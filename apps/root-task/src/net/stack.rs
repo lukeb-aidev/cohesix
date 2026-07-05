@@ -3548,6 +3548,26 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     #[cfg(feature = "kernel")]
+    fn service_genet_tcp_flush_pre_poll_burst_budgeted(
+        &self,
+        contract: crate::hal::driver_task::DriverTaskContract,
+        hot_path: crate::hal::driver_task::DriverTaskHotPath,
+        budget: &mut DriverServiceBudget,
+    ) -> bool {
+        if !genet_tcp_flush_pre_poll_enabled(hot_path)
+            || !crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(contract)
+        {
+            return false;
+        }
+        service_driver_task_pre_poll_burst_budgeted(
+            contract,
+            hot_path,
+            NET_RING_FLAG_BUDGETED,
+            budget,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
     fn drain_cyw43_pre_poll_activity(
         &mut self,
         timestamp: Instant,
@@ -6958,12 +6978,16 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         hot_path.as_u32() as usize,
                         crate::drivers::driver_task_net::runtime_ring_service,
                     );
-                    let ring_progress =
-                        if hot_path == crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi {
+                    let ring_progress = match hot_path {
+                        crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi => {
                             self.service_cyw43_data_pre_poll_burst_budgeted(contract, budget)
-                        } else {
-                            false
-                        };
+                        }
+                        crate::hal::driver_task::DriverTaskHotPath::GenetNic => self
+                            .service_genet_tcp_flush_pre_poll_burst_budgeted(
+                                contract, hot_path, budget,
+                            ),
+                        _ => false,
+                    };
                     return Ok(
                         self.flush_budgeted_tcp_with_time(now_ms, budget, ring_progress)
                             || ring_progress,
@@ -7399,6 +7423,16 @@ fn driver_task_pre_poll_burst_limit(hot_path: crate::hal::driver_task::DriverTas
         }
         _ => DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT,
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn genet_tcp_flush_pre_poll_enabled(
+    hot_path: crate::hal::driver_task::DriverTaskHotPath,
+) -> bool {
+    matches!(
+        hot_path,
+        crate::hal::driver_task::DriverTaskHotPath::GenetNic
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -8593,6 +8627,20 @@ mod tests {
             genet_command.flags & crate::hal::driver_task::DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH,
             0
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_tcp_flush_pre_poll_is_wired_only() {
+        assert!(genet_tcp_flush_pre_poll_enabled(
+            crate::hal::driver_task::DriverTaskHotPath::GenetNic
+        ));
+        assert!(!genet_tcp_flush_pre_poll_enabled(
+            crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi
+        ));
+        assert!(!genet_tcp_flush_pre_poll_enabled(
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole
+        ));
     }
 
     #[cfg(feature = "kernel")]

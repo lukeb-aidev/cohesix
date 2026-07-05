@@ -591,6 +591,9 @@ class GateSummary:
     driver_task_vspace_proof: bool = False
     driver_task_pointer_free_ipc_proof: bool = False
     driver_task_owner_state_proof: bool = False
+    driver_task_runtime_descriptor_seal_proof: bool = False
+    driver_task_runtime_descriptor_seal_proofs: int = 0
+    driver_task_runtime_descriptor_seal_blocker: str = "none"
     driver_task_active_net: str = "unknown"
     driver_task_budget_overruns: int = 0
     driver_task_latency_proofs: int = 0
@@ -826,6 +829,15 @@ class GateSummary:
             ),
             "DRIVER_TASK_OWNER_STATE_PROOF": (
                 "yes" if self.driver_task_owner_state_proof else "no"
+            ),
+            "DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF": (
+                "yes" if self.driver_task_runtime_descriptor_seal_proof else "no"
+            ),
+            "DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOFS": (
+                self.driver_task_runtime_descriptor_seal_proofs
+            ),
+            "DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER": (
+                self.driver_task_runtime_descriptor_seal_blocker
             ),
             "DRIVER_TASK_ACTIVE_NET": self.driver_task_active_net,
             "DRIVER_TASK_BUDGET_OVERRUNS": self.driver_task_budget_overruns,
@@ -1569,6 +1581,12 @@ def normalize_usb_blocker(value: str) -> str:
         return "none"
     if stripped == "awaiting-physical-key":
         return "awaiting-physical-key"
+    if (
+        "boot_blocker" in lower
+        and "post-prompt-local-seat-attach" in lower
+        and "status=retry-exhausted" in lower
+    ):
+        return "post-prompt-attach-retry-exhausted"
     if "no-device-coverage" in lower and (
         "xhci" in lower
         or "vl805" in lower
@@ -2875,6 +2893,10 @@ def cyw43_control_split_event_exact(event: TraceEvent) -> str | None:
     detail_exact = CYW43_CONTROL_POLL_IDLE_DETAIL_REASONS.get(
         parse_hex_int(fields.get("detail")) or -1
     )
+    if event_name in {"tx-complete", "tx-retry-complete"} and parse_hex_int(
+        fields.get("detail")
+    ) == 0x5103:
+        return "cyw43-sdio-descriptor-transfer-failed"
     if event_name == "cyw43-control-reply-nonmatching":
         return "cyw43-control-reply-nonmatching"
     if event_name == "cyw43-control-split-no-reply":
@@ -3562,6 +3584,8 @@ def normalize_wifi_blocker(value: str) -> str:
         return "cyw43-post-release-mailbox-ready"
     if lower in {"21294", "0x532e"} or "cyw43-post-release-protocol-version" in lower:
         return "cyw43-post-release-protocol-version"
+    if lower in {"21295", "0x532f"} or "cyw43-post-release-rframe-sample" in lower:
+        return "cyw43-post-release-rframe-sample"
     if lower in {"20737", "0x5101"} or "sdio-command-unavailable" in lower:
         return "sdio-command-unavailable"
     if "function2-disabled" in lower:
@@ -3743,6 +3767,8 @@ def normalize_wifi_exact(value: str) -> str:
         "0x532d": "cyw43-post-release-mailbox-ready",
         "21294": "cyw43-post-release-protocol-version",
         "0x532e": "cyw43-post-release-protocol-version",
+        "21295": "cyw43-post-release-rframe-sample",
+        "0x532f": "cyw43-post-release-rframe-sample",
     }
     if lower in cyw43_transport_details:
         return cyw43_transport_details[lower]
@@ -3809,6 +3835,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-post-release-corecontrol",
         "cyw43-post-release-mailbox-ready",
         "cyw43-post-release-protocol-version",
+        "cyw43-post-release-rframe-sample",
         "cyw43-protocol-error-cur-etheraddr-len",
         "wsec-pmk-bad-argument",
         "firmware-supplicant-unsupported",
@@ -3969,6 +3996,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if event.message.startswith("xhci_recent"):
             continue
         fields = event.fields
+        raw_usb_blocker = normalize_usb_blocker(raw)
+        if raw_usb_blocker == "post-prompt-attach-retry-exhausted":
+            gate = max(gate, usb_driver_task_blocker_gate(raw_usb_blocker))
+            blocker = raw_usb_blocker
+            continue
         tag = fields.get("tag", "")
         if "pi4 keyboard preseed end" in raw:
             saw_keyboard_preseed = True
@@ -5040,6 +5072,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-host-card-int-source-unreadable",
         "control-plane-interrupt-programming-drift",
         "control-plane-interrupts-deferred",
+        "cyw43-sdio-descriptor-transfer-failed",
         "join-programming-host-latch-loop",
         "primary-bsscfg-wrapper-join-security-loop",
         "runtime-rx-host-latch-spam",
@@ -5053,6 +5086,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "host-eapol-required",
         "wsec-pmk-bad-argument",
     }
+    sticky_wifi_exact_blockers = {"cyw43-sdio-descriptor-transfer-failed"}
     specific_sdio_blockers = precise_ht_blockers - direct_sdio_blockers
     exact_reset_blockers = specific_sdio_blockers - {
         "pre-f2-core-control",
@@ -5143,8 +5177,26 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if value and value not in {"none", "n/a"}:
                 normalized_value = normalize_wifi_blocker(value)
                 if normalized_value not in {"none", "unknown"}:
+                    if (
+                        explicit_blocker in sticky_wifi_exact_blockers
+                        and normalized_value not in sticky_wifi_exact_blockers
+                    ):
+                        continue
                     explicit_blocker = normalized_value
         raw_contract_blocker = normalize_wifi_blocker(raw)
+        split_control_exact = cyw43_control_split_event_exact(event)
+        if split_control_exact is not None:
+            raw_contract_blocker = split_control_exact
+            explicit_blocker = split_control_exact
+        if "cyw43_driver_task_command_fault" in raw:
+            fault_blocker = normalize_wifi_blocker(
+                fields.get("reason") or fields.get("detail") or raw
+            )
+            if fault_blocker.startswith("cyw43-post-release-"):
+                gate = max(gate, 7)
+                post_f2_progress_seen = True
+                blocker = fault_blocker
+                continue
         if raw_contract_blocker == "uboot-policy-missing":
             gate = max(gate, 1)
             blocker = "uboot-policy-missing"
@@ -5449,6 +5501,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-reply-idle-loop",
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
+            "cyw43-sdio-descriptor-transfer-failed",
             *CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES,
             "firmware-supplicant-unsupported",
             "wifi-host-eapol-pending",
@@ -5845,9 +5898,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 if blocker.startswith("nettest-"):
                     blocker = "netstats-missing"
             else:
-                gate = max(gate, 9)
-                post_f2_progress_seen = True
-                blocker = "nettest-failed"
+                if not (
+                    blocker in precise_control_plane_blockers
+                    or blocker.startswith("cyw43-post-release-")
+                ):
+                    gate = max(gate, 9)
+                    post_f2_progress_seen = True
+                    blocker = "nettest-failed"
             continue
         if raw.startswith("ok nettest"):
             nettest_success_seen = True
@@ -5885,6 +5942,24 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "cyw43",
             }:
                 blocker = blocker
+            elif (
+                blocker in precise_control_plane_blockers
+                and explicit_blocker is not None
+                and explicit_blocker.startswith("nettest-")
+            ):
+                blocker = blocker
+            elif (
+                blocker.startswith("cyw43-post-release-")
+                and explicit_blocker is not None
+                and explicit_blocker.startswith("nettest-")
+            ):
+                blocker = blocker
+            elif blocker.startswith("cyw43-post-release-") and explicit_blocker in {
+                "cyw43",
+                "cyw43-command",
+                "ioctl-timeout",
+            }:
+                blocker = blocker
             elif blocker in JOIN_SECURITY_EXACT_BY_BLOCKER and explicit_blocker in {
                 "ioctl-timeout",
                 "cyw43",
@@ -5906,6 +5981,21 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, 4)
             elif blocker.startswith("net-not-ready") or blocker.startswith(
                 "nettest-"
+            ):
+                gate = max(gate, 9)
+            elif not (
+                blocker in precise_control_plane_blockers
+                or blocker.startswith("cyw43-post-release-")
+                or blocker in precise_ht_blockers
+                or blocker in JOIN_SECURITY_EXACT_BY_BLOCKER
+                or blocker
+                in {
+                    "armcr4-release-readback-unavailable",
+                    "boot-deferred-local-seat-usb",
+                    "boot-deferred-root-console",
+                    "boot-waiting-for-wifi",
+                    "wifi-driver-task-runtime-unproved",
+                }
             ):
                 gate = max(gate, 9)
             continue
@@ -6122,6 +6212,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if explicit_blocker in {
             "cyw43-post-release-mailbox-ready",
             "cyw43-post-release-protocol-version",
+            "cyw43-post-release-rframe-sample",
         }:
             gate = max(gate, 7)
             post_f2_progress_seen = True
@@ -6152,6 +6243,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-reply-idle-loop",
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
+            "cyw43-sdio-descriptor-transfer-failed",
             *CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES,
             "firmware-supplicant-unsupported",
             "wifi-host-eapol-pending",
@@ -6187,6 +6279,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     "control-plane-host-card-int-source-unreadable",
                 }
             ):
+                blocker = explicit_blocker
+            elif explicit_blocker == "cyw43-sdio-descriptor-transfer-failed":
                 blocker = explicit_blocker
             elif explicit_blocker == "wsec-pmk-bad-argument":
                 blocker = explicit_blocker
@@ -6293,6 +6387,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             elif (
                 blocker in precise_control_plane_blockers
                 and explicit_blocker in precise_control_plane_blockers | {"control-plane"}
+            ):
+                pass
+            elif (
+                blocker in sticky_wifi_exact_blockers
+                and explicit_blocker not in sticky_wifi_exact_blockers
             ):
                 pass
             elif blocker in JOIN_SECURITY_EXACT_BY_BLOCKER and explicit_blocker in {
@@ -6960,6 +7059,8 @@ def summarize_wifi_failure_detail(
             elif armcr4_prereset_ioctrl_active:
                 candidate = "armcr4-prereset-fgc-cmd53-r5-rejected"
         event_exact, event_phase = wifi_failure_detail_from_fields(event)
+        if event_exact == wifi_blocker:
+            candidate = wifi_blocker
         if (
             wifi_blocker == "cyw43-firmware-runtime-replay"
             and event_exact.startswith("cyw43-release-")
@@ -6977,6 +7078,7 @@ def summarize_wifi_failure_detail(
                 "cyw43-post-release-corecontrol",
                 "cyw43-post-release-mailbox-ready",
                 "cyw43-post-release-protocol-version",
+                "cyw43-post-release-rframe-sample",
             }
         ):
             candidate = wifi_blocker
@@ -7384,6 +7486,16 @@ def usb_hid_interrupt_no_completion_seen(fields: Mapping[str, str]) -> bool:
     ).lower()
     report_status = fields.get("report_status", "none").lower().replace("_", "-")
     full_idle_queue = fields.get("full_idle_queue", "").lower() in {"1", "true", "yes"}
+    pre_first_report_no_completion = fields.get(
+        "pre_first_report_no_completion", ""
+    ).lower() in {"1", "true", "yes"}
+    if (
+        queued_reports is not None
+        and queued_reports >= 32
+        and pre_first_report_no_completion
+        and doorbell_pending in {"", "0", "false", "no"}
+    ):
+        return True
     return (
         queued_reports is not None
         and queued_reports >= 32
@@ -8043,6 +8155,40 @@ def _owner_state_proven(fields: dict[str, str]) -> bool:
     return explicit.lower() == "driver-owned"
 
 
+RUNTIME_DESCRIPTOR_SEAL_VERSION = 3
+SPLIT_RUNTIME_DESCRIPTOR_SEAL_HOT_PATHS = frozenset(
+    {"usb-keyboard", "cyw43-wifi"}
+)
+
+
+def driver_runtime_descriptor_seal_status(fields: dict[str, str]) -> str:
+    """Return a stable status for sealed runtime descriptor evidence fields."""
+
+    hot_path = classify_owner_state_hot_path(fields)
+    if hot_path is None:
+        return "unknown-hot-path"
+    version = parse_hex_int(fields.get("descriptor_version"))
+    if version != RUNTIME_DESCRIPTOR_SEAL_VERSION:
+        return "descriptor-version-missing"
+    if fields.get("descriptor_seal", "").lower() != "valid":
+        return "descriptor-seal-missing"
+    if fields.get("artifact_hash", "").lower() not in {"nonzero", "present", "valid"}:
+        return "artifact-hash-missing"
+    bus_link_seal = fields.get("bus_link_seal", "").lower()
+    if hot_path in SPLIT_RUNTIME_DESCRIPTOR_SEAL_HOT_PATHS:
+        if bus_link_seal != "valid":
+            return "bus-link-seal-missing"
+    elif bus_link_seal not in {"none", "valid"}:
+        return "bus-link-seal-missing"
+    return "ready"
+
+
+def driver_runtime_descriptor_seal_proven(fields: dict[str, str]) -> bool:
+    """Return whether one proof line carries the sealed descriptor contract."""
+
+    return driver_runtime_descriptor_seal_status(fields) == "ready"
+
+
 def summarize_driver_task_proofs(
     events: Iterable[TraceEvent],
 ) -> tuple[
@@ -8691,6 +8837,7 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         return 8
     if blocker in {
         "hid-first-report",
+        "post-prompt-attach-retry-exhausted",
     }:
         return 9
     if blocker in {
@@ -10308,6 +10455,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         event_list
     )
     (
+        driver_task_runtime_descriptor_seal_proofs,
+        driver_task_runtime_descriptor_seal_blocker,
+    ) = summarize_driver_task_runtime_descriptor_seals(
+        event_list, driver_task_active_net, driver_task_active_net
+    )
+    driver_task_runtime_descriptor_seal_proof = (
+        driver_task_runtime_descriptor_seal_proofs > 0
+        and driver_task_runtime_descriptor_seal_blocker == "none"
+    )
+    (
         driver_task_resource_init,
         driver_task_resource_blocker,
         driver_task_resource_current_blocker,
@@ -10335,6 +10492,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_vspace_proof=driver_task_vspace_proof,
         driver_task_pointer_free_ipc_proof=driver_task_pointer_free_ipc_proof,
         driver_task_owner_state_proof=driver_task_owner_state_proof,
+        driver_task_runtime_descriptor_seal_proof=(
+            driver_task_runtime_descriptor_seal_proof
+        ),
         driver_task_ring_call_outstanding=driver_task_ring_call_outstanding,
         driver_task_ring_call_unresolved_timeout=(
             driver_task_ring_call_unresolved_timeout
@@ -10416,6 +10576,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 "cyw43-post-release-corecontrol",
                 "cyw43-post-release-mailbox-ready",
                 "cyw43-post-release-protocol-version",
+                "cyw43-post-release-rframe-sample",
             }:
                 wifi_gate = max(wifi_gate, 7)
                 wifi_blocker = replay_exact
@@ -10454,6 +10615,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 "cyw43-post-release-corecontrol",
                 "cyw43-post-release-mailbox-ready",
                 "cyw43-post-release-protocol-version",
+                "cyw43-post-release-rframe-sample",
             }:
                 wifi_gate = max(wifi_gate, 7)
                 wifi_blocker = replay_exact
@@ -10626,6 +10788,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_vspace_proof=driver_task_vspace_proof,
         driver_task_pointer_free_ipc_proof=driver_task_pointer_free_ipc_proof,
         driver_task_owner_state_proof=driver_task_owner_state_proof,
+        driver_task_runtime_descriptor_seal_proof=(
+            driver_task_runtime_descriptor_seal_proof
+        ),
+        driver_task_runtime_descriptor_seal_proofs=(
+            driver_task_runtime_descriptor_seal_proofs
+        ),
+        driver_task_runtime_descriptor_seal_blocker=(
+            driver_task_runtime_descriptor_seal_blocker
+        ),
         driver_task_active_net=driver_task_active_net,
         driver_task_budget_overruns=driver_task_budget_overruns,
         driver_task_latency_proofs=driver_task_latency_proofs,
@@ -10876,6 +11047,46 @@ def summarize_driver_task_bootstrap_deferred(events: Iterable[TraceEvent]) -> in
     return sum(1 for deferred in deferred_contracts.values() if deferred)
 
 
+def summarize_driver_task_runtime_descriptor_seals(
+    events: Iterable[TraceEvent], selected_net: str, active_net: str
+) -> tuple[int, str]:
+    """Return sealed runtime-descriptor proof count and current blocker."""
+
+    required = required_driver_task_owner_hot_paths(selected_net, active_net)
+    ready: set[str] = set()
+    current_blockers: dict[str, str] = {}
+    evidence_seen = False
+    for event in events:
+        raw = event.raw.lower()
+        if "driver_task_owner_state" not in raw and "driver_task_dma_proof" not in raw:
+            continue
+        hot_path = classify_owner_state_hot_path(event.fields)
+        if hot_path is None or hot_path not in required:
+            continue
+        owner_state_ready = (
+            "driver_task_owner_state" in raw
+            and _owner_state_proven(event.fields)
+            and event.fields.get("descriptor", "").lower() == "present"
+            and event.fields.get("root_pointer", "").lower() == "no"
+        )
+        dma_ready = "driver_task_dma_proof" in raw and is_ready_driver_task_dma_proof(event)
+        if not owner_state_ready and not dma_ready:
+            continue
+        evidence_seen = True
+        seal_status = driver_runtime_descriptor_seal_status(event.fields)
+        if seal_status == "ready":
+            ready.add(hot_path)
+            current_blockers.pop(hot_path, None)
+        elif hot_path not in ready:
+            current_blockers[hot_path] = f"{hot_path}:{seal_status}"
+    if current_blockers:
+        return len(ready), next(reversed(current_blockers.values()))
+    missing = sorted(required - ready)
+    if evidence_seen and missing:
+        return len(ready), f"missing:{missing[0]}"
+    return len(ready), "none"
+
+
 def is_ready_driver_task_dma_proof(event: TraceEvent) -> bool:
     """Return whether a DMA proof line satisfies the bounded Pi 4 profile."""
 
@@ -10974,6 +11185,7 @@ def classify_pi4_runtime_dma_proof(
     driver_task_vspace_proof: bool,
     driver_task_pointer_free_ipc_proof: bool,
     driver_task_owner_state_proof: bool,
+    driver_task_runtime_descriptor_seal_proof: bool,
     driver_task_ring_call_outstanding: int,
     driver_task_ring_call_unresolved_timeout: int,
     driver_task_bootstrap_deferred: int,
@@ -11001,6 +11213,7 @@ def classify_pi4_runtime_dma_proof(
         driver_task_vspace_proof,
         driver_task_pointer_free_ipc_proof,
         driver_task_owner_state_proof,
+        driver_task_runtime_descriptor_seal_proof,
         driver_task_compatibility == 0,
         driver_task_ring_call_outstanding == 0,
         driver_task_ring_call_unresolved_timeout == 0,
@@ -11020,6 +11233,7 @@ def classify_pi4_runtime_dma_proof(
         or driver_task_vspace_proof
         or driver_task_pointer_free_ipc_proof
         or driver_task_owner_state_proof
+        or driver_task_runtime_descriptor_seal_proof
         or driver_task_compatibility != 0
         or driver_task_ring_call_outstanding != 0
         or driver_task_ring_call_unresolved_timeout != 0
@@ -11761,6 +11975,8 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         blockers.append("driver-task-pointer-free-ipc-missing")
     if record.get("DRIVER_TASK_OWNER_STATE_PROOF") != "yes":
         blockers.append("driver-task-owner-state-missing")
+    if record.get("DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF") != "yes":
+        blockers.append("driver-task-runtime-descriptor-seal-missing")
     if (parse_hex_int(str(record.get("DRIVER_TASK_LATENCY_PROOFS", "0"))) or 0) < 5:
         blockers.append("driver-task-latency-proof-incomplete")
     if (

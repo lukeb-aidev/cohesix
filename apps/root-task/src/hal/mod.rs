@@ -1505,11 +1505,18 @@ struct RuntimeInitDescriptorBuilder {
     expected_mmio_pages: u16,
     expected_dma_pages: u16,
     expected_shared_pages: u16,
+    task_key: u32,
+    artifact_hash: u32,
 }
 
 #[cfg(feature = "kernel")]
 impl RuntimeInitDescriptorBuilder {
-    fn new(spec: driver_task::DriverTaskRuntimeImageSpec, role_bit: usize) -> Self {
+    fn new(
+        spec: driver_task::DriverTaskRuntimeImageSpec,
+        role_bit: usize,
+        task_key: usize,
+        artifact_hash: u32,
+    ) -> Self {
         let mut descriptor = DriverRuntimeInitDescriptor::empty();
         descriptor.hot_path = spec.hot_path.as_u32();
         descriptor.role_bit = role_bit as u32;
@@ -1553,6 +1560,8 @@ impl RuntimeInitDescriptorBuilder {
             expected_dma_pages: spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Dma),
             expected_shared_pages: spec
                 .region_pages(driver_task::DriverTaskRuntimeRegionKind::SharedBuffer),
+            task_key: task_key as u32,
+            artifact_hash,
         }
     }
 
@@ -1701,17 +1710,49 @@ impl RuntimeInitDescriptorBuilder {
     }
 
     fn finish(self) -> Result<DriverRuntimeInitDescriptor, HalError> {
-        if self.descriptor.valid_for_resources(
-            self.descriptor.hot_path,
-            self.descriptor.role_bit,
+        let descriptor = self
+            .descriptor
+            .with_sealed_identity(self.task_key, self.artifact_hash);
+        if descriptor.valid_for_resources(
+            descriptor.hot_path,
+            descriptor.role_bit,
             self.expected_mmio_pages,
             self.expected_dma_pages,
             self.expected_shared_pages,
-        ) {
-            Ok(self.descriptor)
+        ) && descriptor.sealed_identity_valid_for_task(self.task_key)
+            && runtime_init_descriptor_expected_bus_links(&descriptor, self.task_key)
+        {
+            Ok(descriptor)
         } else {
             Err(HalError::Unsupported("driver-runtime-init-invalid"))
         }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_init_descriptor_expected_bus_links(
+    descriptor: &DriverRuntimeInitDescriptor,
+    task_key: u32,
+) -> bool {
+    match driver_task::DriverTaskHotPath::from_u32(descriptor.hot_path) {
+        Some(driver_task::DriverTaskHotPath::UsbKeyboard) => {
+            descriptor.bus_link_count == 1
+                && descriptor.has_sealed_pointer_free_bus_link(
+                    task_key,
+                    driver_task::DriverTaskHotPath::PcieRoot.as_u32(),
+                    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+                )
+        }
+        Some(driver_task::DriverTaskHotPath::Cyw43Wifi) => {
+            descriptor.bus_link_count == 1
+                && descriptor.has_sealed_pointer_free_bus_link(
+                    task_key,
+                    driver_task::DriverTaskHotPath::SdioHost.as_u32(),
+                    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+                )
+        }
+        Some(_) => descriptor.bus_link_count == 0,
+        None => false,
     }
 }
 
@@ -3528,8 +3569,14 @@ impl<'a> KernelHal<'a> {
         self.install_usb_pcie_bus_link(contract, child_cnode, child_depth, vspace, &mut tracker)?;
         self.install_cyw43_sdio_bus_link(contract, child_cnode, child_depth, vspace, &mut tracker)?;
 
-        let mut runtime_init_descriptor =
-            runtime_image_spec.map(|spec| RuntimeInitDescriptorBuilder::new(spec, role_bit));
+        let mut runtime_init_descriptor = runtime_image_spec.map(|spec| {
+            RuntimeInitDescriptorBuilder::new(
+                spec,
+                role_bit,
+                task_key,
+                driver_task::pi4_driver_task_runtime_artifact_hash(spec.hot_path),
+            )
+        });
         let runtime_image_mapped_region_mask = self.map_isolated_runtime_declared_regions(
             runtime_image_spec,
             vspace,
@@ -3666,6 +3713,13 @@ impl<'a> KernelHal<'a> {
             } else {
                 "no-reply"
             };
+            if runtime_init_ok {
+                let _ = driver_task::record_driver_runtime_descriptor_seal(
+                    contract,
+                    spec.hot_path,
+                    descriptor,
+                );
+            }
             driver_task::emit_driver_task_resource_init_status(
                 contract,
                 spec.hot_path,
@@ -4220,21 +4274,49 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    fn runtime_init_test_task_key(hot_path: super::driver_task::DriverTaskHotPath) -> usize {
+        match hot_path {
+            super::driver_task::DriverTaskHotPath::SerialConsole => {
+                super::driver_task::DRIVER_TASK_KEY_SERIAL
+            }
+            super::driver_task::DriverTaskHotPath::UsbKeyboard => {
+                super::driver_task::DRIVER_TASK_KEY_USB_LOCAL_SEAT
+            }
+            super::driver_task::DriverTaskHotPath::HdmiText => {
+                super::driver_task::DRIVER_TASK_KEY_HDMI_TEXT
+            }
+            super::driver_task::DriverTaskHotPath::GenetNic => {
+                super::driver_task::DRIVER_TASK_KEY_BCMGENET_V5
+            }
+            super::driver_task::DriverTaskHotPath::Cyw43Wifi => {
+                super::driver_task::DRIVER_TASK_KEY_CYW43455
+            }
+            super::driver_task::DriverTaskHotPath::SdioHost => {
+                super::driver_task::DRIVER_TASK_KEY_SDIO_HOST
+            }
+            super::driver_task::DriverTaskHotPath::PcieRoot => {
+                super::driver_task::DRIVER_TASK_KEY_PCIE_ROOT
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn runtime_init_test_artifact_hash(hot_path: super::driver_task::DriverTaskHotPath) -> u32 {
+        super::driver_task::pi4_driver_task_runtime_artifact_hash(hot_path)
+    }
+
+    #[cfg(feature = "kernel")]
     #[test]
     fn runtime_init_descriptor_builder_records_primitive_page_metadata() {
+        let hot_path = super::driver_task::DriverTaskHotPath::GenetNic;
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
-            super::driver_task::DriverTaskHotPath::GenetNic,
-            1,
-            1,
-            1,
-            1,
-            1,
-            true,
-            false,
+            hot_path, 1, 1, 1, 1, 1, true, false,
         );
         let mut builder = super::RuntimeInitDescriptorBuilder::new(
             spec,
             super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
+            runtime_init_test_task_key(hot_path),
+            runtime_init_test_artifact_hash(hot_path),
         );
         builder.add_mmio_page(0xFD58_0000).unwrap();
         builder.add_dma_page(0x4000_0000).unwrap();
@@ -4256,24 +4338,23 @@ mod tests {
         assert_eq!(descriptor.dma_pages[0].paddr, 0x4000_0000);
         assert_eq!(descriptor.shared_pages[0].paddr, 0x5000_0000);
         assert!(descriptor.valid());
+        assert!(
+            descriptor.sealed_identity_valid_for_task(runtime_init_test_task_key(hot_path) as u32)
+        );
     }
 
     #[cfg(feature = "kernel")]
     #[test]
     fn runtime_init_descriptor_builder_records_hdmi_framebuffer_metadata() {
+        let hot_path = super::driver_task::DriverTaskHotPath::HdmiText;
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
-            super::driver_task::DriverTaskHotPath::HdmiText,
-            1,
-            1,
-            1,
-            1,
-            1,
-            true,
-            false,
+            hot_path, 1, 1, 1, 1, 1, true, false,
         );
         let mut builder = super::RuntimeInitDescriptorBuilder::new(
             spec,
             super::driver_task::DRIVER_TASK_ROLE_DISPLAY_BIT,
+            runtime_init_test_task_key(hot_path),
+            runtime_init_test_artifact_hash(hot_path),
         );
         builder.add_mmio_page(0xFE00_B000).unwrap();
         builder.add_dma_page(0x4000_0000).unwrap();
@@ -4293,24 +4374,23 @@ mod tests {
             descriptor.framebuffer.vaddr,
             pi4_driver_abi::DRIVER_RUNTIME_FRAMEBUFFER_VADDR
         );
+        assert!(
+            descriptor.sealed_identity_valid_for_task(runtime_init_test_task_key(hot_path) as u32)
+        );
     }
 
     #[cfg(feature = "kernel")]
     #[test]
     fn runtime_init_descriptor_builder_records_semantic_ranges_and_bus_links() {
+        let hot_path = super::driver_task::DriverTaskHotPath::UsbKeyboard;
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
-            super::driver_task::DriverTaskHotPath::UsbKeyboard,
-            64,
-            16,
-            512,
-            128,
-            32,
-            true,
-            false,
+            hot_path, 64, 16, 512, 128, 32, true, false,
         );
         let mut builder = super::RuntimeInitDescriptorBuilder::new(
             spec,
             super::driver_task::DRIVER_TASK_ROLE_USB_BIT,
+            runtime_init_test_task_key(hot_path),
+            runtime_init_test_artifact_hash(hot_path),
         );
         for index in 0..pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES {
             builder
@@ -4369,6 +4449,11 @@ mod tests {
         assert!(
             descriptor.has_bus_link_to(super::driver_task::DriverTaskHotPath::PcieRoot.as_u32())
         );
+        assert!(descriptor.has_sealed_pointer_free_bus_link(
+            runtime_init_test_task_key(hot_path) as u32,
+            super::driver_task::DriverTaskHotPath::PcieRoot.as_u32(),
+            pi4_driver_abi::DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE
+        ));
         assert_eq!(descriptor.bus_alias_or, super::PI4_VL805_DMA_BUS_ALIAS_OR);
         assert_eq!(descriptor.bus_alias_and, super::PI4_VL805_DMA_BUS_ALIAS_AND);
         assert!(descriptor.has_resource_range_at_with_flags(
@@ -4398,19 +4483,15 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn runtime_init_descriptor_builder_records_cyw43_sdio_shared_rx_window() {
+        let hot_path = super::driver_task::DriverTaskHotPath::Cyw43Wifi;
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
-            super::driver_task::DriverTaskHotPath::Cyw43Wifi,
-            64,
-            16,
-            0,
-            0,
-            64,
-            false,
-            true,
+            hot_path, 64, 16, 0, 0, 64, false, true,
         );
         let mut builder = super::RuntimeInitDescriptorBuilder::new(
             spec,
             super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
+            runtime_init_test_task_key(hot_path),
+            runtime_init_test_artifact_hash(hot_path),
         );
         for index in 0..64 {
             builder
@@ -4448,7 +4529,8 @@ mod tests {
             link.shared_len,
             pi4_driver_abi::DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32
         );
-        assert!(descriptor.has_pointer_free_bus_link(
+        assert!(descriptor.has_sealed_pointer_free_bus_link(
+            runtime_init_test_task_key(hot_path) as u32,
             super::driver_task::DriverTaskHotPath::SdioHost.as_u32(),
             pi4_driver_abi::DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
         ));
@@ -4472,19 +4554,15 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn runtime_init_descriptor_builder_keeps_large_buffer_budgets_semantic() {
+        let hot_path = super::driver_task::DriverTaskHotPath::GenetNic;
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
-            super::driver_task::DriverTaskHotPath::GenetNic,
-            64,
-            16,
-            6,
-            512,
-            32,
-            true,
-            false,
+            hot_path, 64, 16, 6, 512, 32, true, false,
         );
         let mut builder = super::RuntimeInitDescriptorBuilder::new(
             spec,
             super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
+            runtime_init_test_task_key(hot_path),
+            runtime_init_test_artifact_hash(hot_path),
         );
         for index in 0..6 {
             builder

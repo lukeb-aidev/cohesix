@@ -26,12 +26,13 @@ use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
     DriverRuntimeCounterSnapshot, DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
     DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
     DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
-    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
-    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_VERSION,
+    DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
+    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY,
@@ -1954,6 +1955,14 @@ fn runtime_image_spec_from_generated(
     )
 }
 
+/// Hash the generated runtime artifact contract for descriptor identity sealing.
+#[must_use]
+pub fn pi4_driver_task_runtime_artifact_hash(hot_path: DriverTaskHotPath) -> u32 {
+    generated_runtime_image_spec_for_hot_path(hot_path)
+        .map(|generated| pi4_driver_abi::driver_runtime_artifact_hash(generated.artifact))
+        .unwrap_or(0)
+}
+
 /// Runtime-image specs for every Pi 4 hardware hot path.
 ///
 /// These are generated manifest contracts, not fresh Pi hardware proof. They
@@ -2048,6 +2057,8 @@ static DRIVER_TASK_OWNER_STATE_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
+static DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
 static DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_CAPSET_PROOF: AtomicUsize = AtomicUsize::new(0);
@@ -2075,6 +2086,8 @@ static DRIVER_TASK_BROAD_CAPS_LEAKED: AtomicUsize = AtomicUsize::new(usize::MAX)
 static DRIVER_TASK_ENTRY_HEARTBEATS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_HDMI_PROGRESS_LAST_KEY: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_BOOT_CONTRACT_PROOF_EMISSIONS: AtomicU32 = AtomicU32::new(0);
 
 /// Stable key for the serial driver TCB.
 pub const DRIVER_TASK_KEY_SERIAL: usize = 0;
@@ -2111,7 +2124,7 @@ const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRA
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize =
     DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT;
-const DRIVER_TASK_USB_HID_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
+const DRIVER_TASK_USB_HID_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 128;
 const DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 4096;
 const DRIVER_TASK_USB_ENUM_ADDRESS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
 const DRIVER_TASK_USB_ENUM_TRANSFER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
@@ -4405,7 +4418,7 @@ pub fn describe_driver_runtime_init_descriptor(
 pub fn driver_runtime_init_descriptor_bytes(
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Option<&[u8]> {
-    if !descriptor.valid() {
+    if !descriptor.valid() || !descriptor.sealed_identity_self_consistent() {
         return None;
     }
     // SAFETY: `DriverRuntimeInitDescriptor` is `repr(C)`, primitive-only, and
@@ -4418,6 +4431,75 @@ pub fn driver_runtime_init_descriptor_bytes(
         )
     };
     Some(bytes)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_descriptor_expected_bus_link_sealed(
+    hot_path: DriverTaskHotPath,
+    task_key: u32,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> bool {
+    match hot_path {
+        DriverTaskHotPath::UsbKeyboard => descriptor.has_sealed_pointer_free_bus_link(
+            task_key,
+            DriverTaskHotPath::PcieRoot.as_u32(),
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+        ),
+        DriverTaskHotPath::Cyw43Wifi => descriptor.has_sealed_pointer_free_bus_link(
+            task_key,
+            DriverTaskHotPath::SdioHost.as_u32(),
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+        ),
+        _ => descriptor.bus_link_count == 0,
+    }
+}
+
+/// Record that one runtime init descriptor was sealed and accepted by a child.
+#[cfg(feature = "kernel")]
+pub fn record_driver_runtime_descriptor_seal(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> bool {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    if hot_path.contract() != contract
+        || descriptor.hot_path != hot_path.as_u32()
+        || descriptor.role_bit != hot_path.role_bit() as u32
+        || !descriptor.sealed_identity_valid_for_task(task_key as u32)
+        || !driver_runtime_descriptor_expected_bus_link_sealed(
+            hot_path,
+            task_key as u32,
+            descriptor,
+        )
+    {
+        return false;
+    }
+    DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK
+        .fetch_or(hot_path.owner_state_bit(), Ordering::AcqRel);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_descriptor_seal_registered(hot_path: DriverTaskHotPath) -> bool {
+    DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK.load(Ordering::Acquire)
+        & hot_path.owner_state_bit()
+        != 0
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_descriptor_bus_link_seal_label(
+    hot_path: DriverTaskHotPath,
+    descriptor_sealed: bool,
+) -> &'static str {
+    if !descriptor_sealed {
+        return "missing";
+    }
+    match hot_path {
+        DriverTaskHotPath::UsbKeyboard | DriverTaskHotPath::Cyw43Wifi => "valid",
+        _ => "none",
+    }
 }
 
 /// Build a runtime init command for a Pi 4 hot path.
@@ -4474,9 +4556,13 @@ pub fn record_deferred_runtime_init_descriptor(
     let Some(hot_path) = DriverTaskHotPath::from_u32(descriptor.hot_path) else {
         return false;
     };
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
     if hot_path.contract() != contract
         || descriptor.role_bit != hot_path.role_bit() as u32
         || !descriptor.valid()
+        || !descriptor.sealed_identity_valid_for_task(task_key as u32)
     {
         emit_driver_task_resource_init_status(
             contract,
@@ -4525,9 +4611,21 @@ pub fn ensure_deferred_runtime_init_descriptor(
         return true;
     }
     let descriptor = slot.load();
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        emit_driver_task_resource_init_status(
+            contract,
+            hot_path,
+            "runtime-descriptor-replay",
+            "invalid-contract",
+            None,
+        );
+        emit_deferred_runtime_init_status(contract, hot_path, "invalid-contract");
+        return false;
+    };
     if descriptor.hot_path != hot_path.as_u32()
         || descriptor.role_bit != hot_path.role_bit() as u32
         || !descriptor.valid()
+        || !descriptor.sealed_identity_valid_for_task(task_key as u32)
     {
         emit_driver_task_resource_init_status(
             contract,
@@ -4591,6 +4689,7 @@ pub fn ensure_deferred_runtime_init_descriptor(
         completion,
     );
     if complete {
+        let _ = record_driver_runtime_descriptor_seal(contract, hot_path, &descriptor);
         slot.initialized.store(1, Ordering::Release);
         slot.pending.store(0, Ordering::Release);
         emit_deferred_runtime_init_status(contract, hot_path, "resumed");
@@ -9342,11 +9441,28 @@ fn write_driver_task_counter_line(
 
 /// Emit compact scheduling-contract proof breadcrumbs for Pi 4 gate tooling.
 #[cfg(feature = "kernel")]
+#[must_use]
+const fn driver_task_boot_contract_proof_line_uses_raw(emission_index: u32) -> bool {
+    emission_index == 0
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_boot_contract_line(line: &str, use_raw_uart: bool) {
+    if use_raw_uart {
+        crate::bootstrap::log::force_uart_line_raw(line);
+    } else {
+        crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line);
+    }
+}
+
+#[cfg(feature = "kernel")]
 pub fn emit_boot_contract_proof() {
     use core::fmt::Write;
 
     use heapless::String;
 
+    let emission_index = DRIVER_TASK_BOOT_CONTRACT_PROOF_EMISSIONS.fetch_add(1, Ordering::AcqRel);
+    let use_raw_uart = driver_task_boot_contract_proof_line_uses_raw(emission_index);
     let proof = driver_task_runtime_proof();
     let proof_ipc_abi = if proof.pointer_free_ipc_proof {
         DriverTaskIpcAbi::SharedRingCommand
@@ -9378,7 +9494,7 @@ pub fn emit_boot_contract_proof() {
             "no"
         },
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
     let mut line = String::<512>::new();
     let _ = write!(
@@ -9391,7 +9507,7 @@ pub fn emit_boot_contract_proof() {
         required_hot_path_mask,
         required_hot_path_count,
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
     let mut line = String::<384>::new();
     let _ = write!(
@@ -9423,7 +9539,7 @@ pub fn emit_boot_contract_proof() {
             "no"
         },
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
     for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
         if !driver_task_contract_active_for_current_profile(*contract) {
             continue;
@@ -9498,7 +9614,7 @@ pub fn emit_boot_contract_proof() {
                 },
             );
         }
-        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+        emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
         let mut line = String::<320>::new();
         let _ = write!(
@@ -9526,12 +9642,12 @@ pub fn emit_boot_contract_proof() {
                 "no"
             },
         );
-        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+        emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
         if let Some(counters) = driver_task_counter_snapshot(*contract) {
             let mut line = String::<DRIVER_TASK_COUNTER_LINE_BYTES>::new();
             if write_driver_task_counter_line(&mut line, contract.name, counters).is_ok() {
-                crate::bootstrap::log::force_uart_line_raw(line.as_str());
+                emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
             }
         }
     }
@@ -9552,7 +9668,7 @@ pub fn emit_boot_contract_proof() {
         proof.owner_state_hot_path_mask,
         proof.compatibility_service_role_mask,
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
     for hot_path in PI4_DRIVER_TASK_HOT_PATHS {
         if required_hot_path_mask & hot_path.owner_state_bit() == 0 {
@@ -9560,10 +9676,23 @@ pub fn emit_boot_contract_proof() {
         }
         let contract = hot_path.contract();
         let present = proof.owner_state_hot_path_mask & hot_path.owner_state_bit() != 0;
-        let mut line = String::<320>::new();
+        let descriptor_sealed = driver_runtime_descriptor_seal_registered(hot_path);
+        let descriptor_seal = if descriptor_sealed {
+            "valid"
+        } else {
+            "missing"
+        };
+        let bus_link_seal =
+            driver_runtime_descriptor_bus_link_seal_label(hot_path, descriptor_sealed);
+        let artifact_hash = if descriptor_sealed {
+            "nonzero"
+        } else {
+            "unknown"
+        };
+        let mut line = String::<512>::new();
         let _ = write!(
             line,
-            "DRIVER_TASK_OWNER_STATE contract={} hot_path={} owner_state={} hardware_owner={} descriptor={} root_pointer={} root_authority=admission-descriptor-diagnostics-only proof_effect={}",
+            "DRIVER_TASK_OWNER_STATE contract={} hot_path={} owner_state={} hardware_owner={} descriptor={} descriptor_version={} descriptor_seal={} artifact_hash={} bus_link_seal={} root_pointer={} root_authority=admission-descriptor-diagnostics-only proof_effect={}",
             contract.name,
             hot_path.as_str(),
             if present { "driver-owned" } else { "missing" },
@@ -9573,6 +9702,10 @@ pub fn emit_boot_contract_proof() {
                 "unproven"
             },
             if present { "present" } else { "missing" },
+            DRIVER_RUNTIME_INIT_VERSION,
+            descriptor_seal,
+            artifact_hash,
+            bus_link_seal,
             if present { "no" } else { "unknown" },
             if present {
                 "owner-state-proven"
@@ -9580,7 +9713,7 @@ pub fn emit_boot_contract_proof() {
                 "owner-state-missing"
             },
         );
-        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+        emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
         let spec = pi4_driver_task_runtime_image_spec(hot_path);
         let counters = driver_task_counter_snapshot(contract);
@@ -9609,11 +9742,15 @@ pub fn emit_boot_contract_proof() {
         let mut line = String::<1024>::new();
         let _ = write!(
             line,
-            "DRIVER_TASK_DMA_PROOF contract={} hot_path={} status={} profile=bounded-no-iommu descriptor={} root_pointer={} owner={} mmio_pages={} dma_pages={} shared_pages={} bus_address_policy={} cache_policy=uncached-plus-root-maintenance cache_clean_ops={} cache_clean_bytes={} cache_invalidate_ops={} cache_invalidate_bytes={} proof_effect={}",
+            "DRIVER_TASK_DMA_PROOF contract={} hot_path={} status={} profile=bounded-no-iommu descriptor={} descriptor_version={} descriptor_seal={} artifact_hash={} bus_link_seal={} root_pointer={} owner={} mmio_pages={} dma_pages={} shared_pages={} bus_address_policy={} cache_policy=uncached-plus-root-maintenance cache_clean_ops={} cache_clean_bytes={} cache_invalidate_ops={} cache_invalidate_bytes={} proof_effect={}",
             contract.name,
             hot_path.as_str(),
             dma_status,
             if spec.acceptance_eligible() { "present" } else { "missing" },
+            DRIVER_RUNTIME_INIT_VERSION,
+            descriptor_seal,
+            artifact_hash,
+            bus_link_seal,
             if present { "no" } else { "unknown" },
             if present { "linked-runtime" } else { "unproven" },
             mmio_pages,
@@ -9634,7 +9771,7 @@ pub fn emit_boot_contract_proof() {
                 "runtime-dma-proof-red"
             },
         );
-        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+        emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
     }
 
     let mut line = String::<512>::new();
@@ -9694,7 +9831,7 @@ pub fn emit_boot_contract_proof() {
         proof.hot_path_role_mask,
         proof.compatibility_service_role_mask,
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 }
 
 #[cfg(feature = "kernel")]
@@ -11086,6 +11223,14 @@ mod tests {
         assert_eq!(slot.timeout_resumes.load(Ordering::Acquire), 0);
 
         clear_driver_task_transport(contract);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn boot_contract_proof_repeats_are_prompt_safe_after_first_emit() {
+        assert!(driver_task_boot_contract_proof_line_uses_raw(0));
+        assert!(!driver_task_boot_contract_proof_line_uses_raw(1));
+        assert!(!driver_task_boot_contract_proof_line_uses_raw(u32::MAX));
     }
 
     #[cfg(feature = "kernel")]
@@ -13387,7 +13532,11 @@ mod tests {
             | pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
         descriptor.shared_page_count = 1;
         descriptor.shared_pages[0] = pi4_driver_abi::DriverRuntimePageDescriptor::new(0x4000_0000);
+        let task_key = driver_task_contract_key(hot_path.contract()).unwrap() as u32;
+        let artifact_hash = pi4_driver_task_runtime_artifact_hash(hot_path);
+        let descriptor = descriptor.with_sealed_identity(task_key, artifact_hash);
         assert!(descriptor.valid());
+        assert!(descriptor.sealed_identity_valid_for_task(task_key));
 
         assert!(record_deferred_runtime_init_descriptor(
             hot_path.contract(),

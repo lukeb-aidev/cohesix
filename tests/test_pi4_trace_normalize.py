@@ -10,6 +10,8 @@ import json
 import pathlib
 import sys
 
+import pytest
+
 MODULE_PATH = (
     pathlib.Path(__file__).resolve().parents[1]
     / "scripts"
@@ -41,10 +43,61 @@ JOIN_COMPLETE_HOST_EAPOL = (
 )
 
 
+def descriptor_seal_suffix(hot_path: str) -> str:
+    """Return current runtime descriptor seal proof fields for a hot path."""
+
+    bus_link_seal = "valid" if hot_path in {"usb-keyboard", "cyw43-wifi"} else "none"
+    return (
+        "descriptor_version=3 descriptor_seal=valid "
+        f"artifact_hash=nonzero bus_link_seal={bus_link_seal}"
+    )
+
+
+def seal_driver_task_runtime_descriptor_lines(lines: list[str]) -> list[str]:
+    """Add sealed runtime descriptor proof to synthetic green fixtures."""
+
+    sealed_lines: list[str] = []
+    for line in lines:
+        if (
+            (
+                line.startswith("DRIVER_TASK_OWNER_STATE ")
+                or line.startswith("DRIVER_TASK_DMA_PROOF ")
+            )
+            and "descriptor=present" in line
+            and "descriptor_version=" not in line
+        ):
+            hot_path = None
+            for field_match in normalizer.KEY_VALUE_RE.finditer(line):
+                if field_match.group("key") == "hot_path":
+                    hot_path = field_match.group("value")
+                    break
+            if hot_path is not None:
+                line = f"{line} {descriptor_seal_suffix(hot_path)}"
+        sealed_lines.append(line)
+    return sealed_lines
+
+
+def strip_driver_task_runtime_descriptor_seals(lines: list[str]) -> list[str]:
+    """Remove seal proof fields from a current fixture to model stale logs."""
+
+    stripped: list[str] = []
+    for line in lines:
+        for token in (
+            " descriptor_version=3",
+            " descriptor_seal=valid",
+            " artifact_hash=nonzero",
+            " bus_link_seal=valid",
+            " bus_link_seal=none",
+        ):
+            line = line.replace(token, "")
+        stripped.append(line)
+    return stripped
+
+
 def oldgood_usb_replay_lines() -> list[str]:
     """Return a synthetic linked-runtime USB old-good replay trace."""
 
-    return [
+    return seal_driver_task_runtime_descriptor_lines([
         "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
@@ -72,13 +125,13 @@ def oldgood_usb_replay_lines() -> list[str]:
         "read=1 ascii=0x74 key=0x17",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
         "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 blocker=none",
-    ]
+    ])
 
 
 def strict_wired_boot_proof_lines() -> list[str]:
     """Return a synthetic boot slice that satisfies strict Pi 4 proof gates."""
 
-    return [
+    return seal_driver_task_runtime_descriptor_lines([
         "U-Boot 2026.01-dirty",
         "Starting kernel ...",
         "[cohesix:root-task] Cohesix boot: root-task online",
@@ -171,13 +224,13 @@ def strict_wired_boot_proof_lines() -> list[str]:
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
         "netstatus: ip=192.168.10.50 gateway=192.168.10.1 "
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
-    ]
+    ])
 
 
 def oldgood_wifi_replay_lines() -> list[str]:
     """Return a synthetic linked-runtime CYW43 old-good replay trace."""
 
-    return [
+    return seal_driver_task_runtime_descriptor_lines([
         "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
@@ -209,7 +262,7 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
-    ]
+    ])
 
 
 def oldgood_usb_resource_replay_lines() -> list[str]:
@@ -931,6 +984,9 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_VSPACE_PROOF": "no",
         "DRIVER_TASK_POINTER_FREE_IPC_PROOF": "no",
         "DRIVER_TASK_OWNER_STATE_PROOF": "no",
+        "DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF": "no",
+        "DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOFS": 0,
+        "DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER": "none",
         "DRIVER_TASK_ACTIVE_NET": "unknown",
         "DRIVER_TASK_BUDGET_OVERRUNS": 0,
         "DRIVER_TASK_LATENCY_PROOFS": 0,
@@ -1144,7 +1200,7 @@ def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
     """Runtime/DMA proof needs live Pi owner-state and counter-qualified timing."""
 
     events = normalizer.parse_events(
-        [
+        seal_driver_task_runtime_descriptor_lines([
             "U-Boot 2026.01",
             "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
             "cohesix> driver proof",
@@ -1243,22 +1299,45 @@ def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
             "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
             "pointer_free_ipc=yes owner_state=driver-owned required=7 "
             "dedicated=7 compatibility=0",
-        ]
+        ])
     )
 
     record = normalizer.summarize_gates(events).to_record()
     assert record["DRIVER_TASK_DMA_PROOFS"] == 7
     assert record["DRIVER_TASK_DMA_BLOCKER"] == "none"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF"] == "yes"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOFS"] == 7
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER"] == "none"
     assert record["PI4_RUNTIME_DMA_PROOF"] == "fresh-pi"
     assert record["PI4_RUNTIME_DMA_PROOF_REASON"] == "live-pi-owner-state"
     assert record["PI4_RUNTIME_DMA_COUNTER_PROOF"] == "counter-qualified"
+
+
+def test_gate_summary_rejects_pre_seal_runtime_dma_as_fresh_pi() -> None:
+    """Old descriptor-present proof is not current sealed runtime proof."""
+
+    events = normalizer.parse_events(
+        strip_driver_task_runtime_descriptor_seals(strict_wired_boot_proof_lines())
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF"] == "no"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOFS"] == 0
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER"].endswith(
+        ":descriptor-version-missing"
+    )
+    assert record["PI4_RUNTIME_DMA_PROOF"] == "diagnostic"
+    assert "driver-task-runtime-descriptor-seal-missing" in (
+        normalizer.boot_evidence_blockers(record)
+    )
 
 
 def test_gate_summary_accepts_late_wired_owner_state_refresh() -> None:
     """Resolved Pi owner-state replay should close the wired runtime/DMA proof."""
 
     events = normalizer.parse_events(
-        [
+        seal_driver_task_runtime_descriptor_lines([
             "U-Boot 2026.01",
             "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
             "usb: platform_reset policy=full-reset-start "
@@ -1373,7 +1452,7 @@ def test_gate_summary_accepts_late_wired_owner_state_refresh() -> None:
             "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
             "pointer_free_ipc=yes owner_state=driver-owned required=5 "
             "dedicated=5 compatibility=0 active_net=genet live_hot_paths=yes",
-        ]
+        ])
     )
 
     record = normalizer.summarize_gates(events).to_record()
@@ -1384,6 +1463,8 @@ def test_gate_summary_accepts_late_wired_owner_state_refresh() -> None:
     )
     assert record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"] == "none"
     assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF"] == "yes"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOFS"] == 5
     assert record["DRIVER_TASK_DMA_PROOFS"] == 5
     assert record["DRIVER_TASK_DMA_BLOCKER"] == "none"
     assert record["PI4_RUNTIME_DMA_PROOF"] == "fresh-pi"
@@ -1395,7 +1476,7 @@ def test_gate_summary_replaces_superseded_dma_blockers() -> None:
     """Later ready DMA proof should replace early owner-state-missing output."""
 
     events = normalizer.parse_events(
-        [
+        seal_driver_task_runtime_descriptor_lines([
             "U-Boot 2026.01",
             "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
             "usb: platform_reset policy=full-reset-start "
@@ -1513,13 +1594,14 @@ def test_gate_summary_replaces_superseded_dma_blockers() -> None:
             "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
             "pointer_free_ipc=yes owner_state=driver-owned required=5 "
             "dedicated=5 compatibility=0 live_hot_paths=yes",
-        ]
+        ])
     )
 
     record = normalizer.summarize_gates(events).to_record()
 
     assert record["DRIVER_TASK_BOOTSTRAP_DEFERRED"] == 0
     assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF"] == "yes"
     assert record["DRIVER_TASK_DMA_PROOFS"] == 5
     assert record["DRIVER_TASK_DMA_BLOCKER"] == "none"
     assert record["PI4_RUNTIME_DMA_PROOF"] == "fresh-pi"
@@ -1628,6 +1710,39 @@ def test_gate_summary_tracks_cyw43_data_path_trace_counts() -> None:
     assert record["WIFI_DATA_PATH_RX_DELIVERED"] == 1
     assert record["WIFI_DATA_PATH_RX_DROPPED"] == 1
     assert record["WIFI_DATA_PATH_LAST"] == "rx-preserve-drop:pre-poll:dhcp-ack"
+
+
+@pytest.mark.parametrize(
+    ("action", "active_descriptor", "active_op"),
+    [
+        ("no-completion-active-tx", "eth-tx", "0x0007"),
+        ("no-completion-active-control-frame", "control-frame", "0x0006"),
+        ("no-completion-active-control-exchange", "control-exchange", "0x000b"),
+        ("no-completion-active-other", "other", "0xffff"),
+    ],
+)
+def test_gate_summary_preserves_cyw43_active_no_completion_actions(
+    action: str, active_descriptor: str, active_op: str
+) -> None:
+    """Active-descriptor TX stalls must survive normalization for WiFi proof."""
+
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_DATA_PATH contract=cyw43455 event=tx-result "
+            f"action={action} attempt=1 len=42 channel=none "
+            f"active_descriptor={active_descriptor} active_op={active_op} "
+            "ethertype=0x0806 ip_proto=0 udp_src=0 udp_dst=0 dhcp=none "
+            "arp=request tx_total_len=84 tx_request_len=84 cmd53_mode=byte "
+            "block_size=84 block_count=0 completion_code=0 completion_detail=0x0000 "
+            "completion_result=0x00000000 completion_flags=0x0000 completion_len=0 "
+            "pending_before=no pending_after=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DATA_PATH_TX"] == 1
+    assert record["WIFI_DATA_PATH_LAST"] == f"tx-result:{action}:arp-request"
 
 
 def test_gate_summary_accepts_sustained_input_usb_burst_field() -> None:
@@ -6781,6 +6896,37 @@ def test_gate_summary_tracks_usb_invalid_config_value_gate() -> None:
     assert gates.usb_blocker == "invalid-config-value"
 
 
+def test_gate_summary_tracks_usb_post_prompt_attach_retry_exhaustion() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: boot_blocker stage=post-prompt-local-seat-attach "
+            "status=retry-exhausted attempts=32 keyboard=backend-unavailable "
+            "command_ready=no first_report=no first_byte=no "
+            "detail=0x0216 result=0x0f000001 next=usb-probe-kbd",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate >= 8
+    assert gates.usb_blocker == "post-prompt-attach-retry-exhausted"
+
+
+def test_gate_summary_ignores_nonterminal_usb_post_prompt_attach_status() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: boot_blocker stage=post-prompt-local-seat-attach "
+            "status=pending attempts=7 keyboard=backend-unavailable "
+            "command_ready=no first_report=no first_byte=no "
+            "detail=0x0216 result=0x0f000001 next=usb-probe-kbd",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_blocker != "post-prompt-attach-retry-exhausted"
+
+
 def test_gate_summary_rejects_unsourced_usb_keyboard_report_and_first_byte() -> None:
     events = normalizer.parse_events(
         [
@@ -7065,6 +7211,29 @@ def test_gate_summary_downgrades_command_ready_hid_no_completion() -> None:
     assert record["USB_BUSY_AFTER_READY"] == "yes"
 
 
+def test_gate_summary_keeps_late_command_ready_bad_after_hid_no_completion() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: recovery_request action=no-reply aux0=0x00000003 no_reply=128 "
+            "streak=128 cooldown=2 recovery_aux_requests=2 recovery_aux_pending=yes "
+            "queue_empty=yes accepted=0 drained=0 echoed=0 detail=0x0501 "
+            "result=0x00000020 queued_reports=32 report_status=none "
+            "report_status_code=0 stale_runtime_queue=no full_idle_queue=yes "
+            "pre_first_report_no_completion=yes debt=yes",
+            "[local-seat] usb keyboard command-ready action=enable-command-input "
+            "clean_polls=2 no_reply=0 recovery_pending=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 8
+    assert record["USB_BLOCKER"] == "usb-hid-interrupt-no-completion"
+    assert record["USB_COMMAND_READY"] == "no"
+    assert record["USB_LOCAL_SEAT_STATE"] == "blocked"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-hid-interrupt-no-completion"
+
+
 def test_gate_summary_treats_post_ready_cumulative_usb_counters_as_historical() -> None:
     events = normalizer.parse_events(
         [
@@ -7072,7 +7241,7 @@ def test_gate_summary_treats_post_ready_cumulative_usb_counters_as_historical() 
             "doorbell_pending=no preserved_events=0 transfer_events=0 "
             "report_status=none",
             "[local-seat] usb keyboard command-deferred "
-            "reason=keyboard-poll-cooldown action=show-hdmi-busy",
+            "reason=keyboard-poll-cooldown action=log-recovery-deferred",
             "[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no",
             "usb: runtime_queue queue_valid=yes detail=0x0501 result=0x01000420 "
             "queued_reports=32 doorbell_pending=no preserved_events=0 "
@@ -7197,7 +7366,7 @@ def test_gate_summary_marks_usb_degraded_when_busy_reappears_after_ready() -> No
             "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
             "proof_gate=10 target_gate=10 next=none blocker=none",
             "[local-seat] usb keyboard command-deferred "
-            "reason=keyboard-poll-cooldown action=show-hdmi-busy",
+            "reason=keyboard-poll-cooldown action=log-recovery-deferred",
         ]
     )
 
@@ -10042,6 +10211,98 @@ def test_gate_summary_refines_cyw43_split_control_tx_not_submitted() -> None:
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "control-plane-reply-idle-loop"
     assert gates.wifi_exact == "cyw43-control-tx-not-submitted"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_gate_summary_refines_cyw43_split_control_tx_sdio_descriptor_fault() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-control-firmware-version event=tx-complete "
+            "poll=0 flags=0x0000 sequence=205 code=5 detail=0x5103 "
+            "result=0x04208000 frame_off=768 frame_len=56 "
+            "frame_flags=0x0000 expected_cmd=262 expected_cmd_hex=0x00000106 "
+            "expected_id=12 header_mode=extended expected_response_len=128 "
+            "iovar=ver nonmatching_frames=0 malformed_frames=0",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-control-firmware-version event=tx-retry-complete "
+            "poll=1 flags=0x0000 sequence=206 code=5 detail=0x5103 "
+            "result=0x04208000 frame_off=768 frame_len=56 "
+            "frame_flags=0x0000 expected_cmd=262 expected_cmd_hex=0x00000106 "
+            "expected_id=12 header_mode=extended expected_response_len=128 "
+            "iovar=ver nonmatching_frames=0 malformed_frames=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
+    assert gates.wifi_exact == "cyw43-sdio-descriptor-transfer-failed"
+    assert gates.wifi_phase == "cyw43-control-firmware-version"
+
+
+def test_gate_summary_keeps_cyw43_split_control_fault_after_nettest_error() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-control-firmware-version event=tx-retry-complete "
+            "poll=1 flags=0x0000 sequence=206 code=5 detail=0x5103 "
+            "result=0x04208000 frame_off=768 frame_len=56 "
+            "frame_flags=0x0000 expected_cmd=262 expected_cmd_hex=0x00000106 "
+            "expected_id=12 header_mode=extended expected_response_len=128 "
+            "iovar=ver nonmatching_frames=0 malformed_frames=0",
+            "ERR NETTEST detail=unsupported reason=not-ready",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
+    assert gates.wifi_exact == "cyw43-sdio-descriptor-transfer-failed"
+    assert gates.wifi_phase == "cyw43-control-firmware-version"
+
+
+def test_gate_summary_keeps_live_txglomalign_descriptor_fault_after_deferred_error() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=begin",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=begin acceptance=no",
+            "CYW43_DRIVER_TASK_CONTROL_REQUEST contract=cyw43455 "
+            "stage=cyw43-control-txglomalign cmd=263 id=1 "
+            "iovar=bus:txglomalign value=0x00000008 header_mode=plain",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign event=tx-complete "
+            "poll=0 flags=0x0000 sequence=180 code=5 detail=0x5103 "
+            "result=0x05000800 frame_off=768 frame_len=56 "
+            "frame_flags=0x0000 expected_cmd=263 expected_cmd_hex=0x00000107 "
+            "expected_id=1 header_mode=plain expected_response_len=0 "
+            "iovar=bus:txglomalign nonmatching_frames=0 malformed_frames=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=tx-submit-fail "
+            "acceptance=no code=5 detail=20739 result=83888128 frame_len=56 "
+            "owner=linked-runtime blocker=cyw43-control-txglomalign-tx-submit-fail",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-plane status=failed blocker=cyw43-control-plane-failed",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "[net-console] deferred failed detail=cyw43-command "
+            "driver-task runtime init failed",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
+    assert gates.wifi_exact == "cyw43-sdio-descriptor-transfer-failed"
     assert gates.wifi_phase == "cyw43-control-txglomalign"
 
 

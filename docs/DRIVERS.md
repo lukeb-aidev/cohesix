@@ -54,6 +54,18 @@ behavior. Runtime progress returns only as bounded completions and breadcrumbs,
 so root can admit, observe, retry, or revoke without reclaiming steady
 physical-driver work.
 
+Isolation here is authority isolation, not a promise that every device can
+advance independently of every other device. USB depends on the admitted PCIe
+root/VL805 window, CYW43 depends on the SDIO owner window, HDMI and USB combine
+into one local-seat operator surface, and GENET/CYW43 selection still shares
+the root-side network-stack client. Those joins must be represented as
+descriptor fields, generated contracts, explicit bus-link records, and separate
+evidence lanes. They must not be hidden as global boot ordering, root-owned
+fallback drivers, implicit shared memory, or cross-driver polling inside
+another runtime. A runtime may depend on a bus-owner runtime only through a
+sealed pointer-free bus link that root generated for the client task key and
+artifact contract.
+
 Terminology in this guide follows the architectural shape: first use is
 **manifest-declared isolated driver runtime**, and later references use
 **isolated runtime**. Existing evidence fields such as `owner=linked-runtime`,
@@ -340,9 +352,14 @@ Fresh Pi evidence must still prove the active hardware state machines make real
 progress from driver-local state. The transport boundary is no longer a
 one-page smoke loader: root now maps bounded multi-page `PT_LOAD` runtime images
 and semantic MMIO/DMA/shared resource ranges before submitting the pointer-free
-init descriptor. The isolated runtime must publish generic lifecycle progress
-before root credits the task as live: `runtime-entry-ready` means the no-std
-entry path installed the mapped IPC buffer, and `runtime-recv-ready` or
+init descriptor. Root seals that descriptor with the driver-task key,
+generated runtime artifact hash, hot path, role bit, and per-client bus-link
+tokens before any bootstrap or prompt-replay submission. The isolated runtime
+must reject an init descriptor whose seal does not match its entry task key or
+whose USB-to-PCIe / CYW43-to-SDIO bus link lacks the matching sealed
+pointer-free token. The isolated runtime must publish generic lifecycle
+progress before root credits the task as live: `runtime-entry-ready` means the
+no-std entry path installed the mapped IPC buffer, and `runtime-recv-ready` or
 `runtime-poll-ready` means the runtime has entered the command-intake loop and
 can accept a descriptor-replay turn through the command endpoint or the
 sequence-last shared-ring path. Root publishes shared-ring commands by staging a
@@ -673,7 +690,10 @@ detail:
   failures, live TCBs, affinity, VSpace isolation, cap/fault/revoke proof,
   broad-cap leaks, compatibility roles, and final verdict.
 - `DRIVER_TASK_OWNER_STATE` reports one descriptor/root-pointer verdict per
-  current acceptance hot path.
+  current acceptance hot path, plus the sealed runtime descriptor contract:
+  `descriptor_version=3`, `descriptor_seal=valid`, `artifact_hash=nonzero`,
+  and `bus_link_seal=valid` for split USB-to-PCIe or CYW43-to-SDIO clients
+  (`bus_link_seal=none` for non-split roles).
 - `SCHED_CONTRACT` and `DRIVER_TASK` report per-role live TCB, hot-path, capset,
   fault-probe, and revoke readiness.
 - `DRIVER_TASK_COUNTER` reports bounded, non-authority root-ring counter
@@ -704,8 +724,9 @@ detail:
 
 Closure is fail-closed. A physical Pi driver-task proof requires the expected
 task count, `failed_count=0`, live TCB count, required role mask, per-driver
-affinity, zero broad-cap leaks, pointer-free IPC, owner-state proof, and every
-boolean required by `scripts/pi4_gate_proof.sh --require-driver-task-proof`.
+affinity, zero broad-cap leaks, pointer-free IPC, owner-state proof, sealed
+runtime descriptor proof, and every boolean required by
+`scripts/pi4_gate_proof.sh --require-driver-task-proof`.
 `DRIVER_TASK_AFFINITY_DEFERRED`, `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED`,
 root-context diagnostic commands, pointer callbacks, idle completions, and
 zero-result progress completions are useful diagnostics but never hot-path
@@ -2436,6 +2457,10 @@ Required Cohesix shape:
   implementation and does not close Pi 4 driver-task acceptance by itself.
   Hardware acceptance requires isolated runtime owner-state proof plus the USB
   10-gate evidence below.
+- Local seat is a composed operator surface, not a single driver. USB keyboard
+  proof, HDMI frame submission, parser ingress, serial priority, deferred
+  output queues, and mirrored status lines stay as separate evidence lanes even
+  when they are presented as one local console to the operator.
 - PCIe root-complex and VL805 BAR/COMMAND proof belongs to HAL.
 - Bootloader stop-state evidence is diagnostic. Pi 4 USB profiles have
   no xHCI ownership handoff opt-in; stop-state, preserve-state, and U-Boot

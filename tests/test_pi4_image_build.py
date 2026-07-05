@@ -73,7 +73,6 @@ def test_pi4_image_build_defaults_to_usb_uboot_menu_input() -> None:
     assert 'test "${coh_menu_input}" = "usb"' in source
     assert 'sed -i \'\' "s/__COH_MENU_INPUT__/${U_BOOT_MENU_INPUT}/g" "$out"' in source
     assert "setenv coh_logo_delay 1" in source
-    assert "USB keyboard input disabled by serial-only menu image" in source
 
 
 def test_pi4_image_build_keeps_firmware_second_stage_debug_quiet() -> None:
@@ -151,8 +150,8 @@ def test_pi4_image_build_does_not_echo_wifi_psk_to_serial() -> None:
     assert "boot.cmd does not collect Wi-Fi PSKs in the protected USB-only prompt" in source
 
 
-def test_pi4_image_build_serial_wifi_policy_missing_has_recovery_path() -> None:
-    """Serial-only Wi-Fi setup must fail closed with non-secret recovery choices."""
+def test_pi4_image_build_serial_wifi_missing_policy_uses_simple_prompt() -> None:
+    """Serial-only Wi-Fi setup must use the proven non-secret staging prompt."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     boot_template = source[
@@ -160,29 +159,25 @@ def test_pi4_image_build_serial_wifi_policy_missing_has_recovery_path() -> None:
             '\nEOF\n    sed -i \'\' "s/__COH_IMAGE__/'
         )
     ]
-    recovery = next(
-        line
-        for line in boot_template.splitlines()
-        if line.startswith("setenv coh_wifi_serial_recovery ")
-    )
     wifi_setup = next(
         line
         for line in boot_template.splitlines()
         if line.startswith("setenv coh_wifi_setup ")
     )
 
-    assert "U-Boot policy missing: ${coh_policy_file} has no saved Wi-Fi credentials" in recovery
-    assert "This image was staged in serial-only menu mode; USB Wi-Fi entry is disabled" in recovery
-    assert "Serial Wi-Fi password entry is disabled because U-Boot echoes input" in recovery
-    assert "Stage coh_wifi_ssid and coh_wifi_psk in ${coh_policy_file}" in recovery
-    assert "do not type PSK on serial" in recovery
-    assert "Use wired Ethernet setup" in recovery
-    assert "Boot with manifest defaults" in recovery
-    assert "Exit to U-Boot prompt for file-based policy recovery" in recovery
-    assert "run coh_wifi_serial_recovery" in wifi_setup
-    assert (
-        "boot.cmd does not route serial Wi-Fi setup to saved-policy recovery" in source
+    assert "setenv coh_wifi_serial_recovery " not in boot_template
+    assert "run coh_wifi_serial_recovery" not in wifi_setup
+    assert "U-Boot policy missing:" not in boot_template
+    assert "file-based policy recovery" not in boot_template
+    assert "do not type PSK on serial" not in boot_template
+    assert "Serial Wi-Fi password entry is disabled because U-Boot echoes input" in (
+        wifi_setup
     )
+    assert (
+        "Stage coh_wifi_ssid and coh_wifi_psk in ${coh_policy_file} on the boot "
+        "partition, then reboot"
+    ) in wifi_setup
+    assert "run coh_prompt_interface" in wifi_setup
 
 
 def test_pi4_image_build_reports_reset_markers_without_autoboot() -> None:

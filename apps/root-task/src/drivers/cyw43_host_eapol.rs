@@ -1805,6 +1805,58 @@ mod tests {
     }
 
     #[test]
+    fn wsec_key_payload_pairwise_without_rsc_leaves_iv_uninitialized() {
+        let key = [
+            0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d,
+            0x2e, 0x2f,
+        ];
+        let ea = [0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff];
+        let mut payload = [0xff; WSEC_KEY_PAYLOAD_LEN];
+        let len =
+            write_wsec_key_payload(&mut payload, 0, &key, &ea, None, false).expect("ptk payload");
+
+        assert_eq!(len, WSEC_KEY_PAYLOAD_LEN);
+        assert_eq!(
+            u32::from_le_bytes([
+                payload[WSEC_KEY_FLAGS_OFFSET],
+                payload[WSEC_KEY_FLAGS_OFFSET + 1],
+                payload[WSEC_KEY_FLAGS_OFFSET + 2],
+                payload[WSEC_KEY_FLAGS_OFFSET + 3],
+            ]),
+            0
+        );
+        assert_eq!(
+            u32::from_le_bytes([
+                payload[WSEC_KEY_IV_INITIALIZED_OFFSET],
+                payload[WSEC_KEY_IV_INITIALIZED_OFFSET + 1],
+                payload[WSEC_KEY_IV_INITIALIZED_OFFSET + 2],
+                payload[WSEC_KEY_IV_INITIALIZED_OFFSET + 3],
+            ]),
+            0
+        );
+        assert_eq!(
+            u32::from_le_bytes([
+                payload[WSEC_KEY_RXIV_HI_OFFSET],
+                payload[WSEC_KEY_RXIV_HI_OFFSET + 1],
+                payload[WSEC_KEY_RXIV_HI_OFFSET + 2],
+                payload[WSEC_KEY_RXIV_HI_OFFSET + 3],
+            ]),
+            0
+        );
+        assert_eq!(
+            u16::from_le_bytes([
+                payload[WSEC_KEY_RXIV_LO_OFFSET],
+                payload[WSEC_KEY_RXIV_LO_OFFSET + 1],
+            ]),
+            0
+        );
+        assert_eq!(
+            &payload[WSEC_KEY_EA_OFFSET..WSEC_KEY_EA_OFFSET + ea.len()],
+            &ea
+        );
+    }
+
+    #[test]
     fn eapol_start_frame_matches_8021x_shape() {
         let dst = [0x01, 0x80, 0xc2, 0x00, 0x00, 0x03];
         let src = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x32];

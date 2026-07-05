@@ -8,13 +8,91 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 2;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 3;
+/// Magic value for a sealed runtime identity inside an init descriptor.
+pub const DRIVER_RUNTIME_IDENTITY_MAGIC: u32 = 0x4452_4944;
+const DRIVER_RUNTIME_IDENTITY_HASH_SEED: u32 = 0x811c_9dc5;
+const DRIVER_RUNTIME_IDENTITY_HASH_PRIME: u32 = 0x0100_0193;
 /// Command `aux0` value used to submit a runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_AUX: u32 = 0x4452_494e;
 /// Command `aux0` value used to ask a linked runtime to instantiate its engine state.
 pub const DRIVER_RUNTIME_ENGINE_INIT_AUX: u32 = 0x454e_474e;
 /// Local-seat USB/HDMI init command used by the root ring client.
 pub const DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX: u32 = 0x4c53_494e;
+
+const fn driver_runtime_nonzero_hash(hash: u32) -> u32 {
+    if hash == 0 {
+        DRIVER_RUNTIME_IDENTITY_MAGIC
+    } else {
+        hash
+    }
+}
+
+/// Mix one primitive word into the descriptor identity hash.
+#[must_use]
+pub const fn driver_runtime_identity_hash_word(mut hash: u32, word: u32) -> u32 {
+    let mut shift = 0u32;
+    while shift < 32 {
+        hash ^= (word >> shift) & 0xff;
+        hash = hash.wrapping_mul(DRIVER_RUNTIME_IDENTITY_HASH_PRIME);
+        shift += 8;
+    }
+    hash
+}
+
+/// Hash a generated runtime artifact name into a pointer-free descriptor word.
+#[must_use]
+pub const fn driver_runtime_artifact_hash(artifact: &str) -> u32 {
+    let bytes = artifact.as_bytes();
+    let mut hash = DRIVER_RUNTIME_IDENTITY_HASH_SEED;
+    let mut index = 0usize;
+    while index < bytes.len() {
+        hash ^= bytes[index] as u32;
+        hash = hash.wrapping_mul(DRIVER_RUNTIME_IDENTITY_HASH_PRIME);
+        index += 1;
+    }
+    driver_runtime_nonzero_hash(hash)
+}
+
+/// Token binding task identity, generated artifact contract, hot path, and role.
+#[must_use]
+pub const fn driver_runtime_identity_token(
+    task_key: u32,
+    artifact_hash: u32,
+    hot_path: u32,
+    role_bit: u32,
+) -> u32 {
+    let mut hash = driver_runtime_identity_hash_word(
+        DRIVER_RUNTIME_IDENTITY_HASH_SEED,
+        DRIVER_RUNTIME_INIT_MAGIC,
+    );
+    hash = driver_runtime_identity_hash_word(hash, DRIVER_RUNTIME_INIT_VERSION as u32);
+    hash = driver_runtime_identity_hash_word(hash, DRIVER_RUNTIME_IDENTITY_MAGIC);
+    hash = driver_runtime_identity_hash_word(hash, task_key);
+    hash = driver_runtime_identity_hash_word(hash, artifact_hash);
+    hash = driver_runtime_identity_hash_word(hash, hot_path);
+    hash = driver_runtime_identity_hash_word(hash, role_bit);
+    driver_runtime_nonzero_hash(hash)
+}
+
+/// Epoch for a split-runtime bus link, derived from the client task identity.
+#[must_use]
+pub const fn driver_runtime_bus_link_epoch(
+    task_key: u32,
+    client_hot_path: u32,
+    owner_hot_path: u32,
+    channel_id: u32,
+) -> u32 {
+    let mut hash = driver_runtime_identity_hash_word(
+        DRIVER_RUNTIME_IDENTITY_HASH_SEED,
+        DRIVER_RUNTIME_INIT_AUX,
+    );
+    hash = driver_runtime_identity_hash_word(hash, task_key);
+    hash = driver_runtime_identity_hash_word(hash, client_hot_path);
+    hash = driver_runtime_identity_hash_word(hash, owner_hot_path);
+    hash = driver_runtime_identity_hash_word(hash, channel_id);
+    driver_runtime_nonzero_hash(hash)
+}
 /// USB keyboard enumeration step command used after local-seat engine init.
 pub const DRIVER_RUNTIME_USB_ENUMERATE_AUX: u32 = 0x5553_4245;
 /// USB runtime init detail: xHCI controller reached run state, no keyboard endpoint yet.
@@ -305,6 +383,11 @@ pub const DRIVER_RUNTIME_RESOURCE_PAGE_BYTES: u64 = 4096;
 pub const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
 /// Bytes in one command/completion ring page.
 pub const DRIVER_RUNTIME_RING_PAGE_BYTES: u16 = 4096;
+/// CYW43 runtime scratch offset for outgoing SDPCM Function 2 TX frames.
+///
+/// This is intentionally separate from `DRIVER_RUNTIME_RING_FRAME_OFFSET`,
+/// where root stages the active CYW43 command descriptor and Ethernet payloads.
+pub const DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET: u16 = 2048;
 /// Fixed offset of the runtime progress marker in one ring page.
 pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
 /// Bytes in the runtime progress marker.
@@ -1831,11 +1914,15 @@ impl DriverRuntimeCyw43CommandDescriptor {
             && payload_end
                 <= DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
                     + DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32;
+        let shared_payload_allowed = bulk_stream_payload
+            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
+            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+            || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX;
         known_op
             && known_flags
             && ((carries_payload
                 && self.payload_len != 0
-                && (ring_payload || (bulk_stream_payload && shared_payload)))
+                && (ring_payload || (shared_payload_allowed && shared_payload)))
                 || (zero_payload && self.payload_len == 0))
             && (self.total_len == 0 || self.total_len >= self.payload_len as u32)
     }
@@ -1927,8 +2014,10 @@ pub struct DriverRuntimeBusLinkDescriptor {
     pub shared_len: u32,
     /// Role-specific primitive flags.
     pub flags: u32,
-    /// Reserved for alignment and future fields.
-    pub reserved: u32,
+    /// Per-client link epoch bound to the runtime task key.
+    pub epoch: u32,
+    /// Sealed token over epoch, owner, channel, window, and flags.
+    pub token: u32,
 }
 
 impl DriverRuntimeBusLinkDescriptor {
@@ -1941,7 +2030,8 @@ impl DriverRuntimeBusLinkDescriptor {
             shared_offset: 0,
             shared_len: 0,
             flags: 0,
-            reserved: 0,
+            epoch: 0,
+            token: 0,
         }
     }
 
@@ -1960,8 +2050,53 @@ impl DriverRuntimeBusLinkDescriptor {
             shared_offset,
             shared_len,
             flags,
-            reserved: 0,
+            epoch: 0,
+            token: 0,
         }
+    }
+
+    /// Return this link with the per-client epoch and token populated.
+    #[must_use]
+    pub const fn with_sealed_identity(mut self, task_key: u32, client_hot_path: u32) -> Self {
+        self.epoch = driver_runtime_bus_link_epoch(
+            task_key,
+            client_hot_path,
+            self.owner_hot_path,
+            self.channel_id,
+        );
+        self.token = self.identity_token_for_client(client_hot_path);
+        self
+    }
+
+    /// Returns true when the link is structurally valid and sealed for this client.
+    #[must_use]
+    pub const fn sealed_for_client(self, task_key: u32, client_hot_path: u32) -> bool {
+        self.valid()
+            && self.epoch
+                == driver_runtime_bus_link_epoch(
+                    task_key,
+                    client_hot_path,
+                    self.owner_hot_path,
+                    self.channel_id,
+                )
+            && self.epoch != 0
+            && self.token == self.identity_token_for_client(client_hot_path)
+            && self.token != 0
+    }
+
+    const fn identity_token_for_client(self, client_hot_path: u32) -> u32 {
+        let mut hash = driver_runtime_identity_hash_word(
+            DRIVER_RUNTIME_IDENTITY_HASH_SEED,
+            DRIVER_RUNTIME_INIT_AUX,
+        );
+        hash = driver_runtime_identity_hash_word(hash, client_hot_path);
+        hash = driver_runtime_identity_hash_word(hash, self.owner_hot_path);
+        hash = driver_runtime_identity_hash_word(hash, self.channel_id);
+        hash = driver_runtime_identity_hash_word(hash, self.shared_offset);
+        hash = driver_runtime_identity_hash_word(hash, self.shared_len);
+        hash = driver_runtime_identity_hash_word(hash, self.flags);
+        hash = driver_runtime_identity_hash_word(hash, self.epoch);
+        driver_runtime_nonzero_hash(hash)
     }
 
     /// Returns true when the link contains a bounded pointer-free channel.
@@ -2108,6 +2243,14 @@ pub struct DriverRuntimeInitDescriptor {
     pub resource_range_count: u16,
     /// Reserved for alignment and future fixed-layout fields.
     pub reserved0: u16,
+    /// [`DRIVER_RUNTIME_IDENTITY_MAGIC`] when root sealed this descriptor.
+    pub identity_magic: u32,
+    /// Stable driver-task key supplied in the runtime entry register.
+    pub task_key: u32,
+    /// Hash of the generated runtime artifact contract selected by root.
+    pub artifact_hash: u32,
+    /// Sealed token over task key, artifact hash, hot path, and role bit.
+    pub identity_token: u32,
     /// Device bus alias OR mask, or zero when physical addresses are direct.
     pub bus_alias_or: u64,
     /// Device bus alias AND mask, or all ones when physical addresses are direct.
@@ -2153,6 +2296,10 @@ impl DriverRuntimeInitDescriptor {
             bus_link_count: 0,
             resource_range_count: 0,
             reserved0: 0,
+            identity_magic: 0,
+            task_key: 0,
+            artifact_hash: 0,
+            identity_token: 0,
             bus_alias_or: 0,
             bus_alias_and: u64::MAX,
             mmio_vaddr_base: 0,
@@ -2168,6 +2315,60 @@ impl DriverRuntimeInitDescriptor {
             resource_ranges: [DriverRuntimeResourceRangeDescriptor::empty();
                 DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES],
         }
+    }
+
+    /// Return this descriptor sealed for one runtime task and generated artifact.
+    #[must_use]
+    pub const fn with_sealed_identity(mut self, task_key: u32, artifact_hash: u32) -> Self {
+        self.identity_magic = DRIVER_RUNTIME_IDENTITY_MAGIC;
+        self.task_key = task_key;
+        self.artifact_hash = artifact_hash;
+        self.identity_token =
+            driver_runtime_identity_token(task_key, artifact_hash, self.hot_path, self.role_bit);
+        let mut index = 0usize;
+        while index < self.bus_link_count as usize {
+            self.bus_links[index] =
+                self.bus_links[index].with_sealed_identity(task_key, self.hot_path);
+            index += 1;
+        }
+        self
+    }
+
+    /// Returns true when the descriptor's identity fields are self-consistent.
+    #[must_use]
+    pub const fn sealed_identity_self_consistent(self) -> bool {
+        self.sealed_identity_valid_for_task(self.task_key)
+    }
+
+    /// Returns true when root sealed the descriptor for this runtime task key.
+    #[must_use]
+    pub const fn sealed_identity_valid_for_task(self, task_key: u32) -> bool {
+        self.valid()
+            && self.identity_magic == DRIVER_RUNTIME_IDENTITY_MAGIC
+            && self.task_key == task_key
+            && self.artifact_hash != 0
+            && self.identity_token
+                == driver_runtime_identity_token(
+                    task_key,
+                    self.artifact_hash,
+                    self.hot_path,
+                    self.role_bit,
+                )
+            && self.identity_token != 0
+            && self.sealed_bus_links_valid_for_task(task_key)
+    }
+
+    /// Returns true when every populated bus link is sealed for this descriptor.
+    #[must_use]
+    pub const fn sealed_bus_links_valid_for_task(self, task_key: u32) -> bool {
+        let mut index = 0usize;
+        while index < self.bus_link_count as usize {
+            if !self.bus_links[index].sealed_for_client(task_key, self.hot_path) {
+                return false;
+            }
+            index += 1;
+        }
+        true
     }
 
     /// Returns true when the descriptor header and bounds are valid.
@@ -2373,6 +2574,29 @@ impl DriverRuntimeInitDescriptor {
             if link.owner_hot_path == owner_hot_path
                 && link.channel_id == channel_id
                 && (link.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE) != 0
+            {
+                return true;
+            }
+            index += 1;
+        }
+        false
+    }
+
+    /// Returns true when the descriptor includes a pointer-free bus link sealed
+    /// for this descriptor's runtime task.
+    #[must_use]
+    pub const fn has_sealed_pointer_free_bus_link(
+        self,
+        task_key: u32,
+        owner_hot_path: u32,
+        channel_id: u32,
+    ) -> bool {
+        let mut index = 0;
+        while index < self.bus_link_count as usize {
+            let link = self.bus_links[index];
+            if link.owner_hot_path == owner_hot_path
+                && link.channel_id == channel_id
+                && link.sealed_for_client(task_key, self.hot_path)
             {
                 return true;
             }
@@ -2665,6 +2889,25 @@ mod tests {
         assert!(descriptor.valid());
         assert!(descriptor.has_bus_link_to(HOT_PATH_SDIO_HOST));
         assert!(descriptor.has_pointer_free_bus_link(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+        ));
+        assert!(!descriptor.sealed_identity_self_consistent());
+        let sealed = descriptor.with_sealed_identity(
+            4,
+            driver_runtime_artifact_hash("cohesix/bin/pi4-driver-cyw43"),
+        );
+        assert!(sealed.sealed_identity_valid_for_task(4));
+        assert!(!sealed.sealed_identity_valid_for_task(3));
+        assert_ne!(sealed.bus_links[0].epoch, 0);
+        assert_ne!(sealed.bus_links[0].token, 0);
+        assert!(sealed.has_sealed_pointer_free_bus_link(
+            4,
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+        ));
+        assert!(!sealed.has_sealed_pointer_free_bus_link(
+            3,
             HOT_PATH_SDIO_HOST,
             DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
         ));
@@ -2991,7 +3234,7 @@ mod tests {
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
         assert!(descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
-        assert!(!descriptor.valid());
+        assert!(descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
         assert!(!descriptor.valid());
@@ -3015,7 +3258,22 @@ mod tests {
         descriptor.payload_len = 0;
         assert!(!descriptor.valid());
         descriptor.payload_len = 16;
+        descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
+        assert!(descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
+        assert!(!descriptor.valid());
+
+        descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+            flags: 0,
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            payload_len: 64,
+            total_len: 64,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert!(descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE + 1;
         assert!(!descriptor.valid());
     }
 }
