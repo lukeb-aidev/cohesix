@@ -1624,6 +1624,31 @@ def test_gate_summary_splits_glued_serial_trace_segment() -> None:
     assert record["SERIAL_RESPONSIVE_PROOF"] == "yes"
 
 
+def test_usb_command_ready_ignores_later_wifi_blockers() -> None:
+    """CYW43 blocker fields must not poison recovered USB command readiness."""
+
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready action=enable-command-input "
+            "clean_polls=2 no_reply=0 recovery_pending=no",
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x68 detail=0x0000 result=0x00000001",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "command_ready=yes proof_gate=10 target_gate=10 blocker=none",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "wifi: evidence boundary failure_domain=cyw43-control-tx-not-submitted "
+            "blocker=cyw43-control-tx-not-submitted detail=0x5103",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+    assert record["USB_LOCAL_SEAT_REASON"] == "command-ready"
+    assert record["USB_BUSY_AFTER_READY"] == "no"
+
+
 def test_gate_summary_marks_prompt_prefixed_trace_as_unclean() -> None:
     """Prompt/log interleaving must not look like clean operator evidence."""
 
@@ -7147,6 +7172,31 @@ def test_gate_summary_degrades_command_ready_without_first_report() -> None:
     assert "local-seat-usb-first-byte-missing" in blockers
 
 
+def test_gate_summary_accepts_clean_command_ready_without_runtime_gate() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+            "owner_state=missing hardware_owner=unproven descriptor=missing",
+            "[local-seat] hdmi prompt enabled reason=usb-console-command-ready "
+            "action=show-prompt",
+            "[local-seat] usb keyboard command-ready action=enable-command-input "
+            "clean_polls=2 arming_bytes=0 queued=0 accepted=0 drained=0 echoed=0 "
+            "no_reply=0 recovery_pending=no hdmi_pending=0 hdmi_submitted=0",
+            "HDMI_FRAME_SUBMIT reason=keyboard-scrollback status=ready "
+            "root_console_ready=yes attached=yes failed=no fatal=no redraw=yes",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_COMMAND_READY"] == "yes"
+    assert record["USB_FIRST_REPORT_READY"] == "yes"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+    assert record["USB_BUSY_AFTER_READY"] == "no"
+
+
 def test_gate_summary_tracks_usb_startup_churn_without_marking_recovered() -> None:
     events = normalizer.parse_events(
         [
@@ -7412,6 +7462,60 @@ def test_gate_summary_marks_usb_degraded_when_busy_reappears_after_ready() -> No
     assert record["USB_BUSY_AFTER_READY"] == "yes"
     assert "local-seat-usb-degraded" in blockers
     assert "local-seat-usb-busy-after-ready" in blockers
+
+
+def test_gate_summary_treats_transient_post_ready_busy_as_superseded() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "command_ready=yes proof_gate=10 target_gate=10 next=none blocker=none",
+            "[local-seat] usb keyboard command-deferred "
+            "reason=keyboard-poll-no-reply action=log-recovery-deferred",
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "command_ready=yes proof_gate=10 target_gate=10 next=none blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+    assert record["USB_LOCAL_SEAT_REASON"] == "command-ready"
+    assert record["USB_BUSY_AFTER_READY"] == "no"
+    assert "local-seat-usb-degraded" not in blockers
+    assert "local-seat-usb-busy-after-ready" not in blockers
+
+
+def test_gate_summary_treats_sustained_input_as_post_busy_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "command_ready=yes proof_gate=10 target_gate=10 next=none blocker=none",
+            "[local-seat] usb keyboard command-deferred "
+            "reason=keyboard-poll-no-reply action=log-recovery-deferred",
+            "usb: sustained_input queue_valid=yes detail=0x0501 "
+            "result=0x64000020 queued_reports=32 transfer_events=100 "
+            "report_status=none accepted=14 drained=14 echoed=14 "
+            "no_reply=27 no_reply_streak=0 recovery_aux_requests=1 "
+            "recovery_aux_pending=no blocker=none usb_burst=yes drops=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+    assert record["USB_BUSY_AFTER_READY"] == "no"
+    assert record["USB_BURST_PROOF"] == "yes"
+    assert "local-seat-usb-degraded" not in blockers
+    assert "local-seat-usb-busy-after-ready" not in blockers
 
 
 def test_gate_summary_reports_post_first_byte_unmatched_transfer() -> None:
@@ -10118,6 +10222,143 @@ def test_gate_summary_refines_cyw43_control_exchange_no_reply_progress() -> None
     assert gates.wifi_phase == "cyw43-sdio-owner-reply"
 
 
+def test_gate_summary_keeps_control_tx_no_reply_below_tcp_gate() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-plane status=begin acceptance=no code=none "
+            "detail=none result=none frame_len=0 owner=linked-runtime "
+            "root_action=submit-turn blocker=cyw43-control-plane-begin",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=begin",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=begin acceptance=no "
+            "blocker=cyw43-control-txglomalign-begin "
+            "progress_marker_valid=yes progress_sequence=0 "
+            "progress_phase=202 progress_phase_name=runtime-poll-ready "
+            "progress_aux0=0x00000004",
+            "CYW43_DRIVER_TASK_CONTROL_REQUEST contract=cyw43455 "
+            "stage=cyw43-control-txglomalign cmd=263 cmd_hex=0x00000107 "
+            "id=1 runtime_flags=0x0008 bcdc_flags=0x0002 payload_len=36 "
+            "response_len=0 iovar=bus:txglomalign value=0x00000008",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=tx-no-reply "
+            "acceptance=no blocker=cyw43-control-txglomalign-tx-no-reply "
+            "active_request_valid=yes active_request=180 "
+            "progress_marker_valid=yes progress_sequence=180 "
+            "progress_phase=144 progress_phase_name=cyw43-sdio-owner-reply "
+            "progress_aux0=0x43595734 progress_request_match=yes",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-plane status=failed acceptance=no "
+            "blocker=cyw43-control-plane-failed "
+            "progress_marker_valid=yes progress_sequence=180 "
+            "progress_phase=144 progress_phase_name=cyw43-sdio-owner-reply "
+            "progress_aux0=0x43595734 progress_request_match=yes",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "[net-console] deferred failed detail=cyw43-command-completion "
+            "driver-task runtime init failed",
+            "ERR NETSTATS reason=policy detail=net-disabled "
+            "cause=cyw43-command-completion driver-task runtime init failed",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-command-completion driver-task runtime init failed",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-control-tx-no-reply"
+    assert gates.wifi_exact == "cyw43-control-tx-no-reply"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_gate_summary_keeps_control_tx_retry_no_reply_exact() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=begin acceptance=no",
+            "CYW43_DRIVER_TASK_CONTROL_REQUEST contract=cyw43455 "
+            "stage=cyw43-control-txglomalign cmd=263 cmd_hex=0x00000107 "
+            "id=1 runtime_flags=0x0008 bcdc_flags=0x0002 payload_len=36 "
+            "response_len=0 iovar=bus:txglomalign value=0x00000008",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign event=tx-complete "
+            "poll=0 flags=0x0008 sequence=180 code=5 detail=0x5103 "
+            "result=0x05000800 frame_off=768 frame_len=56 "
+            "frame_flags=0x0000 expected_cmd=263 expected_cmd_hex=0x00000107 "
+            "expected_id=1 header_mode=plain expected_response_len=0 "
+            "iovar=bus:txglomalign nonmatching_frames=0 malformed_frames=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=tx-fault-sdio-owner-recover-ready "
+            "acceptance=no code=5 detail=20739 result=83888128 frame_len=56",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=tx-retry-no-reply "
+            "acceptance=no blocker=cyw43-control-txglomalign-tx-retry-no-reply "
+            "active_request_valid=yes active_request=182 "
+            "progress_marker_valid=yes progress_sequence=182 "
+            "progress_phase=142 progress_phase_name=cyw43-sdio-owner-wait-begin "
+            "progress_aux0=0x43595734 progress_request_match=yes",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-plane status=failed acceptance=no "
+            "blocker=cyw43-control-plane-failed "
+            "progress_marker_valid=yes progress_sequence=182 "
+            "progress_phase=142 progress_phase_name=cyw43-sdio-owner-wait-begin "
+            "progress_aux0=0x43595734 progress_request_match=yes",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "wifi: evidence boundary failure_domain=cyw43-control-tx-retry-no-reply "
+            "direct_proof_gate=0 proof_gate=7 frontier_gate=7 failing_gate=8 "
+            "target_gate=10",
+            "wifi: next_action=inspect-cyw43-runtime-fault-stage "
+            "blocker=cyw43-control-tx-retry-no-reply proof_gate=7 target_gate=10 "
+            "source=hal-runtime-required",
+            "ERR NETSTATS reason=policy detail=net-disabled "
+            "cause=cyw43-command-completion driver-task runtime init failed",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-command-completion driver-task runtime init failed",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-control-tx-retry-no-reply"
+    assert gates.wifi_exact == "cyw43-control-tx-retry-no-reply"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_gate_summary_honors_wifi_diag_control_tx_failure_domain() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: driver-task replay failure detail=net-disabled "
+            "cause=cyw43-command-completion driver-task runtime init failed",
+            "wifi: cyw43 linked_runtime_progress marker_valid=yes sequence=180 "
+            "phase=144 phase_name=cyw43-sdio-owner-reply aux0=0x43595734 "
+            "gate=2 blocker=cyw43-sdio-owner-replied "
+            "next_action=continue-cyw43-card-adoption",
+            "wifi: gate 2 name=sdio-card-select status=inferred "
+            "evidence=stage=cyw43-control-txglomalign detail=0x0000 "
+            "result=0x00000000 next=cccr-fbr-ready",
+            "wifi: evidence boundary failure_domain=cyw43-control-tx-no-reply "
+            "direct_proof_gate=0 proof_gate=7 frontier_gate=7 failing_gate=8 "
+            "target_gate=10",
+            "wifi: next_action=inspect-cyw43-runtime-fault-stage "
+            "blocker=cyw43-control-tx-no-reply proof_gate=7 target_gate=10 "
+            "source=hal-runtime-required",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-command-completion driver-task runtime init failed",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-control-tx-no-reply"
+    assert gates.wifi_exact == "cyw43-control-tx-no-reply"
+    assert gates.wifi_phase == "none"
+
+
 def test_gate_summary_refines_cyw43_control_exchange_firstread_empty() -> None:
     events = normalizer.parse_events(
         [
@@ -10325,6 +10566,12 @@ def test_gate_summary_keeps_live_txglomalign_descriptor_fault_after_deferred_err
             "stage=cyw43-control-plane status=failed blocker=cyw43-control-plane-failed",
             "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
             "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "wifi: gate 6 name=firmware-upload status=fail "
+            "evidence=uploaded=no verified=no fault_detail=0x5103 "
+            "next=function2-ready",
+            "wifi: gate 9 name=dhcp-bound status=blocked "
+            "evidence=active=none tcp_ready=no "
+            "dependency=not-reached-due-to-gate-6",
             "[net-console] deferred failed detail=cyw43-command "
             "driver-task runtime init failed",
         ]

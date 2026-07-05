@@ -130,11 +130,54 @@ class FakeController:
         del timeout_s, label
         assert self.reads, f"unexpected read for markers {tuple(markers)!r}"
         snapshot = self.reads.pop(0)
-        assert any(marker in snapshot for marker in markers)
+        assert any(pi4_serial_reboot.serial_marker_seen(snapshot, marker) for marker in markers)
         return snapshot
 
     def drain_for(self, duration_s: float, *, label: str) -> None:
         self.drains.append((duration_s, label))
+
+
+class TimeoutOnceController(FakeController):
+    """Fake controller that times out once, then returns scripted reads."""
+
+    def __init__(self, reads: list[bytes]) -> None:
+        super().__init__(reads)
+        self._timed_out = False
+
+    def read_until(
+        self,
+        markers: Iterable[bytes],
+        timeout_s: float,
+        *,
+        label: str,
+    ) -> bytes:
+        if not self._timed_out:
+            del markers, timeout_s
+            self._timed_out = True
+            raise pi4_serial_reboot.SerialMarkerTimeout(f"timeout for {label}")
+        return super().read_until(markers, timeout_s, label=label)
+
+
+class NoReadyThenController(FakeController):
+    """Fake controller that rejects a below-ready snapshot once, then proceeds."""
+
+    def read_until(
+        self,
+        markers: Iterable[bytes],
+        timeout_s: float,
+        *,
+        label: str,
+    ) -> bytes:
+        if not self.notes:
+            del timeout_s
+            snapshot = self.reads.pop(0)
+            assert not any(
+                pi4_serial_reboot.serial_marker_seen(snapshot, marker)
+                for marker in markers
+            )
+            self.notes.append(f"below-ready snapshot rejected for {label}")
+            raise pi4_serial_reboot.SerialMarkerTimeout(f"timeout for {label}")
+        return super().read_until(markers, timeout_s, label=label)
 
 
 def test_saved_wifi_uses_old_root_menu_option_one() -> None:
@@ -160,13 +203,14 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
 
     controller = FakeController(
         [
-            b"OK NETSTATS\n",
-            b"OK NETTEST\n",
-            b"OK WIFI\n",
-            b"ERR WIFI\n",
-            b"OK USB\n",
-            b"OK USB\n",
-            b"OK SMP\n",
+            b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
+            b"OK NETSTATS\ncohesix>",
+            b"OK NETTEST\ncohesix>",
+            b"OK WIFI\ncohesix>",
+            b"ERR WIFI\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -183,7 +227,35 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
     ]
     assert controller.public_sent[0] == "netstats"
     assert controller.reinforced == [True, True, True, True, True, True, True]
-    assert controller.drains == [(1.0, "post-root-prompt-before-diagnostics")]
+    assert controller.drains == [(8.0, "post-root-prompt-settle-before-diagnostics")]
+
+
+def test_diagnostics_accept_interleaved_result_marker() -> None:
+    """Async local-seat logs can split diagnostic OK/ERR tokens on serial."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
+            (
+                b"ERR NE[local-seat] usb keyboard command-ready "
+                b"action=enable-command-input\nTSTATS reason=policy\ncohesix>"
+            ),
+            b"OK NETTEST\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+
+    assert controller.sent == [
+        "netstats",
+        "nettest",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
 
 
 def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
@@ -191,6 +263,7 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
 
     controller = FakeController(
         [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\ncohesix>",
             b"OK NETTEST\ncohesix>",
             b"OK USB\ncohesix>",
@@ -209,7 +282,105 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
         "smp activity",
     ]
     assert controller.reads == []
-    assert controller.drains == [(1.0, "post-root-prompt-before-diagnostics")]
+    assert controller.drains == [(8.0, "post-root-prompt-settle-before-diagnostics")]
+
+
+def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> None:
+    """Keyboard discovery and first-byte evidence are below command-ready."""
+
+    controller = NoReadyThenController(
+        [
+            (
+                b"USB console ready\n"
+                b"usb: runtime_next_action action=enable-command-input\n"
+                b"[local-seat] runtime keyboard first-byte read=1 ascii=0x68\n"
+                b"usb: runtime_gate keyboard=yes first_report=yes first_byte=yes\n"
+            ),
+            b"OK NETSTATS\ncohesix>",
+            b"OK NETTEST\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+
+    assert controller.sent == [
+        "netstats",
+        "nettest",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
+    assert any(
+        "diagnostics serial_only_usb_unproven_after_command_ready_timeout" in note
+        for note in controller.notes
+    )
+    assert any(
+        "diagnostics serial_only_usb_unscored command='usb diag'" in note
+        for note in controller.notes
+    )
+
+
+def test_diagnostics_wait_for_prompt_after_result_without_prompt() -> None:
+    """A result line alone must not prove the next command boundary is clean."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
+            b"OK NETSTATS\n",
+            b"cohesix>",
+            b"OK NETTEST\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+
+    assert controller.sent == [
+        "netstats",
+        "nettest",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
+    assert controller.reads == []
+
+
+def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
+    """USB readiness is a settle signal; serial diagnostics must still run."""
+
+    controller = TimeoutOnceController(
+        [
+            b"OK NETSTATS\ncohesix>",
+            b"OK NETTEST\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+
+    assert controller.sent == [
+        "netstats",
+        "nettest",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
+    assert controller.drains == [(8.0, "post-root-prompt-settle-before-diagnostics")]
+    assert any(
+        "diagnostics serial_only_usb_unproven_after_command_ready_timeout" in note
+        for note in controller.notes
+    )
+    assert any(
+        "diagnostics serial_only_usb_unscored command='usb probe-kbd'" in note
+        for note in controller.notes
+    )
 
 
 def test_diagnostics_require_command_specific_result_marker() -> None:

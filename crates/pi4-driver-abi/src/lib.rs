@@ -237,6 +237,8 @@ pub const DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD: u16 = 1 << 2;
 pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN: u16 = 1 << 3;
 /// CYW43 command flag: after delivering steady data RX, queue bounded tail frames.
 pub const DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN: u16 = 1 << 4;
+/// CYW43 positive detail: a control Function 2 TX retry recovered a transfer fault.
+pub const DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_TX_F2_RETRY_RECOVERED: u16 = 0x5801;
 /// CYW43 RX idle detail: no detailed RX result was reported.
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NONE: u16 = 0;
 /// CYW43 RX idle detail: firmware/channel state is not ready for RX.

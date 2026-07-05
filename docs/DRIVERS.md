@@ -559,13 +559,11 @@ The isolated-image contract is generated, not hand-authored in HAL.
 declare `root_task.driver_images` for `serial-console`, `usb-keyboard`,
 `hdmi-text`, `genet-nic`, `cyw43-wifi`, `sdio-host`, and `pcie-root`;
 `coh-rtc` emits those records into `apps/root-task/src/generated`; and the build
-scripts stage the isolated `pi4-driver-*` runtime images into the raw
+scripts stage each isolated `pi4-driver-*` runtime image into the raw
 driver-runtime CPIO embedded in the Pi 4 root-task image. The U-Boot-staged CPIO
-is packaging evidence only. When stripped role images are byte-identical, the Pi
-image script deduplicates the physical CPIO to one
-`cohesix/bin/pi4-driver-runtime` entry, while the generated per-role specs remain
-the authority for artifact names, code pages, stack pages, resources, and
-hot-path admission.
+is packaging evidence only. Even when stripped role images are byte-identical,
+the Pi image script keeps the generated per-role artifact names because those
+names are part of descriptor identity and hot-path admission proof.
 
 Those binaries implement fixed command/completion ring service engines for the
 active Pi 4 hardware owners. Serial handles bounded mini-UART init/RX/TX; HDMI
@@ -2029,14 +2027,16 @@ active path is Cohesix-owned cold start:
   device slot for as long as the HID keyboard is attached. Dropping the hub
   `UsbDevice` disables that xHCI slot and can silently orphan the interrupt-IN
   pipe after Gate 8. HDMI may show `local-seat USB keyboard online` only after
-  the existing runtime first-byte proof reaches Gate 10; enumeration-only
-  Gate 8 is reported as detected/pending input. Gate 10 proves at least one
-  byte from the isolated HID `FrameReady` path was accepted by the root-console
-  queue. Local parser ingress is reported as `local-seat-queue-diagnostic` and
-  cannot close Gate 10 by itself. It is not full keyboard closure unless a
-  printable key is also proven. Printable-key closure is separately evidenced
-  by the first non-empty HID report and first printable-byte diagnostic, while
-  the first unmapped HID usage is logged once if decode rejects a key. The
+  command-input readiness reaches Gate 10; enumeration-only Gate 8 is reported
+  as detected/pending input. Gate 10 proves that the isolated HID path has a
+  configured keyboard endpoint, at least one runtime interrupt report, bounded
+  clean polls, and a root-console command path that can accept keyboard input
+  without stale pressure. Local parser ingress is reported as
+  `local-seat-queue-diagnostic` and cannot close Gate 10 by itself. It is not
+  full printable-key closure unless a printable key is also proven. Printable-key
+  closure is separately evidenced by the first non-empty HID report and first
+  printable-byte diagnostic, while the first unmapped HID usage is logged once
+  if decode rejects a key. The
   HID decode contract remains a U-Boot-compatible Boot Keyboard contract: report
   ID layouts are accepted only when the keyboard profile explicitly selects that
   offset, because byte `0` of an unknown report can be either a report ID or a

@@ -180,6 +180,20 @@ def test_pi4_image_build_serial_wifi_missing_policy_uses_simple_prompt() -> None
     assert "run coh_prompt_interface" in wifi_setup
 
 
+def test_pi4_image_build_keeps_per_role_driver_runtime_artifacts() -> None:
+    """Runtime CPIO entries must match generated per-role artifact identity."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "Keeping per-role Pi4 driver runtime images" in source
+    assert "verify_driver_runtime_cpio_entries" in source
+    assert "missing Pi4 driver runtime artifact in CPIO" in source
+    assert "generic Pi4 driver runtime artifact is not" in source
+    assert "cohesix/bin/pi4-driver-cyw43" in source
+    assert "Deduplicated identical Pi4 driver runtimes" not in source
+    assert 'local generic_runtime="${runtime_bin}/pi4-driver-runtime"' not in source
+
+
 def test_pi4_image_build_reports_reset_markers_without_autoboot() -> None:
     """Saved policy must not bypass the interactive U-Boot menu."""
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -57,6 +58,22 @@ DIAGNOSTIC_RESULT_MARKERS: dict[str, tuple[bytes, bytes]] = {
     "usb probe-kbd": (b"OK USB", b"ERR USB"),
     "smp activity": (b"OK SMP", b"ERR SMP"),
 }
+DIAGNOSTIC_READY_MARKERS = (
+    b"usb keyboard command-ready",
+)
+DIAGNOSTIC_SETTLE_TIMEOUT_S = 30.0
+ASYNC_RESULT_FRAGMENT_RE = re.compile(
+    rb"(?:"
+    rb"\[[A-Za-z0-9_.:-]+\]"
+    rb"|SERIAL_INPUT_TRACE"
+    rb"|HDMI_FRAME_[A-Z_]*"
+    rb"|DRIVER_TASK_[A-Z_]*"
+    rb"|SCHED_CONTRACT"
+    rb"|CYW43_[A-Z0-9_]*"
+    rb"|NET_DRIVER_TASK_[A-Z_]*"
+    rb"|SDIO_DRIVER_TASK_[A-Z_]*"
+    rb")[^\r\n]*"
+)
 
 MENU_ROOT = "root"
 MENU_DHCP = "dhcp"
@@ -164,7 +181,7 @@ class RedactingSerialController:
             if len(seen) > TAIL_LIMIT:
                 del seen[: len(seen) - TAIL_LIMIT]
             snapshot = bytes(seen)
-            if any(marker in snapshot for marker in needles):
+            if any(serial_marker_seen(snapshot, marker) for marker in needles):
                 return snapshot
         tail = self._redact(bytes(seen[-2048:])).decode("utf-8", errors="replace")
         raise SerialMarkerTimeout(f"timed out waiting for {label}; tail={tail!r}")
@@ -222,6 +239,19 @@ def serial_line_bytes(line: str) -> bytes:
     """Encode a serial command using the Pi 4 console's CR line discipline."""
 
     return f"{line}{DEFAULT_LINE_TERMINATOR}".encode()
+
+
+def serial_marker_seen(snapshot: bytes, marker: bytes) -> bool:
+    """Return whether a marker is present, tolerating async logs in result tokens."""
+
+    if marker in snapshot:
+        return True
+    if not marker.startswith((b"OK ", b"ERR ")):
+        return False
+    cleaned = ASYNC_RESULT_FRAGMENT_RE.sub(b"", snapshot)
+    compact_snapshot = b"".join(cleaned.split())
+    compact_marker = b"".join(marker.split())
+    return compact_marker in compact_snapshot
 
 
 def mint_ticket(repo: pathlib.Path, cohsh: pathlib.Path, ticket_config: pathlib.Path) -> str:
@@ -469,21 +499,38 @@ def run_diagnostics(
     if lane == "wifi":
         commands.extend(["wifi diag", "wifi probe-ht"])
     commands.extend(["usb diag", "usb probe-kbd", "smp activity"])
+    usb_scored = True
     if prompt_ready:
-        controller.drain_for(1.0, label="post-root-prompt-before-diagnostics")
+        controller.drain_for(8.0, label="post-root-prompt-settle-before-diagnostics")
+        try:
+            controller.read_until(
+                DIAGNOSTIC_READY_MARKERS,
+                DIAGNOSTIC_SETTLE_TIMEOUT_S,
+                label="root command readiness before diagnostics",
+            )
+        except SerialMarkerTimeout as exc:
+            usb_scored = False
+            controller.note(
+                "diagnostics serial_only_usb_unproven_after_command_ready_timeout "
+                f"error={exc}"
+            )
     for command in commands:
+        if command.startswith("usb ") and not usb_scored:
+            controller.note(
+                f"diagnostics serial_only_usb_unscored command={command!r}"
+            )
         if prompt_ready:
             prompt_ready = False
         else:
             controller.read_until((b"cohesix>",), 30, label=f"prompt before {command}")
         controller.send_line(command, reinforce_terminator=True)
         try:
-            controller.read_until(
+            result_snapshot = controller.read_until(
                 DIAGNOSTIC_RESULT_MARKERS[command],
                 90,
                 label=f"result for {command}",
             )
-            prompt_ready = True
+            prompt_ready = ROOT_PROMPT in result_snapshot
         except SerialMarkerTimeout as exc:
             controller.note(f"diagnostic timeout command={command!r} error={exc}")
             raise

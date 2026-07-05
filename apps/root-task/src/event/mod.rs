@@ -2168,8 +2168,11 @@ where
     pub fn with_local_seat(mut self, runtime: &'a mut LocalSeatRuntime) -> Self {
         runtime.register_boot_progress_backend();
         self.local_seat = Some(runtime);
-        if self.console_ready_announced && !self.post_prompt_local_seat_attach_pending {
-            self.schedule_post_prompt_local_seat_attach();
+        #[cfg(all(feature = "kernel", feature = "usb"))]
+        {
+            if self.console_ready_announced && !self.post_prompt_local_seat_attach_pending {
+                self.schedule_post_prompt_local_seat_attach();
+            }
         }
         self
     }

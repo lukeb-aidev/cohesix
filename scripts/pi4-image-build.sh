@@ -1380,8 +1380,6 @@ package_driver_runtime_raw_cpio() {
     local runtime_artifact_dir="${ROOT_DIR}/target/aarch64-unknown-none/release"
     local strip_tool
     local bin
-    local generic_runtime="${runtime_bin}/pi4-driver-runtime"
-    local dedup_driver_runtimes=1
 
     assert_driver_runtime_elf_budgets "$runtime_artifact_dir"
     strip_tool="$(find_aarch64_strip || true)"
@@ -1408,42 +1406,36 @@ package_driver_runtime_raw_cpio() {
             "${runtime_bin}/${bin}"
         log "Staged isolated driver runtime: ${bin}"
     done
-    cp -f "${runtime_bin}/pi4-driver-serial" "$generic_runtime"
-    for bin in \
-        pi4-driver-serial \
-        pi4-driver-usb \
-        pi4-driver-hdmi \
-        pi4-driver-genet \
-        pi4-driver-cyw43 \
-        pi4-driver-sdio \
-        pi4-driver-pcie
-    do
-        if ! cmp -s "$generic_runtime" "${runtime_bin}/${bin}"; then
-            dedup_driver_runtimes=0
-            break
-        fi
-    done
-    if [[ "$dedup_driver_runtimes" == "1" ]]; then
-        rm -f \
-            "${runtime_bin}/pi4-driver-serial" \
-            "${runtime_bin}/pi4-driver-usb" \
-            "${runtime_bin}/pi4-driver-hdmi" \
-            "${runtime_bin}/pi4-driver-genet" \
-            "${runtime_bin}/pi4-driver-cyw43" \
-            "${runtime_bin}/pi4-driver-sdio" \
-            "${runtime_bin}/pi4-driver-pcie"
-        log "Deduplicated identical Pi4 driver runtimes as cohesix/bin/pi4-driver-runtime"
-    else
-        rm -f "$generic_runtime"
-        log "Pi4 driver runtimes differ; keeping per-role runtime images"
-    fi
+    log "Keeping per-role Pi4 driver runtime images for manifest artifact identity"
 
     (
         cd "$runtime_root"
         find cohesix -print | LC_ALL=C sort | cpio --reproducible -o -H newc > "$raw_cpio"
     )
     require_file "$raw_cpio"
+    verify_driver_runtime_cpio_entries "$raw_cpio"
     log "Packaged Pi4 driver runtime raw CPIO at ${raw_cpio}"
+}
+
+verify_driver_runtime_cpio_entries() {
+    local raw_cpio="$1"
+    local entries
+    local entry
+    entries="$(LC_ALL=C cpio -it < "$raw_cpio" 2>/dev/null)"
+    for entry in \
+        cohesix/bin/pi4-driver-serial \
+        cohesix/bin/pi4-driver-usb \
+        cohesix/bin/pi4-driver-hdmi \
+        cohesix/bin/pi4-driver-genet \
+        cohesix/bin/pi4-driver-cyw43 \
+        cohesix/bin/pi4-driver-sdio \
+        cohesix/bin/pi4-driver-pcie
+    do
+        grep -Fxq "$entry" <<<"$entries" || fail "missing Pi4 driver runtime artifact in CPIO: ${entry}"
+    done
+    if grep -Fxq "cohesix/bin/pi4-driver-runtime" <<<"$entries"; then
+        fail "generic Pi4 driver runtime artifact is not a manifest-declared per-role image"
+    fi
 }
 
 stage_driver_runtime_payload() {

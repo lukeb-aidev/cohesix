@@ -1789,9 +1789,6 @@ fn embedded_driver_runtime_payload() -> Option<&'static [u8]> {
 }
 
 #[cfg(any(feature = "kernel", test))]
-const GENERIC_PI4_DRIVER_RUNTIME_ARTIFACT: &str = "cohesix/bin/pi4-driver-runtime";
-
-#[cfg(any(feature = "kernel", test))]
 fn read_cpio_hex(bytes: &[u8]) -> Option<usize> {
     let mut value = 0usize;
     for &byte in bytes {
@@ -1870,14 +1867,7 @@ fn cpio_entry_data_with_optional_wrapper<'a>(payload: &'a [u8], name: &str) -> O
 
 #[cfg(any(feature = "kernel", test))]
 fn cpio_driver_runtime_entry_data<'a>(payload: &'a [u8], artifact: &str) -> Option<&'a [u8]> {
-    cpio_entry_data_with_optional_wrapper(payload, artifact).or_else(|| {
-        artifact
-            .strip_prefix("cohesix/bin/pi4-driver-")
-            .and_then(|suffix| (!suffix.is_empty()).then_some(()))
-            .and_then(|()| {
-                cpio_entry_data_with_optional_wrapper(payload, GENERIC_PI4_DRIVER_RUNTIME_ARTIFACT)
-            })
-    })
+    cpio_entry_data_with_optional_wrapper(payload, artifact)
 }
 
 /// Return the linked driver runtime image bytes for a Pi 4 hot path.
@@ -2136,7 +2126,9 @@ const DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 8;
 const DRIVER_TASK_NET_ENGINE_INIT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 64;
 const DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 512;
-const DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32_768;
+pub(crate) const DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32_768;
+const DRIVER_TASK_CYW43_SDIO_OWNER_WAIT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize =
+    DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT;
 const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 0;
 const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
 
@@ -6198,7 +6190,7 @@ fn driver_task_ring_timeout_keep_active_limit_for_progress(
         && cached_driver_task_ring_progress_matches_request(slot, request, command.aux0)
         && driver_task_ring_cyw43_sdio_owner_phase(slot.last_progress_phase.load(Ordering::Acquire))
     {
-        if driver_task_ring_cyw43_sdio_owner_reply_phase(
+        if driver_task_ring_cyw43_sdio_owner_long_phase(
             slot.last_progress_phase.load(Ordering::Acquire),
         ) {
             DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT
@@ -6282,8 +6274,12 @@ const fn driver_task_ring_usb_enum_address_phase(phase: u32) -> bool {
 }
 
 #[cfg(feature = "kernel")]
-const fn driver_task_ring_cyw43_sdio_owner_reply_phase(phase: u32) -> bool {
-    phase == DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY
+const fn driver_task_ring_cyw43_sdio_owner_long_phase(phase: u32) -> bool {
+    matches!(
+        phase,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -11557,7 +11553,7 @@ mod tests {
                 DriverTaskRingCommandMode::PromptSlice,
                 request,
             ),
-            DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
+            DRIVER_TASK_CYW43_SDIO_OWNER_WAIT_TIMEOUT_KEEP_ACTIVE_LIMIT
         );
 
         slot.timeout_resumes.store(
@@ -11592,9 +11588,25 @@ mod tests {
                 request,
                 false,
             ),
+            (true, DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT)
+        );
+
+        slot.timeout_resumes.store(
+            DRIVER_TASK_CYW43_SDIO_OWNER_WAIT_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
             (
                 false,
-                DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
+                DRIVER_TASK_CYW43_SDIO_OWNER_WAIT_TIMEOUT_KEEP_ACTIVE_LIMIT
             )
         );
 
@@ -11619,7 +11631,7 @@ mod tests {
         );
         assert!(
             DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT
-                > DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
+                >= DRIVER_TASK_CYW43_SDIO_OWNER_WAIT_TIMEOUT_KEEP_ACTIVE_LIMIT
         );
 
         slot.timeout_resumes.store(
@@ -14545,7 +14557,7 @@ mod tests {
     }
 
     #[test]
-    fn physical_pi_runtime_payload_lookup_accepts_deduplicated_runtime_entry() {
+    fn physical_pi_runtime_payload_lookup_requires_manifest_artifact_entry() {
         fn pad4(bytes: &mut Vec<u8>) {
             while !bytes.len().is_multiple_of(4) {
                 bytes.push(0);
@@ -14581,7 +14593,7 @@ mod tests {
         let mut embedded = Vec::new();
         append_entry(
             &mut embedded,
-            GENERIC_PI4_DRIVER_RUNTIME_ARTIFACT,
+            "cohesix/bin/pi4-driver-runtime",
             b"generic-runtime-elf",
         );
         append_entry(&mut embedded, "TRAILER!!!", &[]);
@@ -14593,7 +14605,7 @@ mod tests {
                 Some(&embedded),
                 true,
             ),
-            Some(&b"generic-runtime-elf"[..])
+            None
         );
         assert_eq!(
             driver_runtime_image_bytes_from_payloads_for_profile(

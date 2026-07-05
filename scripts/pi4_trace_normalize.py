@@ -2905,6 +2905,7 @@ def cyw43_control_split_event_exact(event: TraceEvent) -> str | None:
         return detail_exact or "cyw43-control-split-timeout"
     if event_name in {
         "cyw43-control-tx-no-reply",
+        "cyw43-control-tx-retry-no-reply",
         "cyw43-control-tx-not-submitted",
         "cyw43-control-poll-unexpected-completion",
         "cyw43-control-frame-unavailable",
@@ -3075,6 +3076,21 @@ def normalize_wifi_blocker(value: str) -> str:
         "status=pending" in lower or " pending" in lower
     ):
         return "wifi-host-eapol-pending"
+    if (
+        stripped == "cyw43-control-tx-no-reply"
+        or stripped == "cyw43-control-tx-retry-no-reply"
+        or "cyw43-control-txglomalign-tx-no-reply" in lower
+        or "cyw43-control-txglomalign-tx-retry-no-reply" in lower
+        or (
+            "stage=cyw43-control-txglomalign" in lower
+            and ("status=tx-no-reply" in lower or "status=tx-retry-no-reply" in lower)
+        )
+    ):
+        if "retry" in lower or stripped == "cyw43-control-tx-retry-no-reply":
+            return "cyw43-control-tx-retry-no-reply"
+        return "cyw43-control-tx-no-reply"
+    if stripped == "cyw43-control-tx-not-submitted":
+        return "cyw43-control-tx-not-submitted"
     if (
         stripped == "cyw43-wifi"
         or "pi4-wifi-driver-task-runtime-required" in lower
@@ -3420,6 +3436,23 @@ def normalize_wifi_blocker(value: str) -> str:
         return "control-plane-rearm-timeout"
     if stripped == "reply-idle-loop":
         return "control-plane-reply-idle-loop"
+    if "cyw43-command-completion" in lower:
+        return "control-plane-reply-idle-loop"
+    if (
+        stripped == "cyw43-control-tx-no-reply"
+        or stripped == "cyw43-control-tx-retry-no-reply"
+        or "cyw43-control-txglomalign-tx-no-reply" in lower
+        or "cyw43-control-txglomalign-tx-retry-no-reply" in lower
+        or (
+            "stage=cyw43-control-txglomalign" in lower
+            and ("status=tx-no-reply" in lower or "status=tx-retry-no-reply" in lower)
+        )
+    ):
+        if "retry" in lower or stripped == "cyw43-control-tx-retry-no-reply":
+            return "cyw43-control-tx-retry-no-reply"
+        return "cyw43-control-tx-no-reply"
+    if stripped == "cyw43-control-tx-not-submitted":
+        return "cyw43-control-tx-not-submitted"
     if "host-card-int-no-dongle-source" in lower:
         return "control-plane-host-card-int-no-dongle-source"
     if "host-card-int-source-unreadable" in lower:
@@ -3821,6 +3854,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-rx-sdpcm-decode-miss",
         "cyw43-control-split-timeout",
         "cyw43-control-tx-no-reply",
+        "cyw43-control-tx-retry-no-reply",
         "cyw43-control-tx-not-submitted",
         "cyw43-runtime-command-no-reply",
         "cyw43-data-rx-f2-read-failed",
@@ -5074,6 +5108,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-host-card-int-source-unreadable",
         "control-plane-interrupt-programming-drift",
         "control-plane-interrupts-deferred",
+        "cyw43-control-tx-no-reply",
+        "cyw43-control-tx-retry-no-reply",
+        "cyw43-control-tx-not-submitted",
         "cyw43-sdio-descriptor-transfer-failed",
         "join-programming-host-latch-loop",
         "primary-bsscfg-wrapper-join-security-loop",
@@ -5166,6 +5203,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "reason",
             "detail",
             "err",
+            "failure_domain",
             "outcome",
             "blocker",
             "cause",
@@ -5503,6 +5541,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-reply-idle-loop",
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
+            "cyw43-control-tx-no-reply",
+            "cyw43-control-tx-retry-no-reply",
+            "cyw43-control-tx-not-submitted",
             "cyw43-sdio-descriptor-transfer-failed",
             *CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES,
             "firmware-supplicant-unsupported",
@@ -6331,6 +6372,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "control-plane-reply-idle-loop",
                 "control-plane-sideband-unreadable",
                 "control-plane-startup-link-timeout",
+                "cyw43-control-tx-no-reply",
+                "cyw43-control-tx-retry-no-reply",
+                "cyw43-control-tx-not-submitted",
                 "function2-interrupt-unbound",
                 "firmware-channel-f2",
                 "firmware-ready-timeout",
@@ -6506,6 +6550,26 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
 
     exact = "none"
     raw = event.raw.lower()
+    failure_domain = normalize_wifi_exact(event.fields.get("failure_domain", ""))
+    if failure_domain in {
+        "cyw43-control-tx-no-reply",
+        "cyw43-control-tx-retry-no-reply",
+        "cyw43-control-tx-not-submitted",
+    }:
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("phase")
+            or event.stage
+            or "cyw43-control-tx"
+        )
+        return failure_domain, phase
+    if (
+        event.fields.get("stage", "").lower() == "cyw43-control-txglomalign"
+        and event.fields.get("status", "").lower() in {"tx-no-reply", "tx-retry-no-reply"}
+    ):
+        if event.fields.get("status", "").lower() == "tx-retry-no-reply":
+            return "cyw43-control-tx-retry-no-reply", "cyw43-control-txglomalign"
+        return "cyw43-control-tx-no-reply", "cyw43-control-txglomalign"
     if "linked_runtime_progress" in raw:
         marker_exact = normalize_wifi_exact(event.fields.get("blocker", ""))
         if marker_exact.startswith(
@@ -6735,6 +6799,20 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
         return 0
     if cyw43_control_exchange_timeout_event_exact(event) is not None:
         return 0
+    if candidate in {"cyw43-control-tx-no-reply", "cyw43-control-tx-retry-no-reply"} and (
+        f"failure_domain={candidate}" in raw
+        or (
+            "stage=cyw43-control-txglomalign" in raw
+            and (
+                (candidate == "cyw43-control-tx-no-reply" and "status=tx-no-reply" in raw)
+                or (
+                    candidate == "cyw43-control-tx-retry-no-reply"
+                    and "status=tx-retry-no-reply" in raw
+                )
+            )
+        )
+    ):
+        return 0
     if (
         cyw43_control_split_event_exact(event) is not None
         or cyw43_control_reply_event_exact(event) is not None
@@ -6819,6 +6897,50 @@ def summarize_cyw43_control_revinfo_badarg(
             event.line,
         )
     return None
+
+
+def summarize_cyw43_split_descriptor_fault(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, int] | None:
+    """Return the raw split-control descriptor fault, if one occurred."""
+
+    latest: tuple[str, str, int] | None = None
+    for event in events:
+        if (
+            cyw43_control_split_event_exact(event)
+            != "cyw43-sdio-descriptor-transfer-failed"
+        ):
+            continue
+        phase = event.fields.get("stage") or event.stage or "cyw43-control-split"
+        latest = ("cyw43-sdio-descriptor-transfer-failed", phase, event.line)
+    return latest
+
+
+def summarize_cyw43_control_tx_no_reply(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, int] | None:
+    """Return terminal CYW43 control-TX no-reply proof, if unrecovered."""
+
+    latest: tuple[str, str, int] | None = None
+    for event in events:
+        raw = event.raw.lower()
+        if (
+            "control-plane step=init-complete action=ready" in raw
+            or (
+                event.fields.get("stage", "").lower() == "cyw43-control-plane"
+                and event.fields.get("status", "").lower() == "ready"
+            )
+        ):
+            latest = None
+            continue
+        exact, phase = wifi_failure_detail_from_fields(event)
+        if exact in {"cyw43-control-tx-no-reply", "cyw43-control-tx-retry-no-reply"}:
+            if latest is None or (
+                latest[1] in {"none", "cyw43-control-tx"}
+                and phase not in {"none", "cyw43-control-tx"}
+            ):
+                latest = (exact, phase, event.line)
+    return latest
 
 
 def summarize_wifi_failure_detail(
@@ -7602,6 +7724,25 @@ def usb_runtime_active_blocker_seen(raw: str, fields: Mapping[str, str]) -> bool
     return False
 
 
+def usb_runtime_active_blocker_event(event: TraceEvent) -> bool:
+    """Return whether an event is USB-scoped active degraded evidence."""
+
+    raw = event.raw.lower()
+    contract = event.fields.get("contract", "").lower()
+    if event.domain not in {"usb", "driver"}:
+        return False
+    if event.domain == "driver" and contract != "usb-local-seat":
+        return False
+    if event.domain == "usb" and (
+        raw.startswith("wifi:")
+        or raw.startswith("cyw43_")
+        or "[cyw43]" in raw
+        or "[pi4-wifi]" in raw
+    ):
+        return False
+    return usb_runtime_active_blocker_seen(raw, event.fields)
+
+
 def summarize_usb_keyboard_pressure(
     events: Iterable[TraceEvent],
 ) -> UsbKeyboardPressureSummary:
@@ -7647,7 +7788,7 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
     for event in events:
         raw = event.raw.lower()
         fields = event.fields
-        active_blocker_seen = usb_runtime_active_blocker_seen(raw, fields)
+        active_blocker_seen = usb_runtime_active_blocker_event(event)
         if active_blocker_seen:
             if command_ready_seen:
                 values["active_blocker_seen"] = True
@@ -7657,6 +7798,8 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
         if usb_command_ready_step(event):
             command_ready_seen = True
             values["command_ready"] = True
+            if "[local-seat] usb keyboard command-ready" in raw:
+                values["first_report_ready"] = True
             if (
                 "pi4 keyboard runtime proof" in raw
                 and field_lower(event, "result") in {"online", "ready"}
@@ -7674,13 +7817,24 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
             values["first_report_ready"] = True
         if usb_first_byte_step(event):
             values["first_byte_ready"] = True
+            if command_ready_seen and not values["active_blocker_seen"]:
+                values["busy_after_ready"] = False
         if raw.startswith("usb: runtime_gate") or raw.startswith("usb: acceptance"):
-            if field_lower(event, "first_report") == "yes":
+            first_report = field_lower(event, "first_report")
+            if first_report == "yes":
                 values["first_report_ready"] = True
+            elif first_report == "no":
+                values["first_report_ready"] = False
             if field_lower(event, "first_byte") == "yes":
                 values["first_byte_ready"] = True
+                if command_ready_seen and not values["active_blocker_seen"]:
+                    values["busy_after_ready"] = False
             if field_lower(event, "command_ready") == "yes":
+                command_ready_seen = True
                 values["command_ready"] = True
+        if sustained_input_progress_proof(raw, event.fields):
+            if command_ready_seen and not values["active_blocker_seen"]:
+                values["busy_after_ready"] = False
         if command_ready_seen and (
             "usb console busy" in raw
             or "usb keyboard command-deferred" in raw
@@ -10688,6 +10842,18 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     if wifi_blocker == "cyw43-transport-command-admission":
         wifi_gate = max(wifi_gate, 6)
         wifi_blocker = "cyw43-runtime-command-rejected"
+    control_tx_no_reply = summarize_cyw43_control_tx_no_reply(event_list)
+    if control_tx_no_reply is not None and wifi_gate <= 9:
+        wifi_gate = 7
+        wifi_exact, wifi_phase, wifi_blocker_line = control_tx_no_reply
+        wifi_blocker = wifi_exact
+    split_descriptor_fault = summarize_cyw43_split_descriptor_fault(event_list)
+    if (
+        split_descriptor_fault is not None
+        and wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
+    ):
+        wifi_gate = 7
+        wifi_exact, wifi_phase, wifi_blocker_line = split_descriptor_fault
     if driver_task_active_net == "genet" or net_active == "wired":
         wifi_gate = 0
         wifi_blocker = "not-selected"
