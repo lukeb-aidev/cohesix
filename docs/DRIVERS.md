@@ -1327,10 +1327,12 @@ context and the retry/poll window.
   `WLC_SET_INFRA`, WPA2 setup, firmware-supplicant probing, PAE multicast
   admission, and `WLC_SET_SSID`/primary-BSS join.
   The prejoin association sequence stays inside the isolated runtime:
-  `cyw43-control-prejoin-mpc` sends `mpc=1`,
-  using the runtime's bounded control pre-TX drain so stale control/event frames
-  cannot leave the next SDPCM submit behind an uncleared F2 condition on real
-  Pi 4 WiFi,
+  current Pi 4 firmware alignment does not emit `cyw43-control-prejoin-mpc`;
+  data admission remains disabled through the explicit `mpc=0` compatibility
+  edge until secure host-EAPOL proof releases DHCP/data. The remaining prejoin
+  exchanges use the runtime's bounded control pre-TX drain so stale control/event
+  frames cannot leave the next SDPCM submit behind an uncleared F2 condition on
+  real Pi 4 WiFi,
   `cyw43-control-prejoin-join-pref` sends the captured
   `04 02 08 01 01 02 00 00` `join_pref` bytes,
   `cyw43-control-prejoin-if-event-message` gets global `event_msgs`, sets the

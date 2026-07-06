@@ -239,13 +239,15 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "SDIO_DRIVER_TASK_REPLAY_STATUS stage=engine-init blocker=ready detail=0x5500",
         "wifi: cyw43-transport-ready owner=linked-runtime",
-        "wifi: firmware_contract fw=609309 nvram=2074 clm=2676 "
+        "wifi: firmware_contract fw=609309 nvram=1744 clm=2676 "
         f"fw_hash={normalizer.CYW43_CAPTURE_FIRMWARE_SHA256} "
         f"nvram_hash={normalizer.CYW43_CAPTURE_NVRAM_SHA256} "
         f"clm_hash={normalizer.CYW43_CAPTURE_CLM_SHA256} "
         "board=raspberrypi,4-model-b rstvec=0xb83ef198 verified=yes "
         "armcr4_release=1 sr_kso=yes current_clock=41666666Hz preferred=41666666Hz",
         "wifi: cyw43-release-firmware-ready-done status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-function2 status=ready",
         "wifi: function2-ready f2_enabled=yes f2_ready=yes",
         "[pi4-wifi] sdio irq contract irq=158 trigger=level "
         "bound=1 badge=0x9f device_clear=sdio-intstatus+sdhci-cardint "
@@ -255,7 +257,12 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "action=interrupts-armed path=sel4-irq "
         "source=hostintmask+cccr-ienx+sdhci-card-int "
         "fn_int_mask_policy=linux-unused ien=0x07",
+        "wifi: control_exchange step=cyw43-control-txglomalign "
+        "status=matched bus:txglomalign=8",
+        "wifi: control_exchange step=cyw43-control-ulp-sdioctrl "
+        "status=unsupported tolerated=yes",
         "wifi: control_exchange step=cyw43-control-rxglom status=matched bus:rxglom=1",
+        "wifi: control_exchange step=cyw43-control-cur-etheraddr status=matched",
         "wifi: control_exchange step=cyw43-control-revinfo status=matched",
         "CYW43_DRIVER_TASK_CLM contract=cyw43455 stage=cyw43-control-clmload "
         "action=ready index=2 offset=2676 len=2676 flags=0x0000",
@@ -346,7 +353,7 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
         "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host stage=engine-init blocker=ready detail=0x5500",
-        "wifi: firmware_contract fw=609309 nvram=2074 clm=2676 "
+        "wifi: firmware_contract fw=609309 nvram=1744 clm=2676 "
         f"fw_hash={normalizer.CYW43_CAPTURE_FIRMWARE_SHA256} "
         f"nvram_hash={normalizer.CYW43_CAPTURE_NVRAM_SHA256} "
         f"clm_hash={normalizer.CYW43_CAPTURE_CLM_SHA256} "
@@ -367,9 +374,21 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
         "source=hostintmask+cccr-ienx+sdhci-card-int "
         "fn_int_mask_policy=linux-unused ien=0x07",
         "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-txglomalign status=ready",
+        "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 "
+        "stage=cyw43-control-txglomalign event=matched-reply "
+        "status=0x00000000 reply_match=yes",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-ulp-sdioctrl status=unsupported",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
         "stage=cyw43-control-rxglom status=ready",
         "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 stage=cyw43-control-rxglom "
         "event=matched-reply status=0x00000000 reply_match=yes",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-mac status=ready",
+        "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 "
+        "stage=cyw43-control-mac event=matched-reply status=0x00000000 "
+        "reply_match=yes",
         "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
         "stage=cyw43-control-revinfo status=ready",
         "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 stage=cyw43-control-revinfo "
@@ -1248,6 +1267,24 @@ def test_gate_summary_late_tcp_not_ready_clears_current_tcp_state() -> None:
     assert record["NET_ADDR_SRC"] == "wifi-tx-credit-anomaly"
     assert record["NET_TCP_READY"] == "no"
     assert record["NETTEST_PROOF"] == "yes"
+
+
+def test_gate_summary_host_cohsh_proof_survives_stale_tcp_ready_no() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cohsh-net][auth] auth OK, session established (conn_id=1)",
+            "netstats: mode=dhcp policy=wired active=wired standby=wifi "
+            "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 "
+            "dhcp=bound tcp_ready=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["NET_ACTIVE"] == "wired"
+    assert record["NET_ADDR_SRC"] == "dhcp-lease"
+    assert record["NET_TCP_READY"] == "yes"
+    assert record["NETTEST_PROOF"] == "no"
 
 
 def test_gate_summary_nettest_error_clears_stale_success_proof() -> None:
@@ -2848,6 +2885,31 @@ def test_gate_summary_preserves_june12_cyw43_firmware_recovery_frontier() -> Non
     assert gates.wifi_blocker != "cyw43-transport-init"
 
 
+def test_gate_summary_preserves_firmware_frontier_after_nettest_disabled() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-firmware-chunk op=2 flags=0x0000 "
+            "target=0x00222000 payload_off=4096 payload_len=8192 "
+            "total_len=609309 detail=21289 "
+            "reason=cyw43-firmware-retry-exhausted result=83888128",
+            "wifi: gate 6 name=firmware-upload status=fail "
+            "evidence=uploaded=no fault_detail=0x5329 next=function2-ready",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-command driver-task runtime init failed",
+            "wifi: gate 9 name=tcp-nettest status=blocked "
+            "dependency=not-reached-due-to-gate-6",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "cyw43-firmware-retry-exhausted"
+    assert gates.wifi_exact == "cyw43-firmware-retry-exhausted"
+    assert gates.wifi_phase == "cyw43-firmware-chunk"
+
+
 def test_gate_summary_refines_cyw43_release_no_reply_with_last_release_marker() -> None:
     events = normalizer.parse_events(
         [
@@ -3836,6 +3898,52 @@ def test_gate_summary_promotes_cyw43_engine_init_replay_over_hal_power_noise() -
     assert record["WIFI_EXACT"] == "cyw43-engine-init-runtime-entry-no-reply"
     assert record["WIFI_PHASE"] == "cyw43-engine-init-runtime-entry-no-reply"
     assert record["NET_DRIVER_TASK_REPLAY_BLOCKER"] == "cyw43-wifi:engine-init:no-reply"
+
+
+def test_gate_summary_classifies_markerless_cyw43_engine_init_replay_exhaustion() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes policy=wifi "
+            "attempted=yes stage=engine-init blocker=begin",
+            "DRIVER_TASK_RING_CALL_BEGIN contract=cyw43455 endpoint=0x1b70 "
+            "request=2 opcode=1 flags=0x2000 arg0=5 arg1=8 aux0=0x454e474e "
+            "aux1=0 frame_len=0",
+            "DRIVER_TASK_RING_CALL_RETURN contract=cyw43455 endpoint=0x1b70 "
+            "request=2 sequence=2 code=5 detail=1 result=0",
+            "DRIVER_TASK_RING_PROGRESS contract=cyw43455 request=2 "
+            "expected_aux0=0x454e474e marker_valid=yes marker_sequence=0 "
+            "marker_phase=202 marker_phase_name=runtime-poll-ready marker_aux0=0x00000004",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes policy=wifi "
+            "attempted=yes stage=engine-init blocker=stale-admission-retry",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=net-engine-init status=stale-admission-retry acceptance=no "
+            "code=5 detail=1 result=0",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes policy=wifi "
+            "attempted=yes stage=engine-init-replay blocker=begin",
+            "DRIVER_TASK_RING_CALL_RETURN contract=cyw43455 endpoint=0x1b70 "
+            "request=3 sequence=3 code=5 detail=1 result=0",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes policy=wifi "
+            "attempted=yes stage=engine-init-replay blocker=stale-admission-exhausted",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=net-engine-init-replay status=stale-admission-exhausted "
+            "acceptance=no code=5 detail=1 result=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "cyw43-engine-init-stale-admission-exhausted"
+    assert record["WIFI_EXACT"] == "cyw43-engine-init-stale-admission-exhausted"
+    assert record["WIFI_PHASE"] == "net-engine-init-replay"
+    assert (
+        record["NET_DRIVER_TASK_REPLAY_BLOCKER"]
+        == "cyw43-wifi:engine-init-replay:stale-admission-exhausted"
+    )
+    assert (
+        record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"]
+        == "cyw43-wifi:net-engine-init-replay:stale-admission-exhausted"
+    )
 
 
 def test_gate_summary_preserves_cyw43_engine_init_branch_progress_blocker() -> None:
@@ -11844,8 +11952,103 @@ def test_gate_summary_accepts_pi4_hardware_wifi_gate7_to_10_capture_contract() -
     assert record["WIFI_OLDGOOD_MISSING"] == "none"
 
 
-def test_gate_summary_accepts_streamed_firmware_upload_identity() -> None:
-    """A complete linked-runtime firmware stream is identity proof."""
+def test_gate_summary_requires_oldgood_txglomalign_control_step() -> None:
+    lines = [
+        line
+        for line in oldgood_wifi_replay_lines()
+        if "cyw43-control-txglomalign" not in line
+    ]
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "function2-ready"
+    assert record["WIFI_OLDGOOD_MISSING"] == "control-txglomalign"
+
+
+def test_gate_summary_requires_oldgood_ulp_sdioctrl_control_step() -> None:
+    lines = [
+        line
+        for line in oldgood_wifi_replay_lines()
+        if "cyw43-control-ulp-sdioctrl" not in line
+    ]
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "control-txglomalign"
+    assert record["WIFI_OLDGOOD_MISSING"] == "control-ulp-sdioctrl"
+
+
+def test_gate_summary_requires_oldgood_cur_etheraddr_control_step() -> None:
+    lines = [
+        line
+        for line in oldgood_wifi_replay_lines()
+        if "cyw43-control-cur-etheraddr" not in line
+    ]
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "control-rxglom"
+    assert record["WIFI_OLDGOOD_MISSING"] == "control-cur-etheraddr"
+
+
+def test_gate_summary_rejects_legacy_only_function2_ready_as_oldgood() -> None:
+    lines = [
+        line
+        for line in oldgood_wifi_replay_lines()
+        if "stage=cyw43-function2 status=ready" not in line
+    ]
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "firmware-ready"
+    assert record["WIFI_OLDGOOD_MISSING"] == "function2-ready"
+
+
+def test_gate_summary_accepts_normalized_nvram_upload_identity() -> None:
+    """Firmware identity uses normalized NVRAM upload length plus raw file hash."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: firmware_contract fw=609309 nvram=1744 clm=2676 "
+            f"fw_hash={normalizer.CYW43_CAPTURE_FIRMWARE_SHA256} "
+            f"nvram_hash={normalizer.CYW43_CAPTURE_NVRAM_SHA256} "
+            f"clm_hash={normalizer.CYW43_CAPTURE_CLM_SHA256} "
+            "board=raspberrypi,4-model-b rstvec=0xb83ef198 verified=yes "
+            "armcr4_release=1 sr_kso=yes current_clock=41666666Hz "
+            "preferred=41666666Hz",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_FIRMWARE_IDENTITY_PROOF"] == "yes"
+    assert record["WIFI_FIRMWARE_IDENTITY_BLOCKER"] == "none"
+
+
+def test_gate_summary_rejects_raw_nvram_len_as_upload_identity() -> None:
+    """The contract's nvram field reports normalized upload bytes, not raw size."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: firmware_contract fw=609309 nvram=2074 clm=2676 "
+            f"fw_hash={normalizer.CYW43_CAPTURE_FIRMWARE_SHA256} "
+            f"nvram_hash={normalizer.CYW43_CAPTURE_NVRAM_SHA256} "
+            f"clm_hash={normalizer.CYW43_CAPTURE_CLM_SHA256}",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_FIRMWARE_IDENTITY_PROOF"] == "no"
+    assert record["WIFI_FIRMWARE_IDENTITY_BLOCKER"] == "nvram-upload-len"
+
+
+def test_gate_summary_rejects_streamed_firmware_upload_without_identity_hashes() -> None:
+    """A complete firmware stream still needs exact bundle identity fields."""
 
     events = normalizer.parse_events(
         seal_driver_task_runtime_descriptor_lines(
@@ -11876,11 +12079,11 @@ def test_gate_summary_accepts_streamed_firmware_upload_identity() -> None:
 
     record = normalizer.summarize_gates(events).to_record()
 
-    assert record["WIFI_FIRMWARE_IDENTITY_PROOF"] == "yes"
-    assert record["WIFI_FIRMWARE_IDENTITY_BLOCKER"] == "none"
+    assert record["WIFI_FIRMWARE_IDENTITY_PROOF"] == "no"
+    assert record["WIFI_FIRMWARE_IDENTITY_BLOCKER"] == "firmware-identity-line-missing"
     assert record["WIFI_OLDGOOD_REPLAY"] == "no"
-    assert record["WIFI_OLDGOOD_LAST"] == "function2-ready"
-    assert record["WIFI_OLDGOOD_MISSING"] == "control-rxglom"
+    assert record["WIFI_OLDGOOD_LAST"] == "none"
+    assert record["WIFI_OLDGOOD_MISSING"] == "firmware-identity"
 
 
 def test_gate_summary_rejects_incomplete_streamed_firmware_upload_identity() -> None:

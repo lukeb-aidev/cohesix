@@ -2091,15 +2091,74 @@ fn driver_task_resource_completion_status(
 const CYW43_ENGINE_INIT_REPLAY_ATTEMPTS: usize = 3;
 
 #[cfg(feature = "kernel")]
-const fn cyw43_engine_init_completion_allows_replay(
-    completion: Option<DriverTaskCompletionRecord>,
+fn cyw43_engine_init_completion_observed_by_runtime(
+    completion: DriverTaskCompletionRecord,
+    progress: Option<DriverTaskRingProgressSnapshot>,
 ) -> bool {
+    matches!(
+        progress,
+        Some(progress)
+            if progress.marker_valid
+                && progress.sequence == completion.sequence
+                && progress.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_engine_init_completion_replay_reason(
+    completion: Option<DriverTaskCompletionRecord>,
+) -> Option<&'static str> {
     match completion {
-        None => true,
-        Some(completion) => {
-            completion.code == DriverTaskCompletionCode::Fault.as_u16()
-                && completion.detail == DriverTaskFaultCode::DeviceUnavailable.as_u16()
-        }
+        None => Some("no-reply"),
+        Some(completion) => match (completion.code, completion.detail) {
+            (code, detail)
+                if code == DriverTaskCompletionCode::Fault.as_u16()
+                    && detail == DriverTaskFaultCode::DeviceUnavailable.as_u16() =>
+            {
+                Some("device-unavailable")
+            }
+            (code, detail)
+                if code == DriverTaskCompletionCode::Fault.as_u16()
+                    && detail == DriverTaskFaultCode::RejectedCommand.as_u16()
+                    && !cyw43_engine_init_completion_observed_by_runtime(
+                        completion,
+                        crate::hal::driver_task::latest_driver_task_ring_progress(
+                            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                        ),
+                    ) =>
+            {
+                Some("stale-admission")
+            }
+            _ => None,
+        },
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_engine_init_completion_status(
+    completion: Option<DriverTaskCompletionRecord>,
+    initialized: bool,
+    replay_reason: Option<&'static str>,
+    final_attempt: bool,
+) -> &'static str {
+    if initialized {
+        return "ready";
+    }
+    match replay_reason {
+        Some("stale-admission") if !final_attempt => "stale-admission-retry",
+        Some("stale-admission") => "stale-admission-exhausted",
+        _ => driver_task_resource_completion_status(completion, initialized),
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_engine_init_completion_allows_replay(
+    replay_reason: Option<&'static str>,
+    final_attempt: bool,
+) -> bool {
+    match replay_reason {
+        Some(_) => !final_attempt,
+        None => false,
     }
 }
 
@@ -2354,7 +2413,22 @@ where
                 completion.code == DriverTaskCompletionCode::Progress.as_u16()
                     && completion.result == 1
             });
-            let status = driver_task_resource_completion_status(completion, initialized);
+            let final_attempt = attempt.saturating_add(1) >= max_engine_init_attempts;
+            let replay_reason = if hot_path == DriverTaskHotPath::Cyw43Wifi {
+                cyw43_engine_init_completion_replay_reason(completion)
+            } else {
+                None
+            };
+            let status = if hot_path == DriverTaskHotPath::Cyw43Wifi {
+                cyw43_engine_init_completion_status(
+                    completion,
+                    initialized,
+                    replay_reason,
+                    final_attempt,
+                )
+            } else {
+                driver_task_resource_completion_status(completion, initialized)
+            };
             emit_net_driver_task_replay_status(config, hot_path, replay_stage, status);
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 contract,
@@ -2365,7 +2439,7 @@ where
             );
             if initialized
                 || hot_path != DriverTaskHotPath::Cyw43Wifi
-                || !cyw43_engine_init_completion_allows_replay(completion)
+                || !cyw43_engine_init_completion_allows_replay(replay_reason, final_attempt)
             {
                 break;
             }
@@ -8102,13 +8176,24 @@ const fn cyw43_tx_completion_proof(
 
 #[cfg(feature = "kernel")]
 const fn cyw43_sdpcm_credit_from_flags(flags: u16) -> Option<u8> {
-    if flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK != 0 {
+    let channel = flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK;
+    if channel == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL
+        || channel == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT
+        || channel == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+        || flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK != 0
+    {
         return Some(
             ((flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK)
                 >> DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT) as u8,
         );
     }
     None
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_sdpcm_credit_from_completion_flags(flags: u16) -> u8 {
+    ((flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK)
+        >> DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT) as u8
 }
 
 #[cfg(feature = "kernel")]
@@ -8121,7 +8206,9 @@ const fn cyw43_completion_sdpcm_credit(completion: DriverTaskCompletionRecord) -
         if code != DriverTaskCompletionCode::FrameReady.as_u16() && completion.frame.len == 0 {
             return None;
         }
-        return cyw43_sdpcm_credit_from_flags(completion.frame.flags);
+        return Some(cyw43_sdpcm_credit_from_completion_flags(
+            completion.frame.flags,
+        ));
     }
     None
 }
@@ -15254,14 +15341,42 @@ mod tests {
             badarg
         ));
         assert!(!cyw43_control_exchange_completion_is_optional_filter_reject(other_fault));
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
         assert_eq!(CYW43_ENGINE_INIT_REPLAY_ATTEMPTS, 3);
-        assert!(cyw43_engine_init_completion_allows_replay(None));
-        assert!(cyw43_engine_init_completion_allows_replay(Some(
-            DriverTaskCompletionRecord::fault(2, DriverTaskFaultCode::DeviceUnavailable)
-        )));
-        assert!(!cyw43_engine_init_completion_allows_replay(Some(
-            DriverTaskCompletionRecord::fault(3, DriverTaskFaultCode::RejectedCommand)
-        )));
+        assert_eq!(
+            cyw43_engine_init_completion_replay_reason(None),
+            Some("no-reply")
+        );
+        assert!(cyw43_engine_init_completion_allows_replay(
+            Some("no-reply"),
+            false
+        ));
+        assert_eq!(
+            cyw43_engine_init_completion_replay_reason(Some(DriverTaskCompletionRecord::fault(
+                2,
+                DriverTaskFaultCode::DeviceUnavailable
+            ))),
+            Some("device-unavailable")
+        );
+        assert!(cyw43_engine_init_completion_allows_replay(
+            Some("device-unavailable"),
+            false
+        ));
+        assert_eq!(
+            cyw43_engine_init_completion_replay_reason(Some(DriverTaskCompletionRecord::fault(
+                3,
+                DriverTaskFaultCode::RejectedCommand
+            ))),
+            Some("stale-admission")
+        );
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
         let not_associated = DriverTaskCompletionRecord {
             result: CYW43_BCME_NOTASSOCIATED_STATUS,
             ..unsupported
@@ -16655,6 +16770,27 @@ mod tests {
             },
         );
         assert!(cyw43_completion_credit_covers_tx(frame_ready, proof));
+
+        let mut wrapped_tx_completion = DriverTaskCompletionRecord::progress(11, 144);
+        wrapped_tx_completion.detail = 144;
+        wrapped_tx_completion.frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 3,
+            flags: 255,
+        };
+        let wrapped_proof = cyw43_tx_completion_proof(wrapped_tx_completion)
+            .expect("wrapped TX proof carries sequence 255");
+        assert_eq!(wrapped_proof.submitted_seq, 255);
+        assert!(
+            cyw43_completion_credit_covers_tx(wrapped_tx_completion, wrapped_proof),
+            "SDPCM credit 0 covers submitted seq 255 after u8 wrap"
+        );
+
+        let stale_wrap_proof = Cyw43HostEapolTxProof { submitted_seq: 100 };
+        assert!(!cyw43_completion_credit_covers_tx(
+            wrapped_tx_completion,
+            stale_wrap_proof
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -20266,6 +20402,100 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_engine_init_replays_markerless_rejected_completion() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        let completion = DriverTaskCompletionRecord {
+            sequence: 2,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: DriverTaskFaultCode::RejectedCommand.as_u16(),
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+
+        let replay_reason = cyw43_engine_init_completion_replay_reason(Some(completion));
+
+        assert_eq!(replay_reason, Some("stale-admission"));
+        assert_eq!(
+            cyw43_engine_init_completion_status(Some(completion), false, replay_reason, false),
+            "stale-admission-retry"
+        );
+        assert!(cyw43_engine_init_completion_allows_replay(
+            replay_reason,
+            false
+        ));
+        assert_eq!(
+            cyw43_engine_init_completion_status(Some(completion), false, replay_reason, true),
+            "stale-admission-exhausted"
+        );
+        assert!(!cyw43_engine_init_completion_allows_replay(
+            replay_reason,
+            true
+        ));
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_engine_init_reject_with_current_progress_is_terminal() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            2,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+            DRIVER_RUNTIME_ENGINE_INIT_AUX,
+        );
+        let completion = DriverTaskCompletionRecord {
+            sequence: 2,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: DriverTaskFaultCode::RejectedCommand.as_u16(),
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+
+        let replay_reason = cyw43_engine_init_completion_replay_reason(Some(completion));
+
+        assert_eq!(replay_reason, None);
+        assert_eq!(
+            cyw43_engine_init_completion_status(Some(completion), false, replay_reason, false),
+            "fault"
+        );
+        assert!(!cyw43_engine_init_completion_allows_replay(
+            replay_reason,
+            false
+        ));
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_descriptor_unavailable_retry_is_narrow() {
         let descriptor_unavailable = DriverTaskCompletionRecord {
             sequence: 11,
@@ -22205,6 +22435,47 @@ mod tests {
         assert_eq!(counters.tx_submit, 6);
         assert_eq!(counters.tx_complete, 6);
         assert_eq!(counters.tx_in_flight, 0);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_credit_zero_after_wrap_reopens_submitted_window() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_TX_SUBMITTED.store(256, Ordering::Release);
+        CYW43_TX_CREDIT_COMPLETED.store(255, Ordering::Release);
+
+        let mut tx_completion = DriverTaskCompletionRecord::progress(7, 64);
+        tx_completion.frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 1,
+            flags: 255,
+        };
+        record_cyw43_unproven_tx_window(Some(tx_completion));
+        assert_eq!(
+            CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
+            CYW43_TX_UNPROVEN_KNOWN
+        );
+
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&test_cyw43_tcp_frame())
+        ));
+        assert!(
+            cyw43_tx_unproven_window_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "RX-carried SDPCM credit 0 must cover submitted seq 255 after u8 wrap"
+        );
+
+        assert_eq!(CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire), 0);
+        assert_eq!(
+            CYW43_TX_CREDIT_COMPLETED.load(Ordering::Acquire),
+            256,
+            "wrapped SDPCM credit must close the cumulative submitted window"
+        );
 
         reset_cyw43_status_flags();
     }

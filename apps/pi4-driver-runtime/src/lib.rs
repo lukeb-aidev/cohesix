@@ -9231,12 +9231,7 @@ fn cyw43_function2_execute_control_tx_transfer(
         }
         let transfer_failure = sdio_last_transfer_failure();
         if cyw43_control_tx_block_rescue_failure(transfer_failure) {
-            state.backplane_window_valid = false;
-            if !cyw43_prime_post_release_function2_control_write(state) {
-                cyw43_record_control_tx_transfer_fault_if_present();
-                return false;
-            }
-            if !block_rescue_active
+            let activated_block_rescue = if !block_rescue_active
                 && cyw43_control_tx_block_rescue_candidate(active_frame, active_block_count)
             {
                 active_frame = DriverFrameDescriptor {
@@ -9247,6 +9242,15 @@ fn cyw43_function2_execute_control_tx_transfer(
                 active_block_size = CYW43_FUNCTION2_BLOCK_BYTES as u16;
                 active_block_count = 1;
                 block_rescue_active = true;
+                true
+            } else {
+                false
+            };
+            state.backplane_window_valid = false;
+            let reprime_ok = cyw43_prime_post_release_function2_control_write(state);
+            if !reprime_ok && !activated_block_rescue {
+                cyw43_record_control_tx_transfer_fault_if_present();
+                return false;
             }
         }
         if state.control_tx_recovered_detail == 0 {
@@ -9420,6 +9424,10 @@ fn cyw43_runtime_rearm_function2_after_write_timeout(state: &mut Cyw43RuntimeSta
 fn cyw43_prime_post_release_function2_control_write(state: &mut Cyw43RuntimeState) -> bool {
     #[cfg(any(target_os = "none", test))]
     {
+        #[cfg(all(not(target_os = "none"), test))]
+        if test_cyw43_prime_post_release_fail_now() {
+            return false;
+        }
         cyw43_require_post_release_ht_clock().is_ok()
             && cyw43_force_ht_clock_for_function2().is_ok()
             && cyw43_enable_post_release_function2_poll().is_ok()
@@ -15809,6 +15817,10 @@ static TEST_SDIO_CMD52_NONE_RESPONSE_KEY: AtomicU32 =
     AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
 
 #[cfg(all(not(target_os = "none"), test))]
+static TEST_CYW43_PRIME_POST_RELEASE_FAIL_AFTER: AtomicU32 =
+    AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
+
+#[cfg(all(not(target_os = "none"), test))]
 static TEST_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -15895,6 +15907,8 @@ fn reset_test_sdio_cmd52_read_responses() {
     TEST_SDIO_CMD52_RFRAME_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_CYW43_SDIO_INT_STATUS_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_SDIO_CMD52_NONE_RESPONSE_KEY.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
+    TEST_CYW43_PRIME_POST_RELEASE_FAIL_AFTER
+        .store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -15979,6 +15993,42 @@ fn test_cyw43_backplane_read_u32_response(addr: u32) -> Option<u32> {
 #[cfg(all(not(target_os = "none"), test))]
 fn test_cyw43_sdio_int_status_response(value: u32) {
     TEST_CYW43_SDIO_INT_STATUS_RESPONSE.store(value, Ordering::Release);
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_cyw43_prime_post_release_fail_after(successes: u32) {
+    TEST_CYW43_PRIME_POST_RELEASE_FAIL_AFTER.store(successes, Ordering::Release);
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_cyw43_prime_post_release_fail_now() -> bool {
+    loop {
+        let remaining = TEST_CYW43_PRIME_POST_RELEASE_FAIL_AFTER.load(Ordering::Acquire);
+        if remaining == TEST_SDIO_CMD52_RESPONSE_UNSET {
+            return false;
+        }
+        if remaining == 0 {
+            return TEST_CYW43_PRIME_POST_RELEASE_FAIL_AFTER
+                .compare_exchange(
+                    0,
+                    TEST_SDIO_CMD52_RESPONSE_UNSET,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok();
+        }
+        if TEST_CYW43_PRIME_POST_RELEASE_FAIL_AFTER
+            .compare_exchange(
+                remaining,
+                remaining.saturating_sub(1),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            return false;
+        }
+    }
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -27666,6 +27716,64 @@ mod tests {
             SDIO_CCCR_IOEX,
             SDIO_FUNC_ENABLE_2
         ));
+    }
+
+    #[test]
+    fn cyw43_control_tx_block_rescue_survives_outer_reprime_miss() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.sdpcm_seq = 8;
+        state.sdpcm_seq_max = 9;
+        let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
+        stage_bytes(payload_offset, b"cdc-control");
+        let request_len = cyw43_control_tx_request_len(CYW43_SDPCM_HEADER_BYTES + 11);
+        reset_test_sdio_transfer_log();
+        test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
+        test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
+        test_cyw43_prime_post_release_fail_after(1);
+
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: 11,
+            flags: 0,
+        };
+
+        assert_eq!(
+            cyw43_submit_sdpcm_frame(&mut state, frame, false, false),
+            CYW43_SDPCM_HEADER_BYTES + 11
+        );
+        assert_eq!(state.sdpcm_seq, 9);
+        assert_eq!(state.tx_frames, 1);
+        assert_eq!(
+            state.control_tx_recovered_detail,
+            DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_TX_F2_RETRY_RECOVERED
+        );
+        assert_eq!(test_sdio_cmd53_transfer_count(2, true), 3);
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                request_len as u16,
+                0,
+                request_len as u16
+            ),
+            2
+        );
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16,
+                1,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16
+            ),
+            1
+        );
     }
 
     #[test]

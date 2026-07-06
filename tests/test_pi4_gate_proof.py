@@ -310,13 +310,15 @@ def _oldgood_wifi_replay_lines() -> list[str]:
     return [
         "SDIO_DRIVER_TASK_REPLAY_STATUS stage=engine-init blocker=ready detail=0x5500",
         "wifi: cyw43-transport-ready owner=linked-runtime",
-        "wifi: firmware_contract fw=609309 nvram=2074 clm=2676 "
+        "wifi: firmware_contract fw=609309 nvram=1744 clm=2676 "
         "fw_hash=d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3 "
         "nvram_hash=ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d "
         "clm_hash=9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1 "
         "board=raspberrypi,4-model-b rstvec=0xb83ef198 verified=yes "
         "armcr4_release=1 sr_kso=yes current_clock=41666666Hz preferred=41666666Hz",
         "wifi: cyw43-release-firmware-ready-done status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-function2 status=ready",
         "wifi: function2-ready f2_enabled=yes f2_ready=yes",
         "[pi4-wifi] sdio irq contract irq=158 trigger=level "
         "bound=1 badge=0x9f device_clear=sdio-intstatus+sdhci-cardint "
@@ -326,7 +328,12 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "action=interrupts-armed path=sel4-irq "
         "source=hostintmask+cccr-ienx+sdhci-card-int "
         "fn_int_mask_policy=linux-unused ien=0x07",
+        "wifi: control_exchange step=cyw43-control-txglomalign "
+        "status=matched bus:txglomalign=8",
+        "wifi: control_exchange step=cyw43-control-ulp-sdioctrl "
+        "status=unsupported tolerated=yes",
         "wifi: control_exchange step=cyw43-control-rxglom status=matched bus:rxglom=1",
+        "wifi: control_exchange step=cyw43-control-cur-etheraddr status=matched",
         "wifi: control_exchange step=cyw43-control-revinfo status=matched",
         "CYW43_DRIVER_TASK_CLM contract=cyw43455 stage=cyw43-control-clmload "
         "action=ready index=2 offset=2676 len=2676 flags=0x0000",

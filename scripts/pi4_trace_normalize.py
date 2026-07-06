@@ -3036,6 +3036,11 @@ def normalize_wifi_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
+    if (
+        "stale-admission-exhausted" in lower
+        and ("engine-init" in lower or "net-engine-init" in lower)
+    ) or stripped == "stale-admission-exhausted":
+        return "cyw43-engine-init-stale-admission-exhausted"
     if uboot_wifi_policy_missing_line(value):
         return "uboot-policy-missing"
     if "wifi-data-rx-admission-blocked" in lower or (
@@ -3072,15 +3077,39 @@ def normalize_wifi_blocker(value: str) -> str:
     if (
         "net_driver_task_replay_status" in lower
         and "role=cyw43-wifi" in lower
-        and "stage=engine-init" in lower
+        and (
+            "stage=engine-init " in lower
+            or "stage=engine-init-replay" in lower
+        )
         and "blocker=no-reply" in lower
     ) or (
         "driver_task_resource_init" in lower
         and "contract=cyw43455" in lower
-        and "stage=net-engine-init" in lower
+        and (
+            "stage=net-engine-init " in lower
+            or "stage=net-engine-init-replay" in lower
+        )
         and "status=no-reply" in lower
     ):
         return "cyw43-engine-init-no-reply"
+    if (
+        "net_driver_task_replay_status" in lower
+        and "role=cyw43-wifi" in lower
+        and (
+            "stage=engine-init " in lower
+            or "stage=engine-init-replay" in lower
+        )
+        and "blocker=stale-admission-exhausted" in lower
+    ) or (
+        "driver_task_resource_init" in lower
+        and "contract=cyw43455" in lower
+        and (
+            "stage=net-engine-init " in lower
+            or "stage=net-engine-init-replay" in lower
+        )
+        and "status=stale-admission-exhausted" in lower
+    ):
+        return "cyw43-engine-init-stale-admission-exhausted"
     if (
         "cyw43-association-not-associated" in lower
         or "association-not-associated" in lower
@@ -3754,6 +3783,11 @@ def normalize_wifi_exact(value: str) -> str:
     lower = value.lower()
     if lower.strip() in {"", "none", "n/a", "net-ready"}:
         return "none"
+    if (
+        "stale-admission-exhausted" in lower
+        and ("engine-init" in lower or "net-engine-init" in lower)
+    ) or lower.strip() == "stale-admission-exhausted":
+        return "cyw43-engine-init-stale-admission-exhausted"
     cyw43_transport_details = {
         "1": "cyw43-runtime-command-rejected",
         "0x1": "cyw43-runtime-command-rejected",
@@ -5150,6 +5184,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "host-eapol-required",
         "wsec-pmk-bad-argument",
     }
+    firmware_upload_blockers = {"cyw43-firmware-retry-exhausted"}
     sticky_wifi_exact_blockers = {"cyw43-sdio-descriptor-transfer-failed"}
     specific_sdio_blockers = precise_ht_blockers - direct_sdio_blockers
     exact_reset_blockers = specific_sdio_blockers - {
@@ -6022,6 +6057,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 and explicit_blocker.startswith("nettest-")
             ):
                 blocker = blocker
+            elif blocker in firmware_upload_blockers and explicit_blocker in {
+                "cyw43",
+                "cyw43-command",
+                "ioctl-timeout",
+                "nettest-failed",
+            }:
+                blocker = blocker
             elif blocker.startswith("cyw43-post-release-") and explicit_blocker in {
                 "cyw43",
                 "cyw43-command",
@@ -6054,6 +6096,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             elif not (
                 blocker in precise_control_plane_blockers
                 or blocker.startswith("cyw43-post-release-")
+                or blocker in firmware_upload_blockers
                 or blocker in precise_ht_blockers
                 or blocker in JOIN_SECURITY_EXACT_BY_BLOCKER
                 or blocker
@@ -6538,6 +6581,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     if blocker in precise_ht_blockers and not ht_available_seen and not post_f2_progress_seen:
         gate = min(gate, 4)
     if (
+        blocker in firmware_upload_blockers
+        and not firmware_release_seen
+        and not post_f2_progress_seen
+    ):
+        gate = min(gate, 5)
+    if (
         startup_blackbox_blocker is not None
         and startup_blackbox_gate >= 4
         and gate <= startup_blackbox_gate
@@ -6848,6 +6897,8 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
     ):
         return 0
     if wifi_firmware_stream_fault_blocker(event) == candidate:
+        if raw.startswith("wifi: gate"):
+            return 10
         return 0
     if candidate == "runtime-rx-host-latch-spam":
         return 1
@@ -7121,6 +7172,13 @@ def summarize_wifi_failure_detail(
         ):
             candidate = "cyw43-driver-task-replay"
         if (
+            wifi_blocker.startswith("cyw43-engine-init-")
+            and "net_driver_task_replay_status" in raw
+            and fields.get("stage", "").lower() in {"engine-init", "engine-init-replay"}
+            and replay_status not in {"", "none", "begin", "ready", "success", "no-reply"}
+        ):
+            candidate = wifi_blocker
+        if (
             wifi_blocker == "control-plane-reply-idle-loop"
             and "sdio xfer chunk" in raw
             and "fn=1" in raw
@@ -7219,6 +7277,14 @@ def summarize_wifi_failure_detail(
         if event_exact == wifi_blocker:
             candidate = wifi_blocker
         if (
+            blocker_matched
+            and wifi_blocker == "cyw43-engine-init-no-reply"
+            and exact.startswith("cyw43-engine-init-")
+            and exact != wifi_blocker
+            and event_exact == wifi_blocker
+        ):
+            continue
+        if (
             wifi_blocker == "cyw43-firmware-runtime-replay"
             and event_exact.startswith("cyw43-release-")
             and event_exact.endswith("-no-reply")
@@ -7284,6 +7350,12 @@ def summarize_wifi_failure_detail(
                 replay_stage = fields.get("stage") or event.stage or "driver-task-replay"
                 exact = f"{replay_stage}-{replay_status or 'unknown'}"
             if candidate.startswith("sdio-engine-init-"):
+                exact = candidate
+            if candidate.startswith("cyw43-engine-init-") and not (
+                candidate == "cyw43-engine-init-no-reply"
+                and event_exact.startswith("cyw43-engine-init-")
+                and event_exact != candidate
+            ):
                 exact = candidate
             if candidate == "join-programming-host-latch-loop":
                 exact = "cyw43-join-programming-host-latch-loop"
@@ -8163,14 +8235,19 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
     dhcp = "unknown"
     dhcp_interface = "unknown"
     tcp_ready = False
+    host_tcp_proof = False
     nettest_proof = False
     for event in events:
         raw = event.raw.lower()
         detail = field_lower(event, "detail")
+        if "[cohsh-net][auth] auth ok" in raw or "[net-console] auth ok" in raw:
+            host_tcp_proof = True
+            tcp_ready = True
         if raw.startswith("ok nettest") and (detail == "pass" or "success" in raw):
             tcp_ready = True
             nettest_proof = True
         if raw.startswith("err nettest") or "detail=net-disabled" in raw:
+            host_tcp_proof = False
             tcp_ready = False
             nettest_proof = False
         if raw_has(event, "[net-selftest] result", "tx_ok=true", "console_ok=true") or (
@@ -8203,7 +8280,7 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
         if tcp_ready_field == "yes":
             tcp_ready = True
         elif tcp_ready_field == "no":
-            tcp_ready = False
+            tcp_ready = host_tcp_proof
     return active, addr_src, dhcp, tcp_ready, nettest_proof
 
 
@@ -10027,17 +10104,67 @@ def wifi_firmware_ready_step(event: TraceEvent) -> bool:
 def wifi_function2_ready_step(event: TraceEvent) -> bool:
     """Return true when Function 2 is enabled and usable."""
 
-    if resource_init_step(
+    return resource_init_step(
         event,
         contract="cyw43455",
         hot_path="cyw43-wifi",
         stages={"cyw43-function2"},
         statuses={"ready"},
-    ):
-        return True
-    if event.domain not in {"wifi", "driver"}:
-        return False
-    return field_lower(event, "f2_enabled") == "yes" and field_lower(event, "f2_ready") == "yes"
+    )
+
+
+def wifi_control_txglomalign_step(event: TraceEvent) -> bool:
+    """Return true once Linux-shaped txglomalign control setup is matched."""
+
+    return (
+        resource_init_step(
+            event,
+            contract="cyw43455",
+            hot_path="cyw43-wifi",
+            stages={"cyw43-control-txglomalign"},
+            statuses={"ready"},
+        )
+        or control_reply_matched_step(event, "cyw43-control-txglomalign")
+        or (
+            event.domain in {"wifi", "driver"}
+            and raw_has_any(
+                event,
+                (
+                    "cyw43-control-txglomalign ready",
+                    "control_exchange step=cyw43-control-txglomalign status=matched",
+                    "bus:txglomalign=8",
+                ),
+            )
+        )
+    )
+
+
+def wifi_control_ulp_sdioctrl_step(event: TraceEvent) -> bool:
+    """Return true once the optional ULP SDIO control step is resolved."""
+
+    return (
+        resource_init_step(
+            event,
+            contract="cyw43455",
+            hot_path="cyw43-wifi",
+            stages={"cyw43-control-ulp-sdioctrl"},
+            statuses={"ready", "unsupported"},
+        )
+        or control_reply_matched_step(event, "cyw43-control-ulp-sdioctrl")
+        or (
+            event.domain in {"wifi", "driver"}
+            and raw_has_any(
+                event,
+                (
+                    "cyw43-control-ulp-sdioctrl ready",
+                    "control_exchange step=cyw43-control-ulp-sdioctrl status=matched",
+                    "control_exchange step=cyw43-control-ulp-sdioctrl status=unsupported",
+                    "cyw43-control-ulp-sdioctrl unsupported",
+                    "ulp_sdioctrl unsupported",
+                ),
+            )
+        )
+    )
 
 
 def wifi_control_rxglom_step(event: TraceEvent) -> bool:
@@ -10052,14 +10179,46 @@ def wifi_control_rxglom_step(event: TraceEvent) -> bool:
             statuses={"ready"},
         )
         or control_reply_matched_step(event, "cyw43-control-rxglom")
-        or (event.domain in {"wifi", "driver"} and raw_has_any(
-        event,
-        (
-            "cyw43-control-rxglom ready",
-            "control_exchange step=cyw43-control-rxglom status=matched",
-            "bus:rxglom=1",
-        ),
-        ))
+        or (
+            event.domain in {"wifi", "driver"}
+            and raw_has_any(
+                event,
+                (
+                    "cyw43-control-rxglom ready",
+                    "control_exchange step=cyw43-control-rxglom status=matched",
+                    "bus:rxglom=1",
+                ),
+            )
+        )
+    )
+
+
+def wifi_control_cur_etheraddr_step(event: TraceEvent) -> bool:
+    """Return true once the current MAC address control read is matched."""
+
+    return (
+        resource_init_step(
+            event,
+            contract="cyw43455",
+            hot_path="cyw43-wifi",
+            stages={"cyw43-control-cur-etheraddr", "cyw43-control-mac"},
+            statuses={"ready"},
+        )
+        or control_reply_matched_step(event, "cyw43-control-cur-etheraddr")
+        or control_reply_matched_step(event, "cyw43-control-mac")
+        or (
+            event.domain in {"wifi", "driver"}
+            and raw_has_any(
+                event,
+                (
+                    "cyw43-control-cur-etheraddr ready",
+                    "cyw43-control-mac ready",
+                    "control_exchange step=cyw43-control-cur-etheraddr status=matched",
+                    "control_exchange step=cyw43-control-mac status=matched",
+                    "cur_etheraddr matched",
+                ),
+            )
+        )
     )
 
 
@@ -10294,7 +10453,8 @@ def wifi_forbidden_shortcut(event: TraceEvent) -> bool:
 
 
 CYW43_CAPTURE_FIRMWARE_LEN = 609_309
-CYW43_CAPTURE_NVRAM_LEN = 2_074
+CYW43_CAPTURE_RAW_NVRAM_LEN = 2_074
+CYW43_CAPTURE_NVRAM_UPLOAD_LEN = 1_744
 CYW43_CAPTURE_CLM_LEN = 2_676
 CYW43_CAPTURE_FIRMWARE_SHA256 = (
     "d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3"
@@ -10307,30 +10467,10 @@ CYW43_CAPTURE_CLM_SHA256 = (
 )
 
 
-def wifi_firmware_stream_upload_identity_step(event: TraceEvent) -> bool:
-    """Return true when linked-runtime streaming proves the known firmware length."""
-
-    raw = event.raw.lower()
-    if "cyw43_driver_task_stream_progress" not in raw:
-        return False
-    if field_lower(event, "contract") != "cyw43455":
-        return False
-    if field_lower(event, "stage") != "cyw43-firmware-chunk":
-        return False
-    uploaded = parse_hex_int(event.fields.get("uploaded"))
-    total_len = parse_hex_int(event.fields.get("total_len"))
-    return (
-        uploaded == CYW43_CAPTURE_FIRMWARE_LEN
-        and total_len == CYW43_CAPTURE_FIRMWARE_LEN
-    )
-
-
 def wifi_firmware_identity_step(event: TraceEvent) -> bool:
     """Return true for captured Pi 4B CYW43455 firmware identity evidence."""
 
     raw = event.raw.lower()
-    if wifi_firmware_stream_upload_identity_step(event):
-        return True
     if not raw.startswith(("wifi: firmware_contract", "wifi: firmware_release")):
         return False
     firmware_len = parse_hex_int(event.fields.get("fw"))
@@ -10338,7 +10478,7 @@ def wifi_firmware_identity_step(event: TraceEvent) -> bool:
     clm_len = parse_hex_int(event.fields.get("clm"))
     return (
         firmware_len == CYW43_CAPTURE_FIRMWARE_LEN
-        and nvram_len == CYW43_CAPTURE_NVRAM_LEN
+        and nvram_len == CYW43_CAPTURE_NVRAM_UPLOAD_LEN
         and clm_len == CYW43_CAPTURE_CLM_LEN
         and field_lower(event, "fw_hash") == CYW43_CAPTURE_FIRMWARE_SHA256
         and field_lower(event, "nvram_hash") == CYW43_CAPTURE_NVRAM_SHA256
@@ -10351,7 +10491,10 @@ def wifi_firmware_identity_blocker(event: TraceEvent) -> str:
 
     if parse_hex_int(event.fields.get("fw")) != CYW43_CAPTURE_FIRMWARE_LEN:
         return "firmware-len"
-    if parse_hex_int(event.fields.get("nvram")) != CYW43_CAPTURE_NVRAM_LEN:
+    nvram_len = parse_hex_int(event.fields.get("nvram"))
+    if nvram_len != CYW43_CAPTURE_NVRAM_UPLOAD_LEN:
+        if nvram_len == CYW43_CAPTURE_RAW_NVRAM_LEN:
+            return "nvram-upload-len"
         return "nvram-len"
     if parse_hex_int(event.fields.get("clm")) != CYW43_CAPTURE_CLM_LEN:
         return "clm-len"
@@ -10383,7 +10526,8 @@ def summarize_wifi_firmware_identity(events: Iterable[TraceEvent]) -> tuple[bool
             if uploaded != total_len:
                 blocker = "firmware-upload-incomplete"
                 continue
-            return True, "none"
+            blocker = "firmware-identity-line-missing"
+            continue
         if not raw.startswith(("wifi: firmware_contract", "wifi: firmware_release")):
             continue
         blocker = wifi_firmware_identity_blocker(event)
@@ -10458,7 +10602,10 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
             SequenceStep("cyw43-transport-ready", wifi_cyw43_transport_step),
             SequenceStep("firmware-ready", wifi_firmware_ready_step),
             SequenceStep("function2-ready", wifi_function2_ready_step),
+            SequenceStep("control-txglomalign", wifi_control_txglomalign_step),
+            SequenceStep("control-ulp-sdioctrl", wifi_control_ulp_sdioctrl_step),
             SequenceStep("control-rxglom", wifi_control_rxglom_step),
+            SequenceStep("control-cur-etheraddr", wifi_control_cur_etheraddr_step),
             SequenceStep("control-revinfo", wifi_control_revinfo_step),
             SequenceStep("clm-ready", wifi_clm_ready_step),
             SequenceStep("firmware-version", wifi_firmware_version_step),
@@ -10981,10 +11128,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             and wifi_blocker == "control-plane-reply-idle-loop"
             and replay_gate < wifi_gate
         )
+        replay_refines_generic_rejection = (
+            wifi_blocker == "cyw43-runtime-command-rejected"
+            and replay_blocker.startswith("cyw43-engine-init-")
+        )
         if (
             wifi_replay_should_refine(wifi_blocker)
             or replay_gate > wifi_gate
             or replay_precedes_generic_control_summary
+            or replay_refines_generic_rejection
         ):
             wifi_gate = (
                 replay_gate
@@ -11356,6 +11508,7 @@ def summarize_driver_task_resource_init(
         "cached-ready",
         "sdio-owner-replay",
         "resume-retained-stage",
+        "stale-admission-retry",
     }
     first_blocker = "none"
     current_blockers: dict[tuple[str, str, str], str] = {}
@@ -11704,6 +11857,7 @@ def summarize_driver_task_frontiers(
         "cached-ready",
         "sdio-owner-replay",
         "resume-retained-stage",
+        "stale-admission-retry",
     }
 
     for event in events:
@@ -12082,6 +12236,7 @@ def summarize_driver_task_replay_status(
         "cached-ready",
         "sdio-owner-replay",
         "resume-retained-stage",
+        "stale-admission-retry",
     }
     for event in replay_events:
         status = event.fields.get("blocker", "unknown").lower()
@@ -12120,7 +12275,7 @@ def classify_net_replay_gate(replay_blocker: str) -> tuple[int, str, str, str]:
     if len(parts) != 3:
         return 1, "cyw43-driver-task-replay", replay_blocker, "cyw43-driver-task-replay"
     role, stage, status = parts
-    if role == "cyw43-wifi" and stage == "engine-init":
+    if role == "cyw43-wifi" and stage in {"engine-init", "engine-init-replay"}:
         blocker = f"cyw43-engine-init-{status}"
         return 1, blocker, blocker, stage
     if role == "cyw43-wifi" and stage == "cyw43-sdio-prereq":
