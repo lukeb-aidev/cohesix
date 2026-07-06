@@ -447,6 +447,15 @@ fn net_status_terminal_failure_reason(status: &NetStatusReport) -> Option<&'stat
 
 #[cfg(feature = "net-console")]
 fn net_status_pre_root_serial_release_reason(status: &NetStatusReport) -> Option<&'static str> {
+    if status.active_interface == "wired"
+        && matches!(
+            status.address_source,
+            "manifest-static" | "dev-virt" | "dhcp-lease"
+        )
+        && matches!(status.dhcp_phase, "bound" | "disabled")
+    {
+        return Some("wired-address-ready");
+    }
     net_status_terminal_failure_reason(status)
 }
 
@@ -16153,6 +16162,10 @@ mod tests {
         status.address_source = "dhcp-lease";
         status.dhcp_phase = "bound";
         assert!(!super::net_status_allows_root_console(&status));
+        assert_eq!(
+            super::net_status_pre_root_serial_release_reason(&status),
+            None
+        );
         status.tcp_ready = true;
         assert!(super::net_status_allows_root_console(&status));
         assert_eq!(super::net_status_terminal_failure_reason(&status), None);
@@ -16161,6 +16174,18 @@ mod tests {
         assert!(super::net_status_allows_root_console(&status));
         status.address_source = "manifest-static";
         assert!(super::net_status_allows_root_console(&status));
+
+        let mut wired = status.clone();
+        wired.active_driver = "bcmgenet-v5";
+        wired.active_interface = "wired";
+        wired.address_source = "dhcp-lease";
+        wired.dhcp_phase = "bound";
+        wired.tcp_ready = false;
+        assert!(!super::net_status_allows_root_console(&wired));
+        assert_eq!(
+            super::net_status_pre_root_serial_release_reason(&wired),
+            Some("wired-address-ready")
+        );
     }
 
     #[test]

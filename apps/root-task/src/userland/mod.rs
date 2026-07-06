@@ -760,7 +760,7 @@ fn wait_for_net_console_before_root_console<
                 "[net-console] root console wait ended reason={reason} action=start-serial-root-console elapsed_ms={elapsed_ms} polls={polls}",
             );
             boot_log::force_uart_line(line.as_str());
-            if reason == "wifi-host-eapol-pending" {
+            if matches!(reason, "wifi-host-eapol-pending" | "wired-address-ready") {
                 log::info!(target: "net-console", "{}", line.as_str());
             } else {
                 log::warn!(target: "net-console", "{}", line.as_str());

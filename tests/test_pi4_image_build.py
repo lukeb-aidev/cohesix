@@ -130,13 +130,26 @@ def test_pi4_image_build_defaults_to_usb_uboot_menu_input() -> None:
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert 'U_BOOT_MENU_INPUT="${COHESIX_UBOOT_MENU_INPUT:-usb}"' in source
+    assert 'U_BOOT_MENU_INPUT="usb"' in source
+    assert 'U_BOOT_MENU_INPUT="${COHESIX_UBOOT_MENU_INPUT:-usb}"' not in source
     assert "--uboot-menu-input <m>" in source
     assert 'validate_menu_input_mode' in source
     assert 'setenv coh_menu_input __COH_MENU_INPUT__' in source
     assert 'test "${coh_menu_input}" = "usb"' in source
     assert 'sed -i \'\' "s/__COH_MENU_INPUT__/${U_BOOT_MENU_INPUT}/g" "$out"' in source
     assert "setenv coh_logo_delay 1" in source
+
+
+def test_pi4_image_build_ignores_legacy_menu_input_environment() -> None:
+    """A stale shell variable must not silently disable the USB U-Boot menu."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'U_BOOT_MENU_INPUT_SOURCE="default"' in source
+    assert 'U_BOOT_MENU_INPUT_SOURCE="cli"' in source
+    assert 'U_BOOT_MENU_INPUT="${COHESIX_UBOOT_MENU_INPUT:-usb}"' not in source
+    assert "Ignoring COHESIX_UBOOT_MENU_INPUT=" in source
+    assert "use --uboot-menu-input for explicit serial lab captures" in source
 
 
 def test_pi4_image_build_keeps_firmware_second_stage_debug_quiet() -> None:

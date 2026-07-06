@@ -1252,6 +1252,8 @@ fn prove_pi4_vl805_pcie_ownership(
     let command_before = vl805_cfg_read_u16(index_reg, config_virt, PCI_CFG_COMMAND_STATUS)?;
     let mut bar0 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR0)?;
     let mut bar1 = vl805_cfg_read_u32(index_reg, config_virt, PCI_CFG_BAR1)?;
+    let bar0_before = bar0;
+    let bar1_before = bar1;
     if status_ready && vl805_bar_assignment_needed(bar0, bar1) {
         let assigned_bar0 = vl805_pi4_assigned_bar0_value();
         vl805_cfg_write_u32(index_reg, config_virt, PCI_CFG_BAR1, 0)?;
@@ -1363,6 +1365,24 @@ fn prove_pi4_vl805_pcie_ownership(
         return Err(HalError::Unsupported("vl805-command"));
     }
 
+    if vl805_post_command_reset_notify_needed(
+        phase,
+        bar0_before,
+        bar1_before,
+        bar0,
+        bar1,
+        command_before,
+        command_after,
+        devctl_proof,
+    ) {
+        notify_vl805_reset_after_pcie_ready(
+            hal,
+            phase,
+            "post-vl805-bar-command",
+            "vl805-bar-command-devctl-after-firmware-notify",
+        )?;
+    }
+
     Ok(Pi4Vl805PcieProof {
         status,
         config_virt,
@@ -1381,6 +1401,28 @@ fn prove_pi4_vl805_pcie_ownership(
         pcie_devctl_before: devctl_proof.control_before,
         pcie_devctl_after: devctl_proof.control_after,
     })
+}
+
+fn vl805_post_command_reset_notify_needed(
+    phase: Pi4PcieProofPhase,
+    bar0_before: u32,
+    bar1_before: u32,
+    bar0_after: u32,
+    bar1_after: u32,
+    command_before: u16,
+    command_after: u16,
+    devctl_proof: Vl805PcieDeviceControlProof,
+) -> bool {
+    if !phase.reloads_vl805_firmware_after_perst() {
+        return false;
+    }
+    let bar_changed = bar0_before != bar0_after || bar1_before != bar1_after;
+    let command_changed = command_before != command_after;
+    let devctl_changed = match (devctl_proof.control_before, devctl_proof.control_after) {
+        (Some(before), Some(after)) => before != after,
+        _ => false,
+    };
+    bar_changed || command_changed || devctl_changed
 }
 
 fn ensure_pi4_pcie_root_ready(
@@ -2640,6 +2682,69 @@ mod tests {
         assert!(!vl805_bar_assignment_needed(0x0000_0000, 0));
         assert!(!vl805_bar_assignment_needed(0x0000_0005, 0));
         assert!(!vl805_bar_assignment_needed(0x0000_0004, 1));
+    }
+
+    #[test]
+    fn vl805_post_command_reset_notify_follows_bar_command_or_devctl_changes() {
+        let unchanged_devctl = Vl805PcieDeviceControlProof {
+            control_before: Some(VL805_PCIE_DEVCTL_COMMAND_PROOF),
+            control_after: Some(VL805_PCIE_DEVCTL_COMMAND_PROOF),
+        };
+        let changed_devctl = Vl805PcieDeviceControlProof {
+            control_before: Some(0),
+            control_after: Some(VL805_PCIE_DEVCTL_COMMAND_PROOF),
+        };
+
+        assert!(!vl805_post_command_reset_notify_needed(
+            Pi4PcieProofPhase::Initial,
+            0x0000_0004,
+            0,
+            0xc000_0004,
+            0,
+            0,
+            VL805_POLL_ONLY_COMMAND_REQUIRED,
+            changed_devctl,
+        ));
+        assert!(vl805_post_command_reset_notify_needed(
+            Pi4PcieProofPhase::PostMailboxReset,
+            0x0000_0004,
+            0,
+            0xc000_0004,
+            0,
+            VL805_POLL_ONLY_COMMAND_REQUIRED,
+            VL805_POLL_ONLY_COMMAND_REQUIRED,
+            unchanged_devctl,
+        ));
+        assert!(vl805_post_command_reset_notify_needed(
+            Pi4PcieProofPhase::PostMailboxReset,
+            0xc000_0004,
+            0,
+            0xc000_0004,
+            0,
+            0,
+            VL805_POLL_ONLY_COMMAND_REQUIRED,
+            unchanged_devctl,
+        ));
+        assert!(vl805_post_command_reset_notify_needed(
+            Pi4PcieProofPhase::PostMailboxReset,
+            0xc000_0004,
+            0,
+            0xc000_0004,
+            0,
+            VL805_POLL_ONLY_COMMAND_REQUIRED,
+            VL805_POLL_ONLY_COMMAND_REQUIRED,
+            changed_devctl,
+        ));
+        assert!(!vl805_post_command_reset_notify_needed(
+            Pi4PcieProofPhase::PostMailboxReset,
+            0xc000_0004,
+            0,
+            0xc000_0004,
+            0,
+            VL805_POLL_ONLY_COMMAND_REQUIRED,
+            VL805_POLL_ONLY_COMMAND_REQUIRED,
+            unchanged_devctl,
+        ));
     }
 
     #[test]

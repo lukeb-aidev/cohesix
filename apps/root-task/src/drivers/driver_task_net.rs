@@ -4054,7 +4054,7 @@ fn cyw43_prepare_runtime_control_plane(
         8,
         "cyw43-control-txglomalign",
         Cyw43ControlHeaderMode::Plain,
-        true,
+        false,
     )?;
     cyw43_get_bcdc_iovar_optional_unsupported_with_header_mode(
         contract,
@@ -16087,19 +16087,16 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_glom_control_uses_split_frame_with_startup_drain() {
+    fn cyw43_glom_control_uses_split_frame_without_rx_pre_drain() {
         let txglom_descriptor =
-            cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, true);
+            cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
 
         assert_eq!(txglom_descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
-        assert_eq!(
-            txglom_descriptor.flags,
-            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
-        );
+        assert_eq!(txglom_descriptor.flags, 0);
         assert_eq!(txglom_descriptor.payload_len, 36);
         assert_eq!(txglom_descriptor.total_len, 36);
         assert_eq!(
-            cyw43_control_runtime_flags(Cyw43ControlHeaderMode::Plain, true),
+            cyw43_control_runtime_flags(Cyw43ControlHeaderMode::Plain, false),
             txglom_descriptor.flags
         );
         let rxglom_descriptor =
@@ -16125,7 +16122,7 @@ mod tests {
     fn cyw43_split_control_fault_status_preserves_expected_metadata() {
         test_clear_cyw43_runtime_replay_status();
 
-        let descriptor = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, true);
+        let descriptor = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
         record_cyw43_control_split_failure(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             "cyw43-control-txglomalign",
@@ -16144,7 +16141,7 @@ mod tests {
         let fault = latest_cyw43_runtime_command_fault_status().unwrap();
         assert_eq!(fault.stage, "cyw43-control-txglomalign");
         assert_eq!(fault.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
-        assert_eq!(fault.flags, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN);
+        assert_eq!(fault.flags, 0);
         assert_eq!(fault.control_cmd, CYW43_WLC_SET_VAR);
         assert_eq!(fault.control_id, 1);
         assert_eq!(fault.control_header_mode, "plain");

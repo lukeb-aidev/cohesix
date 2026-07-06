@@ -8170,6 +8170,9 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
         if raw.startswith("ok nettest") and (detail == "pass" or "success" in raw):
             tcp_ready = True
             nettest_proof = True
+        if raw.startswith("err nettest") or "detail=net-disabled" in raw:
+            tcp_ready = False
+            nettest_proof = False
         if raw_has(event, "[net-selftest] result", "tx_ok=true", "console_ok=true") or (
             "[net-selftest] result" in raw
             and field_lower(event, "result") in {"pass", "peer-assisted-pass"}
@@ -10304,10 +10307,30 @@ CYW43_CAPTURE_CLM_SHA256 = (
 )
 
 
-def wifi_firmware_identity_step(event: TraceEvent) -> bool:
-    """Return true for the exact captured Raspberry Pi OS Pi 4B CYW43455 identity."""
+def wifi_firmware_stream_upload_identity_step(event: TraceEvent) -> bool:
+    """Return true when linked-runtime streaming proves the known firmware length."""
 
     raw = event.raw.lower()
+    if "cyw43_driver_task_stream_progress" not in raw:
+        return False
+    if field_lower(event, "contract") != "cyw43455":
+        return False
+    if field_lower(event, "stage") != "cyw43-firmware-chunk":
+        return False
+    uploaded = parse_hex_int(event.fields.get("uploaded"))
+    total_len = parse_hex_int(event.fields.get("total_len"))
+    return (
+        uploaded == CYW43_CAPTURE_FIRMWARE_LEN
+        and total_len == CYW43_CAPTURE_FIRMWARE_LEN
+    )
+
+
+def wifi_firmware_identity_step(event: TraceEvent) -> bool:
+    """Return true for captured Pi 4B CYW43455 firmware identity evidence."""
+
+    raw = event.raw.lower()
+    if wifi_firmware_stream_upload_identity_step(event):
+        return True
     if not raw.startswith(("wifi: firmware_contract", "wifi: firmware_release")):
         return False
     firmware_len = parse_hex_int(event.fields.get("fw"))
@@ -10347,6 +10370,20 @@ def summarize_wifi_firmware_identity(events: Iterable[TraceEvent]) -> tuple[bool
     blocker = "not-seen"
     for event in events:
         raw = event.raw.lower()
+        if "cyw43_driver_task_stream_progress" in raw:
+            if field_lower(event, "contract") != "cyw43455":
+                continue
+            if field_lower(event, "stage") != "cyw43-firmware-chunk":
+                continue
+            total_len = parse_hex_int(event.fields.get("total_len"))
+            uploaded = parse_hex_int(event.fields.get("uploaded"))
+            if total_len != CYW43_CAPTURE_FIRMWARE_LEN:
+                blocker = "firmware-upload-len"
+                continue
+            if uploaded != total_len:
+                blocker = "firmware-upload-incomplete"
+                continue
+            return True, "none"
         if not raw.startswith(("wifi: firmware_contract", "wifi: firmware_release")):
             continue
         blocker = wifi_firmware_identity_blocker(event)

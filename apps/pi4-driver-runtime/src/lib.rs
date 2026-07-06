@@ -5155,8 +5155,8 @@ fn service_cyw43_descriptor_command(
                 flags: 0,
             };
             let control_ext_header = desc.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER != 0;
+            cyw43_drain_startup_status_frames(state, command.sequence);
             if desc.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN != 0 {
-                cyw43_drain_startup_status_frames(state, command.sequence);
                 cyw43_drain_rx_before_control_tx(state, command.sequence);
             }
             cyw43_publish_control_rx_progress(
@@ -5662,10 +5662,12 @@ const fn sdio_cmd53_arg_addr(arg: u32) -> u32 {
     (arg >> 9) & 0x1ffff
 }
 
-const fn sdio_cmd53_arg_is_function1_backplane_write(arg: u32) -> bool {
-    sdio_cmd53_arg_write(arg)
+const fn sdio_cmd53_r5_out_of_range_tolerated(cmd: u16, arg: u32, status: u32) -> bool {
+    cmd == SDIO_CMD53
+        && status == SDIO_R5_OUT_OF_RANGE
+        && sdio_cmd53_arg_write(arg)
         && sdio_cmd53_arg_function(arg) == 1
-        && sdio_cmd53_arg_addr(arg) & BACKPLANE_32BIT_FLAG != 0
+        && (sdio_cmd53_arg_addr(arg) & BACKPLANE_32BIT_FLAG) != 0
 }
 
 const fn sdio_cmd53_r5_error(cmd: u16, arg: u32, response: u32) -> Option<u32> {
@@ -5673,10 +5675,9 @@ const fn sdio_cmd53_r5_error(cmd: u16, arg: u32, response: u32) -> Option<u32> {
         return None;
     }
     let status = sdio_r5_status(response);
-    if status == SDIO_R5_OUT_OF_RANGE && sdio_cmd53_arg_is_function1_backplane_write(arg) {
-        return None;
-    }
     if status == 0 {
+        None
+    } else if sdio_cmd53_r5_out_of_range_tolerated(cmd, arg, status) {
         None
     } else {
         Some(status)
@@ -9278,6 +9279,11 @@ fn cyw43_record_control_tx_transfer_fault_if_present() {
         return;
     }
     match cyw43_take_last_fault_detail() {
+        Some(FAULT_CYW43_POST_RELEASE_HT | FAULT_CYW43_POST_RELEASE_F2_READY)
+            if cyw43_control_tx_block_rescue_failure(transfer_failure) =>
+        {
+            cyw43_record_last_fault_with_result(FAULT_CYW43_CONTROL_FRAME, transfer_failure);
+        }
         Some(detail @ (FAULT_CYW43_POST_RELEASE_HT | FAULT_CYW43_POST_RELEASE_F2_READY)) => {
             cyw43_record_last_fault_with_result(detail, transfer_failure);
         }
@@ -27786,7 +27792,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_control_tx_fault_preserves_post_release_ht_transfer_result() {
+    fn cyw43_control_tx_fault_relabels_post_release_ht_for_f2_transfer_failure() {
         let _guard = test_guard();
         reset_runtime_for_test();
         sdio_clear_last_transfer_failure();
@@ -27801,7 +27807,7 @@ mod tests {
 
         assert_eq!(
             cyw43_take_last_fault_detail(),
-            Some(FAULT_CYW43_POST_RELEASE_HT)
+            Some(FAULT_CYW43_CONTROL_FRAME)
         );
         assert_eq!(cyw43_take_last_fault_result(), transfer_result);
     }
@@ -27912,6 +27918,7 @@ mod tests {
             state.firmware_released = true;
             state.sdpcm_seq = 4;
             state.sdpcm_seq_max = 5;
+            state.control_startup_status_drained = true;
             state.sdpcm_next_frame_len = frame_len as u16;
         });
         stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
@@ -27988,6 +27995,7 @@ mod tests {
         stage_u32(cdc_offset + 12, CYW43_CDC_STATUS_SUCCESS);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.firmware_released = true;
+            state.control_startup_status_drained = true;
             state.sdpcm_seq = 4;
             state.sdpcm_seq_max = 5;
             state.sdpcm_next_frame_len = frame_len as u16;
@@ -28164,6 +28172,57 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_split_control_always_consumes_startup_status_once() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        let control_payload = *b"cdc-control";
+        let startup_event = *b"startup-event";
+        stage_bytes(usize::from(payload_offset), &control_payload);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq = 4;
+            state.sdpcm_seq_max = 5;
+            state.control_startup_status_drained = false;
+            queue_cyw43_raw_frame_at(
+                state,
+                0,
+                cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 7),
+                &startup_event,
+            );
+            state.rx_queue_head = 0;
+            state.rx_queue_count = 1;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+            flags: 0,
+            target_addr: 0,
+            payload_offset,
+            payload_len: control_payload.len() as u16,
+            total_len: control_payload.len() as u32,
+            arg0: 0,
+            arg1: 0,
+            reserved: 0,
+        });
+        reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(91)),
+            DriverTaskCompletionRecord::progress(
+                91,
+                (CYW43_SDPCM_HEADER_BYTES + control_payload.len()) as u32
+            )
+        );
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert!(state.control_startup_status_drained);
+            assert_eq!(state.rx_queue_count, 0);
+            assert_eq!(state.sdpcm_seq, 5);
+        });
+    }
+
+    #[test]
     fn cyw43_plain_control_tx_does_not_pre_drain_pending_rx() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -28179,6 +28238,7 @@ mod tests {
         stage_sdpcm_data_subframe(CYW43_RUNTIME_RX_BUFFER_OFFSET, &packet, 8);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.firmware_released = true;
+            state.control_startup_status_drained = true;
             state.sdpcm_seq = 4;
             state.sdpcm_seq_max = 5;
             state.sdpcm_next_frame_len = frame_len as u16;
@@ -32496,7 +32556,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_cmd53_r5_errors_match_old_hal_status_mask() {
+    fn sdio_cmd53_r5_tolerates_function1_backplane_out_of_range_only() {
         let firmware_write = sdio_cmd53_arg(
             true,
             1,

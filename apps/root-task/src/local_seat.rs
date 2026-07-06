@@ -10017,6 +10017,7 @@ mod tests {
         ));
     }
 
+    #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
     fn physical_pi_usb_recovery_details_include_hub_and_device_failures() {
         for detail in [

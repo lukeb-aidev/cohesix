@@ -32,6 +32,7 @@ DEFAULT_LINE_TERMINATOR = "\r"
 TAIL_LIMIT = 131_072
 CHOICE_PROMPT = b"Select option [1]:"
 ROOT_PROMPT = b"cohesix>"
+ROOT_PROMPT_MIN_SUFFIX = 2
 ROOT_MENU_MARKERS = (
     b"[cohesix] Cohesix boot options",
     b"Continue with existing config",
@@ -186,15 +187,18 @@ class RedactingSerialController:
         tail = self._redact(bytes(seen[-2048:])).decode("utf-8", errors="replace")
         raise SerialMarkerTimeout(f"timed out waiting for {label}; tail={tail!r}")
 
-    def drain_for(self, duration_s: float, *, label: str) -> None:
+    def drain_for(self, duration_s: float, *, label: str) -> bytes:
         """Record post-marker serial chatter before sending the next command."""
 
         self.note(f"drain {label} duration_s={duration_s:.2f}")
         deadline = time.monotonic() + duration_s
+        seen = bytearray()
         while time.monotonic() < deadline:
             chunk = self._serial.read(4096)
             if chunk:
                 self._record(chunk)
+                seen.extend(chunk)
+        return bytes(seen)
 
 
 def parse_args() -> argparse.Namespace:
@@ -246,6 +250,12 @@ def serial_marker_seen(snapshot: bytes, marker: bytes) -> bool:
 
     if marker in snapshot:
         return True
+    if marker == ROOT_PROMPT:
+        tail = snapshot.rstrip()
+        return any(
+            tail.endswith(marker[-suffix_len:])
+            for suffix_len in range(ROOT_PROMPT_MIN_SUFFIX, len(marker))
+        )
     if not marker.startswith((b"OK ", b"ERR ")):
         return False
     cleaned = ASYNC_RESULT_FRAGMENT_RE.sub(b"", snapshot)
@@ -501,19 +511,23 @@ def run_diagnostics(
     commands.extend(["usb diag", "usb probe-kbd", "smp activity"])
     usb_scored = True
     if prompt_ready:
-        controller.drain_for(8.0, label="post-root-prompt-settle-before-diagnostics")
-        try:
-            controller.read_until(
-                DIAGNOSTIC_READY_MARKERS,
-                DIAGNOSTIC_SETTLE_TIMEOUT_S,
-                label="root command readiness before diagnostics",
-            )
-        except SerialMarkerTimeout as exc:
-            usb_scored = False
-            controller.note(
-                "diagnostics serial_only_usb_unproven_after_command_ready_timeout "
-                f"error={exc}"
-            )
+        settle = controller.drain_for(
+            8.0,
+            label="post-root-prompt-settle-before-diagnostics",
+        )
+        if not any(marker in settle for marker in DIAGNOSTIC_READY_MARKERS):
+            try:
+                controller.read_until(
+                    DIAGNOSTIC_READY_MARKERS,
+                    DIAGNOSTIC_SETTLE_TIMEOUT_S,
+                    label="root command readiness before diagnostics",
+                )
+            except SerialMarkerTimeout as exc:
+                usb_scored = False
+                controller.note(
+                    "diagnostics serial_only_usb_unproven_after_command_ready_timeout "
+                    f"error={exc}"
+                )
     for command in commands:
         if command.startswith("usb ") and not usb_scored:
             controller.note(
@@ -530,7 +544,7 @@ def run_diagnostics(
                 90,
                 label=f"result for {command}",
             )
-            prompt_ready = ROOT_PROMPT in result_snapshot
+            prompt_ready = serial_marker_seen(result_snapshot, ROOT_PROMPT)
         except SerialMarkerTimeout as exc:
             controller.note(f"diagnostic timeout command={command!r} error={exc}")
             raise
@@ -567,7 +581,7 @@ def run() -> int:
                 args.initial_timeout_s,
                 label="root prompt or Cohesix U-Boot menu",
             )
-            if ROOT_PROMPT in first:
+            if serial_marker_seen(first, ROOT_PROMPT):
                 menu_snapshot = reboot_from_root(
                     controller,
                     repo,

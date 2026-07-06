@@ -48,7 +48,8 @@ RESTORE_CANONICAL_CODEGEN=0
 PRESERVED_POLICY_TEMP=""
 PI4_DTB_PADDED_SIZE=$((128 * 1024))
 U_BOOT_CROSS_COMPILE="aarch64-linux-gnu-"
-U_BOOT_MENU_INPUT="${COHESIX_UBOOT_MENU_INPUT:-usb}"
+U_BOOT_MENU_INPUT="usb"
+U_BOOT_MENU_INPUT_SOURCE="default"
 
 usage() {
     cat <<'USAGE'
@@ -85,7 +86,7 @@ Options:
   --root-task-features <f>  Comma-separated root-task feature list
                             (default: release-pi4,bootstrap-trace)
   --uboot-menu-input <m>    U-Boot setup menu input mode: usb or serial
-                            (default: usb; env: COHESIX_UBOOT_MENU_INPUT)
+                            (default: usb; serial is an explicit lab opt-out)
   --clean                   Clean and rebuild root-task, Pi4 seL4/U-Boot outputs,
                             and the Pi 4 U-Boot binary before staging/flashing
   --skip-build              Skip rebuild and reuse existing seL4 image in sel4 build dir
@@ -94,7 +95,6 @@ Options:
   -h, --help                Show this help
 
 Environment:
-  COHESIX_UBOOT_MENU_INPUT may be serial or usb.
   USB is always staged as Cohesix-owned cold boot. U-Boot xHCI handoff export is disabled.
 USAGE
 }
@@ -846,6 +846,7 @@ parse_args() {
             --uboot-menu-input)
                 [[ $# -ge 2 ]] || fail "--uboot-menu-input requires serial or usb"
                 U_BOOT_MENU_INPUT="$2"
+                U_BOOT_MENU_INPUT_SOURCE="cli"
                 shift 2
                 ;;
             --clean)
@@ -878,6 +879,9 @@ parse_args() {
 }
 
 validate_menu_input_mode() {
+    if [[ -n "${COHESIX_UBOOT_MENU_INPUT:-}" && "${U_BOOT_MENU_INPUT_SOURCE}" != "cli" ]]; then
+        log "Ignoring COHESIX_UBOOT_MENU_INPUT=${COHESIX_UBOOT_MENU_INPUT}; use --uboot-menu-input for explicit serial lab captures"
+    fi
     case "${U_BOOT_MENU_INPUT}" in
         serial|usb) ;;
         *) fail "--uboot-menu-input must be serial or usb (got ${U_BOOT_MENU_INPUT})" ;;

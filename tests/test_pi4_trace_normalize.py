@@ -1250,6 +1250,23 @@ def test_gate_summary_late_tcp_not_ready_clears_current_tcp_state() -> None:
     assert record["NETTEST_PROOF"] == "yes"
 
 
+def test_gate_summary_nettest_error_clears_stale_success_proof() -> None:
+    """A current net-disabled result must not inherit earlier NETTEST proof."""
+
+    events = normalizer.parse_events(
+        [
+            "OK NETTEST detail=pass scope=serial-local",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-command driver-task runtime init failed",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["NET_TCP_READY"] == "no"
+    assert record["NETTEST_PROOF"] == "no"
+
+
 def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
     """Runtime/DMA proof needs live Pi owner-state and counter-qualified timing."""
 
@@ -11825,6 +11842,62 @@ def test_gate_summary_accepts_pi4_hardware_wifi_gate7_to_10_capture_contract() -
     assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
     assert record["WIFI_OLDGOOD_LAST"] == "netstats-secure"
     assert record["WIFI_OLDGOOD_MISSING"] == "none"
+
+
+def test_gate_summary_accepts_streamed_firmware_upload_identity() -> None:
+    """A complete linked-runtime firmware stream is identity proof."""
+
+    events = normalizer.parse_events(
+        seal_driver_task_runtime_descriptor_lines(
+            [
+                "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+                "owner_state=driver-owned descriptor=present root_pointer=no",
+                "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+                "owner_state=driver-owned descriptor=present root_pointer=no",
+                "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host stage=engine-init "
+                "blocker=ready detail=0x5500",
+                "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+                "hot_path=cyw43-wifi stage=net-engine-init status=ready",
+                "CYW43_DRIVER_TASK_STREAM_PROGRESS contract=cyw43455 "
+                "stage=cyw43-firmware-chunk uploaded=557056 total_len=609309 "
+                "target=0x0021e000 chunk_len=8192",
+                "CYW43_DRIVER_TASK_STREAM_PROGRESS contract=cyw43455 "
+                "stage=cyw43-firmware-chunk uploaded=609309 total_len=609309 "
+                "target=0x0022c000 chunk_len=3101",
+                "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+                "hot_path=cyw43-wifi stage=cyw43-firmware-release status=ready",
+                "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+                "hot_path=cyw43-wifi stage=cyw43-firmware status=ready",
+                "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+                "hot_path=cyw43-wifi stage=cyw43-function2 status=ready",
+            ]
+        )
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_FIRMWARE_IDENTITY_PROOF"] == "yes"
+    assert record["WIFI_FIRMWARE_IDENTITY_BLOCKER"] == "none"
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "function2-ready"
+    assert record["WIFI_OLDGOOD_MISSING"] == "control-rxglom"
+
+
+def test_gate_summary_rejects_incomplete_streamed_firmware_upload_identity() -> None:
+    """Partial firmware streams must not satisfy the identity prerequisite."""
+
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_STREAM_PROGRESS contract=cyw43455 "
+            "stage=cyw43-firmware-chunk uploaded=557056 total_len=609309 "
+            "target=0x0021e000 chunk_len=8192",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_FIRMWARE_IDENTITY_PROOF"] == "no"
+    assert record["WIFI_FIRMWARE_IDENTITY_BLOCKER"] == "firmware-upload-incomplete"
 
 
 def test_gate_summary_rejects_failed_function2_as_wifi_oldgood_replay() -> None:
