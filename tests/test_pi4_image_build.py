@@ -83,16 +83,16 @@ def test_checked_in_wifi_firmware_bundle_matches_release_contract() -> None:
 
     expected = {
         "cyfmac43455-sdio.bin": (
-            643651,
-            "d408faa9d0d5b1a2f9912dcea53ab0be48217288e398406d117f0edafe7c3edd",
+            609309,
+            "d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3",
         ),
         "brcmfmac43455-sdio.raspberrypi,4-model-b.txt": (
-            1883,
-            "edb6f4e4fb19e18940004124feb4ffe160d72fc607243a07a4480338a28b2748",
+            2074,
+            "ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d",
         ),
         "cyfmac43455-sdio.clm_blob": (
-            4733,
-            "15f50a27020b263d1bea215c8f68d0550d912932d1d9ef19ffd59f18d82dd460",
+            2676,
+            "9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1",
         ),
     }
 

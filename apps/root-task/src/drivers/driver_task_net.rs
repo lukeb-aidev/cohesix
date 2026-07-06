@@ -15339,19 +15339,16 @@ mod tests {
         assert_eq!(CYW43_CLM_CHUNK_BYTES, 1400);
         assert_eq!(cyw43_clm_iovar_data_len(CYW43_CLM_CHUNK_BYTES), 1412);
         assert_eq!(cyw43_clm_setvar_payload_len(CYW43_CLM_CHUNK_BYTES), 1420);
+        assert_eq!(cyw43_clm_iovar_data_len(2676 - CYW43_CLM_CHUNK_BYTES), 1288);
         assert_eq!(
-            cyw43_clm_iovar_data_len(4733 - (3 * CYW43_CLM_CHUNK_BYTES)),
-            545
-        );
-        assert_eq!(
-            cyw43_clm_setvar_payload_len(4733 - (3 * CYW43_CLM_CHUNK_BYTES)),
-            553
+            cyw43_clm_setvar_payload_len(2676 - CYW43_CLM_CHUNK_BYTES),
+            1296
         );
     }
 
     #[test]
-    fn cyw43_clm_download_payload_matches_old_good_header() {
-        let mut clm = [0u8; 4733];
+    fn cyw43_clm_download_payload_matches_linux_pi4b_header() {
+        let mut clm = [0u8; 2676];
         for (index, byte) in clm.iter_mut().enumerate() {
             *byte = (index & 0xff) as u8;
         }
@@ -15376,33 +15373,21 @@ mod tests {
             &clm[..4]
         );
 
-        let second_offset = CYW43_CLM_CHUNK_BYTES;
-        let second_len_bytes = CYW43_CLM_CHUNK_BYTES;
-        let second_len =
-            cyw43_write_clm_download_payload(&mut payload, &clm, second_offset, second_len_bytes)
-                .expect("middle CLM chunk should fit");
-        assert_eq!(second_len, 1412);
-        assert_eq!(
-            &payload[0..2],
-            &CYW43_CLM_DOWNLOAD_FLAG_HANDLER_VER.to_le_bytes()
-        );
-        assert_eq!(&payload[4..8], &(second_len_bytes as u32).to_le_bytes());
-        assert_eq!(
-            &payload[CYW43_CLM_IOVAR_HEADER_BYTES..CYW43_CLM_IOVAR_HEADER_BYTES + 4],
-            &clm[second_offset..second_offset + 4]
-        );
-
-        let final_offset = 3 * CYW43_CLM_CHUNK_BYTES;
+        let final_offset = CYW43_CLM_CHUNK_BYTES;
         let final_len_bytes = clm.len() - final_offset;
         let final_len =
             cyw43_write_clm_download_payload(&mut payload, &clm, final_offset, final_len_bytes)
                 .expect("final CLM chunk should fit");
-        assert_eq!(final_len, 545);
+        assert_eq!(final_len, 1288);
         assert_eq!(
             &payload[0..2],
             &(CYW43_CLM_DOWNLOAD_FLAG_HANDLER_VER | CYW43_CLM_DOWNLOAD_FLAG_END).to_le_bytes()
         );
         assert_eq!(&payload[4..8], &(final_len_bytes as u32).to_le_bytes());
+        assert_eq!(
+            &payload[CYW43_CLM_IOVAR_HEADER_BYTES..CYW43_CLM_IOVAR_HEADER_BYTES + 4],
+            &clm[final_offset..final_offset + 4]
+        );
     }
 
     #[test]
@@ -21169,18 +21154,18 @@ mod tests {
                     target_addr: CYW43_RAM_BASE_4345 - 1,
                     ..fault
                 },
-                643_651
+                609_310
             ),
             None
         );
-        assert_eq!(cyw43_firmware_resume_offset(fault, 643_650), None);
+        assert_eq!(cyw43_firmware_resume_offset(fault, 609_308), None);
     }
 
     #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_nvram_resume_reenters_tail_after_exact_nvram_fault() {
-        let firmware_len = 643_651usize;
-        let nvram_len = 1_708usize;
+        let firmware_len = 609_309usize;
+        let nvram_len = 1_744usize;
         let nvram_base = CYW43_RAM_BASE_4345 + CYW43_RAM_SIZE_4345_PI4 - 4 - nvram_len as u32;
         let fault = Cyw43RuntimeCommandFaultStatus {
             stage: "cyw43-nvram-chunk",

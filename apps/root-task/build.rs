@@ -433,18 +433,18 @@ const PI4_WIFI_THIRD_PARTY_BUNDLE_DIR: &str =
 const PI4_WIFI_BOARD_TYPE: &str = "raspberrypi,4-model-b";
 const PI4_WIFI_CAPTURE_FIRMWARE: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "cyfmac43455-sdio.bin",
-    expected_len: 643_651,
-    expected_sha256: "d408faa9d0d5b1a2f9912dcea53ab0be48217288e398406d117f0edafe7c3edd",
+    expected_len: 609_309,
+    expected_sha256: "d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3",
 };
 const PI4_WIFI_CAPTURE_NVRAM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "brcmfmac43455-sdio.raspberrypi,4-model-b.txt",
-    expected_len: 1_883,
-    expected_sha256: "edb6f4e4fb19e18940004124feb4ffe160d72fc607243a07a4480338a28b2748",
+    expected_len: 2_074,
+    expected_sha256: "ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d",
 };
 const PI4_WIFI_CAPTURE_CLM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "cyfmac43455-sdio.clm_blob",
-    expected_len: 4_733,
-    expected_sha256: "15f50a27020b263d1bea215c8f68d0550d912932d1d9ef19ffd59f18d82dd460",
+    expected_len: 2_676,
+    expected_sha256: "9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1",
 };
 const PI4_WIFI_KNOWN_BUNDLES: &[Pi4WifiKnownBundle] = &[Pi4WifiKnownBundle {
     dir: PI4_WIFI_THIRD_PARTY_BUNDLE_DIR,

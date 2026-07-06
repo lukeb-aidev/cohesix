@@ -294,11 +294,11 @@ def test_latest_diagnostics_classify_cyw43_descriptor_invalid(
             "[Cohesix] Root console ready (type 'help' for commands)",
             "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
             "stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00200000 "
-            "payload_off=4096 payload_len=8192 total_len=643651 detail=21258 "
+            "payload_off=4096 payload_len=8192 total_len=609309 detail=21258 "
             "reason=cyw43-descriptor-invalid result=0x00000004",
             "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0000 "
             "target=0x00200000 payload_off=4096 payload_len=8192 "
-            "total_len=643651 detail=0x530a reason=cyw43-descriptor-invalid "
+            "total_len=609309 detail=0x530a reason=cyw43-descriptor-invalid "
             "result=0x00000004",
         ],
     )

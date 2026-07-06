@@ -310,10 +310,10 @@ def _oldgood_wifi_replay_lines() -> list[str]:
     return [
         "SDIO_DRIVER_TASK_REPLAY_STATUS stage=engine-init blocker=ready detail=0x5500",
         "wifi: cyw43-transport-ready owner=linked-runtime",
-        "wifi: firmware_contract fw=643651 nvram=1883 clm=4733 "
-        "fw_hash=d408faa9d0d5b1a2f9912dcea53ab0be48217288e398406d117f0edafe7c3edd "
-        "nvram_hash=edb6f4e4fb19e18940004124feb4ffe160d72fc607243a07a4480338a28b2748 "
-        "clm_hash=15f50a27020b263d1bea215c8f68d0550d912932d1d9ef19ffd59f18d82dd460 "
+        "wifi: firmware_contract fw=609309 nvram=2074 clm=2676 "
+        "fw_hash=d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3 "
+        "nvram_hash=ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d "
+        "clm_hash=9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1 "
         "board=raspberrypi,4-model-b rstvec=0xb83ef198 verified=yes "
         "armcr4_release=1 sr_kso=yes current_clock=41666666Hz preferred=41666666Hz",
         "wifi: cyw43-release-firmware-ready-done status=ready",
@@ -329,7 +329,7 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "wifi: control_exchange step=cyw43-control-rxglom status=matched bus:rxglom=1",
         "wifi: control_exchange step=cyw43-control-revinfo status=matched",
         "CYW43_DRIVER_TASK_CLM contract=cyw43455 stage=cyw43-control-clmload "
-        "action=ready index=4 offset=4733 len=4733 flags=0x0000",
+        "action=ready index=2 offset=2676 len=2676 flags=0x0000",
         "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
         "stage=cyw43-control-firmware-version name=ver printable_len=48",
         "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "

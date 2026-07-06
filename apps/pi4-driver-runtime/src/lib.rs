@@ -32681,7 +32681,7 @@ mod tests {
         state.initialized = true;
         state.transport_ready = true;
         state.firmware_upload_prepared = true;
-        let nvram_len = 1_708usize;
+        let nvram_len = 1_744usize;
         let completed = 1_024usize;
         let nvram_addr = CYW43_RAM_BASE_4345 + CYW43_RAM_SIZE_4345_PI4 - 4 - nvram_len as u32;
         state.firmware_stage_addr = nvram_addr;

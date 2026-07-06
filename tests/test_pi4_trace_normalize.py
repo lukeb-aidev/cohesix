@@ -239,7 +239,7 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "SDIO_DRIVER_TASK_REPLAY_STATUS stage=engine-init blocker=ready detail=0x5500",
         "wifi: cyw43-transport-ready owner=linked-runtime",
-        "wifi: firmware_contract fw=643651 nvram=1883 clm=4733 "
+        "wifi: firmware_contract fw=609309 nvram=2074 clm=2676 "
         f"fw_hash={normalizer.CYW43_CAPTURE_FIRMWARE_SHA256} "
         f"nvram_hash={normalizer.CYW43_CAPTURE_NVRAM_SHA256} "
         f"clm_hash={normalizer.CYW43_CAPTURE_CLM_SHA256} "
@@ -258,7 +258,7 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "wifi: control_exchange step=cyw43-control-rxglom status=matched bus:rxglom=1",
         "wifi: control_exchange step=cyw43-control-revinfo status=matched",
         "CYW43_DRIVER_TASK_CLM contract=cyw43455 stage=cyw43-control-clmload "
-        "action=ready index=4 offset=4733 len=4733 flags=0x0000",
+        "action=ready index=2 offset=2676 len=2676 flags=0x0000",
         "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
         "stage=cyw43-control-firmware-version name=ver printable_len=48",
         "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
@@ -346,7 +346,7 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
         "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host stage=engine-init blocker=ready detail=0x5500",
-        "wifi: firmware_contract fw=643651 nvram=1883 clm=4733 "
+        "wifi: firmware_contract fw=609309 nvram=2074 clm=2676 "
         f"fw_hash={normalizer.CYW43_CAPTURE_FIRMWARE_SHA256} "
         f"nvram_hash={normalizer.CYW43_CAPTURE_NVRAM_SHA256} "
         f"clm_hash={normalizer.CYW43_CAPTURE_CLM_SHA256} "
@@ -375,7 +375,7 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
         "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 stage=cyw43-control-revinfo "
         "event=matched-reply status=0x00000000 reply_match=yes",
         "CYW43_DRIVER_TASK_CLM contract=cyw43455 stage=cyw43-control-clmload "
-        "action=ready index=4 offset=4733 len=4733 flags=0x0000",
+        "action=ready index=2 offset=2676 len=2676 flags=0x0000",
         "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
         "stage=cyw43-control-firmware-version name=ver printable_len=48",
         "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
@@ -688,7 +688,7 @@ def test_cli_summary_uses_latest_boot_slice(
                 "[local-seat] xhci.diag stage=0x0226 "
                 "tag=reset-pre-usbcmd-source a=0 b=0 c=0",
                 "Kernel entry via Interrupt, irq 27",
-                "wifi: firmware_release fw=643651 rstvec=0xb83ef198 "
+                "wifi: firmware_release fw=609309 rstvec=0xb83ef198 "
                 "armcr4_release=1",
                 "[pi4-wifi] firmware stage=debug-probe-ht "
                 "action=ht-clock-ladder-exhausted "
@@ -934,7 +934,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
             "expected_ptr=0x0000000404024000",
             "usb: diag_contract stage=0x030b diag_fresh=yes "
             "tag=cmd-poll-only-timeout exact=cmd-poll-only-timeout",
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
             "wifi: boot_failure source=live stage=cyw43-load-firmware-fail "
             "exact=cyw43-ht-clock-timeout-before-function2",
@@ -2728,7 +2728,7 @@ def test_gate_summary_names_cyw43_firmware_retry_exhaustion() -> None:
             "wifi: gate 6 name=firmware-upload status=fail "
             "evidence=uploaded=no fault_detail=0x5329 next=function2-ready",
             "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0001 "
-            "target=0x00198000 payload_len=512 total_len=643651 detail=0x5329 "
+            "target=0x00198000 payload_len=512 total_len=609309 detail=0x5329 "
             "reason=cyw43-firmware-retry-exhausted result=0x04208040",
             "wifi: evidence sdio_cmd53 func=1 addr=0x00198000 len=512 "
             "increment=yes block_mode=byte-retry op=2 "
@@ -2759,7 +2759,7 @@ def test_gate_summary_names_june7_cyw43_firmware_owner_fault_shape() -> None:
             "wifi: gate 6 name=firmware-upload status=fail "
             "evidence=uploaded=no fault_detail=0x5329 next=function2-ready",
             "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0000 "
-            "target=0x0021a000 payload_len=8192 total_len=643651 detail=0x5329 "
+            "target=0x0021a000 payload_len=8192 total_len=609309 detail=0x5329 "
             "reason=cyw43-firmware-retry-exhausted result=0x05000800",
             "wifi: evidence sdio_cmd53 func=1 addr=0x0021b800 len=64 "
             "increment=yes block_mode=no op=2 source=owner-terminal",
@@ -2785,7 +2785,7 @@ def test_gate_summary_preserves_june12_cyw43_firmware_recovery_frontier() -> Non
     events = normalizer.parse_events(
         [
             "CYW43_DRIVER_TASK_STREAM_PROGRESS contract=cyw43455 "
-            "stage=cyw43-firmware-chunk uploaded=557056 total_len=643651 "
+            "stage=cyw43-firmware-chunk uploaded=557056 total_len=609309 "
             "target=0x0021e000 chunk_len=8192",
             "CYW43_DRIVER_TASK_FIRMWARE_RECOVERY contract=cyw43455 "
             "attempt=158 resume_offset=565248 force_byte=false "
@@ -2795,7 +2795,7 @@ def test_gate_summary_preserves_june12_cyw43_firmware_recovery_frontier() -> Non
             "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
             "stage=cyw43-firmware-chunk op=2 flags=0x0000 "
             "target=0x00222000 payload_off=4096 payload_len=8192 "
-            "total_len=643651 detail=21289 "
+            "total_len=609309 detail=21289 "
             "reason=cyw43-firmware-retry-exhausted result=83888128",
             "CYW43_SDIO_OWNER_FAULT contract=cyw43455 "
             "stage=cyw43-firmware-chunk op=2 cmd=53 arg=0x95540040 "
@@ -2924,7 +2924,7 @@ def test_gate_summary_keeps_wifi_blackbox_fault_over_later_prompt_replay() -> No
         [
             "wifi: gate 5 name=backplane-window status=pass evidence=programmed=0x00198000 next=firmware-upload",
             "wifi: gate 6 name=firmware-upload status=fail evidence=uploaded=no fault_detail=0x5103 next=function2-ready",
-            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0001 target=0x00199c00 payload_len=1024 total_len=643651 detail=0x5103 reason=sdio-descriptor-transfer-failed result=0x05000100",
+            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0001 target=0x00199c00 payload_len=1024 total_len=609309 detail=0x5103 reason=sdio-descriptor-transfer-failed result=0x05000100",
             "wifi: evidence sdio_cmd53 func=1 addr=0x00199c00 len=1024 increment=yes block_mode=byte-retry op=2 source=owner-terminal",
             "wifi: evidence sdio_status descriptor_status=descriptor-transfer-failed transfer_stage=response transfer_status=0x000100 transfer_reason=sdio-r5-response r5=0x0100 retry=byte512-fallback host=0x06 clock=0x5007",
             "wifi: evidence sdio_payload first=0x44 last=0x55 xor=0x11 sum=0x00006666 owner_window=sdio-shared-8192",
@@ -2947,8 +2947,8 @@ def test_gate_summary_fails_closed_on_cyw43_firmware_upload_pass_with_fault() ->
             "wifi: gate 5 name=backplane-window status=pass evidence=programmed=0x00198000 next=firmware-upload",
             "wifi: gate 6 name=firmware-upload status=pass evidence=uploaded=no verified=no fault_detail=0x0001 next=function2-ready",
             "wifi: gate 7 name=function2-ready status=fail evidence=f2_enabled=no f2_ready=no next=firmware-channel",
-            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00198800 payload_len=1024 total_len=643651 detail=1 reason=unknown result=0",
-            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00198800 payload_len=1024 total_len=643651 detail=0x0001 reason=unknown result=0x00000000",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00198800 payload_len=1024 total_len=609309 detail=1 reason=unknown result=0",
+            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00198800 payload_len=1024 total_len=609309 detail=0x0001 reason=unknown result=0x00000000",
         ]
     )
 
@@ -2992,11 +2992,11 @@ def test_gate_summary_tracks_cyw43_descriptor_invalid_fault() -> None:
             "wifi: gate 5 name=backplane-window status=pass evidence=programmed=0x00198000 next=firmware-upload",
             "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
             "stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00200000 "
-            "payload_off=4096 payload_len=8192 total_len=643651 detail=21258 "
+            "payload_off=4096 payload_len=8192 total_len=609309 detail=21258 "
             "reason=cyw43-descriptor-invalid result=0x00000004",
             "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0000 "
             "target=0x00200000 payload_off=4096 payload_len=8192 "
-            "total_len=643651 detail=0x530a reason=cyw43-descriptor-invalid "
+            "total_len=609309 detail=0x530a reason=cyw43-descriptor-invalid "
             "result=0x00000004",
         ]
     )
@@ -4345,7 +4345,7 @@ def test_gate_summary_tracks_usb_command_doorbell_timer_as_poll_pending() -> Non
             "[local-seat] xhci.diag stage=0x031f tag=cmd-doorbell-post-barrier "
             "doorbell=0x000000000100 target=0x0",
             "Kernel entry via Interrupt, irq 27",
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
         ]
     )
@@ -5967,7 +5967,7 @@ def test_gate_summary_reports_recovery_stop_timeout_as_not_halted() -> None:
 def test_gate_summary_prefers_latest_wifi_nettest_cause() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
             "wifi: boot_failure source=live stage=cyw43-load-firmware-fail "
             "exact=cyw43-ht-clock-timeout-before-function2",
@@ -5985,7 +5985,7 @@ def test_gate_summary_prefers_latest_wifi_nettest_cause() -> None:
 def test_gate_summary_classifies_wifi_devon_timeout() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
             "wifi: boot_failure source=live stage=cyw43-load-firmware-fail "
             "exact=cyw43-sleepcsr-devon-timeout-before-ht",
@@ -6003,7 +6003,7 @@ def test_gate_summary_classifies_wifi_devon_timeout() -> None:
 def test_gate_summary_keeps_sleep_decode_from_becoming_devon_blocker() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
             "wifi: ht_state chipclk=0x50 ht_req=yes ht_avail=no alp_req=no "
             "alp_avail=yes force_ht=no wake_htwait=yes sleep=0x01 kso=yes "
@@ -6020,7 +6020,7 @@ def test_gate_summary_keeps_sleep_decode_from_becoming_devon_blocker() -> None:
 def test_gate_summary_tracks_forced_ht_miss_as_ht_timeout() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=no alp_req=no "
             "alp_avail=yes force_ht=yes",
             "wifi: f2_gate policy=post-ht-proof gate=block-f2-until-ht "
@@ -6042,7 +6042,7 @@ def test_gate_summary_tracks_forced_ht_miss_as_ht_timeout() -> None:
 def test_gate_summary_tracks_wifi_ht_backplane_cmd53_data_wait() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=no alp_avail=yes",
             "[pi4-wifi] sdhci xfer error cmd=53 arg=0x15000018 len=24 "
             "phase=data-wait err=unsupported operation: sdhci-int-timeout",
@@ -6064,7 +6064,7 @@ def test_gate_summary_tracks_wifi_ht_backplane_cmd53_data_wait() -> None:
 def test_gate_summary_tracks_wifi_ht_backplane_cmd53_r5_rejection() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=no alp_avail=yes",
             "[pi4-wifi] sdio cmd53 r5 fail arg=0x1500bd88 len=24 "
             "phase=command-r5 resp=0x00001880 r5=0x0800",
@@ -6103,7 +6103,7 @@ def test_gate_summary_tracks_wifi_chipcommon_socram_remap_r5_rejection() -> None
 def test_gate_summary_preserves_wifi_ht_recover_cmd5_timeout_over_nettest() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: ht_state chipclk=0x50 ht_req=yes ht_avail=no alp_avail=yes",
             "[pi4-wifi] sdio card-init phase=cmd5-probe",
             "[pi4-wifi] sdhci cmd error cmd=5 arg=0x00000000 "
@@ -6422,7 +6422,7 @@ def test_gate_summary_caps_wifi_diag_control_plane_after_pre_f2_cmd52_failure() 
 def test_gate_summary_preserves_linux_shape_wifi_cmd53_data_wait() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=no alp_avail=yes",
             "[pi4-wifi] sdhci xfer error cmd=53 arg=0x15bd8818 len=24 "
             "phase=data-wait err=unsupported operation: sdhci-int-timeout",
@@ -6447,7 +6447,7 @@ def test_gate_summary_preserves_linux_shape_wifi_cmd53_data_wait() -> None:
 def test_gate_summary_clears_ht_blocker_after_retry_ht_avail() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "[pi4-wifi] sdhci xfer error cmd=53 arg=0x15bd8818 len=24 "
             "phase=data-wait err=unsupported operation: sdhci-int-timeout",
             "[pi4-wifi] firmware stage=wait-ht-clock "
@@ -6464,7 +6464,7 @@ def test_gate_summary_clears_ht_blocker_after_retry_ht_avail() -> None:
 def test_gate_summary_promotes_wifi_cmd53_after_cmd52_rejection() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=no alp_avail=yes",
             "[pi4-wifi] firmware stage=debug-probe-ht "
             "action=diagnostic-ht-timeout-backplane-cmd52-rejected "
@@ -6489,7 +6489,7 @@ def test_gate_summary_promotes_wifi_cmd53_after_cmd52_rejection() -> None:
 def test_gate_summary_tracks_wifi_cmd52_rejection_before_fallback_result() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=no alp_avail=yes",
             "[pi4-wifi] firmware stage=debug-probe-ht "
             "action=diagnostic-ht-timeout-backplane-cmd52-rejected "
@@ -6508,7 +6508,7 @@ def test_gate_summary_tracks_wifi_cmd52_rejection_before_fallback_result() -> No
 def test_gate_summary_tracks_wifi_chipclkcsr_cmd52_pre_f2_failure() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: ht_state chipclk=0x50 ht_req=yes ht_avail=no alp_avail=yes",
             "[pi4-wifi] firmware stage=debug-probe-ht "
             "action=chipclkcsr-cmd52-read addr=0x0001000e "
@@ -6549,7 +6549,7 @@ def test_gate_summary_keeps_chipclkcsr_pre_f2_over_generic_control_plane_error()
 def test_gate_summary_does_not_promote_cached_wifi_snapshot_as_live_proof() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "[pi4-wifi] debug snapshot stage=console-diag-error source=cached "
             "exact_error=cyw43-control-plane-sideband-unreadable "
             "sdhci_read_diag=none f2_state=unproven",
@@ -6565,7 +6565,7 @@ def test_gate_summary_does_not_promote_cached_wifi_snapshot_as_live_proof() -> N
 def test_gate_summary_tracks_wifi_ht_backplane_cmd52_unreadable() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: ht_state chipclk=0x52 ht_req=yes ht_avail=no alp_avail=yes",
             "[pi4-wifi] firmware stage=debug-probe-ht "
             "action=diagnostic-ht-timeout-backplane-unreadable "
@@ -6585,7 +6585,7 @@ def test_gate_summary_tracks_wifi_ht_backplane_cmd52_unreadable() -> None:
 def test_gate_summary_requires_wifi_ht_runtime_evidence() -> None:
     events = normalizer.parse_events(
         [
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "wifi: contract current=wait-ht-clock expected=chipclkcsr-ht-avail",
         ]
     )
@@ -6603,7 +6603,7 @@ def test_gate_summary_promotes_latest_wifi_ht_timeout_over_old_reset_edge() -> N
             "base=0x18104000 off=0x800",
             "[pi4-wifi] sdio cmd53 r5 fail arg=0x90080001",
             "wifi: diag stage=before-ht-probe",
-            "wifi: firmware_release fw=643651 rstvec=0xb83ef198 armcr4_release=1",
+            "wifi: firmware_release fw=609309 rstvec=0xb83ef198 armcr4_release=1",
             "[pi4-wifi] firmware stage=debug-probe-ht "
             "action=ht-clock-ladder-exhausted "
             "exact_error=cyw43-ht-clock-timeout-before-function2 csr=0x50",

@@ -10290,22 +10290,22 @@ def wifi_forbidden_shortcut(event: TraceEvent) -> bool:
     )
 
 
-CYW43_CAPTURE_FIRMWARE_LEN = 643_651
-CYW43_CAPTURE_NVRAM_LEN = 1_883
-CYW43_CAPTURE_CLM_LEN = 4_733
+CYW43_CAPTURE_FIRMWARE_LEN = 609_309
+CYW43_CAPTURE_NVRAM_LEN = 2_074
+CYW43_CAPTURE_CLM_LEN = 2_676
 CYW43_CAPTURE_FIRMWARE_SHA256 = (
-    "d408faa9d0d5b1a2f9912dcea53ab0be48217288e398406d117f0edafe7c3edd"
+    "d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3"
 )
 CYW43_CAPTURE_NVRAM_SHA256 = (
-    "edb6f4e4fb19e18940004124feb4ffe160d72fc607243a07a4480338a28b2748"
+    "ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d"
 )
 CYW43_CAPTURE_CLM_SHA256 = (
-    "15f50a27020b263d1bea215c8f68d0550d912932d1d9ef19ffd59f18d82dd460"
+    "9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1"
 )
 
 
 def wifi_firmware_identity_step(event: TraceEvent) -> bool:
-    """Return true for the pinned upstream Linux Pi 4B CYW43455 identity."""
+    """Return true for the exact captured Raspberry Pi OS Pi 4B CYW43455 identity."""
 
     raw = event.raw.lower()
     if not raw.startswith(("wifi: firmware_contract", "wifi: firmware_release")):
@@ -10324,7 +10324,7 @@ def wifi_firmware_identity_step(event: TraceEvent) -> bool:
 
 
 def wifi_firmware_identity_blocker(event: TraceEvent) -> str:
-    """Return the first mismatched upstream Linux Pi 4B identity field."""
+    """Return the first mismatched captured Raspberry Pi OS Pi 4B identity field."""
 
     if parse_hex_int(event.fields.get("fw")) != CYW43_CAPTURE_FIRMWARE_LEN:
         return "firmware-len"
@@ -10342,7 +10342,7 @@ def wifi_firmware_identity_blocker(event: TraceEvent) -> str:
 
 
 def summarize_wifi_firmware_identity(events: Iterable[TraceEvent]) -> tuple[bool, str]:
-    """Return whether proof used the exact pinned upstream Linux Pi 4B bundle."""
+    """Return whether proof used the exact captured Raspberry Pi OS Pi 4B bundle."""
 
     blocker = "not-seen"
     for event in events:

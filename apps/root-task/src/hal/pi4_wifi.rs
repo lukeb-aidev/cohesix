@@ -1380,9 +1380,9 @@ const fn firmware_readback_unavailable_can_continue_before_armcr4_release(
     true
 }
 
-const PI4_WIFI_LINUX_CAPTURE_RAW_NVRAM_LEN: usize = 1_883;
-const PI4_WIFI_LINUX_CAPTURE_NORMALIZED_NVRAM_LEN: usize = 1_708;
-const PI4_WIFI_LINUX_CAPTURE_NVRAM_WITH_TAIL_LEN: usize = 1_712;
+const PI4_WIFI_LINUX_CAPTURE_RAW_NVRAM_LEN: usize = 2_074;
+const PI4_WIFI_LINUX_CAPTURE_NORMALIZED_NVRAM_LEN: usize = 1_744;
+const PI4_WIFI_LINUX_CAPTURE_NVRAM_WITH_TAIL_LEN: usize = 1_748;
 
 #[inline]
 const fn pi4_wifi_nvram_linux_shape_state(raw_len: usize, normalized_len: usize) -> &'static str {
@@ -24745,14 +24745,14 @@ mod tests {
         let nvram_words = u32::try_from(nvram.len() / 4).expect("nvram words fit u32");
         let nvram_magic = (!nvram_words << 16) | nvram_words;
 
-        assert_eq!(PI4_WIFI_NVRAM.len(), 1_883);
-        assert_eq!(nvram.len(), 1_708);
+        assert_eq!(PI4_WIFI_NVRAM.len(), 2_074);
+        assert_eq!(nvram.len(), 1_744);
         assert_eq!(
             pi4_wifi_nvram_linux_shape_state(PI4_WIFI_NVRAM.len(), nvram.len()),
             "linux-shaped"
         );
         assert_eq!(nvram.len() + 4, PI4_WIFI_LINUX_CAPTURE_NVRAM_WITH_TAIL_LEN);
-        assert_eq!(nvram_magic, 0xfe54_01ab);
+        assert_eq!(nvram_magic, 0xfe4b_01b4);
     }
 
     #[test]
@@ -24794,7 +24794,7 @@ mod tests {
         let ram_base = CYW43_RAM_BASE_4345;
         let ram_size = 0x0008_0000;
         let nvram_tail = ram_base + ram_size - 4;
-        let nvram_len = 1_708usize;
+        let nvram_len = 1_744usize;
         let nvram_offset = nvram_tail - u32::try_from(nvram_len).expect("nvram len fits u32");
 
         assert_eq!(
