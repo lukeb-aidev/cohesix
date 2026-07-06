@@ -9207,17 +9207,13 @@ fn cyw43_function2_execute_control_tx_transfer(
     block_size: u16,
     block_count: u16,
 ) -> bool {
-    let mut active_frame = frame;
-    let mut active_block_size = block_size;
-    let mut active_block_count = block_count;
-    let mut block_rescue_active = false;
     for attempt in 0..=CYW43_CONTROL_TX_FUNCTION2_RETRIES {
         if cyw43_function2_execute_transfer_with_write_window(
             state,
             true,
-            active_frame,
-            active_block_size,
-            active_block_count,
+            frame,
+            block_size,
+            block_count,
             Cyw43AssertedEmptyPolicy::RequestRetransmit,
             CYW43_FUNCTION2_BOOT_CONTROL_WRITE_READY_TIMEOUT_MS,
             CYW43_FUNCTION2_BOOT_CONTROL_WRITE_READY_POLLS,
@@ -9226,30 +9222,15 @@ fn cyw43_function2_execute_control_tx_transfer(
             return true;
         }
         if attempt == CYW43_CONTROL_TX_FUNCTION2_RETRIES {
-            cyw43_record_control_tx_transfer_fault_if_present();
+            cyw43_record_control_tx_transfer_fault_if_present(frame, block_size, block_count);
             return false;
         }
         let transfer_failure = sdio_last_transfer_failure();
-        if cyw43_control_tx_block_rescue_failure(transfer_failure) {
-            let activated_block_rescue = if !block_rescue_active
-                && cyw43_control_tx_block_rescue_candidate(active_frame, active_block_count)
-            {
-                active_frame = DriverFrameDescriptor {
-                    offset: frame.offset,
-                    len: CYW43_FUNCTION2_BLOCK_BYTES as u16,
-                    flags: frame.flags,
-                };
-                active_block_size = CYW43_FUNCTION2_BLOCK_BYTES as u16;
-                active_block_count = 1;
-                block_rescue_active = true;
-                true
-            } else {
-                false
-            };
+        if cyw43_control_tx_recoverable_failure(transfer_failure) {
             state.backplane_window_valid = false;
             let reprime_ok = cyw43_prime_post_release_function2_control_write(state);
-            if !reprime_ok && !activated_block_rescue {
-                cyw43_record_control_tx_transfer_fault_if_present();
+            if !reprime_ok {
+                cyw43_record_control_tx_transfer_fault_if_present(frame, block_size, block_count);
                 return false;
             }
         }
@@ -9268,23 +9249,18 @@ fn cyw43_function2_execute_control_tx_transfer(
     false
 }
 
-const fn cyw43_control_tx_block_rescue_candidate(
+fn cyw43_record_control_tx_transfer_fault_if_present(
     frame: DriverFrameDescriptor,
+    block_size: u16,
     block_count: u16,
-) -> bool {
-    block_count == 0
-        && frame.len as usize != 0
-        && (frame.len as usize) < CYW43_FUNCTION2_BLOCK_BYTES
-}
-
-fn cyw43_record_control_tx_transfer_fault_if_present() {
+) {
     let transfer_failure = sdio_last_transfer_failure();
     if transfer_failure == 0 {
         return;
     }
     match cyw43_take_last_fault_detail() {
         Some(FAULT_CYW43_POST_RELEASE_HT | FAULT_CYW43_POST_RELEASE_F2_READY)
-            if cyw43_control_tx_block_rescue_failure(transfer_failure) =>
+            if cyw43_control_tx_recoverable_failure(transfer_failure) =>
         {
             cyw43_record_last_fault_with_result(FAULT_CYW43_CONTROL_FRAME, transfer_failure);
         }
@@ -9296,9 +9272,92 @@ fn cyw43_record_control_tx_transfer_fault_if_present() {
             cyw43_record_last_fault_with_result(FAULT_CYW43_CONTROL_FRAME, transfer_failure);
         }
     }
+    cyw43_record_control_tx_fault_frame_if_missing(
+        frame,
+        block_size,
+        block_count,
+        transfer_failure,
+    );
 }
 
-const fn cyw43_control_tx_block_rescue_failure(result: u32) -> bool {
+fn cyw43_record_control_tx_fault_frame_if_missing(
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+    transfer_failure: u32,
+) {
+    if cyw43_take_last_fault_frame().len != 0 {
+        return;
+    }
+    let flags = DRIVER_RUNTIME_SDIO_FLAG_DATA
+        | DRIVER_RUNTIME_SDIO_FLAG_WRITE
+        | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT;
+    let host_block_count = sdio_descriptor_host_block_count(block_count, flags);
+    let telemetry = cyw43_write_control_tx_fault_telemetry_frame(
+        sdio_cmd53_arg(true, 2, BACKPLANE_32BIT_FLAG, false, block_count, frame.len),
+        flags,
+        frame,
+        block_size,
+        host_block_count,
+        transfer_failure,
+    );
+    cyw43_record_last_fault_frame(telemetry);
+}
+
+fn cyw43_write_control_tx_fault_telemetry_frame(
+    arg: u32,
+    flags: u16,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+    transfer_failure: u32,
+) -> DriverFrameDescriptor {
+    let offset = SDIO_FAULT_TELEMETRY_FRAME_OFFSET;
+    let (payload_edge, payload_sum) = sdio_fault_payload_digest(flags, frame);
+    write_ring_u32(offset, SDIO_FAULT_TELEMETRY_MAGIC);
+    write_ring_u32(offset + 4, SDIO_FAULT_TELEMETRY_VERSION);
+    write_ring_u32(offset + SDIO_FAULT_TELEMETRY_ARG_OFFSET, arg);
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_CMD_FLAGS_OFFSET,
+        u32::from(SDIO_CMD53) | (u32::from(flags) << 16),
+    );
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET,
+        u32::from(frame.len) | (u32::from(block_size) << 16),
+    );
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_COUNT_MODE_OFFSET,
+        u32::from(block_count)
+            | (u32::from(sdio_transfer_mode_from_flags(flags, block_count)) << 16),
+    );
+    write_ring_u32(offset + SDIO_FAULT_TELEMETRY_PRESENT_OFFSET, 0);
+    write_ring_u32(offset + SDIO_FAULT_TELEMETRY_INT_STATUS_OFFSET, 0);
+    write_ring_u32(offset + SDIO_FAULT_TELEMETRY_RESPONSE0_OFFSET, 0);
+    write_ring_u32(offset + SDIO_FAULT_TELEMETRY_HOST_CLOCK_OFFSET, 0);
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_FAILURE_OFFSET,
+        transfer_failure,
+    );
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET,
+        u32::from(block_size) | (u32::from(block_count) << 16),
+    );
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET,
+        payload_edge,
+    );
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET,
+        payload_sum,
+    );
+    DriverFrameDescriptor {
+        offset: offset as u32,
+        len: SDIO_FAULT_TELEMETRY_BYTES,
+        flags: 0,
+    }
+}
+
+const fn cyw43_control_tx_recoverable_failure(result: u32) -> bool {
     let stage = result >> 24;
     let status = result & 0x00ff_ffff;
     (stage == SDIO_TRANSFER_FAILURE_STAGE_RESPONSE && status != 0)
@@ -27694,7 +27753,7 @@ mod tests {
                 0,
                 request_len as u16
             ),
-            2
+            3
         );
         assert_eq!(
             test_sdio_cmd53_write_shape_count(
@@ -27704,7 +27763,7 @@ mod tests {
                 1,
                 CYW43_FUNCTION2_BLOCK_BYTES as u16
             ),
-            1
+            0
         );
         assert!(test_sdio_cmd52_write_seen(
             0,
@@ -27719,7 +27778,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_control_tx_block_rescue_survives_outer_reprime_miss() {
+    fn cyw43_control_tx_fails_closed_when_outer_reprime_misses() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -27743,17 +27802,10 @@ mod tests {
             flags: 0,
         };
 
-        assert_eq!(
-            cyw43_submit_sdpcm_frame(&mut state, frame, false, false),
-            CYW43_SDPCM_HEADER_BYTES + 11
-        );
-        assert_eq!(state.sdpcm_seq, 9);
-        assert_eq!(state.tx_frames, 1);
-        assert_eq!(
-            state.control_tx_recovered_detail,
-            DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_TX_F2_RETRY_RECOVERED
-        );
-        assert_eq!(test_sdio_cmd53_transfer_count(2, true), 3);
+        assert_eq!(cyw43_submit_sdpcm_frame(&mut state, frame, false, false), 0);
+        assert_eq!(state.sdpcm_seq, 8);
+        assert_eq!(state.tx_frames, 0);
+        assert_eq!(test_sdio_cmd53_transfer_count(2, true), 2);
         assert_eq!(
             test_sdio_cmd53_write_shape_count(
                 2,
@@ -27772,7 +27824,7 @@ mod tests {
                 1,
                 CYW43_FUNCTION2_BLOCK_BYTES as u16
             ),
-            1
+            0
         );
     }
 
@@ -27789,7 +27841,7 @@ mod tests {
         let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
         stage_bytes(payload_offset, b"cdc-control");
         let request_len = cyw43_control_tx_request_len(CYW43_SDPCM_HEADER_BYTES + 11);
-        for index in request_len..CYW43_FUNCTION2_BLOCK_BYTES {
+        for index in request_len..SDIO_CMD53_BYTE_MODE_MAX {
             write_ring_byte(CYW43_SDPCM_TX_OFFSET + index, 0xa5);
         }
         reset_test_sdio_transfer_log();
@@ -27829,7 +27881,7 @@ mod tests {
                 0,
                 request_len as u16
             ),
-            2
+            3
         );
         assert_eq!(
             test_sdio_cmd53_write_shape_count(
@@ -27839,12 +27891,9 @@ mod tests {
                 1,
                 CYW43_FUNCTION2_BLOCK_BYTES as u16
             ),
-            1
-        );
-        assert_eq!(
-            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_FUNCTION2_BLOCK_BYTES - 1),
             0
         );
+        assert_eq!(read_ring_byte(CYW43_SDPCM_TX_OFFSET + request_len), 0);
         assert!(test_sdio_cmd52_write_seen(
             0,
             SDIO_CCCR_ABORT,
@@ -27868,7 +27917,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_control_tx_linked_owner_r5_result_enables_block_rescue() {
+    fn cyw43_control_tx_linked_owner_r5_result_is_recoverable() {
         let _guard = test_guard();
         reset_runtime_for_test();
         sdio_clear_last_transfer_failure();
@@ -27880,22 +27929,14 @@ mod tests {
         sdio_record_transfer_failure_result(result);
 
         assert_eq!(sdio_last_transfer_failure(), result);
-        assert!(cyw43_control_tx_block_rescue_failure(
+        assert!(cyw43_control_tx_recoverable_failure(
             sdio_last_transfer_failure()
         ));
-        assert!(cyw43_control_tx_block_rescue_failure(
+        assert!(cyw43_control_tx_recoverable_failure(
             sdio_transfer_failure_result(
                 SDIO_TRANSFER_FAILURE_STAGE_DATA_END,
                 SDHCI_INT_ERROR | SDHCI_INT_DATA_CRC
             )
-        ));
-        assert!(cyw43_control_tx_block_rescue_candidate(
-            DriverFrameDescriptor {
-                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
-                len: 48,
-                flags: 0,
-            },
-            0
         ));
     }
 
@@ -27911,13 +27952,39 @@ mod tests {
 
         cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, 0);
         sdio_record_transfer_failure_result(transfer_result);
-        cyw43_record_control_tx_transfer_fault_if_present();
+        let request_len = cyw43_control_tx_request_len(CYW43_SDPCM_HEADER_BYTES + 11);
+        cyw43_record_control_tx_transfer_fault_if_present(
+            DriverFrameDescriptor {
+                offset: CYW43_SDPCM_TX_OFFSET as u32,
+                len: request_len as u16,
+                flags: 0,
+            },
+            request_len as u16,
+            0,
+        );
 
         assert_eq!(
             cyw43_take_last_fault_detail(),
             Some(FAULT_CYW43_CONTROL_FRAME)
         );
         assert_eq!(cyw43_take_last_fault_result(), transfer_result);
+        let frame = cyw43_take_last_fault_frame();
+        assert_eq!(frame.offset, SDIO_FAULT_TELEMETRY_FRAME_OFFSET as u32);
+        assert_eq!(frame.len, SDIO_FAULT_TELEMETRY_BYTES);
+        assert_eq!(
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET),
+            SDIO_FAULT_TELEMETRY_MAGIC
+        );
+        let arg =
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_ARG_OFFSET);
+        assert!(sdio_cmd53_arg_write(arg));
+        assert_eq!(sdio_cmd53_arg_function(arg), 2);
+        assert_eq!(arg & (1 << 27), 0);
+        assert_eq!(arg & 0x1ff, request_len as u32);
+        assert_eq!(
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_FAILURE_OFFSET),
+            transfer_result
+        );
     }
 
     #[test]
@@ -27932,6 +27999,7 @@ mod tests {
         state.sdpcm_seq_max = 9;
         let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
         stage_bytes(payload_offset, b"cdc-control");
+        let request_len = cyw43_control_tx_request_len(CYW43_SDPCM_HEADER_BYTES + 11);
         reset_test_sdio_transfer_log();
         test_sdio_transfer_fail_rule(TestSdioTransferFailureRule {
             cmd: SDIO_CMD53,
@@ -27959,11 +28027,53 @@ mod tests {
             (CYW43_CONTROL_TX_FUNCTION2_RETRIES + 1) * 2
         );
         assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                request_len as u16,
+                0,
+                request_len as u16
+            ),
+            (CYW43_CONTROL_TX_FUNCTION2_RETRIES + 1) * 2
+        );
+        assert_eq!(
             cyw43_take_last_fault_detail(),
             Some(FAULT_CYW43_CONTROL_FRAME)
         );
         assert_eq!(
             cyw43_take_last_fault_result(),
+            sdio_transfer_failure_result(
+                SDIO_TRANSFER_FAILURE_STAGE_DATA_END,
+                SDHCI_INT_ERROR | SDHCI_INT_DATA_CRC,
+            )
+        );
+        let fault_frame = cyw43_take_last_fault_frame();
+        assert_eq!(fault_frame.offset, SDIO_FAULT_TELEMETRY_FRAME_OFFSET as u32);
+        assert_eq!(fault_frame.len, SDIO_FAULT_TELEMETRY_BYTES);
+        assert_eq!(
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET),
+            SDIO_FAULT_TELEMETRY_MAGIC
+        );
+        let arg =
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_ARG_OFFSET);
+        assert!(sdio_cmd53_arg_write(arg));
+        assert_eq!(sdio_cmd53_arg_function(arg), 2);
+        assert_eq!(arg & (1 << 27), 0);
+        assert_eq!(arg & 0x1ff, request_len as u32);
+        assert_eq!(
+            read_ring_u32(
+                SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET
+            ),
+            u32::from(request_len as u16) | (u32::from(request_len as u16) << 16)
+        );
+        assert_eq!(
+            read_ring_u32(
+                SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_COUNT_MODE_OFFSET
+            ) & 0xffff,
+            1
+        );
+        assert_eq!(
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_FAILURE_OFFSET),
             sdio_transfer_failure_result(
                 SDIO_TRANSFER_FAILURE_STAGE_DATA_END,
                 SDHCI_INT_ERROR | SDHCI_INT_DATA_CRC,
@@ -28618,7 +28728,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_control_tx_extended_header_matches_linux_shape() {
+    fn cyw43_control_tx_extended_header_uses_linux_byte_transport() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -28671,10 +28781,20 @@ mod tests {
             ),
             1
         );
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16,
+                1,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16
+            ),
+            0
+        );
     }
 
     #[test]
-    fn cyw43_control_tx_plain_header_uses_linux_aligned_function2_write_shape() {
+    fn cyw43_control_tx_plain_header_preserves_linux_payload_uses_byte_transport() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -28710,6 +28830,16 @@ mod tests {
                 unpadded_len as u16
             ),
             1
+        );
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16,
+                1,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16
+            ),
+            0
         );
     }
 

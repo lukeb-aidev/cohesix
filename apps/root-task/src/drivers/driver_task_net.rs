@@ -128,6 +128,7 @@ const CYW43_RUNTIME_DATA_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_DATA_TX_NO_REPLY_RESUMES: usize = 63;
 const CYW43_DESCRIPTOR_UNAVAILABLE_DETAIL: u16 = 0x5309;
 const CYW43_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL: u16 = 0x5103;
+const CYW43_CONTROL_FRAME_DETAIL: u16 = 0x5306;
 const CYW43_SDIO_POST_RELEASE_HT_CLOCK_DETAIL: u16 = 0x532a;
 const CYW43_SDIO_FUNCTION2_NOT_READY_DETAIL: u16 = 0x532b;
 const CYW43_RUNTIME_DESCRIPTOR_UNAVAILABLE_RETRIES: usize = 2;
@@ -1933,24 +1934,27 @@ fn cyw43_control_tx_submit_retry_completion(
     if retries_spent >= CYW43_CONTROL_TX_SUBMIT_RETRIES {
         return None;
     }
-    if completion.code != DriverTaskCompletionCode::Fault.as_u16()
-        || !cyw43_control_tx_detail_allows_submit_retry(stage, completion.detail)
-    {
+    if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
         return None;
     }
     let status = sdio_transfer_failure_status(completion.result);
-    let stage = (completion.result >> 24) & 0xff;
+    let failure_stage = (completion.result >> 24) & 0xff;
+    let retryable_transfer_fault = (matches!(failure_stage, 3 | 4)
+        && status & (SDHCI_INT_ERROR | SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC) != 0)
+        || (failure_stage == 5 && sdio_transfer_failure_r5(completion.result) != 0);
+    if completion.detail == CYW43_CONTROL_FRAME_DETAIL {
+        return retryable_transfer_fault.then_some(completion);
+    }
+    if !cyw43_control_tx_detail_allows_submit_retry(stage, completion.detail) {
+        return None;
+    }
     if completion.detail == CYW43_SDIO_POST_RELEASE_HT_CLOCK_DETAIL {
         return Some(completion);
     }
     if completion.detail == CYW43_SDIO_FUNCTION2_NOT_READY_DETAIL {
         return Some(completion);
     }
-    if matches!(stage, 3 | 4)
-        && status & (SDHCI_INT_ERROR | SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC) != 0
-    {
-        Some(completion)
-    } else if stage == 5 && sdio_transfer_failure_r5(completion.result) != 0 {
+    if retryable_transfer_fault {
         Some(completion)
     } else {
         None
@@ -20122,6 +20126,15 @@ mod tests {
             result: 0x0500_0800,
             ..transfer_failed
         };
+        let wrapped_control_frame_transfer = DriverTaskCompletionRecord {
+            detail: CYW43_CONTROL_FRAME_DETAIL,
+            ..transfer_failed
+        };
+        let wrapped_control_frame_command_error = DriverTaskCompletionRecord {
+            detail: CYW43_CONTROL_FRAME_DETAIL,
+            result: 0x0200_8000,
+            ..transfer_failed
+        };
         let command_error_transfer = DriverTaskCompletionRecord {
             result: 0x0200_8000,
             ..transfer_failed
@@ -20187,6 +20200,30 @@ mod tests {
                 0
             ),
             Some(response_r5_fault)
+        );
+        assert_eq!(
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-txglomalign",
+                wrapped_control_frame_transfer,
+                0
+            ),
+            Some(wrapped_control_frame_transfer)
+        );
+        assert_eq!(
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-txglomalign",
+                wrapped_control_frame_transfer,
+                1
+            ),
+            None
+        );
+        assert_eq!(
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-txglomalign",
+                wrapped_control_frame_command_error,
+                0
+            ),
+            None
         );
         assert_eq!(
             cyw43_control_tx_submit_retry_completion(

@@ -1255,18 +1255,25 @@ context and the retry/poll window.
   counter is available, with the old 3000-poll CCCR loop retained only as the
   no-counter fallback and diagnostic poll field before declaring
   `sdio-function2-ready-timeout`.
-- Function 2 control-plane frames follow Linux SDIO host sizing: payloads that
-  still fit CMD53 byte mode are four-byte aligned, while larger frames are
-  padded to the 512-byte Function 2 block size so the HAL emits block-mode
-  CMD53 rather than an unencodable byte-mode count.
-  The normal path must preserve that Linux-shaped byte-mode first write.
-  If the card returns a response-stage R5 fault or data-end CRC fault on a small
-  post-release control write, the isolated runtime may perform one bounded
-  recovery path: re-prime Function 2 sideband state, preserve existing
-  `SBSDIO_DEVICE_CTL` bits while enabling `F2WM_ENAB`, zero-pad the staged frame
-  to one 512-byte Function 2 block, and retry through a block-mode CMD53. That
-  rescue is fault recovery evidence, not a replacement for the Linux-sized
-  primary control path.
+- Function 2 control-plane frames preserve Linux-shaped logical SDPCM/CDC
+  payloads and four-byte alignment. Small post-release control frames such as
+  `bus:txglomalign=8` remain plain-header and use the Linux `sdio_memcpy_toio`
+  physical shape: Function 2 fixed-FIFO CMD53 byte mode with the aligned request
+  length (`count=request_len`, CMD53 argument block count zero, host block count
+  one) while the request is at or below the 512-byte byte-mode ceiling. The
+  isolated runtime must not promote those
+  startup iovars to one-block Function 2 writes merely because the scratch buffer
+  is zero-filled behind the logical request. Control requests larger than the
+  byte-mode ceiling are padded to a 512-byte Function 2 boundary and submitted in
+  block mode. If the card returns a response-stage R5 fault or data-end CRC fault
+  on a control submit, the isolated runtime may perform one bounded recovery
+  path: re-prime Function 2 sideband state, preserve existing
+  `SBSDIO_DEVICE_CTL` bits while enabling `F2WM_ENAB`, and retry the same CMD53
+  shape. If the isolated runtime exhausts that local recovery and reports the
+  wrapped `cyw43-control-frame` detail with an encoded SDIO data-end
+  CRC/timeout/error or R5 response result, root may perform one same-descriptor
+  replay after re-priming the SDIO host config. The replay is result-gated, not a
+  general semantic retry for arbitrary BCDC or firmware-control errors.
 - CLM upload is part of the isolated runtime attach proof. After the initial
   small Linux-shaped iovars and `BRCMF_C_GET_REVINFO`, root streams the bundled
   CLM blob through bounded CYW43 driver-task BCDC control exchanges using the
@@ -1298,7 +1305,10 @@ context and the retry/poll window.
   succeeds, matching `brcmfmac`'s `tx_hdrlen` transition. Sending
   `bus:txglomalign` with the extended header shifts the CDC payload to offset
   20 before the firmware has enabled that framing and leaves the host polling
-  for a reply the firmware never generates.
+  for a reply the firmware never generates. The physical Function 2 submit must
+  remain byte-mode while the aligned request is at or below 512 bytes; larger
+  padded control requests may use block-mode transport only without changing the
+  logical plain-header payload or the CDC command/id observed by root.
 - Firmware streaming stays inside the generated 8192-byte shared-payload/RX
   owner window. The isolated runtime preserves incoming chunk bytes before any
   retained-stage replay, pads only the final logical chunk to a 512-byte physical
@@ -2418,7 +2428,12 @@ Required Cohesix shape:
   nonmatching/malformed frame counts. `CYW43_DRIVER_TASK_CONTROL_REPLY` lines
   expose malformed, nonmatching, and matched CDC reply headers (`cmd`, ioctl id,
   status, response length, available payload) plus the same expected fields and
-  `reply_match`. Nonterminal poll samples and nonmatching replies are context;
+  `reply_match`. Terminal Function 2 control-TX failures must also preserve a
+  self-describing SDIO fault telemetry frame so root can emit
+  `CYW43_SDIO_OWNER_FAULT` with CMD53 function, byte/block mode, length,
+  block-size/count, failure stage/status, and payload digest instead of falling
+  back to `func=unknown` or `descriptor_status=not-classified`. Nonterminal poll
+  samples and nonmatching replies are context;
   they become exact blockers only when the same attempt ends in a terminal split
   timeout/failure. Terminal split timeouts still emit
   `CYW43_DRIVER_TASK_COMMAND_FAULT` with the existing `0x430*` control-timeout
