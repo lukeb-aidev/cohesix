@@ -9624,10 +9624,13 @@ where
     #[cfg(feature = "kernel")]
     fn emit_wifi_firmware_contract(&mut self, trace: &WifiFirmwareContractTrace) {
         let line = format_message(format_args!(
-            "wifi: firmware_contract fw={} nvram={} clm={} board={} rstvec={} verified={} armcr4_release={} sr_kso={} current_clock={}Hz preferred={}Hz",
+            "wifi: firmware_contract fw={} nvram={} clm={} fw_hash={} nvram_hash={} clm_hash={} board={} rstvec={} verified={} armcr4_release={} sr_kso={} current_clock={}Hz preferred={}Hz",
             trace.firmware_len,
             trace.nvram_len,
             Self::format_optional_usize(trace.clm_len),
+            trace.firmware_sha256,
+            trace.nvram_sha256,
+            trace.clm_sha256,
             trace.board_type,
             Self::format_optional_u32(trace.reset_vector),
             if trace.firmware_download_verified {
@@ -9924,10 +9927,13 @@ where
 
         if let Some(trace) = firmware_trace {
             let release = format_message(format_args!(
-                "wifi: firmware_release fw={} nvram={} clm={} rstvec={} verify={} armcr4_release={} sr_kso={} next={}",
+                "wifi: firmware_release fw={} nvram={} clm={} fw_hash={} nvram_hash={} clm_hash={} rstvec={} verify={} armcr4_release={} sr_kso={} next={}",
                 trace.firmware_len,
                 trace.nvram_len,
                 Self::format_optional_usize(trace.clm_len),
+                trace.firmware_sha256,
+                trace.nvram_sha256,
+                trace.clm_sha256,
                 Self::format_optional_u32(trace.reset_vector),
                 Self::yes_no(trace.firmware_download_verified),
                 trace.armcr4_release_attempts,
@@ -17690,6 +17696,9 @@ mod tests {
                 firmware_len: 0x14000,
                 nvram_len: 0x0180,
                 clm_len: Some(0x4000),
+                firmware_sha256: "test-fw",
+                nvram_sha256: "test-nvram",
+                clm_sha256: "test-clm",
                 board_type: "brcm,bcm43455-fmac",
                 reset_vector: Some(0x0019_8000),
                 firmware_download_verified: false,

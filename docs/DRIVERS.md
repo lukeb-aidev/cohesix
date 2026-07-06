@@ -1260,12 +1260,13 @@ context and the retry/poll window.
   padded to the 512-byte Function 2 block size so the HAL emits block-mode
   CMD53 rather than an unencodable byte-mode count.
   The normal path must preserve that Linux-shaped byte-mode first write.
-  If the card returns a response-stage R5 fault on a small post-release control
-  write, the isolated runtime may perform one bounded recovery path: re-prime
-  Function 2 sideband state, preserve existing `SBSDIO_DEVICE_CTL` bits while
-  enabling `F2WM_ENAB`, zero-pad the staged frame to one 512-byte Function 2
-  block, and retry through a block-mode CMD53. That rescue is fault recovery
-  evidence, not a replacement for the Linux-sized primary control path.
+  If the card returns a response-stage R5 fault or data-end CRC fault on a small
+  post-release control write, the isolated runtime may perform one bounded
+  recovery path: re-prime Function 2 sideband state, preserve existing
+  `SBSDIO_DEVICE_CTL` bits while enabling `F2WM_ENAB`, zero-pad the staged frame
+  to one 512-byte Function 2 block, and retry through a block-mode CMD53. That
+  rescue is fault recovery evidence, not a replacement for the Linux-sized
+  primary control path.
 - CLM upload is part of the isolated runtime attach proof. After the initial
   small Linux-shaped iovars and `BRCMF_C_GET_REVINFO`, root streams the bundled
   CLM blob through bounded CYW43 driver-task BCDC control exchanges using the

@@ -4,16 +4,26 @@
 
 """Tests for scripts/pi4-image-build.sh."""
 
+import hashlib
 import pathlib
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "pi4-image-build.sh"
+ROOT_TASK_BUILD_RS_PATH = REPO_ROOT / "apps" / "root-task" / "build.rs"
 U_BOOT_DEFCONFIG_PATH = (
     REPO_ROOT / "third_party" / "u-boot" / "configs" / "rpi_4_defconfig"
 )
 U_BOOT_GENERATED_DEFCONFIG_PATH = (
     REPO_ROOT / "third_party" / "u-boot" / "generated_defconfig-e"
+)
+PI4_WIFI_BUNDLE_PATH = (
+    REPO_ROOT
+    / "third_party"
+    / "raspberry-pi-firmware"
+    / "v1.50"
+    / "firmware"
+    / "cyw43455-linux-capture"
 )
 
 
@@ -37,6 +47,60 @@ def test_pi4_image_build_defaults_to_pi4_release_features() -> None:
 
     assert 'ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"' in source
     assert "(default: release-pi4,bootstrap-trace)" in source
+
+
+def test_pi4_image_build_uses_third_party_wifi_firmware_bundle() -> None:
+    """Pi 4 release builds must not depend on generated capture outputs."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'FIRMWARE_DIR="${ROOT_DIR}/third_party/raspberry-pi-firmware/v1.50"' in (
+        source
+    )
+    assert (
+        'PI4_WIFI_FIRMWARE_DIR="${COHESIX_PI4_WIFI_FIRMWARE_DIR:-${FIRMWARE_DIR}/firmware/cyw43455-linux-capture}"'
+        in source
+    )
+    assert 'COHESIX_PI4_WIFI_FIRMWARE_DIR="${PI4_WIFI_FIRMWARE_DIR}"' in source
+    assert 'out/pi4-linux-capture' not in source
+
+
+def test_root_task_build_defaults_to_checked_in_wifi_firmware_bundle() -> None:
+    """Root-task must find the Pi 4 Wi-Fi bundle after deleting out/."""
+
+    source = ROOT_TASK_BUILD_RS_PATH.read_text(encoding="utf-8")
+
+    assert (
+        '"third_party/raspberry-pi-firmware/v1.50/firmware/cyw43455-linux-capture"'
+        in source
+    )
+    assert "out/pi4-linux-capture" not in source
+    assert "resources/fixtures/pi4-linux-capture" not in source
+
+
+def test_checked_in_wifi_firmware_bundle_matches_release_contract() -> None:
+    """The default Pi 4 Wi-Fi bundle must be the pinned Linux Pi 4B identity."""
+
+    expected = {
+        "cyfmac43455-sdio.bin": (
+            643651,
+            "d408faa9d0d5b1a2f9912dcea53ab0be48217288e398406d117f0edafe7c3edd",
+        ),
+        "brcmfmac43455-sdio.raspberrypi,4-model-b.txt": (
+            1883,
+            "edb6f4e4fb19e18940004124feb4ffe160d72fc607243a07a4480338a28b2748",
+        ),
+        "cyfmac43455-sdio.clm_blob": (
+            4733,
+            "15f50a27020b263d1bea215c8f68d0550d912932d1d9ef19ffd59f18d82dd460",
+        ),
+    }
+
+    for filename, (size, digest) in expected.items():
+        data = (PI4_WIFI_BUNDLE_PATH / filename).read_bytes()
+
+        assert len(data) == size
+        assert hashlib.sha256(data).hexdigest() == digest
 
 
 def test_pi4_image_build_prefers_repo_local_sel4_build_tree() -> None:

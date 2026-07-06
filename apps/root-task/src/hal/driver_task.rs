@@ -7360,15 +7360,28 @@ fn emit_driver_task_resource_init_hdmi_progress(
     status: &'static str,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
-    if !driver_task_hdmi_progress_repeat_allowed(hot_path, stage, status, completion) {
-        return;
-    }
     if let Some(line) =
-        driver_task_resource_hdmi_progress_line(contract, hot_path, stage, status, completion)
+        driver_task_hdmi_progress_line_if_new(contract, hot_path, stage, status, completion)
     {
         crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
         crate::local_seat::mirror_driver_start_progress_line(line.as_str());
     }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_hdmi_progress_line_if_new(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    stage: &'static str,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) -> Option<heapless::String<192>> {
+    let line =
+        driver_task_resource_hdmi_progress_line(contract, hot_path, stage, status, completion)?;
+    if !driver_task_hdmi_progress_repeat_allowed(hot_path, stage, status, completion) {
+        return None;
+    }
+    Some(line)
 }
 
 #[cfg(feature = "kernel")]
@@ -7447,9 +7460,11 @@ fn driver_task_resource_status_mirrors_to_hdmi(
     if stage == "cyw43-firmware-chunk" && status == "ready" {
         return false;
     }
-    if matches!(status, "ready" | "deferred" | "pending" | "resumed") {
-        return false;
-    }
+    driver_task_high_impact_status_mirrors_to_hdmi(status)
+        || driver_task_startup_milestone_mirrors_to_hdmi(hot_path, stage, status)
+}
+
+fn driver_task_high_impact_status_mirrors_to_hdmi(status: &str) -> bool {
     status == "begin"
         || status == "fault"
         || status == "failed"
@@ -7457,6 +7472,7 @@ fn driver_task_resource_status_mirrors_to_hdmi(
         || status == "unexpected-completion"
         || status == "descriptor-rejected"
         || status.ends_with("failed")
+        || status.ends_with("-fail")
         || status.starts_with("blocked")
 }
 
@@ -7472,12 +7488,14 @@ fn driver_task_usb_resource_status_mirrors_to_hdmi(stage: &str, status: &str) ->
         ) | (
             "usb-keyboard-first-report",
             "no-reply" | "busy" | "poll-timeout"
+        ) | (
+            "usb-keyboard-enumeration-resume",
+            "address-device-failed" | "no-reply"
         )
     ) {
         return false;
     }
-    if status == "fault"
-        || status == "failed"
+    if driver_task_high_impact_status_mirrors_to_hdmi(status)
         || status == "invalid-contract"
         || status == "slot-missing"
         || status == "no-endpoint"
@@ -7485,16 +7503,77 @@ fn driver_task_usb_resource_status_mirrors_to_hdmi(stage: &str, status: &str) ->
         || status == "busy"
         || status == "poll-timeout"
         || status == "tx-no-reply"
-        || status == "tx-submit-fail"
-        || status == "unexpected-completion"
-        || status == "descriptor-rejected"
-        || status.ends_with("failed")
     {
         return true;
     }
+    driver_task_startup_milestone_mirrors_to_hdmi(DriverTaskHotPath::UsbKeyboard, stage, status)
+}
+
+fn driver_task_startup_milestone_mirrors_to_hdmi(
+    hot_path: DriverTaskHotPath,
+    stage: &str,
+    status: &str,
+) -> bool {
+    if matches!(status, "deferred" | "pending" | "resumed" | "progress") {
+        return false;
+    }
     matches!(
-        (stage, status),
-        ("usb-engine-init", "ready") | ("usb-keyboard-enumeration-resume", "device-addressed")
+        (hot_path, stage, status),
+        (
+            DriverTaskHotPath::SerialConsole,
+            "runtime-descriptor-replay" | "serial-runtime-init" | "serial-owner-state",
+            "ready"
+        ) | (
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-runtime-descriptor-replay" | "runtime-descriptor-replay" | "usb-engine-init",
+            "begin" | "ready"
+        ) | (
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-enumeration-resume",
+            "begin" | "command-ring-ready" | "root-port-connected" | "device-addressed" | "ready"
+        ) | (
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-enumeration"
+                | "usb-xhci-init"
+                | "usb-keyboard-first-report"
+                | "usb-owner-state",
+            "ready"
+        ) | (
+            DriverTaskHotPath::PcieRoot,
+            "runtime-descriptor-replay"
+                | "usb-prereq-pcie-replay"
+                | "usb-prereq-pcie-hal-prep"
+                | "pcie-owner-state",
+            "ready"
+        ) | (
+            DriverTaskHotPath::PcieRoot,
+            "usb-prereq-pcie-engine-init",
+            "adopt-hal-prepared-descriptor" | "ready-adopted"
+        ) | (
+            DriverTaskHotPath::SdioHost,
+            "runtime-descriptor-replay"
+                | "sdio-engine-init"
+                | "sdio-owner-state"
+                | "cyw43-sdio-prereq"
+                | "cyw43-post-release-sdio-reprime",
+            "ready"
+        ) | (
+            DriverTaskHotPath::Cyw43Wifi,
+            "runtime-descriptor-replay"
+                | "net-engine-init"
+                | "cyw43-transport-init"
+                | "cyw43-firmware-prep"
+                | "cyw43-nvram-tail"
+                | "cyw43-firmware-release"
+                | "cyw43-firmware"
+                | "cyw43-function2"
+                | "cyw43-owner-state",
+            "ready"
+        ) | (
+            DriverTaskHotPath::GenetNic,
+            "runtime-descriptor-replay" | "net-engine-init" | "genet-owner-state",
+            "ready"
+        )
     )
 }
 
@@ -11248,7 +11327,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn usb_transient_resource_progress_stays_off_interactive_surfaces() {
+    fn usb_transient_resource_progress_preserves_bounded_blocker_mirroring() {
         assert!(driver_task_resource_status_logs_to_buffer(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::UsbKeyboard,
@@ -11261,7 +11340,7 @@ mod tests {
             "usb-owner-state",
             "blocked-keyboard-enumeration"
         ));
-        assert!(!driver_task_usb_resource_status_mirrors_to_hdmi(
+        assert!(driver_task_usb_resource_status_mirrors_to_hdmi(
             "usb-owner-state",
             "blocked-keyboard-enumeration"
         ));
@@ -13046,14 +13125,15 @@ mod tests {
 
     #[test]
     fn hdmi_progress_lines_cover_driver_start_without_recursive_display_spam() {
-        assert!(driver_task_resource_hdmi_progress_line(
+        let usb_begin = driver_task_resource_hdmi_progress_line(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::UsbKeyboard,
             "usb-engine-init",
             "begin",
             None,
         )
-        .is_none());
+        .unwrap();
+        assert_eq!(usb_begin.as_str(), "[drivers] USB usb-engine-init begin");
 
         let progress = driver_task_resource_hdmi_progress_line(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
@@ -13084,6 +13164,25 @@ mod tests {
             "usb-keyboard-enumeration-resume",
             "no-reply",
             None,
+        )
+        .is_none());
+
+        assert!(driver_task_resource_hdmi_progress_line(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-enumeration-resume",
+            "address-device-failed",
+            Some(DriverTaskCompletionRecord {
+                sequence: 6,
+                code: DriverTaskCompletionCode::Fault.as_u16(),
+                detail: 0x0213,
+                result: 0x0f000101,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            }),
         )
         .is_none());
 
@@ -13142,13 +13241,33 @@ mod tests {
         .is_none());
 
         assert!(driver_task_resource_hdmi_progress_line(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-transport-init",
+            "progress",
+            Some(DriverTaskCompletionRecord::progress(8, 0)),
+        )
+        .is_none());
+
+        let pcie_ready = driver_task_resource_hdmi_progress_line(
             PCIE_ROOT_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::PcieRoot,
             "pcie-owner-state",
             "ready",
             None,
         )
-        .is_none());
+        .unwrap();
+        assert_eq!(pcie_ready.as_str(), "[drivers] PCIe pcie-owner-state ready");
+
+        let wifi_ready = driver_task_resource_hdmi_progress_line(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-function2",
+            "ready",
+            None,
+        )
+        .unwrap();
+        assert_eq!(wifi_ready.as_str(), "[drivers] WiFi cyw43-function2 ready");
 
         let fault = driver_task_resource_hdmi_progress_line(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -13171,6 +13290,29 @@ mod tests {
         assert_eq!(
             fault.as_str(),
             "[drivers] WiFi cyw43-transport-init fault detail=0x5323 result=0"
+        );
+
+        let tx_fail = driver_task_resource_hdmi_progress_line(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-control-txglomalign",
+            "tx-submit-fail",
+            Some(DriverTaskCompletionRecord {
+                sequence: 10,
+                code: DriverTaskCompletionCode::Fault.as_u16(),
+                detail: 0x532a,
+                result: 0,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 56,
+                    flags: 0,
+                },
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            tx_fail.as_str(),
+            "[drivers] WiFi cyw43-control-txglomalign tx-submit-fail detail=0x532a result=0"
         );
     }
 
@@ -13224,6 +13366,66 @@ mod tests {
             "fault",
             fault,
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn hdmi_progress_filter_does_not_let_hidden_transients_reset_repeat_gate() {
+        reset_driver_task_hdmi_progress_repeat_gate_for_test();
+
+        let begin = driver_task_hdmi_progress_line_if_new(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-enumeration-resume",
+            "begin",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            begin.as_str(),
+            "[drivers] USB usb-keyboard-enumeration-resume begin"
+        );
+
+        assert!(driver_task_hdmi_progress_line_if_new(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-enumeration-resume",
+            "no-reply",
+            None,
+        )
+        .is_none());
+
+        assert!(driver_task_hdmi_progress_line_if_new(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-enumeration-resume",
+            "begin",
+            None,
+        )
+        .is_none());
+
+        let ready = driver_task_hdmi_progress_line_if_new(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-enumeration-resume",
+            "command-ring-ready",
+            Some(DriverTaskCompletionRecord {
+                sequence: 11,
+                code: DriverTaskCompletionCode::Progress.as_u16(),
+                detail: 0x0204,
+                result: 1,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            ready.as_str(),
+            "[drivers] USB usb-keyboard-enumeration-resume command-ring-ready detail=0x0204 result=1"
+        );
     }
 
     #[cfg(feature = "kernel")]

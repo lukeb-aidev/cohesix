@@ -128,6 +128,7 @@ const CYW43_RUNTIME_DATA_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_DATA_TX_NO_REPLY_RESUMES: usize = 63;
 const CYW43_DESCRIPTOR_UNAVAILABLE_DETAIL: u16 = 0x5309;
 const CYW43_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL: u16 = 0x5103;
+const CYW43_SDIO_POST_RELEASE_HT_CLOCK_DETAIL: u16 = 0x532a;
 const CYW43_SDIO_FUNCTION2_NOT_READY_DETAIL: u16 = 0x532b;
 const CYW43_RUNTIME_DESCRIPTOR_UNAVAILABLE_RETRIES: usize = 2;
 // One same-descriptor replay keeps the first SDIO owner fault visible while
@@ -1925,6 +1926,7 @@ fn cyw43_bssid_refresh_tx_retry_completion(
 
 #[cfg(feature = "kernel")]
 fn cyw43_control_tx_submit_retry_completion(
+    stage: &'static str,
     completion: DriverTaskCompletionRecord,
     retries_spent: usize,
 ) -> Option<DriverTaskCompletionRecord> {
@@ -1932,12 +1934,15 @@ fn cyw43_control_tx_submit_retry_completion(
         return None;
     }
     if completion.code != DriverTaskCompletionCode::Fault.as_u16()
-        || !cyw43_fault_detail_allows_same_command_retry(completion.detail)
+        || !cyw43_control_tx_detail_allows_submit_retry(stage, completion.detail)
     {
         return None;
     }
     let status = sdio_transfer_failure_status(completion.result);
     let stage = (completion.result >> 24) & 0xff;
+    if completion.detail == CYW43_SDIO_POST_RELEASE_HT_CLOCK_DETAIL {
+        return Some(completion);
+    }
     if completion.detail == CYW43_SDIO_FUNCTION2_NOT_READY_DETAIL {
         return Some(completion);
     }
@@ -1950,6 +1955,13 @@ fn cyw43_control_tx_submit_retry_completion(
     } else {
         None
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_tx_detail_allows_submit_retry(stage: &'static str, detail: u16) -> bool {
+    cyw43_fault_detail_allows_same_command_retry(detail)
+        || (detail == CYW43_SDIO_POST_RELEASE_HT_CLOCK_DETAIL
+            && matches!(stage, "cyw43-control-txglomalign"))
 }
 
 #[cfg(feature = "kernel")]
@@ -4036,12 +4048,13 @@ fn cyw43_prepare_runtime_control_plane(
     contract: DriverTaskContract,
     clm_blob: Option<&[u8]>,
 ) -> Result<EthernetAddress, DriverTaskNetError> {
-    cyw43_submit_bcdc_iovar_u32_with_header_mode(
+    cyw43_submit_bcdc_iovar_u32_with_options(
         contract,
         "bus:txglomalign",
         8,
         "cyw43-control-txglomalign",
         Cyw43ControlHeaderMode::Plain,
+        true,
     )?;
     cyw43_get_bcdc_iovar_optional_unsupported_with_header_mode(
         contract,
@@ -8856,6 +8869,17 @@ fn cyw43_submit_control_exchange_unmapped_with_options(
                 0,
                 0,
             );
+            record_cyw43_runtime_command_no_reply_with_control_meta(
+                contract,
+                stage,
+                tx_descriptor,
+                tx_retries_spent,
+                cmd,
+                id,
+                header_mode.as_str(),
+                expected_response_len,
+                control_iovar,
+            );
             let status = if tx_retries_spent == 0 {
                 "tx-no-reply"
             } else {
@@ -8896,7 +8920,7 @@ fn cyw43_submit_control_exchange_unmapped_with_options(
             break completion;
         }
         if let Some(retry_completion) =
-            cyw43_control_tx_submit_retry_completion(completion, tx_retries_spent)
+            cyw43_control_tx_submit_retry_completion(stage, completion, tx_retries_spent)
         {
             tx_retries_spent = tx_retries_spent.saturating_add(1);
             crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -9049,7 +9073,7 @@ fn cyw43_submit_runtime_control_exchange(
             return Ok(completion);
         }
         if let Some(retry_completion) =
-            cyw43_control_tx_submit_retry_completion(completion, tx_retries_spent)
+            cyw43_control_tx_submit_retry_completion(stage, completion, tx_retries_spent)
         {
             tx_retries_spent = tx_retries_spent.saturating_add(1);
             crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -10087,13 +10111,10 @@ fn record_cyw43_control_split_failure(
         payload_offset: descriptor.payload_offset,
         payload_len: descriptor.payload_len,
         total_len: descriptor.total_len,
-        control_cmd: cyw43_descriptor_control_cmd(descriptor),
-        control_id: cyw43_descriptor_control_id(descriptor),
-        control_header_mode: cyw43_descriptor_control_header_mode(descriptor),
-        control_response_len: cyw43_control_request_expected_response_len(
-            cyw43_descriptor_control_cmd(descriptor),
-            None,
-        ) as u16,
+        control_cmd: expected_cmd,
+        control_id: expected_id,
+        control_header_mode: header_mode.as_str(),
+        control_response_len: expected_response_len,
         detail,
         reason,
         result,
@@ -11615,6 +11636,32 @@ fn record_cyw43_runtime_command_no_reply(
     descriptor: DriverRuntimeCyw43CommandDescriptor,
     resumes: usize,
 ) {
+    let control_cmd = cyw43_descriptor_control_cmd(descriptor);
+    record_cyw43_runtime_command_no_reply_with_control_meta(
+        contract,
+        stage,
+        descriptor,
+        resumes,
+        control_cmd,
+        cyw43_descriptor_control_id(descriptor),
+        cyw43_descriptor_control_header_mode(descriptor),
+        cyw43_control_request_expected_response_len(control_cmd, None) as u16,
+        "none",
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_runtime_command_no_reply_with_control_meta(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    resumes: usize,
+    control_cmd: u32,
+    control_id: u16,
+    control_header_mode: &'static str,
+    control_response_len: u16,
+    control_iovar: &str,
+) {
     use core::fmt::Write;
 
     *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
@@ -11625,13 +11672,10 @@ fn record_cyw43_runtime_command_no_reply(
         payload_offset: descriptor.payload_offset,
         payload_len: descriptor.payload_len,
         total_len: descriptor.total_len,
-        control_cmd: cyw43_descriptor_control_cmd(descriptor),
-        control_id: cyw43_descriptor_control_id(descriptor),
-        control_header_mode: cyw43_descriptor_control_header_mode(descriptor),
-        control_response_len: cyw43_control_request_expected_response_len(
-            cyw43_descriptor_control_cmd(descriptor),
-            None,
-        ) as u16,
+        control_cmd,
+        control_id,
+        control_header_mode,
+        control_response_len,
         detail: 0,
         reason: "cyw43-runtime-command-no-reply",
         result: 0,
@@ -11639,17 +11683,12 @@ fn record_cyw43_runtime_command_no_reply(
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
     let request = crate::hal::driver_task::current_driver_task_ring_request(contract);
     let progress = crate::hal::driver_task::latest_driver_task_ring_progress(contract);
-    let control_cmd = cyw43_descriptor_control_cmd(descriptor);
-    let control_id = cyw43_descriptor_control_id(descriptor);
-    let control_header_mode = cyw43_descriptor_control_header_mode(descriptor);
-    let control_response_len =
-        cyw43_control_request_expected_response_len(control_cmd, None) as u16;
     let mut line = heapless::String::<768>::new();
     match (request, progress) {
         (Some(request), Some(progress)) => {
             let _ = write!(
                 line,
-                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} iovar={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
                 contract.name,
                 stage,
                 descriptor.op,
@@ -11663,6 +11702,7 @@ fn record_cyw43_runtime_command_no_reply(
                 control_id,
                 control_header_mode,
                 control_response_len,
+                control_iovar,
                 request,
                 resumes,
                 if progress.marker_valid { "yes" } else { "no" },
@@ -11675,7 +11715,7 @@ fn record_cyw43_runtime_command_no_reply(
         (Some(request), None) => {
             let _ = write!(
                 line,
-                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} iovar={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
                 contract.name,
                 stage,
                 descriptor.op,
@@ -11689,6 +11729,7 @@ fn record_cyw43_runtime_command_no_reply(
                 control_id,
                 control_header_mode,
                 control_response_len,
+                control_iovar,
                 request,
                 resumes,
             );
@@ -11696,7 +11737,7 @@ fn record_cyw43_runtime_command_no_reply(
         (None, Some(progress)) => {
             let _ = write!(
                 line,
-                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} iovar={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
                 contract.name,
                 stage,
                 descriptor.op,
@@ -11710,6 +11751,7 @@ fn record_cyw43_runtime_command_no_reply(
                 control_id,
                 control_header_mode,
                 control_response_len,
+                control_iovar,
                 resumes,
                 if progress.marker_valid { "yes" } else { "no" },
                 progress.sequence,
@@ -11721,7 +11763,7 @@ fn record_cyw43_runtime_command_no_reply(
         (None, None) => {
             let _ = write!(
                 line,
-                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} iovar={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
                 contract.name,
                 stage,
                 descriptor.op,
@@ -11735,6 +11777,7 @@ fn record_cyw43_runtime_command_no_reply(
                 control_id,
                 control_header_mode,
                 control_response_len,
+                control_iovar,
                 resumes,
             );
         }
@@ -15292,20 +15335,23 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_clm_chunk_shape_matches_old_good_linux_capture() {
+    fn cyw43_clm_chunk_shape_matches_linux_firmware_pi4b() {
         assert_eq!(CYW43_CLM_CHUNK_BYTES, 1400);
         assert_eq!(cyw43_clm_iovar_data_len(CYW43_CLM_CHUNK_BYTES), 1412);
         assert_eq!(cyw43_clm_setvar_payload_len(CYW43_CLM_CHUNK_BYTES), 1420);
-        assert_eq!(cyw43_clm_iovar_data_len(2676 - CYW43_CLM_CHUNK_BYTES), 1288);
         assert_eq!(
-            cyw43_clm_setvar_payload_len(2676 - CYW43_CLM_CHUNK_BYTES),
-            1296
+            cyw43_clm_iovar_data_len(4733 - (3 * CYW43_CLM_CHUNK_BYTES)),
+            545
+        );
+        assert_eq!(
+            cyw43_clm_setvar_payload_len(4733 - (3 * CYW43_CLM_CHUNK_BYTES)),
+            553
         );
     }
 
     #[test]
     fn cyw43_clm_download_payload_matches_old_good_header() {
-        let mut clm = [0u8; 2676];
+        let mut clm = [0u8; 4733];
         for (index, byte) in clm.iter_mut().enumerate() {
             *byte = (index & 0xff) as u8;
         }
@@ -15331,20 +15377,32 @@ mod tests {
         );
 
         let second_offset = CYW43_CLM_CHUNK_BYTES;
-        let second_len_bytes = clm.len() - second_offset;
+        let second_len_bytes = CYW43_CLM_CHUNK_BYTES;
         let second_len =
             cyw43_write_clm_download_payload(&mut payload, &clm, second_offset, second_len_bytes)
-                .expect("final CLM chunk should fit");
-        assert_eq!(second_len, 1288);
+                .expect("middle CLM chunk should fit");
+        assert_eq!(second_len, 1412);
         assert_eq!(
             &payload[0..2],
-            &(CYW43_CLM_DOWNLOAD_FLAG_HANDLER_VER | CYW43_CLM_DOWNLOAD_FLAG_END).to_le_bytes()
+            &CYW43_CLM_DOWNLOAD_FLAG_HANDLER_VER.to_le_bytes()
         );
         assert_eq!(&payload[4..8], &(second_len_bytes as u32).to_le_bytes());
         assert_eq!(
             &payload[CYW43_CLM_IOVAR_HEADER_BYTES..CYW43_CLM_IOVAR_HEADER_BYTES + 4],
             &clm[second_offset..second_offset + 4]
         );
+
+        let final_offset = 3 * CYW43_CLM_CHUNK_BYTES;
+        let final_len_bytes = clm.len() - final_offset;
+        let final_len =
+            cyw43_write_clm_download_payload(&mut payload, &clm, final_offset, final_len_bytes)
+                .expect("final CLM chunk should fit");
+        assert_eq!(final_len, 545);
+        assert_eq!(
+            &payload[0..2],
+            &(CYW43_CLM_DOWNLOAD_FLAG_HANDLER_VER | CYW43_CLM_DOWNLOAD_FLAG_END).to_le_bytes()
+        );
+        assert_eq!(&payload[4..8], &(final_len_bytes as u32).to_le_bytes());
     }
 
     #[test]
@@ -16044,17 +16102,25 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_glom_control_uses_split_frame_without_startup_drain() {
-        let descriptor = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
+    fn cyw43_glom_control_uses_split_frame_with_startup_drain() {
+        let txglom_descriptor =
+            cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, true);
 
-        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
-        assert_eq!(descriptor.flags, 0);
-        assert_eq!(descriptor.payload_len, 36);
-        assert_eq!(descriptor.total_len, 36);
+        assert_eq!(txglom_descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(
-            cyw43_control_runtime_flags(Cyw43ControlHeaderMode::Plain, false),
-            descriptor.flags
+            txglom_descriptor.flags,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
         );
+        assert_eq!(txglom_descriptor.payload_len, 36);
+        assert_eq!(txglom_descriptor.total_len, 36);
+        assert_eq!(
+            cyw43_control_runtime_flags(Cyw43ControlHeaderMode::Plain, true),
+            txglom_descriptor.flags
+        );
+        let rxglom_descriptor =
+            cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
+        assert_eq!(rxglom_descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
+        assert_eq!(rxglom_descriptor.flags, 0);
         assert!(!cyw43_control_uses_runtime_exchange(
             "cyw43-control-txglomalign",
             "bus:txglomalign"
@@ -16067,6 +16133,38 @@ mod tests {
             "cyw43-control-ulp-sdioctrl",
             "ulp_sdioctrl"
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_split_control_fault_status_preserves_expected_metadata() {
+        test_clear_cyw43_runtime_replay_status();
+
+        let descriptor = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, true);
+        record_cyw43_control_split_failure(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            "cyw43-control-txglomalign",
+            descriptor,
+            "cyw43-control-tx-retry-no-reply",
+            None,
+            CYW43_WLC_SET_VAR,
+            1,
+            Cyw43ControlHeaderMode::Plain,
+            0,
+            "bus:txglomalign",
+            0,
+            0,
+        );
+
+        let fault = latest_cyw43_runtime_command_fault_status().unwrap();
+        assert_eq!(fault.stage, "cyw43-control-txglomalign");
+        assert_eq!(fault.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
+        assert_eq!(fault.flags, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN);
+        assert_eq!(fault.control_cmd, CYW43_WLC_SET_VAR);
+        assert_eq!(fault.control_id, 1);
+        assert_eq!(fault.control_header_mode, "plain");
+        assert_eq!(fault.control_response_len, 0);
+        assert_eq!(fault.reason, "cyw43-control-tx-retry-no-reply");
     }
 
     #[test]
@@ -19816,6 +19914,7 @@ mod tests {
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x53ff));
         assert!(cyw43_fault_detail_allows_same_command_retry(0x5103));
         assert!(cyw43_fault_detail_allows_same_command_retry(0x532b));
+        assert!(!cyw43_fault_detail_allows_same_command_retry(0x532a));
         assert!(!cyw43_fault_detail_allows_same_command_retry(0x5102));
     }
 
@@ -19896,6 +19995,11 @@ mod tests {
             detail: 0x532b,
             ..transfer_failed
         };
+        let post_release_ht_fault = DriverTaskCompletionRecord {
+            detail: 0x532a,
+            result: 0x0500_0800,
+            ..transfer_failed
+        };
         let response_r5_fault = DriverTaskCompletionRecord {
             result: 0x0500_0800,
             ..transfer_failed
@@ -19911,30 +20015,77 @@ mod tests {
 
         assert_eq!(CYW43_CONTROL_TX_SUBMIT_RETRIES, 1);
         assert_eq!(
-            cyw43_control_tx_submit_retry_completion(transfer_failed, 0),
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-firmware-version",
+                transfer_failed,
+                0
+            ),
             Some(transfer_failed)
         );
         assert_eq!(
-            cyw43_control_tx_submit_retry_completion(transfer_failed, 1),
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-firmware-version",
+                transfer_failed,
+                1
+            ),
             None
         );
         assert_eq!(
-            cyw43_control_tx_submit_retry_completion(descriptor_unavailable, 0),
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-firmware-version",
+                descriptor_unavailable,
+                0
+            ),
             None
         );
         assert_eq!(
-            cyw43_control_tx_submit_retry_completion(function2_not_ready, 0),
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-firmware-version",
+                function2_not_ready,
+                0
+            ),
             Some(function2_not_ready)
         );
         assert_eq!(
-            cyw43_control_tx_submit_retry_completion(response_r5_fault, 0),
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-txglomalign",
+                post_release_ht_fault,
+                0
+            ),
+            Some(post_release_ht_fault)
+        );
+        assert_eq!(
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-firmware-version",
+                post_release_ht_fault,
+                0
+            ),
+            None
+        );
+        assert_eq!(
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-firmware-version",
+                response_r5_fault,
+                0
+            ),
             Some(response_r5_fault)
         );
         assert_eq!(
-            cyw43_control_tx_submit_retry_completion(command_error_transfer, 0),
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-firmware-version",
+                command_error_transfer,
+                0
+            ),
             None
         );
-        assert_eq!(cyw43_control_tx_submit_retry_completion(submitted, 0), None);
+        assert_eq!(
+            cyw43_control_tx_submit_retry_completion(
+                "cyw43-control-firmware-version",
+                submitted,
+                0
+            ),
+            None
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -21018,18 +21169,18 @@ mod tests {
                     target_addr: CYW43_RAM_BASE_4345 - 1,
                     ..fault
                 },
-                609_309
+                643_651
             ),
             None
         );
-        assert_eq!(cyw43_firmware_resume_offset(fault, 609_308), None);
+        assert_eq!(cyw43_firmware_resume_offset(fault, 643_650), None);
     }
 
     #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_nvram_resume_reenters_tail_after_exact_nvram_fault() {
-        let firmware_len = 609_309usize;
-        let nvram_len = 1_744usize;
+        let firmware_len = 643_651usize;
+        let nvram_len = 1_708usize;
         let nvram_base = CYW43_RAM_BASE_4345 + CYW43_RAM_SIZE_4345_PI4 - 4 - nvram_len as u32;
         let fault = Cyw43RuntimeCommandFaultStatus {
             stage: "cyw43-nvram-chunk",

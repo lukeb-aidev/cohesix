@@ -4688,8 +4688,6 @@ fn bootstrap<P: Platform>(
         }
     }
 
-    crate::hal::pi4_wifi::preseed_sdhci_mmio(hal);
-
     let mut local_seat_runtime = init_local_seat_runtime(
         &mut console,
         hardware,

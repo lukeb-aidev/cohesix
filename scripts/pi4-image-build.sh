@@ -24,6 +24,7 @@ U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
 OBJCOPY_WRAPPER="${ROOT_DIR}/scripts/aarch64-objcopy-stdout.sh"
 GENERATED_CONFIG_DIR="${ROOT_DIR}/configs/generated"
 FIRMWARE_DIR="${ROOT_DIR}/third_party/raspberry-pi-firmware/v1.50"
+PI4_WIFI_FIRMWARE_DIR=""
 STAGE_DIR="${ROOT_DIR}/out/pi4-sd"
 SEL4_UPSTREAM_IMAGE_NAME="sel4test-driver-image-arm-bcm2711"
 COHESIX_IMAGE_NAME="cohesix-image-arm-bcm2711"
@@ -904,6 +905,7 @@ canonicalize_input_paths() {
     SEL4_VENV_DIR="$(realpath_py "${SEL4_VENV_DIR}")"
     U_BOOT_BIN="$(realpath_py "${U_BOOT_BIN}")"
     FIRMWARE_DIR="$(realpath_py "${FIRMWARE_DIR}")"
+    PI4_WIFI_FIRMWARE_DIR="${COHESIX_PI4_WIFI_FIRMWARE_DIR:-${FIRMWARE_DIR}/firmware/cyw43455-linux-capture}"
     STAGE_DIR="$(realpath_py "${STAGE_DIR}")"
 }
 
@@ -1053,8 +1055,11 @@ build_pi4_image() {
     package_driver_runtime_raw_cpio "${embedded_runtime_cpio}"
 
     log "Building root-task (${ROOT_TASK_FEATURES})"
+    require_dir "${PI4_WIFI_FIRMWARE_DIR}"
+    log "Using Pi4 WiFi firmware bundle: ${PI4_WIFI_FIRMWARE_DIR}"
     COHESIX_BUILD_STAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
       COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="${embedded_runtime_cpio}" \
+      COHESIX_PI4_WIFI_FIRMWARE_DIR="${PI4_WIFI_FIRMWARE_DIR}" \
       cargo build \
         --target aarch64-unknown-none \
         --release \

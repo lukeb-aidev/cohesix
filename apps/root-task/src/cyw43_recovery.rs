@@ -90,6 +90,7 @@ mod tests {
         assert!(!fault_detail_allows_sdio_owner_recovery(0x53ff));
         assert!(fault_detail_allows_same_command_retry(0x5103));
         assert!(fault_detail_allows_same_command_retry(0x532b));
+        assert!(!fault_detail_allows_same_command_retry(0x532a));
         assert!(!fault_detail_allows_same_command_retry(0x5102));
     }
 }

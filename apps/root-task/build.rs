@@ -331,6 +331,9 @@ fn emit_pi4_wifi_firmware() -> io::Result<()> {
             firmware: bundle.firmware,
             nvram: bundle.nvram,
             clm_blob: bundle.clm_blob,
+            firmware_sha256: bundle.firmware_sha256,
+            nvram_sha256: bundle.nvram_sha256,
+            clm_blob_sha256: bundle.clm_blob_sha256,
             board_type: PI4_WIFI_BOARD_TYPE,
         });
 
@@ -350,10 +353,16 @@ fn emit_pi4_wifi_firmware() -> io::Result<()> {
                 "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = include_bytes!(r#\"{}\"#);\n\
 pub(crate) static PI4_WIFI_NVRAM: &[u8] = include_bytes!(r#\"{}\"#);\n\
 pub(crate) static PI4_WIFI_CLM_BLOB: &[u8] = include_bytes!(r#\"{}\"#);\n\
+pub(crate) const PI4_WIFI_FIRMWARE_SHA256: &str = {:?};\n\
+pub(crate) const PI4_WIFI_NVRAM_SHA256: &str = {:?};\n\
+pub(crate) const PI4_WIFI_CLM_BLOB_SHA256: &str = {:?};\n\
 pub(crate) const PI4_WIFI_BOARD_TYPE: &str = {:?};\n",
                 bundle.firmware.display(),
                 bundle.nvram.display(),
                 bundle.clm_blob.display(),
+                bundle.firmware_sha256,
+                bundle.nvram_sha256,
+                bundle.clm_blob_sha256,
                 bundle.board_type,
             ));
         }
@@ -372,6 +381,9 @@ pub(crate) const PI4_WIFI_BOARD_TYPE: &str = {:?};\n",
                 "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = &[];\n\
 pub(crate) static PI4_WIFI_NVRAM: &[u8] = &[];\n\
 pub(crate) static PI4_WIFI_CLM_BLOB: &[u8] = &[];\n\
+pub(crate) const PI4_WIFI_FIRMWARE_SHA256: &str = \"none\";\n\
+pub(crate) const PI4_WIFI_NVRAM_SHA256: &str = \"none\";\n\
+pub(crate) const PI4_WIFI_CLM_BLOB_SHA256: &str = \"none\";\n\
 pub(crate) const PI4_WIFI_BOARD_TYPE: &str = \"raspberrypi,4-model-b\";\n",
             );
         }
@@ -385,6 +397,9 @@ struct Pi4WifiFirmwareBundle {
     firmware: PathBuf,
     nvram: PathBuf,
     clm_blob: PathBuf,
+    firmware_sha256: &'static str,
+    nvram_sha256: &'static str,
+    clm_blob_sha256: &'static str,
     board_type: &'static str,
 }
 
@@ -392,6 +407,9 @@ struct Pi4WifiFirmwareSearch {
     firmware: PathBuf,
     nvram: PathBuf,
     clm_blob: PathBuf,
+    firmware_sha256: &'static str,
+    nvram_sha256: &'static str,
+    clm_blob_sha256: &'static str,
 }
 
 #[derive(Clone, Copy)]
@@ -410,59 +428,30 @@ struct Pi4WifiKnownArtifact {
 }
 
 const PI4_WIFI_FIRMWARE_DIR_ENV: &str = "COHESIX_PI4_WIFI_FIRMWARE_DIR";
-const PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR: &str =
-    "resources/fixtures/pi4-linux-capture/lastchance-20260426T071048Z/firmware-resolved";
-const PI4_WIFI_LOCAL_CAPTURE_DIR: &str =
-    "out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/firmware-resolved";
-const PI4_WIFI_TRACKED_FIRMWARE_DIR: &str = "third_party/raspberry-pi-firmware/v1.50/firmware/brcm";
+const PI4_WIFI_THIRD_PARTY_BUNDLE_DIR: &str =
+    "third_party/raspberry-pi-firmware/v1.50/firmware/cyw43455-linux-capture";
 const PI4_WIFI_BOARD_TYPE: &str = "raspberrypi,4-model-b";
 const PI4_WIFI_CAPTURE_FIRMWARE: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "cyfmac43455-sdio.bin",
-    expected_len: 609_309,
-    expected_sha256: "d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3",
+    expected_len: 643_651,
+    expected_sha256: "d408faa9d0d5b1a2f9912dcea53ab0be48217288e398406d117f0edafe7c3edd",
 };
 const PI4_WIFI_CAPTURE_NVRAM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "brcmfmac43455-sdio.raspberrypi,4-model-b.txt",
-    expected_len: 2_074,
-    expected_sha256: "ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d",
+    expected_len: 1_883,
+    expected_sha256: "edb6f4e4fb19e18940004124feb4ffe160d72fc607243a07a4480338a28b2748",
 };
 const PI4_WIFI_CAPTURE_CLM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "cyfmac43455-sdio.clm_blob",
-    expected_len: 2_676,
-    expected_sha256: "9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1",
+    expected_len: 4_733,
+    expected_sha256: "15f50a27020b263d1bea215c8f68d0550d912932d1d9ef19ffd59f18d82dd460",
 };
-const PI4_WIFI_KNOWN_BUNDLES: &[Pi4WifiKnownBundle] = &[
-    Pi4WifiKnownBundle {
-        dir: PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR,
-        firmware: PI4_WIFI_CAPTURE_FIRMWARE,
-        nvram: PI4_WIFI_CAPTURE_NVRAM,
-        clm_blob: PI4_WIFI_CAPTURE_CLM,
-    },
-    Pi4WifiKnownBundle {
-        dir: PI4_WIFI_LOCAL_CAPTURE_DIR,
-        firmware: PI4_WIFI_CAPTURE_FIRMWARE,
-        nvram: PI4_WIFI_CAPTURE_NVRAM,
-        clm_blob: PI4_WIFI_CAPTURE_CLM,
-    },
-    Pi4WifiKnownBundle {
-        dir: PI4_WIFI_TRACKED_FIRMWARE_DIR,
-        firmware: Pi4WifiKnownArtifact {
-            file_name: "brcmfmac43455-sdio.bin",
-            expected_len: 631_467,
-            expected_sha256: "cf79e8e8727d103a94cd243f1d98770fa29f5da25df251d0d31b3696f3b4ac6a",
-        },
-        nvram: Pi4WifiKnownArtifact {
-            file_name: "brcmfmac43455-sdio.Raspberry",
-            expected_len: 2_074,
-            expected_sha256: "ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d",
-        },
-        clm_blob: Pi4WifiKnownArtifact {
-            file_name: "brcmfmac43455-sdio.clm_blob",
-            expected_len: 7_163,
-            expected_sha256: "2dbd7d22fc9af0eb560ceab45b19646d211bc7b34a1dd00c6bfac5dd6ba25e8a",
-        },
-    },
-];
+const PI4_WIFI_KNOWN_BUNDLES: &[Pi4WifiKnownBundle] = &[Pi4WifiKnownBundle {
+    dir: PI4_WIFI_THIRD_PARTY_BUNDLE_DIR,
+    firmware: PI4_WIFI_CAPTURE_FIRMWARE,
+    nvram: PI4_WIFI_CAPTURE_NVRAM,
+    clm_blob: PI4_WIFI_CAPTURE_CLM,
+}];
 const PI4_DRIVER_RUNTIME_PAYLOAD_ENV: &str = "COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD";
 
 fn emit_pi4_driver_runtime_payload() -> io::Result<()> {
@@ -609,6 +598,9 @@ fn validate_pi4_wifi_known_bundle(
         firmware,
         nvram,
         clm_blob,
+        firmware_sha256: bundle.firmware.expected_sha256,
+        nvram_sha256: bundle.nvram.expected_sha256,
+        clm_blob_sha256: bundle.clm_blob.expected_sha256,
     })
 }
 

@@ -529,6 +529,7 @@ class GateSummary:
     dummy_timer_seen: bool = False
     sdio_irq158_seen: bool = False
     sdio_irq158_bound: bool = False
+    sdio_irq158_inband_proof: bool = False
     sdio_irq158_line: int = 0
     boot_halt_reason: str = "none"
     panic_seen: bool = False
@@ -560,6 +561,11 @@ class GateSummary:
     wifi_rxtrace_pre_sample_delta_ticks: int = 0
     wifi_rxtrace_transfer_delta_ticks: int = 0
     wifi_rxtrace_post_sample_delta_ticks: int = 0
+    wifi_firmware_identity_proof: bool = False
+    wifi_firmware_identity_blocker: str = "not-seen"
+    wifi_clm_ready_proof: bool = False
+    wifi_firmware_version_proof: bool = False
+    wifi_clm_version_proof: bool = False
     driver_task_default_requested: bool = False
     driver_task_live_hot_paths: bool = False
     driver_task_contracts: int = 0
@@ -720,6 +726,9 @@ class GateSummary:
             "DUMMY_TIMER_SEEN": "yes" if self.dummy_timer_seen else "no",
             "SDIO_IRQ158_SEEN": "yes" if self.sdio_irq158_seen else "no",
             "SDIO_IRQ158_BOUND": "yes" if self.sdio_irq158_bound else "no",
+            "SDIO_IRQ158_INBAND_PROOF": (
+                "yes" if self.sdio_irq158_inband_proof else "no"
+            ),
             "SDIO_IRQ158_LINE": self.sdio_irq158_line,
             "BOOT_HALT_REASON": self.boot_halt_reason,
             "PANIC_SEEN": "yes" if self.panic_seen else "no",
@@ -755,6 +764,17 @@ class GateSummary:
             "WIFI_RXTRACE_PRE_SAMPLE_DELTA_TICKS": self.wifi_rxtrace_pre_sample_delta_ticks,
             "WIFI_RXTRACE_TRANSFER_DELTA_TICKS": self.wifi_rxtrace_transfer_delta_ticks,
             "WIFI_RXTRACE_POST_SAMPLE_DELTA_TICKS": self.wifi_rxtrace_post_sample_delta_ticks,
+            "WIFI_FIRMWARE_IDENTITY_PROOF": (
+                "yes" if self.wifi_firmware_identity_proof else "no"
+            ),
+            "WIFI_FIRMWARE_IDENTITY_BLOCKER": self.wifi_firmware_identity_blocker,
+            "WIFI_CLM_READY_PROOF": "yes" if self.wifi_clm_ready_proof else "no",
+            "WIFI_FIRMWARE_VERSION_PROOF": (
+                "yes" if self.wifi_firmware_version_proof else "no"
+            ),
+            "WIFI_CLM_VERSION_PROOF": (
+                "yes" if self.wifi_clm_version_proof else "no"
+            ),
             "DRIVER_TASK_DEFAULT_REQUESTED": (
                 "yes" if self.driver_task_default_requested else "no"
             ),
@@ -2365,7 +2385,12 @@ def summarize_wifi_gate7_subgate_detail(
         return latest
     if wifi_gate != 7:
         return WifiGate7Subgate("none", "none")
-    if wifi_blocker == "cyw43-sdio-descriptor-transfer-failed":
+    if wifi_blocker in {
+        "cyw43-sdio-descriptor-transfer-failed",
+        "cyw43-control-tx-no-reply",
+        "cyw43-control-tx-retry-no-reply",
+        "cyw43-control-tx-not-submitted",
+    }:
         return WifiGate7Subgate("none", "none", reason=wifi_blocker)
     if wifi_blocker in {
         "cyw43-association-event-missing",
@@ -6938,7 +6963,11 @@ def summarize_cyw43_control_tx_no_reply(
             latest = None
             continue
         exact, phase = wifi_failure_detail_from_fields(event)
-        if exact in {"cyw43-control-tx-no-reply", "cyw43-control-tx-retry-no-reply"}:
+        if exact in {
+            "cyw43-control-tx-no-reply",
+            "cyw43-control-tx-retry-no-reply",
+            "cyw43-control-tx-not-submitted",
+        }:
             if latest is None or (
                 latest[1] in {"none", "cyw43-control-tx"}
                 and phase not in {"none", "cyw43-control-tx"}
@@ -8318,7 +8347,7 @@ def _owner_state_proven(fields: dict[str, str]) -> bool:
 
 RUNTIME_DESCRIPTOR_SEAL_VERSION = 3
 SPLIT_RUNTIME_DESCRIPTOR_SEAL_HOT_PATHS = frozenset(
-    {"usb-keyboard", "cyw43-wifi"}
+    {"usb-keyboard", "cyw43-wifi", "sdio-host"}
 )
 
 
@@ -10261,6 +10290,107 @@ def wifi_forbidden_shortcut(event: TraceEvent) -> bool:
     )
 
 
+CYW43_CAPTURE_FIRMWARE_LEN = 643_651
+CYW43_CAPTURE_NVRAM_LEN = 1_883
+CYW43_CAPTURE_CLM_LEN = 4_733
+CYW43_CAPTURE_FIRMWARE_SHA256 = (
+    "d408faa9d0d5b1a2f9912dcea53ab0be48217288e398406d117f0edafe7c3edd"
+)
+CYW43_CAPTURE_NVRAM_SHA256 = (
+    "edb6f4e4fb19e18940004124feb4ffe160d72fc607243a07a4480338a28b2748"
+)
+CYW43_CAPTURE_CLM_SHA256 = (
+    "15f50a27020b263d1bea215c8f68d0550d912932d1d9ef19ffd59f18d82dd460"
+)
+
+
+def wifi_firmware_identity_step(event: TraceEvent) -> bool:
+    """Return true for the pinned upstream Linux Pi 4B CYW43455 identity."""
+
+    raw = event.raw.lower()
+    if not raw.startswith(("wifi: firmware_contract", "wifi: firmware_release")):
+        return False
+    firmware_len = parse_hex_int(event.fields.get("fw"))
+    nvram_len = parse_hex_int(event.fields.get("nvram"))
+    clm_len = parse_hex_int(event.fields.get("clm"))
+    return (
+        firmware_len == CYW43_CAPTURE_FIRMWARE_LEN
+        and nvram_len == CYW43_CAPTURE_NVRAM_LEN
+        and clm_len == CYW43_CAPTURE_CLM_LEN
+        and field_lower(event, "fw_hash") == CYW43_CAPTURE_FIRMWARE_SHA256
+        and field_lower(event, "nvram_hash") == CYW43_CAPTURE_NVRAM_SHA256
+        and field_lower(event, "clm_hash") == CYW43_CAPTURE_CLM_SHA256
+    )
+
+
+def wifi_firmware_identity_blocker(event: TraceEvent) -> str:
+    """Return the first mismatched upstream Linux Pi 4B identity field."""
+
+    if parse_hex_int(event.fields.get("fw")) != CYW43_CAPTURE_FIRMWARE_LEN:
+        return "firmware-len"
+    if parse_hex_int(event.fields.get("nvram")) != CYW43_CAPTURE_NVRAM_LEN:
+        return "nvram-len"
+    if parse_hex_int(event.fields.get("clm")) != CYW43_CAPTURE_CLM_LEN:
+        return "clm-len"
+    if field_lower(event, "fw_hash") != CYW43_CAPTURE_FIRMWARE_SHA256:
+        return "firmware-hash"
+    if field_lower(event, "nvram_hash") != CYW43_CAPTURE_NVRAM_SHA256:
+        return "nvram-hash"
+    if field_lower(event, "clm_hash") != CYW43_CAPTURE_CLM_SHA256:
+        return "clm-hash"
+    return "none"
+
+
+def summarize_wifi_firmware_identity(events: Iterable[TraceEvent]) -> tuple[bool, str]:
+    """Return whether proof used the exact pinned upstream Linux Pi 4B bundle."""
+
+    blocker = "not-seen"
+    for event in events:
+        raw = event.raw.lower()
+        if not raw.startswith(("wifi: firmware_contract", "wifi: firmware_release")):
+            continue
+        blocker = wifi_firmware_identity_blocker(event)
+        if blocker == "none":
+            return True, "none"
+    return False, blocker
+
+
+def wifi_clm_ready_step(event: TraceEvent) -> bool:
+    """Return true when CLM download completed with the captured CLM size."""
+
+    return (
+        "cyw43_driver_task_clm" in event.raw.lower()
+        and field_lower(event, "contract") == "cyw43455"
+        and field_lower(event, "stage") == "cyw43-control-clmload"
+        and field_lower(event, "action") == "ready"
+        and parse_hex_int(event.fields.get("len")) == CYW43_CAPTURE_CLM_LEN
+    )
+
+
+def wifi_text_iovar_step(event: TraceEvent, *, stage: str, name: str) -> bool:
+    """Return true when a nonempty CYW43 text iovar proof was captured."""
+
+    return (
+        "cyw43_driver_task_text_iovar" in event.raw.lower()
+        and field_lower(event, "contract") == "cyw43455"
+        and field_lower(event, "stage") == stage
+        and field_lower(event, "name") == name
+        and (parse_hex_int(event.fields.get("printable_len")) or 0) > 0
+    )
+
+
+def wifi_firmware_version_step(event: TraceEvent) -> bool:
+    """Return true when firmware version text was read after CLM load."""
+
+    return wifi_text_iovar_step(event, stage="cyw43-control-firmware-version", name="ver")
+
+
+def wifi_clm_version_step(event: TraceEvent) -> bool:
+    """Return true when CLM version text was read after CLM load."""
+
+    return wifi_text_iovar_step(event, stage="cyw43-control-clm-version", name="clmver")
+
+
 def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResult:
     """Validate the reopened 26b CYW43 host-EAPOL old-good replay profile."""
 
@@ -10283,6 +10413,7 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
                     contract="sdio-host",
                 ),
             ),
+            SequenceStep("firmware-identity", wifi_firmware_identity_step),
         ],
         forbidden=[SequenceStep("wifi-shortcut", wifi_forbidden_shortcut)],
         steps=[
@@ -10292,6 +10423,9 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
             SequenceStep("function2-ready", wifi_function2_ready_step),
             SequenceStep("control-rxglom", wifi_control_rxglom_step),
             SequenceStep("control-revinfo", wifi_control_revinfo_step),
+            SequenceStep("clm-ready", wifi_clm_ready_step),
+            SequenceStep("firmware-version", wifi_firmware_version_step),
+            SequenceStep("clm-version", wifi_clm_version_step),
             SequenceStep("control-up", wifi_control_up_step),
             SequenceStep("join-request", wifi_join_request_step),
             SequenceStep("association-link", wifi_association_link_step),
@@ -10377,6 +10511,47 @@ def summarize_timer_backend(events: Iterable[TraceEvent]) -> tuple[str, int, str
         counter = "none"
 
     return backend, timer_clock_hz, counter, dummy_seen
+
+
+def sdio_irq158_contract_inband_step(event: TraceEvent) -> bool:
+    """Return true for the real IRQ-158 SDIO device-clear contract."""
+
+    return (
+        "sdio irq contract" in event.raw.lower()
+        and event.fields.get("irq") == "158"
+        and event.fields.get("bound") == "1"
+        and "sdio-intstatus+sdhci-cardint" in field_lower(event, "device_clear")
+    )
+
+
+def sdio_ienx_or_card_int_step(event: TraceEvent) -> bool:
+    """Return true when logs show IENx arming or CARD_INT source evidence."""
+
+    raw = event.raw.lower()
+    if "cccr-ienx+sdhci-card-int" in raw:
+        ien = parse_hex_int(event.fields.get("ien"))
+        if ien is None or ien == 0x07:
+            return True
+    for key in ("rxsrc_ien", "control_rxsrc_ien", "ienx"):
+        value = parse_hex_int(event.fields.get(key))
+        if value == 0x07:
+            return True
+    return (
+        "card_int=y" in raw
+        or "card_int=true" in raw
+        or field_lower(event, "card_int") in {"y", "yes", "true", "1"}
+        or field_lower(event, "rxsrc_card_int") in {"y", "yes", "true", "1"}
+        or field_lower(event, "control_rxsrc_card_int") in {"y", "yes", "true", "1"}
+    )
+
+
+def summarize_sdio_irq158_inband_proof(events: Iterable[TraceEvent]) -> bool:
+    """Return true only for IRQ-158 plus IENx/CARD_INT in-band evidence."""
+
+    event_list = list(events)
+    return any(sdio_irq158_contract_inband_step(event) for event in event_list) and any(
+        sdio_ienx_or_card_int_step(event) for event in event_list
+    )
 
 
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
@@ -10481,6 +10656,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         for event in sdio_irq158_events
     )
     sdio_irq158_line = sdio_irq158_events[0].line if sdio_irq158_events else 0
+    sdio_irq158_inband_proof = summarize_sdio_irq158_inband_proof(event_list)
     if panic_seen:
         boot_halt_reason = panic_reason
     elif boot_halted:
@@ -10523,6 +10699,14 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_rxtrace_transfer_delta_ticks,
         wifi_rxtrace_post_sample_delta_ticks,
     ) = summarize_wifi_rxtrace_timing(event_list)
+    wifi_firmware_identity_proof, wifi_firmware_identity_blocker = (
+        summarize_wifi_firmware_identity(event_list)
+    )
+    wifi_clm_ready_proof = any(wifi_clm_ready_step(event) for event in event_list)
+    wifi_firmware_version_proof = any(
+        wifi_firmware_version_step(event) for event in event_list
+    )
+    wifi_clm_version_proof = any(wifi_clm_version_step(event) for event in event_list)
     (
         driver_task_default_requested,
         driver_task_live_hot_paths,
@@ -10914,6 +11098,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         dummy_timer_seen=dummy_timer_seen,
         sdio_irq158_seen=sdio_irq158_seen,
         sdio_irq158_bound=sdio_irq158_bound,
+        sdio_irq158_inband_proof=sdio_irq158_inband_proof,
         sdio_irq158_line=sdio_irq158_line,
         boot_halt_reason=boot_halt_reason,
         panic_seen=panic_seen,
@@ -10945,6 +11130,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_rxtrace_pre_sample_delta_ticks=wifi_rxtrace_pre_sample_delta_ticks,
         wifi_rxtrace_transfer_delta_ticks=wifi_rxtrace_transfer_delta_ticks,
         wifi_rxtrace_post_sample_delta_ticks=wifi_rxtrace_post_sample_delta_ticks,
+        wifi_firmware_identity_proof=wifi_firmware_identity_proof,
+        wifi_firmware_identity_blocker=wifi_firmware_identity_blocker,
+        wifi_clm_ready_proof=wifi_clm_ready_proof,
+        wifi_firmware_version_proof=wifi_firmware_version_proof,
+        wifi_clm_version_proof=wifi_clm_version_proof,
         driver_task_default_requested=driver_task_default_requested,
         driver_task_live_hot_paths=driver_task_live_hot_paths,
         driver_task_contracts=driver_task_contracts,
@@ -12206,6 +12396,16 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
             blockers.append("wifi-oldgood-incomplete")
         if record.get("DRIVER_TASK_ACTIVE_NET") != "cyw43":
             blockers.append("wifi-driver-task-not-active")
+        if record.get("WIFI_FIRMWARE_IDENTITY_PROOF") != "yes":
+            blockers.append("wifi-firmware-identity-missing")
+        if record.get("WIFI_CLM_READY_PROOF") != "yes":
+            blockers.append("wifi-clm-ready-missing")
+        if record.get("WIFI_FIRMWARE_VERSION_PROOF") != "yes":
+            blockers.append("wifi-firmware-version-missing")
+        if record.get("WIFI_CLM_VERSION_PROOF") != "yes":
+            blockers.append("wifi-clm-version-missing")
+        if record.get("SDIO_IRQ158_INBAND_PROOF") != "yes":
+            blockers.append("wifi-sdio-irq158-inband-proof-missing")
     elif net_active == "wired":
         if record.get("DRIVER_TASK_ACTIVE_NET") != "genet":
             blockers.append("wired-driver-task-not-active")

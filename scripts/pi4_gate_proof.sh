@@ -558,6 +558,12 @@ run_normalizer() {
         args+=("--expect-min" "WIFI_GATE=10" "--expect" "WIFI_BLOCKER=none")
         args+=("--expect" "WIFI_OLDGOOD_REPLAY=yes")
         args+=("--expect" "WIFI_OLDGOOD_MISSING=none")
+        args+=("--expect" "WIFI_FIRMWARE_IDENTITY_PROOF=yes")
+        args+=("--expect" "WIFI_FIRMWARE_IDENTITY_BLOCKER=none")
+        args+=("--expect" "WIFI_CLM_READY_PROOF=yes")
+        args+=("--expect" "WIFI_FIRMWARE_VERSION_PROOF=yes")
+        args+=("--expect" "WIFI_CLM_VERSION_PROOF=yes")
+        args+=("--expect" "SDIO_IRQ158_INBAND_PROOF=yes")
     fi
     if [[ "${REQUIRE_WIRED_READY}" -eq 1 ]]; then
         args+=("--expect" "NET_ACTIVE=wired")

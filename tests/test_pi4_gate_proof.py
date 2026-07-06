@@ -33,7 +33,7 @@ def _driver_task_owner_state_lines() -> list[str]:
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
         "owner_state=driver-owned descriptor=present descriptor_version=3 "
-        "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no",
+        "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
         "owner_state=driver-owned descriptor=present descriptor_version=3 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no",
@@ -138,7 +138,7 @@ def _driver_task_dma_proof_lines(include_wifi: bool = True) -> list[str]:
                 "proof_effect=runtime-dma-proof-ready",
                 "DRIVER_TASK_DMA_PROOF contract=sdio-host hot_path=sdio-host "
                 "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=3 "
-                "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no "
+                "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid root_pointer=no "
                 "owner=linked-runtime mmio_pages=1 dma_pages=0 shared_pages=32 "
                 "bus_address_policy=zero-dma "
                 "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
@@ -310,10 +310,30 @@ def _oldgood_wifi_replay_lines() -> list[str]:
     return [
         "SDIO_DRIVER_TASK_REPLAY_STATUS stage=engine-init blocker=ready detail=0x5500",
         "wifi: cyw43-transport-ready owner=linked-runtime",
+        "wifi: firmware_contract fw=643651 nvram=1883 clm=4733 "
+        "fw_hash=d408faa9d0d5b1a2f9912dcea53ab0be48217288e398406d117f0edafe7c3edd "
+        "nvram_hash=edb6f4e4fb19e18940004124feb4ffe160d72fc607243a07a4480338a28b2748 "
+        "clm_hash=15f50a27020b263d1bea215c8f68d0550d912932d1d9ef19ffd59f18d82dd460 "
+        "board=raspberrypi,4-model-b rstvec=0xb83ef198 verified=yes "
+        "armcr4_release=1 sr_kso=yes current_clock=41666666Hz preferred=41666666Hz",
         "wifi: cyw43-release-firmware-ready-done status=ready",
         "wifi: function2-ready f2_enabled=yes f2_ready=yes",
+        "[pi4-wifi] sdio irq contract irq=158 trigger=level "
+        "bound=1 badge=0x9f device_clear=sdio-intstatus+sdhci-cardint "
+        "ack=after-clear int_status=0x00000000 int_enable=0x027f003b "
+        "signal=0x00000100",
+        "[pi4-wifi] firmware stage=setup-firmware-channel "
+        "action=interrupts-armed path=sel4-irq "
+        "source=hostintmask+cccr-ienx+sdhci-card-int "
+        "fn_int_mask_policy=linux-unused ien=0x07",
         "wifi: control_exchange step=cyw43-control-rxglom status=matched bus:rxglom=1",
         "wifi: control_exchange step=cyw43-control-revinfo status=matched",
+        "CYW43_DRIVER_TASK_CLM contract=cyw43455 stage=cyw43-control-clmload "
+        "action=ready index=4 offset=4733 len=4733 flags=0x0000",
+        "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
+        "stage=cyw43-control-firmware-version name=ver printable_len=48",
+        "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
+        "stage=cyw43-control-clm-version name=clmver printable_len=16",
         "wifi: control_exchange step=cyw43-control-up status=matched",
         "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
         "path=primary-bsscfg:join action=ready ssid_len=7 result=0x00000000",
@@ -1151,7 +1171,7 @@ def test_gate_proof_requires_usb_oldgood_replay_for_ready(
 def test_gate_proof_requires_usb_first_report_for_ready(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Full USB ready proof must not accept parser admission alone."""
+    """Full USB ready proof must not accept command-ready admission alone."""
 
     venv_dir = REPO_ROOT / ".venv"
     if not (venv_dir / "bin" / "python").is_file():
@@ -1186,8 +1206,8 @@ def test_gate_proof_requires_usb_first_report_for_ready(
     )
 
     assert result.returncode == 2
-    assert "USB_FIRST_REPORT_READY=no" in result.stdout
-    assert "USB_FIRST_REPORT_READY expected yes got no" in result.stderr
+    assert "USB_OLDGOOD_REPLAY=no" in result.stdout
+    assert "USB_OLDGOOD_REPLAY expected yes got no" in result.stderr
 
 
 def test_gate_proof_accepts_ready_with_oldgood_replay_contracts(
@@ -1227,6 +1247,11 @@ def test_gate_proof_accepts_ready_with_oldgood_replay_contracts(
     assert result.returncode == 0
     assert "USB_OLDGOOD_REPLAY=yes" in result.stdout
     assert "WIFI_OLDGOOD_REPLAY=yes" in result.stdout
+    assert "WIFI_FIRMWARE_IDENTITY_PROOF=yes" in result.stdout
+    assert "WIFI_CLM_READY_PROOF=yes" in result.stdout
+    assert "WIFI_FIRMWARE_VERSION_PROOF=yes" in result.stdout
+    assert "WIFI_CLM_VERSION_PROOF=yes" in result.stdout
+    assert "SDIO_IRQ158_INBAND_PROOF=yes" in result.stdout
 
 
 def test_gate_proof_rejects_outstanding_driver_task_ring_call(

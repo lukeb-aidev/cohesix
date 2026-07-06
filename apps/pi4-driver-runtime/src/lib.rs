@@ -617,6 +617,8 @@ const ENGINE_STATE_HW_READY: u32 = 1 << 5;
 const RUNTIME_LEGACY_SPINS_PER_SECOND: u64 = 100_000_000;
 const RUNTIME_TIMER_FALLBACK_HZ: u64 = 54_000_000;
 const RUNTIME_MILLIS_PER_SECOND: u64 = 1_000;
+const RUNTIME_MICROS_PER_SECOND: u64 = 1_000_000;
+const SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US: u32 = 100_000;
 
 const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
@@ -4614,7 +4616,9 @@ fn service_sdio_descriptor_command(command: DriverTaskCommandRecord) -> DriverTa
         let flags = sdio_descriptor_response_flags(desc.response_kind);
         let frame = DriverFrameDescriptor::empty();
         sdio_clear_last_transfer_failure();
-        let Some(response0) = sdio_execute_transfer(cmd, desc.addr, flags, frame, 1, 0) else {
+        let Some(response0) =
+            sdio_execute_transfer_with_timeout(cmd, desc.addr, flags, frame, 1, 0, desc.timeout_us)
+        else {
             let result = sdio_last_transfer_failure();
             let telemetry =
                 sdio_write_fault_telemetry_frame(cmd, desc.addr, flags, 0, 1, 0, 0, result, frame);
@@ -4691,14 +4695,30 @@ fn service_sdio_descriptor_command(command: DriverTaskCommandRecord) -> DriverTa
     };
     let block_count = sdio_descriptor_host_block_count(desc.block_count, flags);
     sdio_clear_last_transfer_failure();
-    let response0 =
-        sdio_execute_transfer(cmd, arg, flags, frame, block_size, block_count).or_else(|| {
-            if !sdio_descriptor_transfer_retryable(desc, cmd, flags) {
-                return None;
-            }
-            sdio_recover_command_path();
-            sdio_execute_transfer(cmd, arg, flags, frame, block_size, block_count)
-        });
+    let response0 = sdio_execute_transfer_with_timeout(
+        cmd,
+        arg,
+        flags,
+        frame,
+        block_size,
+        block_count,
+        desc.timeout_us,
+    )
+    .or_else(|| {
+        if !sdio_descriptor_transfer_retryable(desc, cmd, flags) {
+            return None;
+        }
+        sdio_recover_command_path();
+        sdio_execute_transfer_with_timeout(
+            cmd,
+            arg,
+            flags,
+            frame,
+            block_size,
+            block_count,
+            desc.timeout_us,
+        )
+    });
     let Some(response0) = response0 else {
         let result = sdio_last_transfer_failure();
         let transfer_mode = sdio_transfer_mode_from_flags(flags, block_count);
@@ -5499,6 +5519,12 @@ fn sdio_record_transfer_failure(stage: u32, status: u32) {
     );
 }
 
+fn sdio_record_transfer_failure_result(result: u32) {
+    if result != 0 {
+        SDIO_LAST_TRANSFER_FAILURE.store(result, Ordering::Release);
+    }
+}
+
 fn sdio_last_transfer_failure() -> u32 {
     SDIO_LAST_TRANSFER_FAILURE.load(Ordering::Acquire)
 }
@@ -5676,13 +5702,37 @@ fn sdio_execute_transfer(
     block_size: u16,
     block_count: u16,
 ) -> Option<u32> {
+    sdio_execute_transfer_with_timeout(cmd, arg, flags, frame, block_size, block_count, 0)
+}
+
+#[cfg(target_os = "none")]
+fn sdio_execute_transfer_with_timeout(
+    cmd: u16,
+    arg: u32,
+    flags: u16,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+    timeout_us: u32,
+) -> Option<u32> {
     if cyw43_uses_sdio_bus_link() {
-        return sdio_execute_via_bus_link(cmd, arg, flags, frame, block_size, block_count);
+        return sdio_execute_via_bus_link(
+            cmd,
+            arg,
+            flags,
+            frame,
+            block_size,
+            block_count,
+            timeout_us,
+        );
     }
     let has_data = flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0;
     let write = flags & DRIVER_RUNTIME_SDIO_FLAG_WRITE != 0;
     let short_busy_response = flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY != 0;
-    if !sdio_wait_inhibit_clear(sdio_command_waits_for_data_inhibit(flags, has_data)) {
+    if !sdio_wait_inhibit_clear_with_timeout(
+        sdio_command_waits_for_data_inhibit(flags, has_data),
+        timeout_us,
+    ) {
         sdio_record_transfer_failure(
             SDIO_TRANSFER_FAILURE_STAGE_INHIBIT,
             sdio_read32(SDHCI_PRESENT_STATE),
@@ -5701,7 +5751,7 @@ fn sdio_execute_transfer(
         sdio_write16(SDHCI_TRANSFER_MODE, sdio_transfer_mode(write, block_count));
     }
     sdio_write16(SDHCI_COMMAND, sdio_make_command(cmd, flags, has_data));
-    let cmd_status = sdio_wait_int(SDHCI_INT_RESPONSE | SDHCI_INT_ERROR);
+    let cmd_status = sdio_wait_int(SDHCI_INT_RESPONSE | SDHCI_INT_ERROR, timeout_us);
     if cmd_status & SDHCI_INT_ERROR != 0 || cmd_status == 0 {
         sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_COMMAND, cmd_status);
         return None;
@@ -5711,7 +5761,7 @@ fn sdio_execute_transfer(
     } else {
         sdio_read32(SDHCI_RESPONSE)
     };
-    if !has_data && short_busy_response && !sdio_wait_inhibit_clear(true) {
+    if !has_data && short_busy_response && !sdio_wait_inhibit_clear_with_timeout(true, timeout_us) {
         sdio_record_transfer_failure(
             SDIO_TRANSFER_FAILURE_STAGE_INHIBIT,
             sdio_read32(SDHCI_PRESENT_STATE),
@@ -5722,7 +5772,7 @@ fn sdio_execute_transfer(
         sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_RESPONSE, r5);
         return None;
     }
-    if has_data && !sdio_transfer_frame(frame, write, block_size) {
+    if has_data && !sdio_transfer_frame(frame, write, block_size, timeout_us) {
         return None;
     }
     Some(response0)
@@ -5752,6 +5802,7 @@ fn sdio_execute_via_bus_link(
     frame: DriverFrameDescriptor,
     block_size: u16,
     block_count: u16,
+    timeout_us: u32,
 ) -> Option<u32> {
     if sdio_response_flag_count(flags) != 1 {
         return None;
@@ -5771,6 +5822,7 @@ fn sdio_execute_via_bus_link(
             frame,
             block_size,
             block_count,
+            timeout_us,
         )?;
         if write {
             sdio_bus_link_copy_to_owner_payload(frame, CYW43_SDIO_BUS_LINK_DATA_OFFSET)?;
@@ -5785,6 +5837,7 @@ fn sdio_execute_via_bus_link(
     }
     if completion.code == COMPLETION_FAULT {
         cyw43_record_last_fault_with_result(completion.detail, completion.result);
+        sdio_record_transfer_failure_result(completion.result);
         return None;
     }
     if has_data && !write {
@@ -5826,7 +5879,7 @@ fn cyw43_configure_sdio_host_via_bus_link(target_hz: u32, flags: u16) -> bool {
         block_count: 0,
         flags,
         reserved: 0,
-        timeout_us: 100_000,
+        timeout_us: sdio_owner_descriptor_timeout_us(0),
     };
     if !desc.valid() {
         return false;
@@ -5908,6 +5961,14 @@ fn cyw43_sdio_bus_link_command_result(command: DriverTaskCommandRecord) -> u32 {
         | u32::from(desc.len)
 }
 
+const fn sdio_owner_descriptor_timeout_us(timeout_us: u32) -> u32 {
+    if timeout_us == 0 {
+        SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US
+    } else {
+        timeout_us
+    }
+}
+
 #[cfg(target_os = "none")]
 fn sdio_bus_link_descriptor_command(
     sequence: u32,
@@ -5917,6 +5978,7 @@ fn sdio_bus_link_descriptor_command(
     frame: DriverFrameDescriptor,
     block_size: u16,
     block_count: u16,
+    timeout_us: u32,
 ) -> Option<DriverTaskCommandRecord> {
     let shared_payload_bytes = RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
     if cmd != SDIO_CMD53 || !frame.in_runtime_payload(shared_payload_bytes) || frame.len == 0 {
@@ -5944,7 +6006,7 @@ fn sdio_bus_link_descriptor_command(
             0
         },
         reserved: 0,
-        timeout_us: 100_000,
+        timeout_us: sdio_owner_descriptor_timeout_us(timeout_us),
     };
     if !desc.valid() {
         return None;
@@ -5993,7 +6055,7 @@ fn sdio_bus_link_cmd52_descriptor_command(
         block_count: 0,
         flags: 0,
         reserved: 0,
-        timeout_us: 100_000,
+        timeout_us: sdio_owner_descriptor_timeout_us(0),
     };
     if !desc.valid() {
         return None;
@@ -6039,7 +6101,7 @@ fn sdio_bus_link_card_command_descriptor_command(
         block_count: 0,
         flags: 0,
         reserved: 0,
-        timeout_us: 100_000,
+        timeout_us: sdio_owner_descriptor_timeout_us(0),
     };
     if !desc.valid() {
         return None;
@@ -6322,12 +6384,26 @@ fn sdio_execute_transfer(
     block_size: u16,
     block_count: u16,
 ) -> Option<u32> {
+    sdio_execute_transfer_with_timeout(cmd, arg, flags, _frame, block_size, block_count, 0)
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn sdio_execute_transfer_with_timeout(
+    cmd: u16,
+    arg: u32,
+    flags: u16,
+    _frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+    timeout_us: u32,
+) -> Option<u32> {
     let record = TestSdioTransferRecord {
         cmd,
         arg,
         flags,
         block_size,
         block_count,
+        timeout_us,
     };
     test_sdio_transfer_log_record(record);
     if let Some((stage, status)) = test_sdio_transfer_failure(record) {
@@ -6345,6 +6421,19 @@ fn sdio_execute_transfer(
     _frame: DriverFrameDescriptor,
     _block_size: u16,
     _block_count: u16,
+) -> Option<u32> {
+    Some(0)
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+fn sdio_execute_transfer_with_timeout(
+    _cmd: u16,
+    _arg: u32,
+    _flags: u16,
+    _frame: DriverFrameDescriptor,
+    _block_size: u16,
+    _block_count: u16,
+    _timeout_us: u32,
 ) -> Option<u32> {
     Some(0)
 }
@@ -6368,12 +6457,17 @@ fn sdio_make_command(cmd: u16, flags: u16, data: bool) -> u16 {
 }
 
 fn sdio_wait_inhibit_clear(wait_data: bool) -> bool {
+    sdio_wait_inhibit_clear_with_timeout(wait_data, 0)
+}
+
+fn sdio_wait_inhibit_clear_with_timeout(wait_data: bool, timeout_us: u32) -> bool {
     let mask = if wait_data {
         SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT
     } else {
         SDHCI_CMD_INHIBIT
     };
-    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_CMD_WAIT_LOOPS);
+    let mut deadline =
+        runtime_deadline_from_micros_or_legacy_spins(timeout_us, SDHCI_CMD_WAIT_LOOPS);
     while !runtime_deadline_expired(&mut deadline) {
         if sdio_read32(SDHCI_PRESENT_STATE) & mask == 0 {
             return true;
@@ -6388,7 +6482,7 @@ const fn sdhci_wait_int_ack_bits(mask: u32, status: u32) -> u32 {
 }
 
 #[cfg(target_os = "none")]
-fn sdio_wait_int(mask: u32) -> u32 {
+fn sdio_wait_int(mask: u32, timeout_us: u32) -> u32 {
     let error_mask = SDHCI_INT_ERROR
         | SDHCI_INT_TIMEOUT
         | SDHCI_INT_CRC
@@ -6397,7 +6491,8 @@ fn sdio_wait_int(mask: u32) -> u32 {
         | SDHCI_INT_DATA_TIMEOUT
         | SDHCI_INT_DATA_CRC
         | SDHCI_INT_DATA_END_BIT;
-    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_CMD_WAIT_LOOPS);
+    let mut deadline =
+        runtime_deadline_from_micros_or_legacy_spins(timeout_us, SDHCI_CMD_WAIT_LOOPS);
     while !runtime_deadline_expired(&mut deadline) {
         let status = sdio_read32(SDHCI_INT_STATUS);
         if status & (mask | error_mask) != 0 {
@@ -6413,7 +6508,12 @@ fn sdio_wait_int(mask: u32) -> u32 {
 }
 
 #[cfg(target_os = "none")]
-fn sdio_transfer_frame(frame: DriverFrameDescriptor, write: bool, block_size: u16) -> bool {
+fn sdio_transfer_frame(
+    frame: DriverFrameDescriptor,
+    write: bool,
+    block_size: u16,
+    timeout_us: u32,
+) -> bool {
     let mut offset = 0usize;
     while offset < frame.len as usize {
         let ready = if write {
@@ -6422,7 +6522,7 @@ fn sdio_transfer_frame(frame: DriverFrameDescriptor, write: bool, block_size: u1
             SDHCI_DATA_AVAILABLE | SDHCI_INT_DATA_AVAIL
         };
         if sdio_read32(SDHCI_PRESENT_STATE) & ready == 0 {
-            let status = sdio_wait_int(ready | SDHCI_INT_ERROR);
+            let status = sdio_wait_int(ready | SDHCI_INT_ERROR, timeout_us);
             if status & SDHCI_INT_ERROR != 0 || status == 0 {
                 sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, status);
                 let _ = sdio_recover_command_path();
@@ -6456,9 +6556,9 @@ fn sdio_transfer_frame(frame: DriverFrameDescriptor, write: bool, block_size: u1
         }
     }
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_DATA_READY_MASK);
-    let status = sdio_wait_int(SDHCI_INT_DATA_FINISH_MASK);
+    let status = sdio_wait_int(SDHCI_INT_DATA_FINISH_MASK, timeout_us);
     if status & SDHCI_INT_ERROR == 0 && status != 0 {
-        sdio_settle_transfer_data_path();
+        sdio_settle_transfer_data_path(timeout_us);
         true
     } else {
         sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_END, status);
@@ -6468,8 +6568,9 @@ fn sdio_transfer_frame(frame: DriverFrameDescriptor, write: bool, block_size: u1
 }
 
 #[cfg(target_os = "none")]
-fn sdio_settle_transfer_data_path() {
-    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_CMD_WAIT_LOOPS);
+fn sdio_settle_transfer_data_path(timeout_us: u32) {
+    let mut deadline =
+        runtime_deadline_from_micros_or_legacy_spins(timeout_us, SDHCI_CMD_WAIT_LOOPS);
     while !runtime_deadline_expired(&mut deadline) {
         let present = sdio_read32(SDHCI_PRESENT_STATE);
         if present & (SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE) == 0 {
@@ -7671,11 +7772,11 @@ fn cyw43_enable_post_release_function2_poll() -> Result<u8, u16> {
 }
 
 fn cyw43_arm_post_release_function_interrupts() -> Result<(), u16> {
-    #[cfg(not(target_os = "none"))]
+    #[cfg(all(not(target_os = "none"), not(test)))]
     {
         Ok(())
     }
-    #[cfg(target_os = "none")]
+    #[cfg(any(target_os = "none", test))]
     {
         if cyw43_sdio_cmd52_write(0, SDIO_CCCR_IENX, SDIO_INTERRUPT_ENABLE_MASK) {
             Ok(())
@@ -7988,9 +8089,7 @@ fn cyw43_publish_release_progress(sequence: u32, phase: u32) {
 fn cyw43_clear_and_reprime_post_release_interrupts(
     state: &mut Cyw43RuntimeState,
 ) -> Result<(), u16> {
-    if !cyw43_backplane_write_u32(state, CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS, u32::MAX) {
-        return Err(cyw43_take_last_fault_detail().unwrap_or(FAULT_CYW43_POST_RELEASE_F2_READY));
-    }
+    cyw43_arm_post_release_function_interrupts()?;
     if !cyw43_backplane_write_u32(
         state,
         CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK,
@@ -8002,7 +8101,6 @@ fn cyw43_clear_and_reprime_post_release_interrupts(
     ) {
         return Err(cyw43_take_last_fault_detail().unwrap_or(FAULT_CYW43_POST_RELEASE_F2_READY));
     }
-    cyw43_arm_post_release_function_interrupts()?;
     if cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_RFRAMEBCLO).is_none()
         || cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_RFRAMEBCHI).is_none()
     {
@@ -8090,6 +8188,12 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN,
     );
+    if let Err(detail) = cyw43_arm_post_release_function_interrupts() {
+        if cyw43_take_last_fault_detail().is_none() {
+            cyw43_record_last_fault(detail);
+        }
+        return false;
+    }
     if !cyw43_backplane_write_u32(
         state,
         CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK,
@@ -8108,12 +8212,6 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_POST_CONFIG_BEGIN,
     );
     if let Err(detail) = cyw43_configure_post_release_function2_sideband() {
-        if cyw43_take_last_fault_detail().is_none() {
-            cyw43_record_last_fault(detail);
-        }
-        return false;
-    }
-    if let Err(detail) = cyw43_arm_post_release_function_interrupts() {
         if cyw43_take_last_fault_detail().is_none() {
             cyw43_record_last_fault(detail);
         }
@@ -9001,6 +9099,7 @@ fn cyw43_function2_execute_transfer_with_write_window(
     }
     if write
         && !cyw43_runtime_wait_for_function2_ready_for_write(
+            state,
             write_ready_timeout_ms,
             write_ready_polls,
             allow_function2_rearm,
@@ -9036,6 +9135,7 @@ fn cyw43_function2_execute_transfer_with_write_window(
     }
     if write
         && !cyw43_runtime_wait_for_function2_ready_for_write(
+            state,
             write_ready_timeout_ms,
             write_ready_polls,
             allow_function2_rearm,
@@ -9129,9 +9229,9 @@ fn cyw43_function2_execute_control_tx_transfer(
             return false;
         }
         let transfer_failure = sdio_last_transfer_failure();
-        if cyw43_function2_response_stage_r5_failure(transfer_failure) {
+        if cyw43_control_tx_block_rescue_failure(transfer_failure) {
             state.backplane_window_valid = false;
-            if !cyw43_prime_post_release_function2_control_write() {
+            if !cyw43_prime_post_release_function2_control_write(state) {
                 cyw43_record_control_tx_transfer_fault_if_present();
                 return false;
             }
@@ -9174,13 +9274,25 @@ const fn cyw43_control_tx_block_rescue_candidate(
 
 fn cyw43_record_control_tx_transfer_fault_if_present() {
     let transfer_failure = sdio_last_transfer_failure();
-    if transfer_failure != 0 && cyw43_take_last_fault_detail().is_none() {
-        cyw43_record_last_fault_with_result(FAULT_CYW43_CONTROL_FRAME, transfer_failure);
+    if transfer_failure == 0 {
+        return;
+    }
+    match cyw43_take_last_fault_detail() {
+        Some(detail @ (FAULT_CYW43_POST_RELEASE_HT | FAULT_CYW43_POST_RELEASE_F2_READY)) => {
+            cyw43_record_last_fault_with_result(detail, transfer_failure);
+        }
+        Some(_) => {}
+        None => {
+            cyw43_record_last_fault_with_result(FAULT_CYW43_CONTROL_FRAME, transfer_failure);
+        }
     }
 }
 
-const fn cyw43_function2_response_stage_r5_failure(result: u32) -> bool {
-    (result >> 24) == SDIO_TRANSFER_FAILURE_STAGE_RESPONSE && (result & 0x00ff_ffff) != 0
+const fn cyw43_control_tx_block_rescue_failure(result: u32) -> bool {
+    let stage = result >> 24;
+    let status = result & 0x00ff_ffff;
+    (stage == SDIO_TRANSFER_FAILURE_STAGE_RESPONSE && status != 0)
+        || (stage == SDIO_TRANSFER_FAILURE_STAGE_DATA_END && (status & SDHCI_INT_DATA_CRC) != 0)
 }
 
 fn cyw43_function2_execute_transfer_with_policy(
@@ -9250,10 +9362,11 @@ fn cyw43_runtime_recover_failed_function2_transfer_with_write_window(
     if !write {
         return cyw43_runtime_request_rx_retransmit(state);
     }
-    if allow_function2_rearm && !cyw43_runtime_rearm_function2_after_write_timeout() {
+    if allow_function2_rearm && !cyw43_runtime_rearm_function2_after_write_timeout(state) {
         return false;
     }
     cyw43_runtime_wait_for_function2_ready_for_write(
+        state,
         write_ready_timeout_ms,
         write_ready_polls,
         allow_function2_rearm,
@@ -9271,6 +9384,7 @@ fn cyw43_runtime_request_rx_retransmit(state: &mut Cyw43RuntimeState) -> bool {
 }
 
 fn cyw43_runtime_wait_for_function2_ready_for_write(
+    state: &mut Cyw43RuntimeState,
     timeout_ms: u64,
     max_polls: usize,
     allow_function2_rearm: bool,
@@ -9282,30 +9396,33 @@ fn cyw43_runtime_wait_for_function2_ready_for_write(
         return false;
     }
     cyw43_clear_last_fault();
-    cyw43_runtime_rearm_function2_after_write_timeout()
+    cyw43_runtime_rearm_function2_after_write_timeout(state)
 }
 
-fn cyw43_runtime_rearm_function2_after_write_timeout() -> bool {
+fn cyw43_runtime_rearm_function2_after_write_timeout(state: &mut Cyw43RuntimeState) -> bool {
     #[cfg(any(target_os = "none", test))]
     {
-        cyw43_prime_post_release_function2_control_write()
+        cyw43_prime_post_release_function2_control_write(state)
     }
     #[cfg(all(not(target_os = "none"), not(test)))]
     {
+        let _ = state;
         true
     }
 }
 
-fn cyw43_prime_post_release_function2_control_write() -> bool {
+fn cyw43_prime_post_release_function2_control_write(state: &mut Cyw43RuntimeState) -> bool {
     #[cfg(any(target_os = "none", test))]
     {
         cyw43_require_post_release_ht_clock().is_ok()
             && cyw43_force_ht_clock_for_function2().is_ok()
             && cyw43_enable_post_release_function2_poll().is_ok()
             && cyw43_configure_post_release_function2_sideband().is_ok()
+            && cyw43_clear_and_reprime_post_release_interrupts(state).is_ok()
     }
     #[cfg(all(not(target_os = "none"), not(test)))]
     {
+        let _ = state;
         true
     }
 }
@@ -15527,6 +15644,7 @@ struct TestSdioTransferRecord {
     flags: u16,
     block_size: u16,
     block_count: u16,
+    timeout_us: u32,
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -15654,6 +15772,7 @@ static TEST_SDIO_TRANSFER_LOG: TestSdioTransferLog =
             flags: 0,
             block_size: 0,
             block_count: 0,
+            timeout_us: 0,
         }; TEST_SDIO_TRANSFER_LOG_CAP],
     }));
 
@@ -16480,6 +16599,20 @@ fn runtime_millis_to_cycles(ms: u64) -> u64 {
     runtime_millis_to_cycles_at_hz(ms, runtime_timer_freq_hz())
 }
 
+fn runtime_micros_to_cycles_at_hz(us: u64, freq_hz: u64) -> u64 {
+    if us == 0 || freq_hz == 0 {
+        return 0;
+    }
+    let cycles = (us as u128)
+        .saturating_mul(freq_hz as u128)
+        .saturating_div(RUNTIME_MICROS_PER_SECOND as u128);
+    cycles.clamp(1, u64::MAX as u128) as u64
+}
+
+fn runtime_micros_to_cycles(us: u64) -> u64 {
+    runtime_micros_to_cycles_at_hz(us, runtime_timer_freq_hz())
+}
+
 fn runtime_deadline_from_legacy_spins(spins: usize) -> RuntimeDeadline {
     let start = runtime_timer_counter_ticks();
     let cycles = runtime_legacy_spins_to_cycles(spins);
@@ -16487,6 +16620,21 @@ fn runtime_deadline_from_legacy_spins(spins: usize) -> RuntimeDeadline {
         RuntimeDeadline::Counter { start, cycles }
     } else {
         RuntimeDeadline::Iterations { remaining: spins }
+    }
+}
+
+fn runtime_deadline_from_micros_or_legacy_spins(us: u32, fallback_spins: usize) -> RuntimeDeadline {
+    if us == 0 {
+        return runtime_deadline_from_legacy_spins(fallback_spins);
+    }
+    let start = runtime_timer_counter_ticks();
+    let cycles = runtime_micros_to_cycles(u64::from(us));
+    if start != 0 && cycles != 0 {
+        RuntimeDeadline::Counter { start, cycles }
+    } else {
+        RuntimeDeadline::Iterations {
+            remaining: fallback_spins,
+        }
     }
 }
 
@@ -26848,14 +26996,30 @@ mod tests {
         reset_runtime_for_test();
         reset_test_sdio_transfer_log();
         test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
+        let mut state = Cyw43RuntimeState::new();
 
-        assert!(cyw43_runtime_wait_for_function2_ready_for_write(1, 0, true));
+        assert!(cyw43_runtime_wait_for_function2_ready_for_write(
+            &mut state, 1, 0, true
+        ));
         assert!(test_sdio_cmd52_write_seen(
             0,
             SDIO_CCCR_IOEX,
             SDIO_FUNC_ENABLE_2
         ));
         assert!(test_sdio_cmd52_read_count(0, SDIO_CCCR_IORX) >= 1);
+        assert!(test_sdio_cmd52_write_seen(
+            0,
+            SDIO_CCCR_IENX,
+            SDIO_INTERRUPT_ENABLE_MASK
+        ));
+        assert!(test_sdio_cmd53_write_addr_seen(
+            1,
+            CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK
+        ));
+        assert!(test_sdio_cmd53_write_addr_seen(
+            1,
+            CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK
+        ));
         assert_eq!(cyw43_take_last_fault_detail(), None);
     }
 
@@ -27436,6 +27600,7 @@ mod tests {
         state.sdpcm_seq_max = 9;
         let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
         stage_bytes(payload_offset, b"cdc-control");
+        let request_len = cyw43_control_tx_request_len(CYW43_SDPCM_HEADER_BYTES + 11);
         reset_test_sdio_transfer_log();
         test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
         test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
@@ -27465,6 +27630,26 @@ mod tests {
             )
         );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 3);
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                request_len as u16,
+                0,
+                request_len as u16
+            ),
+            2
+        );
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16,
+                1,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16
+            ),
+            1
+        );
         assert!(test_sdio_cmd52_write_seen(
             0,
             SDIO_CCCR_ABORT,
@@ -27566,6 +27751,59 @@ mod tests {
             SBSDIO_DEVICE_CTL,
             SBSDIO_DEVCTL_F2WM_ENAB
         ));
+    }
+
+    #[test]
+    fn cyw43_control_tx_linked_owner_r5_result_enables_block_rescue() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        sdio_clear_last_transfer_failure();
+
+        let result = sdio_transfer_failure_result(
+            SDIO_TRANSFER_FAILURE_STAGE_RESPONSE,
+            SDIO_R5_OUT_OF_RANGE,
+        );
+        sdio_record_transfer_failure_result(result);
+
+        assert_eq!(sdio_last_transfer_failure(), result);
+        assert!(cyw43_control_tx_block_rescue_failure(
+            sdio_last_transfer_failure()
+        ));
+        assert!(cyw43_control_tx_block_rescue_failure(
+            sdio_transfer_failure_result(
+                SDIO_TRANSFER_FAILURE_STAGE_DATA_END,
+                SDHCI_INT_ERROR | SDHCI_INT_DATA_CRC
+            )
+        ));
+        assert!(cyw43_control_tx_block_rescue_candidate(
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 48,
+                flags: 0,
+            },
+            0
+        ));
+    }
+
+    #[test]
+    fn cyw43_control_tx_fault_preserves_post_release_ht_transfer_result() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        sdio_clear_last_transfer_failure();
+        let transfer_result = sdio_transfer_failure_result(
+            SDIO_TRANSFER_FAILURE_STAGE_RESPONSE,
+            SDIO_R5_OUT_OF_RANGE,
+        );
+
+        cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, 0);
+        sdio_record_transfer_failure_result(transfer_result);
+        cyw43_record_control_tx_transfer_fault_if_present();
+
+        assert_eq!(
+            cyw43_take_last_fault_detail(),
+            Some(FAULT_CYW43_POST_RELEASE_HT)
+        );
+        assert_eq!(cyw43_take_last_fault_result(), transfer_result);
     }
 
     #[test]
@@ -31245,10 +31483,38 @@ mod tests {
         ));
         reset_test_sdio_transfer_log();
         assert!(cyw43_clear_and_reprime_post_release_interrupts(&mut state).is_ok());
-        assert!(test_sdio_cmd53_write_addr_seen(
+        let ienx_write = |record: TestSdioTransferRecord| {
+            record.cmd == SDIO_CMD52
+                && record.arg == sdio_cmd52_arg(true, 0, SDIO_CCCR_IENX, SDIO_INTERRUPT_ENABLE_MASK)
+        };
+        let hostintmask_write = |record: TestSdioTransferRecord| {
+            record.cmd == SDIO_CMD53
+                && sdio_cmd53_arg_write(record.arg)
+                && sdio_cmd53_arg_function(record.arg) == 1
+                && sdio_cmd53_arg_addr(record.arg)
+                    == cyw43_backplane_function_addr(CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK)
+        };
+        let functionintmask_write = |record: TestSdioTransferRecord| {
+            record.cmd == SDIO_CMD53
+                && sdio_cmd53_arg_write(record.arg)
+                && sdio_cmd53_arg_function(record.arg) == 1
+                && sdio_cmd53_arg_addr(record.arg)
+                    == cyw43_backplane_function_addr(
+                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                    )
+        };
+        assert!(test_sdio_transfer_seen(ienx_write));
+        assert!(!test_sdio_cmd53_write_addr_seen(
             1,
             CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS
         ));
+        let ienx_index = test_sdio_first_transfer_index(ienx_write).expect("IENx write");
+        let hostintmask_index =
+            test_sdio_first_transfer_index(hostintmask_write).expect("HOSTINTMASK write");
+        let functionintmask_index =
+            test_sdio_first_transfer_index(functionintmask_write).expect("FUNCTIONINTMASK write");
+        assert!(ienx_index < hostintmask_index);
+        assert!(ienx_index < functionintmask_index);
         assert!(test_sdio_cmd53_write_addr_seen(
             1,
             CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK
@@ -32415,7 +32681,7 @@ mod tests {
         state.initialized = true;
         state.transport_ready = true;
         state.firmware_upload_prepared = true;
-        let nvram_len = 1_744usize;
+        let nvram_len = 1_708usize;
         let completed = 1_024usize;
         let nvram_addr = CYW43_RAM_BASE_4345 + CYW43_RAM_SIZE_4345_PI4 - 4 - nvram_len as u32;
         state.firmware_stage_addr = nvram_addr;
@@ -33707,6 +33973,87 @@ mod tests {
             },
         });
         assert_eq!(completion, DriverTaskCompletionRecord::progress(75, 1));
+    }
+
+    #[test]
+    fn sdio_descriptor_timeout_reaches_owner_transfer_path() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+        let init = DriverTaskCommandRecord {
+            sequence: 76,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_command(0, init),
+            DriverTaskCompletionRecord::progress_with_detail(
+                76,
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+                1
+            )
+        );
+        let desc_offset = DRIVER_TASK_RING_FRAME_OFFSET;
+        let data_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET;
+        let timeout_us = 250_000;
+        for index in 0..CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES {
+            write_runtime_payload_byte(data_offset + index, (index & 0xff) as u8);
+        }
+        write_sdio_descriptor_for_test(
+            desc_offset,
+            DriverRuntimeSdioCommandDescriptor {
+                op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+                function: 1,
+                response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+                addr: cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
+                data_offset: data_offset as u16,
+                len: CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES as u16,
+                block_size: 0,
+                block_count: 0,
+                flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+                timeout_us,
+                ..DriverRuntimeSdioCommandDescriptor::empty()
+            },
+        );
+        reset_test_sdio_transfer_log();
+        let completion = service_sdio_host(DriverTaskCommandRecord {
+            sequence: 77,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: 0,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 1,
+                max_frames: 1,
+                max_bytes: CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES as u32,
+            },
+            frame: DriverFrameDescriptor {
+                offset: desc_offset as u32,
+                len: core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>() as u16,
+                flags: 0,
+            },
+        });
+
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::progress(77, CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES as u32)
+        );
+        assert!(test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD53
+                && sdio_cmd53_arg_write(record.arg)
+                && sdio_cmd53_arg_function(record.arg) == 1
+                && record.timeout_us == timeout_us
+                && record.block_size == CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES as u16
+                && record.block_count == 1
+        }));
     }
 
     #[test]
