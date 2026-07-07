@@ -653,15 +653,15 @@ static LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED: AtomicBool = AtomicBool::n
 // a few linked-runtime turns; keep prompt settling bounded and non-blocking.
 const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 16;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS: usize = 128;
+const LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS: usize = 96;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 // Explicit prompt-side probes must remain responsive; long hub/control waits
 // continue through the pre-root cold-boot budget and cached progress evidence.
-const LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS: usize = 32;
+const LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS: usize = 24;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 // Hub reset and port-change settle can report the same progress token for a
 // few nonblocking turns. Keep that prompt-side settle bounded and token-gated.
-const LINKED_LOCAL_SEAT_USB_PROBE_STALLED_PROGRESS_BURST_ATTEMPTS: usize = 8;
+const LINKED_LOCAL_SEAT_USB_PROBE_STALLED_PROGRESS_BURST_ATTEMPTS: usize = 6;
 
 #[cfg(all(
     feature = "kernel",
@@ -763,7 +763,7 @@ const LINKED_LOCAL_SEAT_USB_RECOVERY_PROBE_MAX_QUEUED_REPORTS: u32 = 1;
 
 /// Consecutive post-first-byte no-reply polls before asking the runtime to
 /// recover the already accepted interrupt-IN endpoint.
-const LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD: u64 = 64;
+const LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD: u64 = 48;
 
 /// A full, idle steady interrupt-IN queue that stops replying after first byte
 /// proof is already accepted is a live input stall, so recover sooner.
@@ -9471,6 +9471,12 @@ mod tests {
 
     #[test]
     fn runtime_keyboard_recovery_aux_waits_for_root_queue_drain_unless_runtime_is_stale() {
+        assert!(LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD >= 32);
+        assert!(LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD <= 64);
+        assert!(
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+                >= LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_IDLE_RECOVERY_NO_REPLY_THRESHOLD * 4
+        );
         assert!(!local_seat_keyboard_recovery_aux_allowed(
             false,
             LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD,
@@ -10592,6 +10598,11 @@ mod tests {
         assert!((4..=16).contains(&LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS));
         assert!(LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS >= 16);
         assert!(LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS <= 128);
+        assert!(LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS >= 64);
+        assert!(
+            LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS
+                >= LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS * 4
+        );
         assert_eq!(
             linked_local_seat_usb_enum_resume_attempts(true),
             LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS,
@@ -10607,6 +10618,12 @@ mod tests {
     fn linked_usb_probe_progress_burst_is_progress_bounded() {
         assert!((1..=32).contains(&LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS));
         assert!((1..=8).contains(&LINKED_LOCAL_SEAT_USB_PROBE_STALLED_PROGRESS_BURST_ATTEMPTS));
+        assert!(LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS >= 16);
+        assert!(LINKED_LOCAL_SEAT_USB_PROBE_STALLED_PROGRESS_BURST_ATTEMPTS >= 4);
+        assert!(
+            LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS
+                > LINKED_LOCAL_SEAT_USB_PROBE_STALLED_PROGRESS_BURST_ATTEMPTS
+        );
         assert!(!usb_enumeration_progress_token_advanced(None, None));
         assert!(usb_enumeration_progress_token_advanced(
             None,
