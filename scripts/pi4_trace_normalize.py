@@ -2228,6 +2228,32 @@ CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES = frozenset(
 CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY = (
     "cyw43-data-rx-firstread-source-asserted-empty"
 )
+CYW43_HOST_EAPOL_KEY_INSTALL_BLOCKERS = {
+    "host-eapol-ptk-install",
+    "host-eapol-gtk-install",
+    "cyw43-host-eapol-ptk-tx-no-reply",
+    "cyw43-host-eapol-ptk-tx-retry-no-reply",
+    "cyw43-host-eapol-gtk-tx-no-reply",
+    "cyw43-host-eapol-gtk-tx-retry-no-reply",
+    "cyw43-host-eapol-post-secure-ptk-tx-no-reply",
+    "cyw43-host-eapol-post-secure-ptk-tx-retry-no-reply",
+    "cyw43-host-eapol-post-secure-gtk-tx-no-reply",
+    "cyw43-host-eapol-post-secure-gtk-tx-retry-no-reply",
+}
+CYW43_HOST_EAPOL_KEY_INSTALL_STATUS_BLOCKERS = {
+    "host-eapol-ptk-install",
+    "host-eapol-gtk-install",
+}
+CYW43_HOST_EAPOL_KEY_STAGES = {
+    "cyw43-host-eapol-ptk",
+    "cyw43-host-eapol-gtk",
+    "cyw43-host-eapol-post-secure-ptk",
+    "cyw43-host-eapol-post-secure-gtk",
+}
+CYW43_HOST_EAPOL_KEY_TX_NO_REPLY_STATUSES = {
+    "tx-no-reply",
+    "tx-retry-no-reply",
+}
 CYW43_RXTRACE_RETRANSMIT_ACK_TIMEOUT = 0x0010
 CYW43_RXTRACE_RETRANSMIT_STALE_CLEARED = 0x0020
 CYW43_RXTRACE_QUEUE_PUSH_FAILED = 0x0040
@@ -2293,6 +2319,31 @@ def cyw43_host_eapol_rx_blocker_name(value: str) -> bool:
     return value in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES or value.startswith(
         CYW43_HOST_EAPOL_RX_OWNER_BLOCKER_PREFIXES
     )
+
+
+def cyw43_host_eapol_key_tx_no_reply_detail(
+    event: TraceEvent,
+) -> tuple[str, str] | None:
+    """Return exact PTK/GTK key-install no-reply blocker and runtime phase."""
+
+    stage = event.fields.get("stage", "").lower()
+    status = event.fields.get("status", "").lower()
+    command_no_reply = (
+        "cyw43_driver_task_command_no_reply" in event.raw.lower()
+        and event.fields.get("reason", "").lower() == "cyw43-runtime-command-no-reply"
+    )
+    if stage not in CYW43_HOST_EAPOL_KEY_STAGES or (
+        status not in CYW43_HOST_EAPOL_KEY_TX_NO_REPLY_STATUSES
+        and not command_no_reply
+    ):
+        return None
+    blocker = event.fields.get("blocker", "").lower()
+    if blocker.startswith(f"{stage}-"):
+        exact = blocker
+    else:
+        exact = f"{stage}-{status or 'tx-no-reply'}"
+    phase = event.fields.get("progress_phase_name") or stage
+    return exact, phase
 
 
 def normalize_wifi_gate7_subgate(value: str | None) -> str:
@@ -2819,6 +2870,8 @@ def summarize_host_eapol_firstread_status(
             continue
         status = fields.get("status", "").lower()
         reason = normalize_wifi_blocker(fields.get("reason", ""))
+        if reason in CYW43_HOST_EAPOL_KEY_INSTALL_BLOCKERS:
+            continue
         rxtrace_blocker = cyw43_host_eapol_rxtrace_blocker(fields)
         source_asserted_empty = blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
         if (
@@ -3142,6 +3195,19 @@ def normalize_wifi_blocker(value: str) -> str:
         return CYW43_ASSOCIATION_EVENT_MISSING
     if CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL in lower:
         return CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL
+    for key_install_blocker in CYW43_HOST_EAPOL_KEY_INSTALL_BLOCKERS:
+        if key_install_blocker in lower:
+            return key_install_blocker
+    for key_stage in CYW43_HOST_EAPOL_KEY_STAGES:
+        for key_status in CYW43_HOST_EAPOL_KEY_TX_NO_REPLY_STATUSES:
+            if f"stage={key_stage}" in lower and f"status={key_status}" in lower:
+                return f"{key_stage}-{key_status}"
+        if (
+            "cyw43_driver_task_command_no_reply" in lower
+            and f"stage={key_stage}" in lower
+            and "reason=cyw43-runtime-command-no-reply" in lower
+        ):
+            return f"{key_stage}-tx-no-reply"
     if (
         "host-eapol-required" in lower
         or "wifi-host-eapol-required" in lower
@@ -3940,6 +4006,8 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-tx-no-reply",
         "cyw43-control-tx-retry-no-reply",
         "cyw43-control-tx-not-submitted",
+        "host-eapol-ptk-install",
+        "host-eapol-gtk-install",
         "cyw43-runtime-command-no-reply",
         "cyw43-data-rx-f2-read-failed",
         "cyw43-data-rx-firstread-empty",
@@ -5207,6 +5275,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "firmware-supplicant-unsupported",
         "wifi-host-eapol-pending",
         "host-eapol-required",
+        "host-eapol-ptk-install",
+        "host-eapol-gtk-install",
         "wsec-pmk-bad-argument",
     }
     firmware_upload_blockers = {"cyw43-firmware-retry-exhausted"}
@@ -5313,6 +5383,15 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if split_control_exact is not None:
             raw_contract_blocker = split_control_exact
             explicit_blocker = split_control_exact
+        host_eapol_key_tx_no_reply = cyw43_host_eapol_key_tx_no_reply_detail(event)
+        if host_eapol_key_tx_no_reply is not None:
+            exact, _phase = host_eapol_key_tx_no_reply
+            gate = max(gate, 7)
+            post_f2_progress_seen = True
+            blocker = exact
+            host_eapol_terminal_blocker = exact
+            explicit_blocker = exact
+            continue
         if "cyw43_driver_task_command_fault" in raw:
             fault_blocker = normalize_wifi_blocker(
                 fields.get("reason") or fields.get("detail") or raw
@@ -5341,7 +5420,21 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             source_asserted_empty = (
                 firstread_blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
             )
-            if reason == CYW43_ASSOCIATION_EVENT_MISSING and not firstread_blocker_seen:
+            if reason in CYW43_HOST_EAPOL_KEY_INSTALL_BLOCKERS:
+                if (
+                    reason in CYW43_HOST_EAPOL_KEY_INSTALL_STATUS_BLOCKERS
+                    and host_eapol_terminal_blocker
+                    in CYW43_HOST_EAPOL_KEY_INSTALL_BLOCKERS
+                    and host_eapol_terminal_blocker
+                    not in CYW43_HOST_EAPOL_KEY_INSTALL_STATUS_BLOCKERS
+                ):
+                    reason = host_eapol_terminal_blocker
+                gate = max(gate, 7)
+                post_f2_progress_seen = True
+                blocker = reason
+                host_eapol_terminal_blocker = reason
+                explicit_blocker = reason
+            elif reason == CYW43_ASSOCIATION_EVENT_MISSING and not firstread_blocker_seen:
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 blocker = reason
@@ -6697,6 +6790,9 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     if control_split_exact is not None:
         phase = event.fields.get("stage") or event.stage or "cyw43-control-split"
         return control_split_exact, phase
+    key_tx_no_reply = cyw43_host_eapol_key_tx_no_reply_detail(event)
+    if key_tx_no_reply is not None:
+        return key_tx_no_reply
     control_reply_exact = cyw43_control_reply_event_exact(event)
     if control_reply_exact is not None:
         phase = event.fields.get("stage") or event.stage or "cyw43-control-reply"
@@ -6831,6 +6927,17 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or "join-security"
         )
         return "wifi-host-eapol-pending", phase
+    key_install_blocker = normalize_wifi_blocker(event.raw)
+    if key_install_blocker in CYW43_HOST_EAPOL_KEY_INSTALL_BLOCKERS:
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or event.stage
+            or "join-security"
+        )
+        return key_install_blocker, phase
     if (
         "cyw43_driver_task_host_eapol_status" in event.raw.lower()
         and cyw43_host_eapol_post_rescue_association_gap(event.fields)
@@ -7014,7 +7121,31 @@ def summarize_cyw43_control_txglomalign_reject(
     """Return exact proof when firmware rejects the first txglomalign exchange."""
 
     latest: tuple[str, str, int] | None = None
+    resolved_line = 0
     for event in events:
+        raw_lower = event.raw.lower()
+        if "driver_task_resource_init" in raw_lower:
+            stage = event.fields.get("stage", "").lower()
+            status = event.fields.get("status", "").lower()
+            if (
+                stage == "cyw43-control-txglomalign"
+                and status
+                in {
+                    "ready",
+                    "optional-badarg",
+                    "optional-unsupported",
+                    "optional-skip",
+                }
+            ) or (
+                stage == "cyw43-control-txglomalign-fallback4"
+                and status
+                in {
+                    "ready",
+                    "optional-badarg",
+                    "optional-unsupported",
+                }
+            ):
+                resolved_line = max(resolved_line, event.line)
         exact = cyw43_control_exchange_status_event_exact(event)
         if exact not in {
             "cyw43-control-txglomalign-badarg",
@@ -7022,6 +7153,8 @@ def summarize_cyw43_control_txglomalign_reject(
         }:
             continue
         latest = (exact, "cyw43-control-txglomalign", event.line)
+    if latest is not None and latest[2] <= resolved_line:
+        return None
     return latest
 
 
@@ -10160,7 +10293,7 @@ def wifi_function2_ready_step(event: TraceEvent) -> bool:
 
 
 def wifi_control_txglomalign_step(event: TraceEvent) -> bool:
-    """Return true once Linux-shaped txglomalign control setup is matched."""
+    """Return true once Linux-shaped txglomalign negotiation is resolved."""
 
     return (
         resource_init_step(
@@ -10168,7 +10301,19 @@ def wifi_control_txglomalign_step(event: TraceEvent) -> bool:
             contract="cyw43455",
             hot_path="cyw43-wifi",
             stages={"cyw43-control-txglomalign"},
-            statuses={"ready"},
+            statuses={
+                "ready",
+                "optional-badarg",
+                "optional-unsupported",
+                "optional-skip",
+            },
+        )
+        or resource_init_step(
+            event,
+            contract="cyw43455",
+            hot_path="cyw43-wifi",
+            stages={"cyw43-control-txglomalign-fallback4"},
+            statuses={"ready", "optional-badarg", "optional-unsupported"},
         )
         or control_reply_matched_step(event, "cyw43-control-txglomalign")
         or (
@@ -11250,12 +11395,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     bssid_tx_submit_fail = summarize_host_eapol_bssid_tx_submit_fail(event_list)
     host_eapol_firstread = summarize_host_eapol_firstread_status(event_list)
     if host_eapol_firstread is not None and (
-        wifi_gate <= 7
-        or wifi_exact in {
-            "host-eapol-required",
-            "wifi-host-eapol-pending",
-            "cyw43-association-not-associated",
-        }
+        wifi_exact not in CYW43_HOST_EAPOL_KEY_INSTALL_BLOCKERS
+        and (
+            wifi_gate <= 7
+            or wifi_exact in {
+                "host-eapol-required",
+                "wifi-host-eapol-pending",
+                "cyw43-association-not-associated",
+            }
+        )
     ):
         wifi_blocker, wifi_phase, wifi_blocker_line = host_eapol_firstread
         wifi_exact = wifi_blocker

@@ -128,6 +128,8 @@ const CYW43_RUNTIME_DATA_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_DATA_TX_NO_REPLY_RESUMES: usize = 63;
 const CYW43_TXGLOMALIGN_RUNTIME_EXCHANGE: bool = true;
 const CYW43_TXGLOMALIGN_PRE_TX_DRAIN: bool = true;
+const CYW43_TXGLOMALIGN_PRIMARY_ALIGN: u32 = 8;
+const CYW43_TXGLOMALIGN_FALLBACK_ALIGN: u32 = 4;
 const CYW43_DESCRIPTOR_UNAVAILABLE_DETAIL: u16 = 0x5309;
 const CYW43_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL: u16 = 0x5103;
 const CYW43_CONTROL_FRAME_DETAIL: u16 = 0x5306;
@@ -185,6 +187,7 @@ const CYW43_HOST_EAPOL_RX_RESCUE_AFTER_STARTS: u32 = 2;
 const CYW43_HOST_EAPOL_BSSID_REFRESH_TX_RETRIES: usize = 1;
 const CYW43_HOST_EAPOL_BSSID_REFRESH_PRE_TX_DRAIN: bool = false;
 const CYW43_HOST_EAPOL_PROMISC_PRE_TX_DRAIN: bool = true;
+const CYW43_HOST_EAPOL_WSEC_INSTALL_PRE_TX_DRAIN: bool = true;
 const CYW43_HOST_EAPOL_WSEC_REASSERT_PRE_TX_DRAIN: bool = true;
 const CYW43_HOST_EAPOL_ASSOC_PROBE_POLLS: [u32; 4] = [1_024, 4_096, 8_192, 16_384];
 const CYW43_HOST_EAPOL_ASSOC_RESCUE_POLL: u32 = CYW43_HOST_EAPOL_PRE_ASSOC_POLLS as u32;
@@ -3585,6 +3588,13 @@ fn cyw43_submit_bcdc_iovar_u32_with_options(
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43OptionalControlOutcome {
+    Ready,
+    OptionalReject,
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_submit_bcdc_iovar_u32_optional_filter(
     contract: DriverTaskContract,
     name: &str,
@@ -3696,6 +3706,100 @@ fn cyw43_optional_iovar_submit_fault_is_fail_soft(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_submit_txglomalign_value(
+    contract: DriverTaskContract,
+    value: u32,
+    stage: &'static str,
+) -> Result<Cyw43OptionalControlOutcome, DriverTaskNetError> {
+    #[cfg(test)]
+    if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
+        let _ = (contract, value, stage);
+        return Ok(Cyw43OptionalControlOutcome::Ready);
+    }
+    match cyw43_submit_bcdc_iovar_bytes_unmapped_with_options(
+        contract,
+        "bus:txglomalign",
+        &value.to_le_bytes(),
+        stage,
+        Cyw43ControlHeaderMode::Plain,
+        CYW43_TXGLOMALIGN_PRE_TX_DRAIN,
+    ) {
+        Ok(completion) if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() => {
+            emit_cyw43_txglomalign_negotiation_trace(contract, stage, "ready", value, completion);
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "ready",
+                Some(completion),
+            );
+            Ok(Cyw43OptionalControlOutcome::Ready)
+        }
+        Ok(completion) => {
+            emit_cyw43_txglomalign_negotiation_trace(contract, stage, "fail", value, completion);
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "fail",
+                Some(completion),
+            );
+            Err(DriverTaskNetError::RuntimeInit(stage))
+        }
+        Err(Cyw43CommandSubmitError::Completion(completion))
+            if cyw43_control_exchange_completion_is_optional_reject(completion) =>
+        {
+            let status = if completion.result == CYW43_BCME_BADARG_STATUS {
+                "optional-badarg"
+            } else {
+                "optional-unsupported"
+            };
+            clear_cyw43_runtime_command_fault_status();
+            emit_cyw43_txglomalign_negotiation_trace(contract, stage, status, value, completion);
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                status,
+                Some(completion),
+            );
+            Ok(Cyw43OptionalControlOutcome::OptionalReject)
+        }
+        Err(err) => Err(err.into_net_error()),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_negotiate_txglomalign(contract: DriverTaskContract) -> Result<(), DriverTaskNetError> {
+    if cyw43_submit_txglomalign_value(
+        contract,
+        CYW43_TXGLOMALIGN_PRIMARY_ALIGN,
+        "cyw43-control-txglomalign",
+    )? == Cyw43OptionalControlOutcome::Ready
+    {
+        return Ok(());
+    }
+
+    match cyw43_submit_txglomalign_value(
+        contract,
+        CYW43_TXGLOMALIGN_FALLBACK_ALIGN,
+        "cyw43-control-txglomalign-fallback4",
+    )? {
+        Cyw43OptionalControlOutcome::Ready => Ok(()),
+        Cyw43OptionalControlOutcome::OptionalReject => {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                "cyw43-control-txglomalign",
+                "optional-skip",
+                None,
+            );
+            Ok(())
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_submit_bcdc_iovar_bytes_optional_filter(
     contract: DriverTaskContract,
     name: &str,
@@ -3747,6 +3851,25 @@ fn cyw43_submit_bcdc_iovar_bytes_unmapped_with_header_mode(
     stage: &'static str,
     header_mode: Cyw43ControlHeaderMode,
 ) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
+    cyw43_submit_bcdc_iovar_bytes_unmapped_with_options(
+        contract,
+        name,
+        data,
+        stage,
+        header_mode,
+        false,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_iovar_bytes_unmapped_with_options(
+    contract: DriverTaskContract,
+    name: &str,
+    data: &[u8],
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
+) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
     let name_len = name.len();
     let payload_len = name_len
         .checked_add(1)
@@ -3773,13 +3896,14 @@ fn cyw43_submit_bcdc_iovar_bytes_unmapped_with_header_mode(
         &payload[..payload_len],
     )
     .map_err(Cyw43CommandSubmitError::Runtime)?;
-    cyw43_submit_control_exchange_unmapped_with_header_mode(
+    cyw43_submit_control_exchange_unmapped_with_options(
         contract,
         &frame[..len],
         CYW43_WLC_SET_VAR,
         id,
         stage,
         header_mode,
+        pre_tx_drain,
     )
 }
 
@@ -4134,18 +4258,30 @@ fn emit_cyw43_text_iovar_trace(
 }
 
 #[cfg(feature = "kernel")]
+fn emit_cyw43_txglomalign_negotiation_trace(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    action: &'static str,
+    value: u32,
+    completion: DriverTaskCompletionRecord,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<224>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_TXGLOMALIGN contract={} stage={} action={} value={} code={} detail=0x{:04x} result=0x{:08x}",
+        contract.name, stage, action, value, completion.code, completion.detail, completion.result
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_prepare_runtime_control_plane(
     contract: DriverTaskContract,
     clm_blob: Option<&[u8]>,
 ) -> Result<EthernetAddress, DriverTaskNetError> {
-    cyw43_submit_bcdc_iovar_u32_with_options(
-        contract,
-        "bus:txglomalign",
-        8,
-        "cyw43-control-txglomalign",
-        Cyw43ControlHeaderMode::Plain,
-        CYW43_TXGLOMALIGN_PRE_TX_DRAIN,
-    )?;
+    cyw43_negotiate_txglomalign(contract)?;
     cyw43_get_bcdc_iovar_optional_unsupported_with_header_mode(
         contract,
         "ulp_sdioctrl",
@@ -4552,13 +4688,20 @@ const fn cyw43_control_exchange_completion_is_unsupported(
 }
 
 #[cfg(feature = "kernel")]
-const fn cyw43_control_exchange_completion_is_optional_filter_reject(
+const fn cyw43_control_exchange_completion_is_optional_reject(
     completion: DriverTaskCompletionRecord,
 ) -> bool {
     completion.code == DriverTaskCompletionCode::Fault.as_u16()
         && completion.detail == CYW43_CONTROL_EXCHANGE_FAULT_DETAIL
         && (completion.result == CYW43_BCME_UNSUPPORTED_STATUS
             || completion.result == CYW43_BCME_BADARG_STATUS)
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_control_exchange_completion_is_optional_filter_reject(
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    cyw43_control_exchange_completion_is_optional_reject(completion)
 }
 
 #[cfg(feature = "kernel")]
@@ -4780,7 +4923,16 @@ fn cyw43_install_wsec_key(
     primary: bool,
     stage: &'static str,
 ) -> Result<(), DriverTaskNetError> {
-    cyw43_install_wsec_key_with_pre_tx_drain(contract, index, key, ea, rsc, primary, stage, false)
+    cyw43_install_wsec_key_with_pre_tx_drain(
+        contract,
+        index,
+        key,
+        ea,
+        rsc,
+        primary,
+        stage,
+        CYW43_HOST_EAPOL_WSEC_INSTALL_PRE_TX_DRAIN,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -5490,7 +5642,7 @@ fn process_cyw43_host_eapol_data_completion(
                         };
                         CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
                         emit_cyw43_host_eapol_message(contract, "m4", "send-m4", poll, len);
-                        let m4_drain_ready = wait_cyw43_host_eapol_tx_drain(
+                        let _m4_drain_ready = wait_cyw43_host_eapol_tx_drain(
                             contract,
                             session,
                             "m4-before-wsec",
@@ -5505,7 +5657,7 @@ fn process_cyw43_host_eapol_data_completion(
                             None,
                             false,
                             "cyw43-host-eapol-ptk",
-                            m4_drain_ready,
+                            CYW43_HOST_EAPOL_WSEC_INSTALL_PRE_TX_DRAIN,
                         ) {
                             session
                                 .progress
@@ -9240,7 +9392,10 @@ fn cyw43_submit_runtime_control_exchange(
 #[cfg(feature = "kernel")]
 fn cyw43_control_uses_runtime_exchange(stage: &'static str, control_iovar: &str) -> bool {
     CYW43_TXGLOMALIGN_RUNTIME_EXCHANGE
-        && stage == "cyw43-control-txglomalign"
+        && matches!(
+            stage,
+            "cyw43-control-txglomalign" | "cyw43-control-txglomalign-fallback4"
+        )
         && control_iovar == "bus:txglomalign"
 }
 
@@ -9284,7 +9439,7 @@ const fn cyw43_control_reply_is_commandless_reject(reply: Cyw43ControlReply) -> 
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_control_reply_is_host_eapol_wsec_key_commandless_reject(
+fn cyw43_control_reply_is_host_eapol_wsec_key_commandless_stale(
     stage: &'static str,
     control_iovar: &str,
     reply: Cyw43ControlReply,
@@ -9651,7 +9806,7 @@ fn cyw43_poll_control_exchange_reply(
                 );
                 return Err(Cyw43CommandSubmitError::Completion(fault));
             }
-            if cyw43_control_reply_is_host_eapol_wsec_key_commandless_reject(
+            if cyw43_control_reply_is_host_eapol_wsec_key_commandless_stale(
                 stage,
                 control_iovar,
                 reply,
@@ -9664,7 +9819,7 @@ fn cyw43_poll_control_exchange_reply(
                 emit_cyw43_control_split_completion(
                     contract,
                     stage,
-                    "wsec-key-commandless-reject",
+                    "wsec-key-commandless-stale",
                     poll,
                     flags,
                     fault,
@@ -9676,7 +9831,7 @@ fn cyw43_poll_control_exchange_reply(
                     nonmatching_frames,
                     malformed_frames,
                 );
-                return Err(Cyw43CommandSubmitError::Completion(fault));
+                continue;
             }
             if cyw43_control_reply_is_startup_commandless_reject(stage, control_iovar, reply) {
                 let fault = cyw43_control_fault_completion(
@@ -14023,7 +14178,7 @@ fn consume_cyw43_post_secure_eapol_frame(
             };
             CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
             emit_cyw43_host_eapol_message(contract, "m4", "post-secure-send-m4", poll, len);
-            let m4_drain_ready = match wait_cyw43_host_eapol_tx_drain(
+            let _m4_drain_ready = match wait_cyw43_host_eapol_tx_drain(
                 contract,
                 session,
                 "post-secure-m4-before-wsec",
@@ -14053,7 +14208,7 @@ fn consume_cyw43_post_secure_eapol_frame(
                 None,
                 false,
                 "cyw43-host-eapol-post-secure-ptk",
-                m4_drain_ready,
+                CYW43_HOST_EAPOL_WSEC_INSTALL_PRE_TX_DRAIN,
             )
             .is_err()
             {
@@ -15423,6 +15578,8 @@ mod tests {
         assert_eq!(CYW43_CONTROL_EXCHANGE_FAULT_DETAIL, 0x530b);
         assert_eq!(CYW43_BCME_UNSUPPORTED_STATUS, 0xffff_ffe9);
         assert_eq!(CYW43_BCME_BADARG_STATUS, 0xffff_fffe);
+        assert_eq!(CYW43_TXGLOMALIGN_PRIMARY_ALIGN, 8);
+        assert_eq!(CYW43_TXGLOMALIGN_FALLBACK_ALIGN, 4);
         assert_eq!(CYW43_BCME_NOTASSOCIATED_STATUS, 0xffff_ffef);
         assert_eq!(CYW43_MFP_NONE, 0);
         assert_eq!(CYW43_WME_BSS_DISABLE_RSN_DEFAULT, 1);
@@ -15458,6 +15615,10 @@ mod tests {
         assert!(cyw43_control_exchange_completion_is_optional_filter_reject(
             badarg
         ));
+        assert!(cyw43_control_exchange_completion_is_optional_reject(
+            unsupported
+        ));
+        assert!(cyw43_control_exchange_completion_is_optional_reject(badarg));
         assert!(!cyw43_control_exchange_completion_is_optional_filter_reject(other_fault));
         let _guard = CYW43_STATUS_TEST_LOCK
             .lock()
@@ -16168,28 +16329,28 @@ mod tests {
             matched_command_badarg
         ));
         assert!(
-            cyw43_control_reply_is_host_eapol_wsec_key_commandless_reject(
+            cyw43_control_reply_is_host_eapol_wsec_key_commandless_stale(
                 "cyw43-host-eapol-ptk",
                 "wsec_key",
                 badarg
             )
         );
         assert!(
-            cyw43_control_reply_is_host_eapol_wsec_key_commandless_reject(
+            cyw43_control_reply_is_host_eapol_wsec_key_commandless_stale(
                 "cyw43-host-eapol-post-secure-ptk",
                 "wsec_key",
                 unsupported
             )
         );
         assert!(
-            !cyw43_control_reply_is_host_eapol_wsec_key_commandless_reject(
+            !cyw43_control_reply_is_host_eapol_wsec_key_commandless_stale(
                 "cyw43-host-eapol-allmulti",
                 "allmulti",
                 badarg
             )
         );
         assert!(
-            !cyw43_control_reply_is_host_eapol_wsec_key_commandless_reject(
+            !cyw43_control_reply_is_host_eapol_wsec_key_commandless_stale(
                 "cyw43-host-eapol-ptk",
                 "wsec_key",
                 matched_command_badarg
@@ -16356,6 +16517,10 @@ mod tests {
         assert_eq!(rxglom_descriptor.flags, 0);
         assert!(cyw43_control_uses_runtime_exchange(
             "cyw43-control-txglomalign",
+            "bus:txglomalign"
+        ));
+        assert!(cyw43_control_uses_runtime_exchange(
+            "cyw43-control-txglomalign-fallback4",
             "bus:txglomalign"
         ));
         assert!(!cyw43_control_uses_runtime_exchange(
@@ -17116,7 +17281,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
-            0
+            2
         );
         reset_cyw43_status_flags();
     }
@@ -19136,7 +19301,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
-            1
+            2
         );
         assert_eq!(CYW43_HOST_EAPOL_TEST_RX_RESTORED.load(Ordering::Acquire), 1);
         assert!(!cyw43_data_plane_ready());
@@ -19181,7 +19346,7 @@ mod tests {
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
-            1
+            2
         );
 
         let mut later_m1 = m1;
@@ -19233,7 +19398,7 @@ mod tests {
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
-            1
+            2
         );
 
         let mut later_m3 = [0u8; MAX_FRAME_LEN];
@@ -19275,7 +19440,7 @@ mod tests {
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 3);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
-            2
+            4
         );
         reset_cyw43_status_flags();
     }

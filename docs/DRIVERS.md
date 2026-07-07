@@ -1031,15 +1031,18 @@ the control write. That preserves nonmatching frames for the later control or
 data poll instead of treating the drain as association or EAPOL proof.
 Root-side station setup splits most matched CYW43 controls into a
 `CONTROL_FRAME` TX turn plus bounded parent-side `CONTROL_POLL` turns. The
-first Linux-order startup write, `bus:txglomalign=8`, is the bounded exception:
-it stays a plain-header, 36-byte logical payload and keeps the explicit pre-TX
-drain bit, but uses the isolated runtime `CONTROL_EXCHANGE` path so the
-immediate post-TX CDC reply window stays inside the SDIO-owner runtime. That
-exception targets the live Pi 4 Linux-firmware frontier where the Function 2
-write completed and parent-side split polling consumed a zero-id firmware
-status frame before any matched reply. The exchange still fails closed on
-nonzero CDC status or commandless reject; it is not accepted merely because the
-Function 2 TX completed. Host-EAPOL extends the split model by tracking the
+first Linux-order startup alignment negotiation is the bounded exception:
+`bus:txglomalign=8` stays a plain-header, 36-byte logical payload and keeps the
+explicit pre-TX drain bit, but uses the isolated runtime `CONTROL_EXCHANGE` path
+so the immediate post-TX CDC reply window stays inside the SDIO-owner runtime.
+If the firmware returns an exact control-exchange `BCME_BADARG` or
+`BCME_UNSUPPORTED` for that value, root retries the same iovar with value `4`.
+If value `4` is also rejected with one of those exact firmware statuses, root
+records `optional-skip` and continues to the next Linux-order control; transport
+faults, no-reply, malformed replies, and unrelated firmware status still fail
+closed. That exception targets the live Pi 4 Linux-firmware frontier where the
+Function 2 write completed and the runtime observed a zero-id firmware status
+before any later control could run. Host-EAPOL extends the split model by tracking the
 active CYW43 prompt poll,
 recovering the live descriptor from the ring if the in-memory tracker is stale,
 and resuming the same control/data descriptor and flags before alternating polls
@@ -1052,9 +1055,11 @@ without treating it as a CDC reply. Valid CDC replies that arrive while root is
 waiting for another `(cmd,id)` are not discarded. Root copies those replies into
 a bounded pending-control queue keyed by exact CDC command and ioctl id, and the
 next matching exchange restages the copied frame into the driver-task ring before
-validating length/status and returning the response body. This preserves Linux's
-concurrent control/data receive tolerance without extending the fatal reply
-deadline or weakening the `wsec_key` PTK/GTK gate.
+validating length/status and returning the response body. Commandless/no-id
+nonzero statuses during the `wsec_key` PTK/GTK window are traced as stale
+nonmatching key-install status and root keeps polling for the matched ioctl
+reply. This preserves Linux's concurrent control/data receive tolerance without
+extending the fatal reply deadline or weakening the `wsec_key` PTK/GTK gate.
 progress. Those lines emit `CYW43_DRIVER_TASK_EVENT_RX` and remain linked
 runtime evidence; they do not release DHCP/data without EAPOL secure proof.
 Isolated runtime RX polls now request
@@ -1266,7 +1271,7 @@ context and the retry/poll window.
   `sdio-function2-ready-timeout`.
 - Function 2 control-plane frames preserve Linux-shaped logical SDPCM/CDC
   payloads and four-byte alignment. Small post-release control frames such as
-  `bus:txglomalign=8` remain plain-header and use the Linux `sdio_memcpy_toio`
+  `bus:txglomalign=8` and its bounded value-`4` fallback remain plain-header and use the Linux `sdio_memcpy_toio`
   physical shape: Function 2 fixed-FIFO CMD53 byte mode with the aligned request
   length (`count=request_len`, CMD53 argument block count zero, host block count
   one) while the request is at or below the 512-byte byte-mode ceiling. The
@@ -1340,9 +1345,12 @@ context and the retry/poll window.
   matches the generated CYW43455 address and normalized length. Exhausted
   retained-stage recovery reports `0x5329`.
 - Station attach follows the captured Linux shape while staying bounded to the
-  isolated runtime proof surface. The as-built control path first sends
-  `bus:txglomalign=8`, tolerates only a matched `BCME_UNSUPPORTED` reply for the
-  optional `ulp_sdioctrl` query, sends `bus:rxglom=1`, reads `cur_etheraddr`,
+  isolated runtime proof surface. The as-built control path first negotiates
+  `bus:txglomalign` with value `8`, retries value `4` after an exact firmware
+  `BCME_BADARG` or `BCME_UNSUPPORTED`, and treats rejection of both values as an
+  explicit optional skip rather than a transport proof. It then tolerates only a
+  matched `BCME_UNSUPPORTED` reply for the optional `ulp_sdioctrl` query, sends
+  `bus:rxglom=1`, reads `cur_etheraddr`,
   issues `BRCMF_C_GET_REVINFO` (`cmd=98`) with a 68-byte zeroed response window,
   then records the current `mpc=0` compatibility edge and applies the Linux
   prejoin association defaults before matched CDC exchanges for `WLC_UP`,
@@ -1404,13 +1412,19 @@ context and the retry/poll window.
   attempts a bounded post-M4 SDPCM credit drain, then treats a valid M4 TX
   completion as enough to proceed to PTK/GTK `wsec_key` install when no later
   credit is observed. Missing M4 TX proof and `wsec_key` failures remain fatal.
-  Those `wsec_key` installs use the runtime `CONTROL_EXCHANGE` path with the
-  old-good reply window, unwrap GTK with AES-128 key unwrap, wait after Group M2
-  before secure release when the GTK arrives in the group-key handshake, restore
-  the Linux-unicast-M1 RX admission mode, and only then report secure
-  completion. EAPOL TX uses the extended SDPCM data shape with BDC priority `6`;
-  control writes may wait for CDC replies, but data/event writes must not
-  inherit a control-plane reply wait.
+  Those `wsec_key` installs use the split `CONTROL_FRAME`/`CONTROL_POLL` path
+  with the host-EAPOL key reply window and always request the runtime pre-TX
+  drain, even when the parent-side post-M4 credit drain timed out. The timeout is
+  advisory after valid M4 TX proof; the key-control submit still has to clear the
+  SDIO owner/pending-control window before issuing PTK/GTK. Host-EAPOL unwraps
+  GTK with AES-128 key unwrap, waits after Group M2 before secure release when
+  the GTK arrives in the group-key handshake, restores the Linux-unicast-M1 RX
+  admission mode, and only then reports secure completion. Commandless/no-id
+  nonzero CDC statuses observed during PTK/GTK install are stale nonmatching
+  frame evidence unless the reply matches the expected `wsec_key` ioctl id; only
+  a matched nonzero reply or bounded timeout fails the key. EAPOL TX uses the
+  extended SDPCM data shape with BDC priority `6`; control writes may wait for
+  CDC replies, but data/event writes must not inherit a control-plane reply wait.
   `eapol_start` counts only the bounded isolated runtime 802.1X start frames; it
   is not DHCP/data success by itself.
 - `WIFI_GATE=7`, `wifi-host-eapol-pending`, and
@@ -2412,13 +2426,15 @@ Required Cohesix shape:
   `transport-init`; that sideband belongs after firmware release. CM3-only
   SOCSRAM remap writes are not part of this path.
 - Station control uses matched CDC exchanges for writes and read iovars. The
-  first startup `bus:txglomalign=8` write uses a bounded runtime-private
-  `DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE` so TX completion and the first CDC
-  reply poll are not separated by a parent/root scheduling turn. The runtime
-  must return `FrameReady` only for the expected CDC command/ioctl id with zero
-  firmware status, and must fail fast on commandless nonzero CDC status
-  (`cmd=0`, `id=0`, `status!=0`) instead of reporting a generic idle-loop
-  timeout. All later station exchanges remain split isolated runtime sequences:
+  first startup `bus:txglomalign=8` write and value-`4` fallback use a bounded
+  runtime-private `DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE` so TX completion
+  and the first CDC reply poll are not separated by a parent/root scheduling
+  turn. The runtime must return `FrameReady` only for the expected CDC
+  command/ioctl id with zero firmware status. Exact `BCME_BADARG` and
+  `BCME_UNSUPPORTED` statuses on the txglomalign negotiation are reported to
+  root as optional negotiation rejects; other commandless nonzero CDC statuses
+  (`cmd=0`, `id=0`, `status!=0`) remain fail-fast instead of generic idle-loop
+  timeouts. All later station exchanges remain split isolated runtime sequences:
   a bounded `DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME` TX turn followed by bounded
   `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL` turns that decode the CDC header in
   root. A control-plane command is not accepted merely because the SDPCM frame
@@ -2431,16 +2447,22 @@ Required Cohesix shape:
   matched zero-response completions are not misclassified as control-plane idle
   loops. Split `CONTROL_POLL` turns retain the old-good hintless first-read
   cadence through polls 1, 4, 16, 64, 256, 1024, and 4096 for these admission
-  windows.
+  windows. PTK/GTK `wsec_key` installs use the same split-control matching
+  discipline with a longer bounded key-install reply window: commandless
+  (`cmd=0`, `id=0`) BADARG/UNSUPPORTED-style statuses are nonmatching stale
+  evidence for that key install, not the completion of the expected ioctl.
 - Each matched control exchange emits a bounded
   `CYW43_DRIVER_TASK_CONTROL_REQUEST` line before submission. For small
-  non-secret iovar bodies such as `bus:txglomalign=8`, the line records the
-  full request digest, `cmd`, ioctl id, runtime flags, BCDC flags, header mode,
+  non-secret iovar bodies such as `bus:txglomalign=8` or the value-`4` fallback,
+  the line records the full request digest, `cmd`, ioctl id, runtime flags, BCDC flags, header mode,
   iovar name, and value. Larger iovar bodies use header/name-only digesting so
   Wi-Fi key material is not exposed. The CYW43 runtime also publishes
   `cyw43-control-tx-begin` and `cyw43-control-tx-done` for `CONTROL_FRAME`;
   the atomic `txglomalign` path emits `runtime-exchange-complete` or a
-  `CYW43_DRIVER_TASK_COMMAND_FAULT` carrying the exact firmware status. Parent
+  `CYW43_DRIVER_TASK_COMMAND_FAULT` carrying the exact firmware status, followed
+  by `CYW43_DRIVER_TASK_TXGLOMALIGN` and `DRIVER_TASK_RESOURCE_INIT` lines that
+  mark `ready`, `optional-badarg`, `optional-unsupported`, or `optional-skip`.
+  Parent
   polling emits sparse `CYW43_DRIVER_TASK_CONTROL_SPLIT` lines for TX
   completion, first-read/idle poll completions, response readiness, and terminal
   failures. These split lines carry the completion sequence, expected command,

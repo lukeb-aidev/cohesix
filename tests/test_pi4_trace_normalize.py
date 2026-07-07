@@ -9434,6 +9434,109 @@ def test_gate_summary_names_source_asserted_570a_as_asserted_empty() -> None:
     assert gates.wifi_phase == "runtime-rx"
 
 
+def test_gate_summary_names_ptk_install_over_prior_firstread_empty() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=32 starts=0 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=0 "
+            "control_rx=0 empty_polls=32 associated=no link_up=no "
+            "assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "firstread_class=source-asserted-empty rx_firstread_attempts=10 "
+            "rx_firstread_empty=10 rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=10 control_rx_firstread_empty=10 "
+            "control_rx_firstread_failed=0 last_rx_idle_detail=0x570a "
+            "last_rx_idle_result=0xab070040 last_control_rx_idle_detail=0x570a "
+            "last_control_rx_idle_result=0xab070040 "
+            "next_action=inspect-cyw43-rx-source-latch",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m1 action=recv-m1 poll=7 len=121",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m2 action=send-m2 poll=7 len=129",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m3 action=recv-m3 poll=8 len=177",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m4 action=send-m4 poll=8 len=113",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-host-eapol-ptk event=wsec-key-commandless-stale "
+            "poll=1 flags=0x0000 seq=39 code=fault detail=0x530b "
+            "result=0xfffffffe cmd=263 cmd_hex=0x00000107 id=39 "
+            "header=extended expected_response_len=0 iovar=wsec_key "
+            "nonmatching=1 malformed=0",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 "
+            "kind=ptk stage=cyw43-host-eapol-ptk status=failed",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-ptk-install polls=64 starts=0 "
+            "tx_retries=0 data_rx=0 eapol_rx=4 non_eapol_rx=0 event_rx=1 "
+            "control_rx=0 empty_polls=16 associated=yes link_up=yes "
+            "assoc_event=link-up assoc_poll=4 post_assoc_polls=2 "
+            "firstread_class=source-asserted-empty rx_firstread_attempts=10 "
+            "rx_firstread_empty=10 rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=10 control_rx_firstread_empty=10 "
+            "control_rx_firstread_failed=0 last_rx_idle_detail=0x570a "
+            "last_rx_idle_result=0xab070040 last_control_rx_idle_detail=0x570a "
+            "last_control_rx_idle_result=0xab070040 next_action=install-wsec-key",
+            "ERR NETTEST reason=policy detail=wifi-host-eapol-required",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "host-eapol-ptk-install"
+    assert gates.wifi_exact == "host-eapol-ptk-install"
+    assert gates.wifi_phase == "join-security"
+
+
+def test_gate_summary_refines_host_eapol_ptk_tx_no_reply_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m3 action=recv-m3 poll=24 len=169",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m4 action=send-m4 poll=24 len=113",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_DRAIN contract=cyw43455 "
+            "stage=m4-before-wsec result=timeout tx_result=0x0000008f "
+            "polls=69380 observed_control=0",
+            "CYW43_DRIVER_TASK_CONTROL_REQUEST contract=cyw43455 "
+            "stage=cyw43-host-eapol-ptk cmd=263 cmd_hex=0x00000107 "
+            "id=39 runtime_flags=0x0002 bcdc_flags=0x0002 payload_len=189 "
+            "response_len=0 iovar=wsec_key header_mode=extended",
+            "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract=cyw43455 "
+            "stage=cyw43-host-eapol-ptk op=6 flags=0x0002 "
+            "target=0x00000000 payload_off=284 payload_len=209 total_len=209 "
+            "iovar=wsec_key reason=cyw43-runtime-command-no-reply request=1590 "
+            "resumes=0 progress_marker_valid=yes progress_sequence=1590 "
+            "progress_phase=142 progress_phase_name=cyw43-sdio-owner-wait-begin "
+            "progress_aux0=0x43595734 progress_request_match=yes",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-host-eapol-ptk status=tx-no-reply acceptance=no "
+            "blocker=cyw43-host-eapol-ptk-tx-no-reply "
+            "active_request_valid=yes active_request=1590 "
+            "progress_marker_valid=yes progress_sequence=1590 "
+            "progress_phase=142 progress_phase_name=cyw43-sdio-owner-wait-begin "
+            "progress_aux0=0x43595734 progress_request_match=yes",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 "
+            "kind=ptk stage=cyw43-host-eapol-ptk status=failed",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-ptk-install polls=24576 starts=0 "
+            "tx_retries=0 data_rx=0 eapol_rx=4 non_eapol_rx=0 event_rx=4 "
+            "control_rx=0 empty_polls=24576 associated=yes link_up=yes "
+            "assoc_event=link-up assoc_poll=24 post_assoc_polls=4 "
+            "next_action=inspect-host-eapol-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-host-eapol-ptk-tx-no-reply"
+    assert gates.wifi_exact == "cyw43-host-eapol-ptk-tx-no-reply"
+    assert gates.wifi_phase == "cyw43-sdio-owner-wait-begin"
+
+
 def test_gate_summary_names_firstread_source_asserted_empty() -> None:
     events = normalizer.parse_events(
         [
@@ -10834,6 +10937,39 @@ def test_gate_summary_refines_cyw43_txglomalign_commandless_badarg() -> None:
     assert gates.wifi_blocker == "cyw43-control-txglomalign-badarg"
     assert gates.wifi_exact == "cyw43-control-txglomalign-badarg"
     assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_gate_summary_ignores_resolved_optional_txglomalign_badarg() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=begin acceptance=no",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign op=11 flags=0x0008 "
+            "target=0x00000000 payload_off=0 payload_len=36 total_len=36 "
+            "detail=21259 reason=cyw43-control-exchange result=0xfffffffe",
+            "CYW43_DRIVER_TASK_TXGLOMALIGN contract=cyw43455 "
+            "stage=cyw43-control-txglomalign action=optional-badarg "
+            "value=8 code=5 detail=0x530b result=0xfffffffe",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=optional-badarg "
+            "acceptance=no code=5 detail=21259 result=0xfffffffe frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign-fallback4 status=begin acceptance=no",
+            "CYW43_DRIVER_TASK_TXGLOMALIGN contract=cyw43455 "
+            "stage=cyw43-control-txglomalign-fallback4 action=ready "
+            "value=4 code=2 detail=0x0000 result=0x00000000",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign-fallback4 status=ready "
+            "acceptance=no code=2 detail=0 result=0 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-plane status=failed acceptance=no",
+        ]
+    )
+
+    assert normalizer.summarize_cyw43_control_txglomalign_reject(events) is None
+    gates = normalizer.summarize_gates(events)
+    assert gates.wifi_blocker != "cyw43-control-txglomalign-badarg"
 
 
 def test_gate_summary_tracks_hintless_firstread_no_irq_terminal() -> None:
