@@ -755,13 +755,21 @@ pub trait RootTaskControl {
   existing `0x430*` control-timeout result encoding so summary tooling can emit
   exact `cyw43-control-rx-*`, `cyw43-control-reply-*`, or `cyw43-control-tx-*`
   blockers while preserving the stable Gate 7 control-plane classification.
-  During host-EAPOL PTK/GTK `wsec_key` installs, commandless/no-id nonzero CDC
-  statuses are traced as `event=wsec-key-commandless-stale` and remain
-  nonmatching evidence until the expected ioctl id replies or the bounded
-  key-install window times out. A completed split TX followed by stale or
-  nonmatching reply evidence is summarized as
+  During host-EAPOL PTK/GTK `wsec_key` installs, the redacted
+  `CYW43_DRIVER_TASK_HOST_EAPOL_KEY_REQUEST` line records the key index, key
+  length, RSC presence, primary/default-key flag, and EA class (`zero`, `pae`,
+  `multicast`, or `unicast`) without logging key bytes. Commandless/no-id
+  nonzero CDC statuses are traced as `event=wsec-key-commandless-stale` and
+  remain nonmatching evidence until the expected ioctl id replies or the
+  bounded key-install window times out. A completed split TX followed by stale
+  or nonmatching reply evidence is summarized as
   `cyw43-host-eapol-<ptk|gtk>-poll-timeout` with exact
-  `...-reply-nonmatching`; a TX-side no-reply remains
+  `...-reply-nonmatching`; the retry line includes `timeout_reason=<n>` when
+  the terminal fault was the encoded `0x430*` control-exchange timeout. PTK and
+  post-secure key refresh use one resubmit; the initial GTK install uses a
+  wider bounded reply window and may resubmit twice because live Pi 4 firmware
+  can deliver M4-adjacent RX/credit/control-idle evidence before the matched
+  group-key `wsec_key` completion. A TX-side no-reply remains
   `cyw43-host-eapol-<ptk|gtk>-tx-no-reply` or the matching `post-secure`
   variant, with `WIFI_PHASE` carrying the linked-runtime progress phase such as
   `cyw43-sdio-owner-wait-begin`.

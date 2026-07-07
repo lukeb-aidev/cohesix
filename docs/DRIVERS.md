@@ -1016,15 +1016,15 @@ Extended control TX and pre-TX RX draining are separate isolated runtime policy
 bits. Startup controls such as `cur_etheraddr` and `BRCMF_C_GET_REVINFO` keep
 the direct txctl-to-rxctl path that proved the control plane in prior boots,
 even when they use the Linux SDPCM hardware-extension header. `WLC_GET_BSSID`
-is not a pre-association proof source in the isolated runtime path: the May 18-19
-root-owned behavior used association/link events to prove carrier, then treated
-`WLC_GET_BSSID` only as AP-MAC metadata for the host-EAPOL path. The
-isolated runtime replay now follows that contract. A one-shot post-association
-BSSID refresh keeps the same extended-header direct TX path and may retry one
-retryable isolated SDIO descriptor-transfer fault (`0x5103`) with the same BCDC
-id. That retry is transport recovery only; it does not mark association,
-release DHCP/data, submit a legacy `WLC_SET_SSID` rescue, or convert a valid
-BSSID into carrier proof. Pre-TX drain remains an explicit descriptor flag for
+is a bounded pre-association rescue source in the isolated runtime path: a fresh
+valid AP BSSID moves the host-EAPOL session from association wait into the
+EAPOL-start lane when Broadcom association/link events were dropped or delayed.
+It is not carrier, secure, or DHCP/data proof.
+A one-shot post-association BSSID refresh keeps the same extended-header direct
+TX path and may retry one retryable isolated SDIO descriptor-transfer fault
+(`0x5103`) with the same BCDC id. That retry is transport recovery only; it
+does not mark secure EAPOL progress, release DHCP/data, or submit a legacy
+`WLC_SET_SSID` rescue. Pre-TX drain remains an explicit descriptor flag for
 controls that require it; when used, it can consume immediately readable frames,
 but it does not issue the RX abort/RF_TERM/`SMB_NAK` retransmit sequence before
 the control write. That preserves nonmatching frames for the later control or
@@ -1059,11 +1059,18 @@ validating length/status and returning the response body. Commandless/no-id
 nonzero statuses during the `wsec_key` PTK/GTK window are traced as stale
 nonmatching key-install status and root keeps polling for the matched ioctl
 reply. This preserves Linux's concurrent control/data receive tolerance without
-extending the fatal reply deadline or weakening the `wsec_key` PTK/GTK gate.
-If that stale/nonmatching evidence is the terminal proof for a host-EAPOL
+weakening the `wsec_key` PTK/GTK gate. The live Pi 4 GTK frontier can deliver
+M4-adjacent RX/credit/control-idle evidence before the matched group-key
+completion, so the initial GTK install has a wider bounded reply window than
+PTK. If that stale/nonmatching evidence is the terminal proof for a host-EAPOL
 `wsec_key` install that already used the extended SDPCM header and explicit
-pre-TX drain, root may resubmit the same key body once with a fresh BCDC ioctl
-id. Matched nonzero firmware status remains fatal and is not retried as stale.
+pre-TX drain, root may resubmit the same key body with a fresh BCDC ioctl id:
+once for PTK or post-secure key refresh, and twice for the initial GTK install.
+The retry gate accepts either the preserved split reason or the encoded `0x430*`
+control-exchange timeout reason, so a terminal generic
+`cyw43-control-exchange` fault with nonmatching-reply evidence still reaches the
+bounded retry path. Matched nonzero firmware status remains fatal and is not
+retried as stale.
 progress. Those lines emit `CYW43_DRIVER_TASK_EVENT_RX` and remain linked
 runtime evidence; they do not release DHCP/data without EAPOL secure proof.
 Isolated runtime RX polls now request
@@ -1104,8 +1111,8 @@ frame and keeps queued nonmatching frames for the matching root poll; an empty
 retry keeps DHCP/data blocked and names the RX-source latch as the next
 blocker. The linked runtime owns SDIO interrupt-source clearing: when Function 1
 `RFRAME` is zero but source bits still assert a pending frame, it preserves
-`I_HMB_FRAME_IND` only for a bounded grace window, then acknowledges the stale
-frame-indication bit so an obsolete source latch cannot trap later control
+`I_HMB_FRAME_IND` only for a boot-local bounded grace budget, then acknowledges
+the stale frame-indication bit so an obsolete source latch cannot trap later control
 reply polling. If a Function 2 CMD53 transfer itself fails before the runtime can
 classify the first-read payload, the isolated runtime now performs the same
 bounded recovery on the real transfer path: it aborts Function 2, writes
@@ -1156,10 +1163,10 @@ session remains pending for the normal bounded service path. A
 completion and must not be counted as association progress. If the join proof
 window lacks association/link evidence, root emits sparse
 `CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_PROBE` records at bounded pre-association
-millisecond milestones and uses `WLC_GET_BSSID` only as firmware-state telemetry
-and admission for continued host-EAPOL probing. BSSID alone is not association
-or carrier proof, and it does not release DHCP/data without link and EAPOL
-secure proof. If the primary Linux-shaped `bsscfg:join` returned success and a
+millisecond milestones. A valid AP BSSID from `WLC_GET_BSSID` is accepted as
+association proof for continued host-EAPOL probing, but it does not release
+DHCP/data without secure EAPOL completion. If the primary Linux-shaped
+`bsscfg:join` returned success and a
 bounded probe later returns `BCME_NOTASSOCIATED`, root may spend exactly one
 isolated runtime `WLC_SET_SSID` rescue and records it as
 `CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE`; SET_SSID success or a SET_SSID
@@ -1176,9 +1183,9 @@ dedicated sub-gate breadcrumb. The normalizer keeps
 post-rescue no-association failures as Gate 7
 `cyw43-association-not-associated` unless direct v3 RX trace evidence proves a
 more precise Function 2 first-read/source blocker. Join acceptance remains only
-join-submit proof; carrier proof must come from a Broadcom association/link event
-delivered by the isolated runtime, a valid firmware BSSID probe plus later link
-proof, or a received EAPOL frame that proves the AP is talking to the station.
+join-submit proof; carrier/data release proof must come from secure host-EAPOL
+completion after association evidence, or from a received EAPOL frame and
+completed key install that proves the AP is talking to the station.
 Station setup proof must preserve the Linux-shaped ordering. RSN/MFP and WME
 BSS-disable controls must be ready or tolerated-unsupported before final
 `wpa_auth`; pre-join `mpc`, `join_pref`, interface-event mask, scan dwell
@@ -1194,9 +1201,9 @@ The primary join request is Linux's `join` iovar
 for matched `BCME_UNSUPPORTED` or `BCME_BADARG` join-submit firmware statuses;
 transport faults do not fall back. After an accepted `bsscfg:join`, the only
 post-join `WLC_SET_SSID` use is the single diagnostic host-EAPOL association
-rescue described above. Carrier proof must come from a delivered Broadcom
-association/link event or a direct EAPOL receive edge; a valid BSSID is not
-association proof.
+rescue described above. Carrier/data release proof must come from secure
+host-EAPOL completion after association evidence; a valid BSSID can promote the
+host-EAPOL association wait, but cannot release DHCP/data.
 
 `cyw43-firmware-recover` owner-replay cycles remain progress only when
 `resume_offset` or `STREAM_PROGRESS uploaded=` advances; root keeps the
@@ -1424,12 +1431,18 @@ context and the retry/poll window.
   credit is observed. Missing M4 TX proof and `wsec_key` failures remain fatal.
   Those `wsec_key` installs use the split `CONTROL_FRAME`/`CONTROL_POLL` path
   with the host-EAPOL key reply window and always request the runtime pre-TX
-  drain, even when the parent-side post-M4 credit drain timed out. The timeout is
-  advisory after valid M4 TX proof; the key-control submit still has to clear the
-  SDIO owner/pending-control window before issuing PTK/GTK. Host-EAPOL unwraps
-  GTK with AES-128 key unwrap, waits after Group M2 before secure release when
-  the GTK arrives in the group-key handshake, restores the Linux-unicast-M1 RX
-  admission mode, and only then reports secure completion. Commandless/no-id
+  drain, even when the parent-side post-M4 credit drain timed out. PTK keeps the
+  normal key window; initial GTK uses a longer bounded window and one extra
+  stale/no-reply retry because the group-key completion can trail M4/PTK control
+  evidence on Pi 4 firmware. The timeout is advisory after valid M4 TX proof;
+  the key-control submit still has to clear the SDIO owner/pending-control
+  window before issuing PTK/GTK. Host-EAPOL unwraps
+  GTK with AES-128 key unwrap and waits after Group M2 before secure release when
+  the GTK arrives in the group-key handshake. Post-secure filter restoration
+  (`mcast_list`, `allmulti`, `promisc`) is a best-effort data-reception repair:
+  root attempts all three controls and reports `repair-deferred` when one times
+  out or returns a transport fault, but it does not hold DHCP/data closed after
+  association, link-up, M3/M4, PTK, GTK, and `wsec` are proven. Commandless/no-id
   nonzero CDC statuses observed during PTK/GTK install are stale nonmatching
   frame evidence unless the reply matches the expected `wsec_key` ioctl id; only
   a matched nonzero reply or bounded timeout fails the key. EAPOL TX uses the
@@ -1468,9 +1481,10 @@ context and the retry/poll window.
   control/event frames through `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL`, credit-gates
   control TX, drains a bounded Linux-style SDPCM next-frame window before RX
   returns and before explicitly flagged controls, suppresses repetitive low-level
-  breadcrumbs, and keeps non-EAPOL data blocked. The post-association BSSID
-  refresh is intentionally not pre-drained; it is AP-MAC metadata and cannot
-  prove association or release DHCP/data. The explicit pre-TX drain flag decodes
+  breadcrumbs, and keeps non-EAPOL data blocked. The BSSID probe is
+  intentionally not pre-drained; it can promote the association wait into
+  EAPOL-start when it returns a valid AP MAC, but it cannot release DHCP/data.
+  The explicit pre-TX drain flag decodes
   immediately available RX and preserves asserted-empty source latches for the
   following control write; RX-proof polls remain the path that can send the
   bounded RX retransmit request. Early iovar controls do not consume pending RX
@@ -2461,9 +2475,10 @@ Required Cohesix shape:
   discipline with a longer bounded key-install reply window: commandless
   (`cmd=0`, `id=0`) BADARG/UNSUPPORTED-style statuses are nonmatching stale
   evidence for that key install, not the completion of the expected ioctl. A
-  host-EAPOL `wsec_key` terminal stale/nonmatching timeout may be retried once
-  with a fresh BCDC ioctl id; a matched nonzero status or a second timeout stays
-  fatal.
+  host-EAPOL `wsec_key` terminal stale/nonmatching timeout may be retried with
+  a fresh BCDC ioctl id: once for PTK or post-secure key refresh, and twice for
+  the initial GTK install. A matched nonzero status or exhausted retry budget
+  stays fatal.
 - Each matched control exchange emits a bounded
   `CYW43_DRIVER_TASK_CONTROL_REQUEST` line before submission. For small
   non-secret iovar bodies such as `bus:txglomalign=8` or the value-`4` fallback,

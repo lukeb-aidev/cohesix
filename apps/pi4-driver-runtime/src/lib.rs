@@ -2078,7 +2078,7 @@ struct Cyw43RuntimeState {
     rx_irq_last_preserve_reason: u16,
     rx_irq_last_preserve_int_status: u32,
     rx_irq_last_preserve_ack_bits: u32,
-    rx_irq_source_asserted_empty_streak: u8,
+    rx_irq_source_asserted_empty_preserves: u8,
     rx_trace_sequence: u32,
     rx_trace_start_ticks_lo: u32,
     rx_trace_pre_sample_delta_ticks: u32,
@@ -2174,7 +2174,7 @@ impl Cyw43RuntimeState {
             rx_irq_last_preserve_reason: CYW43_RX_IRQ_PRESERVE_NONE,
             rx_irq_last_preserve_int_status: 0,
             rx_irq_last_preserve_ack_bits: 0,
-            rx_irq_source_asserted_empty_streak: 0,
+            rx_irq_source_asserted_empty_preserves: 0,
             rx_trace_sequence: 0,
             rx_trace_start_ticks_lo: 0,
             rx_trace_pre_sample_delta_ticks: 0,
@@ -2267,7 +2267,6 @@ impl Cyw43RuntimeState {
         self.rx_source_snapshot = Cyw43RxSourceSnapshot::empty();
         self.rx_source_snapshot_valid = false;
         self.rx_retransmit_pending = false;
-        self.rx_irq_source_asserted_empty_streak = 0;
         self.reset_rx_idle_trace();
     }
 
@@ -11052,11 +11051,7 @@ fn cyw43_runtime_clear_rx_irq_source_after_frame_drain(state: &mut Cyw43RuntimeS
     }
 }
 
-fn cyw43_runtime_note_rx_irq_ack(state: &mut Cyw43RuntimeState, ack_bits: u32) {
-    if ack_bits & I_HMB_FRAME_IND != 0 {
-        state.rx_irq_source_asserted_empty_streak = 0;
-    }
-}
+fn cyw43_runtime_note_rx_irq_ack(_state: &mut Cyw43RuntimeState, _ack_bits: u32) {}
 
 fn cyw43_runtime_record_rx_irq_preserve(
     state: &mut Cyw43RuntimeState,
@@ -11065,10 +11060,9 @@ fn cyw43_runtime_record_rx_irq_preserve(
     ack_bits: u32,
 ) {
     if reason == CYW43_RX_IRQ_PRESERVE_SOURCE_ASSERTED_EMPTY {
-        state.rx_irq_source_asserted_empty_streak =
-            state.rx_irq_source_asserted_empty_streak.saturating_add(1);
-    } else {
-        state.rx_irq_source_asserted_empty_streak = 0;
+        state.rx_irq_source_asserted_empty_preserves = state
+            .rx_irq_source_asserted_empty_preserves
+            .saturating_add(1);
     }
     state.rx_irq_preserve_count = state.rx_irq_preserve_count.saturating_add(1);
     state.rx_irq_last_preserve_reason = reason;
@@ -11093,7 +11087,7 @@ fn cyw43_runtime_rx_pending_after_frame_drain(state: &mut Cyw43RuntimeState) -> 
         if cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16)
             .is_some_and(cyw43_rx_source_asserts_pending_frame)
         {
-            if state.rx_irq_source_asserted_empty_streak
+            if state.rx_irq_source_asserted_empty_preserves
                 < CYW43_RX_IRQ_SOURCE_ASSERTED_EMPTY_PRESERVE_LIMIT
             {
                 return Some(CYW43_RX_IRQ_PRESERVE_SOURCE_ASSERTED_EMPTY);
@@ -32671,7 +32665,7 @@ mod tests {
             state.rx_irq_last_preserve_reason,
             CYW43_RX_IRQ_PRESERVE_SOURCE_ASSERTED_EMPTY
         );
-        assert_eq!(state.rx_irq_source_asserted_empty_streak, 1);
+        assert_eq!(state.rx_irq_source_asserted_empty_preserves, 1);
         assert_eq!(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET), I_CHIPACTIVE);
 
         cyw43_runtime_clear_rx_irq_source_after_frame_drain(&mut state);
@@ -32681,13 +32675,13 @@ mod tests {
             state.rx_irq_last_preserve_reason,
             CYW43_RX_IRQ_PRESERVE_SOURCE_ASSERTED_EMPTY
         );
-        assert_eq!(state.rx_irq_source_asserted_empty_streak, 2);
+        assert_eq!(state.rx_irq_source_asserted_empty_preserves, 2);
         assert_eq!(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET), I_CHIPACTIVE);
 
         cyw43_runtime_clear_rx_irq_source_after_frame_drain(&mut state);
 
         assert_eq!(state.rx_irq_preserve_count, 2);
-        assert_eq!(state.rx_irq_source_asserted_empty_streak, 0);
+        assert_eq!(state.rx_irq_source_asserted_empty_preserves, 2);
         assert_eq!(
             read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET),
             I_HMB_FRAME_IND | I_CHIPACTIVE

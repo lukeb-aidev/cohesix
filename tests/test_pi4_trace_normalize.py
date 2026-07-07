@@ -12074,33 +12074,34 @@ def test_gate_summary_reports_rx_admission_blocked_after_secure_release() -> Non
     assert record["WIFI_SUBGATE_NAME"] == "secure-release"
 
 
-def test_gate_summary_treats_repair_pending_rx_admission_as_non_blocking() -> None:
-    events = normalizer.parse_events(
-        [
-            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
-            "status=secure reason=none polls=8194 associated=yes link_up=yes "
-            "event_rx=1 eapol_rx=4 data_rx=4 next_action=release-dhcp-data",
-            "CYW43_DRIVER_TASK_HOST_EAPOL_RX_ADMISSION contract=cyw43455 "
-            "action=restore-after-secure status=repair-pending allmulti=1 promisc=1 "
-            "data=allowed-after-keys",
-            "[INFO root_task::net::stack] [dhcp] start ready "
-            "interface=wifi now_ms=45335",
-            "[INFO root_task::net::stack] [dhcp] lease bound "
-            "ip=192.168.86.154/24 gateway=192.168.86.1 "
-            "server=192.168.86.1 lease_s=86400",
-            "[net-console] root console wait complete reason=net-ready "
-            "action=start-serial-root-console elapsed_ms=46725 polls=4",
-        ]
-    )
+def test_gate_summary_treats_repair_rx_admission_as_non_blocking() -> None:
+    for restore_status in ("repair-pending", "repair-deferred"):
+        events = normalizer.parse_events(
+            [
+                "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+                "status=secure reason=none polls=8194 associated=yes link_up=yes "
+                "event_rx=1 eapol_rx=4 data_rx=4 next_action=release-dhcp-data",
+                "CYW43_DRIVER_TASK_HOST_EAPOL_RX_ADMISSION contract=cyw43455 "
+                f"action=restore-after-secure status={restore_status} "
+                "allmulti=1 promisc=1 data=allowed-after-keys",
+                "[INFO root_task::net::stack] [dhcp] start ready "
+                "interface=wifi now_ms=45335",
+                "[INFO root_task::net::stack] [dhcp] lease bound "
+                "ip=192.168.86.154/24 gateway=192.168.86.1 "
+                "server=192.168.86.1 lease_s=86400",
+                "[net-console] root console wait complete reason=net-ready "
+                "action=start-serial-root-console elapsed_ms=46725 polls=4",
+            ]
+        )
 
-    record = normalizer.summarize_gates(events).to_record()
+        record = normalizer.summarize_gates(events).to_record()
 
-    assert record["WIFI_GATE"] == 9
-    assert record["WIFI_BLOCKER"] == "tcp-proof-missing"
-    assert record["WIFI_EXACT"] == "none"
-    assert record["NET_ACTIVE"] == "wifi"
-    assert record["NET_ADDR_SRC"] == "dhcp-lease"
-    assert record["NET_DHCP"] == "bound"
+        assert record["WIFI_GATE"] == 9
+        assert record["WIFI_BLOCKER"] == "tcp-proof-missing"
+        assert record["WIFI_EXACT"] == "none"
+        assert record["NET_ACTIVE"] == "wifi"
+        assert record["NET_ADDR_SRC"] == "dhcp-lease"
+        assert record["NET_DHCP"] == "bound"
 
 
 def test_gate_summary_reports_cyw43_data_path_status_blockers() -> None:
