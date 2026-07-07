@@ -327,6 +327,11 @@ const CYW43_BRCMF_EVENT_ADDR_OFFSET: usize = 48;
 const SDIO_CMD53_BYTE_MODE_MAX: u16 = 512;
 const CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT: usize = SDIO_CMD53_BYTE_MODE_MAX as usize;
 const CYW43_RUNTIME_FIRMWARE_TAIL_PAD_MAX_BYTES: usize = 4096;
+const SDHCI_HOST_CONTROL_4BIT: u8 = 0x02;
+const SDHCI_HOST_CONTROL_HIGH_SPEED: u8 = 0x04;
+const SDHCI_CLOCK_INT_EN: u16 = 1 << 0;
+const SDHCI_CLOCK_INT_STABLE: u16 = 1 << 1;
+const SDHCI_CLOCK_CARD_EN: u16 = 1 << 2;
 const SDHCI_INT_ERROR: u32 = 1 << 15;
 const SDHCI_INT_TIMEOUT: u32 = 1 << 16;
 const SDHCI_INT_CRC: u32 = 1 << 17;
@@ -585,10 +590,15 @@ pub(crate) struct Cyw43SdioOwnerFaultStatus {
     pub len: u16,
     pub block_size: u16,
     pub block_count: u16,
+    pub cmd53_count: u16,
+    pub desc_block_count: u16,
+    pub host_block_count: u16,
     pub transfer_mode: u16,
     pub host_control: u8,
+    pub host_mode: &'static str,
     pub power_control: u8,
     pub clock_control: u16,
+    pub clock_state: &'static str,
     pub present_state: u32,
     pub int_status: u32,
     pub response0: u32,
@@ -10546,8 +10556,6 @@ where
         &[],
     )
     .map_err(Cyw43FirmwareInitError::Command)?;
-    recover_sdio_host_config_for_cyw43_tx_retry("cyw43-post-release-sdio-reprime")
-        .map_err(Cyw43FirmwareInitError::Runtime)?;
     Ok(())
 }
 
@@ -12059,6 +12067,26 @@ impl SdioFaultTelemetry {
     const fn cmd53_addr(self) -> u32 {
         (self.arg >> 9) & 0x1ffff
     }
+
+    const fn cmd53_count(self) -> u16 {
+        if self.cmd != 53 {
+            return 0;
+        }
+        let count = (self.arg & 0x1ff) as u16;
+        if count == 0 {
+            SDIO_CMD53_BYTE_MODE_MAX
+        } else {
+            count
+        }
+    }
+
+    const fn cmd53_descriptor_block_count(self) -> u16 {
+        if self.cmd == 53 && self.cmd53_block_mode() {
+            self.cmd53_count()
+        } else {
+            0
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -12111,10 +12139,15 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         len: snapshot.len,
         block_size: snapshot.block_size,
         block_count: snapshot.block_count,
+        cmd53_count: snapshot.cmd53_count(),
+        desc_block_count: snapshot.cmd53_descriptor_block_count(),
+        host_block_count: snapshot.block_count,
         transfer_mode: snapshot.transfer_mode,
         host_control: snapshot.host_control,
+        host_mode: sdio_host_control_mode_label(snapshot.host_control),
         power_control: snapshot.power_control,
         clock_control: snapshot.clock_control,
+        clock_state: sdio_clock_control_state_label(snapshot.clock_control),
         present_state: snapshot.present_state,
         int_status: snapshot.int_status,
         response0: snapshot.response0,
@@ -12132,10 +12165,10 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         payload_xor: snapshot.payload_xor,
         payload_sum: snapshot.payload_sum,
     });
-    let mut line = heapless::String::<896>::new();
+    let mut line = heapless::String::<1024>::new();
     let _ = write!(
         line,
-        "CYW43_SDIO_OWNER_FAULT contract={} stage={} op={} cmd={} arg=0x{:08x} fn={} win=0x{:05x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} inc={} write={} mode={} len={} blksz={} blkcnt={} tm=0x{:04x} host=0x{:02x} power=0x{:02x} clock=0x{:04x} present=0x{:08x} int=0x{:08x} resp0=0x{:08x} blkreg=0x{:08x} detail=0x{:04x} reason={} xfer_stage={} xfer_status=0x{:06x} xfer_reason={} r5=0x{:04x} owner_window={} retry={}",
+        "CYW43_SDIO_OWNER_FAULT contract={} stage={} op={} cmd={} arg=0x{:08x} fn={} win=0x{:05x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} inc={} write={} mode={} len={} blksz={} blkcnt={} cmd53_count={} desc_blkcnt={} host_blkcnt={} tm=0x{:04x} host=0x{:02x} host_mode={} power=0x{:02x} clock=0x{:04x} clock_state={} present=0x{:08x} int=0x{:08x} resp0=0x{:08x} blkreg=0x{:08x} detail=0x{:04x} reason={} xfer_stage={} xfer_status=0x{:06x} xfer_reason={} r5=0x{:04x} owner_window={} retry={}",
         contract.name,
         stage,
         descriptor.op,
@@ -12153,10 +12186,15 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         snapshot.len,
         snapshot.block_size,
         snapshot.block_count,
+        snapshot.cmd53_count(),
+        snapshot.cmd53_descriptor_block_count(),
+        snapshot.block_count,
         snapshot.transfer_mode,
         snapshot.host_control,
+        sdio_host_control_mode_label(snapshot.host_control),
         snapshot.power_control,
         snapshot.clock_control,
+        sdio_clock_control_state_label(snapshot.clock_control),
         snapshot.present_state,
         snapshot.int_status,
         snapshot.response0,
@@ -12286,6 +12324,41 @@ const fn sdio_fault_transfer_mode_label(snapshot: SdioFaultTelemetry) -> &'stati
         "byte512"
     } else {
         "byte"
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn sdio_host_control_mode_label(host_control: u8) -> &'static str {
+    let wide = host_control & SDHCI_HOST_CONTROL_4BIT != 0;
+    let high_speed = host_control & SDHCI_HOST_CONTROL_HIGH_SPEED != 0;
+    if wide && high_speed {
+        "4bit+high-speed"
+    } else if wide {
+        "4bit"
+    } else if high_speed {
+        "1bit+high-speed"
+    } else {
+        "1bit"
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn sdio_clock_control_state_label(clock_control: u16) -> &'static str {
+    let internal = clock_control & SDHCI_CLOCK_INT_EN != 0;
+    let stable = clock_control & SDHCI_CLOCK_INT_STABLE != 0;
+    let card = clock_control & SDHCI_CLOCK_CARD_EN != 0;
+    if internal && stable && card {
+        "internal+stable+card"
+    } else if internal && stable {
+        "internal+stable"
+    } else if internal && card {
+        "internal+unstable+card"
+    } else if internal {
+        "internal"
+    } else if card {
+        "card-no-internal"
+    } else {
+        "off"
     }
 }
 
@@ -20910,6 +20983,64 @@ mod tests {
             sdio_transfer_failure_reason_label(result),
             "sdhci-transfer-finish-data-crc"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_owner_fault_decodes_function2_byte_count_separately_from_host_block_count() {
+        let txglomalign = SdioFaultTelemetry {
+            arg: 0xa100_0030,
+            cmd: 53,
+            flags: 0,
+            len: 48,
+            block_size: 48,
+            block_count: 1,
+            transfer_mode: 0x0002,
+            present_state: 0,
+            int_status: 0,
+            response0: 0,
+            host_control: 0x06,
+            power_control: 0x0f,
+            clock_control: 0x0307,
+            failure_result: 0x0420_8000,
+            block_size_count_reg: 0x0001_0030,
+            payload_first: 0,
+            payload_last: 0,
+            payload_xor: 0,
+            payload_sum: 0,
+        };
+
+        assert_eq!(txglomalign.cmd53_function(), 2);
+        assert_eq!(txglomalign.cmd53_addr(), CYW43_BACKPLANE_32BIT_FLAG);
+        assert!(txglomalign.cmd53_write());
+        assert!(!txglomalign.cmd53_increment());
+        assert!(!txglomalign.cmd53_block_mode());
+        assert_eq!(txglomalign.cmd53_count(), 48);
+        assert_eq!(txglomalign.cmd53_descriptor_block_count(), 0);
+        assert_eq!(txglomalign.block_count, 1);
+        assert_eq!(sdio_fault_transfer_mode_label(txglomalign), "byte");
+        assert_eq!(
+            sdio_host_control_mode_label(txglomalign.host_control),
+            "4bit+high-speed"
+        );
+        assert_eq!(
+            sdio_clock_control_state_label(txglomalign.clock_control),
+            "internal+stable+card"
+        );
+
+        let block_mode = SdioFaultTelemetry {
+            arg: (1 << 31) | (2 << 28) | (1 << 27) | (CYW43_BACKPLANE_32BIT_FLAG << 9) | 3,
+            len: 1536,
+            block_size: 512,
+            block_count: 3,
+            block_size_count_reg: 0x0003_0200,
+            ..txglomalign
+        };
+        assert!(block_mode.cmd53_block_mode());
+        assert_eq!(block_mode.cmd53_count(), 3);
+        assert_eq!(block_mode.cmd53_descriptor_block_count(), 3);
+        assert_eq!(block_mode.block_count, 3);
+        assert_eq!(sdio_fault_transfer_mode_label(block_mode), "block");
     }
 
     #[cfg(feature = "kernel")]

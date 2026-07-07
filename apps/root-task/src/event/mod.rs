@@ -10464,7 +10464,7 @@ where
             }
             if let Some(owner_fault) = owner_fault {
                 let cmd53 = format_message(format_args!(
-                    "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} len={} increment={} block_mode={} mode={} op={} source=owner-terminal",
+                    "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} len={} cmd53_count={} desc_blkcnt={} host_blkcnt={} increment={} block_mode={} mode={} op={} source=owner-terminal",
                     owner_fault.function,
                     owner_fault.addr,
                     owner_fault.target_addr,
@@ -10472,6 +10472,9 @@ where
                     owner_fault.chunk_offset,
                     owner_fault.payload_offset,
                     owner_fault.len,
+                    owner_fault.cmd53_count,
+                    owner_fault.desc_block_count,
+                    owner_fault.host_block_count,
                     Self::yes_no(owner_fault.increment),
                     Self::yes_no(owner_fault.block_mode),
                     Self::wifi_sdio_owner_mode_label(owner_fault),
@@ -10479,7 +10482,7 @@ where
                 ));
                 self.emit_console_line(cmd53.as_str());
                 let status = format_message(format_args!(
-                    "wifi: evidence sdio_status descriptor_status={} transfer_stage={} transfer_status=0x{:06x} transfer_reason={} r5=0x{:04x} retry={} host=0x{:02x} clock=0x{:04x}",
+                    "wifi: evidence sdio_status descriptor_status={} transfer_stage={} transfer_status=0x{:06x} transfer_reason={} r5=0x{:04x} retry={} host=0x{:02x} host_mode={} clock=0x{:04x} clock_state={}",
                     owner_fault.reason,
                     owner_fault.transfer_stage,
                     owner_fault.transfer_status,
@@ -10487,7 +10490,9 @@ where
                     owner_fault.r5,
                     owner_fault.retry,
                     owner_fault.host_control,
+                    owner_fault.host_mode,
                     owner_fault.clock_control,
+                    owner_fault.clock_state,
                 ));
                 self.emit_console_line(status.as_str());
                 let payload = format_message(format_args!(

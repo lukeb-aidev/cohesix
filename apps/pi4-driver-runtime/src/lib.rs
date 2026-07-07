@@ -28815,6 +28815,20 @@ mod tests {
         let unpadded_len = CYW43_SDPCM_HEADER_BYTES + payload.len();
         assert_eq!(unpadded_len, 48);
         assert_eq!(cyw43_control_tx_request_len(unpadded_len), unpadded_len);
+        let txglomalign_arg =
+            sdio_cmd53_arg(true, 2, BACKPLANE_32BIT_FLAG, false, 0, unpadded_len as u16);
+        assert_eq!(txglomalign_arg, 0xa100_0030);
+        assert_eq!(txglomalign_arg & (1 << 27), 0);
+        assert_eq!(txglomalign_arg & 0x1ff, unpadded_len as u32);
+        assert_eq!(
+            sdio_descriptor_host_block_count(
+                0,
+                DRIVER_RUNTIME_SDIO_FLAG_DATA
+                    | DRIVER_RUNTIME_SDIO_FLAG_WRITE
+                    | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+            ),
+            1
+        );
         test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
         assert_eq!(
             cyw43_submit_sdpcm_frame(&mut state, frame, false, false),
