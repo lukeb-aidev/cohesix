@@ -126,6 +126,8 @@ const CYW43_RUNTIME_FIRMWARE_RELEASE_NO_REPLY_RESUMES: usize =
 const CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_DATA_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_DATA_TX_NO_REPLY_RESUMES: usize = 63;
+const CYW43_TXGLOMALIGN_RUNTIME_EXCHANGE: bool = true;
+const CYW43_TXGLOMALIGN_PRE_TX_DRAIN: bool = true;
 const CYW43_DESCRIPTOR_UNAVAILABLE_DETAIL: u16 = 0x5309;
 const CYW43_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL: u16 = 0x5103;
 const CYW43_CONTROL_FRAME_DETAIL: u16 = 0x5306;
@@ -4142,7 +4144,7 @@ fn cyw43_prepare_runtime_control_plane(
         8,
         "cyw43-control-txglomalign",
         Cyw43ControlHeaderMode::Plain,
-        false,
+        CYW43_TXGLOMALIGN_PRE_TX_DRAIN,
     )?;
     cyw43_get_bcdc_iovar_optional_unsupported_with_header_mode(
         contract,
@@ -9237,8 +9239,9 @@ fn cyw43_submit_runtime_control_exchange(
 
 #[cfg(feature = "kernel")]
 fn cyw43_control_uses_runtime_exchange(stage: &'static str, control_iovar: &str) -> bool {
-    let _ = (stage, control_iovar);
-    false
+    CYW43_TXGLOMALIGN_RUNTIME_EXCHANGE
+        && stage == "cyw43-control-txglomalign"
+        && control_iovar == "bus:txglomalign"
 }
 
 #[cfg(feature = "kernel")]
@@ -9292,6 +9295,21 @@ fn cyw43_control_reply_is_host_eapol_wsec_key_commandless_reject(
                 stage,
                 control_iovar,
             ))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_reply_is_startup_commandless_reject(
+    stage: &'static str,
+    control_iovar: &str,
+    reply: Cyw43ControlReply,
+) -> bool {
+    cyw43_control_reply_is_commandless_reject(reply)
+        && matches!(
+            (stage, control_iovar),
+            ("cyw43-control-txglomalign", "bus:txglomalign")
+                | ("cyw43-control-ulp-sdioctrl", "ulp_sdioctrl")
+                | ("cyw43-control-rxglom", "bus:rxglom")
+        )
 }
 
 #[cfg(feature = "kernel")]
@@ -9647,6 +9665,29 @@ fn cyw43_poll_control_exchange_reply(
                     contract,
                     stage,
                     "wsec-key-commandless-reject",
+                    poll,
+                    flags,
+                    fault,
+                    cmd,
+                    id,
+                    header_mode,
+                    expected_response_len,
+                    control_iovar,
+                    nonmatching_frames,
+                    malformed_frames,
+                );
+                return Err(Cyw43CommandSubmitError::Completion(fault));
+            }
+            if cyw43_control_reply_is_startup_commandless_reject(stage, control_iovar, reply) {
+                let fault = cyw43_control_fault_completion(
+                    completion.sequence,
+                    CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
+                    reply.status,
+                );
+                emit_cyw43_control_split_completion(
+                    contract,
+                    stage,
+                    "startup-commandless-reject",
                     poll,
                     flags,
                     fault,
@@ -16279,23 +16320,41 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_glom_control_uses_split_frame_without_rx_pre_drain() {
-        let txglom_descriptor =
-            cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
+    fn cyw43_txglomalign_uses_runtime_exchange_with_pre_tx_drain() {
+        let txglom_descriptor = cyw43_control_exchange_descriptor(
+            36,
+            CYW43_WLC_SET_VAR,
+            1,
+            Cyw43ControlHeaderMode::Plain,
+            CYW43_TXGLOMALIGN_PRE_TX_DRAIN,
+        );
 
-        assert_eq!(txglom_descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
-        assert_eq!(txglom_descriptor.flags, 0);
+        assert_eq!(
+            txglom_descriptor.op,
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+        );
+        assert_eq!(
+            txglom_descriptor.flags,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+        );
         assert_eq!(txglom_descriptor.payload_len, 36);
         assert_eq!(txglom_descriptor.total_len, 36);
+        assert_eq!(txglom_descriptor.arg0, CYW43_WLC_SET_VAR);
+        assert_eq!(txglom_descriptor.arg1, 1);
         assert_eq!(
-            cyw43_control_runtime_flags(Cyw43ControlHeaderMode::Plain, false),
+            cyw43_control_runtime_flags(
+                Cyw43ControlHeaderMode::Plain,
+                CYW43_TXGLOMALIGN_PRE_TX_DRAIN
+            ),
             txglom_descriptor.flags
         );
+        assert!(CYW43_TXGLOMALIGN_RUNTIME_EXCHANGE);
+        assert!(CYW43_TXGLOMALIGN_PRE_TX_DRAIN);
         let rxglom_descriptor =
             cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
         assert_eq!(rxglom_descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(rxglom_descriptor.flags, 0);
-        assert!(!cyw43_control_uses_runtime_exchange(
+        assert!(cyw43_control_uses_runtime_exchange(
             "cyw43-control-txglomalign",
             "bus:txglomalign"
         ));
@@ -16306,6 +16365,48 @@ mod tests {
         assert!(!cyw43_control_uses_runtime_exchange(
             "cyw43-control-ulp-sdioctrl",
             "ulp_sdioctrl"
+        ));
+    }
+
+    #[test]
+    fn startup_control_commandless_rejects_are_terminal() {
+        let badarg = Cyw43ControlReply {
+            cmd: 0,
+            id: 0,
+            status: CYW43_BCME_BADARG_STATUS,
+            response_len: 0,
+            payload_available: 0,
+        };
+        let matched_badarg = Cyw43ControlReply {
+            cmd: CYW43_WLC_SET_VAR,
+            id: 1,
+            ..badarg
+        };
+
+        assert!(cyw43_control_reply_is_startup_commandless_reject(
+            "cyw43-control-txglomalign",
+            "bus:txglomalign",
+            badarg
+        ));
+        assert!(cyw43_control_reply_is_startup_commandless_reject(
+            "cyw43-control-ulp-sdioctrl",
+            "ulp_sdioctrl",
+            badarg
+        ));
+        assert!(cyw43_control_reply_is_startup_commandless_reject(
+            "cyw43-control-rxglom",
+            "bus:rxglom",
+            badarg
+        ));
+        assert!(!cyw43_control_reply_is_startup_commandless_reject(
+            "cyw43-control-txglomalign",
+            "bus:txglomalign",
+            matched_badarg
+        ));
+        assert!(!cyw43_control_reply_is_startup_commandless_reject(
+            "cyw43-control-firmware-version",
+            "ver",
+            badarg
         ));
     }
 

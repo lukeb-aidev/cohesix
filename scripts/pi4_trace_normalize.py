@@ -2142,6 +2142,7 @@ def driver_task_service_budget_overrun(fields: Mapping[str, str]) -> bool:
 
 CYW43_CONTROL_EXCHANGE_FAULT_DETAIL = 0x530B
 CYW43_CONTROL_EXCHANGE_OP = 11
+CYW43_CONTROL_EXCHANGE_BCME_UNSUPPORTED = 0xFFFF_FFE9
 CYW43_CONTROL_EXCHANGE_BCME_BADARG = 0xFFFF_FFFE
 CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC = 0x4300_0000
 CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MASK = 0xFF00_0000
@@ -2906,6 +2907,28 @@ def cyw43_control_exchange_timeout_event_exact(event: TraceEvent) -> str | None:
     ):
         return None
     return cyw43_control_exchange_timeout_exact(parse_hex_int(fields.get("result")))
+
+
+def cyw43_control_exchange_status_event_exact(event: TraceEvent) -> str | None:
+    """Return exact firmware status rejections from linked-runtime control exchange."""
+
+    fields = event.fields
+    if "cyw43_driver_task_command_fault" not in event.raw.lower():
+        return None
+    if fields.get("contract", "").lower() != "cyw43455":
+        return None
+    if parse_hex_int(fields.get("op")) != CYW43_CONTROL_EXCHANGE_OP:
+        return None
+    if parse_hex_int(fields.get("detail")) != CYW43_CONTROL_EXCHANGE_FAULT_DETAIL:
+        return None
+    stage = fields.get("stage", "").lower()
+    result = parse_hex_int(fields.get("result"))
+    if stage == "cyw43-control-txglomalign":
+        if result == CYW43_CONTROL_EXCHANGE_BCME_BADARG:
+            return "cyw43-control-txglomalign-badarg"
+        if result == CYW43_CONTROL_EXCHANGE_BCME_UNSUPPORTED:
+            return "cyw43-control-txglomalign-unsupported"
+    return None
 
 
 def cyw43_control_split_event_exact(event: TraceEvent) -> str | None:
@@ -3912,6 +3935,8 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-rx-request-too-large",
         "cyw43-control-rx-sdpcm-decode-miss",
         "cyw43-control-split-timeout",
+        "cyw43-control-txglomalign-badarg",
+        "cyw43-control-txglomalign-unsupported",
         "cyw43-control-tx-no-reply",
         "cyw43-control-tx-retry-no-reply",
         "cyw43-control-tx-not-submitted",
@@ -6691,6 +6716,10 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
         and event.fields.get("event", "").lower() == "poll-complete"
     ):
         return "none", event.fields.get("stage") or event.stage or "cyw43-control-split"
+    control_status_exact = cyw43_control_exchange_status_event_exact(event)
+    if control_status_exact is not None:
+        phase = event.fields.get("stage") or event.stage or "cyw43-control-exchange"
+        return control_status_exact, phase
     control_timeout_exact = cyw43_control_exchange_timeout_event_exact(event)
     if control_timeout_exact is not None:
         phase = event.fields.get("stage") or event.stage or "cyw43-control-exchange"
@@ -6977,6 +7006,23 @@ def summarize_cyw43_control_revinfo_badarg(
             event.line,
         )
     return None
+
+
+def summarize_cyw43_control_txglomalign_reject(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, int] | None:
+    """Return exact proof when firmware rejects the first txglomalign exchange."""
+
+    latest: tuple[str, str, int] | None = None
+    for event in events:
+        exact = cyw43_control_exchange_status_event_exact(event)
+        if exact not in {
+            "cyw43-control-txglomalign-badarg",
+            "cyw43-control-txglomalign-unsupported",
+        }:
+            continue
+        latest = (exact, "cyw43-control-txglomalign", event.line)
+    return latest
 
 
 def summarize_cyw43_split_descriptor_fault(
@@ -11196,6 +11242,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_gate = max(wifi_gate, 7)
         wifi_blocker = "control-plane-revinfo-badarg"
         wifi_exact, wifi_phase, wifi_blocker_line = revinfo_badarg
+    txglomalign_reject = summarize_cyw43_control_txglomalign_reject(event_list)
+    if txglomalign_reject is not None and wifi_gate <= 9:
+        wifi_gate = 7
+        wifi_exact, wifi_phase, wifi_blocker_line = txglomalign_reject
+        wifi_blocker = wifi_exact
     bssid_tx_submit_fail = summarize_host_eapol_bssid_tx_submit_fail(event_list)
     host_eapol_firstread = summarize_host_eapol_firstread_status(event_list)
     if host_eapol_firstread is not None and (

@@ -1168,6 +1168,8 @@ const CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES: usize =
     CYW43_SDPCM_DATA_TX_BDC_OFFSET + CYW43_BDC_HEADER_BYTES;
 const CYW43_CDC_HEADER_BYTES: usize = 16;
 const CYW43_CDC_STATUS_SUCCESS: u32 = 0;
+#[cfg(test)]
+const CYW43_BCME_BADARG_STATUS: u32 = 0xffff_fffe;
 const CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS: usize = 8_000;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_MS: u64 = 1_000;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC: u32 = 0x4300_0000;
@@ -11094,6 +11096,10 @@ struct Cyw43ControlReply {
     payload_available: usize,
 }
 
+const fn cyw43_control_reply_is_commandless_reject(reply: Cyw43ControlReply) -> bool {
+    reply.cmd == 0 && reply.id == 0 && reply.status != CYW43_CDC_STATUS_SUCCESS
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43RxPollResult {
     Frame(DriverFrameDescriptor),
@@ -11571,6 +11577,10 @@ fn cyw43_control_exchange(
             runtime_poll_pause();
             continue;
         };
+        if cyw43_control_reply_is_commandless_reject(reply) {
+            cyw43_record_last_fault_with_result(FAULT_CYW43_CONTROL_EXCHANGE, reply.status);
+            return None;
+        }
         if reply.cmd != expected_cmd || reply.id != expected_id {
             nonmatching_frames = nonmatching_frames.saturating_add(1);
             attempt = attempt.saturating_add(1);
@@ -29156,6 +29166,44 @@ mod tests {
                 79,
                 FAULT_CYW43_CONTROL_EXCHANGE,
                 0xffff_fffe
+            )
+        );
+    }
+
+    #[test]
+    fn cyw43_control_exchange_faults_commandless_nonzero_cdc_status() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        let cmd = 0x107u32;
+        let id = 1u16;
+        let request = [0u8; CYW43_CDC_HEADER_BYTES];
+        stage_bytes(usize::from(payload_offset), &request);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(1);
+            state.control_startup_status_drained = true;
+            queue_cyw43_control_reply(state, 0, 0, CYW43_BCME_BADARG_STATUS, &[]);
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset,
+            payload_len: request.len() as u16,
+            total_len: request.len() as u32,
+            arg0: cmd,
+            arg1: u32::from(id),
+            reserved: 0,
+        });
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(84)),
+            DriverTaskCompletionRecord::fault_with_result(
+                84,
+                FAULT_CYW43_CONTROL_EXCHANGE,
+                CYW43_BCME_BADARG_STATUS
             )
         );
     }

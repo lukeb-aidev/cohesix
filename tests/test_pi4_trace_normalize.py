@@ -10809,6 +10809,33 @@ def test_gate_summary_refines_cyw43_revinfo_badarg_status() -> None:
     assert gates.wifi_phase == "cyw43-control-revinfo"
 
 
+def test_gate_summary_refines_cyw43_txglomalign_commandless_badarg() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=begin acceptance=no",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign op=11 flags=0x0008 "
+            "target=0x00000000 payload_off=284 payload_len=36 total_len=36 "
+            "detail=21259 reason=cyw43-control-exchange result=0xfffffffe",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=fail acceptance=no "
+            "code=5 detail=21259 result=0xfffffffe frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-plane status=failed acceptance=no",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-control-txglomalign-badarg"
+    assert gates.wifi_exact == "cyw43-control-txglomalign-badarg"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
 def test_gate_summary_tracks_hintless_firstread_no_irq_terminal() -> None:
     events = normalizer.parse_events(
         [

@@ -111,6 +111,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
 | [27b](#27b) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
 | [27c](#27c) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Pending |
+| [27d](#27d) | Operator-Lane Scheduler + Multi-Surface Responsiveness | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
 | [28b1](#28b1) | Provider Action Registry + Ecosystem Coexistence Conformance | Pending |
@@ -7825,6 +7826,7 @@ Cadence by milestone family:
 - **27 persistence:** targeted spool/settings pressure plus a small REST/status sanity benchmark only for profiles with persistence enabled.
 - **27b verification:** no runtime benchmark; track verification-gate runtime and proof reproducibility only.
 - **27c core-local scheduling:** full same-harness QEMU/Pi benchmark gate with service-bucket counters and fresh target evidence.
+- **27d operator lanes:** full latency/fairness gate under mixed serial, USB local-seat, TCP console, HDMI, diagnostics, network, telemetry, and persistence pressure; throughput claims remain tied to 26d/27c baselines and must not collapse separated proof lanes.
 - **28 read-only utilities:** no full benchmark; require bounded command latency for inspect/diff/attest over representative evidence packs.
 - **28b/28d gateway authority/protocol work:** gateway-focused latency/backpressure benchmarks for REST delegated writes, MCP resources/tools, and A2A task flows; full Pi hardware benchmark only if gateway results expose runtime-path regression.
 - **28b1/28c/28e:** targeted provider/exporter, AI-run-cost, or fault-recovery timing where the milestone changes those paths; no full Pi/QEMU throughput gate by default.
@@ -8449,11 +8451,236 @@ Deliverables: Repeatable validation and benchmark lanes for core-local SMP optim
 ```
 
 
+## Milestone 27d — Operator-Lane Scheduler + Multi-Surface Responsiveness <a id="27d"></a>
+[Milestones](#Milestones)
+
+**Why now (operator concurrency without a larger TCB):** Milestone 27c turns
+manifest affinity into generated service buckets. That is necessary but not
+sufficient for field responsiveness: serial, USB local-seat, authenticated TCP
+console, HDMI feedback, diagnostics, network progress, telemetry drains, and
+persistence work still need an explicit operator-facing fairness contract. 27d
+adds that contract as generated lane policy over the 27c service buckets before
+Milestone 28 host tools begin presenting pressure and state to operators.
+
+**As-built alignment note:** Cohesix already has a cooperative event pump,
+serial/TCP/local-seat console paths, isolated driver runtimes, bounded
+service-turn language, `smp activity`, and pressure counters. It does **not**
+yet have compiler-owned operator lanes, lane starvation deadlines, lane-aware
+large-output resumability, or target-qualified proof that serial, USB keyboard,
+TCP responses, HDMI redraws, diagnostics, network control/data, telemetry, and
+persistent-spool drains remain responsive under mixed load. Older prose must not
+claim Linux-like parallel activity handling until this milestone has evidence.
+
+**Non-negotiable constraints**
+- No POSIX threads, in-VM async executor, shared work-stealing queue, or bulky
+  runtime library.
+- No new in-VM protocol, unaudited RPC path, console grammar drift, Secure9P
+  verb change, namespace authority change, or unbounded queue.
+- Authoritative command execution remains serialized through the existing
+  authority path; 27d improves concurrent I/O progress, buffering, response
+  flush, and resumable work around that serialized command boundary.
+- Physical hardware service remains restricted to manifest-declared isolated
+  driver runtimes. Root-task may schedule bounded service turns and observe
+  evidence; it must not regain steady-state device ownership.
+- Under load, physical operator input and emergency/fatal status must not be
+  hidden behind HDMI redraws, verbose diagnostics, large tails, telemetry spam,
+  storage drains, or network proof traffic.
+- A "100x better" claim must be grounded in accepted 26d/27c baseline evidence:
+  either worst-observed operator input stall improves by two orders of magnitude
+  under the same pressure harness, or the milestone records a manifest-declared
+  hard latency bound with hardware reasons why a ratio claim is invalid.
+
+### Prerequisite
+- Milestone **27c** completed for the selected profile so generated service
+  buckets, core assignment, and service-turn counters exist.
+- Milestones **26c/26d**, **27**, and **27b** completed or explicitly scoped
+  where their artifacts define the selected profile, persistence drains,
+  formal witnesses, and rolling performance baseline.
+
+### Goal
+Convert the 27c service-bucket substrate into an **operator-lane scheduler**
+that preserves Cohesix's single-authority command model while making serial,
+USB local-seat, authenticated TCP, HDMI, diagnostics, network, telemetry, and
+persistence work progress fairly and observably under mixed load.
+
+### Deliverables
+
+#### A) Compiler-owned operator lane IR
+- Extend `coh-rtc` with generated lane records for:
+  - `serial-input`
+  - `usb-local-seat`
+  - `tcp-console-rx`
+  - `tcp-console-tx`
+  - `network-control`
+  - `network-data`
+  - `hdmi-display`
+  - `diagnostics`
+  - `telemetry-spool`
+- Each lane declares priority class, starvation deadline, max work per turn,
+  max bytes per turn, bounded queue depth, backpressure policy, and degradation
+  policy.
+- Validation rejects unbounded lanes, authority overlap, physical-driver lane
+  ownership drift, and any lane that can bypass generated service-bucket or HAL
+  resource limits.
+
+#### B) Deterministic lane scheduler
+- Root-task drains generated lanes using bounded deterministic policy over the
+  27c service buckets.
+- Physical input lanes stay above routine network data, HDMI redraw, verbose
+  diagnostics, telemetry, and storage drains.
+- Authenticated TCP response flush receives bounded priority for `ACK`/`ERR` /
+  `END` liveness, but cannot starve serial/local-seat input, emergency
+  diagnostics, or fatal status.
+- Saturated lanes return explicit busy/yield/drop evidence rather than growing
+  queues.
+
+#### C) Serialized authority with parallel I/O progress
+- The console command parser and authority decisions remain single-writer and
+  deterministic.
+- Serial, local-seat, and TCP input arbitration records which surface supplied
+  each command and how conflicting partial lines were handled.
+- Long commands, diagnostics, transcript flushes, large `tail` output, and HDMI
+  redraws become resumable bounded work items so input polling and response
+  flushing can interleave.
+
+#### D) Backpressure and degradation policy
+- HDMI redraws coalesce or drop superseded frames before physical input or TCP
+  `ACK`/`END` liveness is affected.
+- Verbose telemetry, routine progress breadcrumbs, network mirroring, and large
+  tails degrade before command liveness.
+- Storage/spool drains inherit Milestone 27 persistence semantics and must not
+  preempt USB local-seat or serial input.
+- Network proof traffic remains classified separately from production TCP or
+  REST throughput; proof-mode overrides must be explicit and lane-visible.
+
+#### E) Observability and evidence
+- `smp activity` adds operator-lane rows: per-lane turns, ready/backlog state,
+  max observed latency, starvation yields, busy returns, drops, coalesces, and
+  suppression counts.
+- `/proc/pressure/*` exposes the same bounded read-only lane-pressure summary.
+- Evidence packs include lane snapshots so Milestone 28 tools can explain
+  pressure without reconstructing scheduler internals.
+- `scripts/pi4_trace_normalize.py` treats lane proof as responsiveness evidence
+  only; it must not convert lane counters into USB, Wi-Fi, HDMI, TCP, or flash
+  acceptance by itself.
+
+#### F) Target-qualified pressure proof
+- Host-safe tests simulate mixed serial, USB, TCP, HDMI, diagnostics, network,
+  telemetry, and persistence pressure without making Pi throughput claims.
+- QEMU proves transcript stability, bounded lane latency, and no ACK/ERR/END
+  drift.
+- Pi 4 proof, when claimed, requires fresh logs that keep serial responsiveness,
+  USB local-seat, TCP/`cohsh`, Wi-Fi/GENET, HDMI, persistence, and flash proof
+  lanes separate.
+
+### Commands
+- `cargo test -p coh-rtc`
+- `cargo test -p root-task --tests schedule`
+- `cargo test -p root-task --test operator_lanes`
+- `cargo test -p pi4-driver-abi`
+- `cargo test -p pi4-driver-runtime`
+- `scripts/check-generated.sh`
+- `scripts/ci/verification_gate.sh`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27d-qemu-lanes`
+- `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27d-pi4-lanes`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite console-pressure --runs 5 --log-dir out/bench --log-prefix m27d-qemu-lanes`
+
+### Checks (DoD)
+- Generated manifests and docs identify every operator lane, priority, deadline,
+  max work, queue bound, and degradation policy.
+- Serial and USB local-seat input have bounded key/line-to-echo and
+  line-to-dispatch latency under mixed TCP/HDMI/network/diagnostic/storage
+  pressure.
+- Authenticated TCP console responses preserve bounded `ACK`/`ERR`/`END`
+  liveness without starving physical input or fatal/emergency status.
+- Long diagnostics, large tails, HDMI redraws, telemetry drains, and persistence
+  drains are resumable and cannot monopolize an event-pump turn.
+- Console grammar, Secure9P semantics, worker namespace paths, persistence
+  append/ack behavior, and driver-runtime authority remain byte-stable unless a
+  separately versioned breaking-change process is followed.
+- QEMU and Pi 4 target-qualified Test Plan runs pass with no undocumented output
+  drift; Pi 4 claims cite fresh target logs and separated proof lanes.
+- Any 100x responsiveness claim cites the accepted 26d/27c baseline, the exact
+  pressure harness, and the lane counters that prove the improvement.
+
+### Compiler touchpoints
+- `coh-rtc` emits operator-lane tables beside service-bucket, affinity,
+  persistence, proof-witness, and cap-bundle outputs.
+- Manifest validation fails closed when lane policy conflicts with generated
+  authority, HAL grants, driver-runtime ownership, Secure9P bounds, or
+  persistence drain semantics.
+- Generated docs snippets summarize lane policy; hand-maintained docs may
+  explain those snippets but must not become the scheduling source of truth.
+
+### Task Breakdown
+```
+Title/ID: m27d-operator-lane-ir
+Goal: Add generated operator-lane policy and validation.
+Inputs: tools/coh-rtc, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/USERLAND_AND_CLI.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — lane schema for priority, deadline, work/byte bounds, queue depth, and degradation policy.
+  - tools/coh-rtc/src/validate.rs — reject unbounded lanes, authority overlap, physical-driver ownership drift, and incompatible service-bucket references.
+  - tools/coh-rtc/src/codegen/* — emit Rust/docs/proof-witness lane tables.
+Commands: cargo test -p coh-rtc && scripts/check-generated.sh
+Checks: Lane policy is compiler-owned, generated docs match resolved manifests, and invalid topology fails closed.
+Deliverables: Generated operator-lane contract for QEMU and Pi 4 profiles.
+
+Title/ID: m27d-event-pump-qos
+Goal: Schedule serial, USB local-seat, TCP, HDMI, diagnostics, network, telemetry, and spool work through bounded lanes.
+Inputs: apps/root-task/src/event/**, apps/root-task/src/local_seat.rs, apps/root-task/src/net/**, apps/root-task/src/storage/**.
+Changes:
+  - apps/root-task/src/event/** — deterministic lane scheduler over generated service buckets.
+  - apps/root-task/src/local_seat.rs — lane-aware keyboard drain, echo, and HDMI coalescing policy.
+  - apps/root-task/src/net/** — lane-aware TCP response flush and network-control/data polling.
+  - apps/root-task/src/storage/** — persistence drain scheduling that cannot preempt physical input.
+Commands: cargo test -p root-task --tests schedule && cargo test -p root-task --test operator_lanes
+Checks: Physical input and TCP response liveness stay bounded; saturated lanes report busy/yield/drop evidence.
+Deliverables: Bounded operator-lane scheduler without a thread pool or new protocol.
+
+Title/ID: m27d-resumable-output-and-diagnostics
+Goal: Prevent diagnostics, large tails, HDMI redraws, and transcript flushes from monopolizing turns.
+Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/ninedoor.rs, docs/USERLAND_AND_CLI.md, tests/fixtures/transcripts/.
+Changes:
+  - apps/root-task/src/event/mod.rs — resumable diagnostic and output jobs with stable ACK/ERR/END behavior.
+  - apps/root-task/src/ninedoor.rs — bounded tail/log/read output chunks with lane-visible continuation.
+  - tests/fixtures/transcripts/ — pressure transcripts proving byte-stable command results.
+Commands: cargo test -p root-task --test operator_lanes && cargo test -p nine-door
+Checks: Existing command output remains byte-stable where semantics do not change; large outputs yield between bounded chunks.
+Deliverables: Long-running console-visible work that remains responsive under input pressure.
+
+Title/ID: m27d-pressure-observability
+Goal: Expose lane pressure through `smp activity`, `/proc/pressure/*`, evidence packs, and trace normalization.
+Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/ninedoor.rs, apps/coh/src/evidence.rs, scripts/pi4_trace_normalize.py.
+Changes:
+  - apps/root-task/src/event/mod.rs — operator-lane rows in `smp activity`.
+  - apps/root-task/src/ninedoor.rs — bounded read-only `/proc/pressure/*` summaries.
+  - apps/coh/src/evidence.rs — lane snapshots in evidence packs.
+  - scripts/pi4_trace_normalize.py — parse lane proof without treating it as device acceptance.
+Commands: cargo test -p root-task --tests schedule && cargo test -p coh --test evidence && pytest tests/test_pi4_trace_normalize.py
+Checks: Pressure evidence is bounded, read-only, manifest-aligned, and separated from USB/Wi-Fi/HDMI/TCP acceptance gates.
+Deliverables: Operator-visible pressure proof ready for Milestone 28 tooling.
+
+Title/ID: m27d-pressure-and-target-proof
+Goal: Add host-safe, QEMU, and Pi 4 pressure gates for multi-surface responsiveness.
+Inputs: scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, docs/TEST_PLAN.md, docs/BENCHMARKS.md.
+Changes:
+  - scripts/ci/test_plan_run.sh — m27d QEMU and Pi target stages.
+  - scripts/rest_perf_harness.py — console-pressure suite or equivalent bounded pressure harness.
+  - docs/TEST_PLAN.md + docs/BENCHMARKS.md — classify lane responsiveness, throughput, and target proof separately.
+Commands:
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27d-qemu-lanes
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27d-pi4-lanes
+  - python3 scripts/rest_perf_harness.py --mode perf --suite console-pressure --runs 5 --log-dir out/bench --log-prefix m27d-qemu-lanes
+Checks: QEMU proves semantic stability and latency bounds; Pi 4 claims require fresh target logs and separated serial, USB, TCP, Wi-Fi/GENET, HDMI, persistence, and flash proof lanes.
+Deliverables: Repeatable validation for Cohesix multi-surface responsiveness.
+```
+
+
 ## Milestone 28 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest <a id="28"></a>
 [Milestones](#Milestones)
 
 **Why now (operator & adoption):**  
-After Milestones 26b, 26c, 26d, 27, 27b, and 27c close, Cohesix should have the Pi 4 isolated runtime benchmark baseline, refreshed seL4 baseline, persistence evidence, formal-verification claim register, and core-local SMP service-bucket evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
+After Milestones 26b, 26c, 26d, 27, 27b, 27c, and 27d close, Cohesix should have the Pi 4 isolated runtime benchmark baseline, refreshed seL4 baseline, persistence evidence, formal-verification claim register, core-local SMP service-bucket evidence, and operator-lane pressure evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
 
 **As-built alignment note:** `coh evidence pack` and `coh evidence timeline` already exist and are reused here. `coh inspect`, a first-class trace diagnostics command, `coh diff`, `coh attest`, and any `coh bundle` alias are not implemented as of the 26c planning audit and must be added as thin, read-only projections over existing file-shaped state and evidence packs.
 
