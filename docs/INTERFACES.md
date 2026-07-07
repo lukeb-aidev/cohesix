@@ -758,10 +758,13 @@ pub trait RootTaskControl {
   During host-EAPOL PTK/GTK `wsec_key` installs, commandless/no-id nonzero CDC
   statuses are traced as `event=wsec-key-commandless-stale` and remain
   nonmatching evidence until the expected ioctl id replies or the bounded
-  key-install window times out. A runtime no-reply at those stages is summarized
-  as `cyw43-host-eapol-<ptk|gtk>-tx-no-reply` or the matching
-  `post-secure` variant, with `WIFI_PHASE` carrying the linked-runtime progress
-  phase such as `cyw43-sdio-owner-wait-begin`.
+  key-install window times out. A completed split TX followed by stale or
+  nonmatching reply evidence is summarized as
+  `cyw43-host-eapol-<ptk|gtk>-poll-timeout` with exact
+  `...-reply-nonmatching`; a TX-side no-reply remains
+  `cyw43-host-eapol-<ptk|gtk>-tx-no-reply` or the matching `post-secure`
+  variant, with `WIFI_PHASE` carrying the linked-runtime progress phase such as
+  `cyw43-sdio-owner-wait-begin`.
 - CYW43 card-select diagnostics stay inside the isolated runtime. During transport init the CYW43 runtime emits host-config, CMD0, CMD5 OCR, CMD5 ready, CMD3 RCA, and CMD7 select progress before submitting each pointer-free SDIO-owner command. `wifi diag` renders terminal card-select faults with the failed command label, attempt, compact card bits, stage, detail, and result; it must not replay CMD0/CMD5/CMD3/CMD7 in root to fill missing fields.
 - Current as-built runtime supports Pi 4 wired control-plane traffic through GENETv5 and Wi-Fi control-plane traffic through CYW43455. Explicit `wifi` requires bounded credentials and now accepts both `dhcp` and `static`; SSIDs must be 1-32 printable ASCII bytes, and PSKs must be empty for open networks, 8-63 printable ASCII bytes, or exactly 64 ASCII hex digits. A 64-hex PSK is decoded as the direct 32-byte PMK for host-EAPOL; passphrase PSKs use WPA2 PBKDF2. On that explicit path the driver may now return to the event pump with `address_source=wifi-associating` / boot log `pending-link ... detail=wifi-associating` while association finishes in bounded background polls. `auto` remains DHCP-only and keeps a single active interface: the physical driver-task profile selects CYW43 when credentials are present and GENET otherwise, and a selected CYW43 failure is fatal driver evidence rather than wired fallback. QEMU/host compatibility profiles may still cover the older absent-device fallback behavior.
 - Wi-Fi credential warnings are evidence-gated operator diagnostics on both the serial root console and mirrored HDMI console. The warning line is `wifi warning: code=<class> detail=<reason> action=<operator-action>` and is emitted only for invalid credential format, WPA2 MIC failure, or association evidence that can plausibly indicate an SSID, password, security-mode, range, or AP availability problem. Generic host-EAPOL pending and post-secure key-maintenance failures do not emit credential warnings, and DHCP-bound or secure-EAPOL Wi-Fi suppresses stale credential warnings.

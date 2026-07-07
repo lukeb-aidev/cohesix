@@ -1060,6 +1060,10 @@ nonzero statuses during the `wsec_key` PTK/GTK window are traced as stale
 nonmatching key-install status and root keeps polling for the matched ioctl
 reply. This preserves Linux's concurrent control/data receive tolerance without
 extending the fatal reply deadline or weakening the `wsec_key` PTK/GTK gate.
+If that stale/nonmatching evidence is the terminal proof for a host-EAPOL
+`wsec_key` install that already used the extended SDPCM header and explicit
+pre-TX drain, root may resubmit the same key body once with a fresh BCDC ioctl
+id. Matched nonzero firmware status remains fatal and is not retried as stale.
 progress. Those lines emit `CYW43_DRIVER_TASK_EVENT_RX` and remain linked
 runtime evidence; they do not release DHCP/data without EAPOL secure proof.
 Isolated runtime RX polls now request
@@ -1098,7 +1102,11 @@ publishes `last_rx_idle_detail=0x570e`
 snapshot. A successful retry is delivered as the recovered control/event/data
 frame and keeps queued nonmatching frames for the matching root poll; an empty
 retry keeps DHCP/data blocked and names the RX-source latch as the next
-blocker. If a Function 2 CMD53 transfer itself fails before the runtime can
+blocker. The linked runtime owns SDIO interrupt-source clearing: when Function 1
+`RFRAME` is zero but source bits still assert a pending frame, it preserves
+`I_HMB_FRAME_IND` only for a bounded grace window, then acknowledges the stale
+frame-indication bit so an obsolete source latch cannot trap later control
+reply polling. If a Function 2 CMD53 transfer itself fails before the runtime can
 classify the first-read payload, the isolated runtime now performs the same
 bounded recovery on the real transfer path: it aborts Function 2, writes
 Function 1 `FRAMECTRL.RF_TERM` for RX or `FRAMECTRL.WF_TERM` for TX, drains the
@@ -1391,10 +1399,12 @@ context and the retry/poll window.
   `bsscfg:sup_wpa` wrapper probe, host-EAPOL PMK/session preparation,
   connect-time station policy, PAE multicast admission, and only then primary
   join submission. Host-EAPOL proof is required before data release. Station
-  setup uses matched `DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE` for key
-  security controls, not fire-and-forget control frames: the runtime must match
-  CDC command plus ioctl id, reject nonzero CDC status, and return the CDC
-  response body for reads such as `cur_etheraddr`.
+  setup uses matched CDC command plus ioctl id for key/security controls, not
+  fire-and-forget control frames: runtime-private `CONTROL_EXCHANGE` is reserved
+  for the startup `bus:txglomalign` negotiation, while PTK/GTK `wsec_key`
+  installs use split `CONTROL_FRAME` plus parent-side `CONTROL_POLL` so root can
+  classify stale/nonmatching replies before accepting or failing the install.
+  Reads such as `cur_etheraddr` must return the CDC response body.
   Primary-BSS commands use plain iovar names; do not invent BSSCFG wrappers on
   this path.
 - Firmware supplicant offload must prove `sup_wpa`, valid PMK programming, and
@@ -2450,7 +2460,10 @@ Required Cohesix shape:
   windows. PTK/GTK `wsec_key` installs use the same split-control matching
   discipline with a longer bounded key-install reply window: commandless
   (`cmd=0`, `id=0`) BADARG/UNSUPPORTED-style statuses are nonmatching stale
-  evidence for that key install, not the completion of the expected ioctl.
+  evidence for that key install, not the completion of the expected ioctl. A
+  host-EAPOL `wsec_key` terminal stale/nonmatching timeout may be retried once
+  with a fresh BCDC ioctl id; a matched nonzero status or a second timeout stays
+  fatal.
 - Each matched control exchange emits a bounded
   `CYW43_DRIVER_TASK_CONTROL_REQUEST` line before submission. For small
   non-secret iovar bodies such as `bus:txglomalign=8` or the value-`4` fallback,

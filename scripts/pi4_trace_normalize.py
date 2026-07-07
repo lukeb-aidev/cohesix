@@ -2233,12 +2233,20 @@ CYW43_HOST_EAPOL_KEY_INSTALL_BLOCKERS = {
     "host-eapol-gtk-install",
     "cyw43-host-eapol-ptk-tx-no-reply",
     "cyw43-host-eapol-ptk-tx-retry-no-reply",
+    "cyw43-host-eapol-ptk-poll-timeout",
+    "cyw43-host-eapol-ptk-reply-nonmatching",
     "cyw43-host-eapol-gtk-tx-no-reply",
     "cyw43-host-eapol-gtk-tx-retry-no-reply",
+    "cyw43-host-eapol-gtk-poll-timeout",
+    "cyw43-host-eapol-gtk-reply-nonmatching",
     "cyw43-host-eapol-post-secure-ptk-tx-no-reply",
     "cyw43-host-eapol-post-secure-ptk-tx-retry-no-reply",
+    "cyw43-host-eapol-post-secure-ptk-poll-timeout",
+    "cyw43-host-eapol-post-secure-ptk-reply-nonmatching",
     "cyw43-host-eapol-post-secure-gtk-tx-no-reply",
     "cyw43-host-eapol-post-secure-gtk-tx-retry-no-reply",
+    "cyw43-host-eapol-post-secure-gtk-poll-timeout",
+    "cyw43-host-eapol-post-secure-gtk-reply-nonmatching",
 }
 CYW43_HOST_EAPOL_KEY_INSTALL_STATUS_BLOCKERS = {
     "host-eapol-ptk-install",
@@ -2253,6 +2261,9 @@ CYW43_HOST_EAPOL_KEY_STAGES = {
 CYW43_HOST_EAPOL_KEY_TX_NO_REPLY_STATUSES = {
     "tx-no-reply",
     "tx-retry-no-reply",
+}
+CYW43_HOST_EAPOL_KEY_POLL_TIMEOUT_STATUSES = {
+    "poll-timeout",
 }
 CYW43_RXTRACE_RETRANSMIT_ACK_TIMEOUT = 0x0010
 CYW43_RXTRACE_RETRANSMIT_STALE_CLEARED = 0x0020
@@ -2332,14 +2343,22 @@ def cyw43_host_eapol_key_tx_no_reply_detail(
         "cyw43_driver_task_command_no_reply" in event.raw.lower()
         and event.fields.get("reason", "").lower() == "cyw43-runtime-command-no-reply"
     )
+    poll_timeout_command = (
+        command_no_reply
+        and parse_hex_int(event.fields.get("op")) == CYW43_CONTROL_EXCHANGE_OP
+        and event.fields.get("iovar", "").lower() == "wsec_key"
+    )
     if stage not in CYW43_HOST_EAPOL_KEY_STAGES or (
         status not in CYW43_HOST_EAPOL_KEY_TX_NO_REPLY_STATUSES
+        and status not in CYW43_HOST_EAPOL_KEY_POLL_TIMEOUT_STATUSES
         and not command_no_reply
     ):
         return None
     blocker = event.fields.get("blocker", "").lower()
     if blocker.startswith(f"{stage}-"):
         exact = blocker
+    elif poll_timeout_command:
+        exact = f"{stage}-poll-timeout"
     else:
         exact = f"{stage}-{status or 'tx-no-reply'}"
     phase = event.fields.get("progress_phase_name") or stage
@@ -3001,6 +3020,9 @@ def cyw43_control_split_event_exact(event: TraceEvent) -> str | None:
     ) == 0x5103:
         return "cyw43-sdio-descriptor-transfer-failed"
     if event_name == "cyw43-control-reply-nonmatching":
+        stage = fields.get("stage", "").lower()
+        if stage in CYW43_HOST_EAPOL_KEY_STAGES:
+            return f"{stage}-reply-nonmatching"
         return "cyw43-control-reply-nonmatching"
     if event_name == "cyw43-control-split-no-reply":
         return detail_exact or "cyw43-control-split-timeout"
@@ -3202,11 +3224,16 @@ def normalize_wifi_blocker(value: str) -> str:
         for key_status in CYW43_HOST_EAPOL_KEY_TX_NO_REPLY_STATUSES:
             if f"stage={key_stage}" in lower and f"status={key_status}" in lower:
                 return f"{key_stage}-{key_status}"
+        for key_status in CYW43_HOST_EAPOL_KEY_POLL_TIMEOUT_STATUSES:
+            if f"stage={key_stage}" in lower and f"status={key_status}" in lower:
+                return f"{key_stage}-{key_status}"
         if (
             "cyw43_driver_task_command_no_reply" in lower
             and f"stage={key_stage}" in lower
             and "reason=cyw43-runtime-command-no-reply" in lower
         ):
+            if "op=11" in lower and "iovar=wsec_key" in lower:
+                return f"{key_stage}-poll-timeout"
             return f"{key_stage}-tx-no-reply"
     if (
         "host-eapol-required" in lower

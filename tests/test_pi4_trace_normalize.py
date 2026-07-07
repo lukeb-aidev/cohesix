@@ -9537,6 +9537,58 @@ def test_gate_summary_refines_host_eapol_ptk_tx_no_reply_progress() -> None:
     assert gates.wifi_phase == "cyw43-sdio-owner-wait-begin"
 
 
+def test_gate_summary_refines_host_eapol_ptk_poll_timeout_after_split_tx() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_DRAIN contract=cyw43455 "
+            "stage=m4-before-wsec result=credit-observed tx_result=0x0000008f "
+            "polls=1 observed_control=0",
+            "CYW43_DRIVER_TASK_CONTROL_REQUEST contract=cyw43455 "
+            "stage=cyw43-host-eapol-ptk cmd=263 cmd_hex=0x00000107 "
+            "id=39 runtime_flags=0x000a bcdc_flags=0x0002 payload_len=189 "
+            "response_len=0 iovar=wsec_key header_mode=extended",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-host-eapol-ptk event=tx-complete poll=0 "
+            "flags=0x000a code=2 detail=0x00d1 result=0x000000d1 "
+            "cmd=263 id=39 header=extended response_len=0 iovar=wsec_key "
+            "nonmatching_frames=0 malformed_frames=0",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-host-eapol-ptk event=wsec-key-commandless-stale "
+            "poll=1 flags=0x0008 code=2 detail=0x00d1 result=0xfffffffe "
+            "cmd=263 id=39 header=extended response_len=0 iovar=wsec_key "
+            "nonmatching_frames=1 malformed_frames=0",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-host-eapol-ptk event=cyw43-control-reply-nonmatching "
+            "poll=10970 flags=0x000a code=3 detail=0x570e result=0x03005030 "
+            "cmd=263 id=39 header=extended response_len=0 iovar=wsec_key "
+            "nonmatching_frames=1 malformed_frames=0",
+            "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract=cyw43455 "
+            "stage=cyw43-host-eapol-ptk op=11 flags=0x000a "
+            "target=0x00000000 payload_off=0 payload_len=209 total_len=209 "
+            "iovar=wsec_key reason=cyw43-runtime-command-no-reply request=1590 "
+            "progress_phase=142 progress_phase_name=cyw43-sdio-owner-wait-begin",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-host-eapol-ptk status=poll-timeout acceptance=no "
+            "blocker=cyw43-host-eapol-ptk-poll-timeout "
+            "progress_phase=142 progress_phase_name=cyw43-sdio-owner-wait-begin",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 "
+            "kind=ptk stage=cyw43-host-eapol-ptk status=failed",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-ptk-install polls=24576 starts=0 "
+            "tx_retries=0 data_rx=3 eapol_rx=3 non_eapol_rx=0 event_rx=3 "
+            "control_rx=0 empty_polls=24576 associated=yes link_up=no "
+            "next_action=inspect-host-eapol-error",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-host-eapol-ptk-poll-timeout"
+    assert gates.wifi_exact == "cyw43-host-eapol-ptk-poll-timeout"
+    assert gates.wifi_phase == "cyw43-sdio-owner-wait-begin"
+
+
 def test_gate_summary_names_firstread_source_asserted_empty() -> None:
     events = normalizer.parse_events(
         [
@@ -10756,6 +10808,26 @@ def test_gate_summary_refines_cyw43_split_control_terminal_nonmatching_reply() -
     assert gates.wifi_blocker == "control-plane-reply-idle-loop"
     assert gates.wifi_exact == "cyw43-control-reply-nonmatching"
     assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_cyw43_split_control_key_install_nonmatching_is_stage_specific() -> None:
+    event = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-host-eapol-ptk "
+            "event=cyw43-control-reply-nonmatching poll=10970 flags=0x000a "
+            "sequence=42 code=3 detail=0x570e result=0x03005030 "
+            "frame_off=0 frame_len=0 frame_flags=0x0000 "
+            "expected_cmd=263 expected_cmd_hex=0x00000107 expected_id=39 "
+            "header_mode=extended expected_response_len=0 iovar=wsec_key "
+            "nonmatching_frames=1 malformed_frames=0",
+        ]
+    )[0]
+
+    assert (
+        normalizer.cyw43_control_split_event_exact(event)
+        == "cyw43-host-eapol-ptk-reply-nonmatching"
+    )
 
 
 def test_gate_summary_refines_cyw43_split_control_tx_not_submitted() -> None:

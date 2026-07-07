@@ -8075,6 +8075,7 @@ Deliverables:
 **Non-negotiable constraints**
 - No proof claim may exceed the checked artifact. QEMU proof, Pi 4 hardware evidence, static analysis, bounded model checking, TLA+ state exploration, and inherited seL4 kernel assumptions must remain separate.
 - Do not claim full seL4-style refinement proof from Cohesix spec to binary unless that proof exists. The accepted claim for this milestone is bounded, machine-checked verification of selected Cohesix contracts plus explicit assumptions.
+- Later milestones may cite 27b only through named claim ids and evidence classes. A downstream production, AI, MCP/A2A, or AWS task must state whether it depends on inherited seL4 assumptions, Cohesix static/generated checks, bounded model checks, state-model exploration, QEMU/staged evidence, fresh Pi 4 evidence, or target-specific AWS evidence.
 - Formal models must describe generated/as-built interfaces, not desired future behavior. If a model and generated manifest disagree, the fix is IR/codegen/docs alignment, not weakening the model.
 - Verification tooling must be deterministic on macOS ARM64 and CI-friendly; heavyweight tools may be optional locally only if CI has a bounded equivalent or checked artifact.
 - No new runtime protocols, namespace roots, ticket semantics, or HAL bypasses are permitted under the banner of verification.
@@ -8093,7 +8094,8 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
 4. HAL-only hardware authority and driver-task resource admission,
 5. pointer-free, bounded Pi 4 driver-task ABI descriptors,
 6. selected Queen/Worker, policy, audit, replay, and persistence state machines,
-7. explicit proof assumptions, residual gaps, and non-claims.
+7. explicit proof assumptions, residual gaps, and non-claims,
+8. a claim ladder that downstream milestones can cite without collapsing static proof, model checking, QEMU evidence, Pi 4 evidence, and AWS target evidence into one assurance label.
 
 ### Deliverables
 
@@ -8108,6 +8110,7 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
   - QEMU/staged evidence,
   - fresh Pi 4 hardware evidence.
 - Define allowed external wording for Cohesix assurance claims so release docs, audit reports, and operator utilities do not overstate proof scope.
+- Define a stable claim-ladder vocabulary and claim-id format. Each claim records `claim_id`, `evidence_class`, `trusted_base`, `assumption_ref`, `artifact_ref`, `target_profile`, and `non_claim` fields so later milestones can cite exactly what was proven and what remains evidence-based.
 
 #### B) Proof-carrying manifest witnesses
 - Extend `coh-rtc` to emit a deterministic verification witness for each resolved manifest profile, including:
@@ -8116,7 +8119,8 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
   - ticket inventory and role/path/verb authority matrix,
   - HAL storage, MMIO, DMA, IRQ, and driver-task resource grants,
   - driver-image ABI bounds, runtime resource windows, and non-overlap checks,
-  - persistence bounds and data-at-rest identity binding.
+  - persistence bounds and data-at-rest identity binding,
+  - claim ids and evidence-class tags consumed by downstream production, AI, MCP/A2A, Pi 4, and AWS milestone gates.
 - Add a verifier that checks the witness against the resolved manifest and generated Rust tables, failing closed on drift.
 - Witnesses must be regenerated from IR; hand-editing witness output is invalid.
 
@@ -9994,7 +9998,7 @@ A2A belongs in the same gateway milestone only as a companion agent-delegation f
 
 **As-built alignment note:** There is no MCP server or A2A facade in `hive-gateway` today. Current gateway behavior is REST/OpenAPI over `LS`/`CAT`/`ECHO`, and the host ecosystem already has bounded providers for CUDA/NVIDIA discovery, GPU leases, PEFT, systemd, Docker, and K8s through Cohesix host tools and `/host/tickets/*`. `coh mount --rest-url` already mounts through `hive-gateway` and is the primary FUSE path for the live Cohesix namespace; Milestone 28d must not rebuild that through MCP or A2A. Milestone 28d adds MCP-compatible and A2A-compatible surfaces only after those existing flows are the implementation substrate. Older prose must not claim MCP or A2A support until the gateway exposes lifecycle/discovery/execution/authorization/conformance evidence for the relevant protocol.
 
-**Sequencing note:** Milestone 28d is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded reads, with every resource classified by the Milestone 28b1 visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 28b1 provider action registry, 28b delegated authority floor, and 28c run/checkpoint/evidence model are proven. No mutating MCP/A2A path can be accepted solely because read-only MCP conformance passes.
+**Sequencing note:** Milestone 28d is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded reads, with every resource classified by the Milestone 28b1 visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 28b1 provider action registry, 28b delegated authority floor, and 28c run/checkpoint/evidence model are proven. No mutating MCP/A2A path can be accepted solely because read-only MCP conformance passes. Any mutating MCP/A2A path that claims production VM worker or driver authority must also cite the Milestone 28e cap-bundle and structured-fault evidence; host-ticket-only and read-only projections must not claim that authority.
 
 **Goal**
 Expose Cohesix to MCP clients through standard MCP server primitives and to A2A peers through task/artifact protocol primitives while preserving Cohesix's existing grammar and authority model:
@@ -10005,6 +10009,7 @@ Expose Cohesix to MCP clients through standard MCP server primitives and to A2A 
 5. The shared `cohsh-core` console grammar, NineDoor semantics, and generated manifest bounds remain byte-stable.
 6. `coh mount --rest-url` remains the canonical gateway-backed namespace mount; any MCP-backed mount mode is a read-only MCP resource/catalog view for MCP-admitted context, not a replacement write path.
 7. A2A Agent Cards, messages, tasks, artifacts, and streaming updates are projections of 28c run/checkpoint/evidence records and existing host-ticket receipts, not a separate scheduler or agent memory.
+8. Read-only MCP/A2A conformance is an ecosystem compatibility claim, not a write-authority claim. Mutating protocol evidence must name the delegated-ticket, provider-action, idempotency, writer-epoch, audit/replay, and, where applicable, 28e VM cap-bundle prerequisites it consumes.
 
 **Non-Goals (Explicit)**
 - No in-VM MCP endpoint, MCP listener, MCP filesystem root, or MCP-specific root-task parser.
@@ -10260,6 +10265,7 @@ As-built leverage:
 - Every MCP read maps to existing `LS`, `CAT`, or `TAIL`; every MCP write maps to existing `ECHO` into a documented Cohesix control file or `/host/tickets/spec`.
 - Every A2A task maps to an existing 28c run/checkpoint/evidence record and, when mutating, an existing Cohesix host-ticket/control action. No A2A message text or metadata becomes authorization.
 - Read-only MCP acceptance passes before mutating MCP tools or A2A task creation are enabled in the milestone evidence path.
+- Read-only MCP acceptance is not sufficient evidence for mutating tools, A2A task creation, provider action execution, or production VM worker/driver authority. Each mutating acceptance artifact must name the 28b, 28b1, 28c, and, when VM worker/driver authority is claimed, 28e evidence it depends on.
 - Read-only MCP and A2A artifact/resource acceptance includes negative tests for public, ticket-scoped, and admin-only read visibility; ticket/provider/evidence/audit reads for the wrong delegated identity fail before payload construction.
 - MCP tool schemas and A2A skill schemas are generated from the same provider action registry; parity tests fail if CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, or evidence actions drift between protocols.
 - No MCP tool directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
@@ -10490,6 +10496,8 @@ After Milestone 28d:
 - Milestone **26d** seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
 - Milestone **28b** completed, including audit/replay defaults and generated gates that distinguish host authority records from VM cap-backed tickets.
 
+**Production authority gate:** Milestone 28e is mandatory for any production profile that claims VM worker or linked-driver authority is represented by live seL4 cap bundles, including AI namespace projections, MCP/A2A task projections, provider projections, and driver-runtime control paths. Read-only profiles, host-ticket-only profiles, and gateway projections may proceed without 28e only when their generated profile state and docs explicitly avoid VM cap-bundle or structured-fault claims.
+
 **Goal**
 Complete production VM authority by making worker and driver tickets correspond to generated seL4 cap bundles and by converting worker/driver faults into structured lifecycle events.
 
@@ -10523,6 +10531,8 @@ Complete production VM authority by making worker and driver tickets correspond 
 
 **Checks (DoD)**
 - Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
+- Production profiles that expose AI, MCP/A2A, provider, or driver-runtime projections fail validation if they claim VM worker/driver cap-bundle authority or structured-fault containment without the generated 28e cap-bundle and fault-lifecycle evidence.
+- Read-only and host-ticket-only profiles remain valid without 28e only when generated profile state, docs, and evidence packs explicitly state that VM worker/driver cap-bundle authority is not claimed.
 - Revoked tickets lose endpoint, notification, frame, shared-ring, MMIO, DMA/shared-buffer, and fault authority; stale invocations and stale ring turns fail deterministically.
 - Recovery reconciles ticket ledger and CSpace/VSpace state so no active ticket exists without live caps and no live caps remain for terminal tickets.
 - Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
@@ -10533,6 +10543,7 @@ Complete production VM authority by making worker and driver tickets correspond 
 
 **Compiler touchpoints**
 - `coh-rtc` emits full cap-bundle ticket authority profiles, generated per-role cap inventories, revoke/recovery evidence, production enablement gates, generated badged fault endpoint records, terminal/quarantine policy, and bounded fault evidence paths.
+- `coh-rtc` emits explicit profile-state distinctions for read-only projection, host-ticket-only actuation, endpoint-cap compatibility, full VM cap-bundle authority, and structured-fault containment so downstream milestones cannot inherit stronger VM authority claims by implication.
 - Generated snippets refresh `docs/WORKER_TICKETS.md`, `docs/SECURITY.md`, `docs/HARDWARE_BRINGUP.md`, `docs/INTERFACES.md`, and `docs/TEST_PLAN.md`.
 
 **Task Breakdown**
@@ -11208,6 +11219,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 
 **Non-negotiable constraints**
 - Milestone 30 may not assume the UEFI/ESP baseline is authoritative until the first AWS task reconciles it against the current Pi 4 U-Boot pivot, `scripts/uefi/esp-build.sh`, `docs/BOOT_REFERENCE.md`, `docs/HARDWARE_BRINGUP.md`, and the charter rule for UEFI tooling. If the baseline is stale, AWS work starts by refreshing or reintroducing it under this milestone with docs and tests.
+- AWS boot work must produce a boot-resource map before ENA, TLS/HTTP, IMDS, or outbound fabric code depends on the profile. The map records ESP contents, kernel/root-task/rootserver artifacts, manifest hash, signed bootstrap manifest, trust anchors, seL4 handoff assumptions, attestation evidence, and explicit non-claims.
 - In-VM TLS, HTTP, and IMDSv2 are a deliberate TCB expansion, not a routine AWS delta. They are disabled by default until `docs/ARCHITECTURE.md`, `docs/NETWORK_CONFIG.md`, `docs/SECURITY.md`, `docs/SECURITY_NIST_800_53.md`, and `docs/AWS_AMI.md` explicitly approve the bounded client-only threat model and generated manifest gates.
 - AWS VM profiles require dependency-closure evidence before runtime code lands: no `std`, libc, POSIX filesystem/process API, DNS resolver, web framework, unapproved TLS/HTTP stack, or host-only ecosystem dependency may enter the root-task or isolated runtime closure.
 - No listener is introduced in the VM. AWS networking is outbound-only after seL4, and any Secure9P fabric mount must preserve existing frame bounds, role-scoped authority, and deterministic error behavior.
@@ -11217,6 +11229,11 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 - The initial single TX/RX queue polling path is bootstrap evidence only. Peak-performance AWS claims require a later generated multi-queue, MSI-X or equivalent notification, queue-affinity, and core-local service-bucket evidence phase.
 
 **Deliverables**
+#### A0) Boot-chain / TCB reconciliation and boot-resource map
+- Reconcile the current UEFI/ESP builder, Pi 4 U-Boot pivot, seL4 handoff assumptions, and AWS profile requirements before runtime AWS code lands.
+- Produce a boot-resource map covering ESP layout, elfloader, kernel, root task/rootserver, optional initrd, resolved manifest hash, signed fabric bootstrap manifest, root trust anchors, selected attestation inputs, and explicit non-claims.
+- Record whether root-task TLS/HTTP/IMDS is accepted, rejected, or deferred. If deferred or rejected, AWS bootstrap must use signed manifest inputs and host/fabric-side termination rather than importing those stacks into the VM closure.
+
 #### A) AWS compiler + profile admission
 - Dedicated AWS Arm64 profile and manifest vocabulary for:
   - `ena` as a network backend
@@ -11274,6 +11291,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 
 **Checks (DoD)**
 - EC2 instance boots directly into Cohesix with no intermediate OS.
+- Boot-chain reconciliation and the boot-resource map are complete before AWS runtime code cites UEFI, TLS/HTTP, IMDS, ENA, or outbound fabric assumptions.
 - AWS dependency-closure gate proves the VM profile remains `no_std` and excludes libc, POSIX filesystem/process APIs, DNS resolver, web framework, and unapproved TLS/HTTP dependencies.
 - ENA link comes up deterministically; DHCP lease acquired within bounded time.
 - ENA hardware service must use a manifest-declared isolated ENA runtime; root-task direct ENA MMIO/DMA paths fail profile validation outside explicitly named QEMU/host compatibility tests.
@@ -11289,6 +11307,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 **Compiler touchpoints**
 - `coh-rtc` emits:
   - AWS profile / backend admission for `ena`
+  - boot-resource map schema, artifact hashes, signed-bootstrap manifest references, trust-anchor references, selected attestation inputs, and generated non-claim summaries for AWS profiles.
   - isolated ENA runtime descriptors, ENA queue bounds, bootstrap retry limits, and later multi-queue/core-local performance gates.
   - Fabric bootstrap manifest schema and signature requirements.
   - dependency-closure allow/deny lists for AWS VM profile crates.
@@ -11301,16 +11320,16 @@ Title/ID: m30-uefi-and-tcb-reconciliation
 Goal: Reconcile AWS boot/security assumptions with the current Cohesix UEFI baseline and tiny-TCB networking posture before runtime work starts.
 Inputs: scripts/uefi/esp-build.sh, docs/BOOT_REFERENCE.md, docs/HARDWARE_BRINGUP.md, docs/NETWORK_CONFIG.md, docs/SECURITY.md, docs/SECURITY_NIST_800_53.md, docs/AWS_AMI.md, AGENTS.md.
 Changes:
-- docs/AWS_AMI.md — state the accepted AWS boot chain, whether the UEFI/ESP builder is current, and what evidence proves it.
+- docs/AWS_AMI.md — state the accepted AWS boot chain, whether the UEFI/ESP builder is current, the boot-resource map fields, and what evidence proves them.
 - docs/NETWORK_CONFIG.md + docs/SECURITY.md + docs/SECURITY_NIST_800_53.md — record whether root-task TLS/HTTP/IMDS is accepted, rejected, or deferred for AWS.
 - docs/BUILD_PLAN.md — keep Milestone 30 subtasks synchronized with the accepted TCB posture.
 Commands:
 - scripts/uefi/esp-build.sh --help
 - scripts/ci/check_test_plan.sh
 Checks:
-- AWS work has an explicit boot-chain baseline and a security-approved plan for TLS/HTTP/IMDS before ENA bootstrap code depends on those assumptions.
+- AWS work has an explicit boot-chain baseline, boot-resource map, and security-approved plan for TLS/HTTP/IMDS before ENA bootstrap code depends on those assumptions.
 Deliverables:
-- UEFI/ESP and AWS TCB reconciliation note that blocks accidental import of web/TLS stacks into the VM.
+- UEFI/ESP and AWS TCB reconciliation note, including a boot-resource map, that blocks accidental import of web/TLS stacks into the VM.
 
 Title/ID: m30-aws-profile
 Goal: Admit AWS/ENA/IMDS bootstrap in compiler IR and profile selection before runtime implementation.

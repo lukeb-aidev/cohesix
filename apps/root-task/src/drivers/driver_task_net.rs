@@ -152,6 +152,7 @@ const CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_POLL_ATTEMPTS: usize = 512;
 const CYW43_CONTROL_PLANE_REPLY_TIMEOUT_MS: u64 = 1_000;
 const CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS: u64 = 2_500;
 const CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_REPLY_TIMEOUT_MS: u64 = 250;
+const CYW43_HOST_EAPOL_WSEC_KEY_STALE_REPLY_RETRIES: usize = 1;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC: u32 = 0x4300_0000;
 const CYW43_HOST_EAPOL_PRE_ASSOC_POLLS: usize = 8_192;
 const CYW43_HOST_EAPOL_POST_ASSOC_POLLS: usize = 16_384;
@@ -4962,14 +4963,91 @@ fn cyw43_install_wsec_key_with_pre_tx_drain(
         }
         return Ok(());
     }
-    cyw43_submit_bcdc_iovar_bytes_with_options(
+    let first_attempt = cyw43_submit_bcdc_iovar_bytes_with_options(
         contract,
         "wsec_key",
         &payload[..len],
         stage,
         Cyw43ControlHeaderMode::Extended,
         pre_tx_drain,
-    )
+    );
+    match first_attempt {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let Some(fault) = cyw43_host_eapol_wsec_key_retry_fault(stage) else {
+                return Err(err);
+            };
+            emit_cyw43_host_eapol_wsec_key_retry(contract, stage, fault);
+            clear_cyw43_runtime_command_fault_status();
+            cyw43_submit_bcdc_iovar_bytes_with_options(
+                contract,
+                "wsec_key",
+                &payload[..len],
+                stage,
+                Cyw43ControlHeaderMode::Extended,
+                pre_tx_drain,
+            )
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_wsec_key_retry_fault(
+    stage: &'static str,
+) -> Option<Cyw43RuntimeCommandFaultStatus> {
+    if CYW43_HOST_EAPOL_WSEC_KEY_STALE_REPLY_RETRIES == 0 {
+        return None;
+    }
+    if !cyw43_control_uses_host_eapol_wsec_key_reply_window(stage, "wsec_key")
+        && !cyw43_control_uses_post_secure_host_eapol_wsec_key_reply_window(stage, "wsec_key")
+    {
+        return None;
+    }
+    let fault = latest_cyw43_runtime_command_fault_status()?;
+    if fault.stage != stage
+        || fault.op != DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+        || fault.control_cmd != CYW43_WLC_SET_VAR
+        || fault.control_header_mode != "extended"
+        || fault.control_response_len != 0
+    {
+        return None;
+    }
+    let required_flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+        | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
+    if fault.flags & required_flags != required_flags {
+        return None;
+    }
+    if matches!(
+        fault.reason,
+        "cyw43-control-reply-nonmatching" | "cyw43-control-split-no-reply"
+    ) {
+        Some(fault)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_host_eapol_wsec_key_retry(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    fault: Cyw43RuntimeCommandFaultStatus,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<256>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_HOST_EAPOL_KEY_RETRY contract={} stage={} iovar=wsec_key action=resubmit reason={} op={} flags=0x{:04x} detail=0x{:04x} result=0x{:08x}",
+        contract.name,
+        stage,
+        fault.reason,
+        fault.op,
+        fault.flags,
+        fault.detail,
+        fault.result
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -21475,6 +21553,7 @@ mod tests {
         assert_eq!(CYW43_CONTROL_PLANE_REPLY_TIMEOUT_MS, 1_000);
         assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS, 2_500);
         assert_eq!(CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_REPLY_TIMEOUT_MS, 250);
+        assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_STALE_REPLY_RETRIES, 1);
         assert_eq!(CYW43_HOST_EAPOL_TX_DRAIN_POLLS, 2_000);
         assert_eq!(CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS, 2_000);
         assert_eq!(
@@ -21560,6 +21639,63 @@ mod tests {
             cyw43_control_exchange_timeout_ms("cyw43-control-wpa-auth-final", "wpa_auth"),
             CYW43_CONTROL_PLANE_REPLY_TIMEOUT_MS
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_wsec_key_retries_after_stale_nonmatching_reply() {
+        test_clear_cyw43_runtime_replay_status();
+        assert!(cyw43_host_eapol_wsec_key_retry_fault("cyw43-host-eapol-ptk").is_none());
+
+        let descriptor = cyw43_control_exchange_descriptor(
+            209,
+            CYW43_WLC_SET_VAR,
+            39,
+            Cyw43ControlHeaderMode::Extended,
+            true,
+        );
+        record_cyw43_control_split_failure(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            "cyw43-host-eapol-ptk",
+            descriptor,
+            "cyw43-control-reply-nonmatching",
+            None,
+            CYW43_WLC_SET_VAR,
+            39,
+            Cyw43ControlHeaderMode::Extended,
+            0,
+            "wsec_key",
+            1,
+            0,
+        );
+
+        let fault = cyw43_host_eapol_wsec_key_retry_fault("cyw43-host-eapol-ptk")
+            .expect("stale nonmatching PTK wsec_key fault should be retried once");
+        assert_eq!(fault.stage, "cyw43-host-eapol-ptk");
+        assert_eq!(fault.reason, "cyw43-control-reply-nonmatching");
+        assert!(cyw43_host_eapol_wsec_key_retry_fault("cyw43-control-txglomalign").is_none());
+
+        record_cyw43_control_split_failure(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            "cyw43-host-eapol-ptk",
+            cyw43_control_exchange_descriptor(
+                209,
+                CYW43_WLC_SET_VAR,
+                40,
+                Cyw43ControlHeaderMode::Extended,
+                false,
+            ),
+            "cyw43-control-reply-nonmatching",
+            None,
+            CYW43_WLC_SET_VAR,
+            40,
+            Cyw43ControlHeaderMode::Extended,
+            0,
+            "wsec_key",
+            1,
+            0,
+        );
+        assert!(cyw43_host_eapol_wsec_key_retry_fault("cyw43-host-eapol-ptk").is_none());
     }
 
     #[cfg(feature = "kernel")]
