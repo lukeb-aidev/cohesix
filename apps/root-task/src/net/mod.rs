@@ -562,7 +562,7 @@ pub struct NetDeviceCounters {
     pub wifi_post_dhcp_rx_ipv4: u64,
     /// Post-DHCP CYW43 ICMP RX frames for the assigned IPv4 address.
     pub wifi_post_dhcp_rx_icmp: u64,
-    /// Post-DHCP CYW43 TCP console RX frames for the assigned IPv4 address.
+    /// Post-DHCP CYW43 TCP console or smoke/proof RX frames for the assigned IPv4 address.
     pub wifi_post_dhcp_rx_tcp: u64,
     /// Last post-DHCP CYW43 RX frame length.
     pub wifi_post_dhcp_rx_last_len: u64,
@@ -693,7 +693,7 @@ pub struct NetCounters {
     pub wifi_post_dhcp_rx_ipv4: u64,
     /// Post-DHCP CYW43 ICMP RX frames for the assigned IPv4 address.
     pub wifi_post_dhcp_rx_icmp: u64,
-    /// Post-DHCP CYW43 TCP console RX frames for the assigned IPv4 address.
+    /// Post-DHCP CYW43 TCP console or smoke/proof RX frames for the assigned IPv4 address.
     pub wifi_post_dhcp_rx_tcp: u64,
     /// Last post-DHCP CYW43 RX frame length.
     pub wifi_post_dhcp_rx_last_len: u64,

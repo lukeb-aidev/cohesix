@@ -39,7 +39,7 @@ JOIN_COMPLETE_SECURE = (
 JOIN_COMPLETE_HOST_EAPOL = (
     "[cyw43] join complete mode=host-eapol secure=yes "
     "completion_rule=host-eapol-required m1=yes m2=yes m3=yes m4=yes "
-    "wsec_key=ptk+gtk key_order=m4-before-wsec carrier=yes"
+    "wsec_key=ptk+gtk key_order=m4-after-wsec carrier=yes"
 )
 
 

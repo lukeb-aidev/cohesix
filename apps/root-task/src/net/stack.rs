@@ -108,9 +108,11 @@ const DHCP_RESTART_BACKOFF_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 const CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS: u64 = 500;
 const CYW43_DHCP_POST_SECURE_EAPOL_OVERSHOOT_LOG_MS: u64 = 1_000;
 const CYW43_DHCP_RX_ADMISSION_RETRY_MS: u64 = 250;
+const CYW43_HOST_EAPOL_STACK_SERVICE_POLLS: usize = 64;
+const CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS: usize = 16;
 const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
-const TCP_SMOKE_PORT: u16 = 31_339;
+pub(crate) const TCP_SMOKE_PORT: u16 = 31_339;
 const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
 const TCP_CONSOLE_SELFTEST_LOCAL_PORT: u16 = 31_341;
 const CONSOLE_SELFTEST_RECOVERY_DEADLINE_MS: u64 = 3_000;
@@ -242,6 +244,14 @@ fn wifi_host_eapol_blocks_data_path(bringup_status: Option<&'static str>) -> boo
 
 fn wifi_host_eapol_blocks_driver_task_pre_poll(bringup_status: Option<&'static str>) -> bool {
     wifi_host_eapol_blocks_data_path(bringup_status)
+}
+
+fn wifi_host_eapol_stack_service_polls(bringup_status: Option<&'static str>) -> usize {
+    if wifi_host_eapol_blocks_data_path(bringup_status) {
+        CYW43_HOST_EAPOL_STACK_SERVICE_POLLS
+    } else {
+        1
+    }
 }
 
 fn dhcp_start_defer_reason_for(bringup_status: Option<&'static str>) -> Option<&'static str> {
@@ -3409,6 +3419,14 @@ impl<D: NetDevice> NetStack<D> {
         budget.charge_bytes((MAX_DHCP_RX_PACKETS_PER_POLL as u32 + 1) * 1024)
     }
 
+    fn charge_wifi_host_eapol_budget(
+        budget: &mut DriverServiceBudget,
+    ) -> Result<(), DriverServiceBudgetError> {
+        budget.charge_ops(CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS as u16)?;
+        budget.charge_frames(8)?;
+        budget.charge_bytes(8 * 1024)
+    }
+
     fn budgeted_dhcp_service_required(&self) -> bool {
         budgeted_dhcp_service_required(self.mode, self.ip, self.dhcp_handle.is_some())
     }
@@ -3854,7 +3872,11 @@ impl<D: NetDevice> NetStack<D> {
                 return Ok(true);
             }
             let mut activity = self.sync_interface_hardware_addr(now_ms);
-            activity |= self.service_wifi_host_eapol_slice(now_ms);
+            Self::charge_wifi_host_eapol_budget(budget)?;
+            activity |= self.service_wifi_host_eapol_slice_with_limit(
+                now_ms,
+                CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS,
+            );
             activity |= self.sync_interface_hardware_addr(now_ms);
             activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
             if !wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
@@ -3949,7 +3971,19 @@ impl<D: NetDevice> NetStack<D> {
         #[cfg(not(feature = "kernel"))]
         let mut activity = false;
         activity |= self.sync_interface_hardware_addr(now_ms);
-        activity |= self.service_wifi_host_eapol_slice(now_ms);
+        let host_eapol_blocked =
+            wifi_host_eapol_blocks_data_path(self.device.bringup_status_label());
+        if host_eapol_blocked {
+            Self::charge_wifi_host_eapol_budget(budget)?;
+        }
+        activity |= self.service_wifi_host_eapol_slice_with_limit(
+            now_ms,
+            if host_eapol_blocked {
+                CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS
+            } else {
+                1
+            },
+        );
         activity |= self.sync_interface_hardware_addr(now_ms);
         activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
         if self.wifi_rx_admission_blocked {
@@ -4088,6 +4122,13 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn service_wifi_host_eapol_slice(&mut self, now_ms: u64) -> bool {
+        self.service_wifi_host_eapol_slice_with_limit(
+            now_ms,
+            wifi_host_eapol_stack_service_polls(self.device.bringup_status_label()),
+        )
+    }
+
+    fn service_wifi_host_eapol_slice_with_limit(&mut self, now_ms: u64, poll_limit: usize) -> bool {
         #[cfg(feature = "kernel")]
         {
             if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
@@ -4099,7 +4140,7 @@ impl<D: NetDevice> NetStack<D> {
             };
             return crate::drivers::driver_task_net::service_cyw43_host_eapol_slice(
                 credentials,
-                1,
+                poll_limit,
                 now_ms,
             );
         }
@@ -7971,6 +8012,21 @@ mod tests {
         )));
         assert!(!wifi_host_eapol_blocks_data_path(Some("dhcp-pending")));
         assert!(!wifi_host_eapol_blocks_data_path(None));
+    }
+
+    #[test]
+    fn host_eapol_pending_uses_linux_style_service_burst() {
+        assert_eq!(
+            wifi_host_eapol_stack_service_polls(Some("wifi-host-eapol-pending")),
+            CYW43_HOST_EAPOL_STACK_SERVICE_POLLS
+        );
+        assert_eq!(
+            wifi_host_eapol_stack_service_polls(Some("wifi-host-eapol-required")),
+            CYW43_HOST_EAPOL_STACK_SERVICE_POLLS
+        );
+        assert_eq!(wifi_host_eapol_stack_service_polls(None), 1);
+        assert_eq!(wifi_host_eapol_stack_service_polls(Some("dhcp-pending")), 1);
+        assert!(CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS < CYW43_HOST_EAPOL_STACK_SERVICE_POLLS);
     }
 
     #[test]

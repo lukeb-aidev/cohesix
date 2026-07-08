@@ -38,6 +38,7 @@ use crate::hal::{HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetInterfacePolicy, NetStage,
     WifiCredentials, COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, MAX_FRAME_LEN, NET_DIAG,
+    TCP_SMOKE_PORT,
 };
 use pi4_driver_abi::{
     driver_runtime_genet_result_is_packed, driver_runtime_genet_result_rx_byte_budget_hit,
@@ -147,14 +148,14 @@ const CYW43_BACKPLANE_ADDRESS_MASK: u32 = 0x7fff;
 const CYW43_BACKPLANE_WINDOW_MASK: u32 = 0xffff_8000;
 const CYW43_BACKPLANE_32BIT_FLAG: u32 = 0x8000;
 const CYW43_CONTROL_PLANE_POLL_ATTEMPTS: usize = 256;
-const CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS: usize = 8_000;
+const CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS: usize = 16_384;
 const CYW43_HOST_EAPOL_GTK_WSEC_KEY_POLL_ATTEMPTS: usize = 16_384;
 const CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_POLL_ATTEMPTS: usize = 512;
 const CYW43_CONTROL_PLANE_REPLY_TIMEOUT_MS: u64 = 1_000;
-const CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS: u64 = 2_500;
+const CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS: u64 = 5_000;
 const CYW43_HOST_EAPOL_GTK_WSEC_KEY_REPLY_TIMEOUT_MS: u64 = 5_000;
 const CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_REPLY_TIMEOUT_MS: u64 = 250;
-const CYW43_HOST_EAPOL_WSEC_KEY_STALE_REPLY_RETRIES: usize = 1;
+const CYW43_HOST_EAPOL_WSEC_KEY_STALE_REPLY_RETRIES: usize = 3;
 const CYW43_HOST_EAPOL_GTK_WSEC_KEY_STALE_REPLY_RETRIES: usize = 2;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC: u32 = 0x4300_0000;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_REASON_SHIFT: u32 = 16;
@@ -165,6 +166,7 @@ const CYW43_HOST_EAPOL_POST_ASSOC_POLLS: usize = 16_384;
 const CYW43_HOST_EAPOL_JOIN_POLLS: usize =
     CYW43_HOST_EAPOL_PRE_ASSOC_POLLS + CYW43_HOST_EAPOL_POST_ASSOC_POLLS;
 const CYW43_HOST_EAPOL_JOIN_SUBMIT_POLLS: usize = CYW43_HOST_EAPOL_PRE_ASSOC_POLLS + 1;
+const CYW43_HOST_EAPOL_POST_ACTIVITY_POLLS: usize = CYW43_HOST_EAPOL_POST_ASSOC_POLLS;
 const CYW43_HOST_EAPOL_START_FIRST_POLL: usize = 8_192;
 const CYW43_HOST_EAPOL_START_INTERVAL_POLLS: usize = 8192;
 const CYW43_HOST_EAPOL_PRE_ASSOC_TIMEOUT_MS: u64 = 8_192;
@@ -488,6 +490,22 @@ static CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_TEST_RX_RESTORED: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_BSSID_VALID: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_M4_SUBMIT_FAILS: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK_WSEC: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_GTK: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_WSEC: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_M4_SUBMIT_PTK_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_M4_SUBMIT_GTK_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_BCDC_IOCTL_ID: AtomicU32 = AtomicU32::new(0);
 static CYW43_RUNTIME_MAC: Mutex<EthernetAddress> = Mutex::new(CYW43_DRIVER_TASK_MAC);
 #[cfg(feature = "kernel")]
@@ -1503,16 +1521,6 @@ impl Cyw43HostEapolProgress {
 
     fn record_eapol_association_proof(&mut self, label: &'static str, poll: usize) {
         self.associated = true;
-        if self.association_event.is_none() {
-            self.association_event = Some(label);
-            self.association_poll = poll.min(u32::MAX as usize) as u32;
-        }
-        CYW43_ASSOCIATED.store(1, Ordering::Release);
-    }
-
-    fn record_bssid_association_proof(&mut self, label: &'static str, poll: usize) {
-        self.associated = true;
-        self.assoc_probe_not_associated = false;
         if self.association_event.is_none() {
             self.association_event = Some(label);
             self.association_poll = poll.min(u32::MAX as usize) as u32;
@@ -5335,26 +5343,51 @@ fn service_cyw43_host_eapol_join_submit_window(
         outcome.activity,
         outcome.progress.as_ref(),
     );
+    let mut latest = outcome;
     if outcome.post_rescue_assoc_window_due {
         let post_rescue_now_ms = crate::hal::timebase().now_ms();
+        let post_rescue_limit = CYW43_HOST_EAPOL_JOIN_POLLS;
         emit_cyw43_host_eapol_join_submit_window(
             contract,
             "post-rescue-begin",
-            poll_limit,
+            post_rescue_limit,
             false,
             outcome.progress.as_ref(),
         );
         let post_rescue = service_cyw43_host_eapol_slice_with_outcome(
             credentials,
-            poll_limit,
+            post_rescue_limit,
             post_rescue_now_ms,
         );
         emit_cyw43_host_eapol_join_submit_window(
             contract,
             "post-rescue-end",
-            poll_limit,
+            post_rescue_limit,
             post_rescue.activity,
             post_rescue.progress.as_ref(),
+        );
+        latest = post_rescue;
+    }
+    if cyw43_host_eapol_needs_post_activity_window(latest) {
+        let post_activity_now_ms = crate::hal::timebase().now_ms();
+        emit_cyw43_host_eapol_join_submit_window(
+            contract,
+            "post-activity-begin",
+            CYW43_HOST_EAPOL_POST_ACTIVITY_POLLS,
+            false,
+            latest.progress.as_ref(),
+        );
+        let post_activity = service_cyw43_host_eapol_slice_with_outcome(
+            credentials,
+            CYW43_HOST_EAPOL_POST_ACTIVITY_POLLS,
+            post_activity_now_ms,
+        );
+        emit_cyw43_host_eapol_join_submit_window(
+            contract,
+            "post-activity-end",
+            CYW43_HOST_EAPOL_POST_ACTIVITY_POLLS,
+            post_activity.activity,
+            post_activity.progress.as_ref(),
         );
     }
 }
@@ -5373,6 +5406,22 @@ struct Cyw43HostEapolSliceOutcome {
     activity: bool,
     post_rescue_assoc_window_due: bool,
     progress: Option<Cyw43HostEapolProgress>,
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_needs_post_activity_window(outcome: Cyw43HostEapolSliceOutcome) -> bool {
+    if CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
+        || CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire) != 0
+    {
+        return false;
+    }
+    let Some(progress) = outcome.progress else {
+        return false;
+    };
+    progress.eapol_rx != 0
+        || progress.associated
+        || progress.link_up
+        || cyw43_host_eapol_valid_bssid_without_carrier(&progress)
 }
 
 #[cfg(feature = "kernel")]
@@ -5428,11 +5477,29 @@ fn service_cyw43_host_eapol_slice_with_outcome(
         session.record_time(current_now_ms);
         if cyw43_host_eapol_join_timeout_expired(session, current_now_ms) {
             let was_associated = session.progress.associated;
-            cyw43_probe_host_eapol_bssid_before_required(contract, station_mac, session);
+            let probe =
+                cyw43_probe_host_eapol_bssid_before_required(contract, station_mac, session);
             session.record_time(current_now_ms);
             if !was_associated && session.progress.associated {
                 activity = true;
                 continue;
+            }
+            if let Some(reason) =
+                cyw43_host_eapol_assoc_rescue_reason(probe, session, current_now_ms)
+            {
+                let rescue_poll = session.progress.polls as usize;
+                let rescue_attempt = session.assoc_probe_attempts;
+                if cyw43_try_host_eapol_assoc_rescue(
+                    contract,
+                    credentials,
+                    session,
+                    rescue_poll,
+                    rescue_attempt,
+                    reason,
+                ) {
+                    activity = true;
+                    continue;
+                }
             }
             mark_cyw43_host_eapol_required(contract, &session.progress);
             clear_session = true;
@@ -5923,25 +5990,6 @@ fn process_cyw43_host_eapol_data_completion(
                             .progress
                             .record_eapol_association_proof("eapol-m3", poll);
                         emit_cyw43_host_eapol_message(contract, "m3", "recv-m3", poll, frame.len());
-                        let Some(m4_completion) =
-                            submit_cyw43_host_eapol_payload_bounded_completion(
-                                contract,
-                                &tx_frame[..len],
-                                "cyw43-host-eapol-m4",
-                            )
-                        else {
-                            session.progress.record_eapol_error("host-eapol-m4-tx");
-                            return Err(DriverTaskNetError::RuntimeInit("host-eapol-m4-tx"));
-                        };
-                        CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
-                        emit_cyw43_host_eapol_message(contract, "m4", "send-m4", poll, len);
-                        let _m4_drain_ready = wait_cyw43_host_eapol_tx_drain(
-                            contract,
-                            session,
-                            "m4-before-wsec",
-                            poll,
-                            m4_completion,
-                        )?;
                         if let Err(err) = cyw43_install_wsec_key_with_pre_tx_drain(
                             contract,
                             0,
@@ -6019,6 +6067,27 @@ fn process_cyw43_host_eapol_data_completion(
                                 "cyw43-host-eapol-reassert-wsec",
                                 "ready",
                             );
+                            #[cfg(test)]
+                            CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK_WSEC.store(1, Ordering::Release);
+                            let Some(m4_completion) =
+                                submit_cyw43_host_eapol_payload_bounded_completion(
+                                    contract,
+                                    &tx_frame[..len],
+                                    "cyw43-host-eapol-m4",
+                                )
+                            else {
+                                session.progress.record_eapol_error("host-eapol-m4-tx");
+                                return Err(DriverTaskNetError::RuntimeInit("host-eapol-m4-tx"));
+                            };
+                            CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
+                            emit_cyw43_host_eapol_message(contract, "m4", "send-m4", poll, len);
+                            let _m4_drain_ready = wait_cyw43_host_eapol_tx_drain(
+                                contract,
+                                session,
+                                "m4-after-wsec",
+                                poll,
+                                m4_completion,
+                            )?;
                             let _scb_authorize = cyw43_authorize_host_eapol_scb(
                                 contract,
                                 &keys.ap_mac,
@@ -6037,6 +6106,25 @@ fn process_cyw43_host_eapol_data_completion(
                                 "cyw43-host-eapol-gtk",
                                 "deferred",
                             );
+                            let Some(m4_completion) =
+                                submit_cyw43_host_eapol_payload_bounded_completion(
+                                    contract,
+                                    &tx_frame[..len],
+                                    "cyw43-host-eapol-m4",
+                                )
+                            else {
+                                session.progress.record_eapol_error("host-eapol-m4-tx");
+                                return Err(DriverTaskNetError::RuntimeInit("host-eapol-m4-tx"));
+                            };
+                            CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
+                            emit_cyw43_host_eapol_message(contract, "m4", "send-m4", poll, len);
+                            let _m4_drain_ready = wait_cyw43_host_eapol_tx_drain(
+                                contract,
+                                session,
+                                "m4-after-ptk",
+                                poll,
+                                m4_completion,
+                            )?;
                         }
                     }
                     HostEapolAction::SendGroupM2InstallGtk { len, keys } => {
@@ -6212,7 +6300,14 @@ fn cyw43_service_host_eapol_pre_assoc(
     if cyw43_host_eapol_set_ssid_rescue_due(session) {
         session.assoc_probe_attempts = session.assoc_probe_attempts.saturating_add(1);
         let attempt = session.assoc_probe_attempts;
-        cyw43_try_host_eapol_assoc_rescue(contract, credentials, session, poll, attempt);
+        cyw43_try_host_eapol_assoc_rescue(
+            contract,
+            credentials,
+            session,
+            poll,
+            attempt,
+            "set-ssid-failure",
+        );
         return true;
     }
     if session.progress.associated
@@ -6235,12 +6330,8 @@ fn cyw43_service_host_eapol_pre_assoc(
         attempt,
         "cyw43-host-eapol-assoc-probe",
     );
-    if matches!(probe, Cyw43AssocProbeResult::NotAssociated)
-        && !session.progress.assoc_join_rescue_attempted
-        && CYW43_PRIMARY_BSSCFG_JOIN_READY.load(Ordering::Acquire) != 0
-        && cyw43_host_eapol_assoc_rescue_due_any(session.progress.polls, pre_assoc_idle_ms)
-    {
-        cyw43_try_host_eapol_assoc_rescue(contract, credentials, session, poll, attempt);
+    if let Some(reason) = cyw43_host_eapol_assoc_rescue_reason(Some(probe), session, now_ms) {
+        cyw43_try_host_eapol_assoc_rescue(contract, credentials, session, poll, attempt, reason);
     }
     true
 }
@@ -6277,6 +6368,38 @@ fn cyw43_host_eapol_assoc_probe_due_any(poll: u32, elapsed_ms: u64, attempts: u8
 #[cfg(feature = "kernel")]
 fn cyw43_host_eapol_assoc_rescue_due_any(poll: u32, elapsed_ms: u64) -> bool {
     poll >= CYW43_HOST_EAPOL_ASSOC_RESCUE_POLL || elapsed_ms >= CYW43_HOST_EAPOL_ASSOC_RESCUE_MS
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_assoc_rescue_reason(
+    probe: Option<Cyw43AssocProbeResult>,
+    session: &Cyw43HostEapolSession,
+    now_ms: u64,
+) -> Option<&'static str> {
+    if session.progress.associated
+        || session.progress.assoc_join_rescue_attempted
+        || CYW43_PRIMARY_BSSCFG_JOIN_READY.load(Ordering::Acquire) == 0
+        || !cyw43_host_eapol_assoc_rescue_due_any(
+            session.progress.polls,
+            session.pre_assoc_idle_ms(now_ms),
+        )
+    {
+        return None;
+    }
+    match probe {
+        Some(Cyw43AssocProbeResult::NotAssociated) => Some("firmware-not-associated-limit"),
+        Some(Cyw43AssocProbeResult::BssidObserved)
+            if cyw43_host_eapol_valid_bssid_without_carrier(&session.progress) =>
+        {
+            Some("valid-bssid-no-carrier")
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_valid_bssid_without_carrier(progress: &Cyw43HostEapolProgress) -> bool {
+    !progress.associated && !progress.link_up && progress.assoc_probe_status == Some("valid-bssid")
 }
 
 #[cfg(feature = "kernel")]
@@ -6320,26 +6443,25 @@ fn cyw43_probe_host_eapol_bssid_before_required(
     contract: DriverTaskContract,
     station_mac: EthernetAddress,
     session: &mut Cyw43HostEapolSession,
-) -> bool {
+) -> Option<Cyw43AssocProbeResult> {
     if session.bssid_probed_before_required || session.progress.associated {
-        return false;
+        return None;
     }
     if cyw43_active_prompt_poll(contract).is_some() {
-        return false;
+        return None;
     }
     session.bssid_probed_before_required = true;
     let poll = session.progress.polls as usize;
     session.assoc_probe_attempts = session.assoc_probe_attempts.saturating_add(1);
     let attempt = session.assoc_probe_attempts;
-    let _ = cyw43_probe_host_eapol_assoc_state(
+    Some(cyw43_probe_host_eapol_assoc_state(
         contract,
         station_mac,
         session,
         poll,
         attempt,
         "cyw43-host-eapol-bssid-probe",
-    );
-    true
+    ))
 }
 
 #[cfg(feature = "kernel")]
@@ -6388,9 +6510,6 @@ fn cyw43_probe_host_eapol_assoc_state(
                 0,
             );
             if accepted {
-                session
-                    .progress
-                    .record_bssid_association_proof("bssid-probe", poll);
                 emit_cyw43_host_eapol_status(contract, "assoc-probe", &session.progress);
                 Cyw43AssocProbeResult::BssidObserved
             } else {
@@ -6449,7 +6568,27 @@ fn cyw43_try_host_eapol_assoc_rescue(
     session: &mut Cyw43HostEapolSession,
     poll: usize,
     attempt: u8,
-) {
+    reason: &'static str,
+) -> bool {
+    cyw43_try_host_eapol_assoc_rescue_with_reason(
+        contract,
+        credentials,
+        session,
+        poll,
+        attempt,
+        reason,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_try_host_eapol_assoc_rescue_with_reason(
+    contract: DriverTaskContract,
+    credentials: WifiCredentials,
+    session: &mut Cyw43HostEapolSession,
+    poll: usize,
+    attempt: u8,
+    reason: &'static str,
+) -> bool {
     session.progress.record_assoc_join_rescue_attempt();
     match cyw43_submit_linux_bsscfg_join_with_stage(
         contract,
@@ -6463,10 +6602,11 @@ fn cyw43_try_host_eapol_assoc_rescue(
                 poll,
                 attempt,
                 "ready",
-                "firmware-not-associated-limit",
+                reason,
                 "bsscfg-join",
                 0,
             );
+            true
         }
         Err(Cyw43CommandSubmitError::Completion(completion))
             if cyw43_join_iovar_completion_allows_set_ssid(completion) =>
@@ -6485,36 +6625,46 @@ fn cyw43_try_host_eapol_assoc_rescue(
                         "set-ssid-fallback",
                         0,
                     );
+                    true
                 }
-                Err(_) => emit_cyw43_host_eapol_assoc_rescue(
-                    contract,
-                    poll,
-                    attempt,
-                    "failed",
-                    "set-ssid-control-error",
-                    "set-ssid-fallback",
-                    0,
-                ),
+                Err(_) => {
+                    emit_cyw43_host_eapol_assoc_rescue(
+                        contract,
+                        poll,
+                        attempt,
+                        "failed",
+                        "set-ssid-control-error",
+                        "set-ssid-fallback",
+                        0,
+                    );
+                    false
+                }
             }
         }
-        Err(Cyw43CommandSubmitError::Completion(completion)) => emit_cyw43_host_eapol_assoc_rescue(
-            contract,
-            poll,
-            attempt,
-            "failed",
-            "bsscfg-join-control-error",
-            "bsscfg-join",
-            completion.result,
-        ),
-        Err(Cyw43CommandSubmitError::Runtime(_)) => emit_cyw43_host_eapol_assoc_rescue(
-            contract,
-            poll,
-            attempt,
-            "failed",
-            "bsscfg-join-runtime-error",
-            "bsscfg-join",
-            0,
-        ),
+        Err(Cyw43CommandSubmitError::Completion(completion)) => {
+            emit_cyw43_host_eapol_assoc_rescue(
+                contract,
+                poll,
+                attempt,
+                "failed",
+                "bsscfg-join-control-error",
+                "bsscfg-join",
+                completion.result,
+            );
+            false
+        }
+        Err(Cyw43CommandSubmitError::Runtime(_)) => {
+            emit_cyw43_host_eapol_assoc_rescue(
+                contract,
+                poll,
+                attempt,
+                "failed",
+                "bsscfg-join-runtime-error",
+                "bsscfg-join",
+                0,
+            );
+            false
+        }
     }
 }
 
@@ -7305,8 +7455,8 @@ fn cyw43_mac_is_unicast(mac: [u8; 6]) -> bool {
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_tcp_dst_is_console_port(port: u16) -> bool {
-    port == COHESIX_TCP_CONSOLE_PORT || port == COHSH_TCP_PORT
+fn cyw43_tcp_dst_is_control_or_proof_port(port: u16) -> bool {
+    port == COHESIX_TCP_CONSOLE_PORT || port == COHSH_TCP_PORT || port == TCP_SMOKE_PORT
 }
 
 #[cfg(feature = "kernel")]
@@ -7356,7 +7506,9 @@ fn record_cyw43_post_dhcp_rx_progress(
         if info.ip_proto == CYW43_IP_PROTO_ICMP {
             CYW43_POST_DHCP_RX_ICMP.fetch_add(1, Ordering::AcqRel);
         }
-        if info.ip_proto == CYW43_IP_PROTO_TCP && cyw43_tcp_dst_is_console_port(info.l4_dst) {
+        if info.ip_proto == CYW43_IP_PROTO_TCP
+            && cyw43_tcp_dst_is_control_or_proof_port(info.l4_dst)
+        {
             CYW43_POST_DHCP_RX_TCP.fetch_add(1, Ordering::AcqRel);
         }
     }
@@ -8269,7 +8421,7 @@ fn cyw43_host_eapol_atomic_status() -> &'static str {
 }
 
 #[cfg(feature = "kernel")]
-const fn cyw43_host_eapol_required_reason(progress: &Cyw43HostEapolProgress) -> &'static str {
+fn cyw43_host_eapol_required_reason(progress: &Cyw43HostEapolProgress) -> &'static str {
     if let Some(error) = progress.eapol_error {
         error
     } else if progress.auth_timeout_seen && !progress.associated {
@@ -8278,6 +8430,8 @@ const fn cyw43_host_eapol_required_reason(progress: &Cyw43HostEapolProgress) -> 
         "cyw43-association-set-ssid-failed"
     } else if progress.assoc_probe_not_associated && !progress.associated {
         "cyw43-association-not-associated"
+    } else if cyw43_host_eapol_valid_bssid_without_carrier(progress) {
+        "cyw43-association-valid-bssid-no-carrier"
     } else if !progress.associated && progress.event_rx == 0 && progress.data_rx == 0 {
         "cyw43-association-event-missing"
     } else {
@@ -9129,8 +9283,14 @@ fn wait_cyw43_host_eapol_tx_drain(
     #[cfg(test)]
     if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
         CYW43_HOST_EAPOL_TEST_TX_DRAINED.fetch_add(1, Ordering::AcqRel);
-        if (stage == "m4-before-wsec" || stage == "post-secure-m4-before-wsec")
-            && CYW43_HOST_EAPOL_TEST_PTK_INSTALLED.load(Ordering::Acquire) == 0
+        if matches!(
+            stage,
+            "m4-before-wsec"
+                | "m4-after-wsec"
+                | "m4-after-ptk"
+                | "post-secure-m4-before-wsec"
+                | "post-secure-m4-after-ptk"
+        ) && CYW43_HOST_EAPOL_TEST_PTK_INSTALLED.load(Ordering::Acquire) == 0
         {
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.store(1, Ordering::Release);
         }
@@ -9140,7 +9300,11 @@ fn wait_cyw43_host_eapol_tx_drain(
         }
         let timeout_bit = match stage {
             "m2-before-m3" => 1,
-            "m4-before-wsec" | "post-secure-m4-before-wsec" => 2,
+            "m4-before-wsec"
+            | "m4-after-wsec"
+            | "m4-after-ptk"
+            | "post-secure-m4-before-wsec"
+            | "post-secure-m4-after-ptk" => 2,
             "group-m2-before-secure" => 4,
             _ => 0,
         };
@@ -9258,6 +9422,9 @@ fn cyw43_host_eapol_next_action(
     }
     if progress.assoc_set_ssid_rescue_attempted && !progress.associated {
         return "inspect-cyw43-association-event-after-set-ssid-rescue";
+    }
+    if cyw43_host_eapol_valid_bssid_without_carrier(progress) {
+        return "inspect-cyw43-valid-bssid-no-carrier-or-rejoin";
     }
     if progress.eapol_rx != 0 {
         "inspect-host-eapol-handshake-state"
@@ -14168,6 +14335,17 @@ fn submit_cyw43_host_eapol_payload_bounded(
     submit_cyw43_host_eapol_payload_bounded_completion(contract, frame, stage).is_some()
 }
 
+#[cfg(test)]
+fn cyw43_host_eapol_test_stage_is_m4(stage: &'static str) -> bool {
+    matches!(
+        stage,
+        "cyw43-host-eapol-m4"
+            | "cyw43-host-eapol-m4-retransmit"
+            | "cyw43-host-eapol-post-secure-m4"
+            | "cyw43-host-eapol-post-secure-m4-retransmit"
+    )
+}
+
 #[cfg(feature = "kernel")]
 fn submit_cyw43_host_eapol_payload_bounded_completion(
     contract: DriverTaskContract,
@@ -14176,7 +14354,30 @@ fn submit_cyw43_host_eapol_payload_bounded_completion(
 ) -> Option<DriverTaskCompletionRecord> {
     #[cfg(test)]
     if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
-        let _ = (contract, stage);
+        let _ = contract;
+        if cyw43_host_eapol_test_stage_is_m4(stage) {
+            let ptk_count = CYW43_HOST_EAPOL_TEST_PTK_INSTALLED.load(Ordering::Acquire);
+            let gtk_count = CYW43_HOST_EAPOL_TEST_GTK_INSTALLED.load(Ordering::Acquire);
+            let wsec_count = CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire);
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_PTK_COUNT.store(ptk_count, Ordering::Release);
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_GTK_COUNT.store(gtk_count, Ordering::Release);
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT.store(wsec_count, Ordering::Release);
+            if ptk_count == 0 {
+                CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.store(1, Ordering::Release);
+            }
+            if CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK_WSEC.swap(0, Ordering::AcqRel) != 0 {
+                if gtk_count == 0 {
+                    CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_GTK.store(1, Ordering::Release);
+                }
+                if wsec_count == 0 {
+                    CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_WSEC.store(1, Ordering::Release);
+                }
+            }
+            if CYW43_HOST_EAPOL_TEST_M4_SUBMIT_FAILS.load(Ordering::Acquire) != 0 {
+                CYW43_TX_DROPPED.fetch_add(1, Ordering::AcqRel);
+                return None;
+            }
+        }
         if !frame.is_empty() {
             CYW43_HOST_EAPOL_TEST_TX_SUBMITTED.fetch_add(1, Ordering::AcqRel);
             CYW43_TX_SUBMITTED.fetch_add(1, Ordering::AcqRel);
@@ -14678,40 +14879,6 @@ fn consume_cyw43_post_secure_eapol_frame(
         HostEapolAction::SendM4InstallKeys { len, keys } => {
             CYW43_HOST_EAPOL_M3.fetch_add(1, Ordering::AcqRel);
             emit_cyw43_host_eapol_message(contract, "m3", "post-secure-recv-m3", poll, frame.len());
-            let Some(m4_completion) = submit_cyw43_host_eapol_payload_bounded_completion(
-                contract,
-                &tx_frame[..len],
-                "cyw43-host-eapol-post-secure-m4",
-            ) else {
-                session
-                    .progress
-                    .record_eapol_error("host-eapol-post-secure-m4-tx");
-                return true;
-            };
-            CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
-            emit_cyw43_host_eapol_message(contract, "m4", "post-secure-send-m4", poll, len);
-            let _m4_drain_ready = match wait_cyw43_host_eapol_tx_drain(
-                contract,
-                session,
-                "post-secure-m4-before-wsec",
-                poll,
-                m4_completion,
-            ) {
-                Ok(drained) => drained,
-                Err(_) => {
-                    session
-                        .progress
-                        .record_eapol_error("host-eapol-post-secure-m4-drain");
-                    emit_cyw43_host_eapol_error(
-                        contract,
-                        "post-secure-m4-drain",
-                        "host-eapol-post-secure-m4-drain",
-                        poll,
-                        frame.len(),
-                    );
-                    return true;
-                }
-            };
             if cyw43_install_wsec_key_with_pre_tx_drain(
                 contract,
                 0,
@@ -14737,6 +14904,40 @@ fn consume_cyw43_post_secure_eapol_frame(
                 return true;
             }
             CYW43_HOST_EAPOL_PTK.fetch_add(1, Ordering::AcqRel);
+            let Some(m4_completion) = submit_cyw43_host_eapol_payload_bounded_completion(
+                contract,
+                &tx_frame[..len],
+                "cyw43-host-eapol-post-secure-m4",
+            ) else {
+                session
+                    .progress
+                    .record_eapol_error("host-eapol-post-secure-m4-tx");
+                return true;
+            };
+            CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
+            emit_cyw43_host_eapol_message(contract, "m4", "post-secure-send-m4", poll, len);
+            let _m4_drain_ready = match wait_cyw43_host_eapol_tx_drain(
+                contract,
+                session,
+                "post-secure-m4-after-ptk",
+                poll,
+                m4_completion,
+            ) {
+                Ok(drained) => drained,
+                Err(_) => {
+                    session
+                        .progress
+                        .record_eapol_error("host-eapol-post-secure-m4-drain");
+                    emit_cyw43_host_eapol_error(
+                        contract,
+                        "post-secure-m4-drain",
+                        "host-eapol-post-secure-m4-drain",
+                        poll,
+                        frame.len(),
+                    );
+                    return true;
+                }
+            };
             if let Some(gtk) = keys.gtk {
                 let group_ea = [0u8; 6];
                 if cyw43_install_wsec_key(
@@ -15907,6 +16108,7 @@ mod tests {
         CYW43_HOST_EAPOL_ACTIVE.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+        CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
         CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
         CYW43_POST_DHCP_RX_ANY.store(0, Ordering::Release);
         CYW43_POST_DHCP_RX_UNICAST.store(0, Ordering::Release);
@@ -15962,6 +16164,14 @@ mod tests {
         CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_RX_RESTORED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_BSSID_VALID.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_M4_SUBMIT_FAILS.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK_WSEC.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_GTK.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_WSEC.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_M4_SUBMIT_PTK_COUNT.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_M4_SUBMIT_GTK_COUNT.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT.store(0, Ordering::Release);
         while take_cyw43_pending_rx_token().is_some() {}
         clear_cyw43_pending_control_replies();
         clear_cyw43_host_eapol_status_throttle();
@@ -17957,7 +18167,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn host_eapol_m4_tx_drain_timeout_is_advisory_before_key_install() {
+    fn host_eapol_m4_tx_drain_timeout_is_advisory_after_key_install() {
         let _guard = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 replay tests must serialize");
@@ -18010,7 +18220,7 @@ mod tests {
             ),
             &mut tx_frame,
         )
-        .expect("M4 drain timeout after submitted M4 must not block key install");
+        .expect("M4 drain timeout after key install must not block secure release");
 
         assert!(m3_result.observed_frame);
         assert!(m3_result.secure);
@@ -18022,7 +18232,7 @@ mod tests {
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
@@ -18047,7 +18257,7 @@ mod tests {
         let err = wait_cyw43_host_eapol_tx_drain(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             &mut session,
-            "m4-before-wsec",
+            "m4-after-wsec",
             8197,
             DriverTaskCompletionRecord::progress(0, 143),
         )
@@ -18059,6 +18269,107 @@ mod tests {
         );
         assert_eq!(CYW43_HOST_EAPOL_PTK.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_HOST_EAPOL_GTK.load(Ordering::Acquire), 0);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_m4_submit_failure_after_key_install_stays_fatal() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 replay tests must serialize");
+        reset_cyw43_status_flags();
+        let _io_guard = test_enable_cyw43_host_eapol_io_stub();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        *CYW43_RUNTIME_MAC.lock() = EthernetAddress(station);
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        let mut tx_frame = [0u8; MAX_FRAME_LEN];
+
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len =
+            cyw43_host_eapol::write_test_m1_frame(&mut m1, &station, &ap).expect("test m1 frame");
+        process_cyw43_host_eapol_data_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            EthernetAddress(station),
+            &mut session,
+            8193,
+            0,
+            test_stage_cyw43_completion(
+                &m1[..m1_len],
+                DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+                1,
+            ),
+            &mut tx_frame,
+        )
+        .expect("M1 replay should submit M2");
+
+        CYW43_HOST_EAPOL_TEST_M4_SUBMIT_FAILS.store(1, Ordering::Release);
+        let mut m3 = [0u8; MAX_FRAME_LEN];
+        let m3_len = cyw43_host_eapol::write_test_m3_frame(&mut m3, &station, &session.eapol)
+            .expect("test m3 frame");
+        let err = process_cyw43_host_eapol_data_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            EthernetAddress(station),
+            &mut session,
+            8197,
+            0,
+            test_stage_cyw43_completion(
+                &m3[..m3_len],
+                DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+                2,
+            ),
+            &mut tx_frame,
+        )
+        .expect_err("M4 submit failure after key install must stay fatal");
+
+        assert_eq!(err, DriverTaskNetError::RuntimeInit("host-eapol-m4-tx"));
+        assert_eq!(session.progress.eapol_error, Some("host-eapol-m4-tx"));
+        assert_eq!(CYW43_HOST_EAPOL_M4.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_HOST_EAPOL_PTK.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_GTK.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_PTK_COUNT.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_GTK_COUNT.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_GTK.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_WSEC.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(CYW43_HOST_EAPOL_TEST_RX_RESTORED.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 0);
+        assert_eq!(
+            CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire),
+            0
+        );
+        assert!(!cyw43_data_plane_ready());
         reset_cyw43_status_flags();
     }
 
@@ -18108,6 +18419,10 @@ mod tests {
         assert_eq!(
             CYW43_HOST_EAPOL_JOIN_SUBMIT_POLLS,
             CYW43_HOST_EAPOL_PRE_ASSOC_POLLS + 1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_POST_ACTIVITY_POLLS,
+            CYW43_HOST_EAPOL_POST_ASSOC_POLLS
         );
         assert!(!cyw43_host_eapol_start_due(
             CYW43_HOST_EAPOL_START_FIRST_POLL - 1,
@@ -18166,6 +18481,70 @@ mod tests {
             Some(CYW43_HOST_EAPOL_START_FIRST_MS),
             CYW43_HOST_EAPOL_START_FIRST_MS + CYW43_HOST_EAPOL_START_INTERVAL_MS
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_post_activity_window_tracks_incomplete_handshake() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+
+        assert!(!cyw43_host_eapol_needs_post_activity_window(
+            Cyw43HostEapolSliceOutcome::default()
+        ));
+
+        let mut progress = Cyw43HostEapolProgress {
+            eapol_rx: 1,
+            ..Default::default()
+        };
+        assert!(cyw43_host_eapol_needs_post_activity_window(
+            Cyw43HostEapolSliceOutcome {
+                activity: true,
+                post_rescue_assoc_window_due: false,
+                progress: Some(progress),
+            }
+        ));
+
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        assert!(!cyw43_host_eapol_needs_post_activity_window(
+            Cyw43HostEapolSliceOutcome {
+                activity: true,
+                post_rescue_assoc_window_due: false,
+                progress: Some(progress),
+            }
+        ));
+        CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+
+        progress.eapol_rx = 0;
+        progress.associated = true;
+        progress.link_up = false;
+        assert!(cyw43_host_eapol_needs_post_activity_window(
+            Cyw43HostEapolSliceOutcome {
+                activity: true,
+                post_rescue_assoc_window_due: false,
+                progress: Some(progress),
+            }
+        ));
+
+        progress.link_up = true;
+        assert!(cyw43_host_eapol_needs_post_activity_window(
+            Cyw43HostEapolSliceOutcome {
+                activity: true,
+                post_rescue_assoc_window_due: false,
+                progress: Some(progress),
+            }
+        ));
+
+        CYW43_HOST_EAPOL_REQUIRED.store(1, Ordering::Release);
+        assert!(!cyw43_host_eapol_needs_post_activity_window(
+            Cyw43HostEapolSliceOutcome {
+                activity: true,
+                post_rescue_assoc_window_due: false,
+                progress: Some(progress),
+            }
+        ));
+
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]
@@ -18546,7 +18925,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn host_eapol_bssid_probe_promotes_association_not_secure_carrier() {
+    fn host_eapol_bssid_probe_records_candidate_without_association() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         CYW43_HOST_EAPOL_TEST_BSSID_VALID.store(1, Ordering::Release);
@@ -18574,14 +18953,65 @@ mod tests {
         );
         assert_eq!(session.progress.assoc_probe_status, Some("valid-bssid"));
         assert!(!session.progress.assoc_probe_not_associated);
-        assert!(session.progress.associated);
+        assert!(!session.progress.associated);
         assert!(!session.progress.link_up);
-        assert_eq!(session.progress.association_event, Some("bssid-probe"));
-        assert_eq!(session.progress.association_poll, 7);
-        assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 1);
+        assert_eq!(session.progress.association_event, None);
+        assert_eq!(session.progress.association_poll, 0);
+        assert!(cyw43_host_eapol_valid_bssid_without_carrier(
+            &session.progress
+        ));
+        assert_eq!(
+            cyw43_host_eapol_required_reason(&session.progress),
+            "cyw43-association-valid-bssid-no-carrier"
+        );
+        assert_eq!(
+            cyw43_host_eapol_next_action("required", &session.progress),
+            "inspect-cyw43-valid-bssid-no-carrier-or-rejoin"
+        );
+        assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 0);
         assert!(!cyw43_secure_carrier_ready());
         assert!(!cyw43_data_plane_ready());
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_valid_bssid_without_carrier_requests_one_rejoin_rescue() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
+
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        session.progress.polls = CYW43_HOST_EAPOL_ASSOC_RESCUE_POLL;
+        session.progress.empty_polls = CYW43_HOST_EAPOL_ASSOC_RESCUE_POLL;
+        session.progress.record_assoc_probe("valid-bssid", 0);
+
+        assert!(cyw43_host_eapol_valid_bssid_without_carrier(
+            &session.progress
+        ));
+        assert_eq!(
+            cyw43_host_eapol_assoc_rescue_reason(
+                Some(Cyw43AssocProbeResult::BssidObserved),
+                &session,
+                0
+            ),
+            Some("valid-bssid-no-carrier")
+        );
+
+        session.progress.record_assoc_join_rescue_attempt();
+        assert_eq!(
+            cyw43_host_eapol_assoc_rescue_reason(
+                Some(Cyw43AssocProbeResult::BssidObserved),
+                &session,
+                0
+            ),
+            None
+        );
 
         reset_cyw43_status_flags();
     }
@@ -20125,13 +20555,37 @@ mod tests {
             1
         );
         assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_PTK_COUNT.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_GTK_COUNT.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_GTK.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_WSEC.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
             CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
             1
         );
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
@@ -20278,6 +20732,22 @@ mod tests {
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
             2
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_PTK_COUNT.load(Ordering::Acquire),
+            2
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_GTK_COUNT.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.load(Ordering::Acquire),
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
@@ -20557,10 +21027,26 @@ mod tests {
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
             0
         );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_PTK_COUNT.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_GTK_COUNT.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.load(Ordering::Acquire),
+            0
+        );
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
@@ -22316,26 +22802,26 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn host_eapol_wsec_key_uses_oldgood_control_reply_window() {
-        assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS, 8_000);
+        assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS, 16_384);
         assert_eq!(CYW43_HOST_EAPOL_GTK_WSEC_KEY_POLL_ATTEMPTS, 16_384);
         assert_eq!(CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_POLL_ATTEMPTS, 512);
         assert_eq!(CYW43_CONTROL_PLANE_REPLY_TIMEOUT_MS, 1_000);
-        assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS, 2_500);
+        assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS, 5_000);
         assert_eq!(CYW43_HOST_EAPOL_GTK_WSEC_KEY_REPLY_TIMEOUT_MS, 5_000);
         assert_eq!(CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_REPLY_TIMEOUT_MS, 250);
-        assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_STALE_REPLY_RETRIES, 1);
+        assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_STALE_REPLY_RETRIES, 3);
         assert_eq!(CYW43_HOST_EAPOL_GTK_WSEC_KEY_STALE_REPLY_RETRIES, 2);
         assert_eq!(CYW43_HOST_EAPOL_TX_DRAIN_POLLS, 2_000);
         assert_eq!(CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS, 2_000);
         assert_eq!(
-            cyw43_host_eapol_tx_drain_window("m4-before-wsec"),
+            cyw43_host_eapol_tx_drain_window("m4-after-wsec"),
             (
                 CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS,
                 CYW43_HOST_EAPOL_TX_DRAIN_POLLS
             )
         );
         assert_eq!(
-            cyw43_host_eapol_tx_drain_window("post-secure-m4-before-wsec"),
+            cyw43_host_eapol_tx_drain_window("post-secure-m4-after-ptk"),
             (
                 CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS,
                 CYW43_HOST_EAPOL_TX_DRAIN_POLLS
@@ -23189,6 +23675,14 @@ mod tests {
         let assigned_ip = [192, 168, 86, 154];
         let frame = test_cyw43_host_tcp_frame(assigned_ip);
         let info = cyw43_trace_frame_info(&frame);
+        let mut smoke_frame = test_cyw43_host_tcp_frame(assigned_ip);
+        let smoke_tcp = ETH_HEADER_LEN + 20;
+        smoke_frame[smoke_tcp + 2..smoke_tcp + 4].copy_from_slice(&TCP_SMOKE_PORT.to_be_bytes());
+        let smoke_info = cyw43_trace_frame_info(&smoke_frame);
+        let mut unrelated_frame = test_cyw43_host_tcp_frame(assigned_ip);
+        let unrelated_tcp = ETH_HEADER_LEN + 20;
+        unrelated_frame[unrelated_tcp + 2..unrelated_tcp + 4].copy_from_slice(&22u16.to_be_bytes());
+        let unrelated_info = cyw43_trace_frame_info(&unrelated_frame);
 
         record_cyw43_post_dhcp_rx_progress(
             contract,
@@ -23200,15 +23694,38 @@ mod tests {
             CYW43_DRIVER_TASK_MAC,
             Some(assigned_ip),
         );
+        record_cyw43_post_dhcp_rx_progress(
+            contract,
+            "rx-deliver",
+            smoke_info,
+            smoke_frame.len(),
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            CYW43_DRIVER_TASK_MAC,
+            Some(assigned_ip),
+        );
+        record_cyw43_post_dhcp_rx_progress(
+            contract,
+            "rx-deliver",
+            unrelated_info,
+            unrelated_frame.len(),
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            CYW43_DRIVER_TASK_MAC,
+            Some(assigned_ip),
+        );
 
         let counters = Cyw43DriverTaskDevice::default().counters();
-        assert_eq!(counters.wifi_post_dhcp_rx_any, 1);
-        assert_eq!(counters.wifi_post_dhcp_rx_unicast, 1);
+        assert_eq!(counters.wifi_post_dhcp_rx_any, 3);
+        assert_eq!(counters.wifi_post_dhcp_rx_unicast, 3);
         assert_eq!(counters.wifi_post_dhcp_rx_arp, 0);
-        assert_eq!(counters.wifi_post_dhcp_rx_ipv4, 1);
+        assert_eq!(counters.wifi_post_dhcp_rx_ipv4, 3);
         assert_eq!(counters.wifi_post_dhcp_rx_icmp, 0);
-        assert_eq!(counters.wifi_post_dhcp_rx_tcp, 1);
-        assert_eq!(counters.wifi_post_dhcp_rx_last_len, frame.len() as u64);
+        assert_eq!(counters.wifi_post_dhcp_rx_tcp, 2);
+        assert_eq!(
+            counters.wifi_post_dhcp_rx_last_len,
+            smoke_frame.len() as u64
+        );
         assert_eq!(
             counters.wifi_post_dhcp_rx_last_ethertype,
             u64::from(CYW43_ETH_P_IPV4)

@@ -1240,6 +1240,7 @@ const CYW43_RX_PRIORITY_CONTROL_EVENT: u8 = 4;
 const CYW43_RX_PRIORITY_IPV4: u8 = 5;
 const CYW43_RX_PRIORITY_ARP: u8 = 6;
 const CYW43_RX_PRIORITY_DHCP: u8 = 7;
+const CYW43_RX_PRIORITY_PROTECTED_EAPOL: u8 = 8;
 const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
 const CYW43_RX_QUEUE_CAP: usize = CYW43_RX_DRAIN_BUDGET;
@@ -2039,6 +2040,7 @@ struct Cyw43RuntimeState {
     rx_queue_overflows: u32,
     rx_drain_budget_hits: u32,
     rx_max_drained_per_turn: u8,
+    rx_queue_protect_eapol: bool,
     rx_queue_slots: [u8; CYW43_RX_QUEUE_CAP],
     rx_queue_lens: [u16; CYW43_RX_QUEUE_CAP],
     rx_queue_flags: [u16; CYW43_RX_QUEUE_CAP],
@@ -2135,6 +2137,7 @@ impl Cyw43RuntimeState {
             rx_queue_overflows: 0,
             rx_drain_budget_hits: 0,
             rx_max_drained_per_turn: 0,
+            rx_queue_protect_eapol: false,
             rx_queue_slots: cyw43_rx_queue_initial_slots(),
             rx_queue_lens: [0; CYW43_RX_QUEUE_CAP],
             rx_queue_flags: [0; CYW43_RX_QUEUE_CAP],
@@ -2252,6 +2255,7 @@ impl Cyw43RuntimeState {
         self.rx_queue_overflows = 0;
         self.rx_drain_budget_hits = 0;
         self.rx_max_drained_per_turn = 0;
+        self.rx_queue_protect_eapol = false;
         for (slot_index, slot) in self.rx_queue_slots.iter_mut().enumerate() {
             *slot = slot_index as u8;
         }
@@ -5162,6 +5166,7 @@ fn service_cyw43_descriptor_command(
             let control_ext_header = desc.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER != 0;
             cyw43_drain_startup_status_frames(state, command.sequence);
             if desc.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN != 0 {
+                state.rx_queue_protect_eapol = true;
                 cyw43_drain_rx_before_control_tx(state, command.sequence);
             }
             cyw43_publish_control_rx_progress(
@@ -5209,6 +5214,10 @@ fn service_cyw43_descriptor_command(
                 len: desc.payload_len,
                 flags: 0,
             };
+            state.rx_queue_protect_eapol = cyw43_runtime_payload_ethertype(
+                usize::from(desc.payload_offset),
+                usize::from(desc.payload_len),
+            ) == Some(CYW43_ETH_P_EAPOL);
             let submitted_seq = state.sdpcm_seq;
             let credit_observations_before = state.sdpcm_credit_observations;
             let expected_request_len = cyw43_data_tx_total_len(usize::from(frame.len))
@@ -5236,6 +5245,8 @@ fn service_cyw43_descriptor_command(
             written as u32
         }
         DRIVER_RUNTIME_CYW43_OP_RX_POLL => {
+            state.rx_queue_protect_eapol =
+                desc.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN == 0;
             let credit_observations_before = state.sdpcm_credit_observations;
             match cyw43_runtime_poll_rx_detailed_with_options(
                 state,
@@ -5259,6 +5270,7 @@ fn service_cyw43_descriptor_command(
             }
         }
         DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
+            state.rx_queue_protect_eapol = true;
             let credit_observations_before = state.sdpcm_credit_observations;
             match cyw43_runtime_poll_rx_detailed(
                 state,
@@ -12444,7 +12456,7 @@ fn cyw43_rx_queue_evict_for_runtime_payload(
     packet_len: usize,
     flags: u16,
 ) -> bool {
-    let incoming_priority = cyw43_runtime_payload_priority(packet_offset, packet_len, flags);
+    let incoming_priority = cyw43_runtime_payload_priority(state, packet_offset, packet_len, flags);
     let mut candidate = None;
     let mut candidate_priority = u8::MAX;
     let mut index = 0u8;
@@ -12555,7 +12567,7 @@ fn cyw43_rx_queue_find_matching_index(
             if best.is_none() || priority > best_priority {
                 best = Some(logical_index);
                 best_priority = priority;
-                if priority == CYW43_RX_PRIORITY_DHCP {
+                if priority == cyw43_rx_queue_max_priority(state) {
                     break;
                 }
             }
@@ -12592,13 +12604,26 @@ fn cyw43_rx_queue_payload_priority_at(state: &Cyw43RuntimeState, logical_index: 
     let slot = cyw43_rx_queue_slot_at(state, logical_index);
     let len = usize::from(state.rx_queue_lens[slot]);
     let flags = state.rx_queue_flags[slot];
-    cyw43_stored_payload_priority(&state.rx_queue_frames[slot], len, flags)
+    cyw43_stored_payload_priority(state, &state.rx_queue_frames[slot], len, flags)
 }
 
-fn cyw43_runtime_payload_priority(packet_offset: usize, packet_len: usize, flags: u16) -> u8 {
+fn cyw43_rx_queue_max_priority(state: &Cyw43RuntimeState) -> u8 {
+    if state.rx_queue_protect_eapol {
+        CYW43_RX_PRIORITY_PROTECTED_EAPOL
+    } else {
+        CYW43_RX_PRIORITY_DHCP
+    }
+}
+
+fn cyw43_runtime_payload_priority(
+    state: &Cyw43RuntimeState,
+    packet_offset: usize,
+    packet_len: usize,
+    flags: u16,
+) -> u8 {
     match flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK {
         DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA => {
-            cyw43_runtime_data_payload_priority(packet_offset, packet_len)
+            cyw43_runtime_data_payload_priority(state, packet_offset, packet_len)
         }
         DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL
         | DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT => CYW43_RX_PRIORITY_CONTROL_EVENT,
@@ -12607,13 +12632,14 @@ fn cyw43_runtime_payload_priority(packet_offset: usize, packet_len: usize, flags
 }
 
 fn cyw43_stored_payload_priority(
+    state: &Cyw43RuntimeState,
     packet: &[u8; MAX_DRIVER_TASK_FRAME_BYTES],
     packet_len: usize,
     flags: u16,
 ) -> u8 {
     match flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK {
         DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA => {
-            cyw43_stored_data_payload_priority(packet, packet_len)
+            cyw43_stored_data_payload_priority(state, packet, packet_len)
         }
         DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL
         | DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT => CYW43_RX_PRIORITY_CONTROL_EVENT,
@@ -12621,9 +12647,16 @@ fn cyw43_stored_payload_priority(
     }
 }
 
-fn cyw43_runtime_data_payload_priority(packet_offset: usize, packet_len: usize) -> u8 {
+fn cyw43_runtime_data_payload_priority(
+    state: &Cyw43RuntimeState,
+    packet_offset: usize,
+    packet_len: usize,
+) -> u8 {
     match cyw43_runtime_payload_ethertype(packet_offset, packet_len) {
         Some(CYW43_ETH_P_ARP) => CYW43_RX_PRIORITY_ARP,
+        Some(CYW43_ETH_P_EAPOL) if state.rx_queue_protect_eapol => {
+            CYW43_RX_PRIORITY_PROTECTED_EAPOL
+        }
         Some(CYW43_ETH_P_EAPOL) => CYW43_RX_PRIORITY_EAPOL,
         Some(CYW43_ETH_P_IPV4) => {
             if cyw43_runtime_payload_is_dhcp(packet_offset, packet_len) {
@@ -12638,11 +12671,15 @@ fn cyw43_runtime_data_payload_priority(packet_offset: usize, packet_len: usize) 
 }
 
 fn cyw43_stored_data_payload_priority(
+    state: &Cyw43RuntimeState,
     packet: &[u8; MAX_DRIVER_TASK_FRAME_BYTES],
     packet_len: usize,
 ) -> u8 {
     match cyw43_stored_payload_ethertype(packet, packet_len) {
         Some(CYW43_ETH_P_ARP) => CYW43_RX_PRIORITY_ARP,
+        Some(CYW43_ETH_P_EAPOL) if state.rx_queue_protect_eapol => {
+            CYW43_RX_PRIORITY_PROTECTED_EAPOL
+        }
         Some(CYW43_ETH_P_EAPOL) => CYW43_RX_PRIORITY_EAPOL,
         Some(CYW43_ETH_P_IPV4) => {
             if cyw43_stored_payload_is_dhcp(packet, packet_len) {
@@ -31323,6 +31360,52 @@ mod tests {
         let mut dhcp_prefix = [0u8; 42];
         dhcp_prefix.copy_from_slice(&dhcp[..42]);
         assert_eq!(read_frame_prefix::<42>(frame), dhcp_prefix);
+    }
+
+    #[test]
+    fn cyw43_rx_queue_full_protects_pre_secure_eapol_over_dhcp() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.rx_queue_protect_eapol = true;
+        let dhcp_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x100;
+        let eapol_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x300;
+        let mut dhcp = [0u8; 300];
+        dhcp[12..14].copy_from_slice(&CYW43_ETH_P_IPV4.to_be_bytes());
+        dhcp[14] = 0x45;
+        dhcp[14 + 9] = CYW43_IP_PROTO_UDP;
+        let udp = 14 + 20;
+        dhcp[udp..udp + 2].copy_from_slice(&CYW43_DHCP_SERVER_PORT.to_be_bytes());
+        dhcp[udp + 2..udp + 4].copy_from_slice(&CYW43_DHCP_CLIENT_PORT.to_be_bytes());
+        let mut eapol = [0u8; 60];
+        eapol[12..14].copy_from_slice(&CYW43_ETH_P_EAPOL.to_be_bytes());
+        stage_bytes(dhcp_offset, &dhcp);
+        stage_bytes(eapol_offset, &eapol);
+
+        for _ in 0..CYW43_RX_QUEUE_CAP {
+            assert!(cyw43_rx_queue_push_from_runtime(
+                &mut state,
+                dhcp_offset,
+                dhcp.len(),
+                cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 1)
+            ));
+        }
+        assert_eq!(usize::from(state.rx_queue_count), CYW43_RX_QUEUE_CAP);
+        assert!(cyw43_rx_queue_push_from_runtime(
+            &mut state,
+            eapol_offset,
+            eapol.len(),
+            cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 2)
+        ));
+        assert_eq!(usize::from(state.rx_queue_count), CYW43_RX_QUEUE_CAP);
+        assert_eq!(state.rx_queue_overflows, 1);
+
+        let frame = cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_DATA)
+            .expect("pre-secure EAPOL should preempt queued DHCP");
+        assert_eq!(frame.len, eapol.len() as u16);
+        let mut eapol_prefix = [0u8; 14];
+        eapol_prefix.copy_from_slice(&eapol[..14]);
+        assert_eq!(read_frame_prefix::<14>(frame), eapol_prefix);
     }
 
     #[test]
