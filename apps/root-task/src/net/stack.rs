@@ -1503,14 +1503,19 @@ fn cyw43_flush_pre_poll_data_ready_for(
 ) -> bool {
     contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
         && active_interface == "wifi"
-        && matches!(mode, NetMode::Dhcp)
         && bringup_status.is_none()
-        && (matches!(
-            dhcp_phase,
-            Some(DhcpPhase::Selecting | DhcpPhase::Requesting | DhcpPhase::Bound)
-        ) || (dhcp_socket_ready
-            && ip == Ipv4Address::UNSPECIFIED
-            && matches!(dhcp_phase, Some(DhcpPhase::Disabled))))
+        && match mode {
+            NetMode::Dhcp => {
+                matches!(
+                    dhcp_phase,
+                    Some(DhcpPhase::Selecting | DhcpPhase::Requesting | DhcpPhase::Bound)
+                ) || (dhcp_socket_ready
+                    && ip == Ipv4Address::UNSPECIFIED
+                    && matches!(dhcp_phase, Some(DhcpPhase::Disabled)))
+            }
+            NetMode::Static => ip != Ipv4Address::UNSPECIFIED,
+            NetMode::Off => false,
+        }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -3544,6 +3549,26 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     #[cfg(feature = "kernel")]
+    fn service_cyw43_data_pre_poll_burst(
+        &self,
+        contract: crate::hal::driver_task::DriverTaskContract,
+    ) -> bool {
+        if net_driver_task_hot_path(contract)
+            != Some(crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi)
+            || !self.cyw43_flush_pre_poll_data_ready()
+            || wifi_host_eapol_blocks_driver_task_pre_poll(self.device.bringup_status_label())
+            || !crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(contract)
+        {
+            return false;
+        }
+        service_driver_task_pre_poll_burst(
+            contract,
+            crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi,
+            0,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
     fn service_cyw43_data_pre_poll_burst_budgeted(
         &self,
         contract: crate::hal::driver_task::DriverTaskContract,
@@ -3795,6 +3820,15 @@ impl<D: NetDevice> NetStack<D> {
         if wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
             self.finish_poll_turn(now_ms, activity);
             return activity;
+        }
+        #[cfg(feature = "kernel")]
+        {
+            let cyw43_pre_poll_activity =
+                self.service_cyw43_data_pre_poll_burst(D::driver_task_contract());
+            activity |= cyw43_pre_poll_activity;
+            if cyw43_pre_poll_activity {
+                activity |= self.poll_smoltcp_once(timestamp, now_ms, "cyw43-pre-poll-drain");
+            }
         }
         activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
         if self.wifi_rx_admission_blocked {
@@ -8627,11 +8661,29 @@ mod tests {
             None,
             true
         ));
-        assert!(!cyw43_flush_pre_poll_data_ready_for(
+        assert!(cyw43_flush_pre_poll_data_ready_for(
             cyw43,
             "wifi",
             NetMode::Static,
             ip,
+            None,
+            Some(DhcpPhase::Bound),
+            true
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Off,
+            ip,
+            None,
+            Some(DhcpPhase::Bound),
+            true
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Static,
+            Ipv4Address::UNSPECIFIED,
             None,
             Some(DhcpPhase::Bound),
             true

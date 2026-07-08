@@ -1577,10 +1577,23 @@ flash_sd_card() {
     [[ "$disk" == /dev/disk* ]] || fail "--flash-disk must look like /dev/diskN"
     diskutil info "$disk" >/dev/null 2>&1 || fail "disk not found: ${disk}"
 
-    if [[ -f "/Volumes/${DISK_LABEL}/${policy_file}" && -s "/Volumes/${DISK_LABEL}/${policy_file}" ]]; then
+    diskutil mountDisk "$disk" >/dev/null 2>&1 || true
+    local preflash_volume="/Volumes/${DISK_LABEL}"
+    local disk_basename="${disk#/dev/}"
+    if [[ -d "$preflash_volume" ]]; then
+        local preflash_whole=""
+        preflash_whole="$(diskutil_info_value "$preflash_volume" "Part of Whole")"
+        if [[ "$preflash_whole" != "$disk_basename" ]]; then
+            preflash_volume=""
+        fi
+    else
+        preflash_volume=""
+    fi
+
+    if [[ -n "$preflash_volume" && -f "${preflash_volume}/${policy_file}" && -s "${preflash_volume}/${policy_file}" ]]; then
         preserved_policy="$(mktemp "${TMPDIR:-/tmp}/cohesix-policy.XXXXXX")"
         chmod 600 "$preserved_policy"
-        cp -f "/Volumes/${DISK_LABEL}/${policy_file}" "$preserved_policy"
+        cp -f "${preflash_volume}/${policy_file}" "$preserved_policy"
         PRESERVED_POLICY_TEMP="$preserved_policy"
         log "Preserving existing Cohesix U-Boot policy file ${policy_file} across flash"
     fi

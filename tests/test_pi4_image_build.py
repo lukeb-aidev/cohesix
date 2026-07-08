@@ -257,6 +257,21 @@ def test_pi4_image_build_serial_wifi_missing_policy_uses_simple_prompt() -> None
     assert "run coh_prompt_interface" in wifi_setup
 
 
+def test_pi4_image_build_mounts_target_before_preserving_policy() -> None:
+    """Reflash must not drop saved Wi-Fi policy just because the card is unmounted."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    flash_start = source.index("flash_sd_card() {")
+    flash_body = source[flash_start : source.index("\ndiskutil_info_value() {")]
+
+    assert 'diskutil mountDisk "$disk" >/dev/null 2>&1 || true' in flash_body
+    assert 'preflash_volume="/Volumes/${DISK_LABEL}"' in flash_body
+    assert 'disk_basename="${disk#/dev/}"' in flash_body
+    assert 'diskutil_info_value "$preflash_volume" "Part of Whole"' in flash_body
+    assert '[[ "$preflash_whole" != "$disk_basename" ]]' in flash_body
+    assert 'cp -f "${preflash_volume}/${policy_file}" "$preserved_policy"' in flash_body
+
+
 def test_pi4_image_build_keeps_per_role_driver_runtime_artifacts() -> None:
     """Runtime CPIO entries must match generated per-role artifact identity."""
 

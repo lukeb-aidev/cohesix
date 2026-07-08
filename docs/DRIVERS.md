@@ -1160,9 +1160,13 @@ continuously poking the RX latch. The network stack treats host-EAPOL pending
 as the steady Linux-equivalent service state: while DHCP/data is parked, each
 normal stack poll spends a bounded CYW43 control/data service burst on the
 pending session, and budgeted service turns spend a smaller charged burst.
-Boot-time join windows are only a kickstart and proof surface, not the sole
-event pump. Post-association hintless first-read recovery still waits for the
-sparse post-EAPOL-start cadence. Host-EAPOL status
+  Boot-time join windows are only a kickstart and proof surface, not the sole
+  event pump. After host-EAPOL secure release, direct unbudgeted stack polls
+  also spend a bounded CYW43 data pre-poll burst before smoltcp/DHCP/TCP work,
+  and budgeted turns keep the same charged burst, so preserved DHCP, ARP, and
+  TCP frames do not depend on an outer poll wrapper. Post-association hintless
+  first-read recovery still waits for the sparse post-EAPOL-start cadence.
+  Host-EAPOL status
 records still report `rx_firstread_attempts`, `rx_firstread_empty`,
 `rx_firstread_invalid`, `rx_firstread_failed`,
 `rx_firstread_remainder_failed`, `rx_firstread_decode_miss`,
@@ -1446,28 +1450,35 @@ context and the retry/poll window.
   treated as the expected handoff to host-EAPOL rather than as DHCP/data proof.
   If firmware rejects that path, Cohesix derives the host PMK locally and reports
   `wifi-host-eapol-pending`; DHCP and normal data stay blocked until M1/M2/M3/M4
-  plus PTK/GTK `wsec_key` install and final `wsec` assertion complete.
+  plus PTK/GTK `wsec_key` install complete against the preconfigured AES `wsec`
+  policy.
   `SET_SSID` alone never releases a secure network.
 - Host-EAPOL admits the PAE group multicast, sends bounded EAPOL-Start frames
   through the isolated CYW43 `ETH_TX` descriptor while waiting for AP M1, derives
   PMK/PTK locally, writes M2/M4 in WPA2-PSK order, verifies M3 MIC/replay state,
   installs the pairwise PTK before transmitting M4, and installs any M3-carried
-  GTK plus final `wsec` before secure data release. Missing M4 TX proof,
-  `wsec_key` failures, and final `wsec` assertion failures remain fatal.
+  GTK before secure data release. Missing M4 TX proof and matched `wsec_key`
+  failures remain fatal; a duplicate generic `wsec` refresh is not part of the
+  Linux-equivalent completion gate because AES `wsec` was already programmed in
+  station security setup before join.
   Those `wsec_key` installs use the split `CONTROL_FRAME`/`CONTROL_POLL` path
   with the host-EAPOL key reply window and always request the runtime pre-TX
   drain. PTK and initial GTK both use the long bounded key window because the
   firmware can trail M4-adjacent control/data evidence before returning the
   matched `wsec_key` completion. Stale, commandless, or nonmatching replies
-  trigger only the bounded fresh-id retry budget; matched nonzero firmware
-  status remains fatal. Host-EAPOL unwraps
+  trigger only the bounded fresh-id retry budget. When that budget is exhausted
+  after the control frame was accepted for TX and only interleaved
+  event/nonmatching reply evidence was observed, Cohesix records
+  `action=accept-after-tx` and continues; matched nonzero firmware status
+  remains fatal. Host-EAPOL unwraps
   GTK with AES-128 key unwrap and waits after Group M2 before secure release when
   the GTK arrives in the group-key handshake. Post-secure filter restoration
   (`mcast_list`, `allmulti`, `promisc`) is a best-effort data-reception repair:
   root attempts all three controls and reports `repair-deferred` when one times
   out or returns a transport fault, but it does not hold DHCP/data closed after
-  association, link-up, M3/M4, PTK, GTK, and `wsec` are proven. Cohesix then
-  attempts Broadcom SCB authorization and records `status=authorized` when the
+  association, link-up, M3/M4, and PTK/GTK `wsec_key` proof are present.
+  Cohesix then attempts Broadcom SCB authorization and records
+  `status=authorized` when the
   firmware returns the matched zero-status completion, or `status=deferred` when
   Pi 4 firmware returns nonmatching/no-reply evidence. The deferred outcome is
   diagnostic in STA mode and does not reopen the secure-release gate because
@@ -1527,8 +1538,8 @@ context and the retry/poll window.
   link flag is `wifi-link-down`, not DHCP progress.
 - Join-completion event delivery is now subscribed in the isolated control path,
   but it is still not Wi-Fi success by itself. The secure-completion
-  gate is host-EAPOL: M1/M2/M3/M4, PTK/GTK `wsec_key` installation, final
-  `wsec` assertion, and secure data release must complete before DHCP. SCB
+  gate is host-EAPOL: M1/M2/M3/M4, PTK/GTK `wsec_key` installation, and secure
+  data release must complete before DHCP. SCB
   authorization is attempted and logged after that boundary instead of being a
   separate STA-mode data-release requirement. The event subscription uses the
   Linux `event_msgs_ext` shape (`ver=1`, `command=SET_MASK`, `len=27`) with the
@@ -1716,11 +1727,14 @@ context and the retry/poll window.
   virtual-device tests.
 - Once host-EAPOL secure completion is proven during the join-submit proof
   window, the CYW43 path releases DHCP immediately and must not emit stale
-  `wifi-host-eapol-pending` / `data=blocked` diagnostics. Wi-Fi Gate 10 remains
-  fail-closed after DHCP: `wifi diag` can report only Gate 9 until the capture
-  includes explicit `nettest` plus final `netstats` proof with DHCP-bound Wi-Fi,
-  secure EAPOL, and non-zero TX/RX counters. Optional peer-assisted `nettest`
-  echo/smoke probes are reported separately from driver-level TX/RX/DHCP/remote-
+  `wifi-host-eapol-pending` / `data=blocked` diagnostics. Direct and budgeted
+  stack polls continue the bounded CYW43 data pre-poll service for DHCP and
+  static Wi-Fi modes once secure release clears the host-EAPOL blocker. Wi-Fi
+  Gate 10 remains fail-closed after DHCP: `wifi diag` can report only Gate 9
+  until the capture includes explicit `nettest` plus final `netstats` proof with
+  DHCP-bound Wi-Fi, secure EAPOL, and non-zero TX/RX counters. Optional
+  peer-assisted `nettest` echo/smoke probes are reported separately from
+  driver-level TX/RX/DHCP/remote-
   `cohsh` proof, so a missing router-side echo listener is not a Wi-Fi blocker
   and cannot spam the console.
 - CYW43 outbound ARP requests normalize unknown target hardware to

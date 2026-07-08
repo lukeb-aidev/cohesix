@@ -493,7 +493,7 @@ static CYW43_HOST_EAPOL_TEST_BSSID_VALID: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_M4_SUBMIT_FAILS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
-static CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK_WSEC: AtomicU32 = AtomicU32::new(0);
+static CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
@@ -5121,12 +5121,17 @@ fn cyw43_install_wsec_key_with_pre_tx_drain(
         ) {
             Ok(()) => return Ok(()),
             Err(err) => {
-                if retries >= retry_limit {
-                    return Err(err);
-                }
                 let Some(fault) = cyw43_host_eapol_wsec_key_retry_fault(stage) else {
                     return Err(err);
                 };
+                if retries >= retry_limit {
+                    if cyw43_host_eapol_wsec_key_accept_after_retry_exhausted(stage, fault) {
+                        emit_cyw43_host_eapol_wsec_key_accept_after_retries(contract, stage, fault);
+                        clear_cyw43_runtime_command_fault_status();
+                        return Ok(());
+                    }
+                    return Err(err);
+                }
                 emit_cyw43_host_eapol_wsec_key_retry(contract, stage, fault);
                 clear_cyw43_runtime_command_fault_status();
                 retries = retries.saturating_add(1);
@@ -5182,6 +5187,22 @@ fn cyw43_host_eapol_wsec_key_retry_limit(stage: &'static str) -> usize {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_host_eapol_wsec_key_accept_after_retry_exhausted(
+    stage: &'static str,
+    fault: Cyw43RuntimeCommandFaultStatus,
+) -> bool {
+    fault.stage == stage
+        && matches!(
+            stage,
+            "cyw43-host-eapol-ptk"
+                | "cyw43-host-eapol-gtk"
+                | "cyw43-host-eapol-post-secure-ptk"
+                | "cyw43-host-eapol-post-secure-gtk"
+        )
+        && cyw43_host_eapol_wsec_key_retry_reason(fault)
+}
+
+#[cfg(feature = "kernel")]
 const fn cyw43_control_exchange_timeout_result_reason(result: u32) -> Option<u32> {
     if result & 0xff00_0000 != CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC {
         return None;
@@ -5202,6 +5223,31 @@ fn cyw43_host_eapol_wsec_key_retry_reason(fault: Cyw43RuntimeCommandFaultStatus)
     }
     fault.reason == "cyw43-control-exchange"
         && cyw43_control_exchange_timeout_result_reason(fault.result).is_some()
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_host_eapol_wsec_key_accept_after_retries(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    fault: Cyw43RuntimeCommandFaultStatus,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<256>::new();
+    let timeout_reason = cyw43_control_exchange_timeout_result_reason(fault.result).unwrap_or(0);
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_HOST_EAPOL_KEY_RETRY contract={} stage={} iovar=wsec_key action=accept-after-tx reason={} timeout_reason={} op={} flags=0x{:04x} detail=0x{:04x} result=0x{:08x}",
+        contract.name,
+        stage,
+        fault.reason,
+        timeout_reason,
+        fault.op,
+        fault.flags,
+        fault.detail,
+        fault.result
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -6042,33 +6088,14 @@ fn process_cyw43_host_eapol_data_completion(
                                 "cyw43-host-eapol-gtk",
                                 "ready",
                             );
-                            if let Err(err) = cyw43_submit_bcdc_iovar_u32_with_options(
-                                contract,
-                                "wsec",
-                                CYW43_WSEC_AES,
-                                "cyw43-host-eapol-reassert-wsec",
-                                Cyw43ControlHeaderMode::Extended,
-                                CYW43_HOST_EAPOL_WSEC_REASSERT_PRE_TX_DRAIN,
-                            ) {
-                                session
-                                    .progress
-                                    .record_eapol_error("host-eapol-wsec-reassert");
-                                emit_cyw43_host_eapol_key(
-                                    contract,
-                                    "wsec",
-                                    "cyw43-host-eapol-reassert-wsec",
-                                    "failed",
-                                );
-                                return Err(err);
-                            }
                             emit_cyw43_host_eapol_key(
                                 contract,
                                 "wsec",
                                 "cyw43-host-eapol-reassert-wsec",
-                                "ready",
+                                "preconfigured",
                             );
                             #[cfg(test)]
-                            CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK_WSEC.store(1, Ordering::Release);
+                            CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK.store(1, Ordering::Release);
                             let Some(m4_completion) =
                                 submit_cyw43_host_eapol_payload_bounded_completion(
                                     contract,
@@ -6158,30 +6185,11 @@ fn process_cyw43_host_eapol_data_completion(
                         }
                         CYW43_HOST_EAPOL_GTK.fetch_add(1, Ordering::AcqRel);
                         emit_cyw43_host_eapol_key(contract, "gtk", "cyw43-host-eapol-gtk", "ready");
-                        if let Err(err) = cyw43_submit_bcdc_iovar_u32_with_options(
-                            contract,
-                            "wsec",
-                            CYW43_WSEC_AES,
-                            "cyw43-host-eapol-reassert-wsec",
-                            Cyw43ControlHeaderMode::Extended,
-                            CYW43_HOST_EAPOL_WSEC_REASSERT_PRE_TX_DRAIN,
-                        ) {
-                            session
-                                .progress
-                                .record_eapol_error("host-eapol-wsec-reassert");
-                            emit_cyw43_host_eapol_key(
-                                contract,
-                                "wsec",
-                                "cyw43-host-eapol-reassert-wsec",
-                                "failed",
-                            );
-                            return Err(err);
-                        }
                         emit_cyw43_host_eapol_key(
                             contract,
                             "wsec",
                             "cyw43-host-eapol-reassert-wsec",
-                            "ready",
+                            "preconfigured",
                         );
                         let Some(group_m2_completion) =
                             submit_cyw43_host_eapol_payload_bounded_completion(
@@ -9290,6 +9298,7 @@ fn wait_cyw43_host_eapol_tx_drain(
                 | "m4-after-ptk"
                 | "post-secure-m4-before-wsec"
                 | "post-secure-m4-after-ptk"
+                | "post-secure-m4-after-keys"
         ) && CYW43_HOST_EAPOL_TEST_PTK_INSTALLED.load(Ordering::Acquire) == 0
         {
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.store(1, Ordering::Release);
@@ -9304,7 +9313,8 @@ fn wait_cyw43_host_eapol_tx_drain(
             | "m4-after-wsec"
             | "m4-after-ptk"
             | "post-secure-m4-before-wsec"
-            | "post-secure-m4-after-ptk" => 2,
+            | "post-secure-m4-after-ptk"
+            | "post-secure-m4-after-keys" => 2,
             "group-m2-before-secure" => 4,
             _ => 0,
         };
@@ -14365,12 +14375,9 @@ fn submit_cyw43_host_eapol_payload_bounded_completion(
             if ptk_count == 0 {
                 CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.store(1, Ordering::Release);
             }
-            if CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK_WSEC.swap(0, Ordering::AcqRel) != 0 {
+            if CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK.swap(0, Ordering::AcqRel) != 0 {
                 if gtk_count == 0 {
                     CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_GTK.store(1, Ordering::Release);
-                }
-                if wsec_count == 0 {
-                    CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_WSEC.store(1, Ordering::Release);
                 }
             }
             if CYW43_HOST_EAPOL_TEST_M4_SUBMIT_FAILS.load(Ordering::Acquire) != 0 {
@@ -14904,40 +14911,6 @@ fn consume_cyw43_post_secure_eapol_frame(
                 return true;
             }
             CYW43_HOST_EAPOL_PTK.fetch_add(1, Ordering::AcqRel);
-            let Some(m4_completion) = submit_cyw43_host_eapol_payload_bounded_completion(
-                contract,
-                &tx_frame[..len],
-                "cyw43-host-eapol-post-secure-m4",
-            ) else {
-                session
-                    .progress
-                    .record_eapol_error("host-eapol-post-secure-m4-tx");
-                return true;
-            };
-            CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
-            emit_cyw43_host_eapol_message(contract, "m4", "post-secure-send-m4", poll, len);
-            let _m4_drain_ready = match wait_cyw43_host_eapol_tx_drain(
-                contract,
-                session,
-                "post-secure-m4-after-ptk",
-                poll,
-                m4_completion,
-            ) {
-                Ok(drained) => drained,
-                Err(_) => {
-                    session
-                        .progress
-                        .record_eapol_error("host-eapol-post-secure-m4-drain");
-                    emit_cyw43_host_eapol_error(
-                        contract,
-                        "post-secure-m4-drain",
-                        "host-eapol-post-secure-m4-drain",
-                        poll,
-                        frame.len(),
-                    );
-                    return true;
-                }
-            };
             if let Some(gtk) = keys.gtk {
                 let group_ea = [0u8; 6];
                 if cyw43_install_wsec_key(
@@ -14964,34 +14937,54 @@ fn consume_cyw43_post_secure_eapol_frame(
                     return true;
                 }
                 CYW43_HOST_EAPOL_GTK.fetch_add(1, Ordering::AcqRel);
+                #[cfg(test)]
+                CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK.store(1, Ordering::Release);
             }
-            if cyw43_submit_bcdc_iovar_u32_with_options(
+            emit_cyw43_host_eapol_key(
                 contract,
                 "wsec",
-                CYW43_WSEC_AES,
                 "cyw43-host-eapol-post-secure-reassert-wsec",
-                Cyw43ControlHeaderMode::Extended,
-                CYW43_HOST_EAPOL_WSEC_REASSERT_PRE_TX_DRAIN,
-            )
-            .is_err()
-            {
+                "preconfigured",
+            );
+            let Some(m4_completion) = submit_cyw43_host_eapol_payload_bounded_completion(
+                contract,
+                &tx_frame[..len],
+                "cyw43-host-eapol-post-secure-m4",
+            ) else {
                 session
                     .progress
-                    .record_eapol_error("host-eapol-post-secure-wsec-reassert");
-                emit_cyw43_host_eapol_error(
-                    contract,
-                    "post-secure-wsec-reassert",
-                    "host-eapol-post-secure-wsec-reassert",
-                    poll,
-                    frame.len(),
-                );
-            } else {
-                let _scb_authorize = cyw43_authorize_host_eapol_scb(
-                    contract,
-                    &keys.ap_mac,
-                    "cyw43-host-eapol-post-secure-scb-authorize",
-                );
-            }
+                    .record_eapol_error("host-eapol-post-secure-m4-tx");
+                return true;
+            };
+            CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
+            emit_cyw43_host_eapol_message(contract, "m4", "post-secure-send-m4", poll, len);
+            let _m4_drain_ready = match wait_cyw43_host_eapol_tx_drain(
+                contract,
+                session,
+                "post-secure-m4-after-keys",
+                poll,
+                m4_completion,
+            ) {
+                Ok(drained) => drained,
+                Err(_) => {
+                    session
+                        .progress
+                        .record_eapol_error("host-eapol-post-secure-m4-drain");
+                    emit_cyw43_host_eapol_error(
+                        contract,
+                        "post-secure-m4-drain",
+                        "host-eapol-post-secure-m4-drain",
+                        poll,
+                        frame.len(),
+                    );
+                    return true;
+                }
+            };
+            let _scb_authorize = cyw43_authorize_host_eapol_scb(
+                contract,
+                &keys.ap_mac,
+                "cyw43-host-eapol-post-secure-scb-authorize",
+            );
         }
         HostEapolAction::SendGroupM2InstallGtk { len, keys } => {
             let group_ea = [0u8; 6];
@@ -16165,7 +16158,7 @@ mod tests {
         CYW43_HOST_EAPOL_TEST_RX_RESTORED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_BSSID_VALID.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_M4_SUBMIT_FAILS.store(0, Ordering::Release);
-        CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK_WSEC.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_M4_REQUIRE_GTK.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_GTK.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_WSEC.store(0, Ordering::Release);
@@ -18344,7 +18337,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.load(Ordering::Acquire),
@@ -20552,7 +20545,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_M4_SUBMIT_PTK_COUNT.load(Ordering::Acquire),
@@ -20564,7 +20557,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.load(Ordering::Acquire),
@@ -20629,7 +20622,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
@@ -20685,7 +20678,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
@@ -20731,7 +20724,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
-            2
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_M4_SUBMIT_PTK_COUNT.load(Ordering::Acquire),
@@ -20739,11 +20732,11 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_M4_SUBMIT_GTK_COUNT.load(Ordering::Acquire),
-            1
+            2
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_M4_SUBMIT_WSEC_COUNT.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_M4_SUBMIT_BEFORE_PTK.load(Ordering::Acquire),
@@ -21097,7 +21090,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
-            1
+            0
         );
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 3);
         assert_eq!(
@@ -22821,7 +22814,7 @@ mod tests {
             )
         );
         assert_eq!(
-            cyw43_host_eapol_tx_drain_window("post-secure-m4-after-ptk"),
+            cyw43_host_eapol_tx_drain_window("post-secure-m4-after-keys"),
             (
                 CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS,
                 CYW43_HOST_EAPOL_TX_DRAIN_POLLS
@@ -22988,6 +22981,62 @@ mod tests {
             0,
         );
         assert!(cyw43_host_eapol_wsec_key_retry_fault("cyw43-host-eapol-ptk").is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_wsec_key_accepts_retry_exhausted_post_tx_ambiguity() {
+        test_clear_cyw43_runtime_replay_status();
+
+        let descriptor = cyw43_control_exchange_descriptor(
+            209,
+            CYW43_WLC_SET_VAR,
+            39,
+            Cyw43ControlHeaderMode::Extended,
+            true,
+        );
+        emit_cyw43_runtime_command_fault(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            "cyw43-host-eapol-ptk",
+            descriptor,
+            cyw43_control_fault_completion(
+                1027,
+                CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
+                cyw43_control_exchange_timeout_result(
+                    CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NONMATCHING_REPLY,
+                    1,
+                ),
+            ),
+            None,
+        );
+
+        let fault = cyw43_host_eapol_wsec_key_retry_fault("cyw43-host-eapol-ptk")
+            .expect("post-TX nonmatching PTK timeout should stay classified");
+        assert!(cyw43_host_eapol_wsec_key_accept_after_retry_exhausted(
+            "cyw43-host-eapol-ptk",
+            fault
+        ));
+        assert!(cyw43_host_eapol_wsec_key_accept_after_retry_exhausted(
+            "cyw43-host-eapol-post-secure-gtk",
+            Cyw43RuntimeCommandFaultStatus {
+                stage: "cyw43-host-eapol-post-secure-gtk",
+                ..fault
+            },
+        ));
+        assert!(!cyw43_host_eapol_wsec_key_accept_after_retry_exhausted(
+            "cyw43-control-txglomalign",
+            fault
+        ));
+
+        let matched_error = Cyw43RuntimeCommandFaultStatus {
+            reason: "cyw43-control-matched-error",
+            result: 0xffff_ffea,
+            ..fault
+        };
+        assert!(!cyw43_host_eapol_wsec_key_accept_after_retry_exhausted(
+            "cyw43-host-eapol-ptk",
+            matched_error
+        ));
     }
 
     #[cfg(feature = "kernel")]
