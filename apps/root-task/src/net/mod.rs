@@ -550,6 +550,24 @@ pub struct NetDeviceCounters {
     pub arp_rx: u64,
     /// ARP frames submitted by the stack to the NIC.
     pub arp_tx: u64,
+    /// Wi-Fi ARP requests normalized from broadcast target hardware to zero.
+    pub wifi_arp_target_hw_zeroed: u64,
+    /// Post-DHCP CYW43 data-channel RX frames observed.
+    pub wifi_post_dhcp_rx_any: u64,
+    /// Post-DHCP CYW43 unicast RX frames addressed to the station MAC.
+    pub wifi_post_dhcp_rx_unicast: u64,
+    /// Post-DHCP CYW43 ARP RX frames for the assigned IPv4 address.
+    pub wifi_post_dhcp_rx_arp: u64,
+    /// Post-DHCP CYW43 IPv4 RX frames for the assigned IPv4 address.
+    pub wifi_post_dhcp_rx_ipv4: u64,
+    /// Post-DHCP CYW43 ICMP RX frames for the assigned IPv4 address.
+    pub wifi_post_dhcp_rx_icmp: u64,
+    /// Post-DHCP CYW43 TCP console RX frames for the assigned IPv4 address.
+    pub wifi_post_dhcp_rx_tcp: u64,
+    /// Last post-DHCP CYW43 RX frame length.
+    pub wifi_post_dhcp_rx_last_len: u64,
+    /// Last post-DHCP CYW43 RX Ethernet type.
+    pub wifi_post_dhcp_rx_last_ethertype: u64,
     /// Last hardware RX frame length reported by the driver task.
     pub driver_rx_last_len: u64,
     /// Last hardware RX Ethernet type reported by the driver task.
@@ -663,6 +681,24 @@ pub struct NetCounters {
     pub arp_rx: u64,
     /// ARP frames submitted by the stack to the NIC.
     pub arp_tx: u64,
+    /// Wi-Fi ARP requests normalized from broadcast target hardware to zero.
+    pub wifi_arp_target_hw_zeroed: u64,
+    /// Post-DHCP CYW43 data-channel RX frames observed.
+    pub wifi_post_dhcp_rx_any: u64,
+    /// Post-DHCP CYW43 unicast RX frames addressed to the station MAC.
+    pub wifi_post_dhcp_rx_unicast: u64,
+    /// Post-DHCP CYW43 ARP RX frames for the assigned IPv4 address.
+    pub wifi_post_dhcp_rx_arp: u64,
+    /// Post-DHCP CYW43 IPv4 RX frames for the assigned IPv4 address.
+    pub wifi_post_dhcp_rx_ipv4: u64,
+    /// Post-DHCP CYW43 ICMP RX frames for the assigned IPv4 address.
+    pub wifi_post_dhcp_rx_icmp: u64,
+    /// Post-DHCP CYW43 TCP console RX frames for the assigned IPv4 address.
+    pub wifi_post_dhcp_rx_tcp: u64,
+    /// Last post-DHCP CYW43 RX frame length.
+    pub wifi_post_dhcp_rx_last_len: u64,
+    /// Last post-DHCP CYW43 RX Ethernet type.
+    pub wifi_post_dhcp_rx_last_ethertype: u64,
     /// Last hardware RX frame length reported by the driver task.
     pub driver_rx_last_len: u64,
     /// Last hardware RX Ethernet type reported by the driver task.

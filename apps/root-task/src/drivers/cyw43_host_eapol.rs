@@ -117,6 +117,7 @@ pub struct HostEapolInstallKeys {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HostEapolGroupKeys {
+    pub ap_mac: [u8; ETHER_ADDR_LEN],
     pub gtk: HostGtkKey,
     pub rsc: [u8; 6],
 }
@@ -620,7 +621,11 @@ impl HostEapolState {
         self.gtk_installed = true;
         Ok(HostEapolAction::SendGroupM2InstallGtk {
             len,
-            keys: HostEapolGroupKeys { gtk, rsc },
+            keys: HostEapolGroupKeys {
+                ap_mac: self.installed_ap_mac,
+                gtk,
+                rsc,
+            },
         })
     }
 }

@@ -1424,14 +1424,15 @@ context and the retry/poll window.
   treated as the expected handoff to host-EAPOL rather than as DHCP/data proof.
   If firmware rejects that path, Cohesix derives the host PMK locally and reports
   `wifi-host-eapol-pending`; DHCP and normal data stay blocked until M1/M2/M3/M4
-  plus PTK/GTK `wsec_key` install complete. `SET_SSID` alone never releases a
-  secure network.
+  plus PTK/GTK `wsec_key` install and final `wsec` assertion complete.
+  `SET_SSID` alone never releases a secure network.
 - Host-EAPOL admits the PAE group multicast, sends bounded EAPOL-Start frames
   through the isolated CYW43 `ETH_TX` descriptor while waiting for AP M1, derives
   PMK/PTK locally, writes M2/M4 in WPA2-PSK order, verifies M3 MIC/replay state,
   attempts a bounded post-M4 SDPCM credit drain, then treats a valid M4 TX
   completion as enough to proceed to PTK/GTK `wsec_key` install when no later
-  credit is observed. Missing M4 TX proof and `wsec_key` failures remain fatal.
+  credit is observed. Missing M4 TX proof, `wsec_key` failures, and final
+  `wsec` assertion failures remain fatal.
   Those `wsec_key` installs use the split `CONTROL_FRAME`/`CONTROL_POLL` path
   with the host-EAPOL key reply window and always request the runtime pre-TX
   drain, even when the parent-side post-M4 credit drain timed out. PTK keeps the
@@ -1445,7 +1446,13 @@ context and the retry/poll window.
   (`mcast_list`, `allmulti`, `promisc`) is a best-effort data-reception repair:
   root attempts all three controls and reports `repair-deferred` when one times
   out or returns a transport fault, but it does not hold DHCP/data closed after
-  association, link-up, M3/M4, PTK, GTK, and `wsec` are proven. Commandless/no-id
+  association, link-up, M3/M4, PTK, GTK, and `wsec` are proven. Cohesix then
+  attempts Broadcom SCB authorization and records `status=authorized` when the
+  firmware returns the matched zero-status completion, or `status=deferred` when
+  Pi 4 firmware returns nonmatching/no-reply evidence. The deferred outcome is
+  diagnostic in STA mode and does not reopen the secure-release gate because
+  Linux exposes `BRCMF_C_SET_SCB_AUTHORIZE` through its station-authorized
+  `change_station` path, separate from `wsec_key` key installation. Commandless/no-id
   nonzero CDC statuses observed during PTK/GTK install are stale nonmatching
   frame evidence unless the reply matches the expected `wsec_key` ioctl id; only
   a matched nonzero reply or bounded timeout fails the key. EAPOL TX uses the
@@ -1500,11 +1507,14 @@ context and the retry/poll window.
   link flag is `wifi-link-down`, not DHCP progress.
 - Join-completion event delivery is now subscribed in the isolated control path,
   but it is still not Wi-Fi success by itself. The secure-completion
-  gate is host-EAPOL: M1/M2/M3/M4, PTK/GTK `wsec_key` installation, and secure
-  data release must complete before DHCP. The event subscription uses the Linux
-  `event_msgs_ext` shape (`ver=1`, `command=SET_MASK`, `len=27`) with the Pi 4
-  capture mask plus Cohesix-required `AUTH`, association, and `PSK_SUP` bits,
-  and may fall back to global `event_msgs` only on matched `BCME_UNSUPPORTED`.
+  gate is host-EAPOL: M1/M2/M3/M4, PTK/GTK `wsec_key` installation, final
+  `wsec` assertion, and secure data release must complete before DHCP. SCB
+  authorization is attempted and logged after that boundary instead of being a
+  separate STA-mode data-release requirement. The event subscription uses the
+  Linux `event_msgs_ext` shape (`ver=1`, `command=SET_MASK`, `len=27`) with the
+  Pi 4 capture mask plus Cohesix-required `AUTH`, association, and `PSK_SUP`
+  bits, and may fall back to global `event_msgs` only on matched
+  `BCME_UNSUPPORTED`.
   Event lines are diagnostics until host-EAPOL secure completion releases the
   DHCP/data gate.
 - Linux clears `SBSDIO_FUNC1_SDIOPULLUP` during SDIO buscore preparation, but
@@ -1693,6 +1703,12 @@ context and the retry/poll window.
   echo/smoke probes are reported separately from driver-level TX/RX/DHCP/remote-
   `cohsh` proof, so a missing router-side echo listener is not a Wi-Fi blocker
   and cannot spam the console.
+- CYW43 outbound ARP requests normalize unknown target hardware to
+  `00:00:00:00:00:00` before the linked runtime TX turn. This keeps gateway ARP
+  probes standards-shaped even when upper-layer Ethernet helpers use the
+  broadcast destination MAC for delivery. `netstats` reports the Wi-Fi-only
+  `wifi_arp_tha_zeroed` counter so boot proof can distinguish a standards-shape
+  ARP repair from a remaining post-secure unicast RX/PTK/filter issue.
 - Post-attach SDPCM glom RX is bounded: descriptor lists are capped, normal-sized
   subframes are deaggregated into the data/event/EAPOL path, and malformed or
   oversized glom evidence remains explicit but UART-capped instead of silent or
@@ -2485,8 +2501,12 @@ Required Cohesix shape:
   evidence for that key install, not the completion of the expected ioctl. A
   host-EAPOL `wsec_key` terminal stale/nonmatching timeout may be retried with
   a fresh BCDC ioctl id: once for PTK or post-secure key refresh, and twice for
-  the initial GTK install. A matched nonzero status or exhausted retry budget
-  stays fatal.
+  the initial GTK install. After PTK/GTK and `wsec` are proven, Cohesix mirrors
+  Linux's `BRCMF_C_SET_SCB_AUTHORIZE` port-authorized command with the AP/BSSID
+  MAC. A matched zero-status reply records `authorized`; nonmatching, no-reply,
+  nonzero, or transport-fault outcomes record `deferred` and remain diagnostic
+  so the linked runtime can prove whether post-secure DHCP/data actually needs
+  the SCB control on this Pi 4 firmware.
 - Each matched control exchange emits a bounded
   `CYW43_DRIVER_TASK_CONTROL_REQUEST` line before submission. For small
   non-secret iovar bodies such as `bus:txglomalign=8` or the value-`4` fallback,

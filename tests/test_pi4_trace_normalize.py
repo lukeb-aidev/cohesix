@@ -11997,6 +11997,8 @@ def test_gate_summary_promotes_dhcp_pending_after_secure_release() -> None:
             "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
             "status=secure reason=none polls=8194 associated=yes link_up=yes "
             "event_rx=1 eapol_rx=4 data_rx=4 next_action=release-dhcp-data",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 "
+            "kind=scb stage=cyw43-host-eapol-scb-authorize status=deferred",
             "CYW43_DRIVER_TASK_WIFI_GATE7 contract=cyw43455 "
             "source=host-eapol-status subgate=7e name=secure-release "
             "status=secure reason=passed polls=8194 associated=yes link_up=yes "

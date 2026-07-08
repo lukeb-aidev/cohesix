@@ -37,7 +37,7 @@ use crate::hal::driver_task::{
 use crate::hal::{HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetInterfacePolicy, NetStage,
-    WifiCredentials, MAX_FRAME_LEN, NET_DIAG,
+    WifiCredentials, COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, MAX_FRAME_LEN, NET_DIAG,
 };
 use pi4_driver_abi::{
     driver_runtime_genet_result_is_packed, driver_runtime_genet_result_rx_byte_budget_hit,
@@ -236,6 +236,7 @@ const CYW43_WLC_GET_BSSID: u32 = 23;
 const CYW43_WLC_SET_SSID: u32 = 26;
 const CYW43_WLC_SET_PM: u32 = 86;
 const CYW43_WLC_GET_REVINFO: u32 = 98;
+const CYW43_WLC_SET_SCB_AUTHORIZE: u32 = 121;
 const CYW43_WLC_SET_SCAN_CHANNEL_TIME: u32 = 185;
 const CYW43_WLC_SET_SCAN_UNASSOC_TIME: u32 = 187;
 const CYW43_WLC_GET_VAR: u32 = 262;
@@ -272,6 +273,7 @@ const CYW43_ETH_P_LINK_CTL: u16 = 0x886c;
 const CYW43_ETH_P_IPV4: u16 = 0x0800;
 const CYW43_ETH_P_ARP: u16 = 0x0806;
 const CYW43_ETH_P_IPV6: u16 = 0x86dd;
+const CYW43_IP_PROTO_ICMP: u8 = 1;
 const CYW43_IP_PROTO_TCP: u8 = 6;
 const CYW43_IP_PROTO_UDP: u8 = 17;
 const CYW43_DHCP_SERVER_PORT: u16 = 67;
@@ -406,6 +408,7 @@ static CYW43_RX_RUNTIME_DRAIN_BUDGET_HIT: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_RUNTIME_MAX_DRAINED_PER_TURN: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_RX: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_TX: AtomicU32 = AtomicU32::new(0);
+static CYW43_ARP_TARGET_HW_ZEROED: AtomicU32 = AtomicU32::new(0);
 static GENET_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static CYW43_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static CYW43_CONTROL_PLANE_READY: AtomicU32 = AtomicU32::new(0);
@@ -423,6 +426,18 @@ static CYW43_HOST_EAPOL_ACTIVE: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_REQUIRED: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_SECURE: AtomicU32 = AtomicU32::new(0);
 static CYW43_POST_SECURE_DATA_RX_ADMITTED: AtomicU32 = AtomicU32::new(0);
+static CYW43_POST_DHCP_RX_ANY: AtomicU32 = AtomicU32::new(0);
+static CYW43_POST_DHCP_RX_UNICAST: AtomicU32 = AtomicU32::new(0);
+static CYW43_POST_DHCP_RX_ASSIGNED_ARP: AtomicU32 = AtomicU32::new(0);
+static CYW43_POST_DHCP_RX_IPV4: AtomicU32 = AtomicU32::new(0);
+static CYW43_POST_DHCP_RX_ICMP: AtomicU32 = AtomicU32::new(0);
+static CYW43_POST_DHCP_RX_TCP: AtomicU32 = AtomicU32::new(0);
+static CYW43_POST_DHCP_RX_LAST_ETHERTYPE: AtomicU32 = AtomicU32::new(0);
+static CYW43_POST_DHCP_RX_LAST_LEN: AtomicU32 = AtomicU32::new(0);
+static CYW43_HOST_EAPOL_SCB_AUTH_ATTEMPTED: AtomicU32 = AtomicU32::new(0);
+static CYW43_HOST_EAPOL_SCB_AUTHORIZED: AtomicU32 = AtomicU32::new(0);
+static CYW43_HOST_EAPOL_SCB_AUTH_MAC_HI: AtomicU32 = AtomicU32::new(0);
+static CYW43_HOST_EAPOL_SCB_AUTH_MAC_LO: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TX_RETRIES: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_TX_RETRIES: AtomicU32 = AtomicU32::new(0);
 static CYW43_PRIMARY_BSSCFG_JOIN_READY: AtomicU32 = AtomicU32::new(0);
@@ -455,6 +470,10 @@ static CYW43_HOST_EAPOL_TEST_PTK_INSTALLED: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_TEST_GTK_INSTALLED: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_SCB_FAILS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_TX_DRAINED: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
@@ -514,6 +533,13 @@ pub(crate) struct Cyw43RuntimeCommandFaultStatus {
 enum Cyw43ControlHeaderMode {
     Plain,
     Extended,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43ScbAuthorizeOutcome {
+    Authorized,
+    Deferred,
 }
 
 #[cfg(feature = "kernel")]
@@ -3149,6 +3175,45 @@ fn cyw43_submit_bcdc_u32_with_options(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_bytes_with_options(
+    contract: DriverTaskContract,
+    cmd: u32,
+    payload: &[u8],
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
+) -> Result<(), DriverTaskNetError> {
+    #[cfg(test)]
+    if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
+        let _ = (contract, cmd, payload, header_mode, pre_tx_drain);
+        if stage == "cyw43-host-eapol-scb-authorize"
+            || stage == "cyw43-host-eapol-post-secure-scb-authorize"
+        {
+            if CYW43_HOST_EAPOL_TEST_SCB_FAILS.load(Ordering::Acquire) != 0 {
+                return Err(DriverTaskNetError::RuntimeInit("test-scb-authorize"));
+            }
+            CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.fetch_add(1, Ordering::AcqRel);
+        }
+        return Ok(());
+    }
+    if payload.len() > MAX_DRIVER_TASK_FRAME_BYTES.saturating_sub(CYW43_BCDC_HEADER_BYTES) {
+        return Err(DriverTaskNetError::RuntimeInit("cyw43-control-frame-len"));
+    }
+    let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    let id = cyw43_next_bcdc_ioctl_id();
+    let len = cyw43_write_bcdc_frame(&mut frame, cmd, CYW43_BCDC_FLAG_SET, id, payload)?;
+    cyw43_submit_control_exchange_checked_with_options(
+        contract,
+        &frame[..len],
+        cmd,
+        id,
+        stage,
+        header_mode,
+        pre_tx_drain,
+    )
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_submit_bcdc_u32_optional_filter(
     contract: DriverTaskContract,
     cmd: u32,
@@ -4835,10 +4900,12 @@ fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) -> boo
         return true;
     }
     let status = cyw43_restore_post_secure_data_filters(contract);
-    let admitted = status != "repair-deferred";
-    CYW43_POST_SECURE_DATA_RX_ADMITTED.store(admitted as u32, Ordering::Release);
+    // Linux treats multicast/promiscuous filter repair as receive-filter
+    // tuning after the WPA port is authorized. PTK/GTK/wsec proof opens data;
+    // deferred filter repair remains telemetry, not a DHCP/TCP admission gate.
+    CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
     emit_cyw43_host_eapol_rx_admission_restore(contract, status);
-    admitted
+    true
 }
 
 #[cfg(feature = "kernel")]
@@ -4957,6 +5024,52 @@ fn cyw43_install_wsec_key(
         stage,
         CYW43_HOST_EAPOL_WSEC_INSTALL_PRE_TX_DRAIN,
     )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_authorize_host_eapol_scb(
+    contract: DriverTaskContract,
+    ap_mac: &[u8; ETHER_ADDR_LEN],
+    stage: &'static str,
+) -> Cyw43ScbAuthorizeOutcome {
+    let mac_hi = u32::from_be_bytes([ap_mac[0], ap_mac[1], ap_mac[2], ap_mac[3]]);
+    let mac_lo = u32::from(u16::from_be_bytes([ap_mac[4], ap_mac[5]]));
+    if CYW43_HOST_EAPOL_SCB_AUTH_ATTEMPTED.load(Ordering::Acquire) != 0
+        && CYW43_HOST_EAPOL_SCB_AUTH_MAC_HI.load(Ordering::Acquire) == mac_hi
+        && CYW43_HOST_EAPOL_SCB_AUTH_MAC_LO.load(Ordering::Acquire) == mac_lo
+    {
+        if CYW43_HOST_EAPOL_SCB_AUTHORIZED.load(Ordering::Acquire) != 0 {
+            emit_cyw43_host_eapol_key(contract, "scb", stage, "cached-authorized");
+            return Cyw43ScbAuthorizeOutcome::Authorized;
+        }
+        emit_cyw43_host_eapol_key(contract, "scb", stage, "cached-deferred");
+        return Cyw43ScbAuthorizeOutcome::Deferred;
+    }
+    CYW43_HOST_EAPOL_SCB_AUTH_MAC_HI.store(mac_hi, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTH_MAC_LO.store(mac_lo, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTH_ATTEMPTED.store(1, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTHORIZED.store(0, Ordering::Release);
+    match cyw43_submit_bcdc_bytes_with_options(
+        contract,
+        CYW43_WLC_SET_SCB_AUTHORIZE,
+        ap_mac,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+        CYW43_HOST_EAPOL_WSEC_REASSERT_PRE_TX_DRAIN,
+    ) {
+        Ok(()) => {
+            CYW43_HOST_EAPOL_SCB_AUTHORIZED.store(1, Ordering::Release);
+            emit_cyw43_host_eapol_key(contract, "scb", stage, "authorized");
+            Cyw43ScbAuthorizeOutcome::Authorized
+        }
+        Err(_) => {
+            // Linux wires SCB authorization through the station-authorized path,
+            // separate from STA-mode key install. Keep Pi firmware mismatches as
+            // evidence without holding DHCP/data closed after PTK/GTK/wsec proof.
+            emit_cyw43_host_eapol_key(contract, "scb", stage, "deferred");
+            Cyw43ScbAuthorizeOutcome::Deferred
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -5174,6 +5287,10 @@ fn arm_cyw43_host_eapol_pending(
     CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
     CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTH_ATTEMPTED.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTHORIZED.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTH_MAC_HI.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTH_MAC_LO.store(0, Ordering::Release);
     crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
         DriverTaskHotPath::Cyw43Wifi,
@@ -5902,6 +6019,11 @@ fn process_cyw43_host_eapol_data_completion(
                                 "cyw43-host-eapol-reassert-wsec",
                                 "ready",
                             );
+                            let _scb_authorize = cyw43_authorize_host_eapol_scb(
+                                contract,
+                                &keys.ap_mac,
+                                "cyw43-host-eapol-scb-authorize",
+                            );
                             restore_cyw43_host_eapol_rx_after_secure(contract);
                             session.progress.associated = true;
                             session.progress.link_up = true;
@@ -6006,6 +6128,11 @@ fn process_cyw43_host_eapol_data_completion(
                                 "host-eapol-tx-drain-timeout",
                             ));
                         }
+                        let _scb_authorize = cyw43_authorize_host_eapol_scb(
+                            contract,
+                            &keys.ap_mac,
+                            "cyw43-host-eapol-scb-authorize",
+                        );
                         restore_cyw43_host_eapol_rx_after_secure(contract);
                         session.progress.associated = true;
                         session.progress.link_up = true;
@@ -6977,6 +7104,10 @@ struct Cyw43DataPathInfo {
     src: [u8; ETHER_ADDR_LEN],
     ethertype: u16,
     ip_proto: u8,
+    ipv4_src: [u8; 4],
+    ipv4_dst: [u8; 4],
+    l4_src: u16,
+    l4_dst: u16,
     udp_src: u16,
     udp_dst: u16,
     dhcp: &'static str,
@@ -7002,16 +7133,17 @@ fn cyw43_trace_frame_info(frame: &[u8]) -> Cyw43DataPathInfo {
         let ethertype = cyw43_ethertype(frame).unwrap_or(0);
         let (dst, src) =
             cyw43_ethernet_addrs(frame).unwrap_or(([0; ETHER_ADDR_LEN], [0; ETHER_ADDR_LEN]));
-        let ip_proto = if ethertype == CYW43_ETH_P_IPV4 {
-            frame.get(ETH_HEADER_LEN + 9).copied().unwrap_or(0)
-        } else {
-            0
-        };
+        let (ip_proto, ipv4_src, ipv4_dst, l4_src, l4_dst) =
+            cyw43_ipv4_trace_tuple(frame).unwrap_or((0, [0; 4], [0; 4], 0, 0));
         Cyw43DataPathInfo {
             dst,
             src,
             ethertype,
             ip_proto,
+            ipv4_src,
+            ipv4_dst,
+            l4_src,
+            l4_dst,
             udp_src: 0,
             udp_dst: 0,
             dhcp: "none",
@@ -7043,6 +7175,10 @@ fn cyw43_arp_data_path_info(
         src,
         ethertype: CYW43_ETH_P_ARP,
         ip_proto: 0,
+        ipv4_src: [0; 4],
+        ipv4_dst: [0; 4],
+        l4_src: 0,
+        l4_dst: 0,
         udp_src: 0,
         udp_dst: 0,
         dhcp: "none",
@@ -7085,6 +7221,24 @@ fn cyw43_arp_addrs(frame: &[u8]) -> Option<([u8; 6], [u8; 4], [u8; 6], [u8; 4])>
 }
 
 #[cfg(feature = "kernel")]
+fn normalize_driver_task_arp_request_target_hw(
+    hot_path: DriverTaskHotPath,
+    frame: &mut [u8],
+) -> bool {
+    if hot_path != DriverTaskHotPath::Cyw43Wifi
+        || driver_task_ethertype(frame) != Some(CYW43_ETH_P_ARP)
+        || cyw43_arp_operation_label(frame) != "request"
+        || cyw43_arp_addrs(frame).is_none()
+        || frame.get(ETH_HEADER_LEN + 18..ETH_HEADER_LEN + 24) != Some(&[0xff; ETHER_ADDR_LEN])
+    {
+        return false;
+    }
+    frame[ETH_HEADER_LEN + 18..ETH_HEADER_LEN + 24].copy_from_slice(&[0; ETHER_ADDR_LEN]);
+    CYW43_ARP_TARGET_HW_ZEROED.fetch_add(1, Ordering::AcqRel);
+    true
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_assigned_ipv4() -> Option<[u8; 4]> {
     let raw = CYW43_ASSIGNED_IPV4_BE.load(Ordering::Acquire);
     if raw == 0 {
@@ -7095,6 +7249,42 @@ fn cyw43_assigned_ipv4() -> Option<[u8; 4]> {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_ipv4_header_len(frame: &[u8]) -> Option<usize> {
+    if cyw43_ethertype(frame)? != CYW43_ETH_P_IPV4 {
+        return None;
+    }
+    let version_ihl = *frame.get(ETH_HEADER_LEN)?;
+    if version_ihl >> 4 != 4 {
+        return None;
+    }
+    let ip_header_len = usize::from(version_ihl & 0x0f) * 4;
+    if ip_header_len < 20 || frame.len() < ETH_HEADER_LEN + ip_header_len {
+        return None;
+    }
+    Some(ip_header_len)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_ipv4_trace_tuple(frame: &[u8]) -> Option<(u8, [u8; 4], [u8; 4], u16, u16)> {
+    let ip_header_len = cyw43_ipv4_header_len(frame)?;
+    let ip_offset = ETH_HEADER_LEN;
+    let ip_proto = *frame.get(ip_offset + 9)?;
+    let mut ipv4_src = [0u8; 4];
+    ipv4_src.copy_from_slice(frame.get(ip_offset + 12..ip_offset + 16)?);
+    let mut ipv4_dst = [0u8; 4];
+    ipv4_dst.copy_from_slice(frame.get(ip_offset + 16..ip_offset + 20)?);
+    let l4_offset = ETH_HEADER_LEN.checked_add(ip_header_len)?;
+    let (l4_src, l4_dst) = if matches!(ip_proto, CYW43_IP_PROTO_TCP | CYW43_IP_PROTO_UDP) {
+        (
+            cyw43_get_u16_be(frame, l4_offset).unwrap_or(0),
+            cyw43_get_u16_be(frame, l4_offset + 2).unwrap_or(0),
+        )
+    } else {
+        (0, 0)
+    };
+    Some((ip_proto, ipv4_src, ipv4_dst, l4_src, l4_dst))
+}
+
 fn cyw43_post_dhcp_zero_sender_arp(frame: &[u8]) -> bool {
     let Some(assigned_ip) = cyw43_assigned_ipv4() else {
         return false;
@@ -7112,6 +7302,64 @@ fn cyw43_post_dhcp_zero_sender_arp(frame: &[u8]) -> bool {
 #[cfg(feature = "kernel")]
 fn cyw43_mac_is_unicast(mac: [u8; 6]) -> bool {
     mac != [0; 6] && mac != [0xff; 6] && mac[0] & 0x01 == 0
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_tcp_dst_is_console_port(port: u16) -> bool {
+    port == COHESIX_TCP_CONSOLE_PORT || port == COHSH_TCP_PORT
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_post_dhcp_rx_progress(
+    contract: DriverTaskContract,
+    event: &'static str,
+    info: Cyw43DataPathInfo,
+    frame_len: usize,
+    frame_flags: u16,
+    completion_flags: u16,
+    runtime_station_mac: EthernetAddress,
+    assigned_ipv4: Option<[u8; 4]>,
+) {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || !event.starts_with("rx-")
+        || !matches!(
+            cyw43_frame_channel(frame_flags),
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+        ) && !matches!(
+            cyw43_frame_channel(completion_flags),
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+        )
+        || info.src == runtime_station_mac.0
+    {
+        return;
+    }
+    let Some(assigned_ip) = assigned_ipv4 else {
+        return;
+    };
+    CYW43_POST_DHCP_RX_ANY.fetch_add(1, Ordering::AcqRel);
+    CYW43_POST_DHCP_RX_LAST_ETHERTYPE.store(u32::from(info.ethertype), Ordering::Release);
+    CYW43_POST_DHCP_RX_LAST_LEN.store(frame_len as u32, Ordering::Release);
+    if info.dst == runtime_station_mac.0 {
+        CYW43_POST_DHCP_RX_UNICAST.fetch_add(1, Ordering::AcqRel);
+    }
+    if info.ethertype == CYW43_ETH_P_ARP
+        && (info.arp_tpa == assigned_ip
+            || info.arp_spa == assigned_ip
+            || info.dst == runtime_station_mac.0)
+    {
+        CYW43_POST_DHCP_RX_ASSIGNED_ARP.fetch_add(1, Ordering::AcqRel);
+    }
+    if info.ethertype == CYW43_ETH_P_IPV4
+        && (info.ipv4_dst == assigned_ip || info.dst == runtime_station_mac.0)
+    {
+        CYW43_POST_DHCP_RX_IPV4.fetch_add(1, Ordering::AcqRel);
+        if info.ip_proto == CYW43_IP_PROTO_ICMP {
+            CYW43_POST_DHCP_RX_ICMP.fetch_add(1, Ordering::AcqRel);
+        }
+        if info.ip_proto == CYW43_IP_PROTO_TCP && cyw43_tcp_dst_is_console_port(info.l4_dst) {
+            CYW43_POST_DHCP_RX_TCP.fetch_add(1, Ordering::AcqRel);
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -7187,7 +7435,7 @@ fn submit_driver_task_gratuitous_arp_announcement(
         2,
         station_mac,
         assigned_ip,
-        [0xff; ETHER_ADDR_LEN],
+        [0; ETHER_ADDR_LEN],
         assigned_ip,
     );
     let request_submitted = submit_driver_task_frame(contract, hot_path, &request);
@@ -7206,7 +7454,6 @@ fn submit_cyw43_arp_assist_if_needed(contract: DriverTaskContract, frame: &[u8])
     if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
         || cyw43_ethertype(frame) != Some(CYW43_ETH_P_ARP)
         || cyw43_arp_operation_label(frame) != "request"
-        || frame.get(..ETHER_ADDR_LEN) != Some(&[0xff; ETHER_ADDR_LEN])
     {
         return false;
     }
@@ -7222,6 +7469,12 @@ fn submit_cyw43_arp_assist_if_needed(contract: DriverTaskContract, frame: &[u8])
     let station_mac = runtime_mac(DriverTaskHotPath::Cyw43Wifi)
         .unwrap_or(CYW43_DRIVER_TASK_MAC)
         .0;
+    let Some((eth_dst, _eth_src)) = cyw43_ethernet_addrs(frame) else {
+        return false;
+    };
+    if eth_dst != [0xff; ETHER_ADDR_LEN] && eth_dst != station_mac {
+        return false;
+    }
     let unicast_reply = cyw43_arp_frame(
         sender_hw,
         station_mac,
@@ -7261,7 +7514,10 @@ enum Cyw43DataPathTraceClass {
 fn cyw43_data_path_info_is_routine_ip(info: Cyw43DataPathInfo) -> bool {
     info.ethertype == CYW43_ETH_P_IPV4
         && info.dhcp == "none"
-        && (info.ip_proto == CYW43_IP_PROTO_TCP || info.ip_proto == CYW43_IP_PROTO_UDP)
+        && matches!(
+            info.ip_proto,
+            CYW43_IP_PROTO_ICMP | CYW43_IP_PROTO_TCP | CYW43_IP_PROTO_UDP
+        )
 }
 
 #[cfg(feature = "kernel")]
@@ -7298,7 +7554,7 @@ fn cyw43_data_path_trace_class(
     if info.arp == "request"
         && matches!(assigned_ipv4, Some(ip) if info.arp_tpa != [0; 4] && info.arp_tpa == ip)
     {
-        return Cyw43DataPathTraceClass::Suppress;
+        return Cyw43DataPathTraceClass::PendingTransition;
     }
     if wifi_bound
         && info.ethertype == CYW43_ETH_P_ARP
@@ -7313,8 +7569,18 @@ fn cyw43_data_path_trace_class(
     {
         return Cyw43DataPathTraceClass::PendingTransition;
     }
+    if wifi_bound
+        && info.ethertype == CYW43_ETH_P_IPV4
+        && info.src != runtime_station_mac.0
+        && matches!(assigned_ipv4, Some(ip) if info.ipv4_dst == ip)
+    {
+        return Cyw43DataPathTraceClass::PendingTransition;
+    }
     if event == "rx-consume" && info.ethertype == ETH_P_EAPOL {
         return Cyw43DataPathTraceClass::EapolConsume;
+    }
+    if action == "arp-target-hw-zero" {
+        return Cyw43DataPathTraceClass::PendingTransition;
     }
     if (matches!(action, "pending" | "resume") || (pending_before != pending_after))
         && !cyw43_data_path_info_is_routine_ip(info)
@@ -7400,18 +7666,11 @@ fn cyw43_ipv4_dhcp_data_path_info(
     dst: [u8; ETHER_ADDR_LEN],
     src: [u8; ETHER_ADDR_LEN],
 ) -> Option<Cyw43DataPathInfo> {
-    let version_ihl = *frame.get(ETH_HEADER_LEN)?;
-    if version_ihl >> 4 != 4 {
-        return None;
-    }
-    let ip_header_len = usize::from(version_ihl & 0x0f) * 4;
-    if ip_header_len < 20 {
-        return None;
-    }
-    let ip_proto = *frame.get(ETH_HEADER_LEN + 9)?;
+    let (ip_proto, ipv4_src, ipv4_dst, l4_src, l4_dst) = cyw43_ipv4_trace_tuple(frame)?;
     if ip_proto != CYW43_IP_PROTO_UDP {
         return None;
     }
+    let ip_header_len = cyw43_ipv4_header_len(frame)?;
     let udp_offset = ETH_HEADER_LEN.checked_add(ip_header_len)?;
     let udp_src = cyw43_get_u16_be(frame, udp_offset)?;
     let udp_dst = cyw43_get_u16_be(frame, udp_offset + 2)?;
@@ -7425,6 +7684,10 @@ fn cyw43_ipv4_dhcp_data_path_info(
         src,
         ethertype: CYW43_ETH_P_IPV4,
         ip_proto,
+        ipv4_src,
+        ipv4_dst,
+        l4_src,
+        l4_dst,
         udp_src,
         udp_dst,
         dhcp: cyw43_dhcp_message_label(dhcp_payload),
@@ -7585,6 +7848,16 @@ fn emit_cyw43_data_path_trace(
         runtime_mac(DriverTaskHotPath::Cyw43Wifi).unwrap_or(CYW43_DRIVER_TASK_MAC);
     let active_descriptor = cyw43_active_descriptor_label(contract);
     let assigned_ipv4 = cyw43_assigned_ipv4();
+    record_cyw43_post_dhcp_rx_progress(
+        contract,
+        event,
+        info,
+        frame.len(),
+        frame_flags,
+        completion_flags,
+        runtime_station_mac,
+        assigned_ipv4,
+    );
     let trace_class = cyw43_data_path_trace_class(
         event,
         action,
@@ -7606,7 +7879,7 @@ fn emit_cyw43_data_path_trace(
     let mut line = heapless::String::<1280>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_DATA_PATH contract={} event={} action={} attempt={} len={} channel={} active_descriptor={} active_op=0x{:04x} ethertype=0x{:04x} ip_proto={} udp_src={} udp_dst={} dhcp={} arp={} arp_spa={}.{}.{}.{} arp_tpa={}.{}.{}.{} arp_tpa_assigned={} dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} runtime_mac={} src_runtime_match={} bdc_priority={} tx_total_len={} tx_request_len={} cmd53_mode={} block_size={} block_count={} completion_code={} completion_detail=0x{:04x} completion_result=0x{:08x} completion_flags=0x{:04x} completion_len={} pending_before={} pending_after={}",
+        "CYW43_DRIVER_TASK_DATA_PATH contract={} event={} action={} attempt={} len={} channel={} active_descriptor={} active_op=0x{:04x} ethertype=0x{:04x} ip_proto={} ipv4_src={}.{}.{}.{} ipv4_dst={}.{}.{}.{} l4_src={} l4_dst={} udp_src={} udp_dst={} dhcp={} arp={} arp_spa={}.{}.{}.{} arp_tpa={}.{}.{}.{} arp_tpa_assigned={} dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} runtime_mac={} src_runtime_match={} bdc_priority={} tx_total_len={} tx_request_len={} cmd53_mode={} block_size={} block_count={} completion_code={} completion_detail=0x{:04x} completion_result=0x{:08x} completion_flags=0x{:04x} completion_len={} pending_before={} pending_after={}",
         contract.name,
         event,
         action,
@@ -7617,6 +7890,16 @@ fn emit_cyw43_data_path_trace(
         cyw43_active_descriptor_op(contract),
         info.ethertype,
         info.ip_proto,
+        info.ipv4_src[0],
+        info.ipv4_src[1],
+        info.ipv4_src[2],
+        info.ipv4_src[3],
+        info.ipv4_dst[0],
+        info.ipv4_dst[1],
+        info.ipv4_dst[2],
+        info.ipv4_dst[3],
+        info.l4_src,
+        info.l4_dst,
         info.udp_src,
         info.udp_dst,
         info.dhcp,
@@ -7936,8 +8219,12 @@ fn cyw43_wifi_gate7_host_eapol_subgate(
     status: &'static str,
     progress: &Cyw43HostEapolProgress,
 ) -> (&'static str, &'static str, &'static str) {
-    if status == "secure" || CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0 {
+    let secure = status == "secure" || CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0;
+    if secure && cyw43_post_secure_data_rx_admitted() {
         return ("7e", "secure-release", "passed");
+    }
+    if secure {
+        return ("7e", "secure-release", "waiting-carrier-release");
     }
     if !progress.associated {
         if status == "required" {
@@ -13382,6 +13669,24 @@ impl phy::TxToken for DriverTaskNetTxToken {
             NET_DIAG.record_smoltcp_tx();
         }
         let result = f(&mut scratch[..frame_len]);
+        #[cfg(feature = "kernel")]
+        let normalized_arp_target_hw =
+            normalize_driver_task_arp_request_target_hw(self.hot_path, &mut scratch[..frame_len]);
+        #[cfg(feature = "kernel")]
+        if self.hot_path == DriverTaskHotPath::Cyw43Wifi && normalized_arp_target_hw {
+            let pending_rx = cyw43_pending_rx_token_occupied();
+            emit_cyw43_data_path_trace(
+                self.contract,
+                "tx-rewrite",
+                "arp-target-hw-zero",
+                0,
+                &scratch[..frame_len],
+                None,
+                0,
+                pending_rx,
+                pending_rx,
+            );
+        }
         if submit_driver_task_frame(self.contract, self.hot_path, &scratch[..frame_len]) {
             if self.hot_path != DriverTaskHotPath::Cyw43Wifi {
                 self.tx_submitted.fetch_add(1, Ordering::AcqRel);
@@ -14479,6 +14784,12 @@ fn consume_cyw43_post_secure_eapol_frame(
                     poll,
                     frame.len(),
                 );
+            } else {
+                let _scb_authorize = cyw43_authorize_host_eapol_scb(
+                    contract,
+                    &keys.ap_mac,
+                    "cyw43-host-eapol-post-secure-scb-authorize",
+                );
             }
         }
         HostEapolAction::SendGroupM2InstallGtk { len, keys } => {
@@ -14514,7 +14825,7 @@ fn consume_cyw43_post_secure_eapol_frame(
                 poll,
                 frame.len(),
             );
-            if submit_cyw43_host_eapol_payload_bounded(
+            if let Some(group_m2_completion) = submit_cyw43_host_eapol_payload_bounded_completion(
                 contract,
                 &tx_frame[..len],
                 "cyw43-host-eapol-post-secure-group-m2",
@@ -14526,6 +14837,45 @@ fn consume_cyw43_post_secure_eapol_frame(
                     poll,
                     len,
                 );
+                match wait_cyw43_host_eapol_tx_drain(
+                    contract,
+                    session,
+                    "post-secure-group-m2",
+                    poll,
+                    group_m2_completion,
+                ) {
+                    Ok(true) => {
+                        let _scb_authorize = cyw43_authorize_host_eapol_scb(
+                            contract,
+                            &keys.ap_mac,
+                            "cyw43-host-eapol-post-secure-scb-authorize",
+                        );
+                    }
+                    Ok(false) => {
+                        session
+                            .progress
+                            .record_eapol_error("host-eapol-post-secure-group-m2-drain");
+                        emit_cyw43_host_eapol_error(
+                            contract,
+                            "post-secure-group-m2-drain",
+                            "host-eapol-post-secure-group-m2-drain",
+                            poll,
+                            frame.len(),
+                        );
+                    }
+                    Err(_) => {
+                        session
+                            .progress
+                            .record_eapol_error("host-eapol-post-secure-group-m2-drain-fault");
+                        emit_cyw43_host_eapol_error(
+                            contract,
+                            "post-secure-group-m2-drain",
+                            "host-eapol-post-secure-group-m2-drain-fault",
+                            poll,
+                            frame.len(),
+                        );
+                    }
+                }
             } else {
                 session
                     .progress
@@ -14592,28 +14942,32 @@ fn cyw43_pending_rx_priority(flags: u16, token: &DriverTaskNetRxToken) -> u8 {
         .0;
     let (dst, src) =
         cyw43_ethernet_addrs(frame).unwrap_or(([0; ETHER_ADDR_LEN], [0; ETHER_ADDR_LEN]));
-    if let Some(info) = cyw43_data_path_info(frame) {
-        if info.dhcp != "none" {
-            return 6;
-        }
-        if info.ethertype == CYW43_ETH_P_ARP {
-            return if info.arp_tpa == [0; 4]
-                || matches!(cyw43_assigned_ipv4(), Some(ip) if info.arp_tpa == ip)
-                || dst == runtime_mac
-                || src == runtime_mac
-            {
-                5
-            } else {
-                2
-            };
-        }
+    let assigned_ipv4 = cyw43_assigned_ipv4();
+    let info = cyw43_trace_frame_info(frame);
+    if info.dhcp != "none" {
+        return if assigned_ipv4.is_some() { 2 } else { 6 };
+    }
+    if info.ethertype == CYW43_ETH_P_ARP {
+        return if matches!(assigned_ipv4, Some(ip) if info.arp_tpa == ip || info.arp_spa == ip)
+            || dst == runtime_mac
+            || src == runtime_mac
+        {
+            7
+        } else if info.arp_tpa == [0; 4] {
+            4
+        } else {
+            2
+        };
     }
     if ethertype == Some(CYW43_ETH_P_IPV4) {
-        let ip_proto = frame.get(ETH_HEADER_LEN + 9).copied().unwrap_or(0);
-        if matches!(ip_proto, CYW43_IP_PROTO_TCP | CYW43_IP_PROTO_UDP)
-            && (dst == runtime_mac || src == runtime_mac)
+        if matches!(
+            info.ip_proto,
+            CYW43_IP_PROTO_ICMP | CYW43_IP_PROTO_TCP | CYW43_IP_PROTO_UDP
+        ) && (dst == runtime_mac
+            || src == runtime_mac
+            || matches!(assigned_ipv4, Some(ip) if info.ipv4_dst == ip))
         {
-            return 5;
+            return 7;
         }
         return 3;
     }
@@ -15383,6 +15737,78 @@ macro_rules! driver_task_nic {
                     } else {
                         0
                     },
+                    wifi_arp_target_hw_zeroed: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_ARP_TARGET_HW_ZEROED.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_post_dhcp_rx_any: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_POST_DHCP_RX_ANY.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_post_dhcp_rx_unicast: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_POST_DHCP_RX_UNICAST.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_post_dhcp_rx_arp: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_POST_DHCP_RX_ASSIGNED_ARP.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_post_dhcp_rx_ipv4: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_POST_DHCP_RX_IPV4.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_post_dhcp_rx_icmp: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_POST_DHCP_RX_ICMP.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_post_dhcp_rx_tcp: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_POST_DHCP_RX_TCP.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_post_dhcp_rx_last_len: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_POST_DHCP_RX_LAST_LEN.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_post_dhcp_rx_last_ethertype: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_POST_DHCP_RX_LAST_ETHERTYPE.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
                     wifi_assoc: if matches!(
                         DriverTaskHotPath::$hot_path,
                         DriverTaskHotPath::Cyw43Wifi
@@ -15482,6 +15908,18 @@ mod tests {
         CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
         CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
+        CYW43_POST_DHCP_RX_ANY.store(0, Ordering::Release);
+        CYW43_POST_DHCP_RX_UNICAST.store(0, Ordering::Release);
+        CYW43_POST_DHCP_RX_ASSIGNED_ARP.store(0, Ordering::Release);
+        CYW43_POST_DHCP_RX_IPV4.store(0, Ordering::Release);
+        CYW43_POST_DHCP_RX_ICMP.store(0, Ordering::Release);
+        CYW43_POST_DHCP_RX_TCP.store(0, Ordering::Release);
+        CYW43_POST_DHCP_RX_LAST_ETHERTYPE.store(0, Ordering::Release);
+        CYW43_POST_DHCP_RX_LAST_LEN.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_SCB_AUTH_ATTEMPTED.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_SCB_AUTHORIZED.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_SCB_AUTH_MAC_HI.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_SCB_AUTH_MAC_LO.store(0, Ordering::Release);
         CYW43_DATA_TX_RETRIES.store(0, Ordering::Release);
         CYW43_DATA_TRACE_DHCP_COUNT.store(0, Ordering::Release);
         CYW43_DATA_TRACE_DROP_COUNT.store(0, Ordering::Release);
@@ -15491,6 +15929,7 @@ mod tests {
         CYW43_DATA_TRACE_TX_RETRY_COUNT.store(0, Ordering::Release);
         CYW43_ARP_RX.store(0, Ordering::Release);
         CYW43_ARP_TX.store(0, Ordering::Release);
+        CYW43_ARP_TARGET_HW_ZEROED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
         CYW43_ASSIGNED_IPV4_BE.store(0, Ordering::Release);
         CYW43_TX_SUBMITTED.store(0, Ordering::Release);
@@ -15514,6 +15953,8 @@ mod tests {
         CYW43_HOST_EAPOL_TEST_PTK_INSTALLED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_GTK_INSTALLED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_SCB_FAILS.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_TX_DRAINED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_TX_DRAIN_TIMEOUTS.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.store(0, Ordering::Release);
@@ -15652,6 +16093,19 @@ mod tests {
         frame
     }
 
+    fn test_cyw43_host_tcp_frame(assigned_ip: [u8; 4]) -> [u8; 94] {
+        let mut frame = test_cyw43_tcp_frame();
+        frame[..6].copy_from_slice(&CYW43_DRIVER_TASK_MAC.0);
+        frame[6..12].copy_from_slice(&[0x62, 0x72, 0x58, 0xed, 0x47, 0x5b]);
+        let ip = ETH_HEADER_LEN;
+        frame[ip + 12..ip + 16].copy_from_slice(&[192, 168, 86, 102]);
+        frame[ip + 16..ip + 20].copy_from_slice(&assigned_ip);
+        let tcp = ip + 20;
+        frame[tcp..tcp + 2].copy_from_slice(&49152u16.to_be_bytes());
+        frame[tcp + 2..tcp + 4].copy_from_slice(&COHESIX_TCP_CONSOLE_PORT.to_be_bytes());
+        frame
+    }
+
     fn test_cyw43_ipv6_multicast_frame() -> [u8; 86] {
         let mut frame = [0u8; 86];
         frame[..6].copy_from_slice(&[0x33, 0x33, 0x00, 0x00, 0x00, 0xfb]);
@@ -15721,6 +16175,7 @@ mod tests {
     impl Drop for TestCyw43HostEapolIoGuard {
         fn drop(&mut self) {
             CYW43_HOST_EAPOL_TEST_IO_STUB.store(0, Ordering::Release);
+            CYW43_HOST_EAPOL_TEST_SCB_FAILS.store(0, Ordering::Release);
         }
     }
 
@@ -15782,6 +16237,7 @@ mod tests {
     fn cyw43_control_preflight_matches_linux_ordered_primitives() {
         assert_eq!(CYW43_WLC_GET_REVINFO, 98);
         assert_eq!(CYW43_WLC_SET_PM, 86);
+        assert_eq!(CYW43_WLC_SET_SCB_AUTHORIZE, 121);
         assert_eq!(CYW43_CONTROL_EXCHANGE_FAULT_DETAIL, 0x530b);
         assert_eq!(CYW43_BCME_UNSUPPORTED_STATUS, 0xffff_ffe9);
         assert_eq!(CYW43_BCME_BADARG_STATUS, 0xffff_fffe);
@@ -15933,6 +16389,91 @@ mod tests {
             cyw43_read_le_u32(&frame[..len], CYW43_BCDC_HEADER_BYTES),
             Some(0)
         );
+    }
+
+    #[test]
+    fn cyw43_scb_authorize_command_matches_linux_shape() {
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+        let len = cyw43_write_bcdc_frame(
+            &mut frame,
+            CYW43_WLC_SET_SCB_AUTHORIZE,
+            CYW43_BCDC_FLAG_SET,
+            1,
+            &ap,
+        )
+        .expect("SCB authorize BCDC frame should fit");
+
+        assert_eq!(
+            cyw43_read_le_u32(&frame[..len], 0),
+            Some(CYW43_WLC_SET_SCB_AUTHORIZE)
+        );
+        assert_eq!(
+            cyw43_read_le_u16(&frame[..len], 8),
+            Some(CYW43_BCDC_FLAG_SET)
+        );
+        assert_eq!(
+            cyw43_control_request_expected_response_len(
+                CYW43_WLC_SET_SCB_AUTHORIZE,
+                cyw43_control_iovar_info(&frame[..len], CYW43_WLC_SET_SCB_AUTHORIZE),
+            ),
+            0
+        );
+        assert_eq!(
+            &frame[CYW43_BCDC_HEADER_BYTES..CYW43_BCDC_HEADER_BYTES + ETHER_ADDR_LEN],
+            &ap
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_scb_authorize_failure_defers_sta_release() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let _io_guard = test_enable_cyw43_host_eapol_io_stub();
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+
+        CYW43_HOST_EAPOL_TEST_SCB_FAILS.store(1, Ordering::Release);
+        let deferred = cyw43_authorize_host_eapol_scb(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &ap,
+            "cyw43-host-eapol-scb-authorize",
+        );
+
+        assert_eq!(deferred, Cyw43ScbAuthorizeOutcome::Deferred);
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
+            0
+        );
+
+        CYW43_HOST_EAPOL_TEST_SCB_FAILS.store(0, Ordering::Release);
+        let cached_deferred = cyw43_authorize_host_eapol_scb(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &ap,
+            "cyw43-host-eapol-scb-authorize",
+        );
+
+        assert_eq!(cached_deferred, Cyw43ScbAuthorizeOutcome::Deferred);
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
+            0
+        );
+
+        let next_ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa6];
+        let authorized = cyw43_authorize_host_eapol_scb(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &next_ap,
+            "cyw43-host-eapol-scb-authorize",
+        );
+
+        assert_eq!(authorized, Cyw43ScbAuthorizeOutcome::Authorized);
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
+            1
+        );
+        reset_cyw43_status_flags();
     }
 
     #[test]
@@ -17247,7 +17788,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn post_secure_rx_admission_transport_failure_blocks_data_rx() {
+    fn post_secure_rx_admission_transport_failure_stays_nonblocking() {
         let _guard = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status-label tests must serialize");
@@ -17265,15 +17806,12 @@ mod tests {
         mark_cyw43_host_eapol_secure(CYW43_WIFI_DRIVER_TASK_CONTRACT, &progress);
 
         assert_eq!(CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire), 1);
-        assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 1);
         assert_eq!(
             CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire),
-            0
+            1
         );
-        assert_eq!(
-            cyw43_driver_task_bringup_status_label(),
-            Some("wifi-data-rx-admission-blocked")
-        );
+        assert_eq!(cyw43_driver_task_bringup_status_label(), None);
 
         reset_cyw43_status_flags();
     }
@@ -17856,6 +18394,12 @@ mod tests {
         );
 
         CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        assert_eq!(
+            cyw43_wifi_gate7_host_eapol_subgate("secure", &progress),
+            ("7e", "secure-release", "waiting-carrier-release")
+        );
+
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
         assert_eq!(
             cyw43_wifi_gate7_host_eapol_subgate("secure", &progress),
             ("7e", "secure-release", "passed")
@@ -18553,7 +19097,7 @@ mod tests {
                 false,
                 false,
             ),
-            Cyw43DataPathTraceClass::Suppress
+            Cyw43DataPathTraceClass::PendingTransition
         );
         assert_eq!(
             cyw43_data_path_trace_class(
@@ -18682,6 +19226,33 @@ mod tests {
             ),
             Cyw43DataPathTraceClass::Suppress
         );
+        let host_tcp_info = cyw43_trace_frame_info(&test_cyw43_host_tcp_frame([192, 168, 86, 154]));
+        assert_eq!(
+            cyw43_data_path_trace_class(
+                "rx-deliver",
+                "poll",
+                host_tcp_info,
+                DriverTaskCompletionCode::FrameReady.as_u16(),
+                Some([192, 168, 86, 154]),
+                CYW43_DRIVER_TASK_MAC,
+                false,
+                false,
+            ),
+            Cyw43DataPathTraceClass::PendingTransition
+        );
+        assert_eq!(
+            cyw43_data_path_trace_class(
+                "rx-deliver",
+                "poll",
+                host_tcp_info,
+                DriverTaskCompletionCode::FrameReady.as_u16(),
+                Some([192, 168, 86, 200]),
+                CYW43_DRIVER_TASK_MAC,
+                false,
+                false,
+            ),
+            Cyw43DataPathTraceClass::Suppress
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -18766,6 +19337,64 @@ mod tests {
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
         assert_eq!(CYW43_TX_SUBMITTED.load(Ordering::Acquire), 2);
         assert_eq!(driver_task_arp_counts(DriverTaskHotPath::Cyw43Wifi), (0, 2));
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_arp_request_target_hardware_is_zeroed_before_tx() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let mut request = cyw43_arp_frame(
+            [0xff; ETHER_ADDR_LEN],
+            CYW43_DRIVER_TASK_MAC.0,
+            1,
+            CYW43_DRIVER_TASK_MAC.0,
+            [192, 168, 86, 154],
+            [0xff; ETHER_ADDR_LEN],
+            [192, 168, 86, 1],
+        );
+
+        let (_sha, _spa, target_hw, target_ip) =
+            cyw43_arp_addrs(&request).expect("test ARP request is well formed");
+        assert_eq!(target_hw, [0xff; ETHER_ADDR_LEN]);
+        assert_eq!(target_ip, [192, 168, 86, 1]);
+        assert!(normalize_driver_task_arp_request_target_hw(
+            DriverTaskHotPath::Cyw43Wifi,
+            &mut request
+        ));
+        let (_sha, _spa, target_hw, target_ip) =
+            cyw43_arp_addrs(&request).expect("normalized ARP request is well formed");
+        assert_eq!(target_hw, [0; ETHER_ADDR_LEN]);
+        assert_eq!(target_ip, [192, 168, 86, 1]);
+        assert_eq!(CYW43_ARP_TARGET_HW_ZEROED.load(Ordering::Acquire), 1);
+        assert!(!normalize_driver_task_arp_request_target_hw(
+            DriverTaskHotPath::Cyw43Wifi,
+            &mut request
+        ));
+        assert_eq!(CYW43_ARP_TARGET_HW_ZEROED.load(Ordering::Acquire), 1);
+
+        let mut genet_request = cyw43_arp_frame(
+            [0xff; ETHER_ADDR_LEN],
+            GENET_DRIVER_TASK_MAC.0,
+            1,
+            GENET_DRIVER_TASK_MAC.0,
+            [192, 168, 10, 50],
+            [0xff; ETHER_ADDR_LEN],
+            [192, 168, 10, 1],
+        );
+        assert!(!normalize_driver_task_arp_request_target_hw(
+            DriverTaskHotPath::GenetNic,
+            &mut genet_request
+        ));
+        let (_sha, _spa, target_hw, target_ip) =
+            cyw43_arp_addrs(&genet_request).expect("Genet ARP request stays well formed");
+        assert_eq!(target_hw, [0xff; ETHER_ADDR_LEN]);
+        assert_eq!(target_ip, [192, 168, 10, 1]);
+        assert_eq!(CYW43_ARP_TARGET_HW_ZEROED.load(Ordering::Acquire), 1);
 
         reset_cyw43_status_flags();
     }
@@ -19495,6 +20124,10 @@ mod tests {
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
             1
         );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
+            1
+        );
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.load(Ordering::Acquire),
@@ -19542,6 +20175,10 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
             1
         );
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
@@ -19596,6 +20233,10 @@ mod tests {
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
             1
         );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
+            1
+        );
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
@@ -19636,6 +20277,10 @@ mod tests {
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
+            2
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_SCB_AUTHORIZED.load(Ordering::Acquire),
             2
         );
         assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 3);
@@ -22284,6 +22929,7 @@ mod tests {
         GENET_ARP_TX.store(0, Ordering::Release);
         CYW43_ARP_RX.store(0, Ordering::Release);
         CYW43_ARP_TX.store(0, Ordering::Release);
+        CYW43_ARP_TARGET_HW_ZEROED.store(0, Ordering::Release);
 
         let mut arp = [0u8; 60];
         arp[12] = 0x08;
@@ -22304,6 +22950,7 @@ mod tests {
         GENET_ARP_TX.store(0, Ordering::Release);
         CYW43_ARP_RX.store(0, Ordering::Release);
         CYW43_ARP_TX.store(0, Ordering::Release);
+        CYW43_ARP_TARGET_HW_ZEROED.store(0, Ordering::Release);
     }
 
     #[cfg(feature = "kernel")]
@@ -22508,18 +23155,71 @@ mod tests {
         let device = Cyw43DriverTaskDevice::default();
         CYW43_DATA_TRACE_FAULT_COUNT.store(7, Ordering::Release);
         CYW43_DATA_TRACE_TX_RETRY_COUNT.store(11, Ordering::Release);
+        CYW43_ARP_TARGET_HW_ZEROED.store(13, Ordering::Release);
 
         let counters = device.counters();
         assert_eq!(counters.wifi_data_trace_faults, 7);
         assert_eq!(counters.wifi_data_trace_tx_retries, 11);
+        assert_eq!(counters.wifi_arp_target_hw_zeroed, 13);
 
         let genet_counters = GenetDriverTaskDevice::default().counters();
         assert_eq!(genet_counters.wifi_data_trace_faults, 0);
         assert_eq!(genet_counters.wifi_data_trace_tx_retries, 0);
+        assert_eq!(genet_counters.wifi_arp_target_hw_zeroed, 0);
 
         crate::hal::driver_task::publish_driver_task_ring(contract, 0);
         CYW43_DATA_TRACE_FAULT_COUNT.store(0, Ordering::Release);
         CYW43_DATA_TRACE_TX_RETRY_COUNT.store(0, Ordering::Release);
+        CYW43_ARP_TARGET_HW_ZEROED.store(0, Ordering::Release);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_post_dhcp_rx_counters_track_host_tcp_to_assigned_ip() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        crate::hal::driver_task::publish_driver_task_ring(
+            contract,
+            ring_page.as_mut_ptr() as usize,
+        );
+        let assigned_ip = [192, 168, 86, 154];
+        let frame = test_cyw43_host_tcp_frame(assigned_ip);
+        let info = cyw43_trace_frame_info(&frame);
+
+        record_cyw43_post_dhcp_rx_progress(
+            contract,
+            "rx-deliver",
+            info,
+            frame.len(),
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            CYW43_DRIVER_TASK_MAC,
+            Some(assigned_ip),
+        );
+
+        let counters = Cyw43DriverTaskDevice::default().counters();
+        assert_eq!(counters.wifi_post_dhcp_rx_any, 1);
+        assert_eq!(counters.wifi_post_dhcp_rx_unicast, 1);
+        assert_eq!(counters.wifi_post_dhcp_rx_arp, 0);
+        assert_eq!(counters.wifi_post_dhcp_rx_ipv4, 1);
+        assert_eq!(counters.wifi_post_dhcp_rx_icmp, 0);
+        assert_eq!(counters.wifi_post_dhcp_rx_tcp, 1);
+        assert_eq!(counters.wifi_post_dhcp_rx_last_len, frame.len() as u64);
+        assert_eq!(
+            counters.wifi_post_dhcp_rx_last_ethertype,
+            u64::from(CYW43_ETH_P_IPV4)
+        );
+
+        let genet_counters = GenetDriverTaskDevice::default().counters();
+        assert_eq!(genet_counters.wifi_post_dhcp_rx_any, 0);
+        assert_eq!(genet_counters.wifi_post_dhcp_rx_tcp, 0);
+
+        crate::hal::driver_task::publish_driver_task_ring(contract, 0);
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]
@@ -22895,6 +23595,45 @@ mod tests {
         assert_eq!(CYW43_PENDING_RX_DROPS.load(Ordering::Acquire), 1);
 
         reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_post_dhcp_queue_evicts_dhcp_for_host_tcp_to_assigned_ip() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_data_plane_ready_for_test();
+        let assigned_ip = [192, 168, 86, 154];
+        CYW43_ASSIGNED_IPV4_BE.store(u32::from_be_bytes(assigned_ip), Ordering::Release);
+
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let dhcp = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);
+        let tcp = test_cyw43_host_tcp_frame(assigned_ip);
+        for _ in 0..CYW43_PENDING_RX_QUEUE_CAP {
+            assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&dhcp)));
+        }
+
+        assert!(cyw43_pending_rx_token_store_possible(
+            flags,
+            &test_rx_token(&tcp)
+        ));
+        assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&tcp)));
+        assert_eq!(CYW43_PENDING_RX_DROPS.load(Ordering::Acquire), 1);
+
+        let mut dev = Cyw43DriverTaskDevice::default();
+        for _ in 0..CYW43_PENDING_RX_QUEUE_CAP {
+            let (rx, _) = dev
+                .receive(Instant::from_millis(0))
+                .expect("post-DHCP queue should retain host TCP");
+            if rx.len == tcp.len() {
+                rx.consume(|bytes| assert_eq!(bytes, &tcp));
+                reset_cyw43_status_flags();
+                return;
+            }
+        }
+        panic!("host TCP was not preserved through post-DHCP DHCP queue pressure");
     }
 
     #[cfg(feature = "kernel")]

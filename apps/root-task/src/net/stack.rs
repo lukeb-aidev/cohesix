@@ -4477,6 +4477,16 @@ impl<D: NetDevice> NetStack<D> {
             device_counters.wifi_rx_runtime_max_drained_per_turn;
         self.counters.wifi_data_trace_faults = device_counters.wifi_data_trace_faults;
         self.counters.wifi_data_trace_tx_retries = device_counters.wifi_data_trace_tx_retries;
+        self.counters.wifi_arp_target_hw_zeroed = device_counters.wifi_arp_target_hw_zeroed;
+        self.counters.wifi_post_dhcp_rx_any = device_counters.wifi_post_dhcp_rx_any;
+        self.counters.wifi_post_dhcp_rx_unicast = device_counters.wifi_post_dhcp_rx_unicast;
+        self.counters.wifi_post_dhcp_rx_arp = device_counters.wifi_post_dhcp_rx_arp;
+        self.counters.wifi_post_dhcp_rx_ipv4 = device_counters.wifi_post_dhcp_rx_ipv4;
+        self.counters.wifi_post_dhcp_rx_icmp = device_counters.wifi_post_dhcp_rx_icmp;
+        self.counters.wifi_post_dhcp_rx_tcp = device_counters.wifi_post_dhcp_rx_tcp;
+        self.counters.wifi_post_dhcp_rx_last_len = device_counters.wifi_post_dhcp_rx_last_len;
+        self.counters.wifi_post_dhcp_rx_last_ethertype =
+            device_counters.wifi_post_dhcp_rx_last_ethertype;
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
         self.counters.wifi_assoc = device_counters.wifi_assoc;
         self.counters.wifi_link_up = device_counters.wifi_link_up;
@@ -4536,6 +4546,15 @@ impl<D: NetDevice> NetStack<D> {
                 .wifi_rx_runtime_max_drained_per_turn,
             wifi_data_trace_faults: device_counters.wifi_data_trace_faults,
             wifi_data_trace_tx_retries: device_counters.wifi_data_trace_tx_retries,
+            wifi_arp_target_hw_zeroed: device_counters.wifi_arp_target_hw_zeroed,
+            wifi_post_dhcp_rx_any: device_counters.wifi_post_dhcp_rx_any,
+            wifi_post_dhcp_rx_unicast: device_counters.wifi_post_dhcp_rx_unicast,
+            wifi_post_dhcp_rx_arp: device_counters.wifi_post_dhcp_rx_arp,
+            wifi_post_dhcp_rx_ipv4: device_counters.wifi_post_dhcp_rx_ipv4,
+            wifi_post_dhcp_rx_icmp: device_counters.wifi_post_dhcp_rx_icmp,
+            wifi_post_dhcp_rx_tcp: device_counters.wifi_post_dhcp_rx_tcp,
+            wifi_post_dhcp_rx_last_len: device_counters.wifi_post_dhcp_rx_last_len,
+            wifi_post_dhcp_rx_last_ethertype: device_counters.wifi_post_dhcp_rx_last_ethertype,
             dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
             wifi_assoc: device_counters.wifi_assoc,
             wifi_link_up: device_counters.wifi_link_up,

@@ -287,6 +287,8 @@ const NET_CYW43_POST_DISPATCH_FLUSH_POLLS: usize = 12;
 const NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 24;
 #[cfg(feature = "net-console")]
 const NET_CYW43_POST_FLUSH_INGEST_POLLS: usize = 8;
+#[cfg(feature = "net-console")]
+const NET_CYW43_IDLE_INGEST_POLLS: usize = 2;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
@@ -721,6 +723,67 @@ fn net_post_dispatch_flush_limit_for_status(
     } else {
         net_post_dispatch_flush_limit_for_display(display)
     }
+}
+
+#[cfg(feature = "net-console")]
+fn poll_cyw43_tail_ingest_bounded(
+    net: &mut dyn NetPoller,
+    audit: &mut dyn AuditSink,
+    metrics: &mut PumpMetrics,
+    now_ms: u64,
+    poll_limit: usize,
+) {
+    if !net_status_cyw43_data_ready(&net.status_report()) {
+        return;
+    }
+    let net_contract = net.driver_task_contract();
+    let mut tail_polls = 0u64;
+    let mut tail_hits = 0u64;
+    let mut tail_idle = 0u64;
+    let mut tail_budget_errors = 0u64;
+    for _ in 0..poll_limit {
+        let mut net_budget = match DriverServiceBudget::new(net_contract) {
+            Ok(budget) => budget,
+            Err(err) => {
+                let message = format_message(format_args!(
+                    "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                    net_contract.name,
+                    err.reason(),
+                    net_contract.max_service_us(),
+                ));
+                audit.denied(message.as_str());
+                tail_budget_errors = tail_budget_errors.saturating_add(1);
+                break;
+            }
+        };
+        match net.poll_with_budget(now_ms, &mut net_budget) {
+            Ok(true) => {
+                tail_polls = tail_polls.saturating_add(1);
+                tail_hits = tail_hits.saturating_add(1);
+            }
+            Ok(false) => {
+                tail_polls = tail_polls.saturating_add(1);
+                tail_idle = tail_idle.saturating_add(1);
+            }
+            Err(err) => {
+                let message = format_message(format_args!(
+                    "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                    net_contract.name,
+                    err.reason(),
+                    net_contract.max_service_us(),
+                ));
+                audit.denied(message.as_str());
+                tail_budget_errors = tail_budget_errors.saturating_add(1);
+                break;
+            }
+        }
+    }
+    metrics.net_cyw43_tail_polls = metrics.net_cyw43_tail_polls.saturating_add(tail_polls);
+    metrics.net_cyw43_tail_hits = metrics.net_cyw43_tail_hits.saturating_add(tail_hits);
+    metrics.net_cyw43_tail_idle = metrics.net_cyw43_tail_idle.saturating_add(tail_idle);
+    metrics.net_cyw43_tail_budget_errors = metrics
+        .net_cyw43_tail_budget_errors
+        .saturating_add(tail_budget_errors);
 }
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
@@ -2471,7 +2534,10 @@ where
             }
             let telemetry = net.telemetry();
             let conn_id = net.active_console_conn_id();
-            let hot_dispatch_rounds = net_hot_dispatch_rounds_for_status(&net.status_report());
+            let status_after = net.status_report();
+            let cyw43_idle_tail_due =
+                !yield_for_physical_input && net_status_cyw43_data_ready(&status_after);
+            let hot_dispatch_rounds = net_hot_dispatch_rounds_for_status(&status_after);
             let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_DISPATCH_BURST }> =
                 HeaplessVec::new();
             if !yield_for_physical_input {
@@ -2491,6 +2557,7 @@ where
                 conn_id,
                 ingest_snapshot,
                 hot_dispatch_rounds,
+                cyw43_idle_tail_due,
             ))
         } else {
             None
@@ -2504,6 +2571,7 @@ where
             conn_id,
             _ingest_snapshot,
             hot_dispatch_rounds,
+            cyw43_idle_tail_due,
         )) = net_poll
         {
             self.net_conn_id = conn_id;
@@ -2517,6 +2585,18 @@ where
                 self.audit.info(message.as_str());
             }
             let mut ingest_snapshot = _ingest_snapshot;
+            if cyw43_idle_tail_due && buffered.is_empty() && !suppress_console_input {
+                if let Some(net) = self.net.as_mut() {
+                    poll_cyw43_tail_ingest_bounded(
+                        *net,
+                        self.audit,
+                        &mut self.metrics,
+                        self.now_ms,
+                        NET_CYW43_IDLE_INGEST_POLLS,
+                    );
+                    ingest_snapshot = net.ingest_snapshot();
+                }
+            }
             for line in buffered {
                 if !suppress_console_input {
                     self.handle_network_line(line.text);
@@ -2629,64 +2709,17 @@ where
                 .net_post_dispatch_flush_exhaustions
                 .saturating_add(1);
         }
-        if net_status_cyw43_data_ready(&net.status_report()) {
-            let mut tail_polls = 0u64;
-            let mut tail_hits = 0u64;
-            let mut tail_idle = 0u64;
-            let mut tail_budget_errors = 0u64;
-            for _ in 0..NET_CYW43_POST_FLUSH_INGEST_POLLS {
-                let mut net_budget = match DriverServiceBudget::new(net_contract) {
-                    Ok(budget) => budget,
-                    Err(err) => {
-                        let message = format_message(format_args!(
-                            "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                            net_contract.name,
-                            err.reason(),
-                            net_contract.max_service_us(),
-                        ));
-                        self.audit.denied(message.as_str());
-                        tail_budget_errors = tail_budget_errors.saturating_add(1);
-                        break;
-                    }
-                };
-                match net.poll_with_budget(self.now_ms, &mut net_budget) {
-                    Ok(true) => {
-                        tail_polls = tail_polls.saturating_add(1);
-                        tail_hits = tail_hits.saturating_add(1);
-                    }
-                    // DHCP proves the broadcast/control path, not unicast
-                    // delivery. Keep a bounded CYW43 RX-first maintenance
-                    // window after the lease as well as after TCP flush
-                    // activity so SYN/ARP/ICMP frames are not stranded until
-                    // an already-active TCP session makes progress.
-                    Ok(false) => {
-                        tail_polls = tail_polls.saturating_add(1);
-                        tail_idle = tail_idle.saturating_add(1);
-                    }
-                    Err(err) => {
-                        let message = format_message(format_args!(
-                            "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                            net_contract.name,
-                            err.reason(),
-                            net_contract.max_service_us(),
-                        ));
-                        self.audit.denied(message.as_str());
-                        tail_budget_errors = tail_budget_errors.saturating_add(1);
-                        break;
-                    }
-                }
-            }
-            self.metrics.net_cyw43_tail_polls =
-                self.metrics.net_cyw43_tail_polls.saturating_add(tail_polls);
-            self.metrics.net_cyw43_tail_hits =
-                self.metrics.net_cyw43_tail_hits.saturating_add(tail_hits);
-            self.metrics.net_cyw43_tail_idle =
-                self.metrics.net_cyw43_tail_idle.saturating_add(tail_idle);
-            self.metrics.net_cyw43_tail_budget_errors = self
-                .metrics
-                .net_cyw43_tail_budget_errors
-                .saturating_add(tail_budget_errors);
-        }
+        // DHCP proves the broadcast/control path, not unicast delivery. Keep a
+        // bounded CYW43 RX-first maintenance window after the lease as well as
+        // after TCP flush activity so SYN/ARP/ICMP frames are not stranded
+        // until an already-active TCP session makes progress.
+        poll_cyw43_tail_ingest_bounded(
+            *net,
+            self.audit,
+            &mut self.metrics,
+            self.now_ms,
+            NET_CYW43_POST_FLUSH_INGEST_POLLS,
+        );
 
         Some(net.ingest_snapshot())
     }
@@ -13217,8 +13250,21 @@ where
                             stats.wifi_rx_runtime_drain_budget_hit,
                         ));
                         let line_wifi_trace = format_message(format_args!(
-                            "netstats: wifi_trace_faults={} wifi_trace_tx_retries={}",
-                            stats.wifi_data_trace_faults, stats.wifi_data_trace_tx_retries,
+                            "netstats: wifi_trace_faults={} wifi_trace_tx_retries={} wifi_arp_tha_zeroed={}",
+                            stats.wifi_data_trace_faults,
+                            stats.wifi_data_trace_tx_retries,
+                            stats.wifi_arp_target_hw_zeroed,
+                        ));
+                        let line_wifi_post_dhcp = format_message(format_args!(
+                            "netstats: wifi_post_dhcp_rx any={} unicast={} arp={} ipv4={} icmp={} tcp={} last_len={} last_ethertype=0x{:04x}",
+                            stats.wifi_post_dhcp_rx_any,
+                            stats.wifi_post_dhcp_rx_unicast,
+                            stats.wifi_post_dhcp_rx_arp,
+                            stats.wifi_post_dhcp_rx_ipv4,
+                            stats.wifi_post_dhcp_rx_icmp,
+                            stats.wifi_post_dhcp_rx_tcp,
+                            stats.wifi_post_dhcp_rx_last_len,
+                            stats.wifi_post_dhcp_rx_last_ethertype,
                         ));
                         let line_wired = format_message(format_args!(
                             "netstats: genet_rx_hw={} genet_rx_last_len={} genet_rx_last_ethertype=0x{:04x}",
@@ -13256,27 +13302,26 @@ where
                             report.tcp_target,
                             report.last_result
                         ));
-                        self.with_local_seat_mirror_suppressed(|this| {
-                            this.emit_console_line(line_one.as_str());
-                            this.emit_console_line(line_two.as_str());
-                            this.emit_console_line(line_three.as_str());
-                            this.emit_console_line(line_flush.as_str());
-                            this.emit_console_line(line_policy.as_str());
-                            this.emit_console_line(line_local_seat.as_str());
-                            this.emit_console_line(line_four.as_str());
-                            this.emit_console_line(line_five.as_str());
-                            if net_status_active_interface_is_wifi(&status) {
-                                this.emit_console_line(line_wifi.as_str());
-                                this.emit_console_line(line_wifi_trace.as_str());
-                                this.emit_wifi_credential_warning_for_status(&status, &stats, true);
-                            }
-                            if net_status_active_interface_is_wired(&status) {
-                                this.emit_console_line(line_wired.as_str());
-                                this.emit_console_line(line_wired_rxq.as_str());
-                            }
-                            this.emit_console_line(line_six.as_str());
-                            this.emit_console_line(status_line.as_str());
-                        });
+                        self.emit_console_line(line_one.as_str());
+                        self.emit_console_line(line_two.as_str());
+                        self.emit_console_line(line_three.as_str());
+                        self.emit_console_line(line_flush.as_str());
+                        self.emit_console_line(line_policy.as_str());
+                        self.emit_console_line(line_local_seat.as_str());
+                        self.emit_console_line(line_four.as_str());
+                        self.emit_console_line(line_five.as_str());
+                        if net_status_active_interface_is_wifi(&status) {
+                            self.emit_console_line(line_wifi.as_str());
+                            self.emit_console_line(line_wifi_trace.as_str());
+                            self.emit_console_line(line_wifi_post_dhcp.as_str());
+                            self.emit_wifi_credential_warning_for_status(&status, &stats, true);
+                        }
+                        if net_status_active_interface_is_wired(&status) {
+                            self.emit_console_line(line_wired.as_str());
+                            self.emit_console_line(line_wired_rxq.as_str());
+                        }
+                        self.emit_console_line(line_six.as_str());
+                        self.emit_console_line(status_line.as_str());
                         self.metrics.accepted_commands += 1;
                         self.emit_ack_ok(verb_label, None);
                     } else {
@@ -18697,6 +18742,43 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn cyw43_data_ready_gets_idle_tail_poll_without_network_line() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        let metrics = pump.metrics;
+        drop(pump);
+
+        assert_eq!(metrics.accepted_commands, 0);
+        assert_eq!(
+            metrics.net_cyw43_tail_polls,
+            NET_CYW43_IDLE_INGEST_POLLS as u64
+        );
+        assert_eq!(
+            metrics.net_cyw43_tail_hits,
+            NET_CYW43_IDLE_INGEST_POLLS as u64
+        );
+        assert_eq!(metrics.net_cyw43_tail_idle, 0);
+        assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
+        assert_eq!(net.polls, NET_CYW43_IDLE_INGEST_POLLS + 1);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn non_data_ready_net_dispatch_stays_single_burst() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
@@ -19671,7 +19753,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn netstats_suppresses_local_seat_mirror_for_bulk_serial_diagnostic() {
+    fn netstats_serial_output_mirrors_full_status_to_local_seat() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19681,6 +19763,8 @@ mod tests {
         let mut net = FakeNet::new();
         net.status.mode = "dhcp";
         net.status.interface_policy = "wired";
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
         net.status.active_driver = "bcmgenet-v5";
         net.status.active_interface = "wired";
         net.status.standby_interface = "none";
@@ -19691,8 +19775,8 @@ mod tests {
         let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",
-            line_bytes: 64,
-            buffer_lines: 8,
+            line_bytes: 256,
+            buffer_lines: 32,
         });
         local_seat.mark_root_console_ready();
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
@@ -19705,10 +19789,49 @@ mod tests {
         drop(pump);
 
         let mirrored = local_seat.mirrored_lines_snapshot();
+        let diagnostic_lines: Vec<_> = mirrored
+            .iter()
+            .filter(|line| {
+                line.starts_with("netstats:")
+                    || line.starts_with("netstatus:")
+                    || line.starts_with("nettest:")
+            })
+            .collect();
+        assert_eq!(diagnostic_lines.len(), 12, "{mirrored:?}");
         assert!(
-            mirrored.iter().all(|line| !line.starts_with("netstats:")
-                && !line.starts_with("netstatus:")
-                && !line.starts_with("nettest:")),
+            mirrored.iter().any(|line| {
+                line.starts_with("netstats: rx_pkts=0 tx_pkts=0 rx_used=0 tx_used=0 polls=0")
+            }),
+            "{mirrored:?}"
+        );
+        assert!(
+            mirrored.iter().any(|line| {
+                line.starts_with("netstats: tcp_post_flush_polls=0 tcp_post_flush_exhaustions=0")
+            }),
+            "{mirrored:?}"
+        );
+        assert!(
+            mirrored.iter().any(|line| {
+                line.starts_with("netstats: mode=dhcp policy=wired active=wired standby=none")
+            }),
+            "{mirrored:?}"
+        );
+        assert!(
+            mirrored
+                .iter()
+                .any(|line| line.starts_with("netstats: genet_rxq runtime_cur=0")),
+            "{mirrored:?}"
+        );
+        assert!(
+            mirrored.iter().any(|line| {
+                line.starts_with("netstatus: ip=192.168.10.50 gateway=192.168.10.1 src=dhcp-lease")
+            }),
+            "{mirrored:?}"
+        );
+        assert!(
+            mirrored
+                .iter()
+                .any(|line| line.starts_with("nettest: profile_backend=bcmgenet-v5")),
             "{mirrored:?}"
         );
     }
@@ -19823,6 +19946,15 @@ mod tests {
         net.counters.wifi_rx_runtime_drain_budget_hit = 1;
         net.counters.wifi_data_trace_faults = 3;
         net.counters.wifi_data_trace_tx_retries = 5;
+        net.counters.wifi_arp_target_hw_zeroed = 7;
+        net.counters.wifi_post_dhcp_rx_any = 11;
+        net.counters.wifi_post_dhcp_rx_unicast = 6;
+        net.counters.wifi_post_dhcp_rx_arp = 2;
+        net.counters.wifi_post_dhcp_rx_ipv4 = 4;
+        net.counters.wifi_post_dhcp_rx_icmp = 1;
+        net.counters.wifi_post_dhcp_rx_tcp = 3;
+        net.counters.wifi_post_dhcp_rx_last_len = 74;
+        net.counters.wifi_post_dhcp_rx_last_ethertype = 0x0800;
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.session = Some(SessionRole::Queen);
         pump.serial_mut().driver_mut().push_rx(b"netstats\n");
@@ -19854,7 +19986,15 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("netstats: wifi_trace_faults=3 wifi_trace_tx_retries=5"),
+            rendered.contains(
+                "netstats: wifi_trace_faults=3 wifi_trace_tx_retries=5 wifi_arp_tha_zeroed=7"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: wifi_post_dhcp_rx any=11 unicast=6 arp=2 ipv4=4 icmp=1 tcp=3 last_len=74 last_ethertype=0x0800"
+            ),
             "{rendered}"
         );
         assert!(
