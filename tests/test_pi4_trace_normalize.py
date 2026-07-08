@@ -1014,6 +1014,17 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DATA_PATH_RX_DELIVERED": 0,
         "WIFI_DATA_PATH_RX_DROPPED": 0,
         "WIFI_DATA_PATH_LAST": "none",
+        "WIFI_SERVICE_OP": 0,
+        "WIFI_SERVICE_REASON": 0,
+        "WIFI_SERVICE_PROGRESS": "0x00000000",
+        "WIFI_SERVICE_SEQ": 0,
+        "WIFI_SERVICE_CREDIT": 0,
+        "WIFI_SERVICE_CHANNEL": 0,
+        "WIFI_SERVICE_RFRAME": 0,
+        "WIFI_SERVICE_EAPOL_M1": 0,
+        "WIFI_SERVICE_EAPOL_M2": 0,
+        "WIFI_SERVICE_EAPOL_M3": 0,
+        "WIFI_SERVICE_EAPOL_M4": 0,
         "WIFI_RX_IRQ_PRESERVE_COUNT": 0,
         "WIFI_RX_IRQ_PRESERVE_REASON": "none",
         "WIFI_RX_IRQ_PRESERVE_INT": "0x00000000",
@@ -11860,6 +11871,10 @@ def test_gate_summary_tracks_wifi_dhcp_and_nettest_success() -> None:
             "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
             "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
             "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
+            "netstats: wifi_service_turn op=54 reason=3 progress=0x00000015 "
+            "seq=4 credit=9 credit_obs=8 channel=2 rframe=512 "
+            "src_flags=0x0042 pre_src=0x43520058 post_src=0x43520059 "
+            "eapol_m1=1 eapol_m2=1 eapol_m3=1 eapol_m4=1 ptk=1 gtk=1",
         ]
     )
 
@@ -11870,6 +11885,42 @@ def test_gate_summary_tracks_wifi_dhcp_and_nettest_success() -> None:
     assert gates.wifi_blocker == "none"
     assert record["NET_TCP_READY"] == "yes"
     assert record["NETTEST_PROOF"] == "yes"
+    assert record["WIFI_SERVICE_OP"] == 54
+    assert record["WIFI_SERVICE_REASON"] == 3
+    assert record["WIFI_SERVICE_PROGRESS"] == "0x00000015"
+    assert record["WIFI_SERVICE_SEQ"] == 4
+    assert record["WIFI_SERVICE_CREDIT"] == 9
+    assert record["WIFI_SERVICE_CHANNEL"] == 2
+    assert record["WIFI_SERVICE_RFRAME"] == 512
+    assert record["WIFI_SERVICE_EAPOL_M1"] == 1
+    assert record["WIFI_SERVICE_EAPOL_M2"] == 1
+    assert record["WIFI_SERVICE_EAPOL_M3"] == 1
+    assert record["WIFI_SERVICE_EAPOL_M4"] == 1
+
+
+def test_gate_summary_classifies_missing_host_eapol_m3() -> None:
+    events = normalizer.parse_events(
+        [
+            "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
+            "addr_src=host-eapol-m3-missing ip=0.0.0.0 gateway=0.0.0.0 "
+            "dhcp=host-eapol-m3-missing",
+            "netstats: wifi_service_turn op=54 reason=3 progress=0x00000001 "
+            "seq=4 credit=9 credit_obs=8 channel=65535 rframe=0 "
+            "src_flags=0x0000 pre_src=0x00000000 post_src=0x00000000 "
+            "eapol_m1=1 eapol_m2=1 eapol_m3=0 eapol_m4=0 ptk=0 gtk=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.wifi_gate == 9
+    assert gates.wifi_blocker == "host-eapol-m3-missing"
+    assert gates.wifi_exact == "host-eapol-m3-missing"
+    assert gates.wifi_phase == "join-security"
+    assert record["WIFI_SERVICE_EAPOL_M1"] == 1
+    assert record["WIFI_SERVICE_EAPOL_M2"] == 1
+    assert record["WIFI_SERVICE_EAPOL_M3"] == 0
 
 
 def test_gate_summary_requires_netstats_for_wifi_ready() -> None:

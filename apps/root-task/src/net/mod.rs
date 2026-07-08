@@ -606,6 +606,26 @@ pub struct NetDeviceCounters {
     pub wifi_rx_runtime_drain_budget_hit: u64,
     /// CYW43 linked-runtime max frames drained during one service turn.
     pub wifi_rx_runtime_max_drained_per_turn: u64,
+    /// CYW43 linked-runtime last service operation.
+    pub wifi_service_last_op: u64,
+    /// CYW43 linked-runtime last service reason.
+    pub wifi_service_last_reason: u64,
+    /// CYW43 linked-runtime last service progress bits or byte count.
+    pub wifi_service_last_progress: u64,
+    /// CYW43 linked-runtime last SDPCM sequence/credit window.
+    pub wifi_service_last_seq_window: u64,
+    /// CYW43 linked-runtime last serviced channel, or 0xffff when none.
+    pub wifi_service_last_channel: u64,
+    /// CYW43 linked-runtime credit observations at the last service trace.
+    pub wifi_service_last_credit_observations: u64,
+    /// CYW43 linked-runtime last RFRAME length sampled in the service trace.
+    pub wifi_service_last_rframe_len: u64,
+    /// CYW43 linked-runtime last RX source flags.
+    pub wifi_service_last_source_flags: u64,
+    /// CYW43 linked-runtime last pre-service RX source result.
+    pub wifi_service_last_pre_source: u64,
+    /// CYW43 linked-runtime last post-service RX source result.
+    pub wifi_service_last_post_source: u64,
     /// Sampled CYW43 data-path fault trace count.
     pub wifi_data_trace_faults: u64,
     /// Sampled CYW43 data-path TX retry trace count.
@@ -630,6 +650,18 @@ pub struct NetDeviceCounters {
     pub wifi_host_eapol_start: u64,
     /// Host-EAPOL secure completion state, encoded as 0 or 1.
     pub wifi_host_eapol_secure: u64,
+    /// Host-EAPOL M1 frames received.
+    pub wifi_host_eapol_m1: u64,
+    /// Host-EAPOL M2 frames transmitted.
+    pub wifi_host_eapol_m2: u64,
+    /// Host-EAPOL M3 frames received.
+    pub wifi_host_eapol_m3: u64,
+    /// Host-EAPOL M4 frames transmitted.
+    pub wifi_host_eapol_m4: u64,
+    /// Pairwise key install completions.
+    pub wifi_host_eapol_ptk: u64,
+    /// Group key install completions.
+    pub wifi_host_eapol_gtk: u64,
 }
 
 /// Monotonic counters collected from the NIC driver and smoltcp sockets.
@@ -737,6 +769,26 @@ pub struct NetCounters {
     pub wifi_rx_runtime_drain_budget_hit: u64,
     /// CYW43 linked-runtime max frames drained during one service turn.
     pub wifi_rx_runtime_max_drained_per_turn: u64,
+    /// CYW43 linked-runtime last service operation.
+    pub wifi_service_last_op: u64,
+    /// CYW43 linked-runtime last service reason.
+    pub wifi_service_last_reason: u64,
+    /// CYW43 linked-runtime last service progress bits or byte count.
+    pub wifi_service_last_progress: u64,
+    /// CYW43 linked-runtime last SDPCM sequence/credit window.
+    pub wifi_service_last_seq_window: u64,
+    /// CYW43 linked-runtime last serviced channel, or 0xffff when none.
+    pub wifi_service_last_channel: u64,
+    /// CYW43 linked-runtime credit observations at the last service trace.
+    pub wifi_service_last_credit_observations: u64,
+    /// CYW43 linked-runtime last RFRAME length sampled in the service trace.
+    pub wifi_service_last_rframe_len: u64,
+    /// CYW43 linked-runtime last RX source flags.
+    pub wifi_service_last_source_flags: u64,
+    /// CYW43 linked-runtime last pre-service RX source result.
+    pub wifi_service_last_pre_source: u64,
+    /// CYW43 linked-runtime last post-service RX source result.
+    pub wifi_service_last_post_source: u64,
     /// Sampled CYW43 data-path fault trace count.
     pub wifi_data_trace_faults: u64,
     /// Sampled CYW43 data-path TX retry trace count.
@@ -753,6 +805,18 @@ pub struct NetCounters {
     pub wifi_host_eapol_start: u64,
     /// Host-EAPOL secure completion state, encoded as 0 or 1.
     pub wifi_host_eapol_secure: u64,
+    /// Host-EAPOL M1 frames received.
+    pub wifi_host_eapol_m1: u64,
+    /// Host-EAPOL M2 frames transmitted.
+    pub wifi_host_eapol_m2: u64,
+    /// Host-EAPOL M3 frames received.
+    pub wifi_host_eapol_m3: u64,
+    /// Host-EAPOL M4 frames transmitted.
+    pub wifi_host_eapol_m4: u64,
+    /// Pairwise key install completions.
+    pub wifi_host_eapol_ptk: u64,
+    /// Group key install completions.
+    pub wifi_host_eapol_gtk: u64,
 }
 
 /// Outcome of the latest network self-test pass.

@@ -167,6 +167,14 @@ struct WifiLiveNetFrontier {
     wifi_assoc: u64,
     wifi_link_up: u64,
     wifi_host_eapol_secure: u64,
+    wifi_service_last_op: u64,
+    wifi_service_last_reason: u64,
+    wifi_service_last_progress: u64,
+    wifi_service_last_rframe_len: u64,
+    wifi_host_eapol_m1: u64,
+    wifi_host_eapol_m2: u64,
+    wifi_host_eapol_m3: u64,
+    wifi_host_eapol_m4: u64,
 }
 
 /// Trait used by the event pump to emit audit records.
@@ -9246,6 +9254,18 @@ where
                 frontier.wifi_host_eapol_secure,
             ));
             self.emit_console_line(detail.as_str());
+            let service_detail = format_message(format_args!(
+                "wifi: live service op={} reason={} progress=0x{:08x} rframe={} eapol_m1={} eapol_m2={} eapol_m3={} eapol_m4={}",
+                frontier.wifi_service_last_op,
+                frontier.wifi_service_last_reason,
+                frontier.wifi_service_last_progress,
+                frontier.wifi_service_last_rframe_len,
+                frontier.wifi_host_eapol_m1,
+                frontier.wifi_host_eapol_m2,
+                frontier.wifi_host_eapol_m3,
+                frontier.wifi_host_eapol_m4,
+            ));
+            self.emit_console_line(service_detail.as_str());
         } else if let Some(cause) = self.net_unavailable_detail.as_ref() {
             let detail = format_message(format_args!(
                 "wifi: driver-task replay failure detail=net-disabled cause={cause}"
@@ -9381,6 +9401,14 @@ where
                     wifi_assoc: counters.wifi_assoc,
                     wifi_link_up: counters.wifi_link_up,
                     wifi_host_eapol_secure: counters.wifi_host_eapol_secure,
+                    wifi_service_last_op: counters.wifi_service_last_op,
+                    wifi_service_last_reason: counters.wifi_service_last_reason,
+                    wifi_service_last_progress: counters.wifi_service_last_progress,
+                    wifi_service_last_rframe_len: counters.wifi_service_last_rframe_len,
+                    wifi_host_eapol_m1: counters.wifi_host_eapol_m1,
+                    wifi_host_eapol_m2: counters.wifi_host_eapol_m2,
+                    wifi_host_eapol_m3: counters.wifi_host_eapol_m3,
+                    wifi_host_eapol_m4: counters.wifi_host_eapol_m4,
                 };
                 Self::wifi_live_net_status_supersedes_runtime(&frontier).then_some(frontier)
             })
@@ -9403,7 +9431,11 @@ where
         let secure_counters = frontier.wifi_assoc != 0
             && frontier.wifi_link_up != 0
             && frontier.wifi_host_eapol_secure != 0;
-        dhcp_frontier || secure_counters
+        let host_eapol_frontier = frontier.wifi_host_eapol_m1 != 0
+            || frontier.wifi_host_eapol_m2 != 0
+            || frontier.wifi_host_eapol_m3 != 0
+            || frontier.wifi_host_eapol_m4 != 0;
+        dhcp_frontier || secure_counters || host_eapol_frontier
     }
 
     #[cfg(feature = "kernel")]
@@ -11702,14 +11734,23 @@ where
         {
             if let Some(net) = self.net.as_ref() {
                 let status = net.status_report();
+                let counters = net.stats();
                 return format_message(format_args!(
-                    "active={} active_driver={} address_source={} dhcp_phase={} tcp_ready={} ip={}",
+                    "active={} active_driver={} address_source={} dhcp_phase={} tcp_ready={} ip={} service_op={} service_reason={} service_progress=0x{:08x} service_rframe={} eapol_m1={} eapol_m2={} eapol_m3={} eapol_m4={}",
                     status.active_interface,
                     status.active_driver,
                     status.address_source,
                     status.dhcp_phase,
                     if status.tcp_ready { "yes" } else { "no" },
                     status.ip,
+                    counters.wifi_service_last_op,
+                    counters.wifi_service_last_reason,
+                    counters.wifi_service_last_progress,
+                    counters.wifi_service_last_rframe_len,
+                    counters.wifi_host_eapol_m1,
+                    counters.wifi_host_eapol_m2,
+                    counters.wifi_host_eapol_m3,
+                    counters.wifi_host_eapol_m4,
                 ));
             }
         }
@@ -13249,6 +13290,26 @@ where
                             stats.wifi_rx_runtime_max_drained_per_turn,
                             stats.wifi_rx_runtime_drain_budget_hit,
                         ));
+                        let line_wifi_service = format_message(format_args!(
+                            "netstats: wifi_service_turn op={} reason={} progress=0x{:08x} seq={} credit={} credit_obs={} channel={} rframe={} src_flags=0x{:04x} pre_src=0x{:08x} post_src=0x{:08x} eapol_m1={} eapol_m2={} eapol_m3={} eapol_m4={} ptk={} gtk={}",
+                            stats.wifi_service_last_op,
+                            stats.wifi_service_last_reason,
+                            stats.wifi_service_last_progress,
+                            stats.wifi_service_last_seq_window & 0xff,
+                            (stats.wifi_service_last_seq_window >> 8) & 0xff,
+                            stats.wifi_service_last_credit_observations,
+                            stats.wifi_service_last_channel,
+                            stats.wifi_service_last_rframe_len,
+                            stats.wifi_service_last_source_flags,
+                            stats.wifi_service_last_pre_source,
+                            stats.wifi_service_last_post_source,
+                            stats.wifi_host_eapol_m1,
+                            stats.wifi_host_eapol_m2,
+                            stats.wifi_host_eapol_m3,
+                            stats.wifi_host_eapol_m4,
+                            stats.wifi_host_eapol_ptk,
+                            stats.wifi_host_eapol_gtk,
+                        ));
                         let line_wifi_trace = format_message(format_args!(
                             "netstats: wifi_trace_faults={} wifi_trace_tx_retries={} wifi_arp_tha_zeroed={}",
                             stats.wifi_data_trace_faults,
@@ -13312,6 +13373,7 @@ where
                         self.emit_console_line(line_five.as_str());
                         if net_status_active_interface_is_wifi(&status) {
                             self.emit_console_line(line_wifi.as_str());
+                            self.emit_console_line(line_wifi_service.as_str());
                             self.emit_console_line(line_wifi_trace.as_str());
                             self.emit_console_line(line_wifi_post_dhcp.as_str());
                             self.emit_wifi_credential_warning_for_status(&status, &stats, true);
@@ -19944,6 +20006,22 @@ mod tests {
         net.counters.wifi_rx_runtime_queue_overflow_seen = 0;
         net.counters.wifi_rx_runtime_max_drained_per_turn = 4;
         net.counters.wifi_rx_runtime_drain_budget_hit = 1;
+        net.counters.wifi_service_last_op = 54;
+        net.counters.wifi_service_last_reason = 3;
+        net.counters.wifi_service_last_progress = 0x15;
+        net.counters.wifi_service_last_seq_window = 0x0904;
+        net.counters.wifi_service_last_channel = 2;
+        net.counters.wifi_service_last_credit_observations = 8;
+        net.counters.wifi_service_last_rframe_len = 512;
+        net.counters.wifi_service_last_source_flags = 0x0042;
+        net.counters.wifi_service_last_pre_source = 0x4352_0058;
+        net.counters.wifi_service_last_post_source = 0x4352_0059;
+        net.counters.wifi_host_eapol_m1 = 1;
+        net.counters.wifi_host_eapol_m2 = 1;
+        net.counters.wifi_host_eapol_m3 = 1;
+        net.counters.wifi_host_eapol_m4 = 1;
+        net.counters.wifi_host_eapol_ptk = 1;
+        net.counters.wifi_host_eapol_gtk = 1;
         net.counters.wifi_data_trace_faults = 3;
         net.counters.wifi_data_trace_tx_retries = 5;
         net.counters.wifi_arp_target_hw_zeroed = 7;
@@ -19982,6 +20060,12 @@ mod tests {
         assert!(
             rendered.contains(
                 "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1 wifi_rxq_cur=0 wifi_rxq_hwm=0 wifi_rxq_drops=0 wifi_runtime_rxq_cur=3 wifi_runtime_rxq_hwm=5 wifi_runtime_rxq_ovf=0 wifi_runtime_rxq_max_drain=4 wifi_runtime_rxq_drain_hit=1"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: wifi_service_turn op=54 reason=3 progress=0x00000015 seq=4 credit=9 credit_obs=8 channel=2 rframe=512 src_flags=0x0042 pre_src=0x43520058 post_src=0x43520059 eapol_m1=1 eapol_m2=1 eapol_m3=1 eapol_m4=1 ptk=1 gtk=1"
             ),
             "{rendered}"
         );

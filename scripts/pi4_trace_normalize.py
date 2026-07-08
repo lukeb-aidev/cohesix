@@ -552,6 +552,17 @@ class GateSummary:
     wifi_data_path_rx_delivered: int = 0
     wifi_data_path_rx_dropped: int = 0
     wifi_data_path_last: str = "none"
+    wifi_service_op: int = 0
+    wifi_service_reason: int = 0
+    wifi_service_progress: int = 0
+    wifi_service_seq: int = 0
+    wifi_service_credit: int = 0
+    wifi_service_channel: int = 0
+    wifi_service_rframe: int = 0
+    wifi_service_eapol_m1: int = 0
+    wifi_service_eapol_m2: int = 0
+    wifi_service_eapol_m3: int = 0
+    wifi_service_eapol_m4: int = 0
     wifi_rx_irq_preserve_count: int = 0
     wifi_rx_irq_preserve_reason: str = "none"
     wifi_rx_irq_preserve_int: int = 0
@@ -755,6 +766,17 @@ class GateSummary:
             "WIFI_DATA_PATH_RX_DELIVERED": self.wifi_data_path_rx_delivered,
             "WIFI_DATA_PATH_RX_DROPPED": self.wifi_data_path_rx_dropped,
             "WIFI_DATA_PATH_LAST": self.wifi_data_path_last,
+            "WIFI_SERVICE_OP": self.wifi_service_op,
+            "WIFI_SERVICE_REASON": self.wifi_service_reason,
+            "WIFI_SERVICE_PROGRESS": f"0x{self.wifi_service_progress:08x}",
+            "WIFI_SERVICE_SEQ": self.wifi_service_seq,
+            "WIFI_SERVICE_CREDIT": self.wifi_service_credit,
+            "WIFI_SERVICE_CHANNEL": self.wifi_service_channel,
+            "WIFI_SERVICE_RFRAME": self.wifi_service_rframe,
+            "WIFI_SERVICE_EAPOL_M1": self.wifi_service_eapol_m1,
+            "WIFI_SERVICE_EAPOL_M2": self.wifi_service_eapol_m2,
+            "WIFI_SERVICE_EAPOL_M3": self.wifi_service_eapol_m3,
+            "WIFI_SERVICE_EAPOL_M4": self.wifi_service_eapol_m4,
             "WIFI_RX_IRQ_PRESERVE_COUNT": self.wifi_rx_irq_preserve_count,
             "WIFI_RX_IRQ_PRESERVE_REASON": self.wifi_rx_irq_preserve_reason,
             "WIFI_RX_IRQ_PRESERVE_INT": f"0x{self.wifi_rx_irq_preserve_int:08x}",
@@ -3150,6 +3172,8 @@ def normalize_wifi_blocker(value: str) -> str:
         return "wifi-rx-overflow"
     if "wifi-rx-starvation" in lower or stripped == "rx-starvation":
         return "wifi-rx-starvation"
+    if "host-eapol-m3-missing" in lower:
+        return "host-eapol-m3-missing"
     if "wifi-tx-credit-anomaly" in lower or stripped == "tx-credit-anomaly":
         return "wifi-tx-credit-anomaly"
     if "cyw43-transport-command-admission" in lower:
@@ -3904,6 +3928,8 @@ def normalize_wifi_exact(value: str) -> str:
         and ("engine-init" in lower or "net-engine-init" in lower)
     ) or lower.strip() == "stale-admission-exhausted":
         return "cyw43-engine-init-stale-admission-exhausted"
+    if "host-eapol-m3-missing" in lower:
+        return "host-eapol-m3-missing"
     cyw43_transport_details = {
         "1": "cyw43-runtime-command-rejected",
         "0x1": "cyw43-runtime-command-rejected",
@@ -7627,6 +7653,8 @@ def wifi_cyw43_status_blocker(fields: Mapping[str, str]) -> tuple[str, str] | No
         return "wifi-rx-overflow", "runtime-rx"
     if addr_src == "wifi-rx-starvation" or dhcp == "rx-starvation":
         return "wifi-rx-starvation", "runtime-rx"
+    if addr_src == "host-eapol-m3-missing" or dhcp == "host-eapol-m3-missing":
+        return "host-eapol-m3-missing", "join-security"
     if addr_src == "wifi-tx-credit-anomaly" or dhcp == "tx-credit-anomaly":
         return "wifi-tx-credit-anomaly", "data-tx"
     return None
@@ -7707,6 +7735,32 @@ def summarize_wifi_data_path(
         elif "drop" in data_event:
             rx_dropped += 1
     return tx, rx_preserved, rx_delivered, rx_dropped, last
+
+
+def summarize_wifi_service_turn(
+    events: Iterable[TraceEvent],
+) -> tuple[int, int, int, int, int, int, int, int, int, int, int]:
+    """Return the latest compact CYW43 linked-runtime service-turn ledger."""
+
+    latest = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    for event in events:
+        if not event.raw.lower().startswith("netstats: wifi_service_turn"):
+            continue
+        fields = event.fields
+        latest = (
+            parse_hex_int(fields.get("op")) or 0,
+            parse_hex_int(fields.get("reason")) or 0,
+            parse_hex_int(fields.get("progress")) or 0,
+            parse_hex_int(fields.get("seq")) or 0,
+            parse_hex_int(fields.get("credit")) or 0,
+            parse_hex_int(fields.get("channel")) or 0,
+            parse_hex_int(fields.get("rframe")) or 0,
+            parse_hex_int(fields.get("eapol_m1")) or 0,
+            parse_hex_int(fields.get("eapol_m2")) or 0,
+            parse_hex_int(fields.get("eapol_m3")) or 0,
+            parse_hex_int(fields.get("eapol_m4")) or 0,
+        )
+    return latest
 
 
 WIFI_RX_IRQ_PRESERVE_REASONS = {
@@ -11089,6 +11143,19 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_data_path_last,
     ) = summarize_wifi_data_path(event_list)
     (
+        wifi_service_op,
+        wifi_service_reason,
+        wifi_service_progress,
+        wifi_service_seq,
+        wifi_service_credit,
+        wifi_service_channel,
+        wifi_service_rframe,
+        wifi_service_eapol_m1,
+        wifi_service_eapol_m2,
+        wifi_service_eapol_m3,
+        wifi_service_eapol_m4,
+    ) = summarize_wifi_service_turn(event_list)
+    (
         wifi_rx_irq_preserve_count,
         wifi_rx_irq_preserve_reason,
         wifi_rx_irq_preserve_int,
@@ -11536,6 +11603,17 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_data_path_rx_delivered=wifi_data_path_rx_delivered,
         wifi_data_path_rx_dropped=wifi_data_path_rx_dropped,
         wifi_data_path_last=wifi_data_path_last,
+        wifi_service_op=wifi_service_op,
+        wifi_service_reason=wifi_service_reason,
+        wifi_service_progress=wifi_service_progress,
+        wifi_service_seq=wifi_service_seq,
+        wifi_service_credit=wifi_service_credit,
+        wifi_service_channel=wifi_service_channel,
+        wifi_service_rframe=wifi_service_rframe,
+        wifi_service_eapol_m1=wifi_service_eapol_m1,
+        wifi_service_eapol_m2=wifi_service_eapol_m2,
+        wifi_service_eapol_m3=wifi_service_eapol_m3,
+        wifi_service_eapol_m4=wifi_service_eapol_m4,
         wifi_rx_irq_preserve_count=wifi_rx_irq_preserve_count,
         wifi_rx_irq_preserve_reason=wifi_rx_irq_preserve_reason,
         wifi_rx_irq_preserve_int=wifi_rx_irq_preserve_int,

@@ -92,6 +92,7 @@ const WPA_PTK_PRF_LABEL: &[u8] = b"Pairwise key expansion\0";
 const WPA_SNONCE_LABEL_PREFIX: &[u8] = b"Cohesix host WPA SNonce ";
 const HOST_EAPOL_KEY_DATA_MAX_LEN: usize = 256;
 const HOST_EAPOL_RSN_IE_MAX_LEN: usize = 64;
+const HOST_EAPOL_POST_SECURE_RETRANSMIT_LIMIT: u8 = 1;
 const RSN_IE_ID: u8 = 48;
 const RSN_VERSION_1: u16 = 1;
 const RSN_SUITE_LEN: usize = 4;
@@ -146,6 +147,94 @@ impl HostPtkCandidate {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HostEapolPairwiseDuplicateWindow {
+    valid: bool,
+    ap_mac: [u8; ETHER_ADDR_LEN],
+    anonce: [u8; WPA_NONCE_LEN],
+    replay_counter: [u8; WPA_REPLAY_COUNTER_LEN],
+    responses: u8,
+}
+
+impl HostEapolPairwiseDuplicateWindow {
+    const fn empty() -> Self {
+        Self {
+            valid: false,
+            ap_mac: [0; ETHER_ADDR_LEN],
+            anonce: [0; WPA_NONCE_LEN],
+            replay_counter: [0; WPA_REPLAY_COUNTER_LEN],
+            responses: 0,
+        }
+    }
+
+    fn admit(
+        &mut self,
+        ap_mac: [u8; ETHER_ADDR_LEN],
+        anonce: &[u8],
+        replay_counter: &[u8],
+    ) -> bool {
+        if self.valid
+            && self.ap_mac == ap_mac
+            && self.anonce.as_slice() == anonce
+            && self.replay_counter.as_slice() == replay_counter
+        {
+            if self.responses >= HOST_EAPOL_POST_SECURE_RETRANSMIT_LIMIT {
+                return false;
+            }
+            self.responses = self.responses.saturating_add(1);
+            return true;
+        }
+        self.valid = true;
+        self.ap_mac = ap_mac;
+        self.anonce.copy_from_slice(anonce);
+        self.replay_counter.copy_from_slice(replay_counter);
+        self.responses = 1;
+        true
+    }
+
+    fn reset(&mut self) {
+        *self = Self::empty();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HostEapolGroupDuplicateWindow {
+    valid: bool,
+    ap_mac: [u8; ETHER_ADDR_LEN],
+    replay_counter: [u8; WPA_REPLAY_COUNTER_LEN],
+    responses: u8,
+}
+
+impl HostEapolGroupDuplicateWindow {
+    const fn empty() -> Self {
+        Self {
+            valid: false,
+            ap_mac: [0; ETHER_ADDR_LEN],
+            replay_counter: [0; WPA_REPLAY_COUNTER_LEN],
+            responses: 0,
+        }
+    }
+
+    fn admit(&mut self, ap_mac: [u8; ETHER_ADDR_LEN], replay_counter: &[u8]) -> bool {
+        if self.valid && self.ap_mac == ap_mac && self.replay_counter.as_slice() == replay_counter {
+            if self.responses >= HOST_EAPOL_POST_SECURE_RETRANSMIT_LIMIT {
+                return false;
+            }
+            self.responses = self.responses.saturating_add(1);
+            return true;
+        }
+        self.valid = true;
+        self.ap_mac = ap_mac;
+        self.replay_counter.copy_from_slice(replay_counter);
+        self.responses = 1;
+        true
+    }
+
+    fn reset(&mut self) {
+        *self = Self::empty();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostEapolAction {
     None,
     Inspect {
@@ -164,6 +253,9 @@ pub enum HostEapolAction {
     SendGroupM2InstallGtk {
         len: usize,
         keys: HostEapolGroupKeys,
+    },
+    DropPostSecureDuplicate {
+        message: &'static str,
     },
 }
 
@@ -191,6 +283,10 @@ pub struct HostEapolState {
     ptk_candidates: [HostPtkCandidate; HOST_EAPOL_PTK_CANDIDATES],
     ptk_candidate_count: usize,
     ptk_candidate_next: usize,
+    post_secure_m1_duplicate: HostEapolPairwiseDuplicateWindow,
+    post_secure_m3_duplicate: HostEapolPairwiseDuplicateWindow,
+    post_secure_group_duplicate: HostEapolGroupDuplicateWindow,
+    post_secure_duplicate_drops: u32,
     rsn_ie: [u8; HOST_EAPOL_RSN_IE_MAX_LEN],
     rsn_ie_len: usize,
 }
@@ -234,6 +330,10 @@ impl HostEapolState {
             ptk_candidates: [HostPtkCandidate::empty(); HOST_EAPOL_PTK_CANDIDATES],
             ptk_candidate_count: 0,
             ptk_candidate_next: 0,
+            post_secure_m1_duplicate: HostEapolPairwiseDuplicateWindow::empty(),
+            post_secure_m3_duplicate: HostEapolPairwiseDuplicateWindow::empty(),
+            post_secure_group_duplicate: HostEapolGroupDuplicateWindow::empty(),
+            post_secure_duplicate_drops: 0,
             rsn_ie: stored_rsn_ie,
             rsn_ie_len: rsn_ie.len(),
         })
@@ -241,6 +341,10 @@ impl HostEapolState {
 
     pub const fn rx_packets(&self) -> u32 {
         self.rx_packets
+    }
+
+    pub const fn post_secure_duplicate_drops(&self) -> u32 {
+        self.post_secure_duplicate_drops
     }
 
     pub const fn secure_complete(&self) -> bool {
@@ -294,6 +398,14 @@ impl HostEapolState {
             &body[EAPOL_KEY_BODY_REPLAY_OFFSET
                 ..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN],
         );
+        if self.secure_complete()
+            && !self
+                .post_secure_m1_duplicate
+                .admit(ap_mac, &anonce, &replay_counter)
+        {
+            self.record_post_secure_duplicate_drop();
+            return Ok(HostEapolAction::DropPostSecureDuplicate { message: "m1" });
+        }
         if let Some(candidate) = self.ptk_candidate_for_m1_anonce(ap_mac, &anonce) {
             self.ap_mac = candidate.ap_mac;
             self.anonce = candidate.anonce;
@@ -409,6 +521,14 @@ impl HostEapolState {
         let secure_retransmit =
             self.m3_is_secure_retransmit(ap_mac, anonce, replay_counter, matched_candidate);
         let selected_ptk = matched_candidate.ptk;
+        if secure_retransmit
+            && !self
+                .post_secure_m3_duplicate
+                .admit(ap_mac, anonce, &incoming_m3_replay_counter)
+        {
+            self.record_post_secure_duplicate_drop();
+            return Ok(HostEapolAction::DropPostSecureDuplicate { message: "m3" });
+        }
         if !secure_retransmit {
             self.apply_ptk_candidate(matched_candidate);
             self.m3_replay_counter.copy_from_slice(replay_counter);
@@ -458,6 +578,7 @@ impl HostEapolState {
         self.group_replay_counter_valid = false;
         self.ptk_installed = true;
         self.gtk_installed = gtk.is_some();
+        self.reset_post_secure_duplicate_windows();
         Ok(HostEapolAction::SendM4InstallKeys {
             len,
             keys: HostEapolInstallKeys {
@@ -572,6 +693,17 @@ impl HostEapolState {
         self.installed_ptk = candidate.ptk;
     }
 
+    fn reset_post_secure_duplicate_windows(&mut self) {
+        self.post_secure_m1_duplicate.reset();
+        self.post_secure_m3_duplicate.reset();
+        self.post_secure_group_duplicate.reset();
+    }
+
+    fn record_post_secure_duplicate_drop(&mut self) {
+        self.rx_packets = self.rx_packets.saturating_sub(1);
+        self.post_secure_duplicate_drops = self.post_secure_duplicate_drops.saturating_add(1);
+    }
+
     fn handle_group_key(
         &mut self,
         station_mac: [u8; ETHER_ADDR_LEN],
@@ -588,6 +720,19 @@ impl HostEapolState {
         let body = host_eapol_key_body(packet).ok_or("host-eapol-group-body")?;
         let replay_counter = &body
             [EAPOL_KEY_BODY_REPLAY_OFFSET..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN];
+        let duplicate_group_replay = self.gtk_installed
+            && self.group_replay_counter_valid
+            && replay_counter == self.group_replay_counter.as_slice();
+        if duplicate_group_replay
+            && !self
+                .post_secure_group_duplicate
+                .admit(self.installed_ap_mac, replay_counter)
+        {
+            self.record_post_secure_duplicate_drop();
+            return Ok(HostEapolAction::DropPostSecureDuplicate {
+                message: "group-key",
+            });
+        }
         if !group_replay_counter_admitted(replay_counter, self) {
             return Err("host-eapol-group-replay");
         }
@@ -619,6 +764,9 @@ impl HostEapolState {
         self.group_replay_counter.copy_from_slice(replay_counter);
         self.group_replay_counter_valid = true;
         self.gtk_installed = true;
+        if !duplicate_group_replay {
+            self.post_secure_group_duplicate.reset();
+        }
         Ok(HostEapolAction::SendGroupM2InstallGtk {
             len,
             keys: HostEapolGroupKeys {
@@ -2060,6 +2208,16 @@ mod tests {
             .handle_packet(station, &m3[..m3_len], &mut tx)
             .expect("retransmitted m3 after secure");
         assert!(matches!(retransmit, HostEapolAction::SendM4 { .. }));
+        let rx_after_retransmit = state.rx_packets();
+        let duplicate = state
+            .handle_packet(station, &m3[..m3_len], &mut tx)
+            .expect("duplicate m3 after retransmit");
+        assert!(matches!(
+            duplicate,
+            HostEapolAction::DropPostSecureDuplicate { message: "m3" }
+        ));
+        assert_eq!(state.rx_packets(), rx_after_retransmit);
+        assert_eq!(state.post_secure_duplicate_drops(), 1);
         assert!(state.secure_complete());
     }
 
@@ -2102,6 +2260,15 @@ mod tests {
         assert_eq!(state.ptk, installed_ptk);
         assert_eq!(state.snonce, installed_snonce);
         assert_eq!(state.m1_replay_counter[WPA_REPLAY_COUNTER_LEN - 1], 3);
+        let rx_after_later_m1 = state.rx_packets();
+        let duplicate_later_m1 = state
+            .handle_packet(station, &later_m1[..m1_len], &mut tx)
+            .expect("duplicate same-anonce m1 after secure");
+        assert!(matches!(
+            duplicate_later_m1,
+            HostEapolAction::DropPostSecureDuplicate { message: "m1" }
+        ));
+        assert_eq!(state.rx_packets(), rx_after_later_m1);
 
         let mut later_m3 = [0u8; MAX_FRAME_LEN];
         let later_m3_len = write_test_m3_frame(&mut later_m3, &station, &state).expect("later m3");
@@ -2225,6 +2392,17 @@ mod tests {
             retransmit,
             HostEapolAction::SendGroupM2InstallGtk { .. }
         ));
+        let rx_after_group_retransmit = state.rx_packets();
+        let duplicate = state
+            .handle_packet(station, &group[..group_len], &mut tx)
+            .expect("duplicate group key after retransmit");
+        assert!(matches!(
+            duplicate,
+            HostEapolAction::DropPostSecureDuplicate {
+                message: "group-key"
+            }
+        ));
+        assert_eq!(state.rx_packets(), rx_after_group_retransmit);
         assert!(state.secure_complete());
     }
 

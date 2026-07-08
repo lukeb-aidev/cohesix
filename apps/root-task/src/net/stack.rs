@@ -105,7 +105,7 @@ const DHCP_RESTART_BACKOFF_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 } else {
     64_000
 };
-const CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS: u64 = 500;
+const CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS: u64 = 0;
 const CYW43_DHCP_POST_SECURE_EAPOL_OVERSHOOT_LOG_MS: u64 = 1_000;
 const CYW43_DHCP_RX_ADMISSION_RETRY_MS: u64 = 250;
 const CYW43_HOST_EAPOL_STACK_SERVICE_POLLS: usize = 64;
@@ -243,7 +243,8 @@ fn wifi_host_eapol_blocks_data_path(bringup_status: Option<&'static str>) -> boo
 }
 
 fn wifi_host_eapol_blocks_driver_task_pre_poll(bringup_status: Option<&'static str>) -> bool {
-    wifi_host_eapol_blocks_data_path(bringup_status)
+    let _ = bringup_status;
+    false
 }
 
 fn wifi_host_eapol_stack_service_polls(bringup_status: Option<&'static str>) -> usize {
@@ -334,6 +335,16 @@ fn cyw43_status_blocker_for(
             dhcp_phase: "rx-starvation",
         });
     }
+    if counters.wifi_host_eapol_m1 != 0
+        && counters.wifi_host_eapol_m2 != 0
+        && counters.wifi_host_eapol_m3 == 0
+        && counters.wifi_host_eapol_secure == 0
+    {
+        return Some(Cyw43StatusBlocker {
+            address_source: "host-eapol-m3-missing",
+            dhcp_phase: "host-eapol-m3-missing",
+        });
+    }
     if counters.wifi_data_trace_faults != 0
         || (counters.tx_submit > counters.tx_complete
             && (counters.wifi_data_trace_tx_retries != 0 || counters.tx_in_flight != 0))
@@ -375,6 +386,18 @@ fn cyw43_dhcp_post_secure_eapol_settle(
             quiet_ms: 0,
             remaining_ms: CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS,
             next_ready_ms: None,
+        };
+    }
+    if CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS == 0 {
+        let changed = eapol_rx != *last_eapol_rx;
+        *last_eapol_rx = eapol_rx;
+        *quiet_since_ms = Some(now_ms);
+        return Cyw43DhcpPostSecureEapolSettle {
+            ready: true,
+            changed,
+            quiet_ms: 0,
+            remaining_ms: 0,
+            next_ready_ms: Some(now_ms),
         };
     }
     if eapol_rx != *last_eapol_rx {
@@ -1516,6 +1539,30 @@ fn cyw43_flush_pre_poll_data_ready_for(
             NetMode::Static => ip != Ipv4Address::UNSPECIFIED,
             NetMode::Off => false,
         }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_runtime_service_pre_poll_ready_for(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    active_interface: &'static str,
+    mode: NetMode,
+    ip: Ipv4Address,
+    bringup_status: Option<&'static str>,
+    dhcp_phase: Option<DhcpPhase>,
+    dhcp_socket_ready: bool,
+) -> bool {
+    contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && active_interface == "wifi"
+        && (wifi_host_eapol_blocks_data_path(bringup_status)
+            || cyw43_flush_pre_poll_data_ready_for(
+                contract,
+                active_interface,
+                mode,
+                ip,
+                bringup_status,
+                dhcp_phase,
+                dhcp_socket_ready,
+            ))
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -3499,6 +3546,20 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     #[cfg(feature = "kernel")]
+    fn cyw43_runtime_service_pre_poll_ready(&self) -> bool {
+        let dhcp_phase = self.dhcp.as_ref().map(|client| client.status().phase);
+        cyw43_runtime_service_pre_poll_ready_for(
+            D::driver_task_contract(),
+            self.device.interface_label(),
+            self.mode,
+            self.ip,
+            self.device.bringup_status_label(),
+            dhcp_phase,
+            self.dhcp_handle.is_some(),
+        )
+    }
+
+    #[cfg(feature = "kernel")]
     fn reassert_cyw43_dhcp_rx_admission(&mut self, reason: &'static str, now_ms: u64) -> bool {
         if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT {
             self.wifi_rx_admission_blocked = false;
@@ -3555,7 +3616,7 @@ impl<D: NetDevice> NetStack<D> {
     ) -> bool {
         if net_driver_task_hot_path(contract)
             != Some(crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi)
-            || !self.cyw43_flush_pre_poll_data_ready()
+            || !self.cyw43_runtime_service_pre_poll_ready()
             || wifi_host_eapol_blocks_driver_task_pre_poll(self.device.bringup_status_label())
             || !crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(contract)
         {
@@ -3576,7 +3637,7 @@ impl<D: NetDevice> NetStack<D> {
     ) -> bool {
         if net_driver_task_hot_path(contract)
             != Some(crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi)
-            || !self.cyw43_flush_pre_poll_data_ready()
+            || !self.cyw43_runtime_service_pre_poll_ready()
             || wifi_host_eapol_blocks_driver_task_pre_poll(self.device.bringup_status_label())
             || !crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(contract)
         {
@@ -4550,6 +4611,18 @@ impl<D: NetDevice> NetStack<D> {
             device_counters.wifi_rx_runtime_drain_budget_hit;
         self.counters.wifi_rx_runtime_max_drained_per_turn =
             device_counters.wifi_rx_runtime_max_drained_per_turn;
+        self.counters.wifi_service_last_op = device_counters.wifi_service_last_op;
+        self.counters.wifi_service_last_reason = device_counters.wifi_service_last_reason;
+        self.counters.wifi_service_last_progress = device_counters.wifi_service_last_progress;
+        self.counters.wifi_service_last_seq_window = device_counters.wifi_service_last_seq_window;
+        self.counters.wifi_service_last_channel = device_counters.wifi_service_last_channel;
+        self.counters.wifi_service_last_credit_observations =
+            device_counters.wifi_service_last_credit_observations;
+        self.counters.wifi_service_last_rframe_len = device_counters.wifi_service_last_rframe_len;
+        self.counters.wifi_service_last_source_flags =
+            device_counters.wifi_service_last_source_flags;
+        self.counters.wifi_service_last_pre_source = device_counters.wifi_service_last_pre_source;
+        self.counters.wifi_service_last_post_source = device_counters.wifi_service_last_post_source;
         self.counters.wifi_data_trace_faults = device_counters.wifi_data_trace_faults;
         self.counters.wifi_data_trace_tx_retries = device_counters.wifi_data_trace_tx_retries;
         self.counters.wifi_arp_target_hw_zeroed = device_counters.wifi_arp_target_hw_zeroed;
@@ -4568,6 +4641,12 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.wifi_host_eapol_rx = device_counters.wifi_host_eapol_rx;
         self.counters.wifi_host_eapol_start = device_counters.wifi_host_eapol_start;
         self.counters.wifi_host_eapol_secure = device_counters.wifi_host_eapol_secure;
+        self.counters.wifi_host_eapol_m1 = device_counters.wifi_host_eapol_m1;
+        self.counters.wifi_host_eapol_m2 = device_counters.wifi_host_eapol_m2;
+        self.counters.wifi_host_eapol_m3 = device_counters.wifi_host_eapol_m3;
+        self.counters.wifi_host_eapol_m4 = device_counters.wifi_host_eapol_m4;
+        self.counters.wifi_host_eapol_ptk = device_counters.wifi_host_eapol_ptk;
+        self.counters.wifi_host_eapol_gtk = device_counters.wifi_host_eapol_gtk;
     }
 
     fn current_counters(&self) -> NetCounters {
@@ -4619,6 +4698,17 @@ impl<D: NetDevice> NetStack<D> {
             wifi_rx_runtime_drain_budget_hit: device_counters.wifi_rx_runtime_drain_budget_hit,
             wifi_rx_runtime_max_drained_per_turn: device_counters
                 .wifi_rx_runtime_max_drained_per_turn,
+            wifi_service_last_op: device_counters.wifi_service_last_op,
+            wifi_service_last_reason: device_counters.wifi_service_last_reason,
+            wifi_service_last_progress: device_counters.wifi_service_last_progress,
+            wifi_service_last_seq_window: device_counters.wifi_service_last_seq_window,
+            wifi_service_last_channel: device_counters.wifi_service_last_channel,
+            wifi_service_last_credit_observations: device_counters
+                .wifi_service_last_credit_observations,
+            wifi_service_last_rframe_len: device_counters.wifi_service_last_rframe_len,
+            wifi_service_last_source_flags: device_counters.wifi_service_last_source_flags,
+            wifi_service_last_pre_source: device_counters.wifi_service_last_pre_source,
+            wifi_service_last_post_source: device_counters.wifi_service_last_post_source,
             wifi_data_trace_faults: device_counters.wifi_data_trace_faults,
             wifi_data_trace_tx_retries: device_counters.wifi_data_trace_tx_retries,
             wifi_arp_target_hw_zeroed: device_counters.wifi_arp_target_hw_zeroed,
@@ -4636,6 +4726,12 @@ impl<D: NetDevice> NetStack<D> {
             wifi_host_eapol_rx: device_counters.wifi_host_eapol_rx,
             wifi_host_eapol_start: device_counters.wifi_host_eapol_start,
             wifi_host_eapol_secure: device_counters.wifi_host_eapol_secure,
+            wifi_host_eapol_m1: device_counters.wifi_host_eapol_m1,
+            wifi_host_eapol_m2: device_counters.wifi_host_eapol_m2,
+            wifi_host_eapol_m3: device_counters.wifi_host_eapol_m3,
+            wifi_host_eapol_m4: device_counters.wifi_host_eapol_m4,
+            wifi_host_eapol_ptk: device_counters.wifi_host_eapol_ptk,
+            wifi_host_eapol_gtk: device_counters.wifi_host_eapol_gtk,
         }
     }
 
@@ -8064,11 +8160,11 @@ mod tests {
     }
 
     #[test]
-    fn host_eapol_pending_and_required_block_driver_task_pre_poll() {
-        assert!(wifi_host_eapol_blocks_driver_task_pre_poll(Some(
+    fn host_eapol_pending_and_required_do_not_block_driver_task_pre_poll() {
+        assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(Some(
             "wifi-host-eapol-pending"
         )));
-        assert!(wifi_host_eapol_blocks_driver_task_pre_poll(Some(
+        assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(Some(
             "wifi-host-eapol-required"
         )));
         assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(Some(
@@ -8093,46 +8189,43 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_dhcp_waits_for_post_secure_eapol_quiet_window() {
+    fn cyw43_dhcp_starts_immediately_after_secure_eapol() {
         let mut last_rx = 0;
         let mut quiet_since_ms = None;
 
         let first =
             cyw43_dhcp_post_secure_eapol_settle(1_000, 1, 18, &mut last_rx, &mut quiet_since_ms);
-        assert!(!first.ready);
+        assert!(first.ready);
         assert!(first.changed);
         assert_eq!(first.quiet_ms, 0);
-        assert_eq!(first.remaining_ms, CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS);
-        assert_eq!(first.next_ready_ms, Some(1_500));
+        assert_eq!(first.remaining_ms, 0);
+        assert_eq!(first.next_ready_ms, Some(1_000));
         assert_eq!(last_rx, 18);
         assert_eq!(quiet_since_ms, Some(1_000));
 
         let early =
             cyw43_dhcp_post_secure_eapol_settle(1_499, 1, 18, &mut last_rx, &mut quiet_since_ms);
-        assert!(!early.ready);
+        assert!(early.ready);
         assert!(!early.changed);
-        assert_eq!(early.quiet_ms, 499);
-        assert_eq!(early.remaining_ms, 1);
-        assert_eq!(early.next_ready_ms, Some(1_500));
+        assert_eq!(early.quiet_ms, 0);
+        assert_eq!(early.remaining_ms, 0);
+        assert_eq!(early.next_ready_ms, Some(1_499));
 
         let ready =
             cyw43_dhcp_post_secure_eapol_settle(1_500, 1, 18, &mut last_rx, &mut quiet_since_ms);
         assert!(ready.ready);
         assert!(!ready.changed);
-        assert_eq!(ready.quiet_ms, CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS);
+        assert_eq!(ready.quiet_ms, 0);
         assert_eq!(ready.remaining_ms, 0);
         assert_eq!(ready.next_ready_ms, Some(1_500));
 
         let retransmit =
             cyw43_dhcp_post_secure_eapol_settle(1_600, 1, 19, &mut last_rx, &mut quiet_since_ms);
-        assert!(!retransmit.ready);
+        assert!(retransmit.ready);
         assert!(retransmit.changed);
         assert_eq!(retransmit.quiet_ms, 0);
-        assert_eq!(
-            retransmit.remaining_ms,
-            CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS
-        );
-        assert_eq!(retransmit.next_ready_ms, Some(2_100));
+        assert_eq!(retransmit.remaining_ms, 0);
+        assert_eq!(retransmit.next_ready_ms, Some(1_600));
         assert_eq!(last_rx, 19);
         assert_eq!(quiet_since_ms, Some(1_600));
     }
@@ -8598,7 +8691,25 @@ mod tests {
             Some(DhcpPhase::Bound),
             true
         ));
+        assert!(cyw43_runtime_service_pre_poll_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            ip,
+            Some("wifi-host-eapol-pending"),
+            Some(DhcpPhase::Bound),
+            true
+        ));
         assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            ip,
+            Some("wifi-host-eapol-required"),
+            Some(DhcpPhase::Bound),
+            true
+        ));
+        assert!(cyw43_runtime_service_pre_poll_ready_for(
             cyw43,
             "wifi",
             NetMode::Dhcp,
@@ -9153,6 +9264,41 @@ mod tests {
         );
         assert_eq!(
             cyw43_status_blocker_for("bcmgenet-v5", "wired", counters),
+            None
+        );
+    }
+
+    #[test]
+    fn cyw43_status_reports_missing_host_eapol_m3() {
+        assert_eq!(
+            cyw43_status_blocker_for(
+                "cyw43",
+                "wifi",
+                NetCounters {
+                    wifi_host_eapol_m1: 1,
+                    wifi_host_eapol_m2: 1,
+                    wifi_host_eapol_m3: 0,
+                    wifi_host_eapol_secure: 0,
+                    ..NetCounters::default()
+                }
+            ),
+            Some(Cyw43StatusBlocker {
+                address_source: "host-eapol-m3-missing",
+                dhcp_phase: "host-eapol-m3-missing"
+            })
+        );
+        assert_eq!(
+            cyw43_status_blocker_for(
+                "cyw43",
+                "wifi",
+                NetCounters {
+                    wifi_host_eapol_m1: 1,
+                    wifi_host_eapol_m2: 1,
+                    wifi_host_eapol_m3: 1,
+                    wifi_host_eapol_secure: 1,
+                    ..NetCounters::default()
+                }
+            ),
             None
         );
     }

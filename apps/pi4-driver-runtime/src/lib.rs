@@ -1158,12 +1158,8 @@ const CYW43_SDPCM_CONTROL_TX_BLOCK_BYTES: usize = 512;
 const CYW43_SDPCM_CONTROL_TX_EXT_HEADER_BYTES: usize =
     CYW43_SDPCM_HEADER_BYTES + CYW43_SDPCM_HWEXT_BYTES;
 const CYW43_BDC_HEADER_BYTES: usize = 4;
-const CYW43_SDPCM_DATA_TX_HEADER_BYTES: usize = CYW43_SDPCM_HEADER_BYTES + CYW43_SDPCM_HWEXT_BYTES;
-const CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET: usize =
-    CYW43_SDPCM_HWHDR_BYTES + CYW43_SDPCM_HWEXT_BYTES;
-const CYW43_SDPCM_DATA_TX_PADDING_BYTES: usize = 6;
-const CYW43_SDPCM_DATA_TX_BDC_OFFSET: usize =
-    CYW43_SDPCM_DATA_TX_HEADER_BYTES + CYW43_SDPCM_DATA_TX_PADDING_BYTES;
+const CYW43_SDPCM_DATA_TX_HEADER_BYTES: usize = CYW43_SDPCM_HEADER_BYTES;
+const CYW43_SDPCM_DATA_TX_BDC_OFFSET: usize = CYW43_SDPCM_DATA_TX_HEADER_BYTES;
 const CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES: usize =
     CYW43_SDPCM_DATA_TX_BDC_OFFSET + CYW43_BDC_HEADER_BYTES;
 const CYW43_CDC_HEADER_BYTES: usize = 16;
@@ -1214,6 +1210,12 @@ const CYW43_DATA_TX_FUNCTION2_RETRIES: usize = 2;
 const CYW43_CONTROL_TX_FUNCTION2_RETRIES: usize = 2;
 const CYW43_DATA_TX_COMPLETION_DRAIN_POLLS: usize = 80;
 const CYW43_DATA_TX_COMPLETION_DRAIN_TIMEOUT_MS: u64 = 100;
+const CYW43_SERVICE_PROGRESS_CREDIT: u32 = 1 << 0;
+const CYW43_SERVICE_PROGRESS_QUEUE_DEPTH: u32 = 1 << 1;
+const CYW43_SERVICE_PROGRESS_QUEUE_HIGH_WATER: u32 = 1 << 2;
+const CYW43_SERVICE_PROGRESS_DRAIN: u32 = 1 << 3;
+const CYW43_SERVICE_PROGRESS_DRAIN_BUDGET: u32 = 1 << 4;
+const CYW43_SERVICE_PROGRESS_QUEUE_OVERFLOW: u32 = 1 << 5;
 const CYW43_SDPCM_DATA_TX_RESERVED_CONTROL_CREDITS: u8 = 1;
 const CYW43_TX_CREDIT_WAIT_LOOPS: usize = 2_000;
 const CYW43_RX_FRAME_FLAG_MASK_DATA: u16 = 1 << CYW43_SDPCM_CHANNEL_DATA;
@@ -1241,7 +1243,7 @@ const CYW43_RX_PRIORITY_IPV4: u8 = 5;
 const CYW43_RX_PRIORITY_ARP: u8 = 6;
 const CYW43_RX_PRIORITY_DHCP: u8 = 7;
 const CYW43_RX_PRIORITY_PROTECTED_EAPOL: u8 = 8;
-const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
+const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 0;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
 const CYW43_RX_QUEUE_CAP: usize = CYW43_RX_DRAIN_BUDGET;
 const CYW43_FUNCTION2_BLOCK_BYTES: usize = SDIO_FUNCTION2_BLOCK_SIZE as usize;
@@ -1293,6 +1295,7 @@ const SDIO_OCR_3V2_3V4: u32 = 0x00ff_8000;
 const SDIO_CCCR_IOEX: u32 = 0x02;
 const SDIO_CCCR_IORX: u32 = 0x03;
 const SDIO_CCCR_IENX: u32 = 0x04;
+const SDIO_CCCR_INTX: u32 = 0x05;
 const SDIO_CCCR_ABORT: u32 = 0x06;
 const SDIO_CCCR_IF: u32 = 0x07;
 const SDIO_CCCR_SPEED: u32 = 0x13;
@@ -1430,8 +1433,16 @@ const CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS: usize = 32;
 const CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS: u64 = 20;
 const CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS: usize = 5_000;
 const CYW43_RX_IDLE_TRACE_MAGIC: u32 = 0x4352_5854;
-const CYW43_RX_IDLE_TRACE_VERSION: u16 = 6;
-const CYW43_RX_IDLE_TRACE_BYTES: u16 = 156;
+const CYW43_RX_IDLE_TRACE_VERSION: u16 = 7;
+const CYW43_RX_IDLE_TRACE_BYTES: u16 = 172;
+const CYW43_SERVICE_REASON_NONE: u16 = 0;
+const CYW43_SERVICE_REASON_BACKGROUND_RX: u16 = 1;
+const CYW43_SERVICE_REASON_ETH_TX: u16 = 2;
+const CYW43_SERVICE_REASON_RX_POLL: u16 = 3;
+const CYW43_SERVICE_REASON_CONTROL_POLL: u16 = 4;
+const CYW43_SERVICE_REASON_CONTROL_FRAME: u16 = 5;
+const CYW43_SERVICE_REASON_CONTROL_EXCHANGE: u16 = 6;
+const CYW43_SERVICE_CHANNEL_NONE: u16 = 0xffff;
 const CYW43_RX_IRQ_PRESERVE_NONE: u16 = 0;
 const CYW43_RX_IRQ_PRESERVE_SDPCM_NEXT_FRAME: u16 = 1;
 const CYW43_RX_IRQ_PRESERVE_RFRAME_PENDING: u16 = 2;
@@ -2086,6 +2097,12 @@ struct Cyw43RuntimeState {
     rx_trace_pre_sample_delta_ticks: u32,
     rx_trace_transfer_delta_ticks: u32,
     rx_trace_post_sample_delta_ticks: u32,
+    service_trace_op: u16,
+    service_trace_reason: u16,
+    service_trace_progress: u32,
+    service_trace_seq_window: u16,
+    service_trace_channel: u16,
+    service_trace_credit_observations: u32,
     control_startup_status_drained: bool,
     control_tx_recovered_detail: u16,
     control_tx_recovered_result: u32,
@@ -2183,6 +2200,12 @@ impl Cyw43RuntimeState {
             rx_trace_pre_sample_delta_ticks: 0,
             rx_trace_transfer_delta_ticks: 0,
             rx_trace_post_sample_delta_ticks: 0,
+            service_trace_op: 0,
+            service_trace_reason: CYW43_SERVICE_REASON_NONE,
+            service_trace_progress: 0,
+            service_trace_seq_window: 0,
+            service_trace_channel: CYW43_SERVICE_CHANNEL_NONE,
+            service_trace_credit_observations: 0,
             control_startup_status_drained: false,
             control_tx_recovered_detail: 0,
             control_tx_recovered_result: 0,
@@ -2306,6 +2329,12 @@ impl Cyw43RuntimeState {
         self.rx_trace_pre_sample_delta_ticks = 0;
         self.rx_trace_transfer_delta_ticks = 0;
         self.rx_trace_post_sample_delta_ticks = 0;
+        self.service_trace_op = 0;
+        self.service_trace_reason = CYW43_SERVICE_REASON_NONE;
+        self.service_trace_progress = 0;
+        self.service_trace_seq_window = 0;
+        self.service_trace_channel = CYW43_SERVICE_CHANNEL_NONE;
+        self.service_trace_credit_observations = 0;
     }
 
     fn reset_firmware_stage_storage(&mut self) {
@@ -2322,6 +2351,29 @@ impl Cyw43RuntimeState {
         self.card_init_poll_count = 0;
         self.card_init_ocr = 0;
         self.card_init_rca = 0;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43RuntimeServiceSnapshot {
+    sdpcm_credit_observations: u32,
+    rx_queue_count: u8,
+    rx_queue_high_water: u8,
+    rx_drain_budget_hits: u32,
+    rx_max_drained_per_turn: u8,
+    rx_queue_overflows: u32,
+}
+
+impl Cyw43RuntimeServiceSnapshot {
+    const fn from_state(state: &Cyw43RuntimeState) -> Self {
+        Self {
+            sdpcm_credit_observations: state.sdpcm_credit_observations,
+            rx_queue_count: state.rx_queue_count,
+            rx_queue_high_water: state.rx_queue_high_water,
+            rx_drain_budget_hits: state.rx_drain_budget_hits,
+            rx_max_drained_per_turn: state.rx_max_drained_per_turn,
+            rx_queue_overflows: state.rx_queue_overflows,
+        }
     }
 }
 
@@ -4352,11 +4404,57 @@ fn service_cyw43_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
         return service_cyw43_descriptor_command(command);
     }
     if command.frame.len == 0 {
-        let produced = CYW43_RUNTIME_STATE
-            .with_mut(|state| cyw43_runtime_poll_rx(state, CYW43_RX_FRAME_FLAG_MASK_DATA));
-        return if let Some(frame) = produced {
+        let mut progress_frame = DriverFrameDescriptor::empty();
+        let mut idle_reason = None;
+        let result = CYW43_RUNTIME_STATE.with_mut(|state| {
+            let before = Cyw43RuntimeServiceSnapshot::from_state(state);
+            match cyw43_runtime_poll_rx_detailed_with_options(
+                state,
+                CYW43_RX_FRAME_FLAG_MASK_DATA,
+                command.sequence,
+                false,
+                Cyw43AssertedEmptyPolicy::RequestRetransmit,
+                true,
+            ) {
+                Cyw43RxPollResult::Frame(frame) => {
+                    progress_frame = frame;
+                    cyw43_service_trace_record(
+                        state,
+                        0,
+                        CYW43_SERVICE_REASON_BACKGROUND_RX,
+                        u32::from(frame.len),
+                        Some(frame.flags),
+                    );
+                    u32::from(frame.len)
+                }
+                Cyw43RxPollResult::Idle(reason) => {
+                    idle_reason = Some(reason);
+                    if state.sdpcm_credit_observations != before.sdpcm_credit_observations {
+                        progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
+                    }
+                    let progress = cyw43_runtime_service_progress_result(before, state);
+                    cyw43_service_trace_record(
+                        state,
+                        0,
+                        CYW43_SERVICE_REASON_BACKGROUND_RX,
+                        progress,
+                        None,
+                    );
+                    progress
+                }
+            }
+        });
+        return if progress_frame.len != 0 && idle_reason.is_none() {
             CYW43_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_RX_PROGRESS, Ordering::AcqRel);
-            DriverTaskCompletionRecord::frame_ready_with_descriptor(command.sequence, frame)
+            DriverTaskCompletionRecord::frame_ready_with_descriptor(
+                command.sequence,
+                progress_frame,
+            )
+        } else if result != 0 {
+            CYW43_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_RX_PROGRESS, Ordering::AcqRel);
+            let mut completion = DriverTaskCompletionRecord::progress(command.sequence, result);
+            completion.frame = progress_frame;
+            completion
         } else {
             DriverTaskCompletionRecord::idle(command.sequence)
         };
@@ -5187,6 +5285,13 @@ fn service_cyw43_descriptor_command(
                     return recovered_result.max(written as u32);
                 }
             }
+            cyw43_service_trace_record(
+                state,
+                desc.op,
+                CYW43_SERVICE_REASON_CONTROL_FRAME,
+                written as u32,
+                None,
+            );
             written as u32
         }
         DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => {
@@ -5206,7 +5311,15 @@ fn service_cyw43_descriptor_command(
                 desc.arg1 as u16,
                 command.sequence,
             );
-            frame_ready.map_or(0, |frame| u32::from(frame.len).saturating_add(1))
+            let progress = frame_ready.map_or(0, |frame| u32::from(frame.len).saturating_add(1));
+            cyw43_service_trace_record(
+                state,
+                desc.op,
+                CYW43_SERVICE_REASON_CONTROL_EXCHANGE,
+                progress,
+                frame_ready.map(|frame| frame.flags),
+            );
+            progress
         }
         DRIVER_RUNTIME_CYW43_OP_ETH_TX => {
             let frame = DriverFrameDescriptor {
@@ -5242,11 +5355,19 @@ fn service_cyw43_descriptor_command(
             } else if state.sdpcm_credit_observations != credit_observations_before {
                 progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
             }
+            cyw43_service_trace_record(
+                state,
+                desc.op,
+                CYW43_SERVICE_REASON_ETH_TX,
+                written as u32,
+                None,
+            );
             written as u32
         }
         DRIVER_RUNTIME_CYW43_OP_RX_POLL => {
             state.rx_queue_protect_eapol =
                 desc.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN == 0;
+            let before = Cyw43RuntimeServiceSnapshot::from_state(state);
             let credit_observations_before = state.sdpcm_credit_observations;
             match cyw43_runtime_poll_rx_detailed_with_options(
                 state,
@@ -5258,6 +5379,13 @@ fn service_cyw43_descriptor_command(
             ) {
                 Cyw43RxPollResult::Frame(frame) => {
                     frame_ready = Some(frame);
+                    cyw43_service_trace_record(
+                        state,
+                        desc.op,
+                        CYW43_SERVICE_REASON_RX_POLL,
+                        u32::from(frame.len),
+                        Some(frame.flags),
+                    );
                     u32::from(frame.len)
                 }
                 Cyw43RxPollResult::Idle(reason) => {
@@ -5265,12 +5393,21 @@ fn service_cyw43_descriptor_command(
                     if state.sdpcm_credit_observations != credit_observations_before {
                         progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
                     }
-                    0
+                    let progress = cyw43_runtime_service_progress_result(before, state);
+                    cyw43_service_trace_record(
+                        state,
+                        desc.op,
+                        CYW43_SERVICE_REASON_RX_POLL,
+                        progress,
+                        None,
+                    );
+                    progress
                 }
             }
         }
         DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
             state.rx_queue_protect_eapol = true;
+            let before = Cyw43RuntimeServiceSnapshot::from_state(state);
             let credit_observations_before = state.sdpcm_credit_observations;
             match cyw43_runtime_poll_rx_detailed(
                 state,
@@ -5280,6 +5417,13 @@ fn service_cyw43_descriptor_command(
             ) {
                 Cyw43RxPollResult::Frame(frame) => {
                     frame_ready = Some(frame);
+                    cyw43_service_trace_record(
+                        state,
+                        desc.op,
+                        CYW43_SERVICE_REASON_CONTROL_POLL,
+                        u32::from(frame.len),
+                        Some(frame.flags),
+                    );
                     u32::from(frame.len)
                 }
                 Cyw43RxPollResult::Idle(reason) => {
@@ -5287,7 +5431,15 @@ fn service_cyw43_descriptor_command(
                     if state.sdpcm_credit_observations != credit_observations_before {
                         progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
                     }
-                    0
+                    let progress = cyw43_runtime_service_progress_result(before, state);
+                    cyw43_service_trace_record(
+                        state,
+                        desc.op,
+                        CYW43_SERVICE_REASON_CONTROL_POLL,
+                        progress,
+                        None,
+                    );
+                    progress
                 }
             }
         }
@@ -5376,7 +5528,20 @@ fn service_cyw43_descriptor_command(
     } else if let Some(frame) = frame_ready {
         DriverTaskCompletionRecord::frame_ready_with_descriptor(command.sequence, frame)
     } else {
-        DriverTaskCompletionRecord::progress(command.sequence, result)
+        let mut completion = DriverTaskCompletionRecord::progress(command.sequence, result);
+        if desc.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
+            || desc.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
+        {
+            let mut frame = CYW43_RUNTIME_STATE
+                .with_mut(|state| cyw43_stage_rx_idle_trace(state, FAULT_NONE, 0));
+            if progress_frame.flags != 0 {
+                frame.flags = progress_frame.flags;
+            }
+            completion.frame = frame;
+        } else {
+            completion.frame = progress_frame;
+        }
+        completion
     }
 }
 
@@ -5692,9 +5857,7 @@ const fn sdio_cmd53_r5_error(cmd: u16, arg: u32, response: u32) -> Option<u32> {
         return None;
     }
     let status = sdio_r5_status(response);
-    if status == 0 {
-        None
-    } else if sdio_cmd53_r5_out_of_range_tolerated(cmd, arg, status) {
+    if status == 0 || sdio_cmd53_r5_out_of_range_tolerated(cmd, arg, status) {
         None
     } else {
         Some(status)
@@ -5962,7 +6125,7 @@ fn cyw43_sdio_bus_link_command_result(command: DriverTaskCommandRecord) -> u32 {
         || command.frame.len as usize != core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()
     {
         return (u32::from(command.opcode) << 24)
-            | (u32::from(command.arg0 & 0xff) << 16)
+            | ((command.arg0 & 0xff) << 16)
             | u32::from(command.frame.len);
     }
     // SAFETY: CYW43 writes this fixed SDIO-owner descriptor immediately before
@@ -9966,16 +10129,6 @@ fn cyw43_wait_for_sdpcm_tx_credit(
     has_sdpcm_credit_for_frame(state.sdpcm_seq, state.sdpcm_seq_max, reserve_control_credit)
 }
 
-fn cyw43_runtime_poll_rx(
-    state: &mut Cyw43RuntimeState,
-    wanted_mask: u16,
-) -> Option<DriverFrameDescriptor> {
-    match cyw43_runtime_poll_rx_detailed(state, wanted_mask, 0, false) {
-        Cyw43RxPollResult::Frame(frame) => Some(frame),
-        Cyw43RxPollResult::Idle(_) => None,
-    }
-}
-
 fn cyw43_runtime_poll_rx_detailed(
     state: &mut Cyw43RuntimeState,
     wanted_mask: u16,
@@ -11053,6 +11206,50 @@ fn cyw43_record_rx_drain_turn(state: &mut Cyw43RuntimeState, drained: usize) {
         .max(drained.min(u8::MAX as usize) as u8);
 }
 
+fn cyw43_runtime_service_progress_result(
+    before: Cyw43RuntimeServiceSnapshot,
+    state: &Cyw43RuntimeState,
+) -> u32 {
+    let mut result = 0;
+    if state.sdpcm_credit_observations != before.sdpcm_credit_observations {
+        result |= CYW43_SERVICE_PROGRESS_CREDIT;
+    }
+    if state.rx_queue_count != before.rx_queue_count {
+        result |= CYW43_SERVICE_PROGRESS_QUEUE_DEPTH;
+    }
+    if state.rx_queue_high_water != before.rx_queue_high_water {
+        result |= CYW43_SERVICE_PROGRESS_QUEUE_HIGH_WATER;
+    }
+    if state.rx_max_drained_per_turn != before.rx_max_drained_per_turn {
+        result |= CYW43_SERVICE_PROGRESS_DRAIN;
+    }
+    if state.rx_drain_budget_hits != before.rx_drain_budget_hits {
+        result |= CYW43_SERVICE_PROGRESS_DRAIN_BUDGET;
+    }
+    if state.rx_queue_overflows != before.rx_queue_overflows {
+        result |= CYW43_SERVICE_PROGRESS_QUEUE_OVERFLOW;
+    }
+    result
+}
+
+fn cyw43_service_trace_record(
+    state: &mut Cyw43RuntimeState,
+    op: u16,
+    reason: u16,
+    progress: u32,
+    frame_flags: Option<u16>,
+) {
+    state.service_trace_op = op;
+    state.service_trace_reason = reason;
+    state.service_trace_progress = progress;
+    state.service_trace_seq_window =
+        u16::from(state.sdpcm_seq) | (u16::from(state.sdpcm_seq_max) << 8);
+    state.service_trace_channel = frame_flags.map_or(CYW43_SERVICE_CHANNEL_NONE, |flags| {
+        flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK
+    });
+    state.service_trace_credit_observations = state.sdpcm_credit_observations;
+}
+
 fn cyw43_runtime_finish_hintless_firstread(
     state: &mut Cyw43RuntimeState,
     wanted_mask: u16,
@@ -11170,12 +11367,10 @@ fn cyw43_runtime_rx_pending_after_frame_drain(state: &mut Cyw43RuntimeState) -> 
     if frame_len == 0 {
         if cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16)
             .is_some_and(cyw43_rx_source_asserts_pending_frame)
-        {
-            if state.rx_irq_source_asserted_empty_preserves
+            && state.rx_irq_source_asserted_empty_preserves
                 < CYW43_RX_IRQ_SOURCE_ASSERTED_EMPTY_PRESERVE_LIMIT
-            {
-                return Some(CYW43_RX_IRQ_PRESERVE_SOURCE_ASSERTED_EMPTY);
-            }
+        {
+            return Some(CYW43_RX_IRQ_PRESERVE_SOURCE_ASSERTED_EMPTY);
         }
         return None;
     }
@@ -11308,6 +11503,7 @@ fn cyw43_sample_rx_source_snapshot(
     let interrupt_enable = cyw43_rearm_post_release_function_interrupts_if_needed(
         cyw43_sdio_cmd52_read(0, SDIO_CCCR_IENX),
     );
+    let interrupt_pending = cyw43_sdio_cmd52_read(0, SDIO_CCCR_INTX);
     let iordy = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX);
     let int_status = cyw43_backplane_read_u32(state, CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS);
     let mailbox_data = if state.rx_retransmit_pending {
@@ -11328,21 +11524,29 @@ fn cyw43_sample_rx_source_snapshot(
         state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED;
     }
     if interrupt_enable.is_none()
+        && interrupt_pending.is_none()
         && iordy.is_none()
         && int_status.is_none()
         && mailbox_data.is_none()
     {
         return None;
     }
+    let using_bus_link = cyw43_uses_sdio_bus_link();
     let sdhci_status = cyw43_sdio_host_int_status_snapshot();
+    let interrupt_pending_value = interrupt_pending.unwrap_or(0);
+    let reported_sdhci_status = cyw43_rx_source_reported_sdhci_status(
+        using_bus_link,
+        sdhci_status,
+        interrupt_pending_value,
+    );
     Some(Cyw43RxSourceSnapshot {
         probe_len,
         interrupt_enable: interrupt_enable.unwrap_or(0),
         int_status: int_status_value,
-        sdhci_status,
+        sdhci_status: reported_sdhci_status,
         frame_indicated: int_status_value & I_HMB_FRAME_IND != 0,
         host_interrupt: int_status_value & HOSTINTMASK != 0,
-        card_interrupt: sdhci_status & SDHCI_INT_CARD_INT != 0,
+        card_interrupt: cyw43_rx_source_card_interrupt(sdhci_status, interrupt_pending_value),
         function2_ready: iordy.unwrap_or(0) & SDIO_FUNC_READY_2 != 0,
         passive: false,
         cached: false,
@@ -11390,6 +11594,22 @@ fn cyw43_sdio_host_int_status_snapshot() -> u32 {
         return 0;
     }
     sdio_read32(SDHCI_INT_STATUS)
+}
+
+const fn cyw43_rx_source_reported_sdhci_status(
+    using_bus_link: bool,
+    sdhci_status: u32,
+    interrupt_pending: u8,
+) -> u32 {
+    if using_bus_link {
+        interrupt_pending as u32
+    } else {
+        sdhci_status
+    }
+}
+
+const fn cyw43_rx_source_card_interrupt(sdhci_status: u32, interrupt_pending: u8) -> bool {
+    sdhci_status & SDHCI_INT_CARD_INT != 0 || interrupt_pending & SDIO_CCCR_IEN_FUNC2 != 0
 }
 
 const fn cyw43_sdio_host_int_status_visible_to_cyw43(using_bus_link: bool) -> bool {
@@ -11548,9 +11768,7 @@ fn cyw43_drain_rx_before_control_tx(state: &mut Cyw43RuntimeState, sequence: u32
 
 const fn cyw43_data_tx_post_drain_budget(state: &Cyw43RuntimeState) -> usize {
     let free_slots = CYW43_RX_QUEUE_CAP.saturating_sub(state.rx_queue_count as usize);
-    if free_slots == 0 {
-        CYW43_RX_DRAIN_BUDGET
-    } else if free_slots < CYW43_DATA_TX_POST_DRAIN_BUDGET {
+    if free_slots < CYW43_DATA_TX_POST_DRAIN_BUDGET {
         CYW43_RX_DRAIN_BUDGET
     } else {
         CYW43_DATA_TX_POST_DRAIN_BUDGET
@@ -12122,6 +12340,12 @@ fn cyw43_stage_rx_idle_trace(
     write_ring_u32(offset + 144, state.rx_trace_pre_sample_delta_ticks);
     write_ring_u32(offset + 148, state.rx_trace_transfer_delta_ticks);
     write_ring_u32(offset + 152, state.rx_trace_post_sample_delta_ticks);
+    write_ring_u16(offset + 156, state.service_trace_op);
+    write_ring_u16(offset + 158, state.service_trace_reason);
+    write_ring_u32(offset + 160, state.service_trace_progress);
+    write_ring_u16(offset + 164, state.service_trace_seq_window);
+    write_ring_u16(offset + 166, state.service_trace_channel);
+    write_ring_u32(offset + 168, state.service_trace_credit_observations);
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(
         DRIVER_TASK_RING_VADDR + offset,
@@ -12135,9 +12359,6 @@ fn cyw43_stage_rx_idle_trace(
 }
 
 fn cyw43_update_sdpcm_credit(state: &mut Cyw43RuntimeState, header: Cyw43RxSdpcmHeader) {
-    if header.channel >= CYW43_SDPCM_CHANNEL_GLOM {
-        return;
-    }
     state.sdpcm_credit_observations = state.sdpcm_credit_observations.wrapping_add(1);
     let mut credit = header.credit;
     if credit.wrapping_sub(state.sdpcm_seq) > 0x40 {
@@ -12956,27 +13177,13 @@ const fn cyw43_control_rx_remainder_request_len(
 }
 
 fn cyw43_write_sdpcm_data_tx_header(offset: usize, total_len: usize, seq: u8) {
-    let total = total_len as u16;
-    write_ring_byte(offset, (total & 0xff) as u8);
-    write_ring_byte(offset + 1, (total >> 8) as u8);
-    let inv = !total;
-    write_ring_byte(offset + 2, (inv & 0xff) as u8);
-    write_ring_byte(offset + 3, (inv >> 8) as u8);
-    write_ring_u32(
-        offset + CYW43_SDPCM_HWHDR_BYTES,
-        (total_len.saturating_sub(CYW43_SDPCM_HWHDR_BYTES) as u32) | CYW43_SDPCM_LAST_FRAME,
+    write_sdpcm_header(
+        offset,
+        total_len,
+        CYW43_SDPCM_DATA_TX_BDC_OFFSET,
+        seq,
+        CYW43_SDPCM_CHANNEL_DATA,
     );
-    write_ring_u32(offset + CYW43_SDPCM_HWHDR_BYTES + 4, 0);
-    write_ring_u32(
-        offset + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET,
-        u32::from(seq)
-            | (u32::from(CYW43_SDPCM_CHANNEL_DATA) << 8)
-            | ((CYW43_SDPCM_DATA_TX_BDC_OFFSET as u32) << 24),
-    );
-    write_ring_u32(offset + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET + 4, 0);
-    for index in CYW43_SDPCM_DATA_TX_HEADER_BYTES..CYW43_SDPCM_DATA_TX_BDC_OFFSET {
-        write_ring_byte(offset + index, 0);
-    }
 }
 
 fn cyw43_bdc_priority_for_runtime_packet(offset: usize, len: usize) -> u8 {
@@ -15999,6 +16206,9 @@ static TEST_SDIO_CMD52_IORX_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52
 static TEST_SDIO_CMD52_IENX_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
 
 #[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_CMD52_INTX_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
+
+#[cfg(all(not(target_os = "none"), test))]
 static TEST_SDIO_CMD52_RFRAME_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -16097,6 +16307,7 @@ fn reset_test_sdio_transfer_failure() {
 fn reset_test_sdio_cmd52_read_responses() {
     TEST_SDIO_CMD52_IORX_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_SDIO_CMD52_IENX_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
+    TEST_SDIO_CMD52_INTX_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_SDIO_CMD52_RFRAME_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_CYW43_SDIO_INT_STATUS_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_SDIO_CMD52_NONE_RESPONSE_KEY.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
@@ -16108,6 +16319,12 @@ fn reset_test_sdio_cmd52_read_responses() {
 fn test_sdio_cmd52_read_response(function: u8, addr: u32) -> Option<u8> {
     if function == 0 && addr == SDIO_CCCR_IENX {
         let value = TEST_SDIO_CMD52_IENX_RESPONSE.load(Ordering::Acquire);
+        if value <= u32::from(u8::MAX) {
+            return Some(value as u8);
+        }
+    }
+    if function == 0 && addr == SDIO_CCCR_INTX {
+        let value = TEST_SDIO_CMD52_INTX_RESPONSE.load(Ordering::Acquire);
         if value <= u32::from(u8::MAX) {
             return Some(value as u8);
         }
@@ -16165,6 +16382,11 @@ fn test_sdio_cmd52_read_iorx_response(value: u8) {
 #[cfg(all(not(target_os = "none"), test))]
 fn test_sdio_cmd52_read_ienx_response(value: u8) {
     TEST_SDIO_CMD52_IENX_RESPONSE.store(u32::from(value), Ordering::Release);
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_cmd52_read_intx_response(value: u8) {
+    TEST_SDIO_CMD52_INTX_RESPONSE.store(u32::from(value), Ordering::Release);
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -26989,12 +27211,17 @@ mod tests {
         });
         assert_eq!(read_ring_u16(CYW43_SDPCM_TX_OFFSET), data_tx_len as u16);
         assert_eq!(
-            read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES),
-            (data_tx_len.saturating_sub(CYW43_SDPCM_HWHDR_BYTES) as u32) | CYW43_SDPCM_LAST_FRAME
+            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES),
+            0
         );
-        let sw_header = read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET);
-        assert_eq!((sw_header >> 8) & 0x0f, u32::from(CYW43_SDPCM_CHANNEL_DATA));
-        assert_eq!((sw_header >> 24) as usize, CYW43_SDPCM_DATA_TX_BDC_OFFSET);
+        assert_eq!(
+            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 1) & 0x0f,
+            CYW43_SDPCM_CHANNEL_DATA
+        );
+        assert_eq!(
+            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 3) as usize,
+            CYW43_SDPCM_DATA_TX_BDC_OFFSET
+        );
         assert_eq!(
             read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_BDC_OFFSET)
                 >> CYW43_BDC_VERSION_SHIFT,
@@ -27119,8 +27346,8 @@ mod tests {
         let ipv4_tcp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + ipv4_tcp.len();
         let (ipv4_tcp_request_len, ipv4_tcp_block_mode) =
             cyw43_data_tx_request_len_for_frame(frame, ipv4_tcp_total_len);
-        assert_eq!(ipv4_tcp_total_len, 124);
-        assert_eq!(cyw43_data_tx_request_len_default(ipv4_tcp_total_len), 124);
+        assert_eq!(ipv4_tcp_total_len, 110);
+        assert_eq!(cyw43_data_tx_request_len_default(ipv4_tcp_total_len), 112);
         assert_eq!(ipv4_tcp_request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert!(!ipv4_tcp_block_mode);
         assert_eq!(
@@ -27456,8 +27683,8 @@ mod tests {
         test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_discover.len();
-        assert_eq!(total_len, 330);
-        assert_eq!(cyw43_data_tx_request_len_default(total_len), 332);
+        assert_eq!(total_len, 316);
+        assert_eq!(cyw43_data_tx_request_len_default(total_len), 316);
         let frame = DriverFrameDescriptor {
             offset: payload_offset as u32,
             len: dhcp_discover.len() as u16,
@@ -27598,7 +27825,7 @@ mod tests {
             total_len,
         )
         .0;
-        assert_eq!(total_len, 72);
+        assert_eq!(total_len, 58);
         assert_eq!(CYW43_DATA_TX_MIN_FUNCTION2_BYTES, 128);
         assert_eq!(request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert_eq!(service_command(0, cyw43_descriptor_command(177)), {
@@ -27725,8 +27952,8 @@ mod tests {
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + m2_frame.len();
         let request_len = cyw43_data_tx_request_len_default(total_len);
-        assert_eq!(total_len, 165);
-        assert_eq!(request_len, 168);
+        assert_eq!(total_len, 151);
+        assert_eq!(request_len, 152);
         assert_eq!(service_command(0, cyw43_descriptor_command(176)), {
             let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 176,
@@ -28323,6 +28550,36 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_sdpcm_credit_updates_from_glom_header_before_channel_dispatch() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.sdpcm_seq = 4;
+        state.sdpcm_seq_max = 5;
+
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_GLOM,
+            9,
+            true,
+        );
+
+        assert_eq!(
+            cyw43_runtime_decode_rx_frame_detailed_for(
+                &mut state,
+                CYW43_RUNTIME_RX_BUFFER_OFFSET,
+                CYW43_SDPCM_HEADER_BYTES,
+                CYW43_RX_FRAME_FLAG_MASK_DATA,
+            ),
+            Cyw43RxDecodeResult::DecodeMiss
+        );
+        assert_eq!(state.sdpcm_credit_observations, 1);
+        assert_eq!(state.sdpcm_seq_max, 9);
+    }
+
+    #[test]
     fn cyw43_control_tx_pre_drain_consumes_stale_control_reply() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -28679,7 +28936,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_data_tx_uses_linux_extended_header_and_eapol_priority() {
+    fn cyw43_data_tx_uses_linux_short_header_and_eapol_priority() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -28706,10 +28963,22 @@ mod tests {
         );
         assert_eq!(state.sdpcm_seq, 10);
         assert_eq!(state.tx_frames, 1);
-        let sw_header = read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET);
-        assert_eq!(sw_header & 0xff, 9);
-        assert_eq!((sw_header >> 8) & 0x0f, u32::from(CYW43_SDPCM_CHANNEL_DATA));
-        assert_eq!((sw_header >> 24) as usize, CYW43_SDPCM_DATA_TX_BDC_OFFSET);
+        assert_eq!(
+            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES),
+            9
+        );
+        assert_eq!(
+            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 1) & 0x0f,
+            CYW43_SDPCM_CHANNEL_DATA
+        );
+        assert_eq!(
+            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 3) as usize,
+            CYW43_SDPCM_DATA_TX_BDC_OFFSET
+        );
+        assert_eq!(
+            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_BDC_OFFSET + 3),
+            0
+        );
         assert_eq!(
             read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_BDC_OFFSET + 1),
             CYW43_HOST_EAPOL_BDC_PRIORITY
@@ -29556,6 +29825,71 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_data_poll_reports_progress_when_service_turn_queues_control() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload = *b"event-after-m2";
+        let frame_len = CYW43_SDPCM_HEADER_BYTES + payload.len();
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_EVENT,
+            7,
+            false,
+        );
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &payload,
+        );
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq = 4;
+            state.sdpcm_seq_max = 5;
+            state.sdpcm_next_frame_len = frame_len as u16;
+        });
+
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+        let progress = service_command(0, cyw43_descriptor_command(285));
+        assert_eq!(progress.sequence, 285);
+        assert_eq!(progress.code, COMPLETION_PROGRESS);
+        assert_ne!(progress.result & CYW43_SERVICE_PROGRESS_QUEUE_DEPTH, 0);
+        assert_eq!(progress.frame.flags, cyw43_sdpcm_credit_proof_flags(4, 7));
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.rx_queue_count, 1);
+            assert_eq!(state.sdpcm_seq_max, 7);
+        });
+
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(286)),
+            DriverTaskCompletionRecord::frame_ready_with_descriptor(
+                286,
+                DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: payload.len() as u16,
+                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 7),
+                }
+            )
+        );
+        assert_eq!(
+            read_frame_prefix::<14>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload.len() as u16,
+                flags: 0,
+            }),
+            payload
+        );
+    }
+
+    #[test]
     fn cyw43_data_rx_poll_without_tail_drain_preserves_next_hint() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -30032,6 +30366,29 @@ mod tests {
                 | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT
                 | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY
         );
+    }
+
+    #[test]
+    fn cyw43_rx_source_snapshot_samples_cccr_intx_function2_pending() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        test_sdio_cmd52_read_ienx_response(SDIO_INTERRUPT_ENABLE_MASK);
+        test_sdio_cmd52_read_intx_response(SDIO_CCCR_IEN_FUNC2);
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
+        test_cyw43_sdio_int_status_response(0);
+
+        let source =
+            cyw43_sample_rx_source_snapshot(&mut state, CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16)
+                .expect("CCCR INTx evidence should produce a source snapshot");
+
+        assert!(source.card_interrupt);
+        assert!(source.function2_ready);
+        assert!(!source.frame_indicated);
+        assert!(!source.host_interrupt);
+        assert_eq!(source.sdhci_status, 0);
+        assert!(cyw43_rx_source_asserts_pending_frame(source));
+        assert!(test_sdio_cmd52_read_count(0, SDIO_CCCR_INTX) >= 1);
     }
 
     #[test]
@@ -30823,6 +31180,15 @@ mod tests {
         assert!(!cyw43_sdio_host_int_status_visible_to_cyw43(true));
         assert!(cyw43_sdio_host_int_status_visible_to_cyw43(false));
         assert_eq!(
+            cyw43_rx_source_reported_sdhci_status(true, SDHCI_INT_CARD_INT, SDIO_CCCR_IEN_FUNC2),
+            u32::from(SDIO_CCCR_IEN_FUNC2)
+        );
+        assert_eq!(
+            cyw43_rx_source_reported_sdhci_status(false, SDHCI_INT_CARD_INT, SDIO_CCCR_IEN_FUNC2),
+            SDHCI_INT_CARD_INT
+        );
+        assert!(cyw43_rx_source_card_interrupt(0, SDIO_CCCR_IEN_FUNC2));
+        assert_eq!(
             Cyw43RxSourceSnapshot::passive(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16).encode(),
             DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC
                 | CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u32
@@ -30916,6 +31282,21 @@ mod tests {
         assert_eq!(read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 70), u16::MAX);
         assert_eq!(read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 72), 0);
         assert!(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET + 136) >= 1);
+        assert_eq!(
+            read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 156),
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL
+        );
+        assert_eq!(
+            read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 158),
+            CYW43_SERVICE_REASON_RX_POLL
+        );
+        assert_eq!(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET + 160), 0);
+        assert_eq!(read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 164), 0x0100);
+        assert_eq!(
+            read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 166),
+            CYW43_SERVICE_CHANNEL_NONE
+        );
+        assert_eq!(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET + 168), 0);
         assert!(test_sdio_cmd53_read_shape_seen(
             2,
             BACKPLANE_32BIT_FLAG,
@@ -32551,7 +32932,7 @@ mod tests {
         );
         assert_eq!(
             cyw43_data_tx_request_len_default(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14),
-            44
+            32
         );
         let tiny_frame = DriverFrameDescriptor {
             offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
@@ -32568,7 +32949,7 @@ mod tests {
         );
         assert_eq!(
             cyw43_data_tx_request_len_default(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 300),
-            332
+            316
         );
         assert_eq!(
             cyw43_data_tx_request_len_for_frame(

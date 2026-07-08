@@ -184,6 +184,8 @@ const CYW43_DATA_TX_MIN_FUNCTION2_BYTES: usize = 128;
 const CYW43_DATA_RX_STEADY_POLL_FLAGS: u16 = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
     | DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN;
 const CYW43_HOST_EAPOL_TX_ATTEMPTS: usize = 8;
+const CYW43_HOST_EAPOL_M2_TX_DRAIN_POLLS: usize = 8;
+const CYW43_HOST_EAPOL_M2_TX_DRAIN_TIMEOUT_MS: u64 = 0;
 const CYW43_HOST_EAPOL_TX_DRAIN_POLLS: usize = 2_000;
 const CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS: u64 = 2_000;
 const CYW43_HOST_EAPOL_RX_ADMISSION_POLL_ATTEMPTS: usize = 4_096;
@@ -210,15 +212,12 @@ const CYW43_BDC_HEADER_BYTES: usize = 4;
 const CYW43_BDC_VERSION: u8 = 2;
 const CYW43_BDC_VERSION_SHIFT: u8 = 4;
 const CYW43_SDPCM_HEADER_BYTES: usize = 12;
-const CYW43_SDPCM_HWEXT_BYTES: usize = 8;
-const CYW43_SDPCM_DATA_TX_HEADER_BYTES: usize = CYW43_SDPCM_HEADER_BYTES + CYW43_SDPCM_HWEXT_BYTES;
-const CYW43_SDPCM_DATA_TX_PADDING_BYTES: usize = 6;
-const CYW43_SDPCM_DATA_TX_BDC_OFFSET: usize =
-    CYW43_SDPCM_DATA_TX_HEADER_BYTES + CYW43_SDPCM_DATA_TX_PADDING_BYTES;
+const CYW43_SDPCM_DATA_TX_HEADER_BYTES: usize = CYW43_SDPCM_HEADER_BYTES;
+const CYW43_SDPCM_DATA_TX_BDC_OFFSET: usize = CYW43_SDPCM_DATA_TX_HEADER_BYTES;
 const CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES: usize =
     CYW43_SDPCM_DATA_TX_BDC_OFFSET + CYW43_BDC_HEADER_BYTES;
 const CYW43_FUNCTION2_BLOCK_BYTES: usize = 512;
-const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
+const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 0;
 const CYW43_REVINFO_RESPONSE_BYTES: usize = 68;
 const CYW43_CLM_IOVAR_NAME: &str = "clmload";
 const CYW43_CLM_IOVAR_NAME_WITH_NUL_BYTES: usize = 8;
@@ -408,6 +407,16 @@ static CYW43_RX_RUNTIME_QUEUE_HIGH_WATER: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_RUNTIME_QUEUE_OVERFLOW_SEEN: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_RUNTIME_DRAIN_BUDGET_HIT: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_RUNTIME_MAX_DRAINED_PER_TURN: AtomicU32 = AtomicU32::new(0);
+static CYW43_SERVICE_LAST_OP: AtomicU32 = AtomicU32::new(0);
+static CYW43_SERVICE_LAST_REASON: AtomicU32 = AtomicU32::new(0);
+static CYW43_SERVICE_LAST_PROGRESS: AtomicU32 = AtomicU32::new(0);
+static CYW43_SERVICE_LAST_SEQ_WINDOW: AtomicU32 = AtomicU32::new(0);
+static CYW43_SERVICE_LAST_CHANNEL: AtomicU32 = AtomicU32::new(0xffff);
+static CYW43_SERVICE_LAST_CREDIT_OBS: AtomicU32 = AtomicU32::new(0);
+static CYW43_SERVICE_LAST_RFRAME: AtomicU32 = AtomicU32::new(0);
+static CYW43_SERVICE_LAST_SOURCE_FLAGS: AtomicU32 = AtomicU32::new(0);
+static CYW43_SERVICE_LAST_PRE_SOURCE: AtomicU32 = AtomicU32::new(0);
+static CYW43_SERVICE_LAST_POST_SOURCE: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_RX: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_TX: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_TARGET_HW_ZEROED: AtomicU32 = AtomicU32::new(0);
@@ -728,7 +737,9 @@ const CYW43_RX_IDLE_TRACE_VERSION_V4: u16 = 4;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_VERSION_V5: u16 = 5;
 #[cfg(feature = "kernel")]
-const CYW43_RX_IDLE_TRACE_VERSION: u16 = 6;
+const CYW43_RX_IDLE_TRACE_VERSION_V6: u16 = 6;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_VERSION: u16 = 7;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_BYTES: usize = 40;
 #[cfg(feature = "kernel")]
@@ -741,6 +752,10 @@ const CYW43_RX_IDLE_TRACE_V4_BYTES: usize = 120;
 const CYW43_RX_IDLE_TRACE_V5_BYTES: usize = 136;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_V6_BYTES: usize = 156;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_V7_BYTES: usize = 172;
+#[cfg(feature = "kernel")]
+const CYW43_SERVICE_CHANNEL_NONE: u16 = 0xffff;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_RETRANSMIT_ACTION_MASK: u16 = 0x000f;
 #[cfg(feature = "kernel")]
@@ -824,6 +839,12 @@ struct Cyw43RxIdleTrace {
     pre_sample_delta_ticks: u32,
     transfer_delta_ticks: u32,
     post_sample_delta_ticks: u32,
+    service_op: u16,
+    service_reason: u16,
+    service_progress: u32,
+    service_seq_window: u16,
+    service_channel: u16,
+    service_credit_observations: u32,
 }
 
 #[cfg(feature = "kernel")]
@@ -840,6 +861,7 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
         && version != CYW43_RX_IDLE_TRACE_VERSION_V3
         && version != CYW43_RX_IDLE_TRACE_VERSION_V4
         && version != CYW43_RX_IDLE_TRACE_VERSION_V5
+        && version != CYW43_RX_IDLE_TRACE_VERSION_V6
         && version != CYW43_RX_IDLE_TRACE_VERSION
     {
         return None;
@@ -856,7 +878,10 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
     if version == CYW43_RX_IDLE_TRACE_VERSION_V5 && bytes.len() < CYW43_RX_IDLE_TRACE_V5_BYTES {
         return None;
     }
-    if version == CYW43_RX_IDLE_TRACE_VERSION && bytes.len() < CYW43_RX_IDLE_TRACE_V6_BYTES {
+    if version == CYW43_RX_IDLE_TRACE_VERSION_V6 && bytes.len() < CYW43_RX_IDLE_TRACE_V6_BYTES {
+        return None;
+    }
+    if version == CYW43_RX_IDLE_TRACE_VERSION && bytes.len() < CYW43_RX_IDLE_TRACE_V7_BYTES {
         return None;
     }
     Some(Cyw43RxIdleTrace {
@@ -907,6 +932,12 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
         pre_sample_delta_ticks: cyw43_read_le_u32(bytes, 144).unwrap_or(0),
         transfer_delta_ticks: cyw43_read_le_u32(bytes, 148).unwrap_or(0),
         post_sample_delta_ticks: cyw43_read_le_u32(bytes, 152).unwrap_or(0),
+        service_op: cyw43_read_le_u16(bytes, 156).unwrap_or(0),
+        service_reason: cyw43_read_le_u16(bytes, 158).unwrap_or(0),
+        service_progress: cyw43_read_le_u32(bytes, 160).unwrap_or(0),
+        service_seq_window: cyw43_read_le_u16(bytes, 164).unwrap_or(0),
+        service_channel: cyw43_read_le_u16(bytes, 166).unwrap_or(CYW43_SERVICE_CHANNEL_NONE),
+        service_credit_observations: cyw43_read_le_u32(bytes, 168).unwrap_or(0),
     })
 }
 
@@ -5948,6 +5979,15 @@ fn process_cyw43_host_eapol_data_completion(
                 match action {
                     HostEapolAction::None => {}
                     HostEapolAction::Inspect { .. } => {}
+                    HostEapolAction::DropPostSecureDuplicate { message } => {
+                        emit_cyw43_host_eapol_message(
+                            contract,
+                            message,
+                            "drop-post-secure-duplicate",
+                            poll,
+                            frame.len(),
+                        );
+                    }
                     HostEapolAction::SendM2 { len } => {
                         CYW43_HOST_EAPOL_M1.fetch_add(1, Ordering::AcqRel);
                         session
@@ -9273,7 +9313,12 @@ fn cyw43_data_tx_admission_ready(contract: DriverTaskContract) -> bool {
 
 #[cfg(feature = "kernel")]
 fn cyw43_host_eapol_tx_drain_window(stage: &'static str) -> (u64, usize) {
-    let _ = stage;
+    if stage == "m2-before-m3" {
+        return (
+            CYW43_HOST_EAPOL_M2_TX_DRAIN_TIMEOUT_MS,
+            CYW43_HOST_EAPOL_M2_TX_DRAIN_POLLS,
+        );
+    }
     (
         CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS,
         CYW43_HOST_EAPOL_TX_DRAIN_POLLS,
@@ -12359,7 +12404,10 @@ const fn cyw43_runtime_descriptor_quiet_hot_path(op: u16) -> bool {
 
 #[cfg(feature = "kernel")]
 const fn cyw43_runtime_descriptor_blocks_net_pre_poll(op: u16) -> bool {
-    cyw43_runtime_descriptor_uses_prompt_slice(op)
+    matches!(
+        op,
+        DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME | DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -14058,6 +14106,16 @@ fn record_cyw43_runtime_completion(
     if trace.rx_queue_overflows != 0 {
         CYW43_RX_RUNTIME_QUEUE_OVERFLOW_SEEN.store(1, Ordering::Release);
     }
+    CYW43_SERVICE_LAST_OP.store(u32::from(trace.service_op), Ordering::Release);
+    CYW43_SERVICE_LAST_REASON.store(u32::from(trace.service_reason), Ordering::Release);
+    CYW43_SERVICE_LAST_PROGRESS.store(trace.service_progress, Ordering::Release);
+    CYW43_SERVICE_LAST_SEQ_WINDOW.store(u32::from(trace.service_seq_window), Ordering::Release);
+    CYW43_SERVICE_LAST_CHANNEL.store(u32::from(trace.service_channel), Ordering::Release);
+    CYW43_SERVICE_LAST_CREDIT_OBS.store(trace.service_credit_observations, Ordering::Release);
+    CYW43_SERVICE_LAST_RFRAME.store(u32::from(trace.rframe_len), Ordering::Release);
+    CYW43_SERVICE_LAST_SOURCE_FLAGS.store(u32::from(trace.source_flags), Ordering::Release);
+    CYW43_SERVICE_LAST_PRE_SOURCE.store(trace.pre_source_result, Ordering::Release);
+    CYW43_SERVICE_LAST_POST_SOURCE.store(trace.post_source_result, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -14116,6 +14174,75 @@ fn genet_frame_ready_tx_window(completion: DriverTaskCompletionRecord) -> Option
 }
 
 #[cfg(feature = "kernel")]
+fn route_cyw43_pre_secure_eapol_pre_poll_completion(
+    contract: DriverTaskContract,
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire) == 0
+        || CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire) != 0
+        || CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
+    {
+        return false;
+    }
+    let Some((flags, token)) = cyw43_driver_task_frame_from_completion(contract, completion) else {
+        return false;
+    };
+    if cyw43_frame_channel(flags) != DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA {
+        return false;
+    }
+    let frame = &token.buffer[..token.len];
+    if cyw43_ethertype(frame) != Some(ETH_P_EAPOL) {
+        return false;
+    }
+
+    emit_cyw43_data_path_trace(
+        contract,
+        "rx-host-eapol",
+        "pre-poll",
+        0,
+        frame,
+        Some(completion),
+        flags,
+        cyw43_pending_rx_token_occupied(),
+        cyw43_pending_rx_token_occupied(),
+    );
+
+    let station_mac = *CYW43_RUNTIME_MAC.lock();
+    let mut tx_frame = [0u8; MAX_FRAME_LEN];
+    let mut guard = CYW43_HOST_EAPOL_SESSION.lock();
+    let Some(session) = guard.as_mut() else {
+        return true;
+    };
+    let poll = session.progress.polls as usize;
+    let mut clear_session = false;
+    match process_cyw43_host_eapol_data_completion(
+        contract,
+        station_mac,
+        session,
+        poll,
+        CYW43_DATA_RX_STEADY_POLL_FLAGS,
+        completion,
+        &mut tx_frame,
+    ) {
+        Ok(result) => {
+            record_cyw43_host_eapol_poll_completion(session, result);
+            if result.secure {
+                mark_cyw43_host_eapol_secure(contract, &session.progress);
+            }
+        }
+        Err(_) => {
+            mark_cyw43_host_eapol_required(contract, &session.progress);
+            clear_session = true;
+        }
+    }
+    if clear_session {
+        *guard = None;
+    }
+    true
+}
+
+#[cfg(feature = "kernel")]
 pub(crate) fn preserve_driver_task_pre_poll_completion(
     contract: DriverTaskContract,
     hot_path: DriverTaskHotPath,
@@ -14137,6 +14264,9 @@ pub(crate) fn preserve_driver_task_pre_poll_completion(
         DriverTaskHotPath::GenetNic => driver_task_rx_token_from_completion(contract, completion)
             .is_some_and(store_genet_pending_rx_token),
         DriverTaskHotPath::Cyw43Wifi => {
+            if route_cyw43_pre_secure_eapol_pre_poll_completion(contract, completion) {
+                return true;
+            }
             if let Some((flags, token)) =
                 cyw43_driver_task_data_frame_with_flags_from_completion(contract, completion)
             {
@@ -14837,6 +14967,15 @@ fn consume_cyw43_post_secure_eapol_frame(
 
     match eapol_action {
         HostEapolAction::None | HostEapolAction::Inspect { .. } => {}
+        HostEapolAction::DropPostSecureDuplicate { message } => {
+            emit_cyw43_host_eapol_message(
+                contract,
+                message,
+                "post-secure-drop-duplicate",
+                poll,
+                frame.len(),
+            );
+        }
         HostEapolAction::SendM2 { len } => {
             CYW43_HOST_EAPOL_M1.fetch_add(1, Ordering::AcqRel);
             emit_cyw43_host_eapol_message(contract, "m1", "post-secure-recv-m1", poll, frame.len());
@@ -15915,6 +16054,86 @@ macro_rules! driver_task_nic {
                     } else {
                         0
                     },
+                    wifi_service_last_op: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_OP.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_service_last_reason: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_REASON.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_service_last_progress: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_PROGRESS.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_service_last_seq_window: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_SEQ_WINDOW.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_service_last_channel: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_CHANNEL.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_service_last_credit_observations: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_CREDIT_OBS.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_service_last_rframe_len: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_RFRAME.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_service_last_source_flags: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_SOURCE_FLAGS.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_service_last_pre_source: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_PRE_SOURCE.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_service_last_post_source: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_SERVICE_LAST_POST_SOURCE.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
                     wifi_data_trace_faults: if matches!(
                         DriverTaskHotPath::$hot_path,
                         DriverTaskHotPath::Cyw43Wifi
@@ -16047,6 +16266,54 @@ macro_rules! driver_task_nic {
                     } else {
                         0
                     },
+                    wifi_host_eapol_m1: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_HOST_EAPOL_M1.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_host_eapol_m2: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_HOST_EAPOL_M2.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_host_eapol_m3: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_HOST_EAPOL_M3.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_host_eapol_m4: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_HOST_EAPOL_M4.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_host_eapol_ptk: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_HOST_EAPOL_PTK.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    wifi_host_eapol_gtk: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) {
+                        CYW43_HOST_EAPOL_GTK.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
                     ..NetDeviceCounters::default()
                 }
             }
@@ -16135,6 +16402,16 @@ mod tests {
         CYW43_TX_UNPROVEN_SEQ.store(0, Ordering::Release);
         CYW43_TX_UNPROVEN_COUNT.store(0, Ordering::Release);
         CYW43_RX_FRAMES.store(0, Ordering::Release);
+        CYW43_SERVICE_LAST_OP.store(0, Ordering::Release);
+        CYW43_SERVICE_LAST_REASON.store(0, Ordering::Release);
+        CYW43_SERVICE_LAST_PROGRESS.store(0, Ordering::Release);
+        CYW43_SERVICE_LAST_SEQ_WINDOW.store(0, Ordering::Release);
+        CYW43_SERVICE_LAST_CHANNEL.store(0xffff, Ordering::Release);
+        CYW43_SERVICE_LAST_CREDIT_OBS.store(0, Ordering::Release);
+        CYW43_SERVICE_LAST_RFRAME.store(0, Ordering::Release);
+        CYW43_SERVICE_LAST_SOURCE_FLAGS.store(0, Ordering::Release);
+        CYW43_SERVICE_LAST_PRE_SOURCE.store(0, Ordering::Release);
+        CYW43_SERVICE_LAST_POST_SOURCE.store(0, Ordering::Release);
         CYW43_PENDING_RX_HIGH_WATER.store(0, Ordering::Release);
         CYW43_PENDING_RX_DROPS.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_STUB.store(0, Ordering::Release);
@@ -19405,7 +19682,7 @@ mod tests {
         let arp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + arp_reply.len();
         let (arp_request_len, arp_block_mode) =
             cyw43_data_tx_request_len_for_frame(&arp_reply, arp_total_len);
-        assert_eq!(arp_total_len, 72);
+        assert_eq!(arp_total_len, 58);
         assert_eq!(CYW43_DATA_TX_MIN_FUNCTION2_BYTES, 128);
         assert_eq!(arp_request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert!(!arp_block_mode);
@@ -19429,8 +19706,8 @@ mod tests {
         let tcp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + tcp_frame.len();
         let (tcp_request_len, tcp_block_mode) =
             cyw43_data_tx_request_len_for_frame(&tcp_frame, tcp_total_len);
-        assert_eq!(tcp_total_len, 124);
-        assert_eq!(cyw43_data_tx_request_len(tcp_total_len), 124);
+        assert_eq!(tcp_total_len, 110);
+        assert_eq!(cyw43_data_tx_request_len(tcp_total_len), 112);
         assert_eq!(tcp_request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert!(!tcp_block_mode);
         assert_eq!(
@@ -21993,7 +22270,7 @@ mod tests {
         assert!(cyw43_runtime_descriptor_quiet_hot_path(
             DRIVER_RUNTIME_CYW43_OP_RX_POLL
         ));
-        assert!(cyw43_runtime_descriptor_blocks_net_pre_poll(
+        assert!(!cyw43_runtime_descriptor_blocks_net_pre_poll(
             DRIVER_RUNTIME_CYW43_OP_RX_POLL
         ));
         assert!(cyw43_runtime_descriptor_uses_prompt_slice(
@@ -22002,7 +22279,7 @@ mod tests {
         assert!(cyw43_runtime_descriptor_quiet_hot_path(
             DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
         ));
-        assert!(cyw43_runtime_descriptor_blocks_net_pre_poll(
+        assert!(!cyw43_runtime_descriptor_blocks_net_pre_poll(
             DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
         ));
         assert!(cyw43_runtime_descriptor_uses_prompt_slice(
@@ -22011,7 +22288,7 @@ mod tests {
         assert!(cyw43_runtime_descriptor_quiet_hot_path(
             DRIVER_RUNTIME_CYW43_OP_ETH_TX
         ));
-        assert!(cyw43_runtime_descriptor_blocks_net_pre_poll(
+        assert!(!cyw43_runtime_descriptor_blocks_net_pre_poll(
             DRIVER_RUNTIME_CYW43_OP_ETH_TX
         ));
         assert!(cyw43_runtime_descriptor_uses_prompt_slice(
@@ -22067,6 +22344,31 @@ mod tests {
             "control-exchange"
         );
         assert_eq!(cyw43_descriptor_label_for_op(Some(0xffff)), "other");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_task_net_active_eth_tx_allows_bounded_credit_rescue() {
+        assert!(!cyw43_runtime_descriptor_blocks_net_pre_poll(
+            DRIVER_RUNTIME_CYW43_OP_ETH_TX
+        ));
+        assert!(!cyw43_runtime_descriptor_blocks_net_pre_poll(
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL
+        ));
+        assert!(!cyw43_runtime_descriptor_blocks_net_pre_poll(
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_task_net_control_exchange_still_blocks_unrelated_fresh_poll() {
+        assert!(cyw43_runtime_descriptor_blocks_net_pre_poll(
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
+        ));
+        assert!(cyw43_runtime_descriptor_blocks_net_pre_poll(
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -22804,6 +23106,8 @@ mod tests {
         assert_eq!(CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_REPLY_TIMEOUT_MS, 250);
         assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_STALE_REPLY_RETRIES, 3);
         assert_eq!(CYW43_HOST_EAPOL_GTK_WSEC_KEY_STALE_REPLY_RETRIES, 2);
+        assert_eq!(CYW43_HOST_EAPOL_M2_TX_DRAIN_POLLS, 8);
+        assert_eq!(CYW43_HOST_EAPOL_M2_TX_DRAIN_TIMEOUT_MS, 0);
         assert_eq!(CYW43_HOST_EAPOL_TX_DRAIN_POLLS, 2_000);
         assert_eq!(CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS, 2_000);
         assert_eq!(
@@ -22823,8 +23127,8 @@ mod tests {
         assert_eq!(
             cyw43_host_eapol_tx_drain_window("m2-before-m3"),
             (
-                CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS,
-                CYW43_HOST_EAPOL_TX_DRAIN_POLLS
+                CYW43_HOST_EAPOL_M2_TX_DRAIN_TIMEOUT_MS,
+                CYW43_HOST_EAPOL_M2_TX_DRAIN_POLLS
             )
         );
         assert_eq!(
@@ -23612,14 +23916,24 @@ mod tests {
         CYW43_RX_RUNTIME_DRAIN_BUDGET_HIT.store(0, Ordering::Release);
         CYW43_RX_RUNTIME_MAX_DRAINED_PER_TURN.store(0, Ordering::Release);
 
-        let mut trace = [0u8; CYW43_RX_IDLE_TRACE_V6_BYTES];
+        let mut trace = [0u8; CYW43_RX_IDLE_TRACE_V7_BYTES];
         trace[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
         trace[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION.to_le_bytes());
+        trace[24..26].copy_from_slice(&512u16.to_le_bytes());
+        trace[60..64].copy_from_slice(&0x4352_0058u32.to_le_bytes());
+        trace[64..68].copy_from_slice(&0x4352_0059u32.to_le_bytes());
+        trace[68..70].copy_from_slice(&0x0042u16.to_le_bytes());
         trace[40..42].copy_from_slice(&3u16.to_le_bytes());
         trace[42..44].copy_from_slice(&5u16.to_le_bytes());
         trace[108..112].copy_from_slice(&1u32.to_le_bytes());
         trace[112..116].copy_from_slice(&1u32.to_le_bytes());
         trace[116..118].copy_from_slice(&4u16.to_le_bytes());
+        trace[156..158].copy_from_slice(&54u16.to_le_bytes());
+        trace[158..160].copy_from_slice(&3u16.to_le_bytes());
+        trace[160..164].copy_from_slice(&0x15u32.to_le_bytes());
+        trace[164..166].copy_from_slice(&0x0904u16.to_le_bytes());
+        trace[166..168].copy_from_slice(&2u16.to_le_bytes());
+        trace[168..172].copy_from_slice(&8u32.to_le_bytes());
         let frame = crate::hal::driver_task::stage_driver_task_ring_frame(contract, &trace, 0)
             .expect("test ring has room for one idle trace");
         record_cyw43_runtime_completion(
@@ -23639,6 +23953,16 @@ mod tests {
         assert_eq!(counters.wifi_rx_runtime_queue_overflow_seen, 1);
         assert_eq!(counters.wifi_rx_runtime_drain_budget_hit, 1);
         assert_eq!(counters.wifi_rx_runtime_max_drained_per_turn, 4);
+        assert_eq!(counters.wifi_service_last_op, 54);
+        assert_eq!(counters.wifi_service_last_reason, 3);
+        assert_eq!(counters.wifi_service_last_progress, 0x15);
+        assert_eq!(counters.wifi_service_last_seq_window, 0x0904);
+        assert_eq!(counters.wifi_service_last_channel, 2);
+        assert_eq!(counters.wifi_service_last_credit_observations, 8);
+        assert_eq!(counters.wifi_service_last_rframe_len, 512);
+        assert_eq!(counters.wifi_service_last_source_flags, 0x0042);
+        assert_eq!(counters.wifi_service_last_pre_source, 0x4352_0058);
+        assert_eq!(counters.wifi_service_last_post_source, 0x4352_0059);
 
         CYW43_TX_SUBMITTED.store(1, Ordering::Release);
         let mut tx_completion = DriverTaskCompletionRecord::progress(7, 64);
@@ -24014,6 +24338,54 @@ mod tests {
             1
         );
 
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_prepoll_pre_secure_eapol_routes_to_host_eapol_not_pending_rx() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let _io_guard = test_enable_cyw43_host_eapol_io_stub();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring = test_publish_cyw43_ring(&mut ring_page);
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        *CYW43_RUNTIME_MAC.lock() = EthernetAddress(station);
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        *CYW43_HOST_EAPOL_SESSION.lock() =
+            Some(Cyw43HostEapolSession::new(credentials).expect("host eapol session starts"));
+        CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len =
+            cyw43_host_eapol::write_test_m1_frame(&mut m1, &station, &ap).expect("test m1 frame");
+        let completion = test_stage_cyw43_completion(
+            &m1[..m1_len],
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            74,
+        );
+
+        assert!(preserve_driver_task_pre_poll_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            completion
+        ));
+        assert!(!cyw43_pending_rx_token_occupied());
+        assert_eq!(CYW43_HOST_EAPOL_M1.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_M2.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_TX_SUBMITTED.load(Ordering::Acquire),
+            1
+        );
+        let guard = CYW43_HOST_EAPOL_SESSION.lock();
+        let session = guard.as_ref().expect("session remains active after M2");
+        assert_eq!(session.progress.eapol_rx, 1);
+
+        drop(guard);
         reset_cyw43_status_flags();
     }
 
