@@ -4788,7 +4788,7 @@ fn sdio_descriptor_transfer_retryable(
     }
     desc.function == 2
         && desc.addr == BACKPLANE_32BIT_FLAG
-        && desc.flags & DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT == 0
+        && desc.flags & DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT != 0
 }
 
 fn read_sdio_command_descriptor(
@@ -9032,6 +9032,10 @@ const fn cyw43_function2_cmd53_shape(request_len: usize) -> (u16, u16) {
     }
 }
 
+const fn cyw43_function2_block_probe_cmd53_shape() -> (u16, u16) {
+    cyw43_function2_cmd53_shape(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES)
+}
+
 const fn cyw43_function2_data_tx_cmd53_shape(
     request_len: usize,
     prefer_block_mode: bool,
@@ -9085,7 +9089,7 @@ fn cyw43_function2_execute_transfer_with_write_window(
         write,
         2,
         BACKPLANE_32BIT_FLAG,
-        false,
+        write,
         block_count,
         frame.len,
     );
@@ -9299,7 +9303,7 @@ fn cyw43_record_control_tx_fault_frame_if_missing(
         | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT;
     let host_block_count = sdio_descriptor_host_block_count(block_count, flags);
     let telemetry = cyw43_write_control_tx_fault_telemetry_frame(
-        sdio_cmd53_arg(true, 2, BACKPLANE_32BIT_FLAG, false, block_count, frame.len),
+        sdio_cmd53_arg(true, 2, BACKPLANE_32BIT_FLAG, true, block_count, frame.len),
         flags,
         frame,
         block_size,
@@ -9539,6 +9543,7 @@ fn cyw43_runtime_wait_for_function2_ready(timeout_ms: u64, max_polls: usize) -> 
                 last_iordy,
             ),
         );
+        sdio_clear_last_transfer_failure();
         false
     }
 }
@@ -10036,6 +10041,7 @@ fn cyw43_runtime_poll_rx_detailed_with_options(
                         wanted_mask,
                         sequence,
                         asserted_empty_policy,
+                        allow_steady_tail_drain,
                     );
                 }
                 let reason = if decoded_valid_unmatched {
@@ -10191,6 +10197,7 @@ fn cyw43_runtime_poll_rx_hintless_firstread(
     wanted_mask: u16,
     sequence: u32,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+    allow_empty_block_probe: bool,
 ) -> Cyw43RxPollResult {
     let pre_source = cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16)
         .unwrap_or_else(|| {
@@ -10228,6 +10235,16 @@ fn cyw43_runtime_poll_rx_hintless_firstread(
                     return result;
                 }
                 return cyw43_runtime_recover_asserted_empty_firstread(
+                    state,
+                    wanted_mask,
+                    sequence,
+                    source,
+                    asserted_empty_policy,
+                    allow_empty_block_probe,
+                );
+            }
+            if allow_empty_block_probe {
+                return cyw43_runtime_block_probe_after_hintless_empty(
                     state,
                     wanted_mask,
                     sequence,
@@ -10413,6 +10430,7 @@ fn cyw43_runtime_poll_rx_hintless_block_probe(
                     sequence,
                     source,
                     asserted_empty_policy,
+                    false,
                 );
             }
             Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadEmpty {
@@ -10444,7 +10462,7 @@ fn cyw43_runtime_read_hintless_block_probe_once(
         len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
         flags: 0,
     };
-    let (block_size, block_count) = cyw43_function2_cmd53_shape(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES);
+    let (block_size, block_count) = cyw43_function2_block_probe_cmd53_shape();
     if !cyw43_function2_execute_transfer_with_policy(
         state,
         false,
@@ -10504,6 +10522,7 @@ fn cyw43_runtime_recover_asserted_empty_firstread(
     sequence: u32,
     first_source: Cyw43RxSourceSnapshot,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+    allow_empty_block_probe: bool,
 ) -> Cyw43RxPollResult {
     let mut source = cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16)
         .unwrap_or(first_source);
@@ -10563,6 +10582,15 @@ fn cyw43_runtime_recover_asserted_empty_firstread(
             }
         }
     }
+    if allow_empty_block_probe {
+        return cyw43_runtime_block_probe_after_hintless_empty(
+            state,
+            wanted_mask,
+            sequence,
+            source,
+            asserted_empty_policy,
+        );
+    }
     let reason = if cyw43_rx_source_asserts_pending_frame(source) {
         Cyw43RxIdleReason::FirstreadSourceAssertedEmpty {
             probe_len: CYW43_CONTROL_RX_FIRSTREAD_BYTES,
@@ -10575,6 +10603,50 @@ fn cyw43_runtime_recover_asserted_empty_firstread(
         }
     };
     Cyw43RxPollResult::Idle(reason)
+}
+
+fn cyw43_runtime_block_probe_after_hintless_empty(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    sequence: u32,
+    source: Cyw43RxSourceSnapshot,
+    asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+) -> Cyw43RxPollResult {
+    let block_policy = cyw43_speculative_rx_probe_policy(asserted_empty_policy, source);
+    match cyw43_runtime_read_hintless_block_probe_once(state, wanted_mask, sequence, block_policy) {
+        Cyw43HintlessBlockProbeResult::Frame(frame) => Cyw43RxPollResult::Frame(frame),
+        Cyw43HintlessBlockProbeResult::Idle(reason) => Cyw43RxPollResult::Idle(reason),
+        Cyw43HintlessBlockProbeResult::Empty => {
+            let block_source =
+                cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16)
+                    .unwrap_or_else(|| {
+                        source.with_probe_len(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16)
+                    });
+            if cyw43_rx_source_asserts_pending_frame(block_source) {
+                let mut retransmit_source = block_source;
+                if asserted_empty_policy == Cyw43AssertedEmptyPolicy::RequestRetransmit {
+                    if let Some(result) = cyw43_runtime_recover_asserted_empty_by_retransmit(
+                        state,
+                        wanted_mask,
+                        sequence,
+                        &mut retransmit_source,
+                        asserted_empty_policy,
+                    ) {
+                        return result;
+                    }
+                }
+                Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadSourceAssertedEmpty {
+                    probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+                    source: retransmit_source,
+                })
+            } else {
+                Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadEmpty {
+                    probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+                    source: block_source,
+                })
+            }
+        }
+    }
 }
 
 fn cyw43_runtime_recover_asserted_empty_by_retransmit(
@@ -26170,7 +26242,7 @@ mod tests {
         block_count: u16,
         len: u16,
     ) -> usize {
-        let expected_arg = sdio_cmd53_arg(true, function, addr, false, block_count, len);
+        let expected_arg = sdio_cmd53_arg(true, function, addr, true, block_count, len);
         test_sdio_transfer_count(|record| {
             record.cmd == SDIO_CMD53
                 && sdio_cmd53_arg_write(record.arg)
@@ -28005,6 +28077,7 @@ mod tests {
         assert!(sdio_cmd53_arg_write(arg));
         assert_eq!(sdio_cmd53_arg_function(arg), 2);
         assert_eq!(arg & (1 << 27), 0);
+        assert_ne!(arg & (1 << 26), 0);
         assert_eq!(arg & 0x1ff, request_len as u32);
         assert_eq!(
             read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_FAILURE_OFFSET),
@@ -28841,9 +28914,10 @@ mod tests {
         assert_eq!(unpadded_len, 48);
         assert_eq!(cyw43_control_tx_request_len(unpadded_len), unpadded_len);
         let txglomalign_arg =
-            sdio_cmd53_arg(true, 2, BACKPLANE_32BIT_FLAG, false, 0, unpadded_len as u16);
-        assert_eq!(txglomalign_arg, 0xa100_0030);
+            sdio_cmd53_arg(true, 2, BACKPLANE_32BIT_FLAG, true, 0, unpadded_len as u16);
+        assert_eq!(txglomalign_arg, 0xa500_0030);
         assert_eq!(txglomalign_arg & (1 << 27), 0);
+        assert_ne!(txglomalign_arg & (1 << 26), 0);
         assert_eq!(txglomalign_arg & 0x1ff, unpadded_len as u32);
         assert_eq!(
             sdio_descriptor_host_block_count(
@@ -30510,6 +30584,7 @@ mod tests {
                 93,
                 source,
                 Cyw43AssertedEmptyPolicy::RequestRetransmit,
+                false,
             )
         });
 
@@ -30605,6 +30680,7 @@ mod tests {
                 95,
                 source,
                 Cyw43AssertedEmptyPolicy::PreserveForTx,
+                false,
             )
         });
 
@@ -30667,6 +30743,7 @@ mod tests {
                 94,
                 source,
                 Cyw43AssertedEmptyPolicy::RequestRetransmit,
+                false,
             )
         });
 
@@ -30816,6 +30893,55 @@ mod tests {
             0,
             CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16
         ));
+    }
+
+    #[test]
+    fn cyw43_steady_rx_hintless_empty_reports_wide_byte_probe_terminal_detail() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+        });
+
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
+                | DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+        reset_test_sdio_transfer_log();
+
+        let completion = service_command(0, cyw43_descriptor_command(85));
+        assert_eq!(completion.sequence, 85);
+        assert_eq!(completion.code, COMPLETION_IDLE);
+        assert_eq!(
+            completion.detail,
+            DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY
+        );
+        assert_eq!(
+            completion.result,
+            DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC | CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u32
+        );
+        assert!(test_sdio_cmd53_read_shape_seen(
+            2,
+            BACKPLANE_32BIT_FLAG,
+            CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16,
+            0,
+            CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16
+        ));
+        assert!(test_sdio_cmd53_read_shape_seen(
+            2,
+            BACKPLANE_32BIT_FLAG,
+            CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
+            0,
+            CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16
+        ));
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.rx_trace_firstread_reads, 1);
+            assert_eq!(state.rx_trace_block_reads, 1);
+            assert_eq!(state.rx_trace_block_count, 0);
+        });
     }
 
     #[test]
@@ -32399,6 +32525,10 @@ mod tests {
             cyw43_function2_cmd53_shape(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES);
         assert_eq!(probe_byte_size, SDIO_CMD53_BYTE_MODE_MAX as u16);
         assert_eq!(probe_byte_count, 0);
+        assert_eq!(
+            cyw43_function2_block_probe_cmd53_shape(),
+            (probe_byte_size, probe_byte_count)
+        );
         let probe_arg = sdio_cmd53_arg(
             false,
             2,
@@ -32707,7 +32837,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_descriptor_retry_covers_cyw43_function2_fixed_fifo_writes() {
+    fn sdio_descriptor_retry_covers_cyw43_function2_incrementing_writes() {
         let mut desc = DriverRuntimeSdioCommandDescriptor {
             op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
             function: 1,
@@ -32731,14 +32861,6 @@ mod tests {
         desc.function = 2;
         desc.addr = BACKPLANE_32BIT_FLAG;
         desc.flags = 0;
-        assert!(sdio_descriptor_transfer_retryable(
-            desc,
-            SDIO_CMD53,
-            DRIVER_RUNTIME_SDIO_FLAG_DATA
-                | DRIVER_RUNTIME_SDIO_FLAG_WRITE
-                | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        ));
-        desc.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
         assert!(!sdio_descriptor_transfer_retryable(
             desc,
             SDIO_CMD53,
@@ -32746,7 +32868,14 @@ mod tests {
                 | DRIVER_RUNTIME_SDIO_FLAG_WRITE
                 | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
         ));
-        desc.flags = 0;
+        desc.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
+        assert!(sdio_descriptor_transfer_retryable(
+            desc,
+            SDIO_CMD53,
+            DRIVER_RUNTIME_SDIO_FLAG_DATA
+                | DRIVER_RUNTIME_SDIO_FLAG_WRITE
+                | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+        ));
         desc.addr = CYW43_RAM_BASE_4345;
         assert!(!sdio_descriptor_transfer_retryable(
             desc,
@@ -32904,7 +33033,7 @@ mod tests {
             true,
             2,
             BACKPLANE_32BIT_FLAG,
-            false,
+            true,
             0,
             SDIO_FUNCTION2_BLOCK_SIZE,
         );

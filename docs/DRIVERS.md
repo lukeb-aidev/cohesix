@@ -1079,7 +1079,8 @@ window so the runtime can translate the May 18-19 zero-RFRAME/card-interrupt
 behavior into bounded Function 2 first-read evidence without moving physical
 CYW43 ownership back into root. Data, control/event, and control-exchange
 hintless RX now all start with the Linux-style 64-byte Function 2 first-read;
-only an empty prefix falls through to the 512-byte Function 2 block probe. If
+only an empty prefix falls through to the 512-byte Function 2 byte-mode wide
+probe. If
 the probe is empty without owner-sampled pending-source bits, the completion
 keeps `last_rx_idle_detail=0x570a` and packs an RX-source snapshot into
 `last_rx_idle_result`: high bit set, low 16 bits as the probe length, CCCR
@@ -1095,15 +1096,15 @@ host-EAPOL status rows with no semantic progress may be suppressed; the next
 full status row carries `suppressed_status=<count>`, while required, secure,
 event, RX-observed, EAPOL, admission refresh/rescue, and post-secure rows remain
 unsuppressed. In proof-oriented RX
-polls, if a 512-byte hintless block probe is empty while owner-sampled CYW43
-source bits still show Function 2 ready plus frame-indication, host-interrupt,
-or card-interrupt asserted, the isolated runtime now forces a fresh owner-side
-sample, re-checks Function 1 `RFRAME`, terminates the stale Function 2 RX frame
-with CCCR `ABORT` plus Function 1 `FRAMECTRL.RF_TERM`, sends Linux-style
-`SMB_NAK` on the SDIO core mailbox, treats `HMB_DATA_NAKHANDLED` as a retransmit
-RX source while that NAK is pending, waits through a bounded Function 1 `RFRAME`
-resample window, retries one bounded Function 2 block probe, and only then
-publishes `last_rx_idle_detail=0x570e`
+polls, if a 512-byte hintless byte-mode wide probe is empty while owner-sampled
+CYW43 source bits still show Function 2 ready plus frame-indication,
+host-interrupt, or card-interrupt asserted, the isolated runtime now forces a
+fresh owner-side sample, re-checks Function 1 `RFRAME`, terminates the stale
+Function 2 RX frame with CCCR `ABORT` plus Function 1 `FRAMECTRL.RF_TERM`, sends
+Linux-style `SMB_NAK` on the SDIO core mailbox, treats `HMB_DATA_NAKHANDLED` as a
+retransmit RX source while that NAK is pending, waits through a bounded Function
+1 `RFRAME` resample window, retries one bounded Function 2 byte-mode wide probe,
+and only then publishes `last_rx_idle_detail=0x570e`
 (`cyw43-data-rx-firstread-source-asserted-empty` /
 `cyw43-control-rx-firstread-source-asserted-empty`) with the packed source
 snapshot. A successful retry is delivered as the recovered control/event/data
@@ -1286,10 +1287,12 @@ context and the retry/poll window.
   `sdio-function2-ready-timeout`.
 - Function 2 control-plane frames preserve Linux-shaped logical SDPCM/CDC
   payloads and four-byte alignment. Small post-release control frames such as
-  `bus:txglomalign=8` and its bounded value-`4` fallback remain plain-header and use the Linux `sdio_memcpy_toio`
-  physical shape: Function 2 fixed-FIFO CMD53 byte mode with the aligned request
-  length (`count=request_len`, CMD53 argument block count zero, host block count
-  one) while the request is at or below the 512-byte byte-mode ceiling. The
+  `bus:txglomalign=8` and its bounded value-`4` fallback remain plain-header and
+  use the Linux `sdio_memcpy_toio` physical shape: Function 2 incrementing CMD53
+  byte mode with the aligned request length (`count=request_len`, CMD53 argument
+  block count zero, host block count one) while the request is at or below the
+  512-byte byte-mode ceiling. Function 2 RX remains fixed-address
+  `sdio_readsb`-style FIFO traffic. The
   isolated runtime must not promote those
   startup iovars to one-block Function 2 writes merely because the scratch buffer
   is zero-filled behind the logical request. Root must not issue an unconditional
@@ -1561,7 +1564,12 @@ context and the retry/poll window.
   SDIO-core `int_status` word. It performs a sparse, bounded Linux-shaped
   hintless Function 2 first-read probe from the isolated CYW43 runtime; when the
   initial 64-byte byte-mode read is all-zero, it immediately follows with one
-  512-byte Function 2 block-mode probe before publishing the terminal result.
+  512-byte Function 2 byte-mode wide probe before publishing the terminal result.
+  Steady CYW43 data-RX polls that opt into
+  `DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN` use the same terminal wide
+  byte-mode probe after the 64-byte first-read reports empty, so post-secure DHCP
+  or TCP receive proof does not collapse to an early empty result while the
+  Function 2 sideband is stale.
   The runtime then publishes `cyw43-control-rx-firstread-begin`,
   `cyw43-control-rx-firstread-done` and one of `cyw43-control-rx-firstread-frame`,
   `cyw43-control-rx-firstread-empty`,

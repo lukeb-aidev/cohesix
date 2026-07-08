@@ -4835,9 +4835,10 @@ fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) -> boo
         return true;
     }
     let status = cyw43_restore_post_secure_data_filters(contract);
-    CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+    let admitted = status != "repair-deferred";
+    CYW43_POST_SECURE_DATA_RX_ADMITTED.store(admitted as u32, Ordering::Release);
     emit_cyw43_host_eapol_rx_admission_restore(contract, status);
-    true
+    admitted
 }
 
 #[cfg(feature = "kernel")]
@@ -17246,7 +17247,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn post_secure_rx_admission_transport_failure_defers_filter_repair() {
+    fn post_secure_rx_admission_transport_failure_blocks_data_rx() {
         let _guard = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status-label tests must serialize");
@@ -17264,12 +17265,15 @@ mod tests {
         mark_cyw43_host_eapol_secure(CYW43_WIFI_DRIVER_TASK_CONTRACT, &progress);
 
         assert_eq!(CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire), 1);
-        assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 0);
         assert_eq!(
             CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire),
-            1
+            0
         );
-        assert_eq!(cyw43_driver_task_bringup_status_label(), None);
+        assert_eq!(
+            cyw43_driver_task_bringup_status_label(),
+            Some("wifi-data-rx-admission-blocked")
+        );
 
         reset_cyw43_status_flags();
     }
@@ -20186,7 +20190,7 @@ mod tests {
         frame[30..32].copy_from_slice(&6u16.to_le_bytes());
         frame[32..34].copy_from_slice(&512u16.to_le_bytes());
         frame[34..36].copy_from_slice(&512u16.to_le_bytes());
-        frame[36..38].copy_from_slice(&1u16.to_le_bytes());
+        frame[36..38].copy_from_slice(&0u16.to_le_bytes());
         frame[38..40].copy_from_slice(&0x0223u16.to_le_bytes());
         frame[40..42].copy_from_slice(&3u16.to_le_bytes());
         frame[42..44].copy_from_slice(&7u16.to_le_bytes());
@@ -20248,7 +20252,7 @@ mod tests {
         assert_eq!(trace.rframe_reads, 6);
         assert_eq!(trace.request_len, 512);
         assert_eq!(trace.block_size, 512);
-        assert_eq!(trace.block_count, 1);
+        assert_eq!(trace.block_count, 0);
         assert_eq!(trace.retransmit_sample, 0x0223);
         assert_eq!(trace.queue_depth, 3);
         assert_eq!(trace.queue_high_water, 7);
@@ -21452,7 +21456,7 @@ mod tests {
     #[test]
     fn sdio_owner_fault_decodes_function2_byte_count_separately_from_host_block_count() {
         let txglomalign = SdioFaultTelemetry {
-            arg: 0xa100_0030,
+            arg: 0xa500_0030,
             cmd: 53,
             flags: 0,
             len: 48,
@@ -21476,7 +21480,7 @@ mod tests {
         assert_eq!(txglomalign.cmd53_function(), 2);
         assert_eq!(txglomalign.cmd53_addr(), CYW43_BACKPLANE_32BIT_FLAG);
         assert!(txglomalign.cmd53_write());
-        assert!(!txglomalign.cmd53_increment());
+        assert!(txglomalign.cmd53_increment());
         assert!(!txglomalign.cmd53_block_mode());
         assert_eq!(txglomalign.cmd53_count(), 48);
         assert_eq!(txglomalign.cmd53_descriptor_block_count(), 0);
