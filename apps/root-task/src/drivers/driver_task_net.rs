@@ -531,7 +531,9 @@ static CYW43_RUNTIME_MAC: Mutex<EthernetAddress> = Mutex::new(CYW43_DRIVER_TASK_
 #[cfg(feature = "kernel")]
 static CYW43_HOST_EAPOL_SESSION: Mutex<Option<Cyw43HostEapolSession>> = Mutex::new(None);
 #[cfg(feature = "kernel")]
-static CYW43_HOST_EAPOL_PENDING_EVENT: Mutex<Option<Cyw43PendingHostEapolEvent>> = Mutex::new(None);
+static CYW43_HOST_EAPOL_PENDING_EVENTS: Mutex<
+    heapless::Deque<Cyw43PendingHostEapolEvent, CYW43_HOST_EAPOL_PENDING_EVENT_CAP>,
+> = Mutex::new(heapless::Deque::new());
 #[cfg(feature = "kernel")]
 static CYW43_ACTIVE_PROMPT_POLL_REQUEST: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
@@ -721,6 +723,9 @@ struct Cyw43PendingHostEapolEvent {
     flags: u16,
     len: u16,
 }
+
+#[cfg(feature = "kernel")]
+const CYW43_HOST_EAPOL_PENDING_EVENT_CAP: usize = 8;
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -1700,6 +1705,42 @@ impl Cyw43HostEapolProgress {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_pending_host_eapol_event_matches(
+    pending: Cyw43PendingHostEapolEvent,
+    next: Cyw43PendingHostEapolEvent,
+) -> bool {
+    pending.event.event_type == next.event.event_type
+        && pending.event.status == next.event.status
+        && pending.event.reason == next.event.reason
+        && pending.event.auth_type == next.event.auth_type
+        && pending.event.addr == next.event.addr
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_store_pending_host_eapol_event_record(next: Cyw43PendingHostEapolEvent) {
+    let mut queue = CYW43_HOST_EAPOL_PENDING_EVENTS.lock();
+    let len = queue.len();
+    let mut retained =
+        heapless::Deque::<Cyw43PendingHostEapolEvent, CYW43_HOST_EAPOL_PENDING_EVENT_CAP>::new();
+
+    for _ in 0..len {
+        let Some(pending) = queue.pop_front() else {
+            break;
+        };
+        if !cyw43_pending_host_eapol_event_matches(pending, next) {
+            let _ = retained.push_back(pending);
+        }
+    }
+    while let Some(pending) = retained.pop_front() {
+        let _ = queue.push_back(pending);
+    }
+    if queue.len() == CYW43_HOST_EAPOL_PENDING_EVENT_CAP {
+        let _ = queue.pop_front();
+    }
+    let _ = queue.push_back(next);
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_store_pending_host_eapol_event(
     contract: DriverTaskContract,
     stage: &'static str,
@@ -1728,7 +1769,7 @@ fn cyw43_store_pending_host_eapol_event(
     let event_label = cyw43_host_eapol_association_event_label(event);
     let relevant = associated_update.is_some() || link_update.is_some() || event_label.is_some();
     if relevant {
-        *CYW43_HOST_EAPOL_PENDING_EVENT.lock() = Some(Cyw43PendingHostEapolEvent {
+        cyw43_store_pending_host_eapol_event_record(Cyw43PendingHostEapolEvent {
             event,
             flags,
             len: len.min(u16::MAX as usize) as u16,
@@ -1766,11 +1807,11 @@ fn cyw43_apply_pending_host_eapol_event(
     session: &mut Cyw43HostEapolSession,
     poll: usize,
 ) {
-    let pending = {
-        let mut guard = CYW43_HOST_EAPOL_PENDING_EVENT.lock();
-        guard.take()
-    };
-    if let Some(pending) = pending {
+    loop {
+        let pending = CYW43_HOST_EAPOL_PENDING_EVENTS.lock().pop_front();
+        let Some(pending) = pending else {
+            break;
+        };
         session.progress.record_event_frame(
             pending.flags,
             usize::from(pending.len),
@@ -10559,34 +10600,19 @@ fn cyw43_control_poll_progress_is_advisory(
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_service_data_once_for_control_window(
+fn cyw43_record_control_window_advisory_progress(
     contract: DriverTaskContract,
     stage: &'static str,
     advisory_completion: DriverTaskCompletionRecord,
-) -> bool {
-    let trace = cyw43_completion_rx_idle_trace(contract, advisory_completion);
-    if !cyw43_poll_completion_made_service_progress(advisory_completion, trace) {
-        return false;
-    }
-    let Some(completion) = poll_cyw43_driver_task_data_completion(CYW43_DATA_RX_STEADY_POLL_FLAGS)
-    else {
-        return false;
-    };
-    let serviced = preserve_driver_task_pre_poll_completion(
+) {
+    record_cyw43_runtime_completion(contract, advisory_completion);
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
         DriverTaskHotPath::Cyw43Wifi,
-        completion,
+        stage,
+        "poll-progress-advisory",
+        Some(advisory_completion),
     );
-    if serviced {
-        crate::hal::driver_task::emit_driver_task_resource_init_status(
-            contract,
-            DriverTaskHotPath::Cyw43Wifi,
-            stage,
-            "control-window-data-service",
-            Some(completion),
-        );
-    }
-    serviced
 }
 
 #[cfg(feature = "kernel")]
@@ -10837,7 +10863,7 @@ fn cyw43_poll_control_exchange_reply(
             return Err(Cyw43CommandSubmitError::Completion(completion));
         }
         if cyw43_control_poll_progress_is_advisory(stage, control_iovar, completion) {
-            let _ = cyw43_service_data_once_for_control_window(contract, stage, completion);
+            cyw43_record_control_window_advisory_progress(contract, stage, completion);
             continue;
         }
         if completion.code != DriverTaskCompletionCode::FrameReady.as_u16() {
@@ -11839,7 +11865,7 @@ fn reset_cyw43_control_plane_state() {
     CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
     CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
-    *CYW43_HOST_EAPOL_PENDING_EVENT.lock() = None;
+    CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
     clear_cyw43_active_prompt_poll();
     clear_cyw43_pending_control_replies();
     clear_cyw43_host_eapol_status_throttle();
@@ -15435,6 +15461,7 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
                 cyw43_pending_rx_token_occupied(),
             );
             submit_cyw43_arp_assist_if_needed(contract, &token.buffer[..token.len]);
+            drain_cyw43_post_secure_pending_eapol(contract, "pending-scavenge");
             return Some(token);
         }
         if let Some((flags, token)) = resume_cyw43_active_prompt_poll_for_data_path(contract) {
@@ -15453,6 +15480,7 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
                 false,
             );
             submit_cyw43_arp_assist_if_needed(contract, &token.buffer[..token.len]);
+            drain_cyw43_post_secure_pending_eapol(contract, "resume-scavenge");
             return Some(token);
         }
         if cyw43_active_descriptor_blocks_fresh_net_poll(contract) {
@@ -15484,9 +15512,30 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
             false,
         );
         submit_cyw43_arp_assist_if_needed(contract, &token.buffer[..token.len]);
+        drain_cyw43_post_secure_pending_eapol(contract, "poll-scavenge");
         return Some(token);
     }
     None
+}
+
+#[cfg(feature = "kernel")]
+fn drain_cyw43_post_secure_pending_eapol(contract: DriverTaskContract, action: &'static str) {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT || !cyw43_secure_carrier_ready() {
+        return;
+    }
+    let original_len = CYW43_PENDING_RX_QUEUE.lock().len();
+    for _ in 0..original_len {
+        let Some(pending) = CYW43_PENDING_RX_QUEUE.lock().pop_front() else {
+            break;
+        };
+        if consume_cyw43_post_secure_eapol_frame(contract, pending.flags, &pending.token, action) {
+            continue;
+        }
+        let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+        if queue.push_back(pending).is_err() {
+            record_cyw43_pending_rx_drop();
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -15810,10 +15859,45 @@ fn consume_cyw43_post_secure_eapol_frame(
 
 #[cfg(feature = "kernel")]
 fn take_cyw43_pending_rx_token() -> Option<(u16, DriverTaskNetRxToken)> {
-    CYW43_PENDING_RX_QUEUE
-        .lock()
-        .pop_front()
-        .map(|pending| (pending.flags, pending.token))
+    let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+    let (front, back) = queue.as_slices();
+    let mut selected_index = None;
+    let mut selected_priority = 0u8;
+
+    for (index, pending) in front.iter().chain(back.iter()).enumerate() {
+        let priority = cyw43_pending_rx_priority(pending.flags, &pending.token);
+        if selected_index.is_none() || priority > selected_priority {
+            selected_index = Some(index);
+            selected_priority = priority;
+        }
+    }
+    let pending = remove_cyw43_pending_rx_at(&mut queue, selected_index?)?;
+    Some((pending.flags, pending.token))
+}
+
+#[cfg(feature = "kernel")]
+fn remove_cyw43_pending_rx_at(
+    queue: &mut heapless::Deque<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>,
+    index: usize,
+) -> Option<DriverTaskNetPendingRxToken> {
+    let original_len = queue.len();
+    if index >= original_len {
+        return None;
+    }
+    for _ in 0..index {
+        let pending = queue.pop_front()?;
+        if queue.push_back(pending).is_err() {
+            return None;
+        }
+    }
+    let selected = queue.pop_front();
+    for _ in 0..original_len.saturating_sub(index + 1) {
+        let pending = queue.pop_front()?;
+        if queue.push_back(pending).is_err() {
+            return None;
+        }
+    }
+    selected
 }
 
 #[cfg(feature = "kernel")]
@@ -15851,6 +15935,12 @@ fn cyw43_pending_rx_token_store_possible(flags: u16, token: &DriverTaskNetRxToke
 #[cfg(feature = "kernel")]
 fn cyw43_pending_rx_priority(flags: u16, token: &DriverTaskNetRxToken) -> u8 {
     if cyw43_pre_secure_host_eapol_frame(flags, token) {
+        return 8;
+    }
+    if CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) == 0
+        && cyw43_frame_channel(flags) == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+        && cyw43_ethertype(&token.buffer[..token.len]) == Some(ETH_P_EAPOL)
+    {
         return 8;
     }
     if cyw43_frame_channel(flags) != DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA {
@@ -15940,24 +16030,20 @@ fn cyw43_evict_one_pending_rx_for(
     let Some(target_priority) = target_priority else {
         return false;
     };
-    let mut retained =
-        heapless::Deque::<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>::new();
-    let mut evicted = false;
-
-    for _ in 0..original_len {
-        let Some(pending) = queue.pop_front() else {
-            break;
-        };
-        if !evicted && cyw43_pending_rx_priority(pending.flags, &pending.token) == target_priority {
-            evicted = true;
-            continue;
-        }
-        let _ = retained.push_back(pending);
-    }
-    while let Some(pending) = retained.pop_front() {
-        let _ = queue.push_back(pending);
-    }
-    evicted
+    let (front, back) = queue.as_slices();
+    let Some(index) = front
+        .iter()
+        .chain(back.iter())
+        .take(original_len)
+        .enumerate()
+        .find_map(|(index, pending)| {
+            (cyw43_pending_rx_priority(pending.flags, &pending.token) == target_priority)
+                .then_some(index)
+        })
+    else {
+        return false;
+    };
+    remove_cyw43_pending_rx_at(queue, index).is_some()
 }
 
 #[cfg(feature = "kernel")]
@@ -17104,7 +17190,7 @@ mod tests {
         clear_cyw43_pending_control_replies();
         clear_cyw43_host_eapol_status_throttle();
         *CYW43_HOST_EAPOL_SESSION.lock() = None;
-        *CYW43_HOST_EAPOL_PENDING_EVENT.lock() = None;
+        CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
         clear_cyw43_active_prompt_poll();
     }
 
@@ -21573,7 +21659,50 @@ mod tests {
         assert!(session.progress.link_up);
         assert_eq!(session.progress.association_event, Some("link-up"));
         assert_eq!(session.progress.association_poll, 8);
-        assert!(CYW43_HOST_EAPOL_PENDING_EVENT.lock().is_none());
+        assert!(CYW43_HOST_EAPOL_PENDING_EVENTS.lock().is_empty());
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_pending_events_apply_ordered_burst() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status-label tests must serialize");
+        reset_cyw43_status_flags();
+
+        for (event_type, event_flags) in [
+            (CYW43_EVENT_ASSOC, 0),
+            (CYW43_EVENT_LINK, CYW43_EVENT_FLAG_LINK),
+        ] {
+            let packet =
+                test_cyw43_event_packet(event_type, CYW43_EVENT_STATUS_SUCCESS, event_flags);
+            let event_frame = test_cyw43_bdc_event_frame(&packet);
+            let mut token = DriverTaskNetRxToken {
+                len: event_frame.len(),
+                buffer: [0; MAX_FRAME_LEN],
+            };
+            token.buffer[..event_frame.len()].copy_from_slice(&event_frame);
+            assert!(cyw43_capture_event_frame_from_token(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                "test-event-burst",
+                DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT,
+                &token,
+            ));
+        }
+
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        cyw43_apply_pending_host_eapol_event(CYW43_WIFI_DRIVER_TASK_CONTRACT, &mut session, 5);
+
+        assert_eq!(session.progress.event_rx, 2);
+        assert!(session.progress.associated);
+        assert!(session.progress.link_up);
+        assert_eq!(session.progress.association_event, Some("assoc"));
+        assert_eq!(session.progress.association_poll, 6);
+        assert!(CYW43_HOST_EAPOL_PENDING_EVENTS.lock().is_empty());
         reset_cyw43_status_flags();
     }
 
@@ -25616,6 +25745,36 @@ mod tests {
         assert_eq!(CYW43_PENDING_RX_DROPS.load(Ordering::Acquire), 1);
 
         while take_cyw43_pending_rx_token().is_some() {}
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_pending_rx_delivery_prefers_high_priority_frame() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_data_plane_ready_for_test();
+        let assigned_ip = [192, 168, 86, 154];
+        CYW43_ASSIGNED_IPV4_BE.store(u32::from_be_bytes(assigned_ip), Ordering::Release);
+
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let multicast = test_cyw43_ipv6_multicast_frame();
+        let tcp = test_cyw43_host_tcp_frame(assigned_ip);
+        assert!(store_cyw43_pending_rx_token(
+            flags,
+            test_rx_token(&multicast)
+        ));
+        assert!(store_cyw43_pending_rx_token(
+            flags,
+            test_rx_token(&multicast)
+        ));
+        assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&tcp)));
+
+        let (_, token) =
+            take_cyw43_pending_rx_token().expect("high-priority pending frame is available");
+        token.consume(|bytes| assert_eq!(bytes, &tcp));
         reset_cyw43_status_flags();
     }
 
