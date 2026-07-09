@@ -11734,23 +11734,14 @@ where
         {
             if let Some(net) = self.net.as_ref() {
                 let status = net.status_report();
-                let counters = net.stats();
                 return format_message(format_args!(
-                    "active={} active_driver={} address_source={} dhcp_phase={} tcp_ready={} ip={} service_op={} service_reason={} service_progress=0x{:08x} service_rframe={} eapol_m1={} eapol_m2={} eapol_m3={} eapol_m4={}",
+                    "active={} active_driver={} address_source={} dhcp_phase={} tcp_ready={} ip={}",
                     status.active_interface,
                     status.active_driver,
                     status.address_source,
                     status.dhcp_phase,
                     if status.tcp_ready { "yes" } else { "no" },
-                    status.ip,
-                    counters.wifi_service_last_op,
-                    counters.wifi_service_last_reason,
-                    counters.wifi_service_last_progress,
-                    counters.wifi_service_last_rframe_len,
-                    counters.wifi_host_eapol_m1,
-                    counters.wifi_host_eapol_m2,
-                    counters.wifi_host_eapol_m3,
-                    counters.wifi_host_eapol_m4,
+                    status.ip
                 ));
             }
         }
@@ -19490,7 +19481,7 @@ mod tests {
         let emitted = pump.serial_mut().driver_mut().drain_tx();
         drop(pump);
 
-        assert_eq!(net.polls, 1);
+        assert_eq!(net.polls, NET_CYW43_IDLE_INGEST_POLLS + 1);
         assert!(!emitted.is_empty());
     }
 
