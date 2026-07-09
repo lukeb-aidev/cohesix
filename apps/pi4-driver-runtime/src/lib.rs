@@ -1158,8 +1158,12 @@ const CYW43_SDPCM_CONTROL_TX_BLOCK_BYTES: usize = 512;
 const CYW43_SDPCM_CONTROL_TX_EXT_HEADER_BYTES: usize =
     CYW43_SDPCM_HEADER_BYTES + CYW43_SDPCM_HWEXT_BYTES;
 const CYW43_BDC_HEADER_BYTES: usize = 4;
-const CYW43_SDPCM_DATA_TX_HEADER_BYTES: usize = CYW43_SDPCM_HEADER_BYTES;
-const CYW43_SDPCM_DATA_TX_BDC_OFFSET: usize = CYW43_SDPCM_DATA_TX_HEADER_BYTES;
+const CYW43_SDPCM_DATA_TX_HEADER_BYTES: usize = CYW43_SDPCM_HEADER_BYTES + CYW43_SDPCM_HWEXT_BYTES;
+const CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET: usize =
+    CYW43_SDPCM_HWHDR_BYTES + CYW43_SDPCM_HWEXT_BYTES;
+const CYW43_SDPCM_DATA_TX_PADDING_BYTES: usize = 6;
+const CYW43_SDPCM_DATA_TX_BDC_OFFSET: usize =
+    CYW43_SDPCM_DATA_TX_HEADER_BYTES + CYW43_SDPCM_DATA_TX_PADDING_BYTES;
 const CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES: usize =
     CYW43_SDPCM_DATA_TX_BDC_OFFSET + CYW43_BDC_HEADER_BYTES;
 const CYW43_CDC_HEADER_BYTES: usize = 16;
@@ -1222,6 +1226,8 @@ const CYW43_RX_FRAME_FLAG_MASK_DATA: u16 = 1 << CYW43_SDPCM_CHANNEL_DATA;
 const CYW43_RX_FRAME_FLAG_MASK_CONTROL: u16 = 1 << CYW43_SDPCM_CHANNEL_CONTROL;
 const CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT: u16 =
     (1 << CYW43_SDPCM_CHANNEL_CONTROL) | (1 << CYW43_SDPCM_CHANNEL_EVENT);
+const CYW43_RX_FRAME_FLAG_MASK_SERVICE: u16 =
+    CYW43_RX_FRAME_FLAG_MASK_DATA | CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT;
 const CYW43_BDC_VERSION: u8 = 2;
 const CYW43_BDC_VERSION_SHIFT: u8 = 4;
 const CYW43_ETH_HEADER_BYTES: usize = 14;
@@ -1243,7 +1249,7 @@ const CYW43_RX_PRIORITY_IPV4: u8 = 5;
 const CYW43_RX_PRIORITY_ARP: u8 = 6;
 const CYW43_RX_PRIORITY_DHCP: u8 = 7;
 const CYW43_RX_PRIORITY_PROTECTED_EAPOL: u8 = 8;
-const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 0;
+const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
 const CYW43_RX_QUEUE_CAP: usize = CYW43_RX_DRAIN_BUDGET;
 const CYW43_FUNCTION2_BLOCK_BYTES: usize = SDIO_FUNCTION2_BLOCK_SIZE as usize;
@@ -4410,7 +4416,7 @@ fn service_cyw43_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
             let before = Cyw43RuntimeServiceSnapshot::from_state(state);
             match cyw43_runtime_poll_rx_detailed_with_options(
                 state,
-                CYW43_RX_FRAME_FLAG_MASK_DATA,
+                CYW43_RX_FRAME_FLAG_MASK_SERVICE,
                 command.sequence,
                 false,
                 Cyw43AssertedEmptyPolicy::RequestRetransmit,
@@ -5371,7 +5377,7 @@ fn service_cyw43_descriptor_command(
             let credit_observations_before = state.sdpcm_credit_observations;
             match cyw43_runtime_poll_rx_detailed_with_options(
                 state,
-                CYW43_RX_FRAME_FLAG_MASK_DATA,
+                CYW43_RX_FRAME_FLAG_MASK_SERVICE,
                 command.sequence,
                 desc.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD != 0,
                 Cyw43AssertedEmptyPolicy::RequestRetransmit,
@@ -11188,7 +11194,7 @@ fn cyw43_runtime_tail_drain_after_data_frame(
     wanted_mask: u16,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
 ) {
-    if wanted_mask == CYW43_RX_FRAME_FLAG_MASK_DATA
+    if wanted_mask & CYW43_RX_FRAME_FLAG_MASK_DATA != 0
         && state.rx_queue_count < CYW43_RX_QUEUE_CAP as u8
     {
         let _ = cyw43_runtime_read_rframe_if_present_with_budget(
@@ -13177,13 +13183,27 @@ const fn cyw43_control_rx_remainder_request_len(
 }
 
 fn cyw43_write_sdpcm_data_tx_header(offset: usize, total_len: usize, seq: u8) {
-    write_sdpcm_header(
-        offset,
-        total_len,
-        CYW43_SDPCM_DATA_TX_BDC_OFFSET,
-        seq,
-        CYW43_SDPCM_CHANNEL_DATA,
+    let total = total_len as u16;
+    write_ring_byte(offset, (total & 0xff) as u8);
+    write_ring_byte(offset + 1, (total >> 8) as u8);
+    let inv = !total;
+    write_ring_byte(offset + 2, (inv & 0xff) as u8);
+    write_ring_byte(offset + 3, (inv >> 8) as u8);
+    write_ring_u32(
+        offset + CYW43_SDPCM_HWHDR_BYTES,
+        (total_len.saturating_sub(CYW43_SDPCM_HWHDR_BYTES) as u32) | CYW43_SDPCM_LAST_FRAME,
     );
+    write_ring_u32(offset + CYW43_SDPCM_HWHDR_BYTES + 4, 0);
+    write_ring_u32(
+        offset + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET,
+        u32::from(seq)
+            | (u32::from(CYW43_SDPCM_CHANNEL_DATA) << 8)
+            | ((CYW43_SDPCM_DATA_TX_BDC_OFFSET as u32) << 24),
+    );
+    write_ring_u32(offset + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET + 4, 0);
+    for index in CYW43_SDPCM_DATA_TX_HEADER_BYTES..CYW43_SDPCM_DATA_TX_BDC_OFFSET {
+        write_ring_byte(offset + index, 0);
+    }
 }
 
 fn cyw43_bdc_priority_for_runtime_packet(offset: usize, len: usize) -> u8 {
@@ -27952,8 +27972,8 @@ mod tests {
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + m2_frame.len();
         let request_len = cyw43_data_tx_request_len_default(total_len);
-        assert_eq!(total_len, 151);
-        assert_eq!(request_len, 152);
+        assert_eq!(total_len, 165);
+        assert_eq!(request_len, 168);
         assert_eq!(service_command(0, cyw43_descriptor_command(176)), {
             let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 176,
@@ -27977,6 +27997,8 @@ mod tests {
             read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_BDC_OFFSET + 1),
             CYW43_HOST_EAPOL_BDC_PRIORITY
         );
+        let sw_header = read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET);
+        assert_eq!((sw_header >> 24) as usize, CYW43_SDPCM_DATA_TX_BDC_OFFSET);
         assert_eq!(
             read_frame_prefix::<135>(DriverFrameDescriptor {
                 offset: (CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES) as u32,
@@ -28936,7 +28958,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_data_tx_uses_linux_short_header_and_eapol_priority() {
+    fn cyw43_data_tx_uses_linux_extended_header_and_eapol_priority() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -28963,18 +28985,29 @@ mod tests {
         );
         assert_eq!(state.sdpcm_seq, 10);
         assert_eq!(state.tx_frames, 1);
+        let packet_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + packet.len();
+        let hw_len = u16::from(read_ring_byte(CYW43_SDPCM_TX_OFFSET))
+            | (u16::from(read_ring_byte(CYW43_SDPCM_TX_OFFSET + 1)) << 8);
+        assert_eq!(usize::from(hw_len), packet_len);
         assert_eq!(
-            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES),
-            9
+            read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES),
+            ((packet_len - CYW43_SDPCM_HWHDR_BYTES) as u32) | CYW43_SDPCM_LAST_FRAME
         );
         assert_eq!(
-            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 1) & 0x0f,
-            CYW43_SDPCM_CHANNEL_DATA
+            read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 4),
+            0
         );
+        let sw_header = read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET);
+        assert_eq!(sw_header & 0xff, 9);
+        assert_eq!((sw_header >> 8) & 0x0f, u32::from(CYW43_SDPCM_CHANNEL_DATA));
+        assert_eq!((sw_header >> 24) as usize, CYW43_SDPCM_DATA_TX_BDC_OFFSET);
         assert_eq!(
-            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 3) as usize,
-            CYW43_SDPCM_DATA_TX_BDC_OFFSET
+            read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET + 4),
+            0
         );
+        for index in CYW43_SDPCM_DATA_TX_HEADER_BYTES..CYW43_SDPCM_DATA_TX_BDC_OFFSET {
+            assert_eq!(read_ring_byte(CYW43_SDPCM_TX_OFFSET + index), 0);
+        }
         assert_eq!(
             read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_BDC_OFFSET + 3),
             0
@@ -29825,7 +29858,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_data_poll_reports_progress_when_service_turn_queues_control() {
+    fn cyw43_steady_rx_poll_returns_event_without_control_window() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -29854,24 +29887,10 @@ mod tests {
             op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         });
-        let progress = service_command(0, cyw43_descriptor_command(285));
-        assert_eq!(progress.sequence, 285);
-        assert_eq!(progress.code, COMPLETION_PROGRESS);
-        assert_ne!(progress.result & CYW43_SERVICE_PROGRESS_QUEUE_DEPTH, 0);
-        assert_eq!(progress.frame.flags, cyw43_sdpcm_credit_proof_flags(4, 7));
-        CYW43_RUNTIME_STATE.with_ref(|state| {
-            assert_eq!(state.rx_queue_count, 1);
-            assert_eq!(state.sdpcm_seq_max, 7);
-        });
-
-        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
-            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
-            ..DriverRuntimeCyw43CommandDescriptor::empty()
-        });
         assert_eq!(
-            service_command(0, cyw43_descriptor_command(286)),
+            service_command(0, cyw43_descriptor_command(285)),
             DriverTaskCompletionRecord::frame_ready_with_descriptor(
-                286,
+                285,
                 DriverFrameDescriptor {
                     offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                     len: payload.len() as u16,
@@ -29879,6 +29898,10 @@ mod tests {
                 }
             )
         );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.rx_queue_count, 0);
+            assert_eq!(state.sdpcm_seq_max, 7);
+        });
         assert_eq!(
             read_frame_prefix::<14>(DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,

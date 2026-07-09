@@ -1553,7 +1553,8 @@ fn cyw43_runtime_service_pre_poll_ready_for(
 ) -> bool {
     contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
         && active_interface == "wifi"
-        && (wifi_host_eapol_blocks_data_path(bringup_status)
+        && !matches!(mode, NetMode::Off)
+        && (cyw43_runtime_service_live_bringup_status(bringup_status)
             || cyw43_flush_pre_poll_data_ready_for(
                 contract,
                 active_interface,
@@ -1563,6 +1564,20 @@ fn cyw43_runtime_service_pre_poll_ready_for(
                 dhcp_phase,
                 dhcp_socket_ready,
             ))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_runtime_service_live_bringup_status(bringup_status: Option<&'static str>) -> bool {
+    matches!(
+        bringup_status,
+        Some(
+            "wifi-associating"
+                | "wifi-host-eapol-pending"
+                | "wifi-host-eapol-required"
+                | "wifi-link-down"
+                | "wifi-data-rx-admission-blocked"
+        )
+    )
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -3973,6 +3988,8 @@ impl<D: NetDevice> NetStack<D> {
                 CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS,
             );
             activity |= self.sync_interface_hardware_addr(now_ms);
+            activity |=
+                self.service_cyw43_data_pre_poll_burst_budgeted(D::driver_task_contract(), budget);
             activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
             if !wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
                 if self.budgeted_dhcp_service_required() {
@@ -8717,6 +8734,51 @@ mod tests {
             Some("wifi-host-eapol-required"),
             Some(DhcpPhase::Bound),
             true
+        ));
+        assert!(cyw43_runtime_service_pre_poll_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            Some("wifi-associating"),
+            None,
+            false
+        ));
+        assert!(cyw43_runtime_service_pre_poll_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            Some("wifi-link-down"),
+            None,
+            false
+        ));
+        assert!(cyw43_runtime_service_pre_poll_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            Some("wifi-data-rx-admission-blocked"),
+            None,
+            false
+        ));
+        assert!(!cyw43_runtime_service_pre_poll_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Off,
+            Ipv4Address::UNSPECIFIED,
+            Some("wifi-associating"),
+            None,
+            false
+        ));
+        assert!(!cyw43_runtime_service_pre_poll_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            Some("driver-task-ring-client"),
+            None,
+            false
         ));
         assert!(cyw43_flush_pre_poll_data_ready_for(
             cyw43,

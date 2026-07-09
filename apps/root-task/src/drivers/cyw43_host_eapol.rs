@@ -67,7 +67,7 @@ const WPA_KEK_LEN: usize = 16;
 const WPA_TK_LEN: usize = 16;
 const WPA_PTK_LEN: usize = 48;
 const WPA_MIC_LEN: usize = 16;
-const WSEC_PMK_LEN: usize = 32;
+pub const WSEC_PMK_LEN: usize = 32;
 const WSEC_KEY_DATA_LEN: usize = 32;
 const WSEC_KEY_INDEX_OFFSET: usize = 0;
 const WSEC_KEY_LEN_OFFSET: usize = 4;
@@ -840,6 +840,12 @@ pub fn write_eapol_start_frame(
     frame[ETH_HEADER_LEN + 1] = EAPOL_PACKET_TYPE_START;
     put_u16_be(frame, ETH_HEADER_LEN + 2, 0);
     Ok(len)
+}
+
+pub fn derive_wpa2_psk_pmk(ssid: &[u8], psk: &[u8]) -> Result<[u8; WSEC_PMK_LEN], &'static str> {
+    let mut pmk = [0u8; WSEC_PMK_LEN];
+    fill_wpa2_psk_pmk(ssid, psk, &mut pmk)?;
+    Ok(pmk)
 }
 
 fn fill_wpa2_psk_pmk(
