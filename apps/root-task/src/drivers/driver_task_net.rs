@@ -89,7 +89,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_ENABLED,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F2_BLOCK_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY, DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
-    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START, DRIVER_RUNTIME_ENGINE_INIT_AUX,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START,
+    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED, DRIVER_RUNTIME_ENGINE_INIT_AUX,
     DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED,
@@ -124,14 +126,15 @@ const CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES: usize =
     CYW43_RUNTIME_NESTED_SDIO_NO_REPLY_RESUMES;
 const CYW43_RUNTIME_CONTROL_FRAME_NO_REPLY_RESUMES: usize =
     CYW43_RUNTIME_NESTED_SDIO_NO_REPLY_RESUMES;
+const CYW43_BOOTSTRAP_CONTROL_PROMPT_RESUME_TIMEOUT_MS: u64 = 5_000;
 const CYW43_RUNTIME_FIRMWARE_RELEASE_NO_REPLY_RESUMES: usize =
     CYW43_RUNTIME_NESTED_SDIO_NO_REPLY_RESUMES;
-const CYW43_TXGLOMALIGN_RUNTIME_EXCHANGE: bool = true;
 const CYW43_TXGLOMALIGN_PRE_TX_DRAIN: bool = true;
 const CYW43_TXGLOMALIGN_PRIMARY_ALIGN: u32 = 8;
 const CYW43_TXGLOMALIGN_FALLBACK_ALIGN: u32 = 4;
 const CYW43_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL: u16 = 0x5103;
 const CYW43_CONTROL_FRAME_DETAIL: u16 = 0x5306;
+const CYW43_ETH_TX_DETAIL: u16 = 0x5307;
 const CYW43_SDIO_POST_RELEASE_HT_CLOCK_DETAIL: u16 = 0x532a;
 const CYW43_SDIO_FUNCTION2_NOT_READY_DETAIL: u16 = 0x532b;
 // One same-descriptor replay keeps the first SDIO owner fault visible while
@@ -447,6 +450,10 @@ static CYW43_SERVICE_LAST_RFRAME: AtomicU32 = AtomicU32::new(0);
 static CYW43_SERVICE_LAST_SOURCE_FLAGS: AtomicU32 = AtomicU32::new(0);
 static CYW43_SERVICE_LAST_PRE_SOURCE: AtomicU32 = AtomicU32::new(0);
 static CYW43_SERVICE_LAST_POST_SOURCE: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_GENERATION: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_CONSUMED: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_EPOCH_ERRORS: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_SEQUENCE_ERRORS: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_RX: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_TX: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_TARGET_HW_ZEROED: AtomicU32 = AtomicU32::new(0);
@@ -456,6 +463,63 @@ static CYW43_CONTROL_PLANE_READY: AtomicU32 = AtomicU32::new(0);
 static CYW43_ASSOCIATED: AtomicU32 = AtomicU32::new(0);
 static CYW43_LINK_UP: AtomicU32 = AtomicU32::new(0);
 static CYW43_CONNECTION_EPOCH: AtomicU32 = AtomicU32::new(0);
+static CYW43_GENERATION_RECOVERY_ACTIVE: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+struct Cyw43RetainedRecoveryContext {
+    config: ConsoleNetConfig,
+    bundle: crate::hal::WifiFirmwareBundle<'static>,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43RetainedRecoveryContext {
+    fn acquire<H>(hal: &H, config: ConsoleNetConfig) -> Result<Self, DriverTaskNetError>
+    where
+        H: Hardware<Error = HalError>,
+    {
+        let bundle = hal
+            .wifi_firmware_bundle()
+            .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
+        bundle
+            .validate()
+            .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
+        Ok(Self { config, bundle })
+    }
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_RETAINED_RECOVERY_CONTEXT: Mutex<Option<Cyw43RetainedRecoveryContext>> =
+    Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43GenerationRecoveryPhase {
+    Start,
+    EngineReady,
+    FirmwareReady,
+    ControlReady,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43GenerationRecoveryPhase {
+    const fn advance(self, next: Self) -> Option<Self> {
+        if matches!(
+            (self, next),
+            (Self::Start, Self::EngineReady)
+                | (Self::EngineReady, Self::FirmwareReady)
+                | (Self::FirmwareReady, Self::ControlReady)
+        ) {
+            Some(next)
+        } else {
+            None
+        }
+    }
+
+    const fn ready(self) -> bool {
+        matches!(self, Self::ControlReady)
+    }
+}
 // Zero means that no disconnect-driven rejoin is pending. Non-zero values are
 // the connection epoch plus one, widened to u64 so every u32 epoch has a unique
 // token even when the connection epoch wraps. The root event/service pump is
@@ -506,6 +570,8 @@ static CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_DATA_TX_TEST_AMBIGUOUS_FAULTS_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
@@ -591,6 +657,8 @@ static CYW43_TEST_CONTROL_POLL_COMPLETIONS: Mutex<
 static CYW43_TEST_CONTROL_POLL_CALLS: AtomicU32 = AtomicU32::new(0);
 static CYW43_BCDC_IOCTL_ID: AtomicU32 = AtomicU32::new(0);
 static CYW43_RUNTIME_MAC: Mutex<EthernetAddress> = Mutex::new(CYW43_DRIVER_TASK_MAC);
+#[cfg(feature = "kernel")]
+static CYW43_BOOTSTRAP_CONTROL_ACTIVE: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static CYW43_HOST_EAPOL_SESSION: Mutex<Option<Cyw43HostEapolSession>> = Mutex::new(None);
 #[cfg(feature = "kernel")]
@@ -820,7 +888,9 @@ const CYW43_RX_IDLE_TRACE_VERSION_V6: u16 = 6;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_VERSION_V7: u16 = 7;
 #[cfg(feature = "kernel")]
-const CYW43_RX_IDLE_TRACE_VERSION: u16 = 8;
+const CYW43_RX_IDLE_TRACE_VERSION_V8: u16 = 8;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_VERSION: u16 = 9;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_BYTES: usize = 40;
 #[cfg(feature = "kernel")]
@@ -837,6 +907,8 @@ const CYW43_RX_IDLE_TRACE_V6_BYTES: usize = 156;
 const CYW43_RX_IDLE_TRACE_V7_BYTES: usize = 172;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_V8_BYTES: usize = 180;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_V9_BYTES: usize = 192;
 #[cfg(feature = "kernel")]
 const CYW43_SERVICE_CHANNEL_NONE: u16 = 0xffff;
 #[cfg(feature = "kernel")]
@@ -876,6 +948,7 @@ const CYW43_RX_IDLE_TRACE_FIFO_FLAG_READBACK_MATCH: u16 = 1 << 2;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Cyw43RxIdleTrace {
     valid: bool,
+    version: u16,
     flags: u16,
     detail: u16,
     probe_len: u16,
@@ -930,7 +1003,38 @@ struct Cyw43RxIdleTrace {
     service_credit_observations: u32,
     rx_irq_episode_preserves: u16,
     rx_irq_episode_rearms: u32,
+    dpc_events_consumed: u32,
+    dpc_epoch_errors: u32,
+    dpc_sequence_errors: u32,
 }
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cyw43DpcClientCounters {
+    consumed: u32,
+    epoch_errors: u32,
+    sequence_errors: u32,
+}
+
+/// Compact Linux-equivalent CYW43/SDIO DPC service proof.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Cyw43SdioDpcDiagnostic {
+    pub generation: u32,
+    pub captures: u32,
+    pub published: u32,
+    pub consumed: u32,
+    pub rearms: u32,
+    pub overruns: u32,
+    pub epoch_errors: u32,
+    pub sequence_errors: u32,
+    pub ack_failures: u32,
+    pub poisoned: bool,
+    pub masked: bool,
+}
+
+#[cfg(all(feature = "kernel", test))]
+static CYW43_DPC_DIAGNOSTIC_TEST_OVERRIDE: Mutex<Option<Cyw43SdioDpcDiagnostic>> = Mutex::new(None);
 
 #[cfg(feature = "kernel")]
 fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
@@ -948,6 +1052,7 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
         && version != CYW43_RX_IDLE_TRACE_VERSION_V5
         && version != CYW43_RX_IDLE_TRACE_VERSION_V6
         && version != CYW43_RX_IDLE_TRACE_VERSION_V7
+        && version != CYW43_RX_IDLE_TRACE_VERSION_V8
         && version != CYW43_RX_IDLE_TRACE_VERSION
     {
         return None;
@@ -970,11 +1075,15 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
     if version == CYW43_RX_IDLE_TRACE_VERSION_V7 && bytes.len() < CYW43_RX_IDLE_TRACE_V7_BYTES {
         return None;
     }
-    if version == CYW43_RX_IDLE_TRACE_VERSION && bytes.len() < CYW43_RX_IDLE_TRACE_V8_BYTES {
+    if version == CYW43_RX_IDLE_TRACE_VERSION_V8 && bytes.len() < CYW43_RX_IDLE_TRACE_V8_BYTES {
+        return None;
+    }
+    if version == CYW43_RX_IDLE_TRACE_VERSION && bytes.len() < CYW43_RX_IDLE_TRACE_V9_BYTES {
         return None;
     }
     Some(Cyw43RxIdleTrace {
         valid: true,
+        version,
         flags: cyw43_read_le_u16(bytes, 6)?,
         detail: cyw43_read_le_u16(bytes, 8)?,
         probe_len: cyw43_read_le_u16(bytes, 10)?,
@@ -1029,7 +1138,92 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
         service_credit_observations: cyw43_read_le_u32(bytes, 168).unwrap_or(0),
         rx_irq_episode_preserves: cyw43_read_le_u16(bytes, 172).unwrap_or(0),
         rx_irq_episode_rearms: cyw43_read_le_u32(bytes, 176).unwrap_or(0),
+        dpc_events_consumed: cyw43_read_le_u32(bytes, 180).unwrap_or(0),
+        dpc_epoch_errors: cyw43_read_le_u32(bytes, 184).unwrap_or(0),
+        dpc_sequence_errors: cyw43_read_le_u32(bytes, 188).unwrap_or(0),
     })
+}
+
+#[cfg(feature = "kernel")]
+fn cache_cyw43_dpc_client_counters(trace: Cyw43RxIdleTrace) {
+    if trace.version != CYW43_RX_IDLE_TRACE_VERSION {
+        return;
+    }
+    let Some(ring) = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot() else {
+        return;
+    };
+    CYW43_DPC_CLIENT_CONSUMED.store(trace.dpc_events_consumed, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_EPOCH_ERRORS.store(trace.dpc_epoch_errors, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(trace.dpc_sequence_errors, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_GENERATION.store(ring.epoch, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_dpc_client_counters(generation: u32) -> Option<Cyw43DpcClientCounters> {
+    if CYW43_DPC_CLIENT_GENERATION.load(Ordering::Acquire) != generation {
+        return None;
+    }
+    let counters = Cyw43DpcClientCounters {
+        consumed: CYW43_DPC_CLIENT_CONSUMED.load(Ordering::Relaxed),
+        epoch_errors: CYW43_DPC_CLIENT_EPOCH_ERRORS.load(Ordering::Relaxed),
+        sequence_errors: CYW43_DPC_CLIENT_SEQUENCE_ERRORS.load(Ordering::Relaxed),
+    };
+    if CYW43_DPC_CLIENT_GENERATION.load(Ordering::Acquire) == generation {
+        Some(counters)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_dpc_diagnostic_from(
+    ring: crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot,
+    client: Cyw43DpcClientCounters,
+) -> Cyw43SdioDpcDiagnostic {
+    // The live ring consumer is authoritative for the emitted count. Any
+    // mismatch means the completion sample raced the stable ring snapshot and
+    // could also omit later client errors, so the proof must be rerun.
+    let client_consumer_mismatch = client.consumed != ring.consumer;
+    let masked = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0;
+    Cyw43SdioDpcDiagnostic {
+        generation: ring.epoch,
+        captures: ring.producer.saturating_add(ring.overruns),
+        published: ring.producer,
+        consumed: ring.consumer,
+        rearms: if masked {
+            ring.consumer.saturating_sub(1)
+        } else {
+            ring.consumer
+        },
+        overruns: ring.overruns,
+        epoch_errors: client.epoch_errors,
+        sequence_errors: client.sequence_errors,
+        ack_failures: ring.ack_failures,
+        poisoned: client_consumer_mismatch
+            || client.epoch_errors != 0
+            || ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED != 0,
+        masked,
+    }
+}
+
+/// Return the current isolated SDIO-owner/CYW43-client DPC service proof.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_sdio_dpc_diagnostic() -> Option<Cyw43SdioDpcDiagnostic> {
+    #[cfg(test)]
+    if let Some(snapshot) = *CYW43_DPC_DIAGNOSTIC_TEST_OVERRIDE.lock() {
+        return Some(snapshot);
+    }
+    let ring = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()?;
+    let client = cyw43_dpc_client_counters(ring.epoch)?;
+    Some(cyw43_sdio_dpc_diagnostic_from(ring, client))
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn set_cyw43_sdio_dpc_diagnostic_test_override(
+    snapshot: Option<Cyw43SdioDpcDiagnostic>,
+) {
+    *CYW43_DPC_DIAGNOSTIC_TEST_OVERRIDE.lock() = snapshot;
 }
 
 #[cfg(feature = "kernel")]
@@ -1172,7 +1366,9 @@ fn cyw43_completion_rx_idle_trace(
     completion: DriverTaskCompletionRecord,
 ) -> Option<Cyw43RxIdleTrace> {
     let bytes = crate::hal::driver_task::driver_task_ring_frame_bytes(contract, completion.frame)?;
-    cyw43_rx_idle_trace(bytes)
+    let trace = cyw43_rx_idle_trace(bytes)?;
+    cache_cyw43_dpc_client_counters(trace);
+    Some(trace)
 }
 
 #[cfg(feature = "kernel")]
@@ -1887,6 +2083,76 @@ fn keep_cyw43_reauthentication_pending() {
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_fault_invalidates_root_generation(detail: u16) -> bool {
+    matches!(detail, CYW43_CONTROL_FRAME_DETAIL | CYW43_ETH_TX_DETAIL)
+}
+
+/// Return the current root-visible CYW43 connection generation.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_connection_generation() -> u32 {
+    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire)
+}
+
+#[cfg(feature = "kernel")]
+fn invalidate_cyw43_root_generation_for_ambiguous_fault(detail: u16) -> Option<u32> {
+    if !cyw43_fault_invalidates_root_generation(detail) {
+        return None;
+    }
+    Some(invalidate_cyw43_root_generation_for_recovery())
+}
+
+#[cfg(feature = "kernel")]
+fn invalidate_cyw43_root_generation_for_recovery() -> u32 {
+    let next_epoch = CYW43_CONNECTION_EPOCH
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1);
+    CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(cyw43_epoch_token(next_epoch), Ordering::Release);
+    CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
+    CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
+    CYW43_ASSOCIATED.store(0, Ordering::Release);
+    CYW43_LINK_UP.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_RX.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_START.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_M1.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_M2.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_M3.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_M4.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_PTK.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_GTK.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+    CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+    CYW43_FIRMWARE_SUPPLICANT_ACTIVE.store(0, Ordering::Release);
+    CYW43_FIRMWARE_PSK_SUP_COMPLETE.store(0, Ordering::Release);
+    CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
+    CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTH_ATTEMPTED.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTHORIZED.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTH_MAC_HI.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SCB_AUTH_MAC_LO.store(0, Ordering::Release);
+    CYW43_ASSIGNED_IPV4_BE.store(0, Ordering::Release);
+    CYW43_POST_DHCP_RX_ANY.store(0, Ordering::Release);
+    CYW43_POST_DHCP_RX_UNICAST.store(0, Ordering::Release);
+    CYW43_POST_DHCP_RX_ASSIGNED_ARP.store(0, Ordering::Release);
+    CYW43_POST_DHCP_RX_IPV4.store(0, Ordering::Release);
+    CYW43_POST_DHCP_RX_ICMP.store(0, Ordering::Release);
+    CYW43_POST_DHCP_RX_TCP.store(0, Ordering::Release);
+    CYW43_POST_DHCP_RX_LAST_ETHERTYPE.store(0, Ordering::Release);
+    CYW43_POST_DHCP_RX_LAST_LEN.store(0, Ordering::Release);
+    CYW43_ARP_TARGET_HW_ZEROED.store(0, Ordering::Release);
+    *CYW43_HOST_EAPOL_SESSION.lock() = None;
+    CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
+    CYW43_PENDING_RX_QUEUE.lock().clear();
+    clear_cyw43_pending_control_replies();
+    clear_cyw43_active_prompt_poll();
+    clear_cyw43_host_eapol_status_throttle();
+    clear_cyw43_unproven_tx_window();
+    CYW43_BCDC_IOCTL_ID.store(0, Ordering::Release);
+
+    next_epoch
+}
+
+#[cfg(feature = "kernel")]
 fn transition_cyw43_host_eapol_to_reauthentication() {
     if CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) == 0
         && CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire) == 0
@@ -2444,7 +2710,11 @@ fn cyw43_control_tx_submit_retry_completion(
         && status & (SDHCI_INT_ERROR | SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC) != 0)
         || (failure_stage == 5 && sdio_transfer_failure_r5(completion.result) != 0);
     if completion.detail == CYW43_CONTROL_FRAME_DETAIL {
-        return retryable_transfer_fault.then_some(completion);
+        // The runtime wraps an issued-unknown Function-2 write as a typed
+        // CONTROL_FRAME fault. Replaying it after SDIO reprime could submit the
+        // same SDPCM sequence twice. Only faults that prove the write was not
+        // issued may enter the existing same-command recovery below.
+        return None;
     }
     if !cyw43_control_tx_detail_allows_submit_retry(stage, completion.detail) {
         return None;
@@ -2885,7 +3155,7 @@ where
                 "begin",
                 None,
             );
-            if let Err(err) = init_sdio_host_linked_runtime(hal) {
+            if let Err(err) = init_sdio_host_linked_runtime() {
                 crate::hal::driver_task::emit_driver_task_resource_init_status(
                     SDIO_HOST_DRIVER_TASK_CONTRACT,
                     DriverTaskHotPath::SdioHost,
@@ -2912,6 +3182,7 @@ where
             1
         };
         let mut initialized = false;
+        let mut engine_completion = None;
         for attempt in 0..max_engine_init_attempts {
             let replay_stage = if attempt == 0 {
                 "engine-init"
@@ -2925,6 +3196,7 @@ where
             };
             emit_net_driver_task_replay_status(config, hot_path, replay_stage, "begin");
             let completion = run_driver_task_net_engine_init_service(contract, command);
+            engine_completion = completion;
             initialized = completion.is_some_and(|completion| {
                 completion.code == DriverTaskCompletionCode::Progress.as_u16()
                     && completion.result == 1
@@ -2994,6 +3266,39 @@ where
                     );
                 }
                 DriverTaskHotPath::Cyw43Wifi => {
+                    *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
+                    let Some(engine_completion) = engine_completion else {
+                        return Err(DriverTaskNetError::RuntimeInit(
+                            "cyw43-sdio-producer-handoff-completion",
+                        ));
+                    };
+                    if !crate::hal::driver_task::handoff_sdio_command_ring_to_cyw43(
+                        engine_completion,
+                    ) {
+                        crate::hal::driver_task::emit_driver_task_resource_init_status(
+                            contract,
+                            hot_path,
+                            "cyw43-sdio-producer-handoff",
+                            "failed",
+                            None,
+                        );
+                        emit_net_driver_task_replay_status(
+                            config,
+                            hot_path,
+                            "cyw43-sdio-producer-handoff",
+                            "failed",
+                        );
+                        return Err(DriverTaskNetError::RuntimeInit(
+                            "cyw43-sdio-producer-handoff",
+                        ));
+                    }
+                    crate::hal::driver_task::emit_driver_task_resource_init_status(
+                        contract,
+                        hot_path,
+                        "cyw43-sdio-producer-handoff",
+                        "ready",
+                        None,
+                    );
                     crate::hal::driver_task::emit_driver_task_resource_init_status(
                         contract,
                         hot_path,
@@ -3002,7 +3307,32 @@ where
                         None,
                     );
                     emit_net_driver_task_replay_status(config, hot_path, "cyw43-firmware", "begin");
-                    if let Err(err) = complete_cyw43_linked_runtime_firmware(hal, contract) {
+                    let recovery_context = match Cyw43RetainedRecoveryContext::acquire(hal, config)
+                    {
+                        Ok(context) => context,
+                        Err(err) => {
+                            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                                contract,
+                                hot_path,
+                                "cyw43-firmware",
+                                "failed",
+                                None,
+                            );
+                            emit_net_driver_task_replay_status(
+                                config,
+                                hot_path,
+                                "cyw43-firmware",
+                                "failed",
+                            );
+                            return Err(err);
+                        }
+                    };
+                    *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = Some(recovery_context);
+                    if let Err(err) = complete_cyw43_linked_runtime_firmware_with_bundle(
+                        contract,
+                        recovery_context.bundle,
+                    ) {
+                        *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
                         crate::hal::driver_task::emit_driver_task_resource_init_status(
                             contract,
                             hot_path,
@@ -3035,6 +3365,7 @@ where
                     );
                     if !crate::hal::driver_task::register_driver_task_runtime_owner_state(hot_path)
                     {
+                        *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
                         crate::hal::driver_task::emit_driver_task_resource_init_status(
                             contract,
                             hot_path,
@@ -3050,7 +3381,6 @@ where
                         );
                         return Err(DriverTaskNetError::RuntimeInit("cyw43-owner-state"));
                     }
-                    CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
                     crate::hal::driver_task::emit_driver_task_resource_init_status(
                         contract,
                         hot_path,
@@ -3075,7 +3405,12 @@ where
                         "cyw43-control-plane",
                         "begin",
                     );
-                    if let Err(err) = complete_cyw43_linked_runtime_control_plane(hal, config) {
+                    if let Err(err) = complete_cyw43_linked_runtime_control_plane_with_bundle(
+                        config,
+                        recovery_context.bundle,
+                        Cyw43ControlPlaneResetMode::Initial,
+                    ) {
+                        *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
                         crate::hal::driver_task::emit_driver_task_resource_init_status(
                             contract,
                             hot_path,
@@ -3104,6 +3439,7 @@ where
                         "cyw43-control-plane",
                         "ready",
                     );
+                    CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
                 }
                 _ => {}
             }
@@ -3141,16 +3477,10 @@ fn driver_task_net_engine_init_command(
 }
 
 #[cfg(feature = "kernel")]
-fn complete_cyw43_linked_runtime_firmware<H>(
-    hal: &mut H,
+fn complete_cyw43_linked_runtime_firmware_with_bundle(
     contract: DriverTaskContract,
-) -> Result<(), DriverTaskNetError>
-where
-    H: Hardware<Error = HalError>,
-{
-    let bundle = hal
-        .wifi_firmware_bundle()
-        .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
+    bundle: crate::hal::WifiFirmwareBundle<'static>,
+) -> Result<(), DriverTaskNetError> {
     bundle
         .validate()
         .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
@@ -3165,7 +3495,6 @@ where
     loop {
         let result = if let Some((resume_offset, force_resume_byte_mode)) = next_resume.take() {
             complete_cyw43_linked_runtime_firmware_from_offset(
-                hal,
                 contract,
                 bundle,
                 reset_vector,
@@ -3173,7 +3502,7 @@ where
                 force_resume_byte_mode,
             )
         } else {
-            complete_cyw43_linked_runtime_firmware_once(hal, contract, bundle, reset_vector)
+            complete_cyw43_linked_runtime_firmware_once(contract, bundle, reset_vector)
         };
         match result {
             Ok(()) => {
@@ -3217,7 +3546,7 @@ where
                     "sdio-owner-replay",
                     Some(completion),
                 );
-                replay_sdio_host_linked_runtime_preserving_hal(hal, "cyw43-firmware-recover")?;
+                replay_sdio_host_linked_runtime("cyw43-firmware-recover")?;
                 recovery_attempts = recovery_attempts.saturating_add(1);
                 if let Some(resume_offset) = resume_offset {
                     emit_cyw43_runtime_firmware_recovery(
@@ -3242,21 +3571,47 @@ where
 }
 
 #[cfg(feature = "kernel")]
-fn complete_cyw43_linked_runtime_control_plane<H>(
-    hal: &mut H,
+struct Cyw43BootstrapControlScope;
+
+#[cfg(feature = "kernel")]
+impl Cyw43BootstrapControlScope {
+    fn enter() -> Self {
+        CYW43_BOOTSTRAP_CONTROL_ACTIVE.store(1, Ordering::Release);
+        Self
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl Drop for Cyw43BootstrapControlScope {
+    fn drop(&mut self) {
+        CYW43_BOOTSTRAP_CONTROL_ACTIVE.store(0, Ordering::Release);
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43ControlPlaneResetMode {
+    Initial,
+    PreserveGeneration,
+}
+
+#[cfg(feature = "kernel")]
+fn complete_cyw43_linked_runtime_control_plane_with_bundle(
     config: ConsoleNetConfig,
-) -> Result<(), DriverTaskNetError>
-where
-    H: Hardware<Error = HalError>,
-{
+    firmware_bundle: crate::hal::WifiFirmwareBundle<'static>,
+    reset_mode: Cyw43ControlPlaneResetMode,
+) -> Result<(), DriverTaskNetError> {
     let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
-    let firmware_bundle = hal
-        .wifi_firmware_bundle()
-        .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
     firmware_bundle
         .validate()
         .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
-    reset_cyw43_control_plane_state();
+    reset_cyw43_control_plane_state(reset_mode);
+    // Bootstrap runs before a NetStack/EventPump exists. Each PromptSlice still
+    // performs one HAL attempt, but this scope gives the synchronous attach
+    // program ownership of resuming the exact HAL-retained request. Steady
+    // EAPOL/data service never enters this scope and therefore always yields
+    // incomplete requests back to the outer event-pump turn.
+    let _bootstrap_control_scope = Cyw43BootstrapControlScope::enter();
     let Some(credentials) = config.wifi_credentials else {
         return Err(DriverTaskNetError::RuntimeInit("wifi-credentials-missing"));
     };
@@ -8144,7 +8499,6 @@ fn cyw43_service_host_eapol_pre_assoc(
     let pre_assoc_idle_ms = session.pre_assoc_idle_ms(now_ms);
     let poll = session.progress.polls as usize;
     if !session.progress.associated
-        && CYW43_PRIMARY_BSSCFG_JOIN_READY.load(Ordering::Acquire) != 0
         && cyw43_rejoin_pending_for_epoch(session.progress.connection_epoch)
     {
         let attempt = session.disconnect_rejoin_submit_attempts.saturating_add(1);
@@ -12159,9 +12513,8 @@ fn cyw43_submit_control_exchange_unmapped_with_options(
     let tx_descriptor = cyw43_control_frame_descriptor(payload.len(), header_mode, pre_tx_drain);
     let mut tx_retries_spent = 0usize;
     let tx_completion = loop {
-        let Some(completion) =
-            run_cyw43_runtime_descriptor_command(contract, tx_descriptor, payload)
-        else {
+        let outcome = run_cyw43_control_descriptor_command(contract, tx_descriptor, payload);
+        let Some(completion) = outcome.completion else {
             let reason = if tx_retries_spent == 0 {
                 "cyw43-control-tx-no-reply"
             } else {
@@ -12185,7 +12538,7 @@ fn cyw43_submit_control_exchange_unmapped_with_options(
                 contract,
                 stage,
                 tx_descriptor,
-                tx_retries_spent,
+                outcome.prompt_slice_resumes,
                 cmd,
                 id,
                 header_mode.as_str(),
@@ -12337,9 +12690,14 @@ fn cyw43_submit_runtime_control_exchange(
         cyw43_control_exchange_descriptor(payload.len(), cmd, id, header_mode, pre_tx_drain);
     let mut tx_retries_spent = 0usize;
     loop {
-        let Some(completion) = run_cyw43_runtime_descriptor_command(contract, descriptor, payload)
-        else {
-            record_cyw43_runtime_command_no_reply(contract, stage, descriptor, tx_retries_spent);
+        let outcome = run_cyw43_control_descriptor_command(contract, descriptor, payload);
+        let Some(completion) = outcome.completion else {
+            record_cyw43_runtime_command_no_reply(
+                contract,
+                stage,
+                descriptor,
+                outcome.prompt_slice_resumes,
+            );
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 contract,
                 DriverTaskHotPath::Cyw43Wifi,
@@ -12447,13 +12805,12 @@ fn cyw43_submit_runtime_control_exchange(
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_control_uses_runtime_exchange(stage: &'static str, control_iovar: &str) -> bool {
-    CYW43_TXGLOMALIGN_RUNTIME_EXCHANGE
-        && matches!(
-            stage,
-            "cyw43-control-txglomalign" | "cyw43-control-txglomalign-fallback4"
-        )
-        && control_iovar == "bus:txglomalign"
+fn cyw43_control_uses_runtime_exchange(_stage: &'static str, _control_iovar: &str) -> bool {
+    // Root routes every matched control, including the initial txglomalign
+    // negotiation, through CONTROL_FRAME followed by CONTROL_POLL. Keep this
+    // predicate as the single routing gate while the runtime-private exchange
+    // opcode remains ABI-compatible, but do not select that private loop.
+    false
 }
 
 #[cfg(feature = "kernel")]
@@ -13906,12 +14263,14 @@ fn cyw43_poll_control_plane_frames(stage: &'static str) -> u32 {
 }
 
 #[cfg(feature = "kernel")]
-fn reset_cyw43_control_plane_state() {
+fn reset_cyw43_control_plane_state(mode: Cyw43ControlPlaneResetMode) {
     CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
     CYW43_ASSOCIATED.store(0, Ordering::Release);
     CYW43_LINK_UP.store(0, Ordering::Release);
-    CYW43_CONNECTION_EPOCH.store(0, Ordering::Release);
-    CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(0, Ordering::Release);
+    if mode == Cyw43ControlPlaneResetMode::Initial {
+        CYW43_CONNECTION_EPOCH.store(0, Ordering::Release);
+        CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(0, Ordering::Release);
+    }
     CYW43_HOST_EAPOL_RX.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_START.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_M1.store(0, Ordering::Release);
@@ -13938,16 +14297,12 @@ fn reset_cyw43_control_plane_state() {
 }
 
 #[cfg(feature = "kernel")]
-fn complete_cyw43_linked_runtime_firmware_once<H>(
-    hal: &mut H,
+fn complete_cyw43_linked_runtime_firmware_once(
     contract: DriverTaskContract,
     bundle: crate::hal::WifiFirmwareBundle<'_>,
     reset_vector: u32,
-) -> Result<(), Cyw43FirmwareInitError>
-where
-    H: Hardware<Error = HalError>,
-{
-    init_sdio_host_linked_runtime(hal).map_err(Cyw43FirmwareInitError::Runtime)?;
+) -> Result<(), Cyw43FirmwareInitError> {
+    ensure_sdio_host_ready_for_cyw43().map_err(Cyw43FirmwareInitError::Runtime)?;
     complete_cyw43_linked_runtime_transport(contract).map_err(Cyw43FirmwareInitError::Command)?;
     submit_cyw43_runtime_command_checked(
         contract,
@@ -13959,14 +14314,13 @@ where
     )
     .map_err(Cyw43FirmwareInitError::Command)?;
     stream_cyw43_runtime_payload(
-        hal,
         contract,
         DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
         CYW43_RAM_BASE_4345,
         bundle.firmware,
         bundle.firmware.len(),
     )?;
-    complete_cyw43_linked_runtime_firmware_tail(hal, contract, bundle, reset_vector)
+    complete_cyw43_linked_runtime_firmware_tail(contract, bundle, reset_vector)
 }
 
 #[cfg(feature = "kernel")]
@@ -13989,19 +14343,14 @@ fn complete_cyw43_linked_runtime_transport(
 }
 
 #[cfg(feature = "kernel")]
-fn complete_cyw43_linked_runtime_firmware_from_offset<H>(
-    hal: &mut H,
+fn complete_cyw43_linked_runtime_firmware_from_offset(
     contract: DriverTaskContract,
     bundle: crate::hal::WifiFirmwareBundle<'_>,
     reset_vector: u32,
     resume_offset: usize,
     force_first_chunk_byte_mode: bool,
-) -> Result<(), Cyw43FirmwareInitError>
-where
-    H: Hardware<Error = HalError>,
-{
+) -> Result<(), Cyw43FirmwareInitError> {
     stream_cyw43_runtime_payload_from_offset(
-        hal,
         contract,
         DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
         CYW43_RAM_BASE_4345,
@@ -14010,19 +14359,15 @@ where
         resume_offset,
         force_first_chunk_byte_mode,
     )?;
-    complete_cyw43_linked_runtime_firmware_tail(hal, contract, bundle, reset_vector)
+    complete_cyw43_linked_runtime_firmware_tail(contract, bundle, reset_vector)
 }
 
 #[cfg(feature = "kernel")]
-fn complete_cyw43_linked_runtime_firmware_tail<H>(
-    hal: &mut H,
+fn complete_cyw43_linked_runtime_firmware_tail(
     contract: DriverTaskContract,
     bundle: crate::hal::WifiFirmwareBundle<'_>,
     reset_vector: u32,
-) -> Result<(), Cyw43FirmwareInitError>
-where
-    H: Hardware<Error = HalError>,
-{
+) -> Result<(), Cyw43FirmwareInitError> {
     let nvram = crate::hal::pi4_wifi::normalize_nvram(bundle.nvram);
     let nvram_offset = CYW43_RAM_BASE_4345
         .checked_add(CYW43_RAM_SIZE_4345_PI4)
@@ -14032,7 +14377,6 @@ where
             DriverTaskNetError::RuntimeInit("cyw43-nvram-range"),
         ))?;
     stream_cyw43_runtime_payload(
-        hal,
         contract,
         DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
         nvram_offset,
@@ -14134,10 +14478,7 @@ const fn cyw43_firmware_resume_forces_byte_mode(fault: Cyw43RuntimeCommandFaultS
 }
 
 #[cfg(feature = "kernel")]
-fn init_sdio_host_linked_runtime<H>(_hal: &mut H) -> Result<(), DriverTaskNetError>
-where
-    H: Hardware<Error = HalError>,
-{
+fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
     if SDIO_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0 {
         return Ok(());
     }
@@ -14210,21 +14551,36 @@ where
 }
 
 #[cfg(feature = "kernel")]
-fn replay_sdio_host_linked_runtime_preserving_hal<H>(
-    hal: &mut H,
-    stage: &'static str,
-) -> Result<(), DriverTaskNetError>
-where
-    H: Hardware<Error = HalError>,
-{
+fn ensure_sdio_host_ready_for_cyw43() -> Result<(), DriverTaskNetError> {
+    if crate::hal::driver_task::sdio_command_ring_delegated_to_cyw43() {
+        return if SDIO_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0 {
+            Ok(())
+        } else {
+            Err(DriverTaskNetError::RuntimeInit(
+                "sdio-owner-recovery-delegated-to-cyw43",
+            ))
+        };
+    }
+    init_sdio_host_linked_runtime()
+}
+
+#[cfg(feature = "kernel")]
+fn replay_sdio_host_linked_runtime(stage: &'static str) -> Result<(), DriverTaskNetError> {
     emit_cyw43_sdio_replay_resource_init_status(stage, "begin", None);
     if sdio_owner_recovery_can_preserve_ready_state() {
         emit_sdio_driver_task_replay_status("owner-state", "preserved-ready");
         emit_cyw43_sdio_replay_resource_init_status(stage, "ready", None);
         return Ok(());
     }
+    if crate::hal::driver_task::sdio_command_ring_delegated_to_cyw43() {
+        emit_sdio_driver_task_replay_status("owner-state", "delegated-recovery-required");
+        emit_cyw43_sdio_replay_resource_init_status(stage, "delegated-recovery-required", None);
+        return Err(DriverTaskNetError::RuntimeInit(
+            "sdio-owner-recovery-delegated-to-cyw43",
+        ));
+    }
     SDIO_LINKED_RUNTIME_READY.store(0, Ordering::Release);
-    match init_sdio_host_linked_runtime(hal) {
+    match init_sdio_host_linked_runtime() {
         Ok(()) => {
             emit_cyw43_sdio_replay_resource_init_status(stage, "ready", None);
             Ok(())
@@ -14250,10 +14606,245 @@ const fn cyw43_sdio_host_reprime_descriptor() -> DriverRuntimeSdioCommandDescrip
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioRecoveryRoute {
+    RootSdioReprime,
+    Cyw43FullRuntime,
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_sdio_recovery_route(delegated: bool) -> Cyw43SdioRecoveryRoute {
+    if delegated {
+        Cyw43SdioRecoveryRoute::Cyw43FullRuntime
+    } else {
+        Cyw43SdioRecoveryRoute::RootSdioReprime
+    }
+}
+
+#[cfg(feature = "kernel")]
+struct Cyw43GenerationRecoveryScope;
+
+#[cfg(feature = "kernel")]
+impl Drop for Cyw43GenerationRecoveryScope {
+    fn drop(&mut self) {
+        CYW43_GENERATION_RECOVERY_ACTIVE.store(0, Ordering::Release);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn begin_cyw43_generation_recovery() -> Option<Cyw43GenerationRecoveryScope> {
+    CYW43_GENERATION_RECOVERY_ACTIVE
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .ok()
+        .map(|_| Cyw43GenerationRecoveryScope)
+}
+
+#[cfg(feature = "kernel")]
+fn fail_closed_cyw43_generation_recovery() {
+    CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
+    CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
+    CYW43_ASSOCIATED.store(0, Ordering::Release);
+    CYW43_LINK_UP.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_ACTIVE.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+    CYW43_FIRMWARE_SUPPLICANT_ACTIVE.store(0, Ordering::Release);
+    CYW43_FIRMWARE_PSK_SUP_COMPLETE.store(0, Ordering::Release);
+    CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
+    CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
+    CYW43_ASSIGNED_IPV4_BE.store(0, Ordering::Release);
+    CYW43_DPC_CLIENT_GENERATION.store(0, Ordering::Release);
+    *CYW43_HOST_EAPOL_SESSION.lock() = None;
+    CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
+    CYW43_PENDING_RX_QUEUE.lock().clear();
+    clear_cyw43_pending_control_replies();
+    clear_cyw43_active_prompt_poll();
+    clear_cyw43_unproven_tx_window();
+}
+
+#[cfg(feature = "kernel")]
+fn publish_cyw43_generation_recovery_ready(phase: Cyw43GenerationRecoveryPhase) -> bool {
+    if !phase.ready() {
+        CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
+        return false;
+    }
+    CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_rejoin_after_control_replay(epoch: u32) {
+    let _ = clear_cyw43_rejoin_pending_for_epoch(epoch);
+}
+
+#[cfg(feature = "kernel")]
+fn recover_cyw43_full_runtime_from_context(stage: &'static str) -> Result<(), DriverTaskNetError> {
+    let Some(_scope) = begin_cyw43_generation_recovery() else {
+        return Err(DriverTaskNetError::RuntimePending(
+            "cyw43-generation-recovery-active",
+        ));
+    };
+    fail_closed_cyw43_generation_recovery();
+    let result = (|| {
+        let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let context = (*CYW43_RETAINED_RECOVERY_CONTEXT.lock()).ok_or(
+            DriverTaskNetError::RuntimeInit("cyw43-generation-recovery-context"),
+        )?;
+        let recovery_epoch = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+        let mut phase = Cyw43GenerationRecoveryPhase::Start;
+
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "engine-init-begin",
+            None,
+        );
+        let command = driver_task_net_engine_init_command(contract, DriverTaskHotPath::Cyw43Wifi);
+        let engine_completion = run_driver_task_net_engine_init_service(contract, command);
+        let engine_ready = engine_completion.is_some_and(|completion| {
+            completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
+        });
+        if !engine_ready {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "engine-init-failed",
+                engine_completion,
+            );
+            return Err(DriverTaskNetError::RuntimeInit(
+                "cyw43-generation-engine-init",
+            ));
+        }
+        phase = phase
+            .advance(Cyw43GenerationRecoveryPhase::EngineReady)
+            .ok_or(DriverTaskNetError::RuntimeInit(
+                "cyw43-generation-recovery-order",
+            ))?;
+
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "firmware-reload-begin",
+            engine_completion,
+        );
+        complete_cyw43_linked_runtime_firmware_with_bundle(contract, context.bundle)?;
+        phase = phase
+            .advance(Cyw43GenerationRecoveryPhase::FirmwareReady)
+            .ok_or(DriverTaskNetError::RuntimeInit(
+                "cyw43-generation-recovery-order",
+            ))?;
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "firmware-reload-ready",
+            None,
+        );
+
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "control-plane-replay-begin",
+            None,
+        );
+        complete_cyw43_linked_runtime_control_plane_with_bundle(
+            context.config,
+            context.bundle,
+            Cyw43ControlPlaneResetMode::PreserveGeneration,
+        )?;
+        phase = phase
+            .advance(Cyw43GenerationRecoveryPhase::ControlReady)
+            .ok_or(DriverTaskNetError::RuntimeInit(
+                "cyw43-generation-recovery-order",
+            ))?;
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "control-plane-replay-ready",
+            None,
+        );
+        clear_cyw43_rejoin_after_control_replay(recovery_epoch);
+
+        if !publish_cyw43_generation_recovery_ready(phase) {
+            return Err(DriverTaskNetError::RuntimeInit(
+                "cyw43-generation-recovery-order",
+            ));
+        }
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "ready",
+            None,
+        );
+        Ok(())
+    })();
+    if result.is_err() {
+        fail_closed_cyw43_generation_recovery();
+    }
+    result
+}
+
+#[cfg(feature = "kernel")]
+fn handle_cyw43_ambiguous_generation_fault(
+    contract: DriverTaskContract,
+    completion: DriverTaskCompletionRecord,
+) {
+    if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
+        return;
+    }
+    let Some(generation) = invalidate_cyw43_root_generation_for_ambiguous_fault(completion.detail)
+    else {
+        return;
+    };
+    use core::fmt::Write;
+    let mut line = heapless::String::<320>::new();
+    let _ = write!(
+        line,
+        "CYW43_ROOT_GENERATION_INVALIDATED contract={} generation={} detail=0x{:04x} association=down host_eapol=reset address=cleared arp=flushed-on-stack-sync tcp=closed-on-stack-sync pending_io=cleared next_action=cyw43-full-runtime-recovery",
+        contract.name,
+        generation,
+        completion.detail,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+
+    if crate::hal::driver_task::sdio_command_ring_delegated_to_cyw43() {
+        let status =
+            if recover_cyw43_full_runtime_from_context("cyw43-ambiguous-generation-recovery")
+                .is_ok()
+            {
+                "ready-association-pending"
+            } else {
+                "failed"
+            };
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-ambiguous-generation-recovery",
+            status,
+            Some(completion),
+        );
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn recover_sdio_host_config_for_cyw43_tx_retry(
     stage: &'static str,
 ) -> Result<(), DriverTaskNetError> {
     let contract = SDIO_HOST_DRIVER_TASK_CONTRACT;
+    let route =
+        cyw43_sdio_recovery_route(crate::hal::driver_task::sdio_command_ring_delegated_to_cyw43());
+    if route == Cyw43SdioRecoveryRoute::Cyw43FullRuntime {
+        if CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0 {
+            let _ = invalidate_cyw43_root_generation_for_recovery();
+        }
+        return recover_cyw43_full_runtime_from_context(stage);
+    }
     let mut scratch = [0u8; core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()];
     encode_sdio_descriptor(&mut scratch, cyw43_sdio_host_reprime_descriptor());
     let Some(frame) = crate::hal::driver_task::describe_driver_task_ring_frame(&scratch, 0) else {
@@ -14324,17 +14915,6 @@ fn cyw43_sdio_replay_resource_status_is_redundant(stage: &str, status: &str) -> 
 #[cfg(feature = "kernel")]
 fn sdio_owner_recovery_can_preserve_ready_state() -> bool {
     SDIO_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0
-}
-
-#[cfg(not(feature = "kernel"))]
-fn complete_cyw43_linked_runtime_firmware<H>(
-    _hal: &mut H,
-    _contract: DriverTaskContract,
-) -> Result<(), DriverTaskNetError>
-where
-    H: Hardware<Error = HalError>,
-{
-    Err(DriverTaskNetError::RuntimeInit("cyw43-kernel-runtime"))
 }
 
 #[cfg(feature = "kernel")]
@@ -14492,25 +15072,18 @@ fn submit_cyw43_runtime_stream_command(
 }
 
 #[cfg(feature = "kernel")]
-fn stream_cyw43_runtime_payload<H>(
-    hal: &mut H,
+fn stream_cyw43_runtime_payload(
     contract: DriverTaskContract,
     op: u16,
     base_addr: u32,
     payload: &[u8],
     total_len: usize,
-) -> Result<(), Cyw43FirmwareInitError>
-where
-    H: Hardware<Error = HalError>,
-{
-    stream_cyw43_runtime_payload_from_offset(
-        hal, contract, op, base_addr, payload, total_len, 0, false,
-    )
+) -> Result<(), Cyw43FirmwareInitError> {
+    stream_cyw43_runtime_payload_from_offset(contract, op, base_addr, payload, total_len, 0, false)
 }
 
 #[cfg(feature = "kernel")]
-fn stream_cyw43_runtime_payload_from_offset<H>(
-    _hal: &mut H,
+fn stream_cyw43_runtime_payload_from_offset(
     contract: DriverTaskContract,
     op: u16,
     base_addr: u32,
@@ -14518,10 +15091,7 @@ fn stream_cyw43_runtime_payload_from_offset<H>(
     total_len: usize,
     start_offset: usize,
     force_first_chunk_byte_mode: bool,
-) -> Result<(), Cyw43FirmwareInitError>
-where
-    H: Hardware<Error = HalError>,
-{
+) -> Result<(), Cyw43FirmwareInitError> {
     let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
     let max_payload = cyw43_runtime_stream_payload_limit(desc_size)?;
     if start_offset > payload.len() {
@@ -17099,6 +17669,19 @@ fn submit_cyw43_driver_task_eth_frame_completion(
                 },
             });
         }
+        if attempt < CYW43_DATA_TX_TEST_AMBIGUOUS_FAULTS_BEFORE_SUCCESS.load(Ordering::Acquire) {
+            return Some(DriverTaskCompletionRecord {
+                sequence: attempt.saturating_add(1),
+                code: DriverTaskCompletionCode::Fault.as_u16(),
+                detail: CYW43_ETH_TX_DETAIL,
+                result: 0x0400_8000,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: frame.len() as u16,
+                    flags: 0,
+                },
+            });
+        }
         if attempt < CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.load(Ordering::Acquire) {
             return Some(DriverTaskCompletionRecord::progress(0, 0));
         }
@@ -17212,6 +17795,20 @@ fn submit_cyw43_host_eapol_payload_bounded_completion(
             }
             return completion;
         }
+        if completion.is_some_and(|record| {
+            record.code == DriverTaskCompletionCode::Fault.as_u16()
+                && record.detail == CYW43_ETH_TX_DETAIL
+        }) {
+            CYW43_TX_DROPPED.fetch_add(1, Ordering::AcqRel);
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "tx-ambiguous-terminal",
+                None,
+            );
+            return None;
+        }
         CYW43_HOST_EAPOL_TX_RETRIES.fetch_add(1, Ordering::AcqRel);
         let _ = resume_cyw43_data_tx_retry_recovery(contract, completion);
         if let Some((flags, token)) = poll_cyw43_driver_task_control_frame() {
@@ -17264,6 +17861,71 @@ pub(crate) fn submit_cyw43_driver_task_control_payload(
         payload,
     );
     completion.is_some_and(driver_task_tx_completion_submitted)
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43ControlDescriptorOutcome {
+    completion: Option<DriverTaskCompletionRecord>,
+    prompt_slice_resumes: usize,
+}
+
+#[cfg(feature = "kernel")]
+fn run_cyw43_control_descriptor_command(
+    contract: DriverTaskContract,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    payload: &[u8],
+) -> Cyw43ControlDescriptorOutcome {
+    let resume_limit = cyw43_control_descriptor_resume_limit(
+        CYW43_BOOTSTRAP_CONTROL_ACTIVE.load(Ordering::Acquire) != 0,
+        descriptor.op,
+    );
+    let mut resume_deadline = cyw43_poll_deadline_from_millis_or_polls(
+        CYW43_BOOTSTRAP_CONTROL_PROMPT_RESUME_TIMEOUT_MS,
+        resume_limit,
+    );
+    let mut prompt_slice_resumes = 0usize;
+    loop {
+        let completion = run_cyw43_runtime_descriptor_command(contract, descriptor, payload);
+        if completion.is_some() {
+            return Cyw43ControlDescriptorOutcome {
+                completion,
+                prompt_slice_resumes,
+            };
+        }
+        if prompt_slice_resumes >= resume_limit || !cyw43_poll_deadline_open(&mut resume_deadline) {
+            return Cyw43ControlDescriptorOutcome {
+                completion: None,
+                prompt_slice_resumes,
+            };
+        }
+        let Some(active_request) =
+            crate::hal::driver_task::active_driver_task_ring_request(contract)
+                .and_then(|request| u32::try_from(request).ok())
+        else {
+            return Cyw43ControlDescriptorOutcome {
+                completion: None,
+                prompt_slice_resumes,
+            };
+        };
+        if !cyw43_active_prompt_descriptor_resume_ready(contract, active_request, descriptor) {
+            return Cyw43ControlDescriptorOutcome {
+                completion: None,
+                prompt_slice_resumes,
+            };
+        }
+        prompt_slice_resumes = prompt_slice_resumes.saturating_add(1);
+        core::hint::spin_loop();
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_control_descriptor_resume_limit(bootstrap_active: bool, op: u16) -> usize {
+    if bootstrap_active {
+        cyw43_bootstrap_no_reply_resume_limit(op)
+    } else {
+        0
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -17374,6 +18036,7 @@ fn run_cyw43_runtime_descriptor_command(
     record_cyw43_active_prompt_poll(contract, descriptor, active_before, completion);
     if let Some(completion) = completion {
         record_cyw43_runtime_completion(contract, completion);
+        handle_cyw43_ambiguous_generation_fault(contract, completion);
     }
     completion
 }
@@ -18941,6 +19604,12 @@ macro_rules! driver_task_nic {
             }
 
             fn set_assigned_ipv4(&mut self, ip: Ipv4Address) {
+                if ip == Ipv4Address::UNSPECIFIED {
+                    if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
+                        CYW43_ASSIGNED_IPV4_BE.store(0, Ordering::Release);
+                    }
+                    return;
+                }
                 #[cfg(feature = "kernel")]
                 {
                     let _ = submit_driver_task_gratuitous_arp_announcement(
@@ -19495,11 +20164,13 @@ mod tests {
     static CYW43_STATUS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn reset_cyw43_status_flags() {
+        *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
         CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
         CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
         CYW43_ASSOCIATED.store(0, Ordering::Release);
         CYW43_LINK_UP.store(0, Ordering::Release);
         CYW43_CONNECTION_EPOCH.store(0, Ordering::Release);
+        CYW43_GENERATION_RECOVERY_ACTIVE.store(0, Ordering::Release);
         CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_RX.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_START.store(0, Ordering::Release);
@@ -19558,12 +20229,17 @@ mod tests {
         CYW43_SERVICE_LAST_SOURCE_FLAGS.store(0, Ordering::Release);
         CYW43_SERVICE_LAST_PRE_SOURCE.store(0, Ordering::Release);
         CYW43_SERVICE_LAST_POST_SOURCE.store(0, Ordering::Release);
+        CYW43_DPC_CLIENT_CONSUMED.store(0, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_EPOCH_ERRORS.store(0, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(0, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_GENERATION.store(0, Ordering::Release);
         CYW43_PENDING_RX_HIGH_WATER.store(0, Ordering::Release);
         CYW43_PENDING_RX_DROPS.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_STUB.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS.store(0, Ordering::Release);
+        CYW43_DATA_TX_TEST_AMBIGUOUS_FAULTS_BEFORE_SUCCESS.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_ATTEMPTS.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_IO_STUB.store(0, Ordering::Release);
@@ -19603,6 +20279,87 @@ mod tests {
         *CYW43_HOST_EAPOL_SESSION.lock() = None;
         CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
         clear_cyw43_active_prompt_poll();
+    }
+
+    #[test]
+    fn generation_recovery_enforces_engine_firmware_control_order_before_ready() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+
+        let mut phase = Cyw43GenerationRecoveryPhase::Start;
+        assert!(!publish_cyw43_generation_recovery_ready(phase));
+        assert_eq!(CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire), 0);
+        assert_eq!(
+            phase.advance(Cyw43GenerationRecoveryPhase::FirmwareReady),
+            None
+        );
+        phase = phase
+            .advance(Cyw43GenerationRecoveryPhase::EngineReady)
+            .expect("engine must be first");
+        assert!(!publish_cyw43_generation_recovery_ready(phase));
+        phase = phase
+            .advance(Cyw43GenerationRecoveryPhase::FirmwareReady)
+            .expect("firmware must follow engine");
+        assert!(!publish_cyw43_generation_recovery_ready(phase));
+        assert_eq!(
+            phase.advance(Cyw43GenerationRecoveryPhase::EngineReady),
+            None
+        );
+        phase = phase
+            .advance(Cyw43GenerationRecoveryPhase::ControlReady)
+            .expect("control must follow firmware");
+        assert!(publish_cyw43_generation_recovery_ready(phase));
+        assert_eq!(CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire), 1);
+        reset_cyw43_status_flags();
+    }
+
+    #[test]
+    fn generation_recovery_missing_context_fails_closed_before_engine_service() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+
+        assert_eq!(
+            recover_cyw43_full_runtime_from_context("test-missing-context"),
+            Err(DriverTaskNetError::RuntimeInit(
+                "cyw43-generation-recovery-context"
+            ))
+        );
+        assert_eq!(CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_GENERATION_RECOVERY_ACTIVE.load(Ordering::Acquire), 0);
+        reset_cyw43_status_flags();
+    }
+
+    #[test]
+    fn generation_recovery_control_reset_preserves_invalidated_epoch() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        CYW43_CONNECTION_EPOCH.store(9, Ordering::Release);
+        CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(cyw43_epoch_token(9), Ordering::Release);
+        CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
+
+        reset_cyw43_control_plane_state(Cyw43ControlPlaneResetMode::PreserveGeneration);
+        assert_eq!(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), 9);
+        assert_eq!(
+            CYW43_REJOIN_PENDING_EPOCH_TOKEN.load(Ordering::Acquire),
+            cyw43_epoch_token(9)
+        );
+        assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 0);
+        clear_cyw43_rejoin_after_control_replay(9);
+        assert!(!cyw43_rejoin_pending_for_epoch(9));
+        assert_eq!(CYW43_REJOIN_PENDING_EPOCH_TOKEN.load(Ordering::Acquire), 0);
+
+        reset_cyw43_control_plane_state(Cyw43ControlPlaneResetMode::Initial);
+        assert_eq!(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_REJOIN_PENDING_EPOCH_TOKEN.load(Ordering::Acquire), 0);
+        reset_cyw43_status_flags();
     }
 
     fn mark_cyw43_data_plane_ready_for_test() {
@@ -21253,27 +22010,40 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_txglomalign_uses_runtime_exchange_with_pre_tx_drain() {
-        let txglom_descriptor = cyw43_control_exchange_descriptor(
-            36,
+    fn cyw43_txglomalign_uses_split_control_frame_with_pre_tx_drain() {
+        let ioctl_id = 0x1234;
+        let mut iovar = [0u8; 20];
+        iovar[..15].copy_from_slice(b"bus:txglomalign");
+        iovar[16..20].copy_from_slice(&CYW43_TXGLOMALIGN_PRIMARY_ALIGN.to_le_bytes());
+        let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+        let frame_len = cyw43_write_bcdc_frame(
+            &mut frame,
             CYW43_WLC_SET_VAR,
-            1,
+            CYW43_BCDC_FLAG_SET,
+            ioctl_id,
+            &iovar,
+        )
+        .expect("txglomalign BCDC frame should fit");
+        let txglom_descriptor = cyw43_control_frame_descriptor(
+            frame_len,
             Cyw43ControlHeaderMode::Plain,
             CYW43_TXGLOMALIGN_PRE_TX_DRAIN,
         );
 
+        assert_eq!(frame_len, 36);
+        assert_eq!(cyw43_read_le_u16(&frame[..frame_len], 10), Some(ioctl_id));
         assert_eq!(
-            txglom_descriptor.op,
-            DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+            cyw43_control_iovar_info(&frame[..frame_len], CYW43_WLC_SET_VAR)
+                .and_then(|info| info.value_u32),
+            Some(CYW43_TXGLOMALIGN_PRIMARY_ALIGN)
         );
+        assert_eq!(txglom_descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(
             txglom_descriptor.flags,
             DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
         );
         assert_eq!(txglom_descriptor.payload_len, 36);
         assert_eq!(txglom_descriptor.total_len, 36);
-        assert_eq!(txglom_descriptor.arg0, CYW43_WLC_SET_VAR);
-        assert_eq!(txglom_descriptor.arg1, 1);
         assert_eq!(
             cyw43_control_runtime_flags(
                 Cyw43ControlHeaderMode::Plain,
@@ -21281,17 +22051,16 @@ mod tests {
             ),
             txglom_descriptor.flags
         );
-        assert!(CYW43_TXGLOMALIGN_RUNTIME_EXCHANGE);
         assert!(CYW43_TXGLOMALIGN_PRE_TX_DRAIN);
         let rxglom_descriptor =
             cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
         assert_eq!(rxglom_descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(rxglom_descriptor.flags, 0);
-        assert!(cyw43_control_uses_runtime_exchange(
+        assert!(!cyw43_control_uses_runtime_exchange(
             "cyw43-control-txglomalign",
             "bus:txglomalign"
         ));
-        assert!(cyw43_control_uses_runtime_exchange(
+        assert!(!cyw43_control_uses_runtime_exchange(
             "cyw43-control-txglomalign-fallback4",
             "bus:txglomalign"
         ));
@@ -23503,7 +24272,7 @@ mod tests {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         let _io_guard = test_enable_cyw43_host_eapol_io_stub();
-        CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
+        CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
         transition_cyw43_host_eapol_to_reauthentication();
 
@@ -26367,7 +27136,7 @@ mod tests {
     fn host_eapol_firstread_decodes_rx_idle_trace() {
         let mut frame = [0u8; CYW43_RX_IDLE_TRACE_V8_BYTES];
         frame[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
-        frame[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION.to_le_bytes());
+        frame[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION_V8.to_le_bytes());
         frame[6..8].copy_from_slice(&0x0001u16.to_le_bytes());
         frame[8..10].copy_from_slice(
             &DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_SOURCE_ASSERTED_EMPTY.to_le_bytes(),
@@ -26432,6 +27201,7 @@ mod tests {
         let trace = cyw43_rx_idle_trace(&frame).expect("valid rx idle trace");
 
         assert!(trace.valid);
+        assert_eq!(trace.version, CYW43_RX_IDLE_TRACE_VERSION_V8);
         assert_eq!(trace.flags, 0x0001);
         assert_eq!(
             trace.detail,
@@ -26506,6 +27276,104 @@ mod tests {
             ),
             "read-source-asserted"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn rx_idle_trace_v9_decodes_dpc_client_counters_and_retains_v8() {
+        let mut v9 = [0u8; CYW43_RX_IDLE_TRACE_V9_BYTES];
+        v9[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
+        v9[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION.to_le_bytes());
+        v9[180..184].copy_from_slice(&17u32.to_le_bytes());
+        v9[184..188].copy_from_slice(&2u32.to_le_bytes());
+        v9[188..192].copy_from_slice(&3u32.to_le_bytes());
+        let decoded = cyw43_rx_idle_trace(&v9).expect("v9 trace must decode");
+        assert_eq!(decoded.version, CYW43_RX_IDLE_TRACE_VERSION);
+        assert_eq!(decoded.dpc_events_consumed, 17);
+        assert_eq!(decoded.dpc_epoch_errors, 2);
+        assert_eq!(decoded.dpc_sequence_errors, 3);
+        assert_eq!(
+            cyw43_rx_idle_trace(&v9[..CYW43_RX_IDLE_TRACE_V8_BYTES]),
+            None
+        );
+
+        let mut v8 = [0u8; CYW43_RX_IDLE_TRACE_V8_BYTES];
+        v8[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
+        v8[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION_V8.to_le_bytes());
+        let decoded = cyw43_rx_idle_trace(&v8).expect("v8 trace must remain supported");
+        assert_eq!(decoded.version, CYW43_RX_IDLE_TRACE_VERSION_V8);
+        assert_eq!(decoded.dpc_events_consumed, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_dpc_diagnostic_derives_exact_ring_service_totals() {
+        let diagnostic = cyw43_sdio_dpc_diagnostic_from(
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                epoch: 7,
+                producer: 12,
+                consumer: 11,
+                flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+                overruns: 2,
+                ack_failures: 1,
+            },
+            Cyw43DpcClientCounters {
+                consumed: 11,
+                epoch_errors: 3,
+                sequence_errors: 4,
+            },
+        );
+        assert_eq!(diagnostic.generation, 7);
+        assert_eq!(diagnostic.captures, 14);
+        assert_eq!(diagnostic.published, 12);
+        assert_eq!(diagnostic.consumed, 11);
+        assert_eq!(diagnostic.rearms, 10);
+        assert_eq!(diagnostic.epoch_errors, 3);
+        assert_eq!(diagnostic.sequence_errors, 4);
+        assert!(diagnostic.poisoned);
+        assert!(diagnostic.masked);
+
+        let mismatch = cyw43_sdio_dpc_diagnostic_from(
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                epoch: 8,
+                producer: 13,
+                consumer: 13,
+                flags: 0,
+                overruns: 0,
+                ack_failures: 0,
+            },
+            Cyw43DpcClientCounters {
+                consumed: 12,
+                epoch_errors: 0,
+                sequence_errors: 0,
+            },
+        );
+        assert!(mismatch.poisoned, "stale client sample must fail closed");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn dpc_client_counters_require_same_generation_v9_sample() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        assert_eq!(cyw43_dpc_client_counters(4), None);
+
+        CYW43_DPC_CLIENT_CONSUMED.store(6, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_EPOCH_ERRORS.store(1, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(2, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_GENERATION.store(4, Ordering::Release);
+        assert_eq!(
+            cyw43_dpc_client_counters(4),
+            Some(Cyw43DpcClientCounters {
+                consumed: 6,
+                epoch_errors: 1,
+                sequence_errors: 2,
+            })
+        );
+        assert_eq!(cyw43_dpc_client_counters(5), None);
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]
@@ -26842,6 +27710,106 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn ambiguous_cyw43_fault_invalidates_all_root_network_generation_state() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        assert!(cyw43_fault_invalidates_root_generation(
+            CYW43_CONTROL_FRAME_DETAIL
+        ));
+        assert!(cyw43_fault_invalidates_root_generation(CYW43_ETH_TX_DETAIL));
+        assert!(!cyw43_fault_invalidates_root_generation(
+            CYW43_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL
+        ));
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        *CYW43_HOST_EAPOL_SESSION.lock() =
+            Some(Cyw43HostEapolSession::new(credentials).expect("host eapol session starts"));
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+        CYW43_CONNECTION_EPOCH.store(7, Ordering::Release);
+        CYW43_HOST_EAPOL_M1.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_M2.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_M3.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_M4.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_PTK.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_GTK.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+        CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
+        CYW43_ASSIGNED_IPV4_BE.store(u32::from_be_bytes([192, 168, 86, 154]), Ordering::Release);
+        CYW43_POST_DHCP_RX_ASSIGNED_ARP.store(1, Ordering::Release);
+        CYW43_POST_DHCP_RX_TCP.store(1, Ordering::Release);
+        CYW43_TX_UNPROVEN_ACTIVE.store(CYW43_TX_UNPROVEN_UNKNOWN, Ordering::Release);
+        CYW43_TX_UNPROVEN_SEQ.store(44, Ordering::Release);
+        CYW43_TX_UNPROVEN_COUNT.store(3, Ordering::Release);
+        CYW43_ACTIVE_PROMPT_POLL_REQUEST.store(91, Ordering::Release);
+        CYW43_ACTIVE_PROMPT_POLL_OP.store(
+            u32::from(DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL),
+            Ordering::Release,
+        );
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&test_cyw43_tcp_frame()),
+        ));
+        assert!(store_cyw43_pending_control_reply(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL,
+            test_control_reply_token(CYW43_WLC_SET_VAR, 77, 0, &[]),
+            91,
+        ));
+
+        assert_eq!(
+            invalidate_cyw43_root_generation_for_ambiguous_fault(CYW43_ETH_TX_DETAIL),
+            Some(8)
+        );
+
+        assert_eq!(cyw43_connection_generation(), 8);
+        assert!(cyw43_rejoin_pending_for_epoch(8));
+        assert_eq!(CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_HOST_EAPOL_PTK.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_HOST_EAPOL_GTK.load(Ordering::Acquire), 0);
+        assert!(CYW43_HOST_EAPOL_SESSION.lock().is_none());
+        assert_eq!(CYW43_ASSIGNED_IPV4_BE.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_POST_DHCP_RX_ASSIGNED_ARP.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_POST_DHCP_RX_TCP.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_PRIMARY_BSSCFG_JOIN_READY.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_TX_UNPROVEN_SEQ.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_TX_UNPROVEN_COUNT.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_ACTIVE_PROMPT_POLL_REQUEST.load(Ordering::Acquire), 0);
+        assert!(!cyw43_pending_rx_token_occupied());
+        assert!(CYW43_PENDING_CONTROL_REPLY_QUEUE.lock().is_empty());
+        assert!(!cyw43_data_plane_ready());
+        assert_eq!(
+            cyw43_driver_task_bringup_status_label(),
+            Some(DRIVER_TASK_NET_STATUS)
+        );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_recovery_route_preserves_pre_handoff_reprime_then_switches_to_cyw_runtime() {
+        assert_eq!(
+            cyw43_sdio_recovery_route(false),
+            Cyw43SdioRecoveryRoute::RootSdioReprime
+        );
+        let reprime = cyw43_sdio_host_reprime_descriptor();
+        assert_eq!(reprime.op, DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG);
+        assert_eq!(reprime.addr, CYW43_SDIO_HOST_REPRIME_CLOCK_HZ);
+        assert_eq!(
+            cyw43_sdio_recovery_route(true),
+            Cyw43SdioRecoveryRoute::Cyw43FullRuntime
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn post_up_scan_timing_submit_fault_is_fail_soft_only_for_scan_tuning() {
         let transfer_failed = DriverTaskCompletionRecord {
             sequence: 20,
@@ -27052,7 +28020,7 @@ mod tests {
                 wrapped_control_frame_transfer,
                 0
             ),
-            Some(wrapped_control_frame_transfer)
+            None
         );
         assert_eq!(
             cyw43_control_tx_submit_retry_completion(
@@ -27166,6 +28134,22 @@ mod tests {
         assert_eq!(
             cyw43_bootstrap_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME),
             CYW43_RUNTIME_CONTROL_FRAME_NO_REPLY_RESUMES
+        );
+        assert_eq!(
+            cyw43_control_descriptor_resume_limit(true, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,),
+            CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES
+        );
+        assert_eq!(
+            cyw43_control_descriptor_resume_limit(true, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,),
+            CYW43_RUNTIME_CONTROL_FRAME_NO_REPLY_RESUMES
+        );
+        assert_eq!(
+            cyw43_control_descriptor_resume_limit(false, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,),
+            0
+        );
+        assert_eq!(
+            cyw43_control_descriptor_resume_limit(false, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,),
+            0
         );
         assert_eq!(
             cyw43_bootstrap_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL),
@@ -29179,7 +30163,7 @@ mod tests {
 
         let mut trace = [0u8; CYW43_RX_IDLE_TRACE_V8_BYTES];
         trace[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
-        trace[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION.to_le_bytes());
+        trace[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION_V8.to_le_bytes());
         trace[24..26].copy_from_slice(&512u16.to_le_bytes());
         trace[60..64].copy_from_slice(&0x4352_0058u32.to_le_bytes());
         trace[64..68].copy_from_slice(&0x4352_0059u32.to_le_bytes());
@@ -30506,6 +31490,22 @@ mod tests {
             }),
             false
         ));
+        let ambiguous_eth_tx = DriverTaskCompletionRecord {
+            sequence: 8,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: CYW43_ETH_TX_DETAIL,
+            result: 0x0400_8000,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+        assert!(cyw43_tx_retry_should_yield(Some(ambiguous_eth_tx), false));
+        assert_eq!(
+            cyw43_data_tx_retry_recovery_poll_budget(Some(ambiguous_eth_tx)),
+            1
+        );
         assert!(!cyw43_tx_retry_should_yield(
             Some(DriverTaskCompletionRecord::idle(7)),
             true
@@ -30573,6 +31573,30 @@ mod tests {
         ));
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
         assert_eq!(CYW43_DATA_TX_RETRIES.load(Ordering::Acquire), 1);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_ambiguous_eth_tx_fault_is_terminal_after_one_attempt() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_AMBIGUOUS_FAULTS_BEFORE_SUCCESS
+            .store(CYW43_HOST_EAPOL_TX_ATTEMPTS as u32, Ordering::Release);
+
+        assert!(submit_cyw43_host_eapol_payload_bounded_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"eapol-m4",
+            "cyw43-host-eapol-m4",
+        )
+        .is_none());
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_TX_RETRIES.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), 1);
 
         reset_cyw43_status_flags();
     }

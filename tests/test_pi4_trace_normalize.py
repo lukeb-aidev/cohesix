@@ -50,7 +50,7 @@ def descriptor_seal_suffix(hot_path: str) -> str:
         "valid" if hot_path in {"usb-keyboard", "cyw43-wifi", "sdio-host"} else "none"
     )
     return (
-        "descriptor_version=3 descriptor_seal=valid "
+        "descriptor_version=4 descriptor_seal=valid "
         f"artifact_hash=nonzero bus_link_seal={bus_link_seal}"
     )
 
@@ -85,7 +85,7 @@ def strip_driver_task_runtime_descriptor_seals(lines: list[str]) -> list[str]:
     stripped: list[str] = []
     for line in lines:
         for token in (
-            " descriptor_version=3",
+            " descriptor_version=4",
             " descriptor_seal=valid",
             " artifact_hash=nonzero",
             " bus_link_seal=valid",
@@ -1036,6 +1036,20 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_RXTRACE_PRE_SAMPLE_DELTA_TICKS": 0,
         "WIFI_RXTRACE_TRANSFER_DELTA_TICKS": 0,
         "WIFI_RXTRACE_POST_SAMPLE_DELTA_TICKS": 0,
+        "WIFI_DPC_PROOF": "no",
+        "WIFI_DPC_REASON": "missing",
+        "WIFI_DPC_GENERATION": 0,
+        "WIFI_DPC_CAPTURES": 0,
+        "WIFI_DPC_PUBLISHED": 0,
+        "WIFI_DPC_CONSUMED": 0,
+        "WIFI_DPC_REARMS": 0,
+        "WIFI_DPC_OVERRUNS": 0,
+        "WIFI_DPC_EPOCH_ERRORS": 0,
+        "WIFI_DPC_SEQUENCE_ERRORS": 0,
+        "WIFI_DPC_ACK_FAILURES": 0,
+        "WIFI_DPC_POISONED": "unknown",
+        "WIFI_DPC_MASKED": "unknown",
+        "WIFI_DPC_LINE": 0,
         "WIFI_FIRMWARE_IDENTITY_PROOF": "no",
         "WIFI_FIRMWARE_IDENTITY_BLOCKER": "nvram-len",
         "WIFI_CLM_READY_PROOF": "no",
@@ -7345,6 +7359,137 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
 
     assert gates.usb_gate == 10
     assert gates.usb_blocker == "none"
+
+
+def test_gate_summary_accepts_exact_healthy_wifi_dpc_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
+            "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 poisoned=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "yes"
+    assert record["WIFI_DPC_REASON"] == "none"
+    assert record["WIFI_DPC_GENERATION"] == 9
+    assert record["WIFI_DPC_CAPTURES"] == 6
+    assert record["WIFI_DPC_PUBLISHED"] == 6
+    assert record["WIFI_DPC_CONSUMED"] == 6
+    assert record["WIFI_DPC_REARMS"] == 6
+    assert record["WIFI_DPC_POISONED"] == "no"
+    assert record["WIFI_DPC_MASKED"] == "unknown"
+
+
+def test_gate_summary_rejects_exact_zero_activity_wifi_dpc_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=10 captures=0 published=0 consumed=0 "
+            "rearms=0 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 poisoned=no masked=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "no-activity"
+    assert record["WIFI_DPC_GENERATION"] == 10
+    assert record["WIFI_DPC_CAPTURES"] == 0
+    assert record["WIFI_DPC_PUBLISHED"] == 0
+    assert record["WIFI_DPC_MASKED"] == "no"
+
+
+@pytest.mark.parametrize(
+    ("fields", "reason"),
+    [
+        ({"poisoned": "yes"}, "poisoned"),
+        ({"overruns": 1}, "overrun"),
+        ({"epoch_errors": 1}, "epoch-error"),
+        ({"sequence_errors": 1}, "sequence-error"),
+        ({"ack_failures": 1}, "ack-failure"),
+        (
+            {
+                "captures": 0,
+                "published": 0,
+                "consumed": 0,
+                "rearms": 0,
+                "masked": "no",
+            },
+            "no-activity",
+        ),
+        ({"published": 5}, "capture-publish-mismatch"),
+        ({"consumed": 5}, "consume-publish-mismatch"),
+        ({"masked": "yes"}, "masked"),
+        ({"masked": "no", "rearms": 5}, "unrearmed"),
+    ],
+)
+def test_gate_summary_rejects_invalid_wifi_dpc_proof(
+    fields: dict[str, int | str], reason: str
+) -> None:
+    values: dict[str, int | str] = {
+        "generation": 9,
+        "captures": 6,
+        "published": 6,
+        "consumed": 6,
+        "rearms": 6,
+        "overruns": 0,
+        "epoch_errors": 0,
+        "sequence_errors": 0,
+        "ack_failures": 0,
+        "poisoned": "no",
+    }
+    values.update(fields)
+    masked = f" masked={values['masked']}" if "masked" in values else ""
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC "
+            f"generation={values['generation']} captures={values['captures']} "
+            f"published={values['published']} consumed={values['consumed']} "
+            f"rearms={values['rearms']} overruns={values['overruns']} "
+            f"epoch_errors={values['epoch_errors']} "
+            f"sequence_errors={values['sequence_errors']} "
+            f"ack_failures={values['ack_failures']} "
+            f"poisoned={values['poisoned']}{masked}",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == reason
+
+
+def test_wifi_dpc_proof_requires_exact_complete_line() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
+            "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 poisoned=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "missing"
+
+
+def test_boot_acceptance_requires_wifi_dpc_but_wired_history_does_not() -> None:
+    wifi_record = {
+        "NET_ACTIVE": "wifi",
+        "WIFI_DPC_PROOF": "no",
+        "WIFI_DPC_REASON": "missing",
+    }
+    wired_record = {
+        "NET_ACTIVE": "wired",
+        "WIFI_DPC_PROOF": "no",
+        "WIFI_DPC_REASON": "missing",
+    }
+
+    assert "wifi-dpc-proof-missing" in normalizer.boot_evidence_blockers(wifi_record)
+    assert "wifi-dpc-proof-missing" not in normalizer.boot_evidence_blockers(wired_record)
 
 
 def test_gate_summary_degrades_command_ready_without_first_report() -> None:

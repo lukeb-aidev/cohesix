@@ -30,6 +30,8 @@
 - `root_task.driver_images.pi4-cyw43-runtime`: contract=`cyw43455` hot_path=`cyw43-wifi` artifact=`cohesix/bin/pi4-driver-cyw43` root_context_required=`false` hardware_state_migrated=`true`
 - `root_task.driver_images.pi4-sdio-runtime`: contract=`sdio-host` hot_path=`sdio-host` artifact=`cohesix/bin/pi4-driver-sdio` root_context_required=`false` hardware_state_migrated=`true`
 - `root_task.driver_images.pi4-pcie-runtime`: contract=`pcie-root` hot_path=`pcie-root` artifact=`cohesix/bin/pi4-driver-pcie` root_context_required=`false` hardware_state_migrated=`true`
+- `root_task.driver_images.irq.sdio-host`: irq=`158` badge=`159` handler_slot=`4` notification_slot=`3` trigger=`level`
+- `root_task.driver_images.bus_link.cyw43-sdio`: client=`cyw43-wifi` owner=`sdio-host` notifications=`3:3:8:10` shared=`4096+8192` link_epoch=`1129927425` dpc_event=`160+96` depth=`4`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
@@ -227,7 +229,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `b5d22bc62de7e0883b8fea8acc6db377cfe3450e8f6357f1a6c6d01a9e66971b`
+- `manifest.sha256`: `cdf450fc38f44e8a9a2063c97b7aeda81bf11bf8989b6db09c4ef79d8eeecb19`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -289,4 +291,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `b5d22bc62de7e0883b8fea8acc6db377cfe3450e8f6357f1a6c6d01a9e66971b`)._
+_Generated from `configs/root_task.toml` (sha256: `cdf450fc38f44e8a9a2063c97b7aeda81bf11bf8989b6db09c4ef79d8eeecb19`)._

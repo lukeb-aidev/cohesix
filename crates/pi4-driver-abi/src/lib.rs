@@ -8,7 +8,7 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 3;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 4;
 /// Magic value for a sealed runtime identity inside an init descriptor.
 pub const DRIVER_RUNTIME_IDENTITY_MAGIC: u32 = 0x4452_4944;
 const DRIVER_RUNTIME_IDENTITY_HASH_SEED: u32 = 0x811c_9dc5;
@@ -337,6 +337,8 @@ pub const DRIVER_RUNTIME_SDIO_OP_POLL_IRQ: u16 = 5;
 pub const DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG: u16 = 6;
 /// SDIO bus-owner operation: issue a bounded raw card command with no data phase.
 pub const DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND: u16 = 7;
+/// SDIO bus-owner operation: recover an issued-unknown CYW43 generation.
+pub const DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET: u16 = 8;
 /// SDIO engine-init detail: SDIO host reached ready state.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY: u16 = 0x5500;
 /// SDIO engine-init detail: HAL-prepared host did not show powered/card-present state.
@@ -353,6 +355,8 @@ pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED: u16 = 0x5511;
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED: u16 = 0x5512;
 /// SDIO engine-init detail: command/data inhibit stayed asserted after clock enable.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED: u16 = 0x5513;
+/// SDIO engine-init detail: generated notification/IRQ topology was invalid.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR: u16 = 0x5514;
 /// SDIO response kind: no response.
 pub const DRIVER_RUNTIME_SDIO_RESP_NONE: u8 = 0;
 /// SDIO response kind: OCR/R4 response.
@@ -378,7 +382,10 @@ pub const DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES: usize = 16;
 /// Maximum IRQ descriptors carried in one init descriptor.
 pub const DRIVER_RUNTIME_INIT_MAX_IRQS: usize = 4;
 /// Maximum bus-link descriptors carried in one init descriptor.
-pub const DRIVER_RUNTIME_INIT_MAX_BUS_LINKS: usize = 2;
+/// Current fixed ABI bound: each isolated runtime may participate in one
+/// compiler-declared owner/client bus link. Keeping this bound at one leaves
+/// the sealed init descriptor within the 1,536-byte command-frame budget.
+pub const DRIVER_RUNTIME_INIT_MAX_BUS_LINKS: usize = 1;
 /// Maximum semantic resource ranges carried in one init descriptor.
 pub const DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES: usize = 8;
 /// Runtime resource descriptors use 4 KiB pages.
@@ -1233,10 +1240,25 @@ pub const DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE: u16 = DRIVER_RUNTIME_RING_P
 pub const DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES: u16 = 8192;
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
+/// Child CSpace slot containing each runtime's local notification receive cap.
+pub const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u32 = 3;
+/// BCM2711 SDIO host interrupt used by the CYW43 card function.
+pub const DRIVER_RUNTIME_SDIO_IRQ: u32 = 158;
+/// Nonzero notification badge bound to [`DRIVER_RUNTIME_SDIO_IRQ`].
+pub const DRIVER_RUNTIME_SDIO_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_IRQ + 1;
+/// Level-sensitive runtime IRQ trigger tag.
+pub const DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL: u16 = 0;
+/// Edge-sensitive runtime IRQ trigger tag.
+pub const DRIVER_RUNTIME_IRQ_TRIGGER_EDGE: u16 = 1;
 /// Child CSpace slot where USB receives the PCIe/VL805 bus-owner endpoint cap.
 pub const DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT: u32 = 9;
-/// Child CSpace slot where CYW43 receives the SDIO bus-owner endpoint cap.
-pub const DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT: u32 = 8;
+/// CYW43 CSpace slot containing the send-only SDIO-owner notification cap.
+pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT: u32 = 8;
+/// Legacy name for the CYW43-to-SDIO doorbell slot during endpoint cutover.
+pub const DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT: u32 =
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT;
+/// SDIO-owner CSpace slot containing the send-only CYW43 notification cap.
+pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT: u32 = 10;
 /// USB-local virtual address where root maps the PCIe owner command ring.
 pub const DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR: u64 = 0x70e0_1000;
 /// CYW43-local virtual address where root maps the SDIO owner command ring.
@@ -1289,10 +1311,44 @@ pub const DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL: u32 = 10;
 pub const DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT: u32 = 1 << 0;
 /// Bus link flag: channel carries only pointer-free ring offsets/lengths.
 pub const DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE: u32 = 1 << 1;
+/// Bus link flag: this descriptor is the bus-owner side of a reciprocal link.
+pub const DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER: u32 = 1 << 2;
+/// Bus link flag: both peers use bounded notification doorbells.
+pub const DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS: u32 = 1 << 3;
+/// Bus link flag: the owner publishes events through the bounded DPC event ring.
+pub const DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING: u32 = 1 << 4;
 /// Bus link channel id for USB using the PCIe/VL805 owner.
 pub const DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE: u32 = 1;
 /// Bus link channel id for CYW43 using the SDIO owner.
 pub const DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO: u32 = 2;
+/// Magic value for the CYW43/SDIO bounded DPC event ring.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_MAGIC: u32 = 0x4450_4352;
+/// CYW43/SDIO bounded DPC event-ring layout version.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_VERSION: u16 = 2;
+/// Fixed metadata offset for the DPC event ring in the owner command page.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET: u16 = 160;
+/// Fixed bytes reserved for the DPC event ring before the payload window.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_BYTES: u16 = 96;
+/// Fixed number of producer entries in the bounded DPC event ring.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH: usize = 4;
+/// DPC event-ring flag: the producer observed bounded overflow pressure.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN: u32 = 1 << 0;
+/// DPC event-ring flag: the SDIO owner must retry the seL4 IRQ acknowledgement.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING: u32 = 1 << 1;
+/// DPC event-ring flag: the current runtime generation is poisoned and must recover.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED: u32 = 1 << 2;
+/// DPC event-ring flag: SDHCI `CARD_INT` signalling is currently masked.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED: u32 = 1 << 3;
+/// Complete set of flags admitted by [`DriverRuntimeDpcEventRing::valid`].
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_KNOWN_FLAGS: u32 =
+    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
+        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING
+        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED
+        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED;
+/// DPC event flag: the SDHCI host reported a card interrupt.
+pub const DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT: u16 = 1 << 0;
+/// DPC event flag: the producer retained a level source for another service turn.
+pub const DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING: u16 = 1 << 1;
 
 /// Runtime hot-path ids. These mirror the root-task command ABI.
 pub const HOT_PATH_SERIAL_CONSOLE: u32 = 1;
@@ -1753,9 +1809,11 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ
             || self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG
-            || self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND;
+            || self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND
+            || self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET;
         let host_config = self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG;
         let card_command = self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND;
+        let generation_reset = self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET;
         let known_response = self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_OCR
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_SHORT
@@ -1769,7 +1827,7 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
         let effective_len = if read_result {
             1
-        } else if host_config || card_command {
+        } else if host_config || card_command || generation_reset {
             0
         } else if self.block_count != 0 {
             (self.block_count as u32).saturating_mul(self.block_size as u32)
@@ -1786,7 +1844,7 @@ impl DriverRuntimeSdioCommandDescriptor {
         known_op
             && known_response
             && self.function <= 7
-            && (host_config || card_command || self.addr < (1 << 17))
+            && (host_config || card_command || generation_reset || self.addr < (1 << 17))
             && (!host_config
                 || (self.function == 0
                     && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
@@ -1804,6 +1862,16 @@ impl DriverRuntimeSdioCommandDescriptor {
                     && self.block_count == 0
                     && self.flags == 0
                     && self.reserved == 0))
+            && (!generation_reset
+                || (self.function == 0
+                    && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
+                    && self.addr != 0
+                    && self.data_offset == 0
+                    && self.len == 0
+                    && self.block_size == 0
+                    && self.block_count == 0
+                    && self.flags == 0
+                    && self.reserved == 0))
             && (!cmd52 || (self.len == 1 && self.block_count == 0 && self.block_size == 0))
             && (!cmd53
                 || ((self.len != 0 || self.block_count != 0)
@@ -1813,6 +1881,7 @@ impl DriverRuntimeSdioCommandDescriptor {
                             && self.block_count <= 511))))
             && (host_config
                 || card_command
+                || generation_reset
                 || (effective_len != 0 && (ring_payload || shared_payload)))
     }
 }
@@ -2004,6 +2073,126 @@ impl DriverRuntimeIrqDescriptor {
             reserved: 0,
         }
     }
+
+    /// Returns true when this pointer-free IRQ handoff is structurally valid.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.irq != 0
+            && self.badge != 0
+            && self.handler_slot >= DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+            && self.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+            && (self.trigger == DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL
+                || self.trigger == DRIVER_RUNTIME_IRQ_TRIGGER_EDGE)
+            && self.flags == 0
+            && self.reserved == 0
+    }
+}
+
+/// One sequence-stamped event published by the SDIO owner for CYW43 DPC work.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeDpcEventEntry {
+    /// Monotonic producer sequence committed after the remaining fields.
+    pub sequence: u32,
+    /// Captured SDHCI interrupt status bits.
+    pub host_int_status: u32,
+    /// Bounded owner signal/reason bits for the CYW43 consumer.
+    pub signal_status: u32,
+    /// Producer-defined primitive reason code.
+    pub reason: u16,
+    /// [`DRIVER_RUNTIME_DPC_EVENT_FLAG_*`] bitset.
+    pub flags: u16,
+}
+
+impl DriverRuntimeDpcEventEntry {
+    /// Empty event entry.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            sequence: 0,
+            host_int_status: 0,
+            signal_status: 0,
+            reason: 0,
+            flags: 0,
+        }
+    }
+
+    /// Returns true when this entry uses only known primitive flags.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.flags
+            & !(DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT
+                | DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING)
+            == 0
+    }
+}
+
+/// Fixed single-producer/single-consumer SDIO-to-CYW43 DPC event ring.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeDpcEventRing {
+    /// [`DRIVER_RUNTIME_DPC_EVENT_RING_MAGIC`].
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_DPC_EVENT_RING_VERSION`].
+    pub version: u16,
+    /// Total record bytes.
+    pub len: u16,
+    /// Generated bus-link epoch shared by both peers.
+    pub epoch: u32,
+    /// Sequence after the newest committed producer entry.
+    pub producer: u32,
+    /// Sequence after the newest consumed entry.
+    pub consumer: u32,
+    /// [`DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_*`] bitset.
+    pub flags: u32,
+    /// Bounded producer-overrun counter.
+    pub overruns: u32,
+    /// Saturating count of failed seL4 IRQ acknowledgement attempts.
+    pub ack_failures: u32,
+    /// Bounded sequence-indexed events.
+    pub entries: [DriverRuntimeDpcEventEntry; DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH],
+}
+
+impl DriverRuntimeDpcEventRing {
+    /// Empty ring bound to one generated bus-link epoch.
+    #[must_use]
+    pub const fn empty(epoch: u32) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_DPC_EVENT_RING_MAGIC,
+            version: DRIVER_RUNTIME_DPC_EVENT_RING_VERSION,
+            len: core::mem::size_of::<Self>() as u16,
+            epoch,
+            producer: 0,
+            consumer: 0,
+            flags: 0,
+            overruns: 0,
+            ack_failures: 0,
+            entries: [DriverRuntimeDpcEventEntry::empty(); DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH],
+        }
+    }
+
+    /// Returns true when the ring is bounded and uses the current fixed layout.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        if self.magic != DRIVER_RUNTIME_DPC_EVENT_RING_MAGIC
+            || self.version != DRIVER_RUNTIME_DPC_EVENT_RING_VERSION
+            || self.len as usize != core::mem::size_of::<Self>()
+            || self.epoch == 0
+            || self.flags & !DRIVER_RUNTIME_DPC_EVENT_RING_KNOWN_FLAGS != 0
+            || self.producer.wrapping_sub(self.consumer)
+                > DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH as u32
+        {
+            return false;
+        }
+        let mut index = 0usize;
+        while index < DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH {
+            if !self.entries[index].valid() {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
 }
 
 /// One pointer-free link between split bus-owner driver runtimes.
@@ -2024,6 +2213,22 @@ pub struct DriverRuntimeBusLinkDescriptor {
     pub epoch: u32,
     /// Sealed token over epoch, owner, channel, window, and flags.
     pub token: u32,
+    /// Generated epoch shared by both peers for the DPC event ring.
+    pub shared_epoch: u32,
+    /// Peer runtime hot path for reciprocal notification delivery.
+    pub peer_hot_path: u32,
+    /// Local notification receive slot in this runtime's CSpace.
+    pub local_notification_slot: u32,
+    /// Send-only peer notification slot in this runtime's CSpace.
+    pub peer_notification_slot: u32,
+    /// Fixed DPC event-ring offset inside the owner command page.
+    pub event_offset: u16,
+    /// Fixed DPC event-ring bytes.
+    pub event_len: u16,
+    /// Fixed DPC event-ring entry depth.
+    pub event_depth: u16,
+    /// Reserved for fixed-layout evolution.
+    pub reserved: u16,
 }
 
 impl DriverRuntimeBusLinkDescriptor {
@@ -2038,6 +2243,14 @@ impl DriverRuntimeBusLinkDescriptor {
             flags: 0,
             epoch: 0,
             token: 0,
+            shared_epoch: 0,
+            peer_hot_path: 0,
+            local_notification_slot: 0,
+            peer_notification_slot: 0,
+            event_offset: 0,
+            event_len: 0,
+            event_depth: 0,
+            reserved: 0,
         }
     }
 
@@ -2058,7 +2271,36 @@ impl DriverRuntimeBusLinkDescriptor {
             flags,
             epoch: 0,
             token: 0,
+            shared_epoch: 0,
+            peer_hot_path: 0,
+            local_notification_slot: 0,
+            peer_notification_slot: 0,
+            event_offset: 0,
+            event_len: 0,
+            event_depth: 0,
+            reserved: 0,
         }
+    }
+
+    /// Attach reciprocal notification and bounded DPC event-ring metadata.
+    #[must_use]
+    pub const fn with_notification_dpc(
+        mut self,
+        peer_hot_path: u32,
+        local_notification_slot: u32,
+        peer_notification_slot: u32,
+        shared_epoch: u32,
+    ) -> Self {
+        self.peer_hot_path = peer_hot_path;
+        self.local_notification_slot = local_notification_slot;
+        self.peer_notification_slot = peer_notification_slot;
+        self.shared_epoch = shared_epoch;
+        self.event_offset = DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET;
+        self.event_len = DRIVER_RUNTIME_DPC_EVENT_RING_BYTES;
+        self.event_depth = DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH as u16;
+        self.flags |= DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS
+            | DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING;
+        self
     }
 
     /// Return this link with the per-client epoch and token populated.
@@ -2102,13 +2344,71 @@ impl DriverRuntimeBusLinkDescriptor {
         hash = driver_runtime_identity_hash_word(hash, self.shared_len);
         hash = driver_runtime_identity_hash_word(hash, self.flags);
         hash = driver_runtime_identity_hash_word(hash, self.epoch);
+        hash = driver_runtime_identity_hash_word(hash, self.shared_epoch);
+        hash = driver_runtime_identity_hash_word(hash, self.peer_hot_path);
+        hash = driver_runtime_identity_hash_word(hash, self.local_notification_slot);
+        hash = driver_runtime_identity_hash_word(hash, self.peer_notification_slot);
+        hash = driver_runtime_identity_hash_word(hash, self.event_offset as u32);
+        hash = driver_runtime_identity_hash_word(hash, self.event_len as u32);
+        hash = driver_runtime_identity_hash_word(hash, self.event_depth as u32);
         driver_runtime_nonzero_hash(hash)
+    }
+
+    const fn notification_dpc_fields_absent(self) -> bool {
+        self.peer_hot_path == 0
+            && self.shared_epoch == 0
+            && self.local_notification_slot == 0
+            && self.peer_notification_slot == 0
+            && self.event_offset == 0
+            && self.event_len == 0
+            && self.event_depth == 0
+            && self.flags
+                & (DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER
+                    | DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS
+                    | DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING)
+                == 0
+    }
+
+    /// Returns true when this link carries the complete reciprocal DPC topology.
+    #[must_use]
+    pub const fn notification_dpc_valid(self) -> bool {
+        let role =
+            self.flags & (DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER);
+        let client = role == DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT;
+        let owner = role == DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER;
+        let peer_matches = if client {
+            self.owner_hot_path == HOT_PATH_SDIO_HOST
+                && self.peer_hot_path == HOT_PATH_SDIO_HOST
+                && self.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT
+        } else if owner {
+            self.owner_hot_path == HOT_PATH_SDIO_HOST
+                && self.peer_hot_path == HOT_PATH_CYW43_WIFI
+                && self.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT
+        } else {
+            false
+        };
+        self.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+            && peer_matches
+            && self.local_notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+            && self.shared_epoch != 0
+            && self.event_offset == DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET
+            && self.event_len == DRIVER_RUNTIME_DPC_EVENT_RING_BYTES
+            && self.event_depth == DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH as u16
+            && self.reserved == 0
+            && (self.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE) != 0
+            && (self.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS) != 0
+            && (self.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING) != 0
     }
 
     /// Returns true when the link contains a bounded pointer-free channel.
     #[must_use]
     pub const fn valid(self) -> bool {
         let shared_end = self.shared_offset.saturating_add(self.shared_len);
+        let known_flags = DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT
+            | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE
+            | DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER
+            | DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS
+            | DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING;
         let known_channel = self.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE
             || self.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO;
         let owner_matches_channel = if self.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
@@ -2128,7 +2428,10 @@ impl DriverRuntimeBusLinkDescriptor {
             && known_channel
             && owner_matches_channel
             && valid_window
+            && self.flags & !known_flags == 0
             && (self.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE) != 0
+            && self.reserved == 0
+            && (self.notification_dpc_fields_absent() || self.notification_dpc_valid())
     }
 }
 
@@ -2406,6 +2709,7 @@ impl DriverRuntimeInitDescriptor {
                 (self.flags & DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS) != 0
             }
             && self.valid_resource_ranges()
+            && self.valid_irqs()
             && self.valid_bus_links()
     }
 
@@ -2428,6 +2732,19 @@ impl DriverRuntimeInitDescriptor {
         let mut index = 0;
         while index < self.bus_link_count as usize {
             if !self.bus_links[index].valid() {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    /// Returns true when every populated IRQ handoff is structurally valid.
+    #[must_use]
+    pub const fn valid_irqs(self) -> bool {
+        let mut index = 0usize;
+        while index < self.irq_count as usize {
+            if !self.irqs[index].valid() {
                 return false;
             }
             index += 1;
@@ -2654,6 +2971,58 @@ mod tests {
         invalid = snapshot;
         invalid.reserved = 1;
         assert!(!invalid.valid());
+    }
+
+    #[test]
+    fn dpc_event_ring_is_fixed_bounded_and_sequence_checked() {
+        assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
+        assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
+        assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 2);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 4);
+        assert_eq!(
+            DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
+            DRIVER_RUNTIME_RING_FRAME_OFFSET
+        );
+
+        let ring = DriverRuntimeDpcEventRing::empty(7);
+        assert!(ring.valid());
+
+        let mut invalid = ring;
+        invalid.producer = DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH as u32 + 1;
+        assert!(!invalid.valid());
+        invalid = ring;
+        invalid.entries[0].flags = 1 << 15;
+        assert!(!invalid.valid());
+    }
+
+    #[test]
+    fn dpc_event_ring_accepts_every_known_state_flag() {
+        let mut ring = DriverRuntimeDpcEventRing::empty(7);
+        for flag in [
+            DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN,
+            DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
+            DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED,
+            DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+        ] {
+            ring.flags = flag;
+            assert!(ring.valid(), "known DPC ring flag 0x{flag:08x}");
+        }
+        ring.flags = DRIVER_RUNTIME_DPC_EVENT_RING_KNOWN_FLAGS;
+        assert!(ring.valid());
+    }
+
+    #[test]
+    fn dpc_event_ring_rejects_unknown_state_flags() {
+        let mut ring = DriverRuntimeDpcEventRing::empty(7);
+        ring.flags = DRIVER_RUNTIME_DPC_EVENT_RING_KNOWN_FLAGS | (1 << 31);
+        assert!(!ring.valid());
+    }
+
+    #[test]
+    fn dpc_event_ring_accepts_saturated_ack_failure_count() {
+        let mut ring = DriverRuntimeDpcEventRing::empty(7);
+        ring.ack_failures = u32::MAX;
+        assert!(ring.valid());
     }
 
     #[test]
@@ -2955,6 +3324,51 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_sdio_bus_link_supports_reciprocal_notification_dpc_descriptors() {
+        let client = DriverRuntimeBusLinkDescriptor::new(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32,
+            DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+        )
+        .with_notification_dpc(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+            0x4359_5301,
+        );
+        assert!(client.valid());
+        assert!(client.notification_dpc_valid());
+
+        let owner = DriverRuntimeBusLinkDescriptor::new(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32,
+            DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+        )
+        .with_notification_dpc(
+            HOT_PATH_CYW43_WIFI,
+            DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
+            0x4359_5301,
+        );
+        assert!(owner.valid());
+        assert!(owner.notification_dpc_valid());
+        assert_eq!(client.shared_epoch, owner.shared_epoch);
+
+        let client_sealed = client.with_sealed_identity(4, HOT_PATH_CYW43_WIFI);
+        let owner_sealed = owner.with_sealed_identity(7, HOT_PATH_SDIO_HOST);
+        assert_ne!(client_sealed.epoch, owner_sealed.epoch);
+        assert_eq!(client_sealed.shared_epoch, owner_sealed.shared_epoch);
+
+        let mut invalid = owner;
+        invalid.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT;
+        assert!(!invalid.valid());
+    }
+
+    #[test]
     fn resource_range_at_requires_exact_vaddr_and_minimum_pages() {
         let mut descriptor = DriverRuntimeInitDescriptor::empty();
         descriptor.hot_path = HOT_PATH_GENET_NIC;
@@ -3148,6 +3562,40 @@ mod tests {
         assert!(!descriptor.valid());
         descriptor.data_offset = 0;
         descriptor.block_count = 1;
+        assert!(!descriptor.valid());
+    }
+
+    #[test]
+    fn sdio_command_descriptor_validates_generation_reset_without_payload() {
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>(),
+            24
+        );
+        let mut descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: 0x4359_5302,
+            data_offset: 0,
+            len: 0,
+            block_size: 0,
+            block_count: 0,
+            flags: 0,
+            reserved: 0,
+            timeout_us: 1_000,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.addr = 0;
+        assert!(!descriptor.valid());
+        descriptor.addr = 0x4359_5302;
+        descriptor.len = 1;
+        assert!(!descriptor.valid());
+        descriptor.len = 0;
+        descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
+        assert!(!descriptor.valid());
+        descriptor.data_offset = 0;
+        descriptor.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
         assert!(!descriptor.valid());
     }
 

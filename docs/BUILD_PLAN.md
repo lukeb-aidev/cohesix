@@ -6371,7 +6371,7 @@ Deliverables:
 ## Milestone 26b — Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency <a id="26b"></a>
 [Milestones](#Milestones)
 
-**Status:** Complete — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi diagnostics, USB/local-seat protection, QEMU compatibility guardrails, and the production Pi 4 wired/GENET isolated-runtime benchmark gate are accepted as meeting the 26b definition of done. Fresh high-pressure Genet REST evidence records zero REST errors, clean post-load TCP/cohsh reachability, clean Genet TX/RX counters, and throughput above the selected best-QEMU reference; Pi latency remains recorded as physical-target evidence rather than a QEMU-loopback parity gate. Pi 4 Wi-Fi is accepted as a research and diagnostics transport, not the production high-concurrency transport: its 26b pass/fail gate is bounded reliability, driver health, and physical-link latency evidence at the documented Wi-Fi worker envelope, while 1500-worker Wi-Fi runs remain stress diagnostics only.
+**Status:** Reopened — the prior bounded DHCP, USB/local-seat, QEMU compatibility, and production wired/GENET evidence remains accepted. Milestone 26d Wi-Fi boot investigation exposed one pre-existing 26b defect: `m26b-wifi-driver-task` and `m26b-sdio-host-driver-task-graduation` still use poll/yield service instead of the generated, notification-driven CYW43/SDIO DPC boundary required by their original root-no-wait contract. Reopened scope is limited to reciprocal generated notification/IRQ topology, bounded pointer-free DPC event-ring metadata, isolated-runtime IRQ/DPC service, and repeatable Wi-Fi TCP/cohsh proof. It adds no operator protocol, namespace, system authority, production-Wi-Fi parity claim, or unrelated 26d system-model change.
 
 **Why now (operator continuity):**  
 Milestone 26b depends on completed 26a driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi and selected-network performance must improve by moving SDIO/firmware/RX/TX or GENET RX/TX progress onto bounded manifest-declared isolated driver runtimes, not by extending the root event-loop turn.
@@ -6558,6 +6558,30 @@ Checks:
   - SDIO production ring commands do not carry `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE`; root-context diagnostic turns remain explicitly non-acceptance.
 Deliverables:
   - SDIO runtime acceptance promotion with generated, code, proof-gate, and docs-as-built alignment.
+
+Title/ID: m26b-wifi-sdio-notification-dpc-closure
+Goal: Restore the original 26b root-no-wait CYW43/SDIO contract with a generated reciprocal notification topology and a bounded Linux-shaped isolated-runtime DPC.
+Inputs: configs/root_task*.toml, tools/coh-rtc/src/{ir.rs,codegen/**}, apps/root-task/src/generated/**, crates/pi4-driver-abi/src/lib.rs, apps/root-task/src/hal/{mod.rs,driver_task.rs}, apps/pi4-driver-runtime/src/lib.rs, scripts/pi4_trace_normalize.py, scripts/pi4_gate_proof.sh, docs/DRIVERS.md, fresh Pi serial/pcap evidence gathered during Milestone 26d.
+Changes:
+  - configs/root_task*.toml + tools/coh-rtc/src/** + generated artifacts — declare and validate SDIO IRQ 158, reciprocal CYW43/SDIO notification slots, the existing shared owner window, and a fixed four-entry DPC event ring as compiler-owned topology.
+  - crates/pi4-driver-abi/src/lib.rs — version the pointer-free reciprocal bus-link descriptor and define bounded sequence-stamped DPC event-ring metadata without changing console or network protocol grammar.
+  - apps/root-task/src/hal/{mod.rs,driver_task.rs} — admit only generated caps/topology, bind the selected runtime notifications, and keep root as a bounded ring client with no steady SDIO service loop.
+  - apps/pi4-driver-runtime/src/lib.rs — let SDIO own IRQ capture/clear/ack and wake CYW43; let CYW43 retain bounded software-pending DPC state, preserve wire order, and yield/resignal on budget exhaustion.
+  - scripts/pi4_trace_normalize.py + scripts/pi4_gate_proof.sh + docs/DRIVERS.md — keep notification deferral red and require bounded IRQ/DPC, ordered RX, multi-boot TCP/cohsh, and unchanged USB/serial proof.
+Commands:
+  - cargo test -p coh-rtc
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
+  - scripts/check-generated.sh
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+Checks:
+  - Generated topology contains exactly one level-triggered SDIO IRQ 158 owner and one reciprocal `cyw43-sdio` link with bounded notification slots and four-entry event ring; malformed, overlapping, unbounded, or unknown topology fails validation.
+  - Root never waits synchronously on SDIO credit, CMD52/CMD53, firmware replies, or glom work; notification/DPC progress remains inside the isolated SDIO/CYW43 runtimes and preserves pointer-free active-slot bounds.
+  - Fresh repeated Wi-Fi boots show no `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED`, no DPC-ring overrun/drop, ordered control/event/data delivery, working DHCP/TCP/cohsh, and unchanged serial/USB/local-seat gates.
+Deliverables:
+  - Generated reciprocal CYW43/SDIO notification contract, fixed bounded DPC event-ring ABI, isolated-runtime implementation, proof gates, docs-as-built alignment, and repeatable Wi-Fi TCP evidence.
 
 Title/ID: m26b-net-control-priority
 Goal: Split network-control and network-data work so EAPOL/DHCP/TCP ACK progress is prioritized without starving physical input.

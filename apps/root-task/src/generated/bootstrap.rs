@@ -8,7 +8,8 @@
 use super::{
     AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig,
     ControlPlaneConfig, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy,
-    DriverRuntimeImagePolicy, DriverRuntimeImageSpec, ExportControlConfig, HardwareConfig,
+    DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec,
+    DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExportControlConfig, HardwareConfig,
     HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig,
     HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState,
     LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig,
@@ -30,7 +31,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "ebe3d952e99b02136b911962614c3a52acfa97c2ae940a1f832d1158ffe47756";
+    "07c792b033f04b638f0d90e15c814e68b230568c4e2d117bf086e144d0f24f89";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -334,9 +335,36 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
     },
 ];
 
+pub const DRIVER_RUNTIME_IRQS: [DriverRuntimeIrqSpec; 1] = [DriverRuntimeIrqSpec {
+    hot_path: "sdio-host",
+    irq: 158,
+    badge: 159,
+    handler_slot: 4,
+    notification_slot: 3,
+    trigger: DriverRuntimeIrqTrigger::Level,
+}];
+
+pub const DRIVER_RUNTIME_BUS_LINKS: [DriverRuntimeBusLinkSpec; 1] = [DriverRuntimeBusLinkSpec {
+    channel: "cyw43-sdio",
+    client_hot_path: "cyw43-wifi",
+    owner_hot_path: "sdio-host",
+    client_notification_slot: 3,
+    owner_notification_slot: 3,
+    client_to_owner_slot: 8,
+    owner_to_client_slot: 10,
+    shared_offset: 4096,
+    shared_len: 8192,
+    link_epoch: 1129927425,
+    event_offset: 160,
+    event_len: 96,
+    event_depth: 4,
+}];
+
 pub const DRIVER_RUNTIME_IMAGE_POLICY: DriverRuntimeImagePolicy = DriverRuntimeImagePolicy {
     required: true,
     images: &DRIVER_RUNTIME_IMAGES,
+    irqs: &DRIVER_RUNTIME_IRQS,
+    bus_links: &DRIVER_RUNTIME_BUS_LINKS,
 };
 
 pub const SHARD_LABELS: [&str; 256] = [
@@ -729,7 +757,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=b5d22bc62de7e0883b8fea8acc6db377cfe3450e8f6357f1a6c6d01a9e66971b",
+    "manifest.sha256=cdf450fc38f44e8a9a2063c97b7aeda81bf11bf8989b6db09c4ef79d8eeecb19",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

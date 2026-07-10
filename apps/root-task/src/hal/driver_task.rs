@@ -25,12 +25,19 @@ use crate::arch::aarch64::timer::{timer_counter_ticks, timer_freq_hz};
 use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
-    DriverRuntimeCounterSnapshot, DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    DriverRuntimeCounterSnapshot, DriverRuntimeDpcEventRing, DriverRuntimeFramebufferDescriptor,
+    DriverRuntimeInitDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT,
+    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
+    DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_VERSION,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
+    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_VERSION,
+    DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
     DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
@@ -379,8 +386,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
-    DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX, DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -2131,6 +2139,10 @@ const DRIVER_TASK_CYW43_SDIO_OWNER_WAIT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize =
     DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT;
 const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 0;
 const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
+const SDIO_RING_PRODUCER_ROOT_BOOTSTRAP: usize = 0;
+const SDIO_RING_PRODUCER_TRANSITION: usize = 1;
+const SDIO_RING_PRODUCER_CYW43_RUNTIME: usize = 2;
+const SDIO_ROOT_SEQUENCE_MAX: usize = 0x7fff_ffff;
 
 #[cfg(feature = "kernel")]
 fn driver_task_shared_store_barrier() {
@@ -2262,6 +2274,8 @@ struct DriverTaskCommandSlot {
     shared_frame_root_ptrs: [AtomicUsize; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
     request_seq: AtomicUsize,
     active: AtomicUsize,
+    ring_producer: AtomicUsize,
+    root_ring_writers: AtomicUsize,
     active_command_fingerprint: AtomicU32,
     timeout_resumes: AtomicUsize,
     last_progress_magic: AtomicU32,
@@ -2471,6 +2485,8 @@ impl DriverTaskCommandSlot {
             shared_frame_root_ptrs: [AtomicUsize::new(0), AtomicUsize::new(0)],
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
+            ring_producer: AtomicUsize::new(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP),
+            root_ring_writers: AtomicUsize::new(0),
             active_command_fingerprint: AtomicU32::new(0),
             timeout_resumes: AtomicUsize::new(0),
             last_progress_magic: AtomicU32::new(0),
@@ -2521,6 +2537,46 @@ impl DriverTaskCommandSlot {
             result: AtomicUsize::new(0),
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+struct RootRingProducerGuard<'a> {
+    slot: &'a DriverTaskCommandSlot,
+    tracked: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl Drop for RootRingProducerGuard<'_> {
+    fn drop(&mut self) {
+        if self.tracked {
+            self.slot.root_ring_writers.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn acquire_root_ring_producer<'a>(
+    contract: DriverTaskContract,
+    slot: &'a DriverTaskCommandSlot,
+) -> Option<RootRingProducerGuard<'a>> {
+    if contract != SDIO_HOST_DRIVER_TASK_CONTRACT {
+        return Some(RootRingProducerGuard {
+            slot,
+            tracked: false,
+        });
+    }
+    if slot.ring_producer.load(Ordering::Acquire) != SDIO_RING_PRODUCER_ROOT_BOOTSTRAP {
+        return None;
+    }
+    slot.root_ring_writers.fetch_add(1, Ordering::AcqRel);
+    if slot.ring_producer.load(Ordering::Acquire) != SDIO_RING_PRODUCER_ROOT_BOOTSTRAP {
+        slot.root_ring_writers.fetch_sub(1, Ordering::AcqRel);
+        return None;
+    }
+    Some(RootRingProducerGuard {
+        slot,
+        tracked: true,
+    })
 }
 
 #[cfg(feature = "kernel")]
@@ -3649,6 +3705,201 @@ pub fn driver_task_bus_owner_transport_caps_with_shared(
     Some((endpoint, ring_frame_cap, shared_frame_caps))
 }
 
+/// Return whether CYW43 has irreversible producer authority over the SDIO ring.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn sdio_command_ring_delegated_to_cyw43() -> bool {
+    slot_for_task_key(DRIVER_TASK_KEY_SDIO_HOST).is_some_and(|slot| {
+        slot.ring_producer.load(Ordering::Acquire) == SDIO_RING_PRODUCER_CYW43_RUNTIME
+    })
+}
+
+/// Read-only root view of the isolated SDIO owner's current DPC ring counters.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DriverTaskSdioDpcRingSnapshot {
+    /// Generated bus-link epoch recorded by the owner.
+    pub epoch: u32,
+    /// Sequence after the newest committed owner event.
+    pub producer: u32,
+    /// Sequence after the newest event consumed by CYW43.
+    pub consumer: u32,
+    /// Current ABI ring flags.
+    pub flags: u32,
+    /// Saturating owner overrun counter.
+    pub overruns: u32,
+    /// Saturating failed IRQ-acknowledgement counter.
+    pub ack_failures: u32,
+}
+
+#[cfg(feature = "kernel")]
+fn stable_sdio_dpc_ring_snapshot(
+    first: DriverRuntimeDpcEventRing,
+    second: DriverRuntimeDpcEventRing,
+) -> Option<DriverTaskSdioDpcRingSnapshot> {
+    if first != second || !second.valid() {
+        return None;
+    }
+    Some(DriverTaskSdioDpcRingSnapshot {
+        epoch: second.epoch,
+        producer: second.producer,
+        consumer: second.consumer,
+        flags: second.flags,
+        overruns: second.overruns,
+        ack_failures: second.ack_failures,
+    })
+}
+
+/// Snapshot the isolated SDIO owner's DPC ring without acquiring write
+/// authority. The root mapping is retained only for fail-closed diagnostics;
+/// producer and consumer ownership remain exclusively with the child runtimes.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_sdio_dpc_ring_snapshot() -> Option<DriverTaskSdioDpcRingSnapshot> {
+    let slot = slot_for_task_key(DRIVER_TASK_KEY_SDIO_HOST)?;
+    if slot.ring_producer.load(Ordering::Acquire) != SDIO_RING_PRODUCER_CYW43_RUNTIME
+        || !driver_runtime_descriptor_seal_registered(DriverTaskHotPath::SdioHost)
+        || !driver_runtime_descriptor_seal_registered(DriverTaskHotPath::Cyw43Wifi)
+    {
+        return None;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let dpc_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET))
+        as *const DriverRuntimeDpcEventRing;
+    let dpc_len = core::mem::size_of::<DriverRuntimeDpcEventRing>();
+    driver_task_ring_invalidate_root_range(dpc_ptr as usize, dpc_len);
+    // SAFETY: HAL admitted and retained this root mapping for the fixed owner
+    // command page. The generated event offset and ABI-sized record fit within
+    // that page. This path performs volatile reads only and never mutates owner
+    // or client ring state.
+    let first = unsafe { core::ptr::read_volatile(dpc_ptr) };
+    driver_task_ring_invalidate_root_range(dpc_ptr as usize, dpc_len);
+    // SAFETY: Same admitted, read-only diagnostic mapping as the first sample.
+    let second = unsafe { core::ptr::read_volatile(dpc_ptr) };
+    driver_task_shared_load_barrier();
+    stable_sdio_dpc_ring_snapshot(first, second)
+}
+
+#[cfg(feature = "kernel")]
+fn sdio_root_command_completion_drained(slot: &DriverTaskCommandSlot) -> bool {
+    let request = slot.request_seq.load(Ordering::Acquire);
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if request == 0 || request > SDIO_ROOT_SEQUENCE_MAX || ring_root_ptr == 0 {
+        return false;
+    }
+    driver_task_ring_invalidate_root_range(
+        ring_root_ptr,
+        core::mem::size_of::<DriverTaskCommandRecord>(),
+    );
+    driver_task_ring_invalidate_completion_record(ring_root_ptr);
+    // SAFETY: The root mapping is published by HAL and both fixed records fit
+    // in the first owner-ring page. Handoff reads only after the active root
+    // turn and every root writer have drained.
+    let command =
+        unsafe { core::ptr::read_volatile(ring_root_ptr as *const DriverTaskCommandRecord) };
+    // SAFETY: Same validated owner-ring page and fixed completion offset.
+    let completion = unsafe {
+        core::ptr::read_volatile(
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                as *const DriverTaskCompletionRecord,
+        )
+    };
+    command.sequence == request as u32 && completion.sequence == request as u32
+}
+
+#[cfg(feature = "kernel")]
+fn begin_sdio_producer_handoff(slot: &DriverTaskCommandSlot) -> bool {
+    if slot
+        .ring_producer
+        .compare_exchange(
+            SDIO_RING_PRODUCER_ROOT_BOOTSTRAP,
+            SDIO_RING_PRODUCER_TRANSITION,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return false;
+    }
+    if slot.root_ring_writers.load(Ordering::Acquire) != 0
+        || slot.active.load(Ordering::Acquire) != 0
+    {
+        slot.ring_producer
+            .store(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP, Ordering::Release);
+        return false;
+    }
+    true
+}
+
+/// Irreversibly delegate the shared SDIO command ring to the CYW43 runtime.
+///
+/// Root may use this ring only for descriptor replay and SDIO engine bootstrap.
+/// The transition succeeds only after those turns are drained and both sealed
+/// peers are admitted. Deleting root's endpoint cap leaves the child receive
+/// cap alive for notification-driven CYW43 service while removing root's send
+/// authority.
+#[cfg(feature = "kernel")]
+pub fn handoff_sdio_command_ring_to_cyw43(
+    cyw43_engine_completion: DriverTaskCompletionRecord,
+) -> bool {
+    let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_SDIO_HOST) else {
+        return false;
+    };
+    if slot.ring_producer.load(Ordering::Acquire) == SDIO_RING_PRODUCER_CYW43_RUNTIME {
+        return slot.endpoint.load(Ordering::Acquire) == 0;
+    }
+    if !begin_sdio_producer_handoff(slot) {
+        return false;
+    }
+    let rollback = || {
+        slot.ring_producer
+            .store(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP, Ordering::Release);
+        false
+    };
+    let Some(cyw43_slot) = slot_for_task_key(DRIVER_TASK_KEY_CYW43455) else {
+        return rollback();
+    };
+    let cyw43_request = cyw43_slot.request_seq.load(Ordering::Acquire);
+    let cyw43_progress_sequence = cyw43_slot.last_progress_sequence.load(Ordering::Acquire);
+    let cyw43_progress_aux0 = cyw43_slot.last_progress_aux0.load(Ordering::Acquire);
+    let cyw43_link_admitted = cyw43_slot.active.load(Ordering::Acquire) == 0
+        && cyw43_request != 0
+        && cyw43_engine_completion.sequence == cyw43_request as u32
+        && cyw43_engine_completion.code == DriverTaskCompletionCode::Progress.as_u16()
+        && cyw43_engine_completion.result == 1
+        && cyw43_progress_sequence == cyw43_engine_completion.sequence
+        && cyw43_progress_aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX;
+    if !driver_runtime_descriptor_seal_registered(DriverTaskHotPath::SdioHost)
+        || !driver_runtime_descriptor_seal_registered(DriverTaskHotPath::Cyw43Wifi)
+        || !cyw43_link_admitted
+        || !sdio_root_command_completion_drained(slot)
+    {
+        return rollback();
+    }
+    let endpoint = slot.endpoint.load(Ordering::Acquire);
+    if endpoint == 0 {
+        return rollback();
+    }
+    let delete_err = crate::sel4::cnode_delete(
+        sel4_sys::seL4_CapInitThreadCNode,
+        endpoint as sel4_sys::seL4_CPtr,
+        crate::sel4::word_bits() as u8,
+    );
+    if delete_err != sel4_sys::seL4_NoError {
+        return rollback();
+    }
+    slot.endpoint.store(0, Ordering::Release);
+    slot.ring_producer
+        .store(SDIO_RING_PRODUCER_CYW43_RUNTIME, Ordering::Release);
+    crate::bootstrap::log::force_uart_line(
+        "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio from=root-bootstrap to=cyw43-runtime root_endpoint=deleted root_submit=disabled sequence_domain=delegated status=ready",
+    );
+    true
+}
+
 /// Clear a partially published driver-task transport after bootstrap failure.
 #[cfg(feature = "kernel")]
 pub fn clear_driver_task_transport(contract: DriverTaskContract) {
@@ -4154,6 +4405,7 @@ pub fn stage_driver_task_ring_payload_at(
     }
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
+    let _root_producer_guard = acquire_root_ring_producer(contract, slot)?;
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     if ring_root_ptr == 0 {
         return None;
@@ -4301,6 +4553,7 @@ pub fn stage_driver_task_shared_payload(
 ) -> Option<DriverTaskStagedSharedPayload> {
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
+    let _root_producer_guard = acquire_root_ring_producer(contract, slot)?;
     let descriptor = describe_driver_task_shared_payload(payload, flags)?;
     if !driver_task_shared_payload_pages_ready(slot, payload.len()) {
         return None;
@@ -4426,6 +4679,125 @@ pub fn driver_runtime_init_descriptor_bytes(
 }
 
 #[cfg(feature = "kernel")]
+const BCM2711_SDIO_RUNTIME_IRQ: u32 = 158;
+#[cfg(feature = "kernel")]
+const BCM2711_SDIO_RUNTIME_IRQ_BADGE: u32 = BCM2711_SDIO_RUNTIME_IRQ + 1;
+
+#[cfg(feature = "kernel")]
+fn generated_cyw43_sdio_runtime_topology_sealed(
+    hot_path: DriverTaskHotPath,
+    task_key: u32,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> bool {
+    let policy = crate::generated::driver_runtime_image_policy();
+    if !policy.required
+        || policy.irqs.len() != 1
+        || policy.bus_links.len() != 1
+        || descriptor.bus_link_count != 1
+    {
+        return false;
+    }
+    let generated_irq = policy.irqs[0];
+    let generated_link = policy.bus_links[0];
+    if generated_irq.hot_path != DriverTaskHotPath::SdioHost.as_str()
+        || generated_irq.irq != BCM2711_SDIO_RUNTIME_IRQ
+        || generated_irq.badge != BCM2711_SDIO_RUNTIME_IRQ_BADGE
+        || u32::from(generated_irq.handler_slot) != DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        || u32::from(generated_irq.notification_slot) != DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        || generated_irq.trigger != crate::generated::DriverRuntimeIrqTrigger::Level
+        || generated_link.channel != "cyw43-sdio"
+        || generated_link.client_hot_path != DriverTaskHotPath::Cyw43Wifi.as_str()
+        || generated_link.owner_hot_path != DriverTaskHotPath::SdioHost.as_str()
+        || u32::from(generated_link.client_notification_slot)
+            != DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        || u32::from(generated_link.owner_notification_slot)
+            != DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        || u32::from(generated_link.client_to_owner_slot)
+            != DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT
+        || u32::from(generated_link.owner_to_client_slot)
+            != DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT
+        || generated_link.shared_offset != u32::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE)
+        || generated_link.shared_len != u32::from(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES)
+        || generated_link.link_epoch == 0
+        || generated_link.event_offset != DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET
+        || generated_link.event_len != DRIVER_RUNTIME_DPC_EVENT_RING_BYTES
+        || usize::from(generated_link.event_depth) != DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH
+    {
+        return false;
+    }
+
+    let link = descriptor.bus_links[0];
+    let (role_flag, peer_hot_path, local_slot, peer_slot) = match hot_path {
+        DriverTaskHotPath::Cyw43Wifi => (
+            DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+            DriverTaskHotPath::SdioHost.as_u32(),
+            u32::from(generated_link.client_notification_slot),
+            u32::from(generated_link.client_to_owner_slot),
+        ),
+        DriverTaskHotPath::SdioHost => (
+            DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
+            DriverTaskHotPath::Cyw43Wifi.as_u32(),
+            u32::from(generated_link.owner_notification_slot),
+            u32::from(generated_link.owner_to_client_slot),
+        ),
+        _ => return false,
+    };
+    let expected_flags = role_flag
+        | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE
+        | DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS
+        | DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING;
+    let link_matches = link.owner_hot_path == DriverTaskHotPath::SdioHost.as_u32()
+        && link.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+        && link.shared_offset == generated_link.shared_offset
+        && link.shared_len == generated_link.shared_len
+        && link.flags == expected_flags
+        && link.peer_hot_path == peer_hot_path
+        && link.shared_epoch == generated_link.link_epoch
+        && link.local_notification_slot == local_slot
+        && link.peer_notification_slot == peer_slot
+        && link.event_offset == generated_link.event_offset
+        && link.event_len == generated_link.event_len
+        && link.event_depth == generated_link.event_depth
+        && link.notification_dpc_valid()
+        && descriptor.has_sealed_pointer_free_bus_link(
+            task_key,
+            DriverTaskHotPath::SdioHost.as_u32(),
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+        );
+    if !link_matches {
+        return false;
+    }
+
+    match hot_path {
+        DriverTaskHotPath::Cyw43Wifi => {
+            descriptor.irq_count == 0
+                && descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY != 0
+                && descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND == 0
+        }
+        DriverTaskHotPath::SdioHost => {
+            let expected_trigger = match generated_irq.trigger {
+                crate::generated::DriverRuntimeIrqTrigger::Level => {
+                    DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL
+                }
+                crate::generated::DriverRuntimeIrqTrigger::Edge => {
+                    pi4_driver_abi::DRIVER_RUNTIME_IRQ_TRIGGER_EDGE
+                }
+            };
+            let irq = descriptor.irqs[0];
+            descriptor.irq_count == 1
+                && descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND != 0
+                && descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY == 0
+                && irq.irq == generated_irq.irq
+                && irq.badge == generated_irq.badge
+                && irq.handler_slot == u32::from(generated_irq.handler_slot)
+                && irq.notification_slot == u32::from(generated_irq.notification_slot)
+                && irq.trigger == expected_trigger
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn driver_runtime_descriptor_expected_bus_link_sealed(
     hot_path: DriverTaskHotPath,
     task_key: u32,
@@ -4437,11 +4809,9 @@ fn driver_runtime_descriptor_expected_bus_link_sealed(
             DriverTaskHotPath::PcieRoot.as_u32(),
             DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
         ),
-        DriverTaskHotPath::Cyw43Wifi => descriptor.has_sealed_pointer_free_bus_link(
-            task_key,
-            DriverTaskHotPath::SdioHost.as_u32(),
-            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-        ),
+        DriverTaskHotPath::Cyw43Wifi | DriverTaskHotPath::SdioHost => {
+            generated_cyw43_sdio_runtime_topology_sealed(hot_path, task_key, descriptor)
+        }
         _ => descriptor.bus_link_count == 0,
     }
 }
@@ -4489,7 +4859,9 @@ fn driver_runtime_descriptor_bus_link_seal_label(
         return "missing";
     }
     match hot_path {
-        DriverTaskHotPath::UsbKeyboard | DriverTaskHotPath::Cyw43Wifi => "valid",
+        DriverTaskHotPath::UsbKeyboard
+        | DriverTaskHotPath::Cyw43Wifi
+        | DriverTaskHotPath::SdioHost => "valid",
         _ => "none",
     }
 }
@@ -6677,6 +7049,15 @@ fn run_driver_task_ring_command_with_mode_and_staging(
         );
         return None;
     };
+    let Some(_root_producer_guard) = acquire_root_ring_producer(contract, slot) else {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "producer-delegated-to-cyw43",
+        );
+        return None;
+    };
     let endpoint = slot.endpoint.load(Ordering::Acquire);
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     if endpoint == 0 {
@@ -6765,6 +7146,18 @@ fn run_driver_task_ring_command_with_mode_and_staging(
             .load(Ordering::Relaxed)
             .wrapping_add(1)
             .max(1);
+        if contract == SDIO_HOST_DRIVER_TASK_CONTRACT && request > SDIO_ROOT_SEQUENCE_MAX {
+            slot.active.store(0, Ordering::Release);
+            slot.active_command_fingerprint.store(0, Ordering::Release);
+            slot.timeout_resumes.store(0, Ordering::Release);
+            emit_driver_task_ring_resource_submit_status(
+                contract,
+                command,
+                "runtime-ring-submit",
+                "root-sequence-domain-exhausted",
+            );
+            return None;
+        }
         slot.request_seq.store(request, Ordering::Release);
         slot.active_command_fingerprint
             .store(command_fingerprint, Ordering::Release);
@@ -9960,6 +10353,31 @@ mod tests {
         assert_eq!(driver_task_spins_to_cycles_at_hz(1, 0), 0);
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_dpc_snapshot_requires_two_stable_valid_reads() {
+        let ring = DriverRuntimeDpcEventRing::empty(41);
+        let snapshot = stable_sdio_dpc_ring_snapshot(ring, ring)
+            .expect("stable ABI ring should be observable");
+        assert_eq!(snapshot.epoch, 41);
+
+        let mut changed = ring;
+        changed.producer = 1;
+        assert_eq!(stable_sdio_dpc_ring_snapshot(ring, changed), None);
+
+        let mut invalid = ring;
+        invalid.magic = 0;
+        assert_eq!(stable_sdio_dpc_ring_snapshot(invalid, invalid), None);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_dpc_snapshot_rejects_zero_epoch_as_invalid() {
+        let mut ring = DriverRuntimeDpcEventRing::empty(40);
+        ring.epoch = 0;
+        assert_eq!(stable_sdio_dpc_ring_snapshot(ring, ring), None);
+    }
+
     #[test]
     fn priority_order_matches_sel4_and_cooperative_service_rules() {
         assert!(
@@ -10128,6 +10546,107 @@ mod tests {
         assert_eq!(slot.steady_priority_active.load(Ordering::Acquire), 0);
         assert_eq!(slot.active.load(Ordering::Acquire), 0);
         assert_eq!(slot.request_seq.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_root_submission_and_staging_are_allowed_before_handoff() {
+        let slot = DriverTaskCommandSlot::new();
+
+        let submit_guard = acquire_root_ring_producer(SDIO_HOST_DRIVER_TASK_CONTRACT, &slot)
+            .expect("root bootstrap submission must own SDIO ring");
+        assert_eq!(slot.root_ring_writers.load(Ordering::Acquire), 1);
+        drop(submit_guard);
+        let stage_guard = acquire_root_ring_producer(SDIO_HOST_DRIVER_TASK_CONTRACT, &slot)
+            .expect("root bootstrap staging must own SDIO ring");
+        drop(stage_guard);
+
+        assert_eq!(slot.root_ring_writers.load(Ordering::Acquire), 0);
+        assert_eq!(
+            slot.ring_producer.load(Ordering::Acquire),
+            SDIO_RING_PRODUCER_ROOT_BOOTSTRAP
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_producer_handoff_rejects_an_active_root_slot() {
+        let slot = DriverTaskCommandSlot::new();
+        slot.active.store(1, Ordering::Release);
+
+        assert!(!begin_sdio_producer_handoff(&slot));
+        assert_eq!(
+            slot.ring_producer.load(Ordering::Acquire),
+            SDIO_RING_PRODUCER_ROOT_BOOTSTRAP
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_root_submission_and_staging_are_rejected_after_handoff() {
+        let slot = DriverTaskCommandSlot::new();
+        slot.ring_producer
+            .store(SDIO_RING_PRODUCER_CYW43_RUNTIME, Ordering::Release);
+
+        assert!(acquire_root_ring_producer(SDIO_HOST_DRIVER_TASK_CONTRACT, &slot).is_none());
+        assert!(acquire_root_ring_producer(SDIO_HOST_DRIVER_TASK_CONTRACT, &slot).is_none());
+        assert_eq!(slot.root_ring_writers.load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_producer_handoff_is_one_way_and_permanent() {
+        let slot = DriverTaskCommandSlot::new();
+        assert!(begin_sdio_producer_handoff(&slot));
+        slot.ring_producer
+            .store(SDIO_RING_PRODUCER_CYW43_RUNTIME, Ordering::Release);
+
+        assert!(!begin_sdio_producer_handoff(&slot));
+        assert_eq!(
+            slot.ring_producer.load(Ordering::Acquire),
+            SDIO_RING_PRODUCER_CYW43_RUNTIME
+        );
+        assert!(acquire_root_ring_producer(SDIO_HOST_DRIVER_TASK_CONTRACT, &slot).is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_handoff_requires_matching_drained_root_completion() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = [0u8; DRIVER_TASK_RING_PAGE_BYTES];
+        let command = DriverTaskCommandRecord::pi4_hot_path(
+            9,
+            DriverTaskHotPath::SdioHost,
+            DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        let completion = DriverTaskCompletionRecord::progress(9, 1);
+        // SAFETY: This test-owned page carries the fixed command/completion
+        // records at their ABI offsets.
+        unsafe {
+            core::ptr::write_volatile(
+                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                command,
+            );
+            core::ptr::write_volatile(
+                ring_page
+                    .as_mut_ptr()
+                    .add(DRIVER_TASK_RING_COMPLETION_OFFSET)
+                    as *mut DriverTaskCompletionRecord,
+                completion,
+            );
+        }
+        slot.ring_root_ptr
+            .store(ring_page.as_mut_ptr() as usize, Ordering::Release);
+        slot.request_seq.store(9, Ordering::Release);
+        assert!(sdio_root_command_completion_drained(&slot));
+
+        slot.request_seq.store(10, Ordering::Release);
+        assert!(!sdio_root_command_completion_drained(&slot));
     }
 
     #[cfg(feature = "kernel")]

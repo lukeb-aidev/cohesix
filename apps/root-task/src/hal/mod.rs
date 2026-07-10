@@ -59,25 +59,30 @@ use crate::sel4::{
 use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
-    DriverRuntimeBusLinkDescriptor, DriverRuntimeInitDescriptor, DriverRuntimePageDescriptor,
-    DriverRuntimeResourceRangeDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
-    DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
-    DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
+    DriverRuntimeBusLinkDescriptor, DriverRuntimeInitDescriptor, DriverRuntimeIrqDescriptor,
+    DriverRuntimePageDescriptor, DriverRuntimeResourceRangeDescriptor,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
+    DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING,
+    DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
+    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
     DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
     DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
-    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
-    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
-    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
-    DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
-    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
-    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
-    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
+    DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED, DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS,
+    DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
+    DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -454,6 +459,7 @@ pub struct KernelIrqBinding {
     notification_slot: seL4_CPtr,
     badged_notification_slot: seL4_CPtr,
     badge: seL4_Word,
+    owns_notification: bool,
 }
 
 #[cfg(feature = "kernel")]
@@ -1285,6 +1291,8 @@ struct KernelDriverTaskHandle {
     cnode: seL4_CPtr,
     command_endpoint: seL4_CPtr,
     notification: seL4_CPtr,
+    runtime_irq: Option<RuntimeIrqBinding>,
+    reciprocal_notification_caps: [Option<InstalledChildCap>; 2],
     fault_slot: seL4_CPtr,
     ipc_frame: seL4_CPtr,
     stack_frame: seL4_CPtr,
@@ -1304,6 +1312,118 @@ struct KernelDriverTaskHandle {
     vspace_isolated: bool,
     pointer_free_ipc: bool,
     started: bool,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug)]
+struct RuntimeIrqBinding {
+    kernel: KernelIrqBinding,
+    child_cnode: seL4_CPtr,
+    child_handler_slot: seL4_CPtr,
+    child_depth: u8,
+}
+
+#[cfg(feature = "kernel")]
+fn release_runtime_irq_binding(binding: RuntimeIrqBinding) -> Result<(), seL4_Error> {
+    let root_cnode = sel4_sys::seL4_CapInitThreadCNode;
+    let root_depth = sel4::word_bits() as u8;
+    let mut first_error = sel4::cnode_delete(
+        binding.child_cnode,
+        binding.child_handler_slot,
+        binding.child_depth,
+    );
+    for err in [
+        sel4::irq_handler_clear(binding.kernel.handler_slot),
+        sel4::cnode_delete(
+            root_cnode,
+            binding.kernel.badged_notification_slot,
+            root_depth,
+        ),
+        sel4::cnode_delete(root_cnode, binding.kernel.handler_slot, root_depth),
+    ] {
+        if err != seL4_NoError && first_error == seL4_NoError {
+            first_error = err;
+        }
+    }
+    if first_error == seL4_NoError {
+        Ok(())
+    } else {
+        Err(first_error)
+    }
+}
+
+#[cfg(feature = "kernel")]
+struct RuntimeIrqInstallGuard {
+    binding: Option<RuntimeIrqBinding>,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug)]
+struct InstalledChildCap {
+    cnode: seL4_CPtr,
+    slot: seL4_CPtr,
+    depth: u8,
+}
+
+#[cfg(feature = "kernel")]
+struct ReciprocalNotificationCapGuard {
+    caps: [Option<InstalledChildCap>; 2],
+}
+
+#[cfg(feature = "kernel")]
+impl ReciprocalNotificationCapGuard {
+    const fn empty() -> Self {
+        Self { caps: [None; 2] }
+    }
+
+    fn push(&mut self, cap: InstalledChildCap) -> Result<(), HalError> {
+        let Some(slot) = self.caps.iter_mut().find(|slot| slot.is_none()) else {
+            return Err(HalError::Unsupported(
+                "driver-runtime-reciprocal-cap-overflow",
+            ));
+        };
+        *slot = Some(cap);
+        Ok(())
+    }
+
+    fn commit(mut self) -> [Option<InstalledChildCap>; 2] {
+        core::mem::replace(&mut self.caps, [None; 2])
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl Drop for ReciprocalNotificationCapGuard {
+    fn drop(&mut self) {
+        for cap in self.caps.iter_mut().filter_map(Option::take) {
+            let _ = sel4::cnode_delete(cap.cnode, cap.slot, cap.depth);
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl RuntimeIrqInstallGuard {
+    const fn empty() -> Self {
+        Self { binding: None }
+    }
+
+    const fn new(binding: RuntimeIrqBinding) -> Self {
+        Self {
+            binding: Some(binding),
+        }
+    }
+
+    fn commit(mut self) -> Option<RuntimeIrqBinding> {
+        self.binding.take()
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl Drop for RuntimeIrqInstallGuard {
+    fn drop(&mut self) {
+        if let Some(binding) = self.binding.take() {
+            let _ = release_runtime_irq_binding(binding);
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -1497,6 +1617,131 @@ fn runtime_region_paddr_is_contiguous(
 }
 
 #[cfg(feature = "kernel")]
+const BCM2711_SDIO_IRQ: u32 = 158;
+#[cfg(feature = "kernel")]
+const BCM2711_SDIO_IRQ_BADGE: u32 = BCM2711_SDIO_IRQ + 1;
+#[cfg(feature = "kernel")]
+const DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL: u16 = 0;
+#[cfg(feature = "kernel")]
+const DRIVER_RUNTIME_IRQ_TRIGGER_EDGE: u16 = 1;
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug)]
+struct GeneratedCyw43SdioTopology {
+    irq: crate::generated::DriverRuntimeIrqSpec,
+    link: crate::generated::DriverRuntimeBusLinkSpec,
+}
+
+#[cfg(feature = "kernel")]
+fn generated_cyw43_sdio_topology() -> Result<GeneratedCyw43SdioTopology, HalError> {
+    let policy = crate::generated::driver_runtime_image_policy();
+    if !policy.required || policy.irqs.len() != 1 || policy.bus_links.len() != 1 {
+        return Err(HalError::Unsupported(
+            "driver-runtime-cyw43-sdio-topology-count",
+        ));
+    }
+    let irq = policy.irqs[0];
+    let link = policy.bus_links[0];
+    let irq_valid = irq.hot_path == driver_task::DriverTaskHotPath::SdioHost.as_str()
+        && irq.irq == BCM2711_SDIO_IRQ
+        && irq.badge == BCM2711_SDIO_IRQ_BADGE
+        && u32::from(irq.handler_slot) == pi4_driver_abi::DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        && u32::from(irq.notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && matches!(
+            irq.trigger,
+            crate::generated::DriverRuntimeIrqTrigger::Level
+        );
+    let link_valid = link.channel == "cyw43-sdio"
+        && link.client_hot_path == driver_task::DriverTaskHotPath::Cyw43Wifi.as_str()
+        && link.owner_hot_path == driver_task::DriverTaskHotPath::SdioHost.as_str()
+        && u32::from(link.client_notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && u32::from(link.owner_notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && u32::from(link.client_to_owner_slot) == DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT
+        && u32::from(link.owner_to_client_slot) == DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT
+        && link.shared_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
+        && link.shared_len == driver_task::DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES as u32
+        && link.link_epoch != 0
+        && link.event_offset == DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET
+        && link.event_len == DRIVER_RUNTIME_DPC_EVENT_RING_BYTES
+        && usize::from(link.event_depth) == DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH;
+    if !irq_valid || !link_valid {
+        return Err(HalError::Unsupported(
+            "driver-runtime-cyw43-sdio-topology-invalid",
+        ));
+    }
+    Ok(GeneratedCyw43SdioTopology { irq, link })
+}
+
+#[cfg(feature = "kernel")]
+fn generated_irq_trigger_word(trigger: crate::generated::DriverRuntimeIrqTrigger) -> u16 {
+    match trigger {
+        crate::generated::DriverRuntimeIrqTrigger::Level => DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+        crate::generated::DriverRuntimeIrqTrigger::Edge => DRIVER_RUNTIME_IRQ_TRIGGER_EDGE,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn generated_irq_trigger(trigger: crate::generated::DriverRuntimeIrqTrigger) -> IrqTrigger {
+    match trigger {
+        crate::generated::DriverRuntimeIrqTrigger::Level => IrqTrigger::Level,
+        crate::generated::DriverRuntimeIrqTrigger::Edge => IrqTrigger::Edge,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn generated_cyw43_sdio_bus_link_descriptor(
+    hot_path: driver_task::DriverTaskHotPath,
+    topology: GeneratedCyw43SdioTopology,
+) -> Result<DriverRuntimeBusLinkDescriptor, HalError> {
+    let (flags, peer_hot_path, local_notification_slot, peer_notification_slot) = match hot_path {
+        driver_task::DriverTaskHotPath::Cyw43Wifi => (
+            DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+            driver_task::DriverTaskHotPath::SdioHost.as_u32(),
+            topology.link.client_notification_slot,
+            topology.link.client_to_owner_slot,
+        ),
+        driver_task::DriverTaskHotPath::SdioHost => (
+            DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+            driver_task::DriverTaskHotPath::Cyw43Wifi.as_u32(),
+            topology.link.owner_notification_slot,
+            topology.link.owner_to_client_slot,
+        ),
+        _ => {
+            return Err(HalError::Unsupported(
+                "driver-runtime-cyw43-sdio-topology-role",
+            ));
+        }
+    };
+    let descriptor = DriverRuntimeBusLinkDescriptor::new(
+        driver_task::DriverTaskHotPath::SdioHost.as_u32(),
+        DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+        topology.link.shared_offset,
+        topology.link.shared_len,
+        flags,
+    )
+    .with_notification_dpc(
+        peer_hot_path,
+        u32::from(local_notification_slot),
+        u32::from(peer_notification_slot),
+        topology.link.link_epoch,
+    );
+    if descriptor.event_offset != topology.link.event_offset
+        || descriptor.event_len != topology.link.event_len
+        || descriptor.event_depth != topology.link.event_depth
+    {
+        return Err(HalError::Unsupported(
+            "driver-runtime-cyw43-sdio-event-geometry",
+        ));
+    }
+    if !descriptor.valid() {
+        return Err(HalError::Unsupported(
+            "driver-runtime-cyw43-sdio-descriptor-invalid",
+        ));
+    }
+    Ok(descriptor)
+}
+
+#[cfg(feature = "kernel")]
 const PI4_VL805_DMA_BUS_ALIAS_OR: u64 = 0x0000_0004_0000_0000;
 #[cfg(feature = "kernel")]
 const PI4_VL805_DMA_BUS_ALIAS_AND: u64 = 0x0000_0000_ffff_ffff;
@@ -1519,7 +1764,7 @@ impl RuntimeInitDescriptorBuilder {
         role_bit: usize,
         task_key: usize,
         artifact_hash: u32,
-    ) -> Self {
+    ) -> Result<Self, HalError> {
         let mut descriptor = DriverRuntimeInitDescriptor::empty();
         descriptor.hot_path = spec.hot_path.as_u32();
         descriptor.role_bit = role_bit as u32;
@@ -1545,19 +1790,22 @@ impl RuntimeInitDescriptorBuilder {
                 descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
             }
             driver_task::DriverTaskHotPath::Cyw43Wifi => {
+                let topology = generated_cyw43_sdio_topology()?;
                 descriptor.bus_link_count = 1;
-                descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
-                    driver_task::DriverTaskHotPath::SdioHost.as_u32(),
-                    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-                    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
-                    driver_task::DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES as u32,
-                    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
-                );
+                descriptor.bus_links[0] =
+                    generated_cyw43_sdio_bus_link_descriptor(spec.hot_path, topology)?;
+                descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
+            }
+            driver_task::DriverTaskHotPath::SdioHost => {
+                let topology = generated_cyw43_sdio_topology()?;
+                descriptor.bus_link_count = 1;
+                descriptor.bus_links[0] =
+                    generated_cyw43_sdio_bus_link_descriptor(spec.hot_path, topology)?;
                 descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
             }
             _ => {}
         }
-        Self {
+        Ok(Self {
             descriptor,
             expected_mmio_pages: spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Mmio),
             expected_dma_pages: spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Dma),
@@ -1565,7 +1813,27 @@ impl RuntimeInitDescriptorBuilder {
                 .region_pages(driver_task::DriverTaskRuntimeRegionKind::SharedBuffer),
             task_key: task_key as u32,
             artifact_hash,
-        }
+        })
+    }
+
+    fn add_irq(&mut self, irq: crate::generated::DriverRuntimeIrqSpec) -> Result<(), HalError> {
+        let index = usize::from(self.descriptor.irq_count);
+        let Some(slot) = self.descriptor.irqs.get_mut(index) else {
+            return Err(HalError::Unsupported("driver-runtime-init-irq-overflow"));
+        };
+        *slot = DriverRuntimeIrqDescriptor {
+            irq: irq.irq,
+            badge: irq.badge,
+            handler_slot: u32::from(irq.handler_slot),
+            notification_slot: u32::from(irq.notification_slot),
+            trigger: generated_irq_trigger_word(irq.trigger),
+            flags: 0,
+            reserved: 0,
+        };
+        self.descriptor.irq_count = self.descriptor.irq_count.saturating_add(1);
+        self.descriptor.flags &= !DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
+        Ok(())
     }
 
     fn add_mmio_page(&mut self, paddr: usize) -> Result<(), HalError> {
@@ -1747,12 +2015,42 @@ fn runtime_init_descriptor_expected_bus_links(
                 )
         }
         Some(driver_task::DriverTaskHotPath::Cyw43Wifi) => {
+            let topology = match generated_cyw43_sdio_topology() {
+                Ok(topology) => topology,
+                Err(_) => return false,
+            };
             descriptor.bus_link_count == 1
                 && descriptor.has_sealed_pointer_free_bus_link(
                     task_key,
                     driver_task::DriverTaskHotPath::SdioHost.as_u32(),
                     DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
                 )
+                && descriptor.bus_links[0].notification_dpc_valid()
+                && descriptor.bus_links[0].flags
+                    == (DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT
+                        | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE
+                        | DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS
+                        | DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING)
+                && descriptor.bus_links[0].shared_epoch == topology.link.link_epoch
+        }
+        Some(driver_task::DriverTaskHotPath::SdioHost) => {
+            let topology = match generated_cyw43_sdio_topology() {
+                Ok(topology) => topology,
+                Err(_) => return false,
+            };
+            descriptor.bus_link_count == 1
+                && descriptor.has_sealed_pointer_free_bus_link(
+                    task_key,
+                    driver_task::DriverTaskHotPath::SdioHost.as_u32(),
+                    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+                )
+                && descriptor.bus_links[0].notification_dpc_valid()
+                && descriptor.bus_links[0].flags
+                    == (DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER
+                        | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE
+                        | DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS
+                        | DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING)
+                && descriptor.bus_links[0].shared_epoch == topology.link.link_epoch
         }
         Some(_) => descriptor.bus_link_count == 0,
         None => false,
@@ -2274,6 +2572,25 @@ fn bind_driver_tcb_notification_for_boot(
     notification: seL4_CPtr,
 ) -> Result<bool, HalError> {
     if driver_task::physical_pi_driver_task_only_owner_state_active() {
+        let topology = generated_cyw43_sdio_topology()?;
+        let generated_peer = (contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+            && topology.link.client_hot_path == driver_task::DriverTaskHotPath::Cyw43Wifi.as_str())
+            || (contract == SDIO_HOST_DRIVER_TASK_CONTRACT
+                && topology.link.owner_hot_path
+                    == driver_task::DriverTaskHotPath::SdioHost.as_str());
+        if generated_peer {
+            sel4::bind_tcb_notification(tcb, notification).map_err(HalError::Sel4)?;
+            let mut line = heapless::String::<192>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "DRIVER_TASK_NOTIFICATION_BOUND contract={} tcb=0x{:04x} notification=0x{:04x} source=generated-cyw43-sdio-topology",
+                    contract.name, tcb, notification,
+                ),
+            );
+            crate::bootstrap::log::force_uart_line(line.as_str());
+            return Ok(true);
+        }
         let mut line = heapless::String::<192>::new();
         let _ = fmt::write(
             &mut line,
@@ -2828,6 +3145,8 @@ impl<'a> KernelHal<'a> {
             ring_frame: Some(ring_frame.cap()),
             vspace: None,
             code_frame: None,
+            runtime_irq: None,
+            reciprocal_notification_caps: [None; 2],
             runtime_image_spec,
             runtime_image_declared_region_mask: runtime_image_declared_region_mask(
                 runtime_image_spec,
@@ -3237,13 +3556,23 @@ impl<'a> KernelHal<'a> {
         contract: DriverTaskContract,
         child_cnode: seL4_CPtr,
         child_depth: u8,
+        client_notification: seL4_CPtr,
         vspace: seL4_CPtr,
         tracker: &mut VSpaceTableTracker,
-    ) -> Result<(), HalError> {
+    ) -> Result<ReciprocalNotificationCapGuard, HalError> {
         if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
-            return Ok(());
+            return Ok(ReciprocalNotificationCapGuard::empty());
         }
-        let (sdio_endpoint, sdio_ring_frame, sdio_shared_frames) =
+        let topology = generated_cyw43_sdio_topology()?;
+        let owner = self
+            .driver_tasks
+            .iter()
+            .find(|handle| handle.contract == SDIO_HOST_DRIVER_TASK_CONTRACT)
+            .copied()
+            .ok_or(HalError::Unsupported(
+                "driver-runtime-sdio-owner-handle-missing",
+            ))?;
+        let (_sdio_endpoint, sdio_ring_frame, sdio_shared_frames) =
             driver_task::driver_task_bus_owner_transport_caps_with_shared(
                 SDIO_HOST_DRIVER_TASK_CONTRACT,
                 driver_task::DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY,
@@ -3253,19 +3582,46 @@ impl<'a> KernelHal<'a> {
             ))?;
         let root_cnode = self.env.init_cnode_cap();
         let root_depth = sel4::word_bits() as u8;
-        let endpoint_err = sel4::cnode_mint_depth(
+        let send_only = sel4_sys::seL4_CapRights::new(0, 0, 0, 1);
+        let mut installed = ReciprocalNotificationCapGuard::empty();
+        let client_to_owner_slot = seL4_CPtr::from(topology.link.client_to_owner_slot);
+        let client_to_owner_err = sel4::cnode_mint_depth(
             child_cnode,
-            driver_task::DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT,
+            client_to_owner_slot,
             child_depth,
             root_cnode,
-            sdio_endpoint,
+            owner.notification,
             root_depth,
-            sel4_sys::seL4_CapRights_All,
+            send_only,
             0,
         );
-        if endpoint_err != seL4_NoError {
-            return Err(HalError::Sel4(endpoint_err));
+        if client_to_owner_err != seL4_NoError {
+            return Err(HalError::Sel4(client_to_owner_err));
         }
+        installed.push(InstalledChildCap {
+            cnode: child_cnode,
+            slot: client_to_owner_slot,
+            depth: child_depth,
+        })?;
+        let owner_to_client_slot = seL4_CPtr::from(topology.link.owner_to_client_slot);
+        let owner_to_client_err = sel4::cnode_mint_depth(
+            owner.cnode,
+            owner_to_client_slot,
+            child_depth,
+            root_cnode,
+            client_notification,
+            root_depth,
+            send_only,
+            0,
+        );
+        if owner_to_client_err != seL4_NoError {
+            return Err(HalError::Sel4(owner_to_client_err));
+        }
+        installed.push(InstalledChildCap {
+            cnode: owner.cnode,
+            slot: owner_to_client_slot,
+            depth: child_depth,
+        })?;
         self.env
             .map_page_copy_into_vspace(
                 sdio_ring_frame,
@@ -3293,10 +3649,25 @@ impl<'a> KernelHal<'a> {
                 )
                 .map_err(HalError::Sel4)?;
         }
-        crate::bootstrap::log::force_uart_line(
-            "DRIVER_TASK_BUS_LINK contract=cyw43455 owner=sdio-host channel=cyw43-sdio endpoint_slot=0x0008 ring_vaddr=0x70e00000 data_vaddr=0x70e01000 shared_len=8192",
+        let mut line = heapless::String::<256>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_BUS_LINK contract={} owner={} channel={} client_send_slot=0x{:04x} owner_send_slot=0x{:04x} rights=write-only ring_vaddr=0x{:08x} data_vaddr=0x{:08x} shared_len={} link_epoch={}",
+                contract.name,
+                SDIO_HOST_DRIVER_TASK_CONTRACT.name,
+                topology.link.channel,
+                topology.link.client_to_owner_slot,
+                topology.link.owner_to_client_slot,
+                driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR,
+                driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR
+                    + driver_task::DRIVER_TASK_RING_PAGE_BYTES,
+                topology.link.shared_len,
+                topology.link.link_epoch,
+            ),
         );
-        Ok(())
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        Ok(installed)
     }
 
     fn install_usb_pcie_bus_link(
@@ -3570,22 +3941,41 @@ impl<'a> KernelHal<'a> {
                 .map_err(HalError::Sel4)?;
         }
         self.install_usb_pcie_bus_link(contract, child_cnode, child_depth, vspace, &mut tracker)?;
-        self.install_cyw43_sdio_bus_link(contract, child_cnode, child_depth, vspace, &mut tracker)?;
+        let reciprocal_notification_caps = self.install_cyw43_sdio_bus_link(
+            contract,
+            child_cnode,
+            child_depth,
+            notification,
+            vspace,
+            &mut tracker,
+        )?;
 
-        let mut runtime_init_descriptor = runtime_image_spec.map(|spec| {
-            RuntimeInitDescriptorBuilder::new(
-                spec,
-                role_bit,
-                task_key,
-                driver_task::pi4_driver_task_runtime_artifact_hash(spec.hot_path),
-            )
-        });
+        let mut runtime_init_descriptor = runtime_image_spec
+            .map(|spec| {
+                RuntimeInitDescriptorBuilder::new(
+                    spec,
+                    role_bit,
+                    task_key,
+                    driver_task::pi4_driver_task_runtime_artifact_hash(spec.hot_path),
+                )
+            })
+            .transpose()?;
         let runtime_image_mapped_region_mask = self.map_isolated_runtime_declared_regions(
             runtime_image_spec,
             vspace,
             &mut tracker,
             runtime_init_descriptor.as_mut(),
         )?;
+        let runtime_irq = match runtime_init_descriptor.as_mut() {
+            Some(builder) => self.install_generated_runtime_irq(
+                contract,
+                child_cnode,
+                child_depth,
+                notification,
+                builder,
+            )?,
+            None => RuntimeIrqInstallGuard::empty(),
+        };
         let runtime_init_descriptor = match runtime_init_descriptor {
             Some(builder) if driver_task::physical_pi_driver_task_only_owner_state_active() => {
                 Some(builder.finish()?)
@@ -3820,6 +4210,9 @@ impl<'a> KernelHal<'a> {
             .map(RamFrame::cap)
             .ok_or(HalError::Unsupported("driver-runtime-stack-empty"))?;
 
+        let runtime_irq = runtime_irq.commit();
+        let reciprocal_notification_caps = reciprocal_notification_caps.commit();
+
         Ok(KernelDriverTaskHandle {
             contract,
             role_bit,
@@ -3833,6 +4226,8 @@ impl<'a> KernelHal<'a> {
             ring_frame: Some(ring_frame.cap()),
             vspace: Some(vspace),
             code_frame: mapped_code_frame,
+            runtime_irq,
+            reciprocal_notification_caps,
             runtime_image_spec,
             runtime_image_declared_region_mask: runtime_image_declared_region_mask(
                 runtime_image_spec,
@@ -3855,6 +4250,97 @@ impl<'a> KernelHal<'a> {
         })
     }
 
+    fn install_generated_runtime_irq(
+        &mut self,
+        contract: DriverTaskContract,
+        child_cnode: seL4_CPtr,
+        child_depth: u8,
+        notification: seL4_CPtr,
+        builder: &mut RuntimeInitDescriptorBuilder,
+    ) -> Result<RuntimeIrqInstallGuard, HalError> {
+        if contract != SDIO_HOST_DRIVER_TASK_CONTRACT {
+            return Ok(RuntimeIrqInstallGuard::empty());
+        }
+        let topology = generated_cyw43_sdio_topology()?;
+        let kernel = match self.bind_irq_to_notification_with_badge(
+            Irq(topology.irq.irq),
+            generated_irq_trigger(topology.irq.trigger),
+            seL4_Word::from(topology.irq.badge),
+            notification,
+            false,
+        ) {
+            Ok(binding) => binding,
+            Err(err) => {
+                let mut line = heapless::String::<224>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "DRIVER_TASK_IRQ_TOPOLOGY contract={} irq={} badge={} status=poll-fallback proof_effect=acceptance-red err={}",
+                        contract.name, topology.irq.irq, topology.irq.badge, err,
+                    ),
+                );
+                crate::bootstrap::log::force_uart_line(line.as_str());
+                return Ok(RuntimeIrqInstallGuard::empty());
+            }
+        };
+        let child_handler_slot = seL4_CPtr::from(topology.irq.handler_slot);
+        let root_cnode = self.env.init_cnode_cap();
+        let root_depth = sel4::word_bits() as u8;
+        let copy_err = sel4::cnode_mint_depth(
+            child_cnode,
+            child_handler_slot,
+            child_depth,
+            root_cnode,
+            kernel.handler_slot,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+            0,
+        );
+        if copy_err != seL4_NoError {
+            let _ = self.release_irq_notification(kernel);
+            let mut line = heapless::String::<224>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "DRIVER_TASK_IRQ_TOPOLOGY contract={} irq={} badge={} status=poll-fallback proof_effect=acceptance-red err=handler-cap-mint-{}",
+                    contract.name, topology.irq.irq, topology.irq.badge, copy_err,
+                ),
+            );
+            crate::bootstrap::log::force_uart_line(line.as_str());
+            return Ok(RuntimeIrqInstallGuard::empty());
+        }
+        if let Err(err) = builder.add_irq(topology.irq) {
+            let runtime = RuntimeIrqBinding {
+                kernel,
+                child_cnode,
+                child_handler_slot,
+                child_depth,
+            };
+            let _ = release_runtime_irq_binding(runtime);
+            return Err(err);
+        }
+        let runtime = RuntimeIrqBinding {
+            kernel,
+            child_cnode,
+            child_handler_slot,
+            child_depth,
+        };
+        let mut line = heapless::String::<224>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_IRQ_TOPOLOGY contract={} irq={} badge={} handler_slot={} notification_slot={} trigger=level status=bound proof_effect=notification-dpc-ready",
+                contract.name,
+                topology.irq.irq,
+                topology.irq.badge,
+                topology.irq.handler_slot,
+                topology.irq.notification_slot,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        Ok(RuntimeIrqInstallGuard::new(runtime))
+    }
+
     /// Creates an IRQHandler and badged notification cap for a device IRQ.
     ///
     /// The returned binding is intentionally inert until the driver clears or
@@ -3864,6 +4350,37 @@ impl<'a> KernelHal<'a> {
         irq: Irq,
         trigger: IrqTrigger,
     ) -> Result<KernelIrqBinding, HalError> {
+        let notification_slot = self.env.alloc_notification().map_err(HalError::Sel4)?;
+        match self.bind_irq_to_notification_with_badge(
+            irq,
+            trigger,
+            irq_notification_badge(irq),
+            notification_slot,
+            true,
+        ) {
+            Ok(binding) => Ok(binding),
+            Err(err) => {
+                let _ = sel4::cnode_delete(
+                    self.env.init_cnode_cap(),
+                    notification_slot,
+                    sel4::word_bits() as u8,
+                );
+                Err(err)
+            }
+        }
+    }
+
+    fn bind_irq_to_notification_with_badge(
+        &mut self,
+        irq: Irq,
+        trigger: IrqTrigger,
+        badge: seL4_Word,
+        notification_slot: seL4_CPtr,
+        owns_notification: bool,
+    ) -> Result<KernelIrqBinding, HalError> {
+        if badge == 0 {
+            return Err(HalError::Unsupported("irq-notification-badge"));
+        }
         let depth = sel4::word_bits() as u8;
         let root_cnode = self.env.init_cnode_cap();
         let handler_slot = self.env.allocate_slot();
@@ -3888,13 +4405,7 @@ impl<'a> KernelHal<'a> {
             return Err(HalError::Sel4(get_err));
         }
 
-        let notification_slot = self.env.alloc_notification().map_err(|err| {
-            let _ = sel4::cnode_delete(root_cnode, handler_slot, depth);
-            HalError::Sel4(err)
-        })?;
-
         let badged_notification_slot = self.env.allocate_slot();
-        let badge = irq_notification_badge(irq);
         let mint_err = sel4::cnode_mint_depth(
             root_cnode,
             badged_notification_slot,
@@ -3907,7 +4418,6 @@ impl<'a> KernelHal<'a> {
         );
         if mint_err != seL4_NoError {
             let _ = sel4::cnode_delete(root_cnode, badged_notification_slot, depth);
-            let _ = sel4::cnode_delete(root_cnode, notification_slot, depth);
             let _ = sel4::cnode_delete(root_cnode, handler_slot, depth);
             return Err(HalError::Sel4(mint_err));
         }
@@ -3916,7 +4426,6 @@ impl<'a> KernelHal<'a> {
         if bind_err != seL4_NoError {
             let _ = sel4::irq_handler_clear(handler_slot);
             let _ = sel4::cnode_delete(root_cnode, badged_notification_slot, depth);
-            let _ = sel4::cnode_delete(root_cnode, notification_slot, depth);
             let _ = sel4::cnode_delete(root_cnode, handler_slot, depth);
             return Err(HalError::Sel4(bind_err));
         }
@@ -3928,6 +4437,7 @@ impl<'a> KernelHal<'a> {
             notification_slot,
             badged_notification_slot,
             badge,
+            owns_notification,
         })
     }
 
@@ -3982,12 +4492,14 @@ impl<'a> KernelHal<'a> {
         let root_cnode = self.env.init_cnode_cap();
         let mut first_error = seL4_NoError;
 
-        for err in [
-            sel4::irq_handler_clear(binding.handler_slot),
-            sel4::cnode_delete(root_cnode, binding.badged_notification_slot, depth),
-            sel4::cnode_delete(root_cnode, binding.notification_slot, depth),
-            sel4::cnode_delete(root_cnode, binding.handler_slot, depth),
-        ] {
+        let mut errors = [seL4_NoError; 4];
+        errors[0] = sel4::irq_handler_clear(binding.handler_slot);
+        errors[1] = sel4::cnode_delete(root_cnode, binding.badged_notification_slot, depth);
+        if binding.owns_notification {
+            errors[2] = sel4::cnode_delete(root_cnode, binding.notification_slot, depth);
+        }
+        errors[3] = sel4::cnode_delete(root_cnode, binding.handler_slot, depth);
+        for err in errors {
             if err != seL4_NoError && first_error == seL4_NoError {
                 first_error = err;
             }
@@ -4156,6 +4668,8 @@ mod tests {
             ring_frame: None,
             vspace: None,
             code_frame: None,
+            runtime_irq: None,
+            reciprocal_notification_caps: [None; 2],
             runtime_image_spec,
             runtime_image_declared_region_mask: super::runtime_image_declared_region_mask(
                 runtime_image_spec,
@@ -4320,7 +4834,8 @@ mod tests {
             super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
             runtime_init_test_task_key(hot_path),
             runtime_init_test_artifact_hash(hot_path),
-        );
+        )
+        .unwrap();
         builder.add_mmio_page(0xFD58_0000).unwrap();
         builder.add_dma_page(0x4000_0000).unwrap();
         builder.add_shared_page(0x5000_0000).unwrap();
@@ -4358,7 +4873,8 @@ mod tests {
             super::driver_task::DRIVER_TASK_ROLE_DISPLAY_BIT,
             runtime_init_test_task_key(hot_path),
             runtime_init_test_artifact_hash(hot_path),
-        );
+        )
+        .unwrap();
         builder.add_mmio_page(0xFE00_B000).unwrap();
         builder.add_dma_page(0x4000_0000).unwrap();
         builder.add_shared_page(0x5000_0000).unwrap();
@@ -4394,7 +4910,8 @@ mod tests {
             super::driver_task::DRIVER_TASK_ROLE_USB_BIT,
             runtime_init_test_task_key(hot_path),
             runtime_init_test_artifact_hash(hot_path),
-        );
+        )
+        .unwrap();
         for index in 0..pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES {
             builder
                 .add_mmio_page(0x0000_0006_0000_0000usize + index * 0x1000)
@@ -4495,7 +5012,8 @@ mod tests {
             super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
             runtime_init_test_task_key(hot_path),
             runtime_init_test_artifact_hash(hot_path),
-        );
+        )
+        .unwrap();
         for index in 0..64 {
             builder
                 .add_shared_page(0x5000_0000usize + index * 0x1000)
@@ -4566,7 +5084,8 @@ mod tests {
             super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
             runtime_init_test_task_key(hot_path),
             runtime_init_test_artifact_hash(hot_path),
-        );
+        )
+        .unwrap();
         for index in 0..6 {
             builder
                 .add_mmio_page(0xfd58_0000usize + index * 0x1000)

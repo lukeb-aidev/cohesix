@@ -65,6 +65,20 @@ MALFORMED_WIFI_PREFIX_RE = re.compile(r"(?<![A-Za-z0-9_.:-])(?:wif|wi):")
 STARTUP_DIAG_GATE_RE = re.compile(
     r"^(?P<domain>usb|wifi): gate (?P<gate>[0-9]+)\b", re.IGNORECASE
 )
+CYW43_SDIO_DPC_RE = re.compile(
+    r"^CYW43_SDIO_DPC "
+    r"generation=(?P<generation>[0-9]+) "
+    r"captures=(?P<captures>[0-9]+) "
+    r"published=(?P<published>[0-9]+) "
+    r"consumed=(?P<consumed>[0-9]+) "
+    r"rearms=(?P<rearms>[0-9]+) "
+    r"overruns=(?P<overruns>[0-9]+) "
+    r"epoch_errors=(?P<epoch_errors>[0-9]+) "
+    r"sequence_errors=(?P<sequence_errors>[0-9]+) "
+    r"ack_failures=(?P<ack_failures>[0-9]+) "
+    r"poisoned=(?P<poisoned>yes|no)"
+    r"(?: masked=(?P<masked>yes|no))?$"
+)
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
 WIFI_HINTS = ("wifi", "wi-fi", "wlan", "cyw", "brcmf", "sdio", "sdhci", "mmc")
 UBOOT_WIFI_POLICY_MISSING_MARKERS = (
@@ -498,6 +512,26 @@ class WifiGate7Subgate:
 
 
 @dataclass(frozen=True)
+class WifiDpcProof:
+    """Latest exact CYW43/SDIO DPC proof plus fail-closed verdict."""
+
+    proof: bool = False
+    reason: str = "missing"
+    generation: int = 0
+    captures: int = 0
+    published: int = 0
+    consumed: int = 0
+    rearms: int = 0
+    overruns: int = 0
+    epoch_errors: int = 0
+    sequence_errors: int = 0
+    ack_failures: int = 0
+    poisoned: str = "unknown"
+    masked: str = "unknown"
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class GateSummary:
     """Current USB/WiFi hardware bring-up gate state."""
 
@@ -574,6 +608,20 @@ class GateSummary:
     wifi_rxtrace_pre_sample_delta_ticks: int = 0
     wifi_rxtrace_transfer_delta_ticks: int = 0
     wifi_rxtrace_post_sample_delta_ticks: int = 0
+    wifi_dpc_proof: bool = False
+    wifi_dpc_reason: str = "missing"
+    wifi_dpc_generation: int = 0
+    wifi_dpc_captures: int = 0
+    wifi_dpc_published: int = 0
+    wifi_dpc_consumed: int = 0
+    wifi_dpc_rearms: int = 0
+    wifi_dpc_overruns: int = 0
+    wifi_dpc_epoch_errors: int = 0
+    wifi_dpc_sequence_errors: int = 0
+    wifi_dpc_ack_failures: int = 0
+    wifi_dpc_poisoned: str = "unknown"
+    wifi_dpc_masked: str = "unknown"
+    wifi_dpc_line: int = 0
     wifi_firmware_identity_proof: bool = False
     wifi_firmware_identity_blocker: str = "not-seen"
     wifi_clm_ready_proof: bool = False
@@ -790,6 +838,20 @@ class GateSummary:
             "WIFI_RXTRACE_PRE_SAMPLE_DELTA_TICKS": self.wifi_rxtrace_pre_sample_delta_ticks,
             "WIFI_RXTRACE_TRANSFER_DELTA_TICKS": self.wifi_rxtrace_transfer_delta_ticks,
             "WIFI_RXTRACE_POST_SAMPLE_DELTA_TICKS": self.wifi_rxtrace_post_sample_delta_ticks,
+            "WIFI_DPC_PROOF": "yes" if self.wifi_dpc_proof else "no",
+            "WIFI_DPC_REASON": self.wifi_dpc_reason,
+            "WIFI_DPC_GENERATION": self.wifi_dpc_generation,
+            "WIFI_DPC_CAPTURES": self.wifi_dpc_captures,
+            "WIFI_DPC_PUBLISHED": self.wifi_dpc_published,
+            "WIFI_DPC_CONSUMED": self.wifi_dpc_consumed,
+            "WIFI_DPC_REARMS": self.wifi_dpc_rearms,
+            "WIFI_DPC_OVERRUNS": self.wifi_dpc_overruns,
+            "WIFI_DPC_EPOCH_ERRORS": self.wifi_dpc_epoch_errors,
+            "WIFI_DPC_SEQUENCE_ERRORS": self.wifi_dpc_sequence_errors,
+            "WIFI_DPC_ACK_FAILURES": self.wifi_dpc_ack_failures,
+            "WIFI_DPC_POISONED": self.wifi_dpc_poisoned,
+            "WIFI_DPC_MASKED": self.wifi_dpc_masked,
+            "WIFI_DPC_LINE": self.wifi_dpc_line,
             "WIFI_FIRMWARE_IDENTITY_PROOF": (
                 "yes" if self.wifi_firmware_identity_proof else "no"
             ),
@@ -8761,7 +8823,7 @@ def _owner_state_proven(fields: dict[str, str]) -> bool:
     return explicit.lower() == "driver-owned"
 
 
-RUNTIME_DESCRIPTOR_SEAL_VERSION = 3
+RUNTIME_DESCRIPTOR_SEAL_VERSION = 4
 SPLIT_RUNTIME_DESCRIPTOR_SEAL_HOT_PATHS = frozenset(
     {"usb-keyboard", "cyw43-wifi", "sdio-host"}
 )
@@ -11086,10 +11148,84 @@ def summarize_sdio_irq158_inband_proof(events: Iterable[TraceEvent]) -> bool:
     )
 
 
+def wifi_dpc_failure_reason(proof: WifiDpcProof) -> str | None:
+    """Return the strongest fail-closed reason for one exact DPC proof line."""
+
+    if proof.poisoned == "yes":
+        return "poisoned"
+    if proof.overruns != 0:
+        return "overrun"
+    if proof.epoch_errors != 0:
+        return "epoch-error"
+    if proof.sequence_errors != 0:
+        return "sequence-error"
+    if proof.ack_failures != 0:
+        return "ack-failure"
+    if proof.captures == 0 or proof.published == 0:
+        return "no-activity"
+    if proof.captures != proof.published:
+        return "capture-publish-mismatch"
+    if proof.consumed != proof.published:
+        return "consume-publish-mismatch"
+    if proof.masked == "yes":
+        return "masked"
+    if proof.masked != "unknown" and proof.rearms < proof.captures:
+        return "unrearmed"
+    return None
+
+
+def summarize_wifi_dpc_proof(events: Iterable[TraceEvent]) -> WifiDpcProof:
+    """Summarize exact CYW43/SDIO DPC lines without crediting partial text."""
+
+    latest: WifiDpcProof | None = None
+    first_failure: str | None = None
+    for event in events:
+        match = CYW43_SDIO_DPC_RE.fullmatch(event.raw)
+        if match is None:
+            continue
+        values = {
+            key: int(match.group(key))
+            for key in (
+                "generation",
+                "captures",
+                "published",
+                "consumed",
+                "rearms",
+                "overruns",
+                "epoch_errors",
+                "sequence_errors",
+                "ack_failures",
+            )
+        }
+        latest = WifiDpcProof(
+            generation=values["generation"],
+            captures=values["captures"],
+            published=values["published"],
+            consumed=values["consumed"],
+            rearms=values["rearms"],
+            overruns=values["overruns"],
+            epoch_errors=values["epoch_errors"],
+            sequence_errors=values["sequence_errors"],
+            ack_failures=values["ack_failures"],
+            poisoned=match.group("poisoned"),
+            masked=match.group("masked") or "unknown",
+            line=event.line,
+        )
+        failure = wifi_dpc_failure_reason(latest)
+        if failure is not None and first_failure is None:
+            first_failure = failure
+    if latest is None:
+        return WifiDpcProof()
+    if first_failure is not None:
+        return replace(latest, proof=False, reason=first_failure)
+    return replace(latest, proof=True, reason="none")
+
+
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
     event_list = list(events)
+    wifi_dpc = summarize_wifi_dpc_proof(event_list)
     usb_gate, usb_blocker = summarize_usb_gate(event_list)
     usb_oldgood = summarize_usb_oldgood_replay(event_list)
     usb_event_ring_alive, usb_psc_drain_count, usb_psc_drain_mask = (
@@ -11703,6 +11839,20 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_rxtrace_pre_sample_delta_ticks=wifi_rxtrace_pre_sample_delta_ticks,
         wifi_rxtrace_transfer_delta_ticks=wifi_rxtrace_transfer_delta_ticks,
         wifi_rxtrace_post_sample_delta_ticks=wifi_rxtrace_post_sample_delta_ticks,
+        wifi_dpc_proof=wifi_dpc.proof,
+        wifi_dpc_reason=wifi_dpc.reason,
+        wifi_dpc_generation=wifi_dpc.generation,
+        wifi_dpc_captures=wifi_dpc.captures,
+        wifi_dpc_published=wifi_dpc.published,
+        wifi_dpc_consumed=wifi_dpc.consumed,
+        wifi_dpc_rearms=wifi_dpc.rearms,
+        wifi_dpc_overruns=wifi_dpc.overruns,
+        wifi_dpc_epoch_errors=wifi_dpc.epoch_errors,
+        wifi_dpc_sequence_errors=wifi_dpc.sequence_errors,
+        wifi_dpc_ack_failures=wifi_dpc.ack_failures,
+        wifi_dpc_poisoned=wifi_dpc.poisoned,
+        wifi_dpc_masked=wifi_dpc.masked,
+        wifi_dpc_line=wifi_dpc.line,
         wifi_firmware_identity_proof=wifi_firmware_identity_proof,
         wifi_firmware_identity_blocker=wifi_firmware_identity_blocker,
         wifi_clm_ready_proof=wifi_clm_ready_proof,
@@ -12695,6 +12845,19 @@ def parse_expectation_pairs(expectations: Iterable[str]) -> list[tuple[str, str]
     return parsed
 
 
+def wifi_dpc_acceptance_required(
+    exact: Mapping[str, str], minimum: Mapping[str, str]
+) -> bool:
+    """Return true when CLI assertions request current WiFi acceptance."""
+
+    if exact.get("WIFI_DPC_PROOF") == "yes":
+        return True
+    if exact.get("WIFI_OLDGOOD_REPLAY") == "yes":
+        return True
+    minimum_gate = parse_hex_int(minimum.get("WIFI_GATE"))
+    return minimum_gate is not None and minimum_gate >= 10
+
+
 def check_gate_expectations(
     summary: GateSummary, expectations: dict[str, str], stderr: TextIO
 ) -> bool:
@@ -12982,6 +13145,11 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
             blockers.append("wifi-clm-version-missing")
         if record.get("SDIO_IRQ158_INBAND_PROOF") != "yes":
             blockers.append("wifi-sdio-irq158-inband-proof-missing")
+        if record.get("WIFI_DPC_PROOF") != "yes":
+            if record.get("WIFI_DPC_REASON") == "missing":
+                blockers.append("wifi-dpc-proof-missing")
+            else:
+                blockers.append("wifi-dpc-proof-invalid")
     elif net_active == "wired":
         if record.get("DRIVER_TASK_ACTIVE_NET") != "genet":
             blockers.append("wired-driver-task-not-active")
@@ -13130,16 +13298,30 @@ def main(argv: list[str] | None = None) -> int:
     if args.gate_summary:
         gate_summary = summarize_gates(events)
         print("\n".join(gate_summary.to_env_lines()))
+        exact_expectations = parse_expectations(args.expect)
+        minimum_expectations = parse_expectations(args.expect_min)
         exact_ok = check_gate_expectations(
-            gate_summary, parse_expectations(args.expect), sys.stderr
+            gate_summary, exact_expectations, sys.stderr
         )
         min_ok = check_gate_min_expectations(
-            gate_summary, parse_expectations(args.expect_min), sys.stderr
+            gate_summary, minimum_expectations, sys.stderr
         )
         not_ok = check_gate_not_expectations(
             gate_summary, parse_expectation_pairs(args.expect_not), sys.stderr
         )
-        if not (exact_ok and min_ok and not_ok):
+        wifi_dpc_ok = True
+        if (
+            wifi_dpc_acceptance_required(exact_expectations, minimum_expectations)
+            and exact_expectations.get("WIFI_DPC_PROOF") != "yes"
+            and not gate_summary.wifi_dpc_proof
+        ):
+            print(
+                "gate assertion failed: WIFI_DPC_PROOF expected yes "
+                f"got no reason={gate_summary.wifi_dpc_reason}",
+                file=sys.stderr,
+            )
+            wifi_dpc_ok = False
+        if not (exact_ok and min_ok and not_ok and wifi_dpc_ok):
             return 2
     elif args.summary:
         print(json.dumps(summarize_events(events), indent=2, sort_keys=True))

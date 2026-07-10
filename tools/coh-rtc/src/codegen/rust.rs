@@ -5,9 +5,10 @@
 
 use crate::codegen::hash_bytes;
 use crate::ir::{
-    resolve_manifest_relative_path, AttestationPolicy, DmaProtectionProfile, HardwareDeviceKind,
-    HostProvider, HostTicketAction, HostTicketLifecycleState, Manifest, NetworkBackendKind, Role,
-    SidecarLink, WorkerSchedulingProfile,
+    resolve_manifest_relative_path, AttestationPolicy, DmaProtectionProfile,
+    DriverRuntimeIrqTrigger, HardwareDeviceKind, HostProvider, HostTicketAction,
+    HostTicketLifecycleState, Manifest, NetworkBackendKind, Role, SidecarLink,
+    WorkerSchedulingProfile,
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -217,6 +218,47 @@ pub fn emit_rust(
         mod_contents,
         "    pub images: &'static [DriverRuntimeImageSpec],"
     )?;
+    writeln!(
+        mod_contents,
+        "    pub irqs: &'static [DriverRuntimeIrqSpec],"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub bus_links: &'static [DriverRuntimeBusLinkSpec],"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, Eq, PartialEq)]")?;
+    writeln!(mod_contents, "pub enum DriverRuntimeIrqTrigger {{")?;
+    writeln!(mod_contents, "    Level,")?;
+    writeln!(mod_contents, "    Edge,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct DriverRuntimeIrqSpec {{")?;
+    writeln!(mod_contents, "    pub hot_path: &'static str,")?;
+    writeln!(mod_contents, "    pub irq: u32,")?;
+    writeln!(mod_contents, "    pub badge: u32,")?;
+    writeln!(mod_contents, "    pub handler_slot: u8,")?;
+    writeln!(mod_contents, "    pub notification_slot: u8,")?;
+    writeln!(mod_contents, "    pub trigger: DriverRuntimeIrqTrigger,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct DriverRuntimeBusLinkSpec {{")?;
+    writeln!(mod_contents, "    pub channel: &'static str,")?;
+    writeln!(mod_contents, "    pub client_hot_path: &'static str,")?;
+    writeln!(mod_contents, "    pub owner_hot_path: &'static str,")?;
+    writeln!(mod_contents, "    pub client_notification_slot: u8,")?;
+    writeln!(mod_contents, "    pub owner_notification_slot: u8,")?;
+    writeln!(mod_contents, "    pub client_to_owner_slot: u8,")?;
+    writeln!(mod_contents, "    pub owner_to_client_slot: u8,")?;
+    writeln!(mod_contents, "    pub shared_offset: u32,")?;
+    writeln!(mod_contents, "    pub shared_len: u32,")?;
+    writeln!(mod_contents, "    pub link_epoch: u32,")?;
+    writeln!(mod_contents, "    pub event_offset: u16,")?;
+    writeln!(mod_contents, "    pub event_len: u16,")?;
+    writeln!(mod_contents, "    pub event_depth: u16,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -1171,7 +1213,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile}};"
     )?;
     writeln!(
         bootstrap_contents,
@@ -1414,7 +1456,50 @@ pub fn emit_rust(
     writeln!(bootstrap_contents, "];\n")?;
     writeln!(
         bootstrap_contents,
-        "pub const DRIVER_RUNTIME_IMAGE_POLICY: DriverRuntimeImagePolicy = DriverRuntimeImagePolicy {{ required: {}, images: &DRIVER_RUNTIME_IMAGES }};\n",
+        "pub const DRIVER_RUNTIME_IRQS: [DriverRuntimeIrqSpec; {}] = [",
+        manifest.root_task.driver_images.irqs.len()
+    )?;
+    for irq in &manifest.root_task.driver_images.irqs {
+        writeln!(
+            bootstrap_contents,
+            "    DriverRuntimeIrqSpec {{ hot_path: \"{}\", irq: {}, badge: {}, handler_slot: {}, notification_slot: {}, trigger: {} }},",
+            escape_literal(&irq.hot_path),
+            irq.irq,
+            irq.badge,
+            irq.handler_slot,
+            irq.notification_slot,
+            driver_runtime_irq_trigger_to_rust(irq.trigger),
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const DRIVER_RUNTIME_BUS_LINKS: [DriverRuntimeBusLinkSpec; {}] = [",
+        manifest.root_task.driver_images.bus_links.len()
+    )?;
+    for link in &manifest.root_task.driver_images.bus_links {
+        writeln!(
+            bootstrap_contents,
+            "    DriverRuntimeBusLinkSpec {{ channel: \"{}\", client_hot_path: \"{}\", owner_hot_path: \"{}\", client_notification_slot: {}, owner_notification_slot: {}, client_to_owner_slot: {}, owner_to_client_slot: {}, shared_offset: {}, shared_len: {}, link_epoch: {}, event_offset: {}, event_len: {}, event_depth: {} }},",
+            escape_literal(&link.channel),
+            escape_literal(&link.client_hot_path),
+            escape_literal(&link.owner_hot_path),
+            link.client_notification_slot,
+            link.owner_notification_slot,
+            link.client_to_owner_slot,
+            link.owner_to_client_slot,
+            link.shared_offset,
+            link.shared_len,
+            link.link_epoch,
+            link.event_offset,
+            link.event_len,
+            link.event_depth,
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const DRIVER_RUNTIME_IMAGE_POLICY: DriverRuntimeImagePolicy = DriverRuntimeImagePolicy {{ required: {}, images: &DRIVER_RUNTIME_IMAGES, irqs: &DRIVER_RUNTIME_IRQS, bus_links: &DRIVER_RUNTIME_BUS_LINKS }};\n",
         manifest.root_task.driver_images.required,
     )?;
     let shard_labels = build_shard_labels(manifest);
@@ -2630,6 +2715,13 @@ fn write_if_changed(path: &Path, contents: &str) -> Result<()> {
     // Always rewrite so mtimes advance when the manifest changes; build.rs enforces freshness by time.
     fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+fn driver_runtime_irq_trigger_to_rust(trigger: DriverRuntimeIrqTrigger) -> &'static str {
+    match trigger {
+        DriverRuntimeIrqTrigger::Level => "DriverRuntimeIrqTrigger::Level",
+        DriverRuntimeIrqTrigger::Edge => "DriverRuntimeIrqTrigger::Edge",
+    }
 }
 
 fn format_optional_u8(value: Option<u8>) -> String {

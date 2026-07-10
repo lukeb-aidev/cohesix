@@ -160,6 +160,43 @@ impl DocFragments {
             )
             .ok();
         }
+        for irq in &manifest.root_task.driver_images.irqs {
+            let trigger = match irq.trigger {
+                crate::ir::DriverRuntimeIrqTrigger::Level => "level",
+                crate::ir::DriverRuntimeIrqTrigger::Edge => "edge",
+            };
+            writeln!(
+                schema_md,
+                "- `root_task.driver_images.irq.{}`: irq=`{}` badge=`{}` handler_slot=`{}` notification_slot=`{}` trigger=`{}`",
+                irq.hot_path,
+                irq.irq,
+                irq.badge,
+                irq.handler_slot,
+                irq.notification_slot,
+                trigger,
+            )
+            .ok();
+        }
+        for link in &manifest.root_task.driver_images.bus_links {
+            writeln!(
+                schema_md,
+                "- `root_task.driver_images.bus_link.{}`: client=`{}` owner=`{}` notifications=`{}:{}:{}:{}` shared=`{}+{}` link_epoch=`{}` dpc_event=`{}+{}` depth=`{}`",
+                link.channel,
+                link.client_hot_path,
+                link.owner_hot_path,
+                link.client_notification_slot,
+                link.owner_notification_slot,
+                link.client_to_owner_slot,
+                link.owner_to_client_slot,
+                link.shared_offset,
+                link.shared_len,
+                link.link_epoch,
+                link.event_offset,
+                link.event_len,
+                link.event_depth,
+            )
+            .ok();
+        }
         writeln!(schema_md, "- `profile.name`: `{}`", manifest.profile.name).ok();
         writeln!(
             schema_md,

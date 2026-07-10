@@ -26,22 +26,25 @@
 use core::arch::asm;
 use core::{
     cell::UnsafeCell,
-    sync::atomic::{fence, AtomicU32, Ordering},
+    sync::atomic::{fence, AtomicBool, AtomicU32, Ordering},
 };
 
 use font8x8::legacy::BASIC_LEGACY;
 #[cfg(target_os = "none")]
 use pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID;
 use pi4_driver_abi::{
-    driver_runtime_genet_completion_result, DriverRuntimeCyw43CommandDescriptor,
+    driver_runtime_genet_completion_result, DriverRuntimeBusLinkDescriptor,
+    DriverRuntimeCyw43CommandDescriptor, DriverRuntimeDpcEventEntry, DriverRuntimeDpcEventRing,
     DriverRuntimeGenetCompletionResultParts, DriverRuntimeInitDescriptor,
-    DriverRuntimeResourceRangeDescriptor, DriverRuntimeSdioCommandDescriptor,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
-    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
-    DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE, DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+    DriverRuntimeIrqDescriptor, DriverRuntimeResourceRangeDescriptor,
+    DriverRuntimeSdioCommandDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR, DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
+    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN, DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
+    DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
     DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
@@ -76,7 +79,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_ENABLED,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F2_BLOCK_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY, DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
-    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START, DRIVER_RUNTIME_ENGINE_INIT_AUX,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START, DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH,
+    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
+    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN,
+    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED, DRIVER_RUNTIME_ENGINE_INIT_AUX,
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
     DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
     DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
@@ -85,6 +91,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_INIT_MAX_IRQS, DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES,
     DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES, DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES,
     DRIVER_RUNTIME_INIT_REQUIRED_FLAGS, DRIVER_RUNTIME_INIT_VERSION,
+    DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
     DRIVER_RUNTIME_PCIE_OP_PORT_READ, DRIVER_RUNTIME_PCIE_OP_PORT_WRITE,
     DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
@@ -426,15 +433,18 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED, DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY, DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED, DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR, DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED, DRIVER_RUNTIME_SDIO_IRQ,
+    DRIVER_RUNTIME_SDIO_IRQ_BADGE, DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND,
     DRIVER_RUNTIME_SDIO_OP_CMD52_READ, DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,
     DRIVER_RUNTIME_SDIO_OP_CMD53_READ, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
-    DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG, DRIVER_RUNTIME_SDIO_OP_POLL_IRQ,
-    DRIVER_RUNTIME_SDIO_RESP_LONG, DRIVER_RUNTIME_SDIO_RESP_NONE, DRIVER_RUNTIME_SDIO_RESP_OCR,
-    DRIVER_RUNTIME_SDIO_RESP_SHORT, DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY,
-    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
-    DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_CONNECTION,
+    DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET, DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+    DRIVER_RUNTIME_SDIO_OP_POLL_IRQ, DRIVER_RUNTIME_SDIO_RESP_LONG, DRIVER_RUNTIME_SDIO_RESP_NONE,
+    DRIVER_RUNTIME_SDIO_RESP_OCR, DRIVER_RUNTIME_SDIO_RESP_SHORT,
+    DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_CONNECTION,
     DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_ENABLE,
     DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_RESET,
     DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CONNECTED,
@@ -488,16 +498,33 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
     DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT,
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
-    DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY, HOT_PATH_CYW43_WIFI, HOT_PATH_GENET_NIC,
-    HOT_PATH_HDMI_TEXT, HOT_PATH_PCIE_ROOT, HOT_PATH_SDIO_HOST, HOT_PATH_SERIAL_CONSOLE,
-    HOT_PATH_USB_KEYBOARD,
+    DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY, DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+    HOT_PATH_CYW43_WIFI, HOT_PATH_GENET_NIC, HOT_PATH_HDMI_TEXT, HOT_PATH_PCIE_ROOT,
+    HOT_PATH_SDIO_HOST, HOT_PATH_SERIAL_CONSOLE, HOT_PATH_USB_KEYBOARD,
+};
+#[cfg(target_os = "none")]
+use pi4_driver_abi::{
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+    DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
 };
 
 /// Child CSpace slot containing the root-to-driver command endpoint.
 pub const DRIVER_TASK_CHILD_COMMAND_SLOT: sel4_sys::seL4_CPtr = 2;
-/// Child CSpace slot containing the linked SDIO bus-owner endpoint.
+/// Child CSpace slot containing this runtime's bound notification object.
+pub const DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr =
+    DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr;
+/// Child CSpace slot containing the SDIO IRQ-handler cap.
+pub const DRIVER_TASK_CHILD_SDIO_IRQ_HANDLER_SLOT: sel4_sys::seL4_CPtr =
+    DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT as sel4_sys::seL4_CPtr;
+/// Child CSpace slot used by CYW43 to signal the linked SDIO bus owner.
+pub const DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr =
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr;
+/// Child CSpace slot used by SDIO to signal the linked CYW43 runtime.
+pub const DRIVER_TASK_CHILD_CYW43_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr =
+    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr;
+/// Legacy source-compatible alias for the SDIO notification slot.
 pub const DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
-    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT as sel4_sys::seL4_CPtr;
+    DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT;
 /// Child CSpace slot containing the linked PCIe/VL805 bus-owner endpoint.
 pub const DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
     DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT as sel4_sys::seL4_CPtr;
@@ -1453,8 +1480,12 @@ const CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS: usize = 32;
 const CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS: u64 = 20;
 const CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS: usize = 5_000;
 const CYW43_RX_IDLE_TRACE_MAGIC: u32 = 0x4352_5854;
-const CYW43_RX_IDLE_TRACE_VERSION: u16 = 8;
-const CYW43_RX_IDLE_TRACE_BYTES: u16 = 180;
+const CYW43_RX_IDLE_TRACE_VERSION: u16 = 9;
+const CYW43_RX_IDLE_TRACE_V8_BYTES: usize = 180;
+const CYW43_RX_IDLE_TRACE_DPC_EVENTS_CONSUMED_OFFSET: usize = CYW43_RX_IDLE_TRACE_V8_BYTES;
+const CYW43_RX_IDLE_TRACE_DPC_EPOCH_ERRORS_OFFSET: usize = 184;
+const CYW43_RX_IDLE_TRACE_DPC_SEQUENCE_ERRORS_OFFSET: usize = 188;
+const CYW43_RX_IDLE_TRACE_BYTES: u16 = 192;
 const CYW43_SERVICE_REASON_NONE: u16 = 0;
 const CYW43_SERVICE_REASON_BACKGROUND_RX: u16 = 1;
 const CYW43_SERVICE_REASON_ETH_TX: u16 = 2;
@@ -2034,6 +2065,18 @@ struct SdioRuntimeState {
     initialized: bool,
     commands: u32,
     last_response: u32,
+    dpc_link_ready: bool,
+    shared_epoch: u32,
+    irq_badge: u32,
+    irq_handler_slot: u32,
+    peer_notification_slot: u32,
+    card_irq_masked: bool,
+    irq_ack_pending: bool,
+    dpc_poisoned: bool,
+    card_irq_captures: u32,
+    dpc_events_published: u32,
+    dpc_ring_overruns: u32,
+    card_irq_rearms: u32,
 }
 
 impl SdioRuntimeState {
@@ -2042,6 +2085,18 @@ impl SdioRuntimeState {
             initialized: false,
             commands: 0,
             last_response: 0,
+            dpc_link_ready: false,
+            shared_epoch: 0,
+            irq_badge: 0,
+            irq_handler_slot: 0,
+            peer_notification_slot: 0,
+            card_irq_masked: false,
+            irq_ack_pending: false,
+            dpc_poisoned: false,
+            card_irq_captures: 0,
+            dpc_events_published: 0,
+            dpc_ring_overruns: 0,
+            card_irq_rearms: 0,
         }
     }
 
@@ -2161,6 +2216,13 @@ struct Cyw43RuntimeState {
     backplane_window: u32,
     backplane_window_valid: bool,
     bus_link_ready: bool,
+    dpc_link_ready: bool,
+    dpc_shared_epoch: u32,
+    dpc_active_sequence: u32,
+    dpc_events_consumed: u32,
+    dpc_epoch_errors: u32,
+    dpc_sequence_errors: u32,
+    recovery_required: bool,
     transport_detail: u16,
     card_init_phase: u8,
     card_init_attempt: u8,
@@ -2281,6 +2343,13 @@ impl Cyw43RuntimeState {
             backplane_window: 0,
             backplane_window_valid: false,
             bus_link_ready: false,
+            dpc_link_ready: false,
+            dpc_shared_epoch: 0,
+            dpc_active_sequence: 0,
+            dpc_events_consumed: 0,
+            dpc_epoch_errors: 0,
+            dpc_sequence_errors: 0,
+            recovery_required: false,
             transport_detail: DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START,
             card_init_phase: CYW43_CARD_INIT_PHASE_HOST_CONFIG,
             card_init_attempt: 0,
@@ -2294,6 +2363,9 @@ impl Cyw43RuntimeState {
         self.initialized = false;
         self.transport_ready = false;
         self.bus_link_ready = false;
+        self.dpc_link_ready = false;
+        self.dpc_active_sequence = 0;
+        self.dpc_events_consumed = 0;
         self.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START;
         self.reset_firmware_upload_state();
     }
@@ -2479,6 +2551,8 @@ static GENET_RX_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_SDIO_BUS_LINK_SEQ: AtomicU32 = AtomicU32::new(0);
+static CYW43_SDIO_CHILD_ACTIVE: AtomicBool = AtomicBool::new(false);
+static CYW43_DPC_DEFERRED: AtomicBool = AtomicBool::new(false);
 static CYW43_ACTIVE_PARENT_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 static CYW43_LAST_FAULT_DETAIL: AtomicU32 = AtomicU32::new(FAULT_NONE as u32);
 static CYW43_LAST_FAULT_RESULT: AtomicU32 = AtomicU32::new(0);
@@ -2821,6 +2895,13 @@ impl DriverTaskCompletionRecord {
     }
 }
 
+const fn runtime_staged_completion(
+    mut completion: DriverTaskCompletionRecord,
+) -> DriverTaskCompletionRecord {
+    completion.sequence = 0;
+    completion
+}
+
 /// Service one fixed-layout command without using root pointers.
 #[must_use]
 pub fn service_command(
@@ -2974,6 +3055,13 @@ struct RuntimeCommandIntake {
 }
 
 #[cfg(target_os = "none")]
+enum RuntimeWake {
+    Command(RuntimeCommandIntake),
+    Notification(u32),
+    None,
+}
+
+#[cfg(target_os = "none")]
 fn read_runtime_command_record() -> DriverTaskCommandRecord {
     driver_task_shared_invalidate_range(
         DRIVER_TASK_RING_VADDR,
@@ -3064,6 +3152,46 @@ fn poll_runtime_command(
         command,
         reply_cap_available: expects_reply,
     })
+}
+
+#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
+fn wait_runtime_command_or_notification(last_sequence: u32) -> RuntimeWake {
+    let mut badge: sel4_sys::seL4_Word = 0;
+    // SAFETY: The generated local notification is bound to this TCB and root
+    // installs the command endpoint in slot 2. A notification therefore wakes
+    // this receive with a zero-length tag; endpoint sends/calls carry MR0.
+    let tag = unsafe { sel4_sys::seL4_Recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge) };
+    if tag.length() == 0 {
+        return RuntimeWake::Notification(badge as u32);
+    }
+    // SAFETY: The fixed endpoint ABI carries the shared-ring sequence in MR0.
+    let ipc_sequence = unsafe { sel4_sys::seL4_GetMR(0) as u32 };
+    let mut command = read_runtime_command_record();
+    if command.sequence != ipc_sequence {
+        for _ in 0..8 {
+            command = read_runtime_command_record();
+            if command.sequence == ipc_sequence {
+                break;
+            }
+            runtime_poll_pause();
+        }
+    }
+    if command.sequence == 0
+        || command.sequence == last_sequence
+        || command.sequence != ipc_sequence
+    {
+        return RuntimeWake::None;
+    }
+    let reply_cap_available = command_expects_reply(command);
+    RuntimeWake::Command(RuntimeCommandIntake {
+        command,
+        reply_cap_available,
+    })
+}
+
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+fn wait_runtime_command_or_notification(_last_sequence: u32) -> RuntimeWake {
+    RuntimeWake::None
 }
 
 #[must_use]
@@ -3339,7 +3467,7 @@ fn runtime_engine_init(
             );
             runtime_engine_init_cyw43(sequence, aux0, descriptor)
         }
-        HOT_PATH_SDIO_HOST => runtime_engine_init_sdio(sequence, aux0),
+        HOT_PATH_SDIO_HOST => runtime_engine_init_sdio(sequence, aux0, descriptor),
         HOT_PATH_PCIE_ROOT => runtime_engine_init_pcie(),
         _ => Ok(FAULT_NONE),
     }
@@ -3383,7 +3511,11 @@ fn runtime_engine_init_cyw43(
 }
 
 #[inline(never)]
-fn runtime_engine_init_sdio(sequence: u32, aux0: u32) -> Result<u16, u16> {
+fn runtime_engine_init_sdio(
+    sequence: u32,
+    aux0: u32,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Result<u16, u16> {
     publish_runtime_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH,
@@ -3400,7 +3532,7 @@ fn runtime_engine_init_sdio(sequence: u32, aux0: u32) -> Result<u16, u16> {
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE,
         aux0,
     );
-    sdio_runtime_init(sequence, aux0)
+    sdio_runtime_init(sequence, aux0, descriptor)
 }
 
 #[inline(never)]
@@ -3448,6 +3580,20 @@ fn descriptor_valid_bus_links(descriptor: &DriverRuntimeInitDescriptor) -> bool 
     true
 }
 
+fn descriptor_valid_irqs(descriptor: &DriverRuntimeInitDescriptor) -> bool {
+    if usize::from(descriptor.irq_count) > DRIVER_RUNTIME_INIT_MAX_IRQS {
+        return false;
+    }
+    let mut index = 0usize;
+    while index < usize::from(descriptor.irq_count) {
+        if !descriptor.irqs[index].valid() {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
 fn descriptor_valid_ref(descriptor: &DriverRuntimeInitDescriptor) -> bool {
     if descriptor.magic != DRIVER_RUNTIME_INIT_MAGIC
         || descriptor.version != DRIVER_RUNTIME_INIT_VERSION
@@ -3478,7 +3624,496 @@ fn descriptor_valid_ref(descriptor: &DriverRuntimeInitDescriptor) -> bool {
     {
         return false;
     }
-    descriptor_valid_resource_ranges(descriptor) && descriptor_valid_bus_links(descriptor)
+    descriptor_valid_resource_ranges(descriptor)
+        && descriptor_valid_irqs(descriptor)
+        && descriptor_valid_bus_links(descriptor)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeNotificationRoute {
+    LegacyPoll,
+    SdioOwner,
+    Cyw43Client,
+}
+
+const DPC_REASON_SDIO_CARD_INTERRUPT: u16 = 1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DpcRingPublishResult {
+    Published(u32),
+    Full,
+    BadEpoch,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DpcRingConsumeResult {
+    Event(DriverRuntimeDpcEventEntry),
+    Empty,
+    BadEpoch,
+    BadSequence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DpcConsumerWakeRoute {
+    SelfSignal,
+    OwnerRearm,
+    Fault,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcReadinessAction {
+    Drain,
+    AdvanceAndRearm,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcContinuationRoute {
+    ImmediateSelfSignal,
+    CompleteAndRearm,
+}
+
+const fn dpc_generation_next(current: u32) -> u32 {
+    let next = current.wrapping_add(1);
+    if next == 0 {
+        1
+    } else {
+        next
+    }
+}
+
+const fn dpc_generation_reset_request_valid(current: u32, requested: u32) -> bool {
+    current != 0 && requested == dpc_generation_next(current)
+}
+
+const fn cyw43_engine_generation(static_epoch: u32, active_epoch: u32) -> u32 {
+    if active_epoch == 0 {
+        static_epoch
+    } else {
+        active_epoch
+    }
+}
+
+fn dpc_event_ring_reset_generation(
+    ring: &mut DriverRuntimeDpcEventRing,
+    current: u32,
+    requested: u32,
+) -> bool {
+    if !ring.valid()
+        || ring.epoch != current
+        || !dpc_generation_reset_request_valid(current, requested)
+    {
+        return false;
+    }
+    let failure_flags = ring.flags
+        & (DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
+            | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED);
+    let overruns = ring.overruns;
+    let ack_failures = ring.ack_failures;
+    *ring = DriverRuntimeDpcEventRing::empty(requested);
+    ring.flags = failure_flags;
+    ring.overruns = overruns;
+    ring.ack_failures = ack_failures;
+    true
+}
+
+const fn cyw43_generation_reset_completion_exact(
+    completion: DriverTaskCompletionRecord,
+    sequence: u32,
+    requested: u32,
+) -> bool {
+    completion.sequence == sequence
+        && completion.code == COMPLETION_PROGRESS
+        && completion.detail == FAULT_NONE
+        && completion.result == requested
+        && completion.frame.offset == 0
+        && completion.frame.len == 0
+        && completion.frame.flags == 0
+}
+
+fn cyw43_complete_generation_reset(
+    state: &mut Cyw43RuntimeState,
+    completion: DriverTaskCompletionRecord,
+    sequence: u32,
+    requested: u32,
+) -> bool {
+    if !cyw43_generation_reset_completion_exact(completion, sequence, requested) {
+        return false;
+    }
+    state.dpc_shared_epoch = requested;
+    state.dpc_active_sequence = 0;
+    state.recovery_required = false;
+    true
+}
+
+fn cyw43_mark_issued_unknown(state: &mut Cyw43RuntimeState) {
+    state.sdpcm_tx_write_ambiguous = true;
+    state.recovery_required = true;
+    state.initialized = false;
+    state.transport_ready = false;
+    state.firmware_released = false;
+}
+
+const fn cyw43_dpc_continuation_route(
+    rxskip: bool,
+    pending_intstatus: u32,
+    rxpending: bool,
+    sdpcm_next_frame_len: u16,
+    _rx_queue_count: u8,
+) -> Cyw43DpcContinuationRoute {
+    if !rxskip && (pending_intstatus != 0 || rxpending || sdpcm_next_frame_len != 0) {
+        Cyw43DpcContinuationRoute::ImmediateSelfSignal
+    } else {
+        // A bounded software queue is root-facing work, not device/DPC work.
+        // Completing the event unmasks CARD_INT and lets endpoint RX_POLL
+        // commands run even while queued frames await root consumption.
+        Cyw43DpcContinuationRoute::CompleteAndRearm
+    }
+}
+
+const fn cyw43_dpc_readiness_action(
+    initialized: bool,
+    transport_ready: bool,
+    firmware_released: bool,
+) -> Cyw43DpcReadinessAction {
+    if initialized && transport_ready && firmware_released {
+        Cyw43DpcReadinessAction::Drain
+    } else {
+        // Pre-release CARD_INT edges are advisory: firmware/card bring-up uses
+        // synchronous register polling. Completing the event prevents an early
+        // edge from leaving SDHCI signaling masked across firmware release.
+        Cyw43DpcReadinessAction::AdvanceAndRearm
+    }
+}
+
+fn dpc_event_ring_publish(
+    ring: &mut DriverRuntimeDpcEventRing,
+    epoch: u32,
+    host_int_status: u32,
+    signal_status: u32,
+    reason: u16,
+    flags: u16,
+) -> DpcRingPublishResult {
+    if !ring.valid() || ring.epoch != epoch {
+        return DpcRingPublishResult::BadEpoch;
+    }
+    if ring.producer.wrapping_sub(ring.consumer) >= DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH as u32 {
+        ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN;
+        ring.overruns = ring.overruns.saturating_add(1);
+        return DpcRingPublishResult::Full;
+    }
+    let sequence = ring.producer.wrapping_add(1);
+    let slot = ring.producer as usize % DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH;
+    ring.entries[slot] = DriverRuntimeDpcEventEntry {
+        sequence,
+        host_int_status,
+        signal_status,
+        reason,
+        flags,
+    };
+    ring.producer = sequence;
+    DpcRingPublishResult::Published(sequence)
+}
+
+fn dpc_event_ring_peek(ring: &DriverRuntimeDpcEventRing, epoch: u32) -> DpcRingConsumeResult {
+    if !ring.valid() || ring.epoch != epoch {
+        return DpcRingConsumeResult::BadEpoch;
+    }
+    if ring.producer == ring.consumer {
+        return DpcRingConsumeResult::Empty;
+    }
+    let expected = ring.consumer.wrapping_add(1);
+    let slot = ring.consumer as usize % DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH;
+    let event = ring.entries[slot];
+    if event.sequence != expected || !event.valid() {
+        return DpcRingConsumeResult::BadSequence;
+    }
+    DpcRingConsumeResult::Event(event)
+}
+
+fn dpc_event_ring_advance(ring: &mut DriverRuntimeDpcEventRing, epoch: u32, sequence: u32) -> bool {
+    if !matches!(
+        dpc_event_ring_peek(ring, epoch),
+        DpcRingConsumeResult::Event(event) if event.sequence == sequence
+    ) {
+        return false;
+    }
+    ring.consumer = sequence;
+    true
+}
+
+fn dpc_event_ring_set_owner_health(
+    ring: &mut DriverRuntimeDpcEventRing,
+    card_irq_masked: bool,
+    ack_pending: bool,
+    poisoned: bool,
+    ack_failed: bool,
+) {
+    // CARD_IRQ_MASKED and ACK_PENDING describe current owner state. POISONED
+    // is boot-slice proof history and remains sticky until runtime boot creates
+    // a fresh ring; live recovery admission uses SdioRuntimeState instead.
+    ring.flags &= !(DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED
+        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING);
+    if card_irq_masked {
+        ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED;
+    }
+    if ack_pending {
+        ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING;
+    }
+    if poisoned {
+        ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED;
+    }
+    if ack_failed {
+        ring.ack_failures = ring.ack_failures.saturating_add(1);
+    }
+}
+
+fn dpc_consumer_wake_route(ring: &DriverRuntimeDpcEventRing, epoch: u32) -> DpcConsumerWakeRoute {
+    match dpc_event_ring_peek(ring, epoch) {
+        DpcRingConsumeResult::Event(_) => DpcConsumerWakeRoute::SelfSignal,
+        DpcRingConsumeResult::Empty => DpcConsumerWakeRoute::OwnerRearm,
+        DpcRingConsumeResult::BadEpoch | DpcRingConsumeResult::BadSequence => {
+            DpcConsumerWakeRoute::Fault
+        }
+    }
+}
+
+#[cfg(target_os = "none")]
+fn dpc_event_ring_read_at(base: usize) -> DriverRuntimeDpcEventRing {
+    driver_task_shared_invalidate_range(base, core::mem::size_of::<DriverRuntimeDpcEventRing>());
+    // SAFETY: `base` is one of the fixed HAL-mapped owner-ring addresses and
+    // callers admit the generated event offset before reaching this helper.
+    let ring = unsafe { core::ptr::read_volatile(base as *const DriverRuntimeDpcEventRing) };
+    driver_task_shared_load_barrier();
+    ring
+}
+
+#[cfg(target_os = "none")]
+fn dpc_event_ring_initialize_at(base: usize, epoch: u32) {
+    let ring = DriverRuntimeDpcEventRing::empty(epoch);
+    // SAFETY: SDIO is the sole initializer and producer for its local owner
+    // ring. Engine initialization completes before CYW43 is admitted.
+    unsafe {
+        core::ptr::write_volatile(base as *mut DriverRuntimeDpcEventRing, ring);
+    }
+    driver_task_shared_clean_range(base, core::mem::size_of::<DriverRuntimeDpcEventRing>());
+}
+
+#[cfg(target_os = "none")]
+fn dpc_event_ring_reset_generation_at(base: usize, current: u32, requested: u32) -> bool {
+    let mut ring = dpc_event_ring_read_at(base);
+    if !dpc_event_ring_reset_generation(&mut ring, current, requested) {
+        return false;
+    }
+    // SAFETY: SDIO owns generation rollover while CARD_INT remains masked and
+    // CYW43 waits synchronously for the exact reset completion.
+    unsafe {
+        core::ptr::write_volatile(base as *mut DriverRuntimeDpcEventRing, ring);
+    }
+    driver_task_shared_clean_range(base, core::mem::size_of::<DriverRuntimeDpcEventRing>());
+    true
+}
+
+#[cfg(target_os = "none")]
+fn dpc_event_ring_publish_at(
+    base: usize,
+    epoch: u32,
+    host_int_status: u32,
+    signal_status: u32,
+    reason: u16,
+    flags: u16,
+) -> DpcRingPublishResult {
+    let mut snapshot = dpc_event_ring_read_at(base);
+    let result = dpc_event_ring_publish(
+        &mut snapshot,
+        epoch,
+        host_int_status,
+        signal_status,
+        reason,
+        flags,
+    );
+    let ring = base as *mut DriverRuntimeDpcEventRing;
+    // SAFETY: SDIO is the single producer. Only producer-owned fields and the
+    // selected entry are written; CYW43's consumer word is never overwritten.
+    unsafe {
+        match result {
+            DpcRingPublishResult::Published(sequence) => {
+                let slot = sequence.wrapping_sub(1) as usize % DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH;
+                let event = snapshot.entries[slot];
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*ring).entries[slot].sequence),
+                    0,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*ring).entries[slot].host_int_status),
+                    event.host_int_status,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*ring).entries[slot].signal_status),
+                    event.signal_status,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*ring).entries[slot].reason),
+                    event.reason,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*ring).entries[slot].flags),
+                    event.flags,
+                );
+                driver_task_shared_store_barrier();
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*ring).entries[slot].sequence),
+                    sequence,
+                );
+                driver_task_shared_store_barrier();
+                core::ptr::write_volatile(core::ptr::addr_of_mut!((*ring).producer), sequence);
+            }
+            DpcRingPublishResult::Full => {
+                core::ptr::write_volatile(core::ptr::addr_of_mut!((*ring).flags), snapshot.flags);
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*ring).overruns),
+                    snapshot.overruns,
+                );
+            }
+            DpcRingPublishResult::BadEpoch => {}
+        }
+    }
+    driver_task_shared_clean_range(base, core::mem::size_of::<DriverRuntimeDpcEventRing>());
+    result
+}
+
+#[cfg(target_os = "none")]
+fn dpc_event_ring_peek_at(base: usize, epoch: u32) -> DpcRingConsumeResult {
+    let ring = dpc_event_ring_read_at(base);
+    dpc_event_ring_peek(&ring, epoch)
+}
+
+#[cfg(target_os = "none")]
+fn dpc_event_ring_advance_at(base: usize, epoch: u32, sequence: u32) -> bool {
+    let mut ring = dpc_event_ring_read_at(base);
+    if !dpc_event_ring_advance(&mut ring, epoch, sequence) {
+        return false;
+    }
+    // SAFETY: CYW43 is the single consumer and only publishes its consumer
+    // sequence after the corresponding DPC work reaches a rearm-safe point.
+    unsafe {
+        let ring_ptr = base as *mut DriverRuntimeDpcEventRing;
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*ring_ptr).consumer), sequence);
+    }
+    driver_task_shared_clean_range(
+        base + core::mem::offset_of!(DriverRuntimeDpcEventRing, consumer),
+        core::mem::size_of::<u32>(),
+    );
+    true
+}
+
+#[cfg(target_os = "none")]
+fn dpc_event_ring_set_owner_health_at(
+    base: usize,
+    card_irq_masked: bool,
+    ack_pending: bool,
+    poisoned: bool,
+    ack_failed: bool,
+) -> bool {
+    let mut snapshot = dpc_event_ring_read_at(base);
+    if !snapshot.valid() {
+        return false;
+    }
+    dpc_event_ring_set_owner_health(
+        &mut snapshot,
+        card_irq_masked,
+        ack_pending,
+        poisoned,
+        ack_failed,
+    );
+    let ring = base as *mut DriverRuntimeDpcEventRing;
+    // SAFETY: SDIO is the sole owner of ring health flags and the failed-ack
+    // counter. CYW43 writes only the consumer sequence in this shared record.
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*ring).flags), snapshot.flags);
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!((*ring).ack_failures),
+            snapshot.ack_failures,
+        );
+    }
+    driver_task_shared_clean_range(
+        base + core::mem::offset_of!(DriverRuntimeDpcEventRing, flags),
+        core::mem::size_of::<u32>(),
+    );
+    driver_task_shared_clean_range(
+        base + core::mem::offset_of!(DriverRuntimeDpcEventRing, ack_failures),
+        core::mem::size_of::<u32>(),
+    );
+    true
+}
+
+fn descriptor_notification_dpc_link(
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<DriverRuntimeBusLinkDescriptor> {
+    if descriptor.bus_link_count != 1
+        || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS == 0
+        || !descriptor_valid_bus_links(descriptor)
+    {
+        return None;
+    }
+    let link = descriptor.bus_links[0];
+    if !link.notification_dpc_valid()
+        || !link.sealed_for_client(descriptor.task_key, descriptor.hot_path)
+    {
+        return None;
+    }
+    let role =
+        link.flags & (DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER);
+    let topology_matches = match descriptor.hot_path {
+        HOT_PATH_CYW43_WIFI => {
+            role == DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT
+                && link.peer_hot_path == HOT_PATH_SDIO_HOST
+                && link.local_notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+                && link.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT
+        }
+        HOT_PATH_SDIO_HOST => {
+            role == DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER
+                && link.peer_hot_path == HOT_PATH_CYW43_WIFI
+                && link.local_notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+                && link.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT
+        }
+        _ => false,
+    };
+    topology_matches.then_some(link)
+}
+
+fn descriptor_sdio_irq(
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<DriverRuntimeIrqDescriptor> {
+    if descriptor.hot_path != HOT_PATH_SDIO_HOST
+        || descriptor.irq_count != 1
+        || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND == 0
+        || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY != 0
+    {
+        return None;
+    }
+    let irq = descriptor.irqs[0];
+    (irq.valid()
+        && irq.irq == DRIVER_RUNTIME_SDIO_IRQ
+        && irq.badge == DRIVER_RUNTIME_SDIO_IRQ_BADGE
+        && irq.handler_slot == DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        && irq.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && irq.trigger == DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL)
+        .then_some(irq)
+}
+
+fn runtime_notification_route(
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> RuntimeNotificationRoute {
+    let Some(_link) = descriptor_notification_dpc_link(descriptor) else {
+        return RuntimeNotificationRoute::LegacyPoll;
+    };
+    match descriptor.hot_path {
+        HOT_PATH_SDIO_HOST if descriptor_sdio_irq(descriptor).is_some() => {
+            RuntimeNotificationRoute::SdioOwner
+        }
+        HOT_PATH_CYW43_WIFI => RuntimeNotificationRoute::Cyw43Client,
+        _ => RuntimeNotificationRoute::LegacyPoll,
+    }
 }
 
 fn descriptor_resource_pages_by_kind(descriptor: &DriverRuntimeInitDescriptor, kind: u16) -> u16 {
@@ -3873,11 +4508,7 @@ fn descriptor_resources_ready_checked(
                 );
                 return false;
             }
-            if !descriptor_has_pointer_free_bus_link(
-                descriptor,
-                HOT_PATH_SDIO_HOST,
-                DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-            ) {
+            if descriptor_notification_dpc_link(descriptor).is_none() {
                 publish_resource_check_progress(
                     progress,
                     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING,
@@ -3935,6 +4566,17 @@ fn descriptor_resources_ready_checked(
             publish_resource_check_progress(
                 progress,
                 DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY,
+            );
+            if descriptor_notification_dpc_link(descriptor).is_none() {
+                publish_resource_check_progress(
+                    progress,
+                    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING,
+                );
+                return false;
+            }
+            publish_resource_check_progress(
+                progress,
+                DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY,
             );
             publish_resource_check_progress(
                 progress,
@@ -4409,6 +5051,9 @@ fn cyw43_runtime_init(
         aux0,
     );
     state.reset();
+    CYW43_SDIO_BUS_LINK_SEQ.store(0, Ordering::Release);
+    CYW43_SDIO_CHILD_ACTIVE.store(false, Ordering::Release);
+    CYW43_DPC_DEFERRED.store(false, Ordering::Release);
     publish_runtime_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_STATE_RESET_DONE,
@@ -4433,13 +5078,57 @@ fn cyw43_runtime_init(
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_CHECK_BEGIN,
         aux0,
     );
-    state.bus_link_ready = descriptor.has_sealed_pointer_free_bus_link(
-        descriptor.task_key,
-        HOT_PATH_SDIO_HOST,
-        DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-    );
-    if !state.bus_link_ready {
+    let Some(link) = descriptor_notification_dpc_link(descriptor) else {
         return false;
+    };
+    let current_generation = cyw43_engine_generation(link.shared_epoch, state.dpc_shared_epoch);
+    if current_generation == 0 {
+        return false;
+    }
+    state.bus_link_ready = true;
+    state.dpc_link_ready = true;
+    state.dpc_shared_epoch = current_generation;
+    CYW43_SDIO_BUS_LINK_SEQ.store(
+        cyw43_sdio_bus_link_sequence_seed(current_generation),
+        Ordering::Release,
+    );
+    #[cfg(target_os = "none")]
+    {
+        let ring = dpc_event_ring_read_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(link.event_offset),
+        );
+        if !ring.valid() || ring.epoch != current_generation {
+            state.bus_link_ready = false;
+            state.dpc_link_ready = false;
+            return false;
+        }
+    }
+    if state.recovery_required {
+        let requested = dpc_generation_next(current_generation);
+        let Some((reset_sequence, completion)) =
+            cyw43_reset_sdio_generation_via_bus_link(requested)
+        else {
+            return false;
+        };
+        if !cyw43_generation_reset_completion_exact(completion, reset_sequence, requested) {
+            return false;
+        }
+        #[cfg(target_os = "none")]
+        {
+            let ring = dpc_event_ring_read_at(
+                DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(link.event_offset),
+            );
+            if !ring.valid() || ring.epoch != requested {
+                return false;
+            }
+        }
+        if !cyw43_complete_generation_reset(state, completion, reset_sequence, requested) {
+            return false;
+        }
+        CYW43_SDIO_BUS_LINK_SEQ.store(
+            cyw43_sdio_bus_link_sequence_seed(requested),
+            Ordering::Release,
+        );
     }
     publish_runtime_progress(
         sequence,
@@ -4473,6 +5162,112 @@ fn cyw43_runtime_init(
         }
     }
     state.initialized
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_runtime_service_dpc_event() -> bool {
+    let mut should_signal_self = false;
+    let mut should_rearm_owner = false;
+    let serviced = CYW43_RUNTIME_STATE.with_mut(|state| {
+        if !state.dpc_link_ready || state.dpc_shared_epoch == 0 {
+            return false;
+        }
+        let base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        let event = match dpc_event_ring_peek_at(base, state.dpc_shared_epoch) {
+            DpcRingConsumeResult::Event(event) => event,
+            DpcRingConsumeResult::Empty => return true,
+            DpcRingConsumeResult::BadEpoch => {
+                state.dpc_epoch_errors = state.dpc_epoch_errors.saturating_add(1);
+                return false;
+            }
+            DpcRingConsumeResult::BadSequence => {
+                state.dpc_sequence_errors = state.dpc_sequence_errors.saturating_add(1);
+                return false;
+            }
+        };
+        if event.flags & DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT == 0 {
+            state.dpc_sequence_errors = state.dpc_sequence_errors.saturating_add(1);
+            return false;
+        }
+        state.dpc_active_sequence = event.sequence;
+        state.rxpending = true;
+
+        if cyw43_dpc_readiness_action(
+            state.initialized,
+            state.transport_ready,
+            state.firmware_released,
+        ) == Cyw43DpcReadinessAction::Drain
+        {
+            let _ = cyw43_runtime_poll_rx_detailed_with_options(
+                state,
+                0,
+                event.sequence,
+                true,
+                Cyw43AssertedEmptyPolicy::RequestRetransmit,
+                false,
+            );
+
+            let continuation = cyw43_dpc_continuation_route(
+                state.rxskip,
+                state.pending_intstatus,
+                state.rxpending,
+                state.sdpcm_next_frame_len,
+                state.rx_queue_count,
+            );
+            match continuation {
+                Cyw43DpcContinuationRoute::ImmediateSelfSignal => {
+                    should_signal_self = true;
+                    return true;
+                }
+                Cyw43DpcContinuationRoute::CompleteAndRearm => {}
+            }
+        }
+
+        // `rxskip` deliberately completes this event so CARD_INT can be
+        // rearmed and a future real NAKHANDLED mailbox interrupt can arrive.
+        if dpc_event_ring_advance_at(base, state.dpc_shared_epoch, event.sequence) {
+            state.dpc_active_sequence = 0;
+            state.dpc_events_consumed = state.dpc_events_consumed.saturating_add(1);
+            let ring = dpc_event_ring_read_at(base);
+            match dpc_consumer_wake_route(&ring, state.dpc_shared_epoch) {
+                DpcConsumerWakeRoute::SelfSignal => should_signal_self = true,
+                DpcConsumerWakeRoute::OwnerRearm => should_rearm_owner = true,
+                DpcConsumerWakeRoute::Fault => {
+                    state.dpc_sequence_errors = state.dpc_sequence_errors.saturating_add(1);
+                    return false;
+                }
+            }
+            true
+        } else {
+            state.dpc_sequence_errors = state.dpc_sequence_errors.saturating_add(1);
+            false
+        }
+    });
+    if should_signal_self {
+        runtime_signal_notification(DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT);
+    }
+    if should_rearm_owner {
+        runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT);
+    }
+    serviced
+}
+
+#[cfg(target_os = "none")]
+fn service_runtime_notification(badge: u32) -> bool {
+    let descriptor = RUNTIME_DESCRIPTOR.load();
+    match runtime_notification_route(&descriptor) {
+        RuntimeNotificationRoute::SdioOwner => sdio_runtime_service_notification(badge),
+        RuntimeNotificationRoute::Cyw43Client => {
+            if cyw43_sdio_dpc_service_deferred(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)) {
+                CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+                true
+            } else {
+                cyw43_runtime_service_dpc_event()
+            }
+        }
+        RuntimeNotificationRoute::LegacyPoll => false,
+    }
 }
 
 fn service_cyw43_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
@@ -4709,6 +5504,168 @@ fn service_hdmi_text(command: DriverTaskCommandRecord) -> DriverTaskCompletionRe
     }
 }
 
+#[cfg(target_os = "none")]
+fn runtime_signal_notification(slot: u32) {
+    // SAFETY: Generated topology admission proves that `slot` is a send-only
+    // notification cap for the reciprocal CYW43/SDIO peer.
+    unsafe {
+        sel4_sys::seL4_Signal(slot as sel4_sys::seL4_CPtr);
+    }
+}
+
+#[cfg(not(target_os = "none"))]
+fn runtime_signal_notification(_slot: u32) {}
+
+fn sdio_record_dpc_health(ack_failed: bool) {
+    let (card_irq_masked, ack_pending, poisoned) = SDIO_RUNTIME_STATE.with_ref(|state| {
+        (
+            state.card_irq_masked,
+            state.irq_ack_pending,
+            state.dpc_poisoned,
+        )
+    });
+    #[cfg(target_os = "none")]
+    let _ = dpc_event_ring_set_owner_health_at(
+        DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+        card_irq_masked,
+        ack_pending,
+        poisoned,
+        ack_failed,
+    );
+    #[cfg(not(target_os = "none"))]
+    let _ = (card_irq_masked, ack_pending, poisoned, ack_failed);
+}
+
+fn sdio_record_irq_ack_result(acked: bool) {
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.irq_ack_pending = !acked;
+    });
+    sdio_record_dpc_health(!acked);
+}
+
+fn sdio_publish_card_interrupt_event(host_int_status: u32, _badge: u32) -> bool {
+    let (_epoch, handler_slot, peer_slot) = SDIO_RUNTIME_STATE.with_ref(|state| {
+        (
+            state.shared_epoch,
+            state.irq_handler_slot,
+            state.peer_notification_slot,
+        )
+    });
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.card_irq_masked = true;
+        state.card_irq_captures = state.card_irq_captures.saturating_add(1);
+    });
+    sdio_record_dpc_health(false);
+    sdio_program_interrupt_policy();
+    // W1C only the captured card bit. Command/data status belongs to the
+    // synchronous SDIO transfer path and must survive this DPC wake.
+    sdio_write32(SDHCI_INT_STATUS, host_int_status & SDHCI_INT_CARD_INT);
+
+    #[cfg(target_os = "none")]
+    let published = dpc_event_ring_publish_at(
+        DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+        _epoch,
+        host_int_status,
+        _badge,
+        DPC_REASON_SDIO_CARD_INTERRUPT,
+        DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+    );
+    #[cfg(not(target_os = "none"))]
+    let published = DpcRingPublishResult::Published(1);
+
+    SDIO_RUNTIME_STATE.with_mut(|state| match published {
+        DpcRingPublishResult::Published(_) => {
+            state.dpc_events_published = state.dpc_events_published.saturating_add(1);
+        }
+        DpcRingPublishResult::Full => {
+            state.dpc_ring_overruns = state.dpc_ring_overruns.saturating_add(1);
+        }
+        DpcRingPublishResult::BadEpoch => {
+            state.dpc_poisoned = true;
+        }
+    });
+
+    // The device-side source is masked before re-enabling the kernel IRQ cap.
+    // A full ring is still acknowledged and the consumer is signalled; the
+    // dongle source remains level-asserted and will be recaptured on rearm.
+    let acked = runtime_irq_handler_ack(handler_slot);
+    sdio_record_irq_ack_result(acked);
+    if !matches!(published, DpcRingPublishResult::BadEpoch) {
+        runtime_signal_notification(peer_slot);
+    }
+    acked && !matches!(published, DpcRingPublishResult::BadEpoch)
+}
+
+fn sdio_runtime_service_notification(badge: u32) -> bool {
+    if !sdio_notification_dpc_ready() {
+        return false;
+    }
+    let (ack_pending, poisoned, handler_slot) = SDIO_RUNTIME_STATE.with_ref(|state| {
+        (
+            state.irq_ack_pending,
+            state.dpc_poisoned,
+            state.irq_handler_slot,
+        )
+    });
+    if poisoned {
+        sdio_record_dpc_health(false);
+        return false;
+    }
+    if ack_pending {
+        let acked = runtime_irq_handler_ack(handler_slot);
+        sdio_record_irq_ack_result(acked);
+        if !acked {
+            return false;
+        }
+    }
+    let host_int_status = sdio_read32(SDHCI_INT_STATUS);
+    if host_int_status & SDHCI_INT_CARD_INT != 0 {
+        return sdio_publish_card_interrupt_event(host_int_status, badge);
+    }
+    let (irq_badge, handler_slot) =
+        SDIO_RUNTIME_STATE.with_ref(|state| (state.irq_badge, state.irq_handler_slot));
+    if badge == irq_badge && irq_badge != 0 {
+        SDIO_RUNTIME_STATE.with_mut(|state| state.card_irq_masked = true);
+        sdio_program_interrupt_policy();
+        sdio_record_dpc_health(false);
+        let acked = runtime_irq_handler_ack(handler_slot);
+        sdio_record_irq_ack_result(acked);
+        if !acked {
+            return false;
+        }
+    }
+
+    #[cfg(target_os = "none")]
+    let ring = dpc_event_ring_read_at(
+        DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+    );
+    #[cfg(not(target_os = "none"))]
+    let ring =
+        DriverRuntimeDpcEventRing::empty(SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch));
+    if !ring.valid() {
+        SDIO_RUNTIME_STATE.with_mut(|state| state.dpc_poisoned = true);
+        sdio_record_dpc_health(false);
+        return false;
+    }
+    if ring.producer != ring.consumer {
+        return true;
+    }
+
+    // Pair the empty-ring observation with a fresh source read before rearm.
+    // If CARD_INT relatched while signaling was masked, publish another event
+    // instead of opening an interrupt-storm window.
+    let relatched = sdio_read32(SDHCI_INT_STATUS);
+    if relatched & SDHCI_INT_CARD_INT != 0 {
+        return sdio_publish_card_interrupt_event(relatched, badge);
+    }
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.card_irq_masked = false;
+        state.card_irq_rearms = state.card_irq_rearms.saturating_add(1);
+    });
+    sdio_publish_unmasked_rearm();
+    true
+}
+
 fn service_sdio_host(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
     if let Some(completion) = service_engine_init(command) {
         return completion;
@@ -4793,6 +5750,9 @@ fn service_sdio_descriptor_command(command: DriverTaskCommandRecord) -> DriverTa
     };
     if !desc.valid() {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
+    }
+    if desc.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET {
+        return service_sdio_generation_reset(command.sequence, desc.addr);
     }
     if desc.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG {
         if sdio_apply_host_config(desc.addr, desc.flags) {
@@ -4953,6 +5913,107 @@ fn service_sdio_descriptor_command(command: DriverTaskCommandRecord) -> DriverTa
         }
         _ => DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
     }
+}
+
+fn sdio_generation_reset_ring_admitted(current: u32, requested: u32) -> bool {
+    if !dpc_generation_reset_request_valid(current, requested) {
+        return false;
+    }
+    #[cfg(target_os = "none")]
+    let mut ring = dpc_event_ring_read_at(
+        DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+    );
+    #[cfg(not(target_os = "none"))]
+    let mut ring = DriverRuntimeDpcEventRing::empty(current);
+    dpc_event_ring_reset_generation(&mut ring, current, requested)
+}
+
+fn sdio_generation_reset_quiesce() -> bool {
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.card_irq_masked = true;
+        state.dpc_poisoned = true;
+    });
+    sdio_record_dpc_health(false);
+    sdio_program_interrupt_policy();
+    if !sdio_recover_command_path() {
+        return false;
+    }
+    sdio_clear_last_transfer_failure();
+    let abort_arg = sdio_cmd52_arg(true, 0, SDIO_CCCR_ABORT, SDIO_FUNCTION_NUMBER_2);
+    if sdio_execute_transfer_with_timeout(
+        52,
+        abort_arg,
+        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+        DriverFrameDescriptor::empty(),
+        1,
+        0,
+        sdio_owner_descriptor_timeout_us(0),
+    )
+    .is_none()
+    {
+        let _ = sdio_recover_command_path();
+        return false;
+    }
+    sdio_recover_command_path()
+}
+
+fn sdio_generation_reset_ack_while_masked() -> bool {
+    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_CARD_INT);
+    let handler_slot = SDIO_RUNTIME_STATE.with_ref(|state| state.irq_handler_slot);
+    let acked = runtime_irq_handler_ack(handler_slot);
+    sdio_record_irq_ack_result(acked);
+    acked
+}
+
+fn sdio_generation_reset_commit(requested: u32) -> bool {
+    let current = SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch);
+    #[cfg(target_os = "none")]
+    if !dpc_event_ring_reset_generation_at(
+        DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+        current,
+        requested,
+    ) {
+        return false;
+    }
+    #[cfg(not(target_os = "none"))]
+    if !dpc_generation_reset_request_valid(current, requested) {
+        return false;
+    }
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.shared_epoch = requested;
+        state.card_irq_masked = true;
+        state.irq_ack_pending = false;
+        state.dpc_poisoned = false;
+    });
+    sdio_record_dpc_health(false);
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.card_irq_masked = false;
+        state.card_irq_rearms = state.card_irq_rearms.saturating_add(1);
+        state.commands = state.commands.saturating_add(1);
+        state.last_response = requested;
+    });
+    sdio_publish_unmasked_rearm();
+    SDIO_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_TX_PROGRESS, Ordering::AcqRel);
+    SDIO_CMD_COUNT.fetch_add(1, Ordering::AcqRel);
+    true
+}
+
+fn service_sdio_generation_reset(sequence: u32, requested: u32) -> DriverTaskCompletionRecord {
+    let current = SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch);
+    if !sdio_notification_dpc_ready() || !sdio_generation_reset_ring_admitted(current, requested) {
+        return DriverTaskCompletionRecord::fault(sequence, FAULT_REJECTED_COMMAND);
+    }
+    if !sdio_generation_reset_quiesce() || !sdio_generation_reset_ack_while_masked() {
+        return DriverTaskCompletionRecord::fault_with_result(
+            sequence,
+            FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+            sdio_last_transfer_failure(),
+        );
+    }
+    if !sdio_generation_reset_commit(requested) {
+        return DriverTaskCompletionRecord::fault(sequence, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED);
+    }
+    DriverTaskCompletionRecord::progress(sequence, requested)
 }
 
 fn sdio_descriptor_transfer_retryable(
@@ -5342,8 +6403,10 @@ fn service_cyw43_descriptor_command(
                 flags: 0,
             };
             let control_ext_header = desc.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER != 0;
-            cyw43_drain_startup_status_frames(state, command.sequence);
-            if desc.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN != 0 {
+            let control_pre_tx_drain =
+                desc.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN != 0;
+            cyw43_drain_startup_status_frames(state, command.sequence, control_pre_tx_drain);
+            if control_pre_tx_drain {
                 state.rx_queue_protect_eapol = true;
                 cyw43_drain_rx_before_control_tx(state, command.sequence);
             }
@@ -6091,10 +7154,7 @@ fn sdio_execute_via_bus_link(
     }
     let has_data = flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0;
     let write = flags & DRIVER_RUNTIME_SDIO_FLAG_WRITE != 0;
-    let sequence = CYW43_SDIO_BUS_LINK_SEQ
-        .fetch_add(1, Ordering::AcqRel)
-        .wrapping_add(1)
-        .max(1);
+    let sequence = cyw43_sdio_bus_link_next_sequence();
     let command = if has_data {
         let command = sdio_bus_link_descriptor_command(
             sequence,
@@ -6146,10 +7206,7 @@ fn cyw43_configure_sdio_host(target_hz: u32, flags: u16) -> bool {
 
 #[cfg(target_os = "none")]
 fn cyw43_configure_sdio_host_via_bus_link(target_hz: u32, flags: u16) -> bool {
-    let sequence = CYW43_SDIO_BUS_LINK_SEQ
-        .fetch_add(1, Ordering::AcqRel)
-        .wrapping_add(1)
-        .max(1);
+    let sequence = cyw43_sdio_bus_link_next_sequence();
     let desc = DriverRuntimeSdioCommandDescriptor {
         op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
         function: 0,
@@ -6199,25 +7256,160 @@ fn cyw43_configure_sdio_host_via_bus_link(_target_hz: u32, _flags: u16) -> bool 
 }
 
 #[cfg(target_os = "none")]
+fn cyw43_reset_sdio_generation_via_bus_link(
+    requested: u32,
+) -> Option<(u32, DriverTaskCompletionRecord)> {
+    let sequence = cyw43_sdio_bus_link_next_sequence();
+    let desc = DriverRuntimeSdioCommandDescriptor {
+        op: DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET,
+        function: 0,
+        response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+        addr: requested,
+        data_offset: 0,
+        len: 0,
+        block_size: 0,
+        block_count: 0,
+        flags: 0,
+        reserved: 0,
+        timeout_us: sdio_owner_descriptor_timeout_us(0),
+    };
+    if !desc.valid() {
+        return None;
+    }
+    sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc);
+    let command = DriverTaskCommandRecord {
+        sequence,
+        opcode: OPCODE_SERVICE,
+        flags: 0,
+        arg0: HOT_PATH_SDIO_HOST,
+        arg1: ROLE_SDIO,
+        aux0: 0,
+        aux1: 0,
+        budget: DriverTaskBudgetGrant {
+            max_ops: 1,
+            max_frames: 1,
+            max_bytes: 0,
+        },
+        frame: DriverFrameDescriptor {
+            offset: CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET as u32,
+            len: core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>() as u16,
+            flags: 0,
+        },
+    };
+    sdio_bus_link_call(command).map(|completion| (sequence, completion))
+}
+
+#[cfg(not(target_os = "none"))]
+fn cyw43_reset_sdio_generation_via_bus_link(
+    requested: u32,
+) -> Option<(u32, DriverTaskCompletionRecord)> {
+    let sequence = cyw43_sdio_bus_link_next_sequence();
+    Some((
+        sequence,
+        DriverTaskCompletionRecord::progress(sequence, requested),
+    ))
+}
+
+#[cfg(target_os = "none")]
 const CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET: usize = DRIVER_TASK_RING_FRAME_OFFSET;
 #[cfg(target_os = "none")]
 const CYW43_SDIO_BUS_LINK_DATA_OFFSET: usize = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize;
 #[cfg(target_os = "none")]
 const CYW43_SDIO_BUS_LINK_DATA_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
-const CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS: usize = 16_384;
-const CYW43_SDIO_BUS_LINK_ATTEMPTS_PER_BYTE: usize = 128;
-const CYW43_SDIO_BUS_LINK_MAX_ATTEMPTS: usize = 524_288;
-const CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL: usize = 512;
+const CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN: u32 = 1 << 31;
+const CYW43_SDIO_BUS_LINK_SEQUENCE_VALUE_MASK: u32 = !CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN;
 
-fn cyw43_sdio_bus_link_attempt_limit(command: DriverTaskCommandRecord) -> usize {
-    let payload_scaled =
-        (command.budget.max_bytes as usize).saturating_mul(CYW43_SDIO_BUS_LINK_ATTEMPTS_PER_BYTE);
-    CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS
-        .saturating_add(payload_scaled)
-        .clamp(
-            CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS,
-            CYW43_SDIO_BUS_LINK_MAX_ATTEMPTS,
-        )
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioChildCompletion {
+    Waiting,
+    Exact(DriverTaskCompletionRecord),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43SdioChildState {
+    expected_sequence: u32,
+    published: bool,
+    dpc_deferred: bool,
+}
+
+impl Cyw43SdioChildState {
+    const fn new(expected_sequence: u32) -> Self {
+        Self {
+            expected_sequence,
+            published: false,
+            dpc_deferred: false,
+        }
+    }
+
+    fn take_publication(&mut self) -> bool {
+        if self.published {
+            false
+        } else {
+            self.published = true;
+            true
+        }
+    }
+
+    fn note_notification(&mut self) {
+        // The peer-completion and card-DPC send caps target the same local
+        // notification. A completion wake may therefore be coalesced with a
+        // DPC wake; retain the DPC work until the parent command is terminal.
+        self.dpc_deferred = true;
+    }
+
+    fn completion(
+        self,
+        first: DriverTaskCompletionRecord,
+        second: DriverTaskCompletionRecord,
+    ) -> Cyw43SdioChildCompletion {
+        if first.sequence == self.expected_sequence
+            && second.sequence == self.expected_sequence
+            && first == second
+        {
+            Cyw43SdioChildCompletion::Exact(second)
+        } else {
+            Cyw43SdioChildCompletion::Waiting
+        }
+    }
+}
+
+const fn cyw43_sdio_bus_link_sequence_seed(shared_epoch: u32) -> u32 {
+    let mixed = shared_epoch ^ (shared_epoch >> 16) ^ shared_epoch.wrapping_shl(7);
+    let value = mixed & CYW43_SDIO_BUS_LINK_SEQUENCE_VALUE_MASK;
+    CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN | if value == 0 { 1 } else { value }
+}
+
+const fn cyw43_sdio_bus_link_sequence_advance(current: u32) -> u32 {
+    let next = current.wrapping_add(1) & CYW43_SDIO_BUS_LINK_SEQUENCE_VALUE_MASK;
+    CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN | if next == 0 { 1 } else { next }
+}
+
+fn cyw43_sdio_bus_link_next_sequence() -> u32 {
+    let mut current = CYW43_SDIO_BUS_LINK_SEQ.load(Ordering::Acquire);
+    loop {
+        let next = cyw43_sdio_bus_link_sequence_advance(current);
+        match CYW43_SDIO_BUS_LINK_SEQ.compare_exchange_weak(
+            current,
+            next,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return next,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+const fn cyw43_sdio_bus_link_staged_command(
+    mut command: DriverTaskCommandRecord,
+) -> DriverTaskCommandRecord {
+    command.sequence = 0;
+    command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+    command
+}
+
+const fn cyw43_sdio_child_wait_slot() -> sel4_sys::seL4_CPtr {
+    DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT
 }
 
 #[cfg(target_os = "none")]
@@ -6411,23 +7603,92 @@ fn sdio_bus_link_card_command_descriptor_command(
 }
 
 #[cfg(target_os = "none")]
+fn cyw43_sdio_child_poll_exact(state: Cyw43SdioChildState) -> Cyw43SdioChildCompletion {
+    driver_task_shared_invalidate_range(
+        DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
+        core::mem::size_of::<DriverTaskCompletionRecord>(),
+    );
+    // SAFETY: Root maps the SDIO owner ring at this fixed address. The owner
+    // publishes a completion and cleans it before signalling CYW43.
+    let first = unsafe {
+        core::ptr::read_volatile(
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                as *const DriverTaskCompletionRecord,
+        )
+    };
+    if first.sequence != state.expected_sequence {
+        return Cyw43SdioChildCompletion::Waiting;
+    }
+    driver_task_shared_load_barrier();
+    // SAFETY: The second volatile read proves that the full sequence-stamped
+    // completion stayed stable across the acquire barrier.
+    let second = unsafe {
+        core::ptr::read_volatile(
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                as *const DriverTaskCompletionRecord,
+        )
+    };
+    state.completion(first, second)
+}
+
+const fn cyw43_sdio_dpc_service_deferred(child_active: bool) -> bool {
+    child_active
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_resignal_deferred_dpc() {
+    if CYW43_DPC_DEFERRED.swap(false, Ordering::AcqRel) {
+        runtime_signal_notification(DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT);
+    }
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_sdio_child_finish(state: Cyw43SdioChildState, parent_sequence: u32) {
+    if state.dpc_deferred {
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+    }
+    CYW43_SDIO_CHILD_ACTIVE.store(false, Ordering::Release);
+    if parent_sequence == 0 {
+        cyw43_resignal_deferred_dpc();
+    }
+}
+
+#[cfg(target_os = "none")]
 fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTaskCompletionRecord> {
+    if CYW43_SDIO_CHILD_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        cyw43_record_last_fault_with_result(
+            FAULT_CYW43_TRANSPORT_BUS_LINK,
+            cyw43_sdio_bus_link_command_result(command),
+        );
+        return None;
+    }
     command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
     let completion_reset = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
-    let attempts = cyw43_sdio_bus_link_attempt_limit(command);
-    let progress_sequence =
-        cyw43_sdio_owner_progress_sequence(cyw43_active_parent_sequence(), command.sequence);
+    let parent_sequence = cyw43_active_parent_sequence();
+    let progress_sequence = cyw43_sdio_owner_progress_sequence(parent_sequence, command.sequence);
+    let mut child = Cyw43SdioChildState::new(command.sequence);
     publish_runtime_progress(
         progress_sequence,
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN,
         DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     );
+    if !child.take_publication() {
+        cyw43_sdio_child_finish(child, parent_sequence);
+        cyw43_record_last_fault_with_result(
+            FAULT_CYW43_TRANSPORT_BUS_LINK,
+            cyw43_sdio_bus_link_command_result(command),
+        );
+        return None;
+    }
+    let staged_command = cyw43_sdio_bus_link_staged_command(command);
     // SAFETY: Root maps the SDIO owner command ring into CYW43 at this fixed
-    // address and mints the SDIO endpoint cap into the fixed child slot before
-    // the CYW43 runtime can be resumed. The bus-link turn publishes one
-    // sequence-stamped descriptor, then uses bounded one-way notifications and
-    // shared-ring polling so a missed endpoint rendezvous can be retried
-    // without moving SDIO ownership back into root.
+    // address and mints the SDIO notification cap into the fixed child slot before
+    // the CYW43 runtime can be resumed. The bus-link turn publishes all command
+    // fields with sequence zero, then publishes the real sequence last before
+    // using exactly one notification doorbell.
     unsafe {
         core::ptr::write_volatile(
             (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
@@ -6436,7 +7697,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
         );
         core::ptr::write_volatile(
             DRIVER_TASK_SDIO_BUS_RING_VADDR as *mut DriverTaskCommandRecord,
-            command,
+            staged_command,
         );
         driver_task_shared_store_barrier();
         driver_task_shared_clean_range(
@@ -6447,67 +7708,53 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
             DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
             core::mem::size_of::<DriverTaskCompletionRecord>(),
         );
-        sel4_sys::seL4_SetMR(0, command.sequence as sel4_sys::seL4_Word);
-        let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
-        sel4_sys::seL4_NBSend(DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT, info);
-        publish_runtime_progress(
-            progress_sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
-            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        core::ptr::write_volatile(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR as *mut u32,
+            command.sequence,
         );
-        publish_runtime_progress(
-            progress_sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
-            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        driver_task_shared_store_barrier();
+        driver_task_shared_clean_range(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            core::mem::size_of::<u32>(),
         );
-        for attempt in 0..attempts {
-            if attempt != 0 && attempt % CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL == 0 {
-                sel4_sys::seL4_SetMR(0, command.sequence as sel4_sys::seL4_Word);
-                sel4_sys::seL4_NBSend(DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT, info);
-            }
-            sel4_sys::seL4_Yield();
-            driver_task_shared_invalidate_range(
-                DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
-                core::mem::size_of::<DriverTaskCompletionRecord>(),
+        sel4_sys::seL4_Signal(DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT);
+    }
+    publish_runtime_progress(
+        progress_sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
+    publish_runtime_progress(
+        progress_sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
+    loop {
+        if let Cyw43SdioChildCompletion::Exact(mut completion) = cyw43_sdio_child_poll_exact(child)
+        {
+            publish_runtime_progress(
+                progress_sequence,
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+                DRIVER_RUNTIME_CYW43_COMMAND_AUX,
             );
-            let observed = core::ptr::read_volatile(
-                (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
-                    as *const DriverTaskCompletionRecord,
-            );
-            if observed.sequence == command.sequence {
-                driver_task_shared_load_barrier();
-                let mut completion = core::ptr::read_volatile(
-                    (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
-                        as *const DriverTaskCompletionRecord,
-                );
-                if completion.sequence != command.sequence {
-                    continue;
+            if completion.code == COMPLETION_FAULT {
+                if let Some(frame) = cyw43_copy_sdio_fault_telemetry(completion.frame) {
+                    completion.frame = frame;
                 }
-                publish_runtime_progress(
-                    progress_sequence,
-                    pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
-                    DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-                );
-                if completion.code == COMPLETION_FAULT {
-                    if let Some(frame) = cyw43_copy_sdio_fault_telemetry(completion.frame) {
-                        completion.frame = frame;
-                    }
-                    cyw43_record_last_fault_with_result(completion.detail, completion.result);
-                    cyw43_record_last_fault_frame(completion.frame);
-                }
-                return Some(completion);
+                cyw43_record_last_fault_with_result(completion.detail, completion.result);
+                cyw43_record_last_fault_frame(completion.frame);
             }
+            cyw43_sdio_child_finish(child, parent_sequence);
+            return Some(completion);
         }
-        publish_runtime_progress(
-            progress_sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
-            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-        );
-        cyw43_record_last_fault_with_result(
-            FAULT_CYW43_TRANSPORT_BUS_LINK,
-            cyw43_sdio_bus_link_command_result(command),
-        );
-        None
+        let mut badge: sel4_sys::seL4_Word = 0;
+        // SAFETY: This waits directly on the generated local notification cap.
+        // Unlike receiving on the bound command endpoint, notification Wait
+        // does not delete the implicit non-MCS root Call reply capability.
+        unsafe {
+            let _ = sel4_sys::seL4_Wait(cyw43_sdio_child_wait_slot(), &mut badge);
+        }
+        child.note_notification();
     }
 }
 
@@ -8577,10 +9824,7 @@ fn cyw43_sdio_cmd52_read_via_bus_link(function: u8, addr: u32) -> Option<u8> {
     if !sdio_bus_link_payload_bounds(CYW43_SDIO_BUS_LINK_DATA_OFFSET, 1) {
         return None;
     }
-    let sequence = CYW43_SDIO_BUS_LINK_SEQ
-        .fetch_add(1, Ordering::AcqRel)
-        .wrapping_add(1)
-        .max(1);
+    let sequence = cyw43_sdio_bus_link_next_sequence();
     let command = sdio_bus_link_cmd52_descriptor_command(sequence, false, function, addr)?;
     let completion = sdio_bus_link_call(command)?;
     if completion.sequence != sequence
@@ -8609,10 +9853,7 @@ fn cyw43_sdio_cmd52_write_via_bus_link(function: u8, addr: u32, value: u8) -> bo
         DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
         1,
     );
-    let sequence = CYW43_SDIO_BUS_LINK_SEQ
-        .fetch_add(1, Ordering::AcqRel)
-        .wrapping_add(1)
-        .max(1);
+    let sequence = cyw43_sdio_bus_link_next_sequence();
     let Some(command) = sdio_bus_link_cmd52_descriptor_command(sequence, true, function, addr)
     else {
         return false;
@@ -9491,8 +10732,8 @@ fn cyw43_function2_execute_tx_transfer_once(
     } else {
         // Once CMD53 has been issued its failure is ambiguous: the device may
         // have consumed the exact SDPCM sequence even when the host did not
-        // observe a successful completion. Never replay that write. Advance
-        // to credit observation and let the ordered device header resolve it.
+        // observe a successful completion. Never replay that write or reuse
+        // this firmware generation's uncertain sequence space.
         Cyw43TxTransferResult::Ambiguous
     }
 }
@@ -10126,7 +11367,31 @@ fn cyw43_submit_sdpcm_frame_with_credit_policy(
         Cyw43TxTransferResult::NotAttempted => return 0,
         Cyw43TxTransferResult::Submitted => {}
         Cyw43TxTransferResult::Ambiguous => {
-            state.sdpcm_tx_write_ambiguous = true;
+            let transfer_failure = sdio_last_transfer_failure();
+            // Linux never treats an issued-unknown SDPCM write as a completed
+            // packet and never reuses the uncertain sequence space. Poison
+            // this firmware generation until engine-init obtains an exact
+            // generation-reset completion from the isolated SDIO owner.
+            cyw43_mark_issued_unknown(state);
+            CYW43_RUNTIME_FLAGS.fetch_and(
+                !(ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY),
+                Ordering::AcqRel,
+            );
+            let detail = if data_frame {
+                FAULT_CYW43_ETH_TX
+            } else {
+                FAULT_CYW43_CONTROL_FRAME
+            };
+            cyw43_record_last_fault_with_result(detail, transfer_failure);
+            if !data_frame {
+                cyw43_record_control_tx_fault_frame_if_missing(
+                    tx_frame,
+                    block_size,
+                    block_count,
+                    transfer_failure,
+                );
+            }
+            return 0;
         }
     }
     state.sdpcm_seq = state.sdpcm_seq.wrapping_add(1);
@@ -11655,7 +12920,15 @@ fn cyw43_runtime_write_service_register_u32(
 }
 
 fn cyw43_runtime_process_hostmail(state: &mut Cyw43RuntimeState) {
-    if state.pending_intstatus & I_HMB_HOST_INT == 0 && !state.rxskip {
+    // Match brcmf_sdio_hostmail(): TOHOSTMAILBOXDATA is consumed only for a
+    // software-latched mailbox interrupt. `rxskip` merely blocks Function 2
+    // reads while waiting for a future NAKHANDLED notification; it must not
+    // turn a stale mailbox register value into a fresh acknowledgement.
+    if state.pending_intstatus & I_HMB_HOST_INT == 0 {
+        return;
+    }
+    #[cfg(all(not(target_os = "none"), test))]
+    if TEST_CYW43_TOHOST_MAILBOX_READ_FAIL.swap(0, Ordering::AcqRel) != 0 {
         return;
     }
     let Some(mailbox_data) =
@@ -11663,11 +12936,17 @@ fn cyw43_runtime_process_hostmail(state: &mut Cyw43RuntimeState) {
     else {
         return;
     };
-    let _ = cyw43_runtime_write_service_register_u32(
+    #[cfg(all(not(target_os = "none"), test))]
+    if TEST_CYW43_TOSB_MAILBOX_ACK_FAIL.swap(0, Ordering::AcqRel) != 0 {
+        return;
+    }
+    if !cyw43_runtime_write_service_register_u32(
         state,
         CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX,
         SMB_INT_ACK,
-    );
+    ) {
+        return;
+    }
     state.pending_intstatus &= !I_HMB_HOST_INT;
     if mailbox_data & HMB_DATA_FC != 0 {
         // Match brcmf_sdio_hostmail(): firmware mailbox FCDATA is an ordered
@@ -11698,7 +12977,7 @@ fn cyw43_runtime_begin_rx_service(state: &mut Cyw43RuntimeState) -> bool {
     // model. FRAME_IND remains software-latched until a bounded drain observes
     // a terminal empty RFRAME state. While rxskip is set, only NAKHANDLED may
     // restore FRAME_IND and permit Function 2 reads.
-    state.pending_intstatus &= I_HMB_FRAME_IND | I_HMB_FC_CHANGE;
+    state.pending_intstatus &= I_HMB_FRAME_IND | I_HMB_FC_CHANGE | I_HMB_HOST_INT;
     if state.rxskip {
         state.pending_intstatus &= !I_HMB_FRAME_IND;
         state.rxpending = false;
@@ -12143,8 +13422,24 @@ fn cyw43_remember_control_idle_reason(
     }
 }
 
-fn cyw43_drain_startup_status_frames(state: &mut Cyw43RuntimeState, sequence: u32) {
+fn cyw43_drain_startup_status_frames(
+    state: &mut Cyw43RuntimeState,
+    sequence: u32,
+    allow_physical_drain: bool,
+) {
     if state.control_startup_status_drained {
+        return;
+    }
+    if !allow_physical_drain {
+        for _ in 0..2 {
+            if cyw43_rx_queue_pop_matching(state, CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT).is_none()
+            {
+                break;
+            }
+            state.rx_frames = state.rx_frames.saturating_add(1);
+            state.rx_retransmit_pending = false;
+        }
+        state.control_startup_status_drained = true;
         return;
     }
     for _ in 0..2 {
@@ -12237,7 +13532,7 @@ fn cyw43_control_exchange(
     expected_id: u16,
     sequence: u32,
 ) -> Option<DriverFrameDescriptor> {
-    cyw43_drain_startup_status_frames(state, sequence);
+    cyw43_drain_startup_status_frames(state, sequence, control_pre_tx_drain);
     if control_pre_tx_drain {
         cyw43_drain_rx_before_control_tx(state, sequence);
     }
@@ -12796,6 +14091,18 @@ fn cyw43_stage_rx_idle_trace(
     );
     write_ring_u16(offset + 174, 0);
     write_ring_u32(offset + 176, state.rx_irq_source_asserted_empty_rearms);
+    write_ring_u32(
+        offset + CYW43_RX_IDLE_TRACE_DPC_EVENTS_CONSUMED_OFFSET,
+        state.dpc_events_consumed,
+    );
+    write_ring_u32(
+        offset + CYW43_RX_IDLE_TRACE_DPC_EPOCH_ERRORS_OFFSET,
+        state.dpc_epoch_errors,
+    );
+    write_ring_u32(
+        offset + CYW43_RX_IDLE_TRACE_DPC_SEQUENCE_ERRORS_OFFSET,
+        state.dpc_sequence_errors,
+    );
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(
         DRIVER_TASK_RING_VADDR + offset,
@@ -14625,13 +15932,33 @@ fn genet_read_rx_desc(slot: usize) -> (u32, u32, u32) {
     }
 }
 
-fn sdio_runtime_init(sequence: u32, aux0: u32) -> Result<u16, u16> {
+fn sdio_runtime_init(
+    sequence: u32,
+    aux0: u32,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Result<u16, u16> {
     publish_runtime_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
         aux0,
     );
-    SDIO_RUNTIME_STATE.with_mut(SdioRuntimeState::reset);
+    let link = descriptor_notification_dpc_link(descriptor)
+        .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR)?;
+    let irq = descriptor_sdio_irq(descriptor);
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.reset();
+        state.dpc_link_ready = irq.is_some();
+        state.shared_epoch = link.shared_epoch;
+        state.irq_badge = irq.map_or(0, |irq| irq.badge);
+        state.irq_handler_slot = irq.map_or(0, |irq| irq.handler_slot);
+        state.peer_notification_slot = link.peer_notification_slot;
+        state.card_irq_masked = irq.is_some();
+    });
+    #[cfg(target_os = "none")]
+    dpc_event_ring_initialize_at(
+        DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+        link.shared_epoch,
+    );
     publish_runtime_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE,
@@ -16755,6 +18082,12 @@ static TEST_CYW43_TOHOST_MAILBOX_RESPONSE: AtomicU32 =
     AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
 
 #[cfg(all(not(target_os = "none"), test))]
+static TEST_CYW43_TOHOST_MAILBOX_READ_FAIL: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_CYW43_TOSB_MAILBOX_ACK_FAIL: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
 static TEST_SDIO_CMD52_NONE_RESPONSE_KEY: AtomicU32 =
     AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
 
@@ -16850,6 +18183,8 @@ fn reset_test_sdio_cmd52_read_responses() {
     TEST_SDIO_CMD52_RFRAME_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_CYW43_SDIO_INT_STATUS_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_CYW43_TOHOST_MAILBOX_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
+    TEST_CYW43_TOHOST_MAILBOX_READ_FAIL.store(0, Ordering::Release);
+    TEST_CYW43_TOSB_MAILBOX_ACK_FAIL.store(0, Ordering::Release);
     TEST_SDIO_CMD52_NONE_RESPONSE_KEY.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_CYW43_PRIME_POST_RELEASE_FAIL_AFTER
         .store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
@@ -24837,9 +26172,113 @@ fn sdio_recover_command_path() -> bool {
     reset_ok && post_clock_reset_ok && sdio_wait_inhibit_clear(true)
 }
 
+fn sdio_notification_dpc_ready() -> bool {
+    SDIO_RUNTIME_STATE.with_ref(|state| {
+        state.dpc_link_ready
+            && state.shared_epoch != 0
+            && state.irq_handler_slot == DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+            && state.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT
+    })
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioUnmaskedRearmStep {
+    ProgramInterruptPolicy,
+    PublishSharedHealth,
+}
+
+const SDIO_UNMASKED_REARM_ORDER: [SdioUnmaskedRearmStep; 2] = [
+    SdioUnmaskedRearmStep::ProgramInterruptPolicy,
+    SdioUnmaskedRearmStep::PublishSharedHealth,
+];
+
+fn sdio_program_interrupt_policy() {
+    let dpc_ready = sdio_notification_dpc_ready();
+    let card_irq_masked = SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked);
+    let int_enable =
+        SDHCI_INT_COMMAND_DATA_CLEAR_MASK | if dpc_ready { SDHCI_INT_CARD_INT } else { 0 };
+    let signal_enable = if dpc_ready && !card_irq_masked {
+        SDHCI_INT_CARD_INT
+    } else {
+        0
+    };
+    sdio_write32(SDHCI_INT_ENABLE, int_enable);
+    sdio_write32(SDHCI_SIGNAL_ENABLE, signal_enable);
+}
+
+fn sdio_publish_unmasked_rearm() {
+    for step in SDIO_UNMASKED_REARM_ORDER {
+        match step {
+            SdioUnmaskedRearmStep::ProgramInterruptPolicy => sdio_program_interrupt_policy(),
+            SdioUnmaskedRearmStep::PublishSharedHealth => sdio_record_dpc_health(false),
+        }
+    }
+}
+
+#[cfg(target_os = "none")]
+fn runtime_irq_handler_ack(handler_slot: u32) -> bool {
+    let mut mr0 = 0;
+    let mut mr1 = 0;
+    let mut mr2 = 0;
+    let mut mr3 = 0;
+    // SAFETY: Descriptor admission proves that `handler_slot` is the generated
+    // SDIO IRQ-handler cap. This is the exact libsel4 IRQHandler_Ack call shape.
+    unsafe {
+        let tag = sel4_sys::seL4_MessageInfo::new(
+            sel4_sys::invocation_label_IRQAckIRQ as sel4_sys::seL4_Word,
+            0,
+            0,
+            0,
+        );
+        let output = sel4_sys::seL4_CallWithMRs(
+            handler_slot as sel4_sys::seL4_CPtr,
+            tag,
+            &mut mr0,
+            &mut mr1,
+            &mut mr2,
+            &mut mr3,
+        );
+        sel4_sys::seL4_MessageInfo_get_label(output) == 0
+    }
+}
+
+#[cfg(not(target_os = "none"))]
+fn runtime_irq_handler_ack(_handler_slot: u32) -> bool {
+    true
+}
+
+fn sdio_arm_card_interrupt_after_init() -> bool {
+    if !sdio_notification_dpc_ready() {
+        sdio_program_interrupt_policy();
+        return true;
+    }
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.card_irq_masked = true;
+        state.irq_ack_pending = false;
+        state.dpc_poisoned = false;
+    });
+    sdio_record_dpc_health(false);
+    sdio_program_interrupt_policy();
+    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_CARD_INT);
+    let handler_slot = SDIO_RUNTIME_STATE.with_ref(|state| state.irq_handler_slot);
+    let acked = runtime_irq_handler_ack(handler_slot);
+    sdio_record_irq_ack_result(acked);
+    if !acked {
+        return false;
+    }
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.card_irq_masked = false;
+        state.card_irq_rearms = state.card_irq_rearms.saturating_add(1);
+    });
+    sdio_publish_unmasked_rearm();
+    true
+}
+
 fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> Result<(), u16> {
     if sdio_adopt_hal_prepared_host(sequence, aux0).is_ok() {
-        return Ok(());
+        return sdio_arm_card_interrupt_after_init()
+            .then_some(())
+            .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
     }
     publish_runtime_progress(
         sequence,
@@ -24861,7 +26300,9 @@ fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> Result<(), u16> {
     runtime_spin(SDHCI_POWER_READY_SPINS);
     if !sdio_software_reset(SDHCI_RESET_ALL) {
         if sdio_adopt_hal_prepared_host(sequence, aux0).is_ok() {
-            return Ok(());
+            return sdio_arm_card_interrupt_after_init()
+                .then_some(())
+                .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
         }
         return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED);
     }
@@ -24873,8 +26314,7 @@ fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> Result<(), u16> {
         aux0,
     );
     sdio_write8(SDHCI_TIMEOUT_CONTROL, 0x0e);
-    sdio_write32(SDHCI_INT_ENABLE, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    sdio_write32(SDHCI_SIGNAL_ENABLE, 0);
+    sdio_program_interrupt_policy();
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     let _ = sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
@@ -24897,6 +26337,9 @@ fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> Result<(), u16> {
     }
     sdio_write8(SDHCI_HOST_CONTROL, sdio_read8(SDHCI_HOST_CONTROL) & !0x06);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+    if !sdio_arm_card_interrupt_after_init() {
+        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
+    }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, aux0);
     Ok(())
 }
@@ -24940,8 +26383,7 @@ fn sdio_adopt_hal_prepared_host(sequence: u32, aux0: u32) -> Result<(), u16> {
         aux0,
     );
     sdio_write8(SDHCI_TIMEOUT_CONTROL, 0x0e);
-    sdio_write32(SDHCI_INT_ENABLE, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    sdio_write32(SDHCI_SIGNAL_ENABLE, 0);
+    sdio_program_interrupt_policy();
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
         publish_runtime_progress(
@@ -24990,6 +26432,7 @@ fn sdio_apply_host_config(target_hz: u32, flags: u16) -> bool {
     }
     sdio_write8(SDHCI_HOST_CONTROL, control);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+    sdio_program_interrupt_policy();
     true
 }
 
@@ -25176,6 +26619,58 @@ fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
     (frame.len as usize).min(limit)
 }
 
+#[cfg(target_os = "none")]
+fn publish_runtime_completion_sequence_last(completion: DriverTaskCompletionRecord) {
+    let staged = runtime_staged_completion(completion);
+    let destination = (DRIVER_TASK_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+        as *mut DriverTaskCompletionRecord;
+    // SAFETY: The completion slot is the fixed HAL-mapped runtime ring record.
+    // Sequence zero is written first so endpoint and linked-runtime pollers
+    // cannot accept any subsequently visible staged body as the new result.
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*destination).sequence), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*destination).code), staged.code);
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!((*destination).detail),
+            staged.detail,
+        );
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!((*destination).result),
+            staged.result,
+        );
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!((*destination).frame.offset),
+            staged.frame.offset,
+        );
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!((*destination).frame.len),
+            staged.frame.len,
+        );
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!((*destination).frame.flags),
+            staged.frame.flags,
+        );
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        DRIVER_TASK_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
+        core::mem::size_of::<DriverTaskCompletionRecord>(),
+    );
+    // SAFETY: The staged completion body is globally visible and stable. The
+    // matching nonzero sequence is the sole commit word and is published last.
+    unsafe {
+        core::ptr::write_volatile(
+            core::ptr::addr_of_mut!((*destination).sequence),
+            completion.sequence,
+        );
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        DRIVER_TASK_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
+        core::mem::size_of::<u32>(),
+    );
+}
+
 /// Run the isolated driver runtime receive/service loop.
 #[cfg(target_os = "none")]
 pub fn runtime_main(task_key: usize) -> ! {
@@ -25201,11 +26696,12 @@ pub fn runtime_main(task_key: usize) -> ! {
     );
     loop {
         let publish_ring_read_begin = !ring_read_progress_published;
-        let intake = poll_runtime_command(last_sequence, task_key_marker, publish_ring_read_begin);
+        let mut intake =
+            poll_runtime_command(last_sequence, task_key_marker, publish_ring_read_begin);
         if publish_ring_read_begin {
             ring_read_progress_published = true;
         }
-        let Some(intake) = intake else {
+        if intake.is_none() {
             idle_polls = idle_polls.wrapping_add(1);
             if runtime_idle_poll_progress_due(idle_polls) {
                 publish_runtime_progress(
@@ -25214,12 +26710,31 @@ pub fn runtime_main(task_key: usize) -> ! {
                     task_key_marker,
                 );
             }
-            // SAFETY: Cooperative idle path for linked driver runtimes. Root
-            // remains the bounded turn scheduler; a yield avoids monopolising
-            // the selected affinity core while preserving shared-ring progress.
-            unsafe {
-                sel4_sys::seL4_Yield();
+            let descriptor = RUNTIME_DESCRIPTOR.load();
+            if runtime_notification_route(&descriptor) != RuntimeNotificationRoute::LegacyPoll {
+                // Poll the persistent ring/source once before sleeping so a
+                // coalesced or already-consumed doorbell cannot strand work.
+                let _ = service_runtime_notification(0);
+                match wait_runtime_command_or_notification(last_sequence) {
+                    RuntimeWake::Command(command) => intake = Some(command),
+                    RuntimeWake::Notification(badge) => {
+                        let _ = service_runtime_notification(badge);
+                        continue;
+                    }
+                    RuntimeWake::None => {}
+                }
             }
+            if intake.is_none() {
+                // SAFETY: Legacy or MCS fallback remains cooperatively polled.
+                // Notification blocking is admitted only by the exact generated
+                // reciprocal CYW43/SDIO topology.
+                unsafe {
+                    sel4_sys::seL4_Yield();
+                }
+                continue;
+            }
+        }
+        let Some(intake) = intake else {
             continue;
         };
         idle_polls = 0;
@@ -25238,20 +26753,14 @@ pub fn runtime_main(task_key: usize) -> ! {
                 command.aux0,
             );
         }
-        // SAFETY: The completion record lies in the same mapped ring page and
-        // uses the fixed ABI layout shared with root.
-        unsafe {
-            core::ptr::write_volatile(
-                (DRIVER_TASK_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
-                    as *mut DriverTaskCompletionRecord,
-                completion,
-            );
+        publish_runtime_completion_sequence_last(completion);
+        if command.arg0 == HOT_PATH_SDIO_HOST
+            && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+            && runtime_notification_route(&RUNTIME_DESCRIPTOR.load())
+                == RuntimeNotificationRoute::SdioOwner
+        {
+            runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT);
         }
-        driver_task_shared_store_barrier();
-        driver_task_shared_clean_range(
-            DRIVER_TASK_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
-            core::mem::size_of::<DriverTaskCompletionRecord>(),
-        );
         #[cfg(not(sel4_config_kernel_mcs))]
         if intake.reply_cap_available {
             // SAFETY: Only `seL4_Call` installs the reply cap consumed here.
@@ -25267,6 +26776,11 @@ pub fn runtime_main(task_key: usize) -> ! {
                     core::ptr::null(),
                 );
             }
+        }
+        if runtime_notification_route(&RUNTIME_DESCRIPTOR.load())
+            == RuntimeNotificationRoute::Cyw43Client
+        {
+            cyw43_resignal_deferred_dpc();
         }
         last_sequence = command.sequence;
         publish_runtime_progress(
@@ -25284,7 +26798,8 @@ mod tests {
         DriverRuntimeBusLinkDescriptor, DriverRuntimeFramebufferDescriptor,
         DriverRuntimeResourceRangeDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
         DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
-        DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+        DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
         DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
         DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
         DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
@@ -25322,6 +26837,8 @@ mod tests {
         CYW43_RUNTIME_FLAGS.store(0, Ordering::Release);
         CYW43_TX_COUNT.store(0, Ordering::Release);
         CYW43_SDIO_BUS_LINK_SEQ.store(0, Ordering::Release);
+        CYW43_SDIO_CHILD_ACTIVE.store(false, Ordering::Release);
+        CYW43_DPC_DEFERRED.store(false, Ordering::Release);
         CYW43_ACTIVE_PARENT_SEQUENCE.store(0, Ordering::Release);
         CYW43_LAST_FAULT_DETAIL.store(FAULT_NONE as u32, Ordering::Release);
         CYW43_LAST_FAULT_RESULT.store(0, Ordering::Release);
@@ -25337,8 +26854,457 @@ mod tests {
         PCIE_RUNTIME_STATE.with_mut(PcieRuntimeState::reset);
         USB_RUNTIME_STATE.with_mut(UsbRuntimeState::reset);
         SDIO_RUNTIME_STATE.with_mut(SdioRuntimeState::reset);
-        CYW43_RUNTIME_STATE.with_mut(Cyw43RuntimeState::reset);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.reset();
+            state.dpc_shared_epoch = 0;
+            state.dpc_epoch_errors = 0;
+            state.dpc_sequence_errors = 0;
+            state.recovery_required = false;
+        });
         SERIAL_RUNTIME_RX_QUEUE.with_mut(SerialRuntimeRxQueue::reset);
+    }
+
+    #[test]
+    fn generated_notification_dpc_topology_routes_both_peers() {
+        let client = descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        let owner = descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+
+        assert_eq!(
+            runtime_notification_route(&client),
+            RuntimeNotificationRoute::Cyw43Client
+        );
+        assert_eq!(
+            runtime_notification_route(&owner),
+            RuntimeNotificationRoute::SdioOwner
+        );
+        assert_ne!(client.bus_links[0].epoch, owner.bus_links[0].epoch);
+        assert_eq!(
+            client.bus_links[0].shared_epoch,
+            owner.bus_links[0].shared_epoch
+        );
+
+        let mut malformed = owner;
+        malformed.irqs[0].handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT + 1;
+        assert_eq!(
+            runtime_notification_route(&malformed),
+            RuntimeNotificationRoute::LegacyPoll
+        );
+    }
+
+    #[test]
+    fn sdio_irq_bind_failure_retains_polling_diagnostic_service() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+        descriptor.irq_count = 0;
+        descriptor.irqs[0] = DriverRuntimeIrqDescriptor::empty();
+        descriptor.flags &= !DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        descriptor = seal_descriptor_for_test(descriptor, HOT_PATH_SDIO_HOST);
+
+        assert_eq!(
+            runtime_notification_route(&descriptor),
+            RuntimeNotificationRoute::LegacyPoll
+        );
+        assert_eq!(
+            sdio_runtime_init(76, DRIVER_RUNTIME_ENGINE_INIT_AUX, &descriptor),
+            Ok(DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY)
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.initialized);
+            assert!(!state.dpc_link_ready);
+            assert_eq!(state.irq_handler_slot, 0);
+        });
+    }
+
+    #[test]
+    fn dpc_event_ring_preserves_fifo_order_and_rejects_bad_epoch() {
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeDpcEventRing, consumer),
+            16,
+            "the consumer cache clean must target its field, not the ring header"
+        );
+        let epoch = 0x4359_5301;
+        let mut ring = DriverRuntimeDpcEventRing::empty(epoch);
+        assert_eq!(
+            dpc_event_ring_publish(
+                &mut ring,
+                epoch,
+                SDHCI_INT_CARD_INT,
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(1)
+        );
+        assert_eq!(
+            dpc_event_ring_publish(
+                &mut ring,
+                epoch,
+                SDHCI_INT_CARD_INT | SDHCI_INT_RESPONSE,
+                0,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(2)
+        );
+        let first = match dpc_event_ring_peek(&ring, epoch) {
+            DpcRingConsumeResult::Event(event) => event,
+            other => panic!("expected first event, got {other:?}"),
+        };
+        assert_eq!(first.sequence, 1);
+        assert_eq!(first.host_int_status, SDHCI_INT_CARD_INT);
+        assert!(dpc_event_ring_advance(&mut ring, epoch, first.sequence));
+        assert_eq!(
+            dpc_consumer_wake_route(&ring, epoch),
+            DpcConsumerWakeRoute::SelfSignal
+        );
+        let second = match dpc_event_ring_peek(&ring, epoch) {
+            DpcRingConsumeResult::Event(event) => event,
+            other => panic!("expected second event, got {other:?}"),
+        };
+        assert_eq!(second.sequence, 2);
+        assert_eq!(
+            second.host_int_status,
+            SDHCI_INT_CARD_INT | SDHCI_INT_RESPONSE
+        );
+        assert_eq!(
+            dpc_event_ring_peek(&ring, epoch.wrapping_add(1)),
+            DpcRingConsumeResult::BadEpoch
+        );
+        assert!(dpc_event_ring_advance(&mut ring, epoch, second.sequence));
+        assert_eq!(
+            dpc_consumer_wake_route(&ring, epoch),
+            DpcConsumerWakeRoute::OwnerRearm
+        );
+    }
+
+    #[test]
+    fn dpc_owner_health_latches_ack_failure_and_poison_without_layout_growth() {
+        let mut ring = DriverRuntimeDpcEventRing::empty(0x4359_5301);
+        dpc_event_ring_set_owner_health(&mut ring, true, true, false, true);
+        assert!(ring.valid());
+        assert_ne!(
+            ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+            0
+        );
+        assert_ne!(
+            ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
+            0
+        );
+        assert_eq!(ring.ack_failures, 1);
+
+        dpc_event_ring_set_owner_health(&mut ring, true, false, true, false);
+        assert!(ring.valid());
+        assert_eq!(
+            ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
+            0
+        );
+        assert_ne!(ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED, 0);
+        assert_eq!(ring.ack_failures, 1);
+
+        dpc_event_ring_set_owner_health(&mut ring, false, false, false, false);
+        assert_eq!(
+            ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED,
+            DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED
+        );
+    }
+
+    #[test]
+    fn sdio_unmasked_rearm_programs_mmio_before_publishing_shared_health() {
+        assert_eq!(
+            SDIO_UNMASKED_REARM_ORDER,
+            [
+                SdioUnmaskedRearmStep::ProgramInterruptPolicy,
+                SdioUnmaskedRearmStep::PublishSharedHealth,
+            ]
+        );
+    }
+
+    #[test]
+    fn generation_reset_carries_owner_failure_history_and_clears_active_health() {
+        let current = 0x4359_5301;
+        let requested = dpc_generation_next(current);
+        let mut ring = DriverRuntimeDpcEventRing::empty(current);
+        ring.flags = DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
+            | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING
+            | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED
+            | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED;
+        ring.overruns = 7;
+        ring.ack_failures = 9;
+
+        assert!(dpc_event_ring_reset_generation(
+            &mut ring, current, requested
+        ));
+        assert!(ring.valid());
+        assert_eq!(ring.epoch, requested);
+        assert_eq!(ring.producer, 0);
+        assert_eq!(ring.consumer, 0);
+        assert_eq!(
+            ring.flags,
+            DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
+                | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED
+        );
+        assert_eq!(ring.overruns, 7);
+        assert_eq!(ring.ack_failures, 9);
+    }
+
+    #[test]
+    fn successful_generation_recovery_remains_proof_poisoned_but_serviceable() {
+        let current = 0x4359_5301;
+        let requested = dpc_generation_next(current);
+        let mut ring = DriverRuntimeDpcEventRing::empty(current);
+        ring.flags = DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED;
+        assert!(dpc_event_ring_reset_generation(
+            &mut ring, current, requested
+        ));
+
+        let mut owner = SdioRuntimeState::new();
+        owner.dpc_poisoned = false;
+        dpc_event_ring_set_owner_health(&mut ring, false, false, owner.dpc_poisoned, false);
+        assert!(!owner.dpc_poisoned);
+        assert_ne!(ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED, 0);
+        assert_eq!(
+            dpc_event_ring_publish(
+                &mut ring,
+                requested,
+                SDHCI_INT_CARD_INT,
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(1)
+        );
+    }
+
+    #[test]
+    fn cyw43_generation_reset_preserves_cumulative_dpc_failures() {
+        let mut state = Cyw43RuntimeState::new();
+        state.dpc_events_consumed = 11;
+        state.dpc_epoch_errors = 13;
+        state.dpc_sequence_errors = 17;
+
+        state.reset();
+        assert_eq!(state.dpc_events_consumed, 0);
+        assert_eq!(state.dpc_epoch_errors, 13);
+        assert_eq!(state.dpc_sequence_errors, 17);
+    }
+
+    #[test]
+    fn cyw43_initial_generation_uses_static_epoch_without_recovery() {
+        let static_epoch = 0x4359_5301;
+        let state = Cyw43RuntimeState::new();
+        assert_eq!(
+            cyw43_engine_generation(static_epoch, state.dpc_shared_epoch),
+            static_epoch
+        );
+        assert!(!state.recovery_required);
+    }
+
+    #[test]
+    fn issued_unknown_poison_requires_persistent_generation_recovery() {
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.dpc_shared_epoch = 0x4359_5301;
+
+        cyw43_mark_issued_unknown(&mut state);
+        assert!(state.sdpcm_tx_write_ambiguous);
+        assert!(state.recovery_required);
+        assert!(!state.initialized);
+        assert!(!state.transport_ready);
+        assert!(!state.firmware_released);
+
+        state.reset();
+        assert!(state.recovery_required);
+        assert_eq!(state.dpc_shared_epoch, 0x4359_5301);
+    }
+
+    #[test]
+    fn generation_reset_advances_exactly_once_and_skips_zero() {
+        assert_eq!(dpc_generation_next(0x4359_5301), 0x4359_5302);
+        assert!(dpc_generation_reset_request_valid(0x4359_5301, 0x4359_5302));
+        assert!(!dpc_generation_reset_request_valid(
+            0x4359_5301,
+            0x4359_5303
+        ));
+        assert_eq!(dpc_generation_next(u32::MAX), 1);
+        assert_ne!(dpc_generation_next(u32::MAX), 0);
+    }
+
+    #[test]
+    fn generation_reset_rejects_old_epoch_after_ring_commit() {
+        let old_epoch = 0x4359_5301;
+        let next_epoch = dpc_generation_next(old_epoch);
+        let mut ring = DriverRuntimeDpcEventRing::empty(old_epoch);
+        assert!(dpc_event_ring_reset_generation(
+            &mut ring, old_epoch, next_epoch
+        ));
+        assert_eq!(ring.epoch, next_epoch);
+        assert_eq!(
+            dpc_event_ring_peek(&ring, old_epoch),
+            DpcRingConsumeResult::BadEpoch
+        );
+        assert!(!dpc_event_ring_reset_generation(
+            &mut ring, old_epoch, next_epoch
+        ));
+    }
+
+    #[test]
+    fn cyw43_generation_reset_requires_exact_owner_completion() {
+        let sequence = 0x8000_0042;
+        let requested: u32 = 0x4359_5302;
+        let exact = DriverTaskCompletionRecord::progress(sequence, requested);
+        assert!(cyw43_generation_reset_completion_exact(
+            exact, sequence, requested
+        ));
+        assert!(!cyw43_generation_reset_completion_exact(
+            DriverTaskCompletionRecord::progress(sequence, requested.wrapping_add(1)),
+            sequence,
+            requested,
+        ));
+        assert!(!cyw43_generation_reset_completion_exact(
+            DriverTaskCompletionRecord::fault(sequence, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED),
+            sequence,
+            requested,
+        ));
+    }
+
+    #[test]
+    fn cyw43_poison_clears_only_after_successful_generation_reset() {
+        let sequence = 0x8000_0042;
+        let requested: u32 = 0x4359_5302;
+        let mut state = Cyw43RuntimeState::new();
+        cyw43_mark_issued_unknown(&mut state);
+
+        assert!(!cyw43_complete_generation_reset(
+            &mut state,
+            DriverTaskCompletionRecord::progress(sequence, requested.wrapping_add(1)),
+            sequence,
+            requested,
+        ));
+        assert!(state.recovery_required);
+
+        assert!(cyw43_complete_generation_reset(
+            &mut state,
+            DriverTaskCompletionRecord::progress(sequence, requested),
+            sequence,
+            requested,
+        ));
+        assert!(!state.recovery_required);
+        assert_eq!(state.dpc_shared_epoch, requested);
+    }
+
+    #[test]
+    fn dpc_queue_only_work_completes_and_rearms_for_root_endpoint_service() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        assert_eq!(
+            cyw43_dpc_continuation_route(false, 0, false, 0, 1),
+            Cyw43DpcContinuationRoute::CompleteAndRearm
+        );
+        assert!(!CYW43_DPC_DEFERRED.load(Ordering::Acquire));
+
+        let epoch = 0x4359_5301;
+        let mut ring = DriverRuntimeDpcEventRing::empty(epoch);
+        assert_eq!(
+            dpc_event_ring_publish(
+                &mut ring,
+                epoch,
+                SDHCI_INT_CARD_INT,
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(1)
+        );
+        assert!(dpc_event_ring_advance(&mut ring, epoch, 1));
+        assert_eq!(
+            dpc_consumer_wake_route(&ring, epoch),
+            DpcConsumerWakeRoute::OwnerRearm
+        );
+    }
+
+    #[test]
+    fn dpc_self_signals_only_for_device_or_latch_work() {
+        for route in [
+            cyw43_dpc_continuation_route(false, I_HMB_HOST_INT, false, 0, 1),
+            cyw43_dpc_continuation_route(false, 0, true, 0, 1),
+            cyw43_dpc_continuation_route(false, 0, false, 64, 1),
+        ] {
+            assert_eq!(route, Cyw43DpcContinuationRoute::ImmediateSelfSignal);
+        }
+        assert_eq!(
+            cyw43_dpc_continuation_route(false, 0, false, 0, 0),
+            Cyw43DpcContinuationRoute::CompleteAndRearm
+        );
+        assert_eq!(
+            cyw43_dpc_continuation_route(true, I_HMB_HOST_INT, true, 64, 1),
+            Cyw43DpcContinuationRoute::CompleteAndRearm
+        );
+    }
+
+    #[test]
+    fn pre_release_dpc_event_advances_and_rearms_owner() {
+        let epoch = 0x4359_5301;
+        let mut ring = DriverRuntimeDpcEventRing::empty(epoch);
+        assert_eq!(
+            dpc_event_ring_publish(
+                &mut ring,
+                epoch,
+                SDHCI_INT_CARD_INT,
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(1)
+        );
+        assert_eq!(
+            cyw43_dpc_readiness_action(true, true, false),
+            Cyw43DpcReadinessAction::AdvanceAndRearm
+        );
+        assert!(dpc_event_ring_advance(&mut ring, epoch, 1));
+        assert_eq!(
+            dpc_consumer_wake_route(&ring, epoch),
+            DpcConsumerWakeRoute::OwnerRearm
+        );
+    }
+
+    #[test]
+    fn dpc_event_ring_full_never_overwrites_unconsumed_entry() {
+        let epoch = 0x4359_5301;
+        let mut ring = DriverRuntimeDpcEventRing::empty(epoch);
+        for sequence in 1..=DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH as u32 {
+            assert_eq!(
+                dpc_event_ring_publish(
+                    &mut ring,
+                    epoch,
+                    SDHCI_INT_CARD_INT,
+                    sequence,
+                    DPC_REASON_SDIO_CARD_INTERRUPT,
+                    DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+                ),
+                DpcRingPublishResult::Published(sequence)
+            );
+        }
+        let first = ring.entries[0];
+        assert_eq!(
+            dpc_event_ring_publish(
+                &mut ring,
+                epoch,
+                SDHCI_INT_CARD_INT,
+                99,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT
+                    | DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+            ),
+            DpcRingPublishResult::Full
+        );
+        assert_eq!(ring.entries[0], first);
+        assert_eq!(ring.producer, DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH as u32);
+        assert_eq!(ring.overruns, 1);
+        assert_ne!(ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN, 0);
     }
 
     #[test]
@@ -26513,9 +28479,9 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_sdio_bus_link_wait_scales_with_payload_size() {
-        let mut command = DriverTaskCommandRecord {
-            sequence: 1,
+    fn cyw43_sdio_bus_link_publishes_sequence_last_once() {
+        let command = DriverTaskCommandRecord {
+            sequence: 0x8123_4567,
             opcode: OPCODE_SERVICE,
             flags: 0,
             arg0: HOT_PATH_SDIO_HOST,
@@ -26529,34 +28495,93 @@ mod tests {
             },
             frame: DriverFrameDescriptor::empty(),
         };
+        let staged = cyw43_sdio_bus_link_staged_command(command);
+        assert_eq!(staged.sequence, 0);
+        assert_ne!(staged.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, 0);
+        assert_eq!(staged.opcode, command.opcode);
+        assert_eq!(staged.arg0, command.arg0);
+        assert_eq!(staged.frame, command.frame);
+
+        let mut child = Cyw43SdioChildState::new(command.sequence);
+        assert!(child.take_publication());
+        assert!(!child.take_publication());
+        assert!(!child.take_publication());
+    }
+
+    #[test]
+    fn cyw43_sdio_bus_link_accepts_only_stable_exact_completion() {
+        let child = Cyw43SdioChildState::new(0x8000_0042);
+        let exact = DriverTaskCompletionRecord::progress(0x8000_0042, 7);
+        let staged = runtime_staged_completion(exact);
+        let stale = DriverTaskCompletionRecord::progress(0x8000_0041, 7);
+        let torn = DriverTaskCompletionRecord::progress(0x8000_0042, 8);
+
         assert_eq!(
-            cyw43_sdio_bus_link_attempt_limit(command),
-            CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS
+            child.completion(staged, staged),
+            Cyw43SdioChildCompletion::Waiting
         );
-        command.budget.max_bytes = 1536;
-        assert!(cyw43_sdio_bus_link_attempt_limit(command) > CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS);
-        command.budget.max_bytes = u32::MAX;
         assert_eq!(
-            cyw43_sdio_bus_link_attempt_limit(command),
-            CYW43_SDIO_BUS_LINK_MAX_ATTEMPTS
+            child.completion(stale, stale),
+            Cyw43SdioChildCompletion::Waiting
+        );
+        assert_eq!(
+            child.completion(exact, torn),
+            Cyw43SdioChildCompletion::Waiting
+        );
+        assert_eq!(
+            child.completion(exact, exact),
+            Cyw43SdioChildCompletion::Exact(exact)
         );
     }
 
     #[test]
-    fn cyw43_sdio_bus_link_renotifies_before_timeout() {
-        assert!(CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL > 0);
-        assert!(CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL < CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS);
+    fn cyw43_sdio_bus_link_sequence_domain_tracks_shared_epoch() {
+        let first = cyw43_sdio_bus_link_sequence_seed(0x1122_3344);
+        let second = cyw43_sdio_bus_link_sequence_seed(0x5566_7788);
+        assert_ne!(first, second);
+        assert_ne!(first & CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN, 0);
+        assert_ne!(second & CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN, 0);
         assert_eq!(
-            CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS % CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL,
-            0
+            cyw43_sdio_bus_link_sequence_advance(u32::MAX),
+            CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN | 1
         );
+    }
+
+    #[test]
+    fn cyw43_sdio_child_wait_defers_coalesced_dpc() {
+        let mut child = Cyw43SdioChildState::new(0x8000_0042);
+        let exact = DriverTaskCompletionRecord::progress(0x8000_0042, 7);
+        child.note_notification();
+        assert!(child.dpc_deferred);
+        assert_eq!(
+            child.completion(exact, exact),
+            Cyw43SdioChildCompletion::Exact(exact)
+        );
+        assert!(cyw43_sdio_dpc_service_deferred(true));
+        assert!(!cyw43_sdio_dpc_service_deferred(false));
+    }
+
+    #[test]
+    fn cyw43_sdio_bus_link_uses_one_generated_notification_doorbell() {
+        assert_eq!(
+            DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT,
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr
+        );
+        assert_eq!(
+            DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT,
+            DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT
+        );
+        assert_eq!(
+            cyw43_sdio_child_wait_slot(),
+            DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT
+        );
+        assert_ne!(cyw43_sdio_child_wait_slot(), DRIVER_TASK_CHILD_COMMAND_SLOT);
     }
 
     #[test]
     fn cyw43_transport_command_is_one_prompt_safe_phase() {
         assert_eq!(CYW43_TRANSPORT_COMMAND_BURST_STEPS, 1);
         assert!(CYW43_TRANSPORT_COMMAND_BURST_STEPS < CYW43_TRANSPORT_PHASE_LIMIT);
-        assert!(CYW43_SDIO_CARD_INIT_RETRY_SETTLE_SPINS < CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS * 2);
     }
 
     #[test]
@@ -26673,6 +28698,7 @@ mod tests {
     }
 
     fn descriptor_for(hot_path: u32, role: u32) -> DriverRuntimeInitDescriptor {
+        const TEST_CYW43_SDIO_SHARED_EPOCH: u32 = 0x4359_5301;
         let mut descriptor = DriverRuntimeInitDescriptor::empty();
         descriptor.hot_path = hot_path;
         descriptor.role_bit = role;
@@ -26808,6 +28834,41 @@ mod tests {
                     DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
                     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32,
                     DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+                )
+                .with_notification_dpc(
+                    HOT_PATH_SDIO_HOST,
+                    DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+                    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+                    TEST_CYW43_SDIO_SHARED_EPOCH,
+                );
+            }
+            HOT_PATH_SDIO_HOST => {
+                descriptor.flags &= !DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+                descriptor.flags |=
+                    DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS | DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
+                descriptor.irq_count = 1;
+                descriptor.irqs[0] = DriverRuntimeIrqDescriptor {
+                    irq: DRIVER_RUNTIME_SDIO_IRQ,
+                    badge: DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                    handler_slot: DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+                    notification_slot: DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+                    trigger: DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+                    flags: 0,
+                    reserved: 0,
+                };
+                descriptor.bus_link_count = 1;
+                descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+                    HOT_PATH_SDIO_HOST,
+                    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+                    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
+                    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32,
+                    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+                )
+                .with_notification_dpc(
+                    HOT_PATH_CYW43_WIFI,
+                    DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+                    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
+                    TEST_CYW43_SDIO_SHARED_EPOCH,
                 );
             }
             _ => {}
@@ -27274,6 +29335,36 @@ mod tests {
         assert_eq!(core::mem::align_of::<DriverTaskCommandRecord>(), 4);
         assert_eq!(core::mem::size_of::<DriverTaskCompletionRecord>(), 20);
         assert_eq!(core::mem::align_of::<DriverTaskCompletionRecord>(), 4);
+    }
+
+    #[test]
+    fn runtime_staged_completion_preserves_fixed_body_and_hides_commit_sequence() {
+        assert_eq!(core::mem::size_of::<DriverTaskCompletionRecord>(), 20);
+        assert_eq!(
+            core::mem::offset_of!(DriverTaskCompletionRecord, sequence),
+            0
+        );
+        assert_eq!(core::mem::offset_of!(DriverTaskCompletionRecord, code), 4);
+        assert_eq!(core::mem::offset_of!(DriverTaskCompletionRecord, detail), 6);
+        assert_eq!(core::mem::offset_of!(DriverTaskCompletionRecord, result), 8);
+        assert_eq!(core::mem::offset_of!(DriverTaskCompletionRecord, frame), 12);
+
+        let completion = DriverTaskCompletionRecord::fault_with_result_and_frame(
+            0x8000_0042,
+            FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+            0x1122_3344,
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 64,
+                flags: 7,
+            },
+        );
+        let staged = runtime_staged_completion(completion);
+        assert_eq!(staged.sequence, 0);
+        assert_eq!(staged.code, completion.code);
+        assert_eq!(staged.detail, completion.detail);
+        assert_eq!(staged.result, completion.result);
+        assert_eq!(staged.frame, completion.frame);
     }
 
     #[test]
@@ -28360,13 +30451,21 @@ mod tests {
         assert!(!block_mode);
         test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
-        assert_eq!(
-            cyw43_submit_sdpcm_frame(&mut state, frame, true, false),
-            total_len
-        );
-        assert_eq!(state.sdpcm_seq, 12);
-        assert_eq!(state.tx_frames, 1);
+        assert_eq!(cyw43_submit_sdpcm_frame(&mut state, frame, true, false), 0);
+        assert_eq!(state.sdpcm_seq, 11);
+        assert_eq!(state.tx_frames, 0);
         assert!(state.sdpcm_tx_write_ambiguous);
+        assert!(!state.initialized);
+        assert!(!state.transport_ready);
+        assert!(!state.firmware_released);
+        assert_eq!(cyw43_take_last_fault_detail(), Some(FAULT_CYW43_ETH_TX));
+        assert_eq!(
+            cyw43_take_last_fault_result(),
+            sdio_transfer_failure_result(
+                SDIO_TRANSFER_FAILURE_STAGE_DATA_END,
+                SDHCI_INT_ERROR | SDHCI_INT_DATA_CRC
+            )
+        );
         assert_eq!(
             test_sdio_cmd53_write_shape_count(
                 2,
@@ -28642,13 +30741,17 @@ mod tests {
             flags: 0,
         };
 
-        assert_eq!(
-            cyw43_submit_sdpcm_frame(&mut state, frame, false, false),
-            CYW43_SDPCM_HEADER_BYTES + 11
-        );
-        assert_eq!(state.sdpcm_seq, 5);
-        assert_eq!(state.tx_frames, 1);
+        assert_eq!(cyw43_submit_sdpcm_frame(&mut state, frame, false, false), 0);
+        assert_eq!(state.sdpcm_seq, 4);
+        assert_eq!(state.tx_frames, 0);
         assert!(state.sdpcm_tx_write_ambiguous);
+        assert!(!state.initialized);
+        assert!(!state.transport_ready);
+        assert!(!state.firmware_released);
+        assert_eq!(
+            cyw43_take_last_fault_detail(),
+            Some(FAULT_CYW43_CONTROL_FRAME)
+        );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         assert_ne!(SDIO_FUNCTION_NUMBER_2, SDIO_FUNC_ENABLE_2);
         assert!(!test_sdio_cmd52_write_seen(
@@ -28693,13 +30796,14 @@ mod tests {
             flags: 0,
         };
 
-        assert_eq!(
-            cyw43_submit_sdpcm_frame(&mut state, frame, false, false),
-            CYW43_SDPCM_HEADER_BYTES + 11
-        );
-        assert_eq!(state.sdpcm_seq, 9);
-        assert_eq!(state.tx_frames, 1);
+        assert_eq!(cyw43_submit_sdpcm_frame(&mut state, frame, false, false), 0);
+        assert_eq!(state.sdpcm_seq, 8);
+        assert_eq!(state.tx_frames, 0);
         assert!(state.sdpcm_tx_write_ambiguous);
+        assert_eq!(
+            cyw43_take_last_fault_detail(),
+            Some(FAULT_CYW43_CONTROL_FRAME)
+        );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         assert_eq!(
             test_sdio_cmd53_write_shape_count(
@@ -28753,13 +30857,14 @@ mod tests {
             flags: 0,
         };
 
-        assert_eq!(
-            cyw43_submit_sdpcm_frame(&mut state, frame, false, false),
-            CYW43_SDPCM_HEADER_BYTES + 11
-        );
-        assert_eq!(state.sdpcm_seq, 9);
-        assert_eq!(state.tx_frames, 1);
+        assert_eq!(cyw43_submit_sdpcm_frame(&mut state, frame, false, false), 0);
+        assert_eq!(state.sdpcm_seq, 8);
+        assert_eq!(state.tx_frames, 0);
         assert!(state.sdpcm_tx_write_ambiguous);
+        assert_eq!(
+            cyw43_take_last_fault_detail(),
+            Some(FAULT_CYW43_CONTROL_FRAME)
+        );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         assert_eq!(
             test_sdio_cmd53_write_shape_count(
@@ -28810,13 +30915,14 @@ mod tests {
             flags: 0,
         };
 
-        assert_eq!(
-            cyw43_submit_sdpcm_frame(&mut state, frame, false, false),
-            CYW43_SDPCM_HEADER_BYTES + 11
-        );
-        assert_eq!(state.sdpcm_seq, 9);
-        assert_eq!(state.tx_frames, 1);
+        assert_eq!(cyw43_submit_sdpcm_frame(&mut state, frame, false, false), 0);
+        assert_eq!(state.sdpcm_seq, 8);
+        assert_eq!(state.tx_frames, 0);
         assert!(state.sdpcm_tx_write_ambiguous);
+        assert_eq!(
+            cyw43_take_last_fault_detail(),
+            Some(FAULT_CYW43_CONTROL_FRAME)
+        );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         assert_eq!(
             test_sdio_cmd53_write_shape_count(
@@ -28950,12 +31056,9 @@ mod tests {
             flags: 0,
         };
 
-        assert_eq!(
-            cyw43_submit_sdpcm_frame(&mut state, frame, false, false),
-            CYW43_SDPCM_HEADER_BYTES + 11
-        );
-        assert_eq!(state.sdpcm_seq, 9);
-        assert_eq!(state.tx_frames, 1);
+        assert_eq!(cyw43_submit_sdpcm_frame(&mut state, frame, false, false), 0);
+        assert_eq!(state.sdpcm_seq, 8);
+        assert_eq!(state.tx_frames, 0);
         assert!(state.sdpcm_tx_write_ambiguous);
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         assert_eq!(
@@ -28968,7 +31071,10 @@ mod tests {
             ),
             1
         );
-        assert_eq!(cyw43_take_last_fault_detail(), None);
+        assert_eq!(
+            cyw43_take_last_fault_detail(),
+            Some(FAULT_CYW43_CONTROL_FRAME)
+        );
     }
 
     #[test]
@@ -29055,6 +31161,7 @@ mod tests {
         assert!(test_sdio_cmd53_transfer_count(2, false) >= 1);
         assert!(test_sdio_cmd53_transfer_count(2, true) >= 1);
         CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert!(state.control_startup_status_drained);
             assert_eq!(state.sdpcm_seq, 5);
             assert_eq!(state.sdpcm_seq_max, 8);
             assert_eq!(state.sdpcm_next_frame_len, 0);
@@ -29268,13 +31375,83 @@ mod tests {
 
         assert_eq!(
             service_command(0, cyw43_descriptor_command(92)),
-            DriverTaskCompletionRecord::progress(92, (CYW43_SDPCM_HEADER_BYTES + 11) as u32)
+            DriverTaskCompletionRecord::fault_with_result_and_frame(
+                92,
+                FAULT_CYW43_CONTROL_FRAME,
+                sdio_transfer_failure_result(
+                    SDIO_TRANSFER_FAILURE_STAGE_DATA_END,
+                    SDHCI_INT_ERROR | SDHCI_INT_DATA_CRC,
+                ),
+                DriverFrameDescriptor {
+                    offset: SDIO_FAULT_TELEMETRY_FRAME_OFFSET as u32,
+                    len: SDIO_FAULT_TELEMETRY_BYTES,
+                    flags: 0,
+                },
+            )
         );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         CYW43_RUNTIME_STATE.with_mut(|state| {
-            assert_eq!(state.sdpcm_seq, 9);
-            assert_eq!(state.tx_frames, 1);
+            assert_eq!(state.sdpcm_seq, 8);
+            assert_eq!(state.tx_frames, 0);
             assert!(state.sdpcm_tx_write_ambiguous);
+            assert!(!state.initialized);
+            assert!(!state.transport_ready);
+            assert!(!state.firmware_released);
+        });
+        assert!(!engine_initialized(&CYW43_RUNTIME_FLAGS));
+    }
+
+    #[test]
+    fn cyw43_control_exchange_ambiguous_submit_faults_without_sequence_advance() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        stage_bytes(usize::from(payload_offset), b"cdc-control");
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq = 6;
+            state.sdpcm_seq_max = 7;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset,
+            payload_len: 11,
+            total_len: 11,
+            arg0: 263,
+            arg1: 1,
+            reserved: 0,
+        });
+        reset_test_sdio_transfer_log();
+        test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(93)),
+            DriverTaskCompletionRecord::fault_with_result_and_frame(
+                93,
+                FAULT_CYW43_CONTROL_FRAME,
+                sdio_transfer_failure_result(
+                    SDIO_TRANSFER_FAILURE_STAGE_DATA_END,
+                    SDHCI_INT_ERROR | SDHCI_INT_DATA_CRC,
+                ),
+                DriverFrameDescriptor {
+                    offset: SDIO_FAULT_TELEMETRY_FRAME_OFFSET as u32,
+                    len: SDIO_FAULT_TELEMETRY_BYTES,
+                    flags: 0,
+                },
+            )
+        );
+        assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert_eq!(state.sdpcm_seq, 6);
+            assert_eq!(state.tx_frames, 0);
+            assert!(state.sdpcm_tx_write_ambiguous);
+            assert!(!state.initialized);
+            assert!(!state.transport_ready);
+            assert!(!state.firmware_released);
         });
     }
 
@@ -29494,6 +31671,7 @@ mod tests {
         stage_sdpcm_data_subframe(CYW43_RUNTIME_RX_BUFFER_OFFSET, &packet, 8);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.firmware_released = true;
+            state.control_startup_status_drained = false;
             state.sdpcm_seq = 4;
             state.sdpcm_seq_max = 5;
             state.sdpcm_next_frame_len = frame_len as u16;
@@ -29522,6 +31700,7 @@ mod tests {
         assert_eq!(test_sdio_cmd53_transfer_count(2, false), 0);
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert!(state.control_startup_status_drained);
             assert_eq!(state.sdpcm_seq, 5);
             assert_eq!(state.sdpcm_seq_max, 5);
             assert_eq!(state.sdpcm_next_frame_len, frame_len as u16);
@@ -31996,6 +34175,98 @@ mod tests {
             state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACK_TIMEOUT,
             0
         );
+        assert!(test_sdio_cmd52_write_seen(
+            1,
+            (CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX) & BACKPLANE_ADDRESS_MASK,
+            SMB_INT_ACK as u8,
+        ));
+        assert_eq!(test_sdio_cmd53_transfer_count(2, false), 0);
+    }
+
+    #[test]
+    fn cyw43_service_entry_mailbox_read_failure_preserves_host_int_latch() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.rx_retransmit_pending = true;
+        state.rxskip = true;
+        test_cyw43_sdio_int_status_response(I_HMB_HOST_INT);
+        test_cyw43_tohost_mailbox_response(HMB_DATA_NAKHANDLED);
+        TEST_CYW43_TOHOST_MAILBOX_READ_FAIL.store(1, Ordering::Release);
+        reset_test_sdio_transfer_log();
+
+        assert!(cyw43_runtime_begin_rx_service(&mut state));
+
+        assert!(state.rx_retransmit_pending);
+        assert!(state.rxskip);
+        assert!(!state.rxpending);
+        assert_ne!(state.pending_intstatus & I_HMB_HOST_INT, 0);
+        assert_eq!(
+            state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED,
+            0
+        );
+    }
+
+    #[test]
+    fn cyw43_service_entry_mailbox_ack_failure_preserves_host_int_latch() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.rx_retransmit_pending = true;
+        state.rxskip = true;
+        test_cyw43_sdio_int_status_response(I_HMB_HOST_INT);
+        test_cyw43_tohost_mailbox_response(HMB_DATA_NAKHANDLED);
+        TEST_CYW43_TOSB_MAILBOX_ACK_FAIL.store(1, Ordering::Release);
+        reset_test_sdio_transfer_log();
+
+        assert!(cyw43_runtime_begin_rx_service(&mut state));
+
+        assert!(state.rx_retransmit_pending);
+        assert!(state.rxskip);
+        assert!(!state.rxpending);
+        assert_ne!(state.pending_intstatus & I_HMB_HOST_INT, 0);
+        assert_eq!(
+            state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED,
+            0
+        );
+    }
+
+    #[test]
+    fn cyw43_service_entry_stale_nakhandled_without_host_int_keeps_rxskip() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.rx_retransmit_pending = true;
+        state.rxskip = true;
+        state.pending_intstatus = I_HMB_FRAME_IND;
+        test_cyw43_sdio_int_status_response(0);
+        test_cyw43_tohost_mailbox_response(HMB_DATA_NAKHANDLED);
+        reset_test_sdio_transfer_log();
+
+        assert!(cyw43_runtime_begin_rx_service(&mut state));
+
+        assert!(state.rx_retransmit_pending);
+        assert!(state.rxskip);
+        assert!(!state.rxpending);
+        assert_eq!(state.pending_intstatus & I_HMB_FRAME_IND, 0);
+        assert_eq!(
+            state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED,
+            0
+        );
+        assert!(!test_sdio_cmd52_write_seen(
+            1,
+            (CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX) & BACKPLANE_ADDRESS_MASK,
+            SMB_INT_ACK as u8,
+        ));
         assert_eq!(test_sdio_cmd53_transfer_count(2, false), 0);
     }
 
@@ -32657,6 +34928,81 @@ mod tests {
             }
             .cached(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16)
         ));
+    }
+
+    #[test]
+    fn cyw43_rx_idle_trace_v9_layout_is_additive() {
+        assert_eq!(CYW43_RX_IDLE_TRACE_VERSION, 9);
+        assert_eq!(CYW43_RX_IDLE_TRACE_V8_BYTES, 180);
+        assert_eq!(CYW43_RX_IDLE_TRACE_DPC_EVENTS_CONSUMED_OFFSET, 180);
+        assert_eq!(CYW43_RX_IDLE_TRACE_DPC_EPOCH_ERRORS_OFFSET, 184);
+        assert_eq!(CYW43_RX_IDLE_TRACE_DPC_SEQUENCE_ERRORS_OFFSET, 188);
+        assert_eq!(CYW43_RX_IDLE_TRACE_BYTES, 192);
+        assert_eq!(
+            CYW43_RX_IDLE_TRACE_DPC_SEQUENCE_ERRORS_OFFSET + core::mem::size_of::<u32>(),
+            usize::from(CYW43_RX_IDLE_TRACE_BYTES)
+        );
+    }
+
+    #[test]
+    fn cyw43_rx_idle_trace_v9_appends_dpc_counters_without_prefix_drift() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.rx_trace_flags = 0x1234;
+        state.rx_irq_source_asserted_empty_rearms = 0x1020_3040;
+        state.dpc_events_consumed = 0x1122_3344;
+        state.dpc_epoch_errors = 0x5566_7788;
+        state.dpc_sequence_errors = 0x99aa_bbcc;
+
+        let frame = cyw43_stage_rx_idle_trace(
+            &state,
+            DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NO_RFRAME,
+            0x4359_5301,
+        );
+        assert_eq!(frame.len, CYW43_RX_IDLE_TRACE_BYTES);
+        assert_eq!(
+            read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 4),
+            CYW43_RX_IDLE_TRACE_VERSION
+        );
+        assert_eq!(
+            read_ring_u32(
+                DRIVER_TASK_RING_FRAME_OFFSET + CYW43_RX_IDLE_TRACE_DPC_EVENTS_CONSUMED_OFFSET
+            ),
+            0x1122_3344
+        );
+        assert_eq!(
+            read_ring_u32(
+                DRIVER_TASK_RING_FRAME_OFFSET + CYW43_RX_IDLE_TRACE_DPC_EPOCH_ERRORS_OFFSET
+            ),
+            0x5566_7788
+        );
+        assert_eq!(
+            read_ring_u32(
+                DRIVER_TASK_RING_FRAME_OFFSET + CYW43_RX_IDLE_TRACE_DPC_SEQUENCE_ERRORS_OFFSET
+            ),
+            0x99aa_bbcc
+        );
+
+        let mut v8_prefix = [0u8; CYW43_RX_IDLE_TRACE_V8_BYTES];
+        for (index, byte) in v8_prefix.iter_mut().enumerate() {
+            *byte = read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index);
+        }
+        state.dpc_events_consumed = 1;
+        state.dpc_epoch_errors = 2;
+        state.dpc_sequence_errors = 3;
+        let _ = cyw43_stage_rx_idle_trace(
+            &state,
+            DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NO_RFRAME,
+            0x4359_5301,
+        );
+        for (index, expected) in v8_prefix.iter().copied().enumerate() {
+            assert_eq!(
+                read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index),
+                expected,
+                "v8 prefix byte {index} changed"
+            );
+        }
     }
 
     #[test]
@@ -33915,7 +36261,11 @@ mod tests {
         reset_runtime_for_test();
 
         assert_eq!(
-            sdio_runtime_init(75, DRIVER_RUNTIME_ENGINE_INIT_AUX),
+            sdio_runtime_init(
+                75,
+                DRIVER_RUNTIME_ENGINE_INIT_AUX,
+                &descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO),
+            ),
             Ok(DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY)
         );
 

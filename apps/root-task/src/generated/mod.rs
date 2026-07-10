@@ -167,6 +167,41 @@ pub struct DriverAffinityPolicy {
 pub struct DriverRuntimeImagePolicy {
     pub required: bool,
     pub images: &'static [DriverRuntimeImageSpec],
+    pub irqs: &'static [DriverRuntimeIrqSpec],
+    pub bus_links: &'static [DriverRuntimeBusLinkSpec],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverRuntimeIrqTrigger {
+    Level,
+    Edge,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DriverRuntimeIrqSpec {
+    pub hot_path: &'static str,
+    pub irq: u32,
+    pub badge: u32,
+    pub handler_slot: u8,
+    pub notification_slot: u8,
+    pub trigger: DriverRuntimeIrqTrigger,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DriverRuntimeBusLinkSpec {
+    pub channel: &'static str,
+    pub client_hot_path: &'static str,
+    pub owner_hot_path: &'static str,
+    pub client_notification_slot: u8,
+    pub owner_notification_slot: u8,
+    pub client_to_owner_slot: u8,
+    pub owner_to_client_slot: u8,
+    pub shared_offset: u32,
+    pub shared_len: u32,
+    pub link_epoch: u32,
+    pub event_offset: u16,
+    pub event_len: u16,
+    pub event_depth: u16,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -676,7 +711,7 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
 pub const MANIFEST_SHA256: &str =
-    "b5d22bc62de7e0883b8fea8acc6db377cfe3450e8f6357f1a6c6d01a9e66971b";
+    "cdf450fc38f44e8a9a2063c97b7aeda81bf11bf8989b6db09c4ef79d8eeecb19";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

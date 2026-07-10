@@ -689,7 +689,7 @@ detail:
   broad-cap leaks, compatibility roles, and final verdict.
 - `DRIVER_TASK_OWNER_STATE` reports one descriptor/root-pointer verdict per
   current acceptance hot path, plus the sealed runtime descriptor contract:
-  `descriptor_version=3`, `descriptor_seal=valid`, `artifact_hash=nonzero`,
+  `descriptor_version=4`, `descriptor_seal=valid`, `artifact_hash=nonzero`,
   and `bus_link_seal=valid` for split USB-to-PCIe or CYW43-to-SDIO clients
   (`bus_link_seal=none` for non-split roles).
 - `SCHED_CONTRACT` and `DRIVER_TASK` report per-role live TCB, hot-path, capset,
@@ -897,9 +897,12 @@ leave the line stuck.
   device interrupt.
 - SDHCI command/data wait paths must not clear `CARD_INT` as a side effect of
   command completion, data-ready, or transfer-finish waits. `CARD_INT` belongs
-  to the HAL IRQ service path, where Cohesix first clears the CYW43 dongle-side
-  interrupt source, acknowledges the SDHCI/seL4 interrupt, and only then
-  re-enables the SDHCI `CARD_INT` signal path.
+  to the isolated SDIO/CYW43 notification-DPC path. The SDIO runtime masks
+  SDHCI `CARD_INT` signalling, W1C-clears only the captured host `CARD_INT`
+  latch, publishes the bounded event, and acknowledges the seL4 IRQ before
+  waking CYW43. The CYW43 runtime then captures and clears the dongle-side
+  source, drains bounded SDPCM work, and signals SDIO to re-read the host latch
+  and re-enable `CARD_INT` only after the event ring is empty.
 - Pi 4 USB/VL805 is event-ring polled with PCI INTx/MSI/MSI-X delivery
   masked. The cold-boot command proof publishes `CONFIG.MaxSlots`, `DCBAAP`,
   `CRCR`, `ERSTSZ`, `ERSTBA`, the initial `ERDP` without `EHB`, scratchpad
@@ -958,11 +961,16 @@ reports same-request SDIO-owner progress. `cyw43-sdio-owner-reply` means the
 SDIO owner completed its nested turn but the CYW43 parent has not yet published
 the parent completion; root gives only that phase a larger finite keep-active
 window. A parent `CONTROL_POLL`, `RX_POLL`, `CONTROL_FRAME`, or data-TX
-PromptSlice performs exactly one HAL service attempt per outer event-pump turn.
-HAL retains a still-active descriptor, staged payload, and request sequence for
-the next turn; root never runs a private same-descriptor resume loop. An
-unresolved transport slice does not spend the logical host-EAPOL RX poll or
-allocate a new BCDC id.
+PromptSlice performs exactly one HAL service attempt. Once the event pump
+exists, HAL retains a still-active descriptor, staged payload, and request
+sequence for the next outer event-pump turn; root never runs a private
+steady-state same-descriptor resume loop. During the earlier synchronous attach
+program, before a `NetStack` or event pump exists, a bounded bootstrap
+coordinator may run consecutive PromptSlices only to resume that exact
+HAL-retained control request. The coordinator is virtual-counter deadline
+bounded and may not change the descriptor, staged bytes, request sequence, or
+BCDC id. An unresolved steady-state transport slice does not spend the logical
+host-EAPOL RX poll or allocate a new BCDC id.
 SDIO engine-init completion details are part of the isolated runtime ABI: success
 returns `0x5500` (`ready`), and faults preserve the exact subgate as
 `0x5501` (`adopt-power-missing`), `0x5502` (`adopt-clock-failed`), `0x5503`
@@ -1039,21 +1047,21 @@ controls that require it; when used, it can consume immediately readable frames,
 but it does not issue the RX abort/RF_TERM/`SMB_NAK` retransmit sequence before
 the control write. That preserves nonmatching frames for the later control or
 data poll instead of treating the drain as association or EAPOL proof.
-Root-side station setup splits most matched CYW43 controls into a
+Root-side station setup splits every matched CYW43 control into a
 `CONTROL_FRAME` TX turn plus bounded parent-side `CONTROL_POLL` turns. The
-first Linux-order startup alignment negotiation is the bounded exception:
-`bus:txglomalign=8` stays a plain-header, 36-byte logical payload and keeps the
-explicit pre-TX drain bit, but uses the isolated runtime `CONTROL_EXCHANGE` path
-so the immediate post-TX CDC reply window stays inside the SDIO-owner runtime.
-If the firmware returns an exact control-exchange `BCME_BADARG` or
+first Linux-order startup alignment negotiation, `bus:txglomalign=8`, stays a
+plain-header, 36-byte logical payload and keeps the explicit pre-TX drain bit;
+it now uses that same split path so HAL can retain the exact TX descriptor and
+root can match the later CDC command/ioctl id without entering a runtime-private
+reply loop.
+If the firmware returns an exact matched CDC `BCME_BADARG` or
 `BCME_UNSUPPORTED` for that value, root retries the same iovar with value `4`.
 If value `4` is also rejected with one of those exact firmware statuses, root
 records `optional-skip` and continues to the next Linux-order control; transport
 faults, no-reply, malformed replies, and unrelated firmware status still fail
-closed. That exception targets the live Pi 4 Linux-firmware frontier where the
-Function 2 write completed and the runtime observed a zero-id firmware status
-before any later control could run. Host-EAPOL extends the split model by tracking the
-active CYW43 prompt poll,
+closed. The runtime-private `CONTROL_EXCHANGE` opcode remains ABI-decodable for
+older proof artifacts, but root does not select it for station setup.
+Host-EAPOL extends the split model by tracking the active CYW43 prompt poll,
 recovering the live descriptor from the ring if the in-memory tracker is stale,
 and resuming the same control/data descriptor and flags before alternating polls
 or submitting post-association rescue work. Split control-reply polling now
@@ -1171,7 +1179,15 @@ wire boundary. Each PromptSlice performs at most one RX/credit action and does
 not assign an SDPCM sequence until credit and flow-control admission both pass.
 DATA and CONTROL Function 2 writes are one-shot: once CMD53 is issued, a
 host-ambiguous completion advances that exact sequence once and is never
-replayed. Root retains the exact M2/M4/group-M2 frame, connection epoch, and
+replayed. That issued-unknown boundary invalidates root's Wi-Fi generation and
+all smoltcp-visible address, neighbor, and TCP state. Post-handoff recovery uses
+the retained, validated static firmware bundle and initial network policy to run
+the isolated CYW43 engine generation reset, transport setup, complete
+firmware/NVRAM/release sequence, and complete Linux-order control-plane program
+again. Root never reacquires the delegated SDIO command producer and does not
+publish `CYW43_LINKED_RUNTIME_READY` until firmware release and control-plane
+replay both succeed; missing retained context or any failed phase remains
+fail-closed. Root retains the exact M2/M4/group-M2 frame, connection epoch, and
 continuation across an idle pre-credit slice, then starts the existing
 incremental credit drain only after submitted-sequence proof.
 Post-release firmware-mailbox readiness, CYW43 control replies, SDPCM TX
@@ -1478,13 +1494,21 @@ context and the retry/poll window.
   connect-time station policy, PAE multicast admission, and only then primary
   join submission. Host-EAPOL proof is required before data release. Station
   setup uses matched CDC command plus ioctl id for key/security controls, not
-  fire-and-forget control frames: runtime-private `CONTROL_EXCHANGE` is reserved
-  for the startup `bus:txglomalign` negotiation, while PTK/GTK `wsec_key`
-  installs use split `CONTROL_FRAME` plus parent-side `CONTROL_POLL` so root can
-  classify stale/nonmatching replies before accepting or failing the install.
+  fire-and-forget control frames. Startup `bus:txglomalign`, PTK/GTK `wsec_key`,
+  and all other matched station controls use split `CONTROL_FRAME` plus
+  parent-side `CONTROL_POLL` so root can classify stale/nonmatching replies
+  before accepting or failing the operation.
   Reads such as `cur_etheraddr` must return the CDC response body.
   Primary-BSS commands use plain iovar names; do not invent BSSCFG wrappers on
   this path.
+- The CYW43-to-SDIO command page is single-producer. Root may publish only the
+  bounded SDIO descriptor-replay and engine-init turns. After SDIO init and a
+  successful CYW43 engine-init/link admission, HAL requires the root SDIO slot
+  to be inactive with its last completion drained, deletes root's SDIO command
+  endpoint cap, and irreversibly delegates the ring to CYW43. Every later root
+  SDIO submission or staging attempt fails before touching ring bytes. Recovery
+  after delegation must run through the CYW43 client/runtime path; root never
+  reclaims or directly reprimes the SDIO owner ring.
 - Firmware supplicant offload must prove `sup_wpa`, valid PMK programming, and
   `PSK_SUP` plus carrier confirmation before DHCP/data. The isolated runtime
   host-EAPOL path still performs the May 18-19 old-good `sup_wpa` and
@@ -1712,17 +1736,23 @@ context and the retry/poll window.
   reading the real response.
 - After real post-release HT and live Function 2 readiness are proved, the Pi 4
   firmware channel arms the Linux-shaped Function 2 interrupt path
-  (`HOSTINTMASK`, `CCCR.IENx`, and SDHCI `CARD_INT`) through HAL-owned source
-  clear plus seL4 ack. The SDPCM `FUNCTIONINTMASK` readback is diagnostic on
-  this Pi 4 path; a zero value is not interrupt-programming drift when
-  `CCCR.IENx` is armed and the SDIO-core frame-indication path is live. IRQ 158
-  is the Wi-Fi SDIO interrupt; IRQ 27 remains the seL4 timer and is never Wi-Fi
-  progress evidence.
+  (`HOSTINTMASK`, `CCCR.IENx`, and SDHCI `CARD_INT`) through the generated
+  reciprocal notification topology. The isolated SDIO runtime owns host-latch
+  mask/W1C plus seL4 ack; the isolated CYW43 runtime owns dongle-source capture,
+  W1C, SDPCM drain, and the rearm request. HAL only admits the generated IRQ,
+  notification caps, mappings, and bounded event ring. The SDPCM
+  `FUNCTIONINTMASK` readback is diagnostic on this Pi 4 path; a zero value is
+  not interrupt-programming drift when `CCCR.IENx` is armed and the SDIO-core
+  frame-indication path is live. IRQ 158 is the Wi-Fi SDIO interrupt; IRQ 27
+  remains the seL4 timer and is never Wi-Fi progress evidence.
 - A polled Function 2 control reply may leave SDHCI `CARD_INT` visible after
   the dongle-side `SDIO_INT_STATUS` source has already been read and cleared.
-  That is a stale host interrupt latch to clear and acknowledge, not a terminal
-  `wifi-sdio-polled-reply-source-still-visible` blocker. It remains terminal
-  only when the dongle-side source cannot be read before the seL4 IRQ ack.
+  That is a stale host interrupt latch for the SDIO runtime to mask, W1C-clear,
+  publish, and acknowledge, not a terminal
+  `wifi-sdio-polled-reply-source-still-visible` blocker. The later CYW43 DPC
+  source sample may be zero because the polled path already consumed it; a
+  dongle-source read failure is a CYW43 service/recovery fault and must not
+  reverse the host-latch-before-dongle-service IRQ ordering.
 - SDIO IRQ logs must separate host interrupt delivery from dongle source proof.
   A seL4 IRQ 158 notification or SDHCI `CARD_INT` latch with
   `SDIO_INT_STATUS=0` is logged as host-latch/no-dongle-source evidence with
@@ -2668,20 +2698,17 @@ Required Cohesix shape:
   `transport-init`; that sideband belongs after firmware release. CM3-only
   SOCSRAM remap writes are not part of this path.
 - Station control uses matched CDC exchanges for writes and read iovars. The
-  first startup `bus:txglomalign=8` write and value-`4` fallback use a bounded
-  runtime-private `DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE` so TX completion
-  and the first CDC reply poll are not separated by a parent/root scheduling
-  turn. The runtime must return `FrameReady` only for the expected CDC
-  command/ioctl id with zero firmware status. Exact `BCME_BADARG` and
-  `BCME_UNSUPPORTED` statuses on the txglomalign negotiation are reported to
-  root as optional negotiation rejects; other commandless nonzero CDC statuses
-  (`cmd=0`, `id=0`, `status!=0`) remain fail-fast instead of generic idle-loop
-  timeouts. All later station exchanges remain split isolated runtime sequences:
-  a bounded `DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME` TX turn followed by bounded
+  first startup `bus:txglomalign=8` write, its value-`4` fallback, and all later
+  station exchanges use split isolated runtime sequences: a bounded
+  `DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME` TX turn followed by bounded
   `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL` turns that decode the CDC header in
-  root. A control-plane command is not accepted merely because the SDPCM frame
-  was transmitted; root must observe the expected CDC command/ioctl id and zero
-  firmware status, or preserve a precise control fault. Zero-response writes,
+  root. Exact `BCME_BADARG` and `BCME_UNSUPPORTED` statuses on the txglomalign
+  negotiation are reported to root as optional negotiation rejects; other
+  commandless nonzero CDC statuses (`cmd=0`, `id=0`, `status!=0`) remain
+  fail-fast instead of generic idle-loop timeouts. A control-plane command is
+  not accepted merely because the SDPCM frame was transmitted; root must
+  observe the expected CDC command/ioctl id and zero firmware status, or
+  preserve a precise control fault. Zero-response writes,
   including host-EAPOL multicast, `allmulti`, and `WLC_SET_PROMISC` admission,
   still require that matched CDC completion and must not use a runtime-private
   combined exchange that hides nonmatching replies from root. Host-EAPOL RX
@@ -2709,10 +2736,11 @@ Required Cohesix shape:
   iovar name, and value. Larger iovar bodies use header/name-only digesting so
   Wi-Fi key material is not exposed. The CYW43 runtime also publishes
   `cyw43-control-tx-begin` and `cyw43-control-tx-done` for `CONTROL_FRAME`;
-  the atomic `txglomalign` path emits `runtime-exchange-complete` or a
-  `CYW43_DRIVER_TASK_COMMAND_FAULT` carrying the exact firmware status, followed
-  by `CYW43_DRIVER_TASK_TXGLOMALIGN` and `DRIVER_TASK_RESOURCE_INIT` lines that
-  mark `ready`, `optional-badarg`, `optional-unsupported`, or `optional-skip`.
+  the split `txglomalign` path emits its TX completion and later matched
+  `CONTROL_POLL` result or a `CYW43_DRIVER_TASK_COMMAND_FAULT` carrying the
+  exact firmware status, followed by `CYW43_DRIVER_TASK_TXGLOMALIGN` and
+  `DRIVER_TASK_RESOURCE_INIT` lines that mark `ready`, `optional-badarg`,
+  `optional-unsupported`, or `optional-skip`.
   Parent
   polling emits sparse `CYW43_DRIVER_TASK_CONTROL_SPLIT` lines for TX
   completion, first-read/idle poll completions, response readiness, and terminal

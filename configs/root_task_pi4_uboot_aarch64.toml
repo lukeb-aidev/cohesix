@@ -142,6 +142,29 @@ shared-buffer-pages = 16
 root-context-required = false
 hardware-state-migrated = true
 
+[[root_task.driver_images.irqs]]
+hot-path = "sdio-host"
+irq = 158
+badge = 159
+handler-slot = 4
+notification-slot = 3
+trigger = "level"
+
+[[root_task.driver_images.bus_links]]
+channel = "cyw43-sdio"
+client-hot-path = "cyw43-wifi"
+owner-hot-path = "sdio-host"
+client-notification-slot = 3
+owner-notification-slot = 3
+client-to-owner-slot = 8
+owner-to-client-slot = 10
+shared-offset = 4096
+shared-len = 8192
+link-epoch = 1129927425
+event-offset = 160
+event-len = 96
+event-depth = 4
+
 [profile]
 name = "pi4-uboot-aarch64"
 kernel = true

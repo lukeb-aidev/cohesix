@@ -72,9 +72,9 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(network["backend"], "bcmgenet-v5");
     assert_eq!(network["mode"], "dhcp");
     assert_eq!(network["interface"], "auto");
-    assert_eq!(network["dhcp"]["discover_timeout_ms"], 500);
-    assert_eq!(network["dhcp"]["request_timeout_ms"], 1000);
-    assert_eq!(network["dhcp"]["max_retries"], 4);
+    assert_eq!(network["dhcp"]["discover_timeout_ms"], 1500);
+    assert_eq!(network["dhcp"]["request_timeout_ms"], 1500);
+    assert_eq!(network["dhcp"]["max_retries"], 6);
     let local_seat = &manifest["hw"]["local_seat"];
     assert_eq!(local_seat["enabled"], true);
     assert_eq!(local_seat["required"], true);
@@ -102,6 +102,35 @@ fn pi4_uboot_profile_emits_network_policy() {
             image["id"]
         );
     }
+    let irqs = manifest["root_task"]["driver_images"]["irqs"]
+        .as_array()
+        .expect("driver runtime IRQ topology");
+    assert_eq!(irqs.len(), 1);
+    assert_eq!(irqs[0]["hot-path"], "sdio-host");
+    assert_eq!(irqs[0]["irq"], 158);
+    assert_eq!(irqs[0]["badge"], 159);
+    assert_eq!(irqs[0]["handler-slot"], 4);
+    assert_eq!(irqs[0]["notification-slot"], 3);
+    assert_eq!(irqs[0]["trigger"], "level");
+
+    let bus_links = manifest["root_task"]["driver_images"]["bus_links"]
+        .as_array()
+        .expect("driver runtime bus-link topology");
+    assert_eq!(bus_links.len(), 1);
+    let cyw43_sdio = &bus_links[0];
+    assert_eq!(cyw43_sdio["channel"], "cyw43-sdio");
+    assert_eq!(cyw43_sdio["client-hot-path"], "cyw43-wifi");
+    assert_eq!(cyw43_sdio["owner-hot-path"], "sdio-host");
+    assert_eq!(cyw43_sdio["client-notification-slot"], 3);
+    assert_eq!(cyw43_sdio["owner-notification-slot"], 3);
+    assert_eq!(cyw43_sdio["client-to-owner-slot"], 8);
+    assert_eq!(cyw43_sdio["owner-to-client-slot"], 10);
+    assert_eq!(cyw43_sdio["shared-offset"], 4096);
+    assert_eq!(cyw43_sdio["shared-len"], 8192);
+    assert_eq!(cyw43_sdio["link-epoch"], 0x4359_5301u32);
+    assert_eq!(cyw43_sdio["event-offset"], 160);
+    assert_eq!(cyw43_sdio["event-len"], 96);
+    assert_eq!(cyw43_sdio["event-depth"], 4);
     let usb = images
         .iter()
         .find(|image| image["hot-path"] == "usb-keyboard")

@@ -5356,6 +5356,9 @@ where
         let _wifi_log_uart_guard = crate::bootstrap::log::suppress_uart_log_output();
 
         self.emit_wifi_debug_status(subcommand, "begin", profile, None);
+        if matches!(command, WifiDebugCommand::Diag) {
+            self.emit_wifi_sdio_dpc_diagnostic();
+        }
         if self.wifi_debug.is_none()
             && self.emit_wifi_driver_task_runtime_snapshot_if_present(
                 command,
@@ -9562,6 +9565,28 @@ where
         self.emit_wifi_startup_blackbox(snapshot, firmware_trace, control_plane_trace);
         #[cfg(feature = "net-console")]
         self.emit_wifi_network_status();
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_sdio_dpc_diagnostic(&mut self) {
+        let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() else {
+            return;
+        };
+        let line = format_message(format_args!(
+            "CYW43_SDIO_DPC generation={} captures={} published={} consumed={} rearms={} overruns={} epoch_errors={} sequence_errors={} ack_failures={} poisoned={} masked={}",
+            snapshot.generation,
+            snapshot.captures,
+            snapshot.published,
+            snapshot.consumed,
+            snapshot.rearms,
+            snapshot.overruns,
+            snapshot.epoch_errors,
+            snapshot.sequence_errors,
+            snapshot.ack_failures,
+            if snapshot.poisoned { "yes" } else { "no" },
+            if snapshot.masked { "yes" } else { "no" },
+        ));
+        self.emit_console_line(line.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -15242,6 +15267,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     fn clear_wifi_driver_task_test_state() {
         crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
+        crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(None);
         crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         );
@@ -22779,6 +22805,21 @@ mod tests {
     #[test]
     fn serial_wifi_diag_command_runs_dump_probe_dump() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic {
+                generation: 9,
+                captures: 12,
+                published: 12,
+                consumed: 12,
+                rearms: 12,
+                overruns: 0,
+                epoch_errors: 0,
+                sequence_errors: 0,
+                ack_failures: 0,
+                poisoned: false,
+                masked: false,
+            },
+        ));
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -22805,6 +22846,9 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(wifi.breadcrumb_suppression_observed);
+        let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 poisoned=no masked=no";
+        assert!(rendered.contains(dpc_line), "{rendered}");
+        assert_eq!(rendered.matches("CYW43_SDIO_DPC ").count(), 1, "{rendered}");
         assert!(
             rendered
                 .contains("wifi: debug subcommand=diag action=begin profile=bounded mode=one-shot"),

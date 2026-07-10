@@ -82,6 +82,21 @@ const MAX_DRIVER_RUNTIME_IMAGE_ID_LEN: usize = 64;
 const MAX_DRIVER_RUNTIME_IMAGE_PATH_LEN: usize = 160;
 const MAX_DRIVER_RUNTIME_ENTRY_SYMBOL_LEN: usize = 96;
 const MAX_DRIVER_RUNTIME_REGION_PAGES: u16 = 1024;
+const MAX_DRIVER_RUNTIME_IRQS: usize = 16;
+const MAX_DRIVER_RUNTIME_BUS_LINKS: usize = 8;
+const DRIVER_RUNTIME_CHILD_CSPACE_SLOTS: u8 = 16;
+const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u8 = 3;
+const DRIVER_RUNTIME_CYW43_SDIO_IRQ: u32 = 158;
+const DRIVER_RUNTIME_CYW43_SDIO_BADGE: u32 = 159;
+const DRIVER_RUNTIME_CYW43_SDIO_CLIENT_TO_OWNER_SLOT: u8 = 8;
+const DRIVER_RUNTIME_CYW43_SDIO_OWNER_TO_CLIENT_SLOT: u8 = 10;
+const DRIVER_RUNTIME_CYW43_SDIO_SHARED_OFFSET: u32 = 4096;
+const DRIVER_RUNTIME_CYW43_SDIO_SHARED_LEN: u32 = 8192;
+const DRIVER_RUNTIME_CYW43_SDIO_LINK_EPOCH: u32 = 0x4359_5301;
+const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
+const DRIVER_RUNTIME_DPC_EVENT_OFFSET: u16 = 160;
+const DRIVER_RUNTIME_DPC_EVENT_LEN: u16 = 96;
+const DRIVER_RUNTIME_DPC_EVENT_DEPTH: u16 = 4;
 const MAX_WORKER_RUNTIME_ROLES: usize = 8;
 const MAX_WORKER_RUNTIME_TEXT_LEN: usize = 96;
 const REQUIRED_IMPLEMENTED_WORKER_ROLES: [Role; 3] =
@@ -2495,6 +2510,8 @@ pub struct RootTaskSection {
 pub struct DriverRuntimeImagePolicy {
     pub required: bool,
     pub images: Vec<DriverRuntimeImageSpec>,
+    pub irqs: Vec<DriverRuntimeIrqSpec>,
+    pub bus_links: Vec<DriverRuntimeBusLinkSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2514,6 +2531,42 @@ pub struct DriverRuntimeImageSpec {
     pub shared_buffer_pages: u16,
     pub root_context_required: bool,
     pub hardware_state_migrated: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DriverRuntimeIrqTrigger {
+    Level,
+    Edge,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct DriverRuntimeIrqSpec {
+    pub hot_path: String,
+    pub irq: u32,
+    pub badge: u32,
+    pub handler_slot: u8,
+    pub notification_slot: u8,
+    pub trigger: DriverRuntimeIrqTrigger,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "kebab-case")]
+pub struct DriverRuntimeBusLinkSpec {
+    pub channel: String,
+    pub client_hot_path: String,
+    pub owner_hot_path: String,
+    pub client_notification_slot: u8,
+    pub owner_notification_slot: u8,
+    pub client_to_owner_slot: u8,
+    pub owner_to_client_slot: u8,
+    pub shared_offset: u32,
+    pub shared_len: u32,
+    pub link_epoch: u32,
+    pub event_offset: u16,
+    pub event_len: u16,
+    pub event_depth: u16,
 }
 
 impl DriverRuntimeImagePolicy {
@@ -2550,7 +2603,200 @@ impl DriverRuntimeImagePolicy {
                 }
             }
         }
+        if self.irqs.len() > MAX_DRIVER_RUNTIME_IRQS {
+            bail!(
+                "root_task.driver_images.irqs contains {} entries, max {}",
+                self.irqs.len(),
+                MAX_DRIVER_RUNTIME_IRQS
+            );
+        }
+        let mut irq_sources = BTreeSet::new();
+        for irq in &self.irqs {
+            irq.validate(&hot_paths)?;
+            if !irq_sources.insert((irq.hot_path.as_str(), irq.irq)) {
+                bail!(
+                    "duplicate driver runtime IRQ {} for hot path {}",
+                    irq.irq,
+                    irq.hot_path
+                );
+            }
+        }
+        if self.bus_links.len() > MAX_DRIVER_RUNTIME_BUS_LINKS {
+            bail!(
+                "root_task.driver_images.bus_links contains {} entries, max {}",
+                self.bus_links.len(),
+                MAX_DRIVER_RUNTIME_BUS_LINKS
+            );
+        }
+        let mut bus_link_channels = BTreeSet::new();
+        for link in &self.bus_links {
+            link.validate(&hot_paths, &self.irqs)?;
+            if !bus_link_channels.insert(link.channel.as_str()) {
+                bail!("duplicate driver runtime bus-link channel {}", link.channel);
+            }
+        }
+        if self.required {
+            let has_sdio_irq = self
+                .irqs
+                .iter()
+                .any(DriverRuntimeIrqSpec::is_cyw43_sdio_irq);
+            if !has_sdio_irq {
+                bail!("root_task.driver_images.required missing SDIO IRQ 158 topology");
+            }
+            let has_cyw43_sdio_link = self
+                .bus_links
+                .iter()
+                .any(DriverRuntimeBusLinkSpec::is_cyw43_sdio_dpc_link);
+            if !has_cyw43_sdio_link {
+                bail!(
+                    "root_task.driver_images.required missing reciprocal cyw43-sdio notification topology"
+                );
+            }
+        }
         Ok(())
+    }
+}
+
+impl DriverRuntimeIrqSpec {
+    fn validate(&self, hot_paths: &BTreeSet<&str>) -> Result<()> {
+        validate_driver_runtime_text(
+            "irqs.hot-path",
+            &self.hot_path,
+            MAX_DRIVER_RUNTIME_IMAGE_ID_LEN,
+        )?;
+        if !hot_paths.contains(self.hot_path.as_str()) {
+            bail!(
+                "driver runtime IRQ references unknown hot path {}",
+                self.hot_path
+            );
+        }
+        if self.irq == 0 || self.badge == 0 {
+            bail!(
+                "driver runtime IRQ for {} must use nonzero irq and badge",
+                self.hot_path
+            );
+        }
+        for (field, slot) in [
+            ("handler-slot", self.handler_slot),
+            ("notification-slot", self.notification_slot),
+        ] {
+            if slot == 0 || slot >= DRIVER_RUNTIME_CHILD_CSPACE_SLOTS {
+                bail!(
+                    "driver runtime IRQ {} {} must be within child CSpace slots 1..{}",
+                    self.hot_path,
+                    field,
+                    DRIVER_RUNTIME_CHILD_CSPACE_SLOTS - 1
+                );
+            }
+        }
+        if self.handler_slot == self.notification_slot {
+            bail!(
+                "driver runtime IRQ {} handler and notification slots must differ",
+                self.hot_path
+            );
+        }
+        Ok(())
+    }
+
+    fn is_cyw43_sdio_irq(&self) -> bool {
+        self.hot_path == "sdio-host"
+            && self.irq == DRIVER_RUNTIME_CYW43_SDIO_IRQ
+            && self.badge == DRIVER_RUNTIME_CYW43_SDIO_BADGE
+            && self.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+            && self.trigger == DriverRuntimeIrqTrigger::Level
+    }
+}
+
+impl DriverRuntimeBusLinkSpec {
+    fn validate(&self, hot_paths: &BTreeSet<&str>, irqs: &[DriverRuntimeIrqSpec]) -> Result<()> {
+        for (field, value) in [
+            ("bus-links.channel", self.channel.as_str()),
+            ("bus-links.client-hot-path", self.client_hot_path.as_str()),
+            ("bus-links.owner-hot-path", self.owner_hot_path.as_str()),
+        ] {
+            validate_driver_runtime_text(field, value, MAX_DRIVER_RUNTIME_IMAGE_ID_LEN)?;
+        }
+        if !hot_paths.contains(self.client_hot_path.as_str())
+            || !hot_paths.contains(self.owner_hot_path.as_str())
+        {
+            bail!(
+                "driver runtime bus link {} references unknown client or owner hot path",
+                self.channel
+            );
+        }
+        if self.client_hot_path == self.owner_hot_path {
+            bail!(
+                "driver runtime bus link {} client and owner must differ",
+                self.channel
+            );
+        }
+        if self.link_epoch == 0 {
+            bail!(
+                "driver runtime bus link {} shared epoch must be nonzero",
+                self.channel
+            );
+        }
+        for (field, slot) in [
+            ("client-notification-slot", self.client_notification_slot),
+            ("owner-notification-slot", self.owner_notification_slot),
+            ("client-to-owner-slot", self.client_to_owner_slot),
+            ("owner-to-client-slot", self.owner_to_client_slot),
+        ] {
+            if slot == 0 || slot >= DRIVER_RUNTIME_CHILD_CSPACE_SLOTS {
+                bail!(
+                    "driver runtime bus link {} {} must be within child CSpace slots 1..{}",
+                    self.channel,
+                    field,
+                    DRIVER_RUNTIME_CHILD_CSPACE_SLOTS - 1
+                );
+            }
+        }
+        if self.client_notification_slot == self.client_to_owner_slot
+            || self.owner_notification_slot == self.owner_to_client_slot
+        {
+            bail!(
+                "driver runtime bus link {} local and peer notification slots must differ",
+                self.channel
+            );
+        }
+        let event_end = u32::from(self.event_offset).saturating_add(u32::from(self.event_len));
+        if self.event_len == 0
+            || self.event_depth == 0
+            || event_end > u32::from(DRIVER_RUNTIME_RING_FRAME_OFFSET)
+        {
+            bail!(
+                "driver runtime bus link {} DPC event ring must be nonzero and end before offset {}",
+                self.channel,
+                DRIVER_RUNTIME_RING_FRAME_OFFSET
+            );
+        }
+        if self.channel == "cyw43-sdio" {
+            if !self.is_cyw43_sdio_dpc_link() {
+                bail!("cyw43-sdio bus link does not match the bounded reciprocal DPC contract");
+            }
+            if !irqs.iter().any(DriverRuntimeIrqSpec::is_cyw43_sdio_irq) {
+                bail!("cyw43-sdio bus link requires the generated level-triggered SDIO IRQ 158");
+            }
+        } else {
+            bail!("unknown driver runtime bus-link channel {}", self.channel);
+        }
+        Ok(())
+    }
+
+    fn is_cyw43_sdio_dpc_link(&self) -> bool {
+        self.channel == "cyw43-sdio"
+            && self.client_hot_path == "cyw43-wifi"
+            && self.owner_hot_path == "sdio-host"
+            && self.client_notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+            && self.owner_notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+            && self.client_to_owner_slot == DRIVER_RUNTIME_CYW43_SDIO_CLIENT_TO_OWNER_SLOT
+            && self.owner_to_client_slot == DRIVER_RUNTIME_CYW43_SDIO_OWNER_TO_CLIENT_SLOT
+            && self.shared_offset == DRIVER_RUNTIME_CYW43_SDIO_SHARED_OFFSET
+            && self.shared_len == DRIVER_RUNTIME_CYW43_SDIO_SHARED_LEN
+            && self.link_epoch == DRIVER_RUNTIME_CYW43_SDIO_LINK_EPOCH
+            && self.event_offset == DRIVER_RUNTIME_DPC_EVENT_OFFSET
+            && self.event_len == DRIVER_RUNTIME_DPC_EVENT_LEN
+            && self.event_depth == DRIVER_RUNTIME_DPC_EVENT_DEPTH
     }
 }
 
@@ -2740,7 +2986,8 @@ impl Default for AffinityPolicy {
 mod tests {
     use super::{
         load_manifest, AffinityPolicy, AttestationPolicy, DmaProtectionProfile,
-        DriverAffinityPolicy, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, HardwareDevice,
+        DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy,
+        DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, HardwareDevice,
         HardwareDeviceKind, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
         WorkerSchedulingProfile,
     };
@@ -2785,6 +3032,35 @@ mod tests {
         }
     }
 
+    fn sdio_irq() -> DriverRuntimeIrqSpec {
+        DriverRuntimeIrqSpec {
+            hot_path: "sdio-host".to_owned(),
+            irq: super::DRIVER_RUNTIME_CYW43_SDIO_IRQ,
+            badge: super::DRIVER_RUNTIME_CYW43_SDIO_BADGE,
+            handler_slot: 4,
+            notification_slot: super::DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            trigger: DriverRuntimeIrqTrigger::Level,
+        }
+    }
+
+    fn cyw43_sdio_link() -> DriverRuntimeBusLinkSpec {
+        DriverRuntimeBusLinkSpec {
+            channel: "cyw43-sdio".to_owned(),
+            client_hot_path: "cyw43-wifi".to_owned(),
+            owner_hot_path: "sdio-host".to_owned(),
+            client_notification_slot: super::DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            owner_notification_slot: super::DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            client_to_owner_slot: super::DRIVER_RUNTIME_CYW43_SDIO_CLIENT_TO_OWNER_SLOT,
+            owner_to_client_slot: super::DRIVER_RUNTIME_CYW43_SDIO_OWNER_TO_CLIENT_SLOT,
+            shared_offset: super::DRIVER_RUNTIME_CYW43_SDIO_SHARED_OFFSET,
+            shared_len: super::DRIVER_RUNTIME_CYW43_SDIO_SHARED_LEN,
+            link_epoch: super::DRIVER_RUNTIME_CYW43_SDIO_LINK_EPOCH,
+            event_offset: super::DRIVER_RUNTIME_DPC_EVENT_OFFSET,
+            event_len: super::DRIVER_RUNTIME_DPC_EVENT_LEN,
+            event_depth: super::DRIVER_RUNTIME_DPC_EVENT_DEPTH,
+        }
+    }
+
     #[test]
     fn driver_runtime_policy_required_covers_all_pi4_hot_paths() {
         let policy = DriverRuntimeImagePolicy {
@@ -2794,6 +3070,8 @@ mod tests {
                 .copied()
                 .map(driver_runtime_image)
                 .collect(),
+            irqs: vec![sdio_irq()],
+            bus_links: vec![cyw43_sdio_link()],
         };
         policy.validate().expect("complete driver runtime table");
     }
@@ -2808,9 +3086,49 @@ mod tests {
                 .filter(|hot_path| *hot_path != "pcie-root")
                 .map(driver_runtime_image)
                 .collect(),
+            irqs: vec![sdio_irq()],
+            bus_links: vec![cyw43_sdio_link()],
         };
         let err = policy.validate().expect_err("missing pcie-root rejected");
         assert!(err.to_string().contains("missing hot path pcie-root"));
+    }
+
+    #[test]
+    fn driver_runtime_policy_rejects_incomplete_cyw43_sdio_dpc_topology() {
+        let images = super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+            .iter()
+            .copied()
+            .map(driver_runtime_image)
+            .collect();
+        let missing_irq = DriverRuntimeImagePolicy {
+            required: true,
+            images,
+            irqs: Vec::new(),
+            bus_links: vec![cyw43_sdio_link()],
+        };
+        let err = missing_irq
+            .validate()
+            .expect_err("missing generated SDIO IRQ rejected");
+        assert!(err
+            .to_string()
+            .contains("requires the generated level-triggered SDIO IRQ 158"));
+
+        let mut invalid_link = cyw43_sdio_link();
+        invalid_link.event_depth = 8;
+        let invalid_dpc = DriverRuntimeImagePolicy {
+            required: true,
+            images: super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+                .iter()
+                .copied()
+                .map(driver_runtime_image)
+                .collect(),
+            irqs: vec![sdio_irq()],
+            bus_links: vec![invalid_link],
+        };
+        let err = invalid_dpc
+            .validate()
+            .expect_err("unbounded generated DPC shape rejected");
+        assert!(err.to_string().contains("bounded reciprocal DPC contract"));
     }
 
     #[test]

@@ -201,6 +201,13 @@ impl DhcpClient {
         };
     }
 
+    /// Discard a lease and all transaction identity from the previous link generation.
+    pub fn reset(&mut self) {
+        self.xid = 0;
+        self.metrics = DhcpMetrics::default();
+        self.state = DhcpState::Disabled;
+    }
+
     #[must_use]
     pub const fn is_enabled(&self) -> bool {
         !matches!(self.state, DhcpState::Disabled)
@@ -845,6 +852,26 @@ mod tests {
         assert_eq!(lease.prefix_len, 24);
         assert_eq!(lease.gateway, Some([192, 168, 10, 1]));
         assert_eq!(client.status().phase, DhcpPhase::Bound);
+    }
+
+    #[test]
+    fn dhcp_generation_reset_discards_bound_lease_and_transaction_identity() {
+        let mut client = DhcpClient::new(config());
+        client.start(MAC, 0);
+        let offer = offer_packet(client.xid);
+        assert_eq!(client.handle_packet(MAC, &offer, 5), DhcpEvent::SendQueued);
+        let ack = ack_packet(client.xid);
+        assert!(matches!(
+            client.handle_packet(MAC, &ack, 6),
+            DhcpEvent::LeaseAcquired(_)
+        ));
+
+        client.reset();
+
+        assert_eq!(client.xid, 0);
+        assert_eq!(client.status().phase, DhcpPhase::Disabled);
+        assert_eq!(client.status().lease, None);
+        assert_eq!(client.status().metrics, DhcpMetrics::default());
     }
 
     #[test]

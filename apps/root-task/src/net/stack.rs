@@ -63,7 +63,9 @@ use crate::drivers::driver_task_net::{
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
-use crate::hal::driver_task::{DriverServiceBudget, DriverServiceBudgetError};
+use crate::hal::driver_task::{
+    DriverServiceBudget, DriverServiceBudgetError, CYW43_WIFI_DRIVER_TASK_CONTRACT,
+};
 use crate::hal::{HalError, Hardware};
 use crate::observe::IngestSnapshot;
 use crate::readiness;
@@ -189,6 +191,21 @@ fn dhcp_restart_required_after_mac_sync(
 
 fn budgeted_dhcp_service_required(mode: NetMode, ip: Ipv4Address, dhcp_socket_ready: bool) -> bool {
     dhcp_socket_ready && matches!(mode, NetMode::Dhcp) && ip == Ipv4Address::UNSPECIFIED
+}
+
+#[cfg(feature = "kernel")]
+fn wifi_connection_generation_for<D: NetDevice>() -> u32 {
+    if D::driver_task_contract() == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        crate::drivers::driver_task_net::cyw43_connection_generation()
+    } else {
+        0
+    }
+}
+
+#[cfg(not(feature = "kernel"))]
+fn wifi_connection_generation_for<D: NetDevice>() -> u32 {
+    let _ = core::marker::PhantomData::<D>;
+    0
 }
 
 macro_rules! set_primary_ipv4_addr {
@@ -1329,6 +1346,8 @@ pub struct NetStack<D: NetDevice> {
     mode: NetMode,
     interface_policy: NetInterfacePolicy,
     wifi_credentials: Option<WifiCredentials>,
+    wifi_connection_generation: u32,
+    wifi_static_address_pending: bool,
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
     prefix_len: u8,
@@ -3128,6 +3147,7 @@ impl<D: NetDevice> NetStack<D> {
         log_bootinfo_mark("net.init.interface", &attempt)?;
         let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
         log_bootinfo_mark("net.init.socketset", &attempt)?;
+        let wifi_connection_generation = wifi_connection_generation_for::<D>();
 
         let mut stack = Box::new(Self {
             clock,
@@ -3147,6 +3167,8 @@ impl<D: NetDevice> NetStack<D> {
             mode: console_config.policy.mode,
             interface_policy: console_config.policy.interface,
             wifi_credentials: console_config.wifi_credentials,
+            wifi_connection_generation,
+            wifi_static_address_pending: false,
             ip,
             gateway,
             prefix_len: prefix,
@@ -3384,7 +3406,124 @@ impl<D: NetDevice> NetStack<D> {
         Ok(())
     }
 
+    fn sync_wifi_connection_generation(&mut self, now_ms: u64) -> bool {
+        let generation = wifi_connection_generation_for::<D>();
+        if generation == self.wifi_connection_generation {
+            return false;
+        }
+        let previous_generation = self.wifi_connection_generation;
+        self.wifi_connection_generation = generation;
+
+        self.device.set_assigned_ipv4(Ipv4Address::UNSPECIFIED);
+        if matches!(self.mode, NetMode::Dhcp) {
+            self.wifi_static_address_pending = false;
+            self.ip = Ipv4Address::UNSPECIFIED;
+            self.gateway = None;
+            self.prefix_len = 0;
+            self.interface.update_ip_addrs(|addrs| {
+                let cidr = IpCidr::new(IpAddress::from(Ipv4Address::UNSPECIFIED), 0);
+                set_primary_ipv4_addr!(addrs, cidr);
+            });
+            let _ = self.interface.routes_mut().remove_default_ipv4_route();
+            if let Some(client) = self.dhcp.as_mut() {
+                client.reset();
+            }
+            self.dhcp_started = false;
+            self.dhcp_restart_after_ms = None;
+            if let Some(handle) = self.dhcp_handle {
+                let socket = self.sockets.get_mut::<UdpSocket>(handle);
+                socket.close();
+                if let Err(err) = socket.bind(DHCP_CLIENT_PORT) {
+                    warn!(
+                        "[dhcp] generation reset rebind failed generation={} err={err:?}",
+                        generation
+                    );
+                }
+            }
+        } else {
+            // Rewriting the existing address list through the public smoltcp
+            // API flushes its private neighbor cache without discarding a
+            // manifest-configured static address.
+            self.interface.update_ip_addrs(|_| {});
+            self.wifi_static_address_pending = true;
+        }
+
+        self.sockets.get_mut::<TcpSocket>(self.tcp_handle).abort();
+        if let Some(handle) = self.tcp_smoke_handle {
+            self.sockets.get_mut::<TcpSocket>(handle).abort();
+        }
+        if let Some(handle) = self.tcp_smoke_out_handle {
+            self.sockets.get_mut::<TcpSocket>(handle).abort();
+        }
+        #[cfg(feature = "net-outbound-probe")]
+        if let Some(handle) = self.tcp_probe_handle {
+            self.sockets.get_mut::<TcpSocket>(handle).abort();
+        }
+
+        self.server.end_session();
+        self.outbound.reset();
+        self.session_active = false;
+        self.active_client_id = None;
+        self.peer_endpoint = None;
+        self.events.clear();
+        self.reset_session_state();
+        self.listener_announced = false;
+        self.listener_defer_reason = Some("wifi-generation-reset");
+        self.last_poll_snapshot = None;
+        self.telemetry.link_up = false;
+        self.wifi_dhcp_last_eapol_rx = 0;
+        self.wifi_dhcp_eapol_quiet_since_ms = None;
+        self.wifi_dhcp_eapol_settle_logged = false;
+        self.wifi_rx_admission_blocked = false;
+        self.wifi_rx_admission_next_retry_ms = 0;
+        self.tx_only_sent = false;
+        self.tcp_smoke_outbound_sent = false;
+        self.tcp_smoke_outbound_connecting = false;
+        self.tcp_smoke_last_attempt_ms = 0;
+        self.self_test = SelfTestState::new(self.self_test.enabled);
+        self.budgeted_phase = BudgetedNetPhase::Interface;
+        #[cfg(feature = "net-outbound-probe")]
+        {
+            self.probe_sent = false;
+            self.probe_last_attempt_ms = 0;
+            self.probe_fail_count = 0;
+            self.probe_last_log_ms = 0;
+            self.probe_hint_logged = false;
+        }
+        info!(
+            "[net-console] wifi generation reset previous={} current={} address={} arp_cache=flushed tcp=closed dhcp={} now_ms={}",
+            previous_generation,
+            generation,
+            self.ip,
+            if matches!(self.mode, NetMode::Dhcp) {
+                "reset"
+            } else {
+                "static-preserved"
+            },
+            now_ms,
+        );
+        true
+    }
+
+    fn restore_static_wifi_generation_address_if_ready(&mut self) -> bool {
+        if !self.wifi_static_address_pending || self.device.bringup_status_label().is_some() {
+            return false;
+        }
+        self.device.set_assigned_ipv4(self.ip);
+        self.wifi_static_address_pending = false;
+        info!(
+            "[net-console] wifi static address restored generation={} ip={}/{} gateway={}",
+            self.wifi_connection_generation,
+            self.ip,
+            self.prefix_len,
+            self.gateway.unwrap_or(Ipv4Address::UNSPECIFIED),
+        );
+        true
+    }
+
     fn begin_poll_turn(&mut self, now_ms: u64) -> Instant {
+        let _ = self.sync_wifi_connection_generation(now_ms);
+        let _ = self.restore_static_wifi_generation_address_if_ready();
         if !self.service_logged {
             info!("[net-console] service loop running");
             self.service_logged = true;
