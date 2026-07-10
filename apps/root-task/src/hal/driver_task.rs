@@ -3784,11 +3784,40 @@ pub(crate) fn driver_task_sdio_dpc_ring_snapshot() -> Option<DriverTaskSdioDpcRi
 }
 
 #[cfg(feature = "kernel")]
-fn sdio_root_command_completion_drained(slot: &DriverTaskCommandSlot) -> bool {
+fn driver_task_engine_init_turn_matches(
+    hot_path: DriverTaskHotPath,
+    request: u32,
+    command: DriverTaskCommandRecord,
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    request != 0
+        && command.sequence == request
+        && command.opcode == DriverTaskOpcode::Service.as_u16()
+        && command.flags & !DRIVER_TASK_RING_FLAG_ONE_WAY == 0
+        && command.arg0 == hot_path.as_u32()
+        && command.arg1 == hot_path.role_bit() as u32
+        && command.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX
+        && command.aux1 == 0
+        && command.frame.offset == 0
+        && command.frame.len == 0
+        && command.frame.flags == 0
+        && completion.sequence == request
+        && completion.code == DriverTaskCompletionCode::Progress.as_u16()
+        && completion.result == 1
+        && completion.frame.offset == 0
+        && completion.frame.len == 0
+        && completion.frame.flags == 0
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_committed_engine_init_turn(
+    slot: &DriverTaskCommandSlot,
+    hot_path: DriverTaskHotPath,
+) -> Option<(u32, DriverTaskCommandRecord, DriverTaskCompletionRecord)> {
     let request = slot.request_seq.load(Ordering::Acquire);
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
-    if request == 0 || request > SDIO_ROOT_SEQUENCE_MAX || ring_root_ptr == 0 {
-        return false;
+    if request == 0 || ring_root_ptr == 0 || slot.active.load(Ordering::Acquire) != 0 {
+        return None;
     }
     driver_task_ring_invalidate_root_range(
         ring_root_ptr,
@@ -3801,13 +3830,48 @@ fn sdio_root_command_completion_drained(slot: &DriverTaskCommandSlot) -> bool {
     let command =
         unsafe { core::ptr::read_volatile(ring_root_ptr as *const DriverTaskCommandRecord) };
     // SAFETY: Same validated owner-ring page and fixed completion offset.
+    let first_completion = unsafe {
+        core::ptr::read_volatile(
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                as *const DriverTaskCompletionRecord,
+        )
+    };
+    if first_completion.sequence != request as u32 {
+        return None;
+    }
+    driver_task_ring_invalidate_completion_record(ring_root_ptr);
+    // SAFETY: The matching sequence is sampled again after invalidation so a
+    // sequence-last producer commit cannot be accepted with a torn body.
     let completion = unsafe {
         core::ptr::read_volatile(
             (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET)
                 as *const DriverTaskCompletionRecord,
         )
     };
-    command.sequence == request as u32 && completion.sequence == request as u32
+    if !driver_task_engine_init_turn_matches(hot_path, request as u32, command, completion) {
+        return None;
+    }
+    Some((request as u32, command, completion))
+}
+
+#[cfg(feature = "kernel")]
+fn sdio_root_command_completion_drained(slot: &DriverTaskCommandSlot) -> bool {
+    let request = slot.request_seq.load(Ordering::Acquire);
+    request <= SDIO_ROOT_SEQUENCE_MAX
+        && driver_task_committed_engine_init_turn(slot, DriverTaskHotPath::SdioHost).is_some()
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_engine_init_completion_drained(
+    slot: &DriverTaskCommandSlot,
+    observed_completion: DriverTaskCompletionRecord,
+) -> bool {
+    matches!(
+        driver_task_committed_engine_init_turn(slot, DriverTaskHotPath::Cyw43Wifi),
+        Some((_, _, committed_completion))
+            if committed_completion == observed_completion
+                && committed_completion.detail == DriverTaskFaultCode::None.as_u16()
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -3846,42 +3910,59 @@ pub fn handoff_sdio_command_ring_to_cyw43(
     cyw43_engine_completion: DriverTaskCompletionRecord,
 ) -> bool {
     let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_SDIO_HOST) else {
+        crate::bootstrap::log::force_uart_line(
+            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=sdio-slot-missing",
+        );
         return false;
     };
     if slot.ring_producer.load(Ordering::Acquire) == SDIO_RING_PRODUCER_CYW43_RUNTIME {
-        return slot.endpoint.load(Ordering::Acquire) == 0;
-    }
-    if !begin_sdio_producer_handoff(slot) {
+        if slot.endpoint.load(Ordering::Acquire) == 0 {
+            return true;
+        }
+        crate::bootstrap::log::force_uart_line(
+            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=delegated-root-endpoint-present",
+        );
         return false;
     }
-    let rollback = || {
+    if !begin_sdio_producer_handoff(slot) {
+        crate::bootstrap::log::force_uart_line(
+            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=root-producer-not-drained",
+        );
+        return false;
+    }
+    let rollback = |reason: &'static str| {
         slot.ring_producer
             .store(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP, Ordering::Release);
+        crate::bootstrap::log::force_uart_line(reason);
         false
     };
     let Some(cyw43_slot) = slot_for_task_key(DRIVER_TASK_KEY_CYW43455) else {
-        return rollback();
+        return rollback(
+            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=cyw43-slot-missing",
+        );
     };
-    let cyw43_request = cyw43_slot.request_seq.load(Ordering::Acquire);
-    let cyw43_progress_sequence = cyw43_slot.last_progress_sequence.load(Ordering::Acquire);
-    let cyw43_progress_aux0 = cyw43_slot.last_progress_aux0.load(Ordering::Acquire);
-    let cyw43_link_admitted = cyw43_slot.active.load(Ordering::Acquire) == 0
-        && cyw43_request != 0
-        && cyw43_engine_completion.sequence == cyw43_request as u32
-        && cyw43_engine_completion.code == DriverTaskCompletionCode::Progress.as_u16()
-        && cyw43_engine_completion.result == 1
-        && cyw43_progress_sequence == cyw43_engine_completion.sequence
-        && cyw43_progress_aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX;
     if !driver_runtime_descriptor_seal_registered(DriverTaskHotPath::SdioHost)
         || !driver_runtime_descriptor_seal_registered(DriverTaskHotPath::Cyw43Wifi)
-        || !cyw43_link_admitted
-        || !sdio_root_command_completion_drained(slot)
     {
-        return rollback();
+        return rollback(
+            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=descriptor-seal-missing",
+        );
+    }
+    if !cyw43_engine_init_completion_drained(cyw43_slot, cyw43_engine_completion) {
+        return rollback(
+            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=cyw43-engine-turn-mismatch",
+        );
+    }
+    if !sdio_root_command_completion_drained(slot) {
+        return rollback(
+            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=sdio-engine-turn-mismatch",
+        );
     }
     let endpoint = slot.endpoint.load(Ordering::Acquire);
     if endpoint == 0 {
-        return rollback();
+        return rollback(
+            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=root-endpoint-missing",
+        );
     }
     let delete_err = crate::sel4::cnode_delete(
         sel4_sys::seL4_CapInitThreadCNode,
@@ -3889,7 +3970,9 @@ pub fn handoff_sdio_command_ring_to_cyw43(
         crate::sel4::word_bits() as u8,
     );
     if delete_err != sel4_sys::seL4_NoError {
-        return rollback();
+        return rollback(
+            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=root-endpoint-delete-failed",
+        );
     }
     slot.endpoint.store(0, Ordering::Release);
     slot.ring_producer
@@ -10614,16 +10697,12 @@ mod tests {
     fn sdio_handoff_requires_matching_drained_root_completion() {
         let slot = DriverTaskCommandSlot::new();
         let mut ring_page = [0u8; DRIVER_TASK_RING_PAGE_BYTES];
-        let command = DriverTaskCommandRecord::pi4_hot_path(
-            9,
+        let mut command = runtime_engine_init_command(
             DriverTaskHotPath::SdioHost,
             DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
-            DriverFrameDescriptor {
-                offset: 0,
-                len: 0,
-                flags: 0,
-            },
         );
+        command.sequence = 9;
+        command.flags = DRIVER_TASK_RING_FLAG_ONE_WAY;
         let completion = DriverTaskCompletionRecord::progress(9, 1);
         // SAFETY: This test-owned page carries the fixed command/completion
         // records at their ABI offsets.
@@ -10647,6 +10726,99 @@ mod tests {
 
         slot.request_seq.store(10, Ordering::Release);
         assert!(!sdio_root_command_completion_drained(&slot));
+
+        slot.request_seq.store(9, Ordering::Release);
+        command.aux0 = 0;
+        // SAFETY: Same test-owned fixed command record as above.
+        unsafe {
+            core::ptr::write_volatile(
+                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                command,
+            );
+        }
+        assert!(!sdio_root_command_completion_drained(&slot));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_handoff_uses_committed_engine_turn_after_progress_returns_idle() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = [0u8; DRIVER_TASK_RING_PAGE_BYTES];
+        let mut command = runtime_engine_init_command(
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+        );
+        command.sequence = 2;
+        command.flags = DRIVER_TASK_RING_FLAG_ONE_WAY;
+        let completion = DriverTaskCompletionRecord::progress(2, 1);
+        // SAFETY: This test-owned page carries the fixed command/completion
+        // records at their ABI offsets.
+        unsafe {
+            core::ptr::write_volatile(
+                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                command,
+            );
+            core::ptr::write_volatile(
+                ring_page
+                    .as_mut_ptr()
+                    .add(DRIVER_TASK_RING_COMPLETION_OFFSET)
+                    as *mut DriverTaskCompletionRecord,
+                completion,
+            );
+        }
+        slot.ring_root_ptr
+            .store(ring_page.as_mut_ptr() as usize, Ordering::Release);
+        slot.request_seq.store(2, Ordering::Release);
+        slot.last_progress_magic
+            .store(DRIVER_RUNTIME_RING_PROGRESS_MAGIC, Ordering::Release);
+        slot.last_progress_sequence.store(0, Ordering::Release);
+        slot.last_progress_phase.store(
+            DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+            Ordering::Release,
+        );
+        slot.last_progress_aux0
+            .store(DRIVER_TASK_KEY_CYW43455 as u32, Ordering::Release);
+
+        assert!(cyw43_engine_init_completion_drained(&slot, completion));
+
+        let wrong_completion =
+            DriverTaskCompletionRecord::fault(2, DriverTaskFaultCode::RejectedCommand);
+        assert!(!cyw43_engine_init_completion_drained(
+            &slot,
+            wrong_completion
+        ));
+
+        command.opcode = DriverTaskOpcode::SubmitFrame.as_u16();
+        // SAFETY: Same test-owned fixed command record as above.
+        unsafe {
+            core::ptr::write_volatile(
+                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                command,
+            );
+        }
+        assert!(!cyw43_engine_init_completion_drained(&slot, completion));
+
+        command.opcode = DriverTaskOpcode::Service.as_u16();
+        command.aux0 = 0;
+        // SAFETY: Same test-owned fixed command record as above.
+        unsafe {
+            core::ptr::write_volatile(
+                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                command,
+            );
+        }
+        assert!(!cyw43_engine_init_completion_drained(&slot, completion));
+
+        command.aux0 = DRIVER_RUNTIME_ENGINE_INIT_AUX;
+        // SAFETY: Same test-owned fixed command record as above.
+        unsafe {
+            core::ptr::write_volatile(
+                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                command,
+            );
+        }
+        slot.active.store(1, Ordering::Release);
+        assert!(!cyw43_engine_init_completion_drained(&slot, completion));
     }
 
     #[cfg(feature = "kernel")]

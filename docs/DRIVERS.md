@@ -1501,14 +1501,52 @@ context and the retry/poll window.
   Reads such as `cur_etheraddr` must return the CDC response body.
   Primary-BSS commands use plain iovar names; do not invent BSSCFG wrappers on
   this path.
+- A bootstrap control request may be queued while the CYW43 runtime is still
+  finishing an earlier asynchronous DPC-to-SDIO child turn. The immutable
+  active command, decoded descriptor, staged-byte fingerprint, and original
+  request sequence authorize its bounded same-request continuation. The latest
+  progress marker is diagnostic and may still carry the prior owner's private
+  high-domain sequence; it is not required to equal the queued root request.
+  Continuation remains limited to bootstrap control operations and the
+  aggregate virtual-counter deadline, and never retransmits the control frame
+  or allocates a second BCDC id.
 - The CYW43-to-SDIO command page is single-producer. Root may publish only the
   bounded SDIO descriptor-replay and engine-init turns. After SDIO init and a
-  successful CYW43 engine-init/link admission, HAL requires the root SDIO slot
-  to be inactive with its last completion drained, deletes root's SDIO command
-  endpoint cap, and irreversibly delegates the ring to CYW43. Every later root
-  SDIO submission or staging attempt fails before touching ring bytes. Recovery
-  after delegation must run through the CYW43 client/runtime path; root never
-  reclaims or directly reprimes the SDIO owner ring.
+  successful CYW43 engine-init/link admission, HAL requires both shared rings
+  to contain a committed, sequence-matched engine-init `Service` command and
+  successful completion for the correct hot path, role, and empty-frame shape.
+  The child progress record is diagnostic and may already have returned to
+  sequence-zero `runtime-recv-ready` or `runtime-poll-ready`; it is never
+  handoff authority. HAL also requires both slots inactive and drained, deletes
+  root's SDIO command endpoint cap, and irreversibly delegates the ring to
+  CYW43. Rejection emits a bounded `DRIVER_TASK_BUS_LINK_HANDOFF ...
+  status=reject reason=<predicate>` line. Every later root SDIO submission or
+  staging attempt fails before touching ring bytes. Recovery after delegation
+  must run through the CYW43 client/runtime path; root never reclaims or
+  directly reprimes the SDIO owner ring.
+- The linked SDIO owner keeps FIFO readiness register-specific: SDHCI
+  `PRESENT_STATE` uses only `SPACE_AVAILABLE`/`DATA_AVAILABLE`, while
+  `INT_STATUS` waits use only `INT_SPACE_AVAIL`/`INT_DATA_AVAIL`. Every PIO
+  descriptor transfer has one aggregate virtual-counter deadline shared by
+  inhibit, command, FIFO, finish, settle, bounded recovery, and its permitted
+  retry; data-path settle failure returns a fault completion rather than a
+  false success, and every recovery exit restores the saved card clock. The
+  owner publishes the reverse notification before the
+  sequence-last completion commit, so equal-priority boosting cannot leave a
+  late completion edge behind after CYW43 accepts the record. CYW43
+  polls a child completion under a strictly larger containment deadline,
+  periodically re-doorbells the idempotent sequence-stamped owner command, and
+  never blocks forever on one reverse notification. An exact completion drains
+  the coalesced local notification before releasing the producer slot. A child
+  timeout is issued-unknown and therefore quarantines that slot for the rest of
+  the runtime generation instead of permitting concurrent ring reuse. A later
+  engine-init cannot clear this quarantine; only a fresh runtime boot resets
+  the process-local producer state.
+  Coalesced completion/DPC work becomes an internal deferred bit; the runtime
+  admits a queued root control command before the next one-frame DPC drain
+  quantum and rechecks deferred work before sleeping. Device latches and the
+  DPC event stay retained until a later quantum reaches the existing rearm-safe
+  condition.
 - Firmware supplicant offload must prove `sup_wpa`, valid PMK programming, and
   `PSK_SUP` plus carrier confirmation before DHCP/data. The isolated runtime
   host-EAPOL path still performs the May 18-19 old-good `sup_wpa` and

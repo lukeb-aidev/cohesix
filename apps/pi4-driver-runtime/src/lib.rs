@@ -645,6 +645,13 @@ const RUNTIME_TIMER_FALLBACK_HZ: u64 = 54_000_000;
 const RUNTIME_MILLIS_PER_SECOND: u64 = 1_000;
 const RUNTIME_MICROS_PER_SECOND: u64 = 1_000_000;
 const SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US: u32 = 100_000;
+const CYW43_SDIO_CHILD_WAIT_MARGIN_US: u32 = SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US;
+// The SDIO owner may spend one descriptor deadline in its aggregate transfer,
+// then enter bounded recovery before publishing the fault completion. Keep the
+// client containment deadline strictly outside that entire owner envelope.
+const CYW43_SDIO_CHILD_WAIT_STAGE_BUDGET: u32 = 8;
+const CYW43_SDIO_CHILD_WAIT_FALLBACK_POLLS: usize = 32_768;
+const CYW43_SDIO_CHILD_RESIGNAL_INTERVAL: usize = 64;
 
 const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
@@ -1239,6 +1246,7 @@ const CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES: usize = 16;
 // from buffer capacity so a larger shared RX window cannot widen readahead.
 const CYW43_SDPCM_NEXT_FRAME_MAX_BYTES: usize = 2_048;
 const CYW43_RX_DRAIN_BUDGET: usize = 50;
+const CYW43_DPC_RX_DRAIN_BUDGET: usize = 1;
 const CYW43_SERVICE_PROGRESS_CREDIT: u32 = 1 << 0;
 const CYW43_SERVICE_PROGRESS_QUEUE_DEPTH: u32 = 1 << 1;
 const CYW43_SERVICE_PROGRESS_QUEUE_HIGH_WATER: u32 = 1 << 2;
@@ -3668,7 +3676,7 @@ enum Cyw43DpcReadinessAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43DpcContinuationRoute {
-    ImmediateSelfSignal,
+    DeferredLocalWork,
     CompleteAndRearm,
 }
 
@@ -3761,13 +3769,21 @@ const fn cyw43_dpc_continuation_route(
     _rx_queue_count: u8,
 ) -> Cyw43DpcContinuationRoute {
     if !rxskip && (pending_intstatus != 0 || rxpending || sdpcm_next_frame_len != 0) {
-        Cyw43DpcContinuationRoute::ImmediateSelfSignal
+        Cyw43DpcContinuationRoute::DeferredLocalWork
     } else {
         // A bounded software queue is root-facing work, not device/DPC work.
         // Completing the event unmasks CARD_INT and lets endpoint RX_POLL
         // commands run even while queued frames await root consumption.
         Cyw43DpcContinuationRoute::CompleteAndRearm
     }
+}
+
+const fn cyw43_should_run_deferred_dpc(
+    command_ready: bool,
+    deferred: bool,
+    child_active: bool,
+) -> bool {
+    deferred && !command_ready && !child_active
 }
 
 const fn cyw43_dpc_readiness_action(
@@ -5050,9 +5066,16 @@ fn cyw43_runtime_init(
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_STATE_RESET_BEGIN,
         aux0,
     );
+    if !cyw43_engine_init_can_reset(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)) {
+        // Main-loop engine init can observe ACTIVE only after an issued-unknown
+        // child timeout: ordinary child calls are synchronous. Do not clear
+        // that quarantine without owner quiescence; only a fresh runtime boot
+        // resets the process-local producer state safely.
+        cyw43_record_last_fault_with_result(FAULT_CYW43_TRANSPORT_BUS_LINK, 0);
+        return false;
+    }
     state.reset();
     CYW43_SDIO_BUS_LINK_SEQ.store(0, Ordering::Release);
-    CYW43_SDIO_CHILD_ACTIVE.store(false, Ordering::Release);
     CYW43_DPC_DEFERRED.store(false, Ordering::Release);
     publish_runtime_progress(
         sequence,
@@ -5164,9 +5187,13 @@ fn cyw43_runtime_init(
     state.initialized
 }
 
+const fn cyw43_engine_init_can_reset(child_active: bool) -> bool {
+    !child_active
+}
+
 #[cfg(target_os = "none")]
 fn cyw43_runtime_service_dpc_event() -> bool {
-    let mut should_signal_self = false;
+    let mut should_defer_local = false;
     let mut should_rearm_owner = false;
     let serviced = CYW43_RUNTIME_STATE.with_mut(|state| {
         if !state.dpc_link_ready || state.dpc_shared_epoch == 0 {
@@ -5199,13 +5226,14 @@ fn cyw43_runtime_service_dpc_event() -> bool {
             state.firmware_released,
         ) == Cyw43DpcReadinessAction::Drain
         {
-            let _ = cyw43_runtime_poll_rx_detailed_with_options(
+            let _ = cyw43_runtime_poll_rx_detailed_with_budget(
                 state,
                 0,
                 event.sequence,
                 true,
                 Cyw43AssertedEmptyPolicy::RequestRetransmit,
                 false,
+                CYW43_DPC_RX_DRAIN_BUDGET,
             );
 
             let continuation = cyw43_dpc_continuation_route(
@@ -5216,8 +5244,8 @@ fn cyw43_runtime_service_dpc_event() -> bool {
                 state.rx_queue_count,
             );
             match continuation {
-                Cyw43DpcContinuationRoute::ImmediateSelfSignal => {
-                    should_signal_self = true;
+                Cyw43DpcContinuationRoute::DeferredLocalWork => {
+                    should_defer_local = true;
                     return true;
                 }
                 Cyw43DpcContinuationRoute::CompleteAndRearm => {}
@@ -5231,7 +5259,7 @@ fn cyw43_runtime_service_dpc_event() -> bool {
             state.dpc_events_consumed = state.dpc_events_consumed.saturating_add(1);
             let ring = dpc_event_ring_read_at(base);
             match dpc_consumer_wake_route(&ring, state.dpc_shared_epoch) {
-                DpcConsumerWakeRoute::SelfSignal => should_signal_self = true,
+                DpcConsumerWakeRoute::SelfSignal => should_defer_local = true,
                 DpcConsumerWakeRoute::OwnerRearm => should_rearm_owner = true,
                 DpcConsumerWakeRoute::Fault => {
                     state.dpc_sequence_errors = state.dpc_sequence_errors.saturating_add(1);
@@ -5244,8 +5272,8 @@ fn cyw43_runtime_service_dpc_event() -> bool {
             false
         }
     });
-    if should_signal_self {
-        runtime_signal_notification(DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT);
+    if should_defer_local {
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
     }
     if should_rearm_owner {
         runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT);
@@ -5844,28 +5872,33 @@ fn service_sdio_descriptor_command(command: DriverTaskCommandRecord) -> DriverTa
     };
     let block_count = sdio_descriptor_host_block_count(desc.block_count, flags);
     sdio_clear_last_transfer_failure();
-    let response0 = sdio_execute_transfer_with_timeout(
+    let owner_timeout_us = sdio_owner_descriptor_timeout_us(desc.timeout_us);
+    let mut owner_deadline =
+        runtime_deadline_from_micros_or_legacy_spins(owner_timeout_us, SDHCI_CMD_WAIT_LOOPS);
+    let response0 = sdio_execute_descriptor_transfer_until(
         cmd,
         arg,
         flags,
         frame,
         block_size,
         block_count,
-        desc.timeout_us,
+        owner_timeout_us,
+        &mut owner_deadline,
     )
     .or_else(|| {
         if !sdio_descriptor_transfer_retryable(desc, cmd, flags) {
             return None;
         }
-        sdio_recover_command_path();
-        sdio_execute_transfer_with_timeout(
+        let _ = sdio_recover_command_path_until(&mut owner_deadline);
+        sdio_execute_descriptor_transfer_until(
             cmd,
             arg,
             flags,
             frame,
             block_size,
             block_count,
-            desc.timeout_us,
+            owner_timeout_us,
+            &mut owner_deadline,
         )
     });
     let Some(response0) = response0 else {
@@ -5882,7 +5915,7 @@ fn service_sdio_descriptor_command(command: DriverTaskCommandRecord) -> DriverTa
             result,
             frame,
         );
-        sdio_recover_command_path();
+        let _ = sdio_recover_command_path_until(&mut owner_deadline);
         return DriverTaskCompletionRecord::fault_with_result_and_frame(
             command.sequence,
             FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
@@ -7071,12 +7104,36 @@ fn sdio_execute_transfer_with_timeout(
             timeout_us,
         );
     }
+    let timeout_us = sdio_owner_descriptor_timeout_us(timeout_us);
+    let mut owner_deadline =
+        runtime_deadline_from_micros_or_legacy_spins(timeout_us, SDHCI_CMD_WAIT_LOOPS);
+    sdio_execute_transfer_until(
+        cmd,
+        arg,
+        flags,
+        frame,
+        block_size,
+        block_count,
+        &mut owner_deadline,
+    )
+}
+
+#[cfg(target_os = "none")]
+fn sdio_execute_transfer_until(
+    cmd: u16,
+    arg: u32,
+    flags: u16,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+    owner_deadline: &mut RuntimeDeadline,
+) -> Option<u32> {
     let has_data = flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0;
     let write = flags & DRIVER_RUNTIME_SDIO_FLAG_WRITE != 0;
     let short_busy_response = flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY != 0;
-    if !sdio_wait_inhibit_clear_with_timeout(
+    if !sdio_wait_inhibit_clear_until(
         sdio_command_waits_for_data_inhibit(flags, has_data),
-        timeout_us,
+        owner_deadline,
     ) {
         sdio_record_transfer_failure(
             SDIO_TRANSFER_FAILURE_STAGE_INHIBIT,
@@ -7096,7 +7153,7 @@ fn sdio_execute_transfer_with_timeout(
         sdio_write16(SDHCI_TRANSFER_MODE, sdio_transfer_mode(write, block_count));
     }
     sdio_write16(SDHCI_COMMAND, sdio_make_command(cmd, flags, has_data));
-    let cmd_status = sdio_wait_int(SDHCI_INT_RESPONSE | SDHCI_INT_ERROR, timeout_us);
+    let cmd_status = sdio_wait_int_until(SDHCI_INT_RESPONSE | SDHCI_INT_ERROR, owner_deadline);
     if cmd_status & SDHCI_INT_ERROR != 0 || cmd_status == 0 {
         sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_COMMAND, cmd_status);
         return None;
@@ -7106,7 +7163,7 @@ fn sdio_execute_transfer_with_timeout(
     } else {
         sdio_read32(SDHCI_RESPONSE)
     };
-    if !has_data && short_busy_response && !sdio_wait_inhibit_clear_with_timeout(true, timeout_us) {
+    if !has_data && short_busy_response && !sdio_wait_inhibit_clear_until(true, owner_deadline) {
         sdio_record_transfer_failure(
             SDIO_TRANSFER_FAILURE_STAGE_INHIBIT,
             sdio_read32(SDHCI_PRESENT_STATE),
@@ -7117,10 +7174,46 @@ fn sdio_execute_transfer_with_timeout(
         sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_RESPONSE, r5);
         return None;
     }
-    if has_data && !sdio_transfer_frame(frame, write, block_size, timeout_us) {
+    if has_data && !sdio_transfer_frame_until(frame, write, block_size, owner_deadline) {
         return None;
     }
     Some(response0)
+}
+
+#[cfg(target_os = "none")]
+fn sdio_execute_descriptor_transfer_until(
+    cmd: u16,
+    arg: u32,
+    flags: u16,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+    _timeout_us: u32,
+    owner_deadline: &mut RuntimeDeadline,
+) -> Option<u32> {
+    sdio_execute_transfer_until(
+        cmd,
+        arg,
+        flags,
+        frame,
+        block_size,
+        block_count,
+        owner_deadline,
+    )
+}
+
+#[cfg(not(target_os = "none"))]
+fn sdio_execute_descriptor_transfer_until(
+    cmd: u16,
+    arg: u32,
+    flags: u16,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+    timeout_us: u32,
+    _owner_deadline: &mut RuntimeDeadline,
+) -> Option<u32> {
+    sdio_execute_transfer_with_timeout(cmd, arg, flags, frame, block_size, block_count, timeout_us)
 }
 
 #[cfg(target_os = "none")]
@@ -7408,10 +7501,6 @@ const fn cyw43_sdio_bus_link_staged_command(
     command
 }
 
-const fn cyw43_sdio_child_wait_slot() -> sel4_sys::seL4_CPtr {
-    DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT
-}
-
 #[cfg(target_os = "none")]
 fn cyw43_sdio_bus_link_command_result(command: DriverTaskCommandRecord) -> u32 {
     if command.frame.offset as usize != CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET
@@ -7435,12 +7524,44 @@ fn cyw43_sdio_bus_link_command_result(command: DriverTaskCommandRecord) -> u32 {
         | u32::from(desc.len)
 }
 
+#[cfg(target_os = "none")]
+fn cyw43_sdio_bus_link_owner_timeout_us(command: DriverTaskCommandRecord) -> u32 {
+    if command.frame.offset as usize != CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET
+        || command.frame.len as usize != core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()
+    {
+        return SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US;
+    }
+    // SAFETY: The command frame identifies the fixed descriptor that CYW43
+    // published in the shared SDIO owner ring before entering the child wait.
+    let desc = unsafe {
+        core::ptr::read_volatile(
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+                as *const DriverRuntimeSdioCommandDescriptor,
+        )
+    };
+    if desc.valid() {
+        sdio_owner_descriptor_timeout_us(desc.timeout_us)
+    } else {
+        SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US
+    }
+}
+
 const fn sdio_owner_descriptor_timeout_us(timeout_us: u32) -> u32 {
     if timeout_us == 0 {
         SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US
     } else {
         timeout_us
     }
+}
+
+const fn cyw43_sdio_child_wait_timeout_us(owner_timeout_us: u32) -> u32 {
+    sdio_owner_descriptor_timeout_us(owner_timeout_us)
+        .saturating_mul(CYW43_SDIO_CHILD_WAIT_STAGE_BUDGET)
+        .saturating_add(CYW43_SDIO_CHILD_WAIT_MARGIN_US)
+}
+
+const fn cyw43_sdio_child_resignal_due(polls: usize) -> bool {
+    polls != 0 && polls % CYW43_SDIO_CHILD_RESIGNAL_INTERVAL == 0
 }
 
 #[cfg(target_os = "none")]
@@ -7636,20 +7757,23 @@ const fn cyw43_sdio_dpc_service_deferred(child_active: bool) -> bool {
 }
 
 #[cfg(target_os = "none")]
-fn cyw43_resignal_deferred_dpc() {
-    if CYW43_DPC_DEFERRED.swap(false, Ordering::AcqRel) {
-        runtime_signal_notification(DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT);
-    }
-}
-
-#[cfg(target_os = "none")]
 fn cyw43_sdio_child_finish(state: Cyw43SdioChildState, parent_sequence: u32) {
     if state.dpc_deferred {
         CYW43_DPC_DEFERRED.store(true, Ordering::Release);
     }
     CYW43_SDIO_CHILD_ACTIVE.store(false, Ordering::Release);
-    if parent_sequence == 0 {
-        cyw43_resignal_deferred_dpc();
+    let _ = parent_sequence;
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_sdio_child_drain_local_notification() {
+    let mut badge: sel4_sys::seL4_Word = 0;
+    // SAFETY: This is the generated local notification cap bound to the CYW43
+    // runtime. Polling it cannot consume an endpoint call or disturb the
+    // implicit non-MCS reply capability. Completion and CARD_INT notification
+    // edges may have coalesced, so the caller retains DPC work separately.
+    unsafe {
+        let _ = sel4_sys::seL4_Poll(DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT, &mut badge);
     }
 }
 
@@ -7669,6 +7793,8 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
     let completion_reset = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
     let parent_sequence = cyw43_active_parent_sequence();
     let progress_sequence = cyw43_sdio_owner_progress_sequence(parent_sequence, command.sequence);
+    let child_wait_timeout_us =
+        cyw43_sdio_child_wait_timeout_us(cyw43_sdio_bus_link_owner_timeout_us(command));
     let mut child = Cyw43SdioChildState::new(command.sequence);
     publish_runtime_progress(
         progress_sequence,
@@ -7729,6 +7855,11 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
         DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     );
+    let mut child_wait_deadline = runtime_deadline_from_micros_or_legacy_spins(
+        child_wait_timeout_us,
+        CYW43_SDIO_CHILD_WAIT_FALLBACK_POLLS,
+    );
+    let mut child_wait_polls = 0usize;
     loop {
         if let Cyw43SdioChildCompletion::Exact(mut completion) = cyw43_sdio_child_poll_exact(child)
         {
@@ -7744,17 +7875,48 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
                 cyw43_record_last_fault_with_result(completion.detail, completion.result);
                 cyw43_record_last_fault_frame(completion.frame);
             }
+            // Completion and DPC notifications share the local notification.
+            // Consume the completion edge now so it cannot win the next bound
+            // endpoint receive, then inspect the event ring later after
+            // command-first admission in case a CARD_INT edge coalesced.
+            cyw43_sdio_child_drain_local_notification();
+            child.note_notification();
             cyw43_sdio_child_finish(child, parent_sequence);
             return Some(completion);
         }
-        let mut badge: sel4_sys::seL4_Word = 0;
-        // SAFETY: This waits directly on the generated local notification cap.
-        // Unlike receiving on the bound command endpoint, notification Wait
-        // does not delete the implicit non-MCS root Call reply capability.
-        unsafe {
-            let _ = sel4_sys::seL4_Wait(cyw43_sdio_child_wait_slot(), &mut badge);
+        if runtime_deadline_iteration_cap_reached(
+            &child_wait_deadline,
+            child_wait_polls,
+            CYW43_SDIO_CHILD_WAIT_FALLBACK_POLLS,
+        ) || runtime_deadline_expired(&mut child_wait_deadline)
+        {
+            publish_runtime_progress(
+                progress_sequence,
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
+                DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+            );
+            // The owner may still be executing this sequence. Retain exclusive
+            // ownership of the shared ring for the rest of this runtime
+            // generation; clearing ACTIVE here would permit a later command to
+            // overwrite an issued-unknown transfer. Engine restart/reboot is
+            // the only safe recovery when no exact completion was observed.
+            CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+            cyw43_record_last_fault_with_result(
+                FAULT_CYW43_TRANSPORT_BUS_LINK,
+                cyw43_sdio_bus_link_command_result(command),
+            );
+            return None;
         }
-        child.note_notification();
+        child_wait_polls = child_wait_polls.saturating_add(1);
+        if cyw43_sdio_child_resignal_due(child_wait_polls) {
+            runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT);
+        }
+        // Keep CYW43 runnable so a lost/coalesced reverse notification cannot
+        // hide an already-published completion, while yielding to the
+        // higher-priority SDIO owner on the same generated core.
+        unsafe {
+            sel4_sys::seL4_Yield();
+        }
     }
 }
 
@@ -7990,14 +8152,18 @@ fn sdio_wait_inhibit_clear(wait_data: bool) -> bool {
 }
 
 fn sdio_wait_inhibit_clear_with_timeout(wait_data: bool, timeout_us: u32) -> bool {
+    let mut deadline =
+        runtime_deadline_from_micros_or_legacy_spins(timeout_us, SDHCI_CMD_WAIT_LOOPS);
+    sdio_wait_inhibit_clear_until(wait_data, &mut deadline)
+}
+
+fn sdio_wait_inhibit_clear_until(wait_data: bool, deadline: &mut RuntimeDeadline) -> bool {
     let mask = if wait_data {
         SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT
     } else {
         SDHCI_CMD_INHIBIT
     };
-    let mut deadline =
-        runtime_deadline_from_micros_or_legacy_spins(timeout_us, SDHCI_CMD_WAIT_LOOPS);
-    while !runtime_deadline_expired(&mut deadline) {
+    while !runtime_deadline_expired(deadline) {
         if sdio_read32(SDHCI_PRESENT_STATE) & mask == 0 {
             return true;
         }
@@ -8011,7 +8177,7 @@ const fn sdhci_wait_int_ack_bits(mask: u32, status: u32) -> u32 {
 }
 
 #[cfg(target_os = "none")]
-fn sdio_wait_int(mask: u32, timeout_us: u32) -> u32 {
+fn sdio_wait_int_until(mask: u32, deadline: &mut RuntimeDeadline) -> u32 {
     let error_mask = SDHCI_INT_ERROR
         | SDHCI_INT_TIMEOUT
         | SDHCI_INT_CRC
@@ -8020,9 +8186,7 @@ fn sdio_wait_int(mask: u32, timeout_us: u32) -> u32 {
         | SDHCI_INT_DATA_TIMEOUT
         | SDHCI_INT_DATA_CRC
         | SDHCI_INT_DATA_END_BIT;
-    let mut deadline =
-        runtime_deadline_from_micros_or_legacy_spins(timeout_us, SDHCI_CMD_WAIT_LOOPS);
-    while !runtime_deadline_expired(&mut deadline) {
+    while !runtime_deadline_expired(deadline) {
         let status = sdio_read32(SDHCI_INT_STATUS);
         if status & (mask | error_mask) != 0 {
             let ack = sdhci_wait_int_ack_bits(mask, status);
@@ -8036,31 +8200,45 @@ fn sdio_wait_int(mask: u32, timeout_us: u32) -> u32 {
     0
 }
 
+const fn sdhci_present_buffer_ready_mask(write: bool) -> u32 {
+    if write {
+        SDHCI_SPACE_AVAILABLE
+    } else {
+        SDHCI_DATA_AVAILABLE
+    }
+}
+
+const fn sdhci_interrupt_buffer_ready_mask(write: bool) -> u32 {
+    if write {
+        SDHCI_INT_SPACE_AVAIL
+    } else {
+        SDHCI_INT_DATA_AVAIL
+    }
+}
+
 #[cfg(target_os = "none")]
-fn sdio_transfer_frame(
+fn sdio_transfer_frame_until(
     frame: DriverFrameDescriptor,
     write: bool,
     block_size: u16,
-    timeout_us: u32,
+    owner_deadline: &mut RuntimeDeadline,
 ) -> bool {
     let mut offset = 0usize;
-    while offset < frame.len as usize {
-        let ready = if write {
-            SDHCI_SPACE_AVAILABLE | SDHCI_INT_SPACE_AVAIL
-        } else {
-            SDHCI_DATA_AVAILABLE | SDHCI_INT_DATA_AVAIL
-        };
-        if sdio_read32(SDHCI_PRESENT_STATE) & ready == 0 {
-            let status = sdio_wait_int(ready | SDHCI_INT_ERROR, timeout_us);
+    let present_ready_mask = sdhci_present_buffer_ready_mask(write);
+    let interrupt_ready_mask = sdhci_interrupt_buffer_ready_mask(write);
+    while offset < frame.len as usize && !runtime_deadline_expired(owner_deadline) {
+        let offset_before = offset;
+        if sdio_read32(SDHCI_PRESENT_STATE) & present_ready_mask == 0 {
+            let status = sdio_wait_int_until(interrupt_ready_mask, owner_deadline);
             if status & SDHCI_INT_ERROR != 0 || status == 0 {
                 sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, status);
-                let _ = sdio_recover_command_path();
+                let _ = sdio_recover_command_path_until(owner_deadline);
                 return false;
             }
         }
         let burst_end = offset + sdio_pio_ready_burst_len(block_size, frame.len as usize - offset);
         while offset < burst_end {
-            if sdio_read32(SDHCI_PRESENT_STATE) & ready == 0 {
+            if sdio_read32(SDHCI_PRESENT_STATE) & present_ready_mask == 0 {
                 break;
             }
             let word_len = (burst_end - offset).min(4);
@@ -8083,33 +8261,42 @@ fn sdio_transfer_frame(
             }
             offset = offset.saturating_add(word_len);
         }
+        if offset == offset_before {
+            runtime_poll_pause();
+        }
+    }
+    if offset != frame.len as usize {
+        sdio_record_transfer_failure(
+            SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT,
+            sdio_read32(SDHCI_INT_STATUS),
+        );
+        let _ = sdio_recover_command_path_until(owner_deadline);
+        return false;
     }
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_DATA_READY_MASK);
-    let status = sdio_wait_int(SDHCI_INT_DATA_FINISH_MASK, timeout_us);
+    let status = sdio_wait_int_until(SDHCI_INT_DATA_FINISH_MASK, owner_deadline);
     if status & SDHCI_INT_ERROR == 0 && status != 0 {
-        sdio_settle_transfer_data_path(timeout_us);
-        true
+        sdio_settle_transfer_data_path_until(owner_deadline)
     } else {
         sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_END, status);
-        let _ = sdio_recover_command_path();
+        let _ = sdio_recover_command_path_until(owner_deadline);
         false
     }
 }
 
 #[cfg(target_os = "none")]
-fn sdio_settle_transfer_data_path(timeout_us: u32) {
-    let mut deadline =
-        runtime_deadline_from_micros_or_legacy_spins(timeout_us, SDHCI_CMD_WAIT_LOOPS);
-    while !runtime_deadline_expired(&mut deadline) {
+fn sdio_settle_transfer_data_path_until(owner_deadline: &mut RuntimeDeadline) -> bool {
+    while !runtime_deadline_expired(owner_deadline) {
         let present = sdio_read32(SDHCI_PRESENT_STATE);
         if present & (SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE) == 0 {
-            return;
+            return true;
         }
         runtime_poll_pause();
     }
     let present = sdio_read32(SDHCI_PRESENT_STATE);
     sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_END, present);
-    let _ = sdio_recover_command_path();
+    let _ = sdio_recover_command_path_until(owner_deadline);
+    false
 }
 
 fn service_pcie_root(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
@@ -11534,6 +11721,7 @@ fn cyw43_runtime_poll_control_rx_detailed(
             allow_hintless_firstread,
             Cyw43AssertedEmptyPolicy::RequestRetransmit,
             false,
+            CYW43_RX_DRAIN_BUDGET,
         ) {
             Cyw43RxPollResult::Frame(_) => {
                 debug_assert!(false, "a zero wanted mask must enqueue service frames");
@@ -11578,6 +11766,26 @@ fn cyw43_runtime_poll_rx_detailed_with_options(
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
     allow_steady_tail_drain: bool,
 ) -> Cyw43RxPollResult {
+    cyw43_runtime_poll_rx_detailed_with_budget(
+        state,
+        wanted_mask,
+        sequence,
+        allow_hintless_firstread,
+        asserted_empty_policy,
+        allow_steady_tail_drain,
+        CYW43_RX_DRAIN_BUDGET,
+    )
+}
+
+fn cyw43_runtime_poll_rx_detailed_with_budget(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    sequence: u32,
+    allow_hintless_firstread: bool,
+    asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+    allow_steady_tail_drain: bool,
+    drain_budget: usize,
+) -> Cyw43RxPollResult {
     if !state.initialized || !state.transport_ready || !state.firmware_released {
         return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::NotReady);
     }
@@ -11590,6 +11798,7 @@ fn cyw43_runtime_poll_rx_detailed_with_options(
         allow_hintless_firstread,
         asserted_empty_policy,
         allow_steady_tail_drain,
+        drain_budget,
     );
     cyw43_runtime_finish_rx_service(state, service_owner);
     result
@@ -11602,11 +11811,13 @@ fn cyw43_runtime_poll_rx_detailed_in_service(
     allow_hintless_firstread: bool,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
     allow_steady_tail_drain: bool,
+    drain_budget: usize,
 ) -> Cyw43RxPollResult {
     let mut decoded_unmatched = false;
     let mut decoded_valid_unmatched = false;
     let mut drained = 0usize;
-    for _ in 0..CYW43_RX_DRAIN_BUDGET {
+    let drain_budget = drain_budget.clamp(1, CYW43_RX_DRAIN_BUDGET);
+    for _ in 0..drain_budget {
         if let Some(frame) = cyw43_rx_queue_pop_matching(state, wanted_mask) {
             state.rx_frames = state.rx_frames.saturating_add(1);
             state.rx_retransmit_pending = false;
@@ -11692,7 +11903,7 @@ fn cyw43_runtime_poll_rx_detailed_in_service(
         }
     }
     cyw43_record_rx_drain_turn(state, drained);
-    if drained >= CYW43_RX_DRAIN_BUDGET {
+    if drained >= drain_budget {
         state.rx_drain_budget_hits = state.rx_drain_budget_hits.saturating_add(1);
     }
     let reason = if decoded_valid_unmatched {
@@ -26043,6 +26254,11 @@ fn sdio_write8(offset: usize, value: u8) {
 fn sdio_write8(_offset: usize, _value: u8) {}
 
 fn sdio_software_reset(mask: u8) -> bool {
+    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
+    sdio_software_reset_until(mask, &mut deadline)
+}
+
+fn sdio_software_reset_until(mask: u8, deadline: &mut RuntimeDeadline) -> bool {
     sdio_write8(SDHCI_SOFTWARE_RESET, mask);
     #[cfg(all(not(target_os = "none"), test))]
     {
@@ -26051,8 +26267,7 @@ fn sdio_software_reset(mask: u8) -> bool {
             return false;
         }
     }
-    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
-    while !runtime_deadline_expired(&mut deadline) {
+    while !runtime_deadline_expired(deadline) {
         if sdio_read8(SDHCI_SOFTWARE_RESET) & mask == 0 {
             return true;
         }
@@ -26154,22 +26369,53 @@ fn sdio_clear_post_clock_inhibit() -> bool {
 }
 
 fn sdio_recover_command_path() -> bool {
+    let recovery_spins = SDHCI_INIT_SPINS
+        .saturating_mul(2)
+        .saturating_add(SDHCI_CLOCK_RECOVERY_SETTLE_SPINS.saturating_mul(2))
+        .saturating_add(SDHCI_CMD_WAIT_LOOPS);
+    let mut deadline = runtime_deadline_from_legacy_spins(recovery_spins);
+    sdio_recover_command_path_until(&mut deadline)
+}
+
+fn sdio_recovery_settle_until(iterations: usize, owner_deadline: &mut RuntimeDeadline) -> bool {
+    let mut completed = 0usize;
+    while completed < iterations && !runtime_deadline_expired(owner_deadline) {
+        core::hint::spin_loop();
+        completed = completed.saturating_add(1);
+    }
+    completed == iterations
+}
+
+fn sdio_recovery_clock_cycle_until(clock: u16, owner_deadline: &mut RuntimeDeadline) -> bool {
+    sdio_write16(SDHCI_CLOCK_CONTROL, clock & !SDHCI_CLOCK_CARD_EN);
+    let settled = sdio_recovery_settle_until(SDHCI_CLOCK_RECOVERY_SETTLE_SPINS, owner_deadline);
+    // Restore the saved clock on every exit path. A containment timeout must
+    // not turn a recoverable command fault into a permanently disabled card.
+    sdio_write16(SDHCI_CLOCK_CONTROL, clock);
+    settled
+}
+
+fn sdio_recover_command_path_until(owner_deadline: &mut RuntimeDeadline) -> bool {
+    if runtime_deadline_expired(owner_deadline) {
+        return false;
+    }
     let clock = sdio_read16(SDHCI_CLOCK_CONTROL);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    let reset_ok = sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+    let reset_ok = sdio_software_reset_until(SDHCI_RESET_CMD | SDHCI_RESET_DATA, owner_deadline);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    sdio_write16(SDHCI_CLOCK_CONTROL, clock & !SDHCI_CLOCK_CARD_EN);
-    runtime_spin(SDHCI_CLOCK_RECOVERY_SETTLE_SPINS);
-    sdio_write16(SDHCI_CLOCK_CONTROL, clock);
-    let post_clock_reset_ok = sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+    if !sdio_recovery_clock_cycle_until(clock, owner_deadline) {
+        return false;
+    }
+    let post_clock_reset_ok =
+        sdio_software_reset_until(SDHCI_RESET_CMD | SDHCI_RESET_DATA, owner_deadline);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     let present = sdio_read32(SDHCI_PRESENT_STATE);
     if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) != 0 {
-        sdio_write16(SDHCI_CLOCK_CONTROL, clock & !SDHCI_CLOCK_CARD_EN);
-        runtime_spin(SDHCI_CLOCK_RECOVERY_SETTLE_SPINS);
-        sdio_write16(SDHCI_CLOCK_CONTROL, clock);
+        if !sdio_recovery_clock_cycle_until(clock, owner_deadline) {
+            return false;
+        }
     }
-    reset_ok && post_clock_reset_ok && sdio_wait_inhibit_clear(true)
+    reset_ok && post_clock_reset_ok && sdio_wait_inhibit_clear_until(true, owner_deadline)
 }
 
 fn sdio_notification_dpc_ready() -> bool {
@@ -26671,6 +26917,15 @@ fn publish_runtime_completion_sequence_last(completion: DriverTaskCompletionReco
     );
 }
 
+const fn sdio_owner_completion_requires_precommit_signal(
+    command: DriverTaskCommandRecord,
+    route: RuntimeNotificationRoute,
+) -> bool {
+    command.arg0 == HOT_PATH_SDIO_HOST
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+        && matches!(route, RuntimeNotificationRoute::SdioOwner)
+}
+
 /// Run the isolated driver runtime receive/service loop.
 #[cfg(target_os = "none")]
 pub fn runtime_main(task_key: usize) -> ! {
@@ -26701,6 +26956,25 @@ pub fn runtime_main(task_key: usize) -> ! {
         if publish_ring_read_begin {
             ring_read_progress_published = true;
         }
+        let notification_route = runtime_notification_route(&RUNTIME_DESCRIPTOR.load());
+        let deferred_dpc =
+            if intake.is_none() && notification_route == RuntimeNotificationRoute::Cyw43Client {
+                CYW43_DPC_DEFERRED.swap(false, Ordering::AcqRel)
+            } else {
+                false
+            };
+        let child_active = CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire);
+        if deferred_dpc && child_active {
+            // An issued-unknown child owns the SDIO ring until restart; retain
+            // any coalesced DPC work without attempting another child turn.
+            CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+        }
+        if cyw43_should_run_deferred_dpc(intake.is_some(), deferred_dpc, child_active) {
+            // Linux services latched DPC work as scheduled quanta. Always
+            // admit a queued control command before the next local quantum.
+            let _ = cyw43_runtime_service_dpc_event();
+            continue;
+        }
         if intake.is_none() {
             idle_polls = idle_polls.wrapping_add(1);
             if runtime_idle_poll_progress_due(idle_polls) {
@@ -26715,6 +26989,12 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // Poll the persistent ring/source once before sleeping so a
                 // coalesced or already-consumed doorbell cannot strand work.
                 let _ = service_runtime_notification(0);
+                if notification_route == RuntimeNotificationRoute::Cyw43Client
+                    && CYW43_DPC_DEFERRED.load(Ordering::Acquire)
+                    && !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+                {
+                    continue;
+                }
                 match wait_runtime_command_or_notification(last_sequence) {
                     RuntimeWake::Command(command) => intake = Some(command),
                     RuntimeWake::Notification(badge) => {
@@ -26753,14 +27033,19 @@ pub fn runtime_main(task_key: usize) -> ! {
                 command.aux0,
             );
         }
-        publish_runtime_completion_sequence_last(completion);
-        if command.arg0 == HOT_PATH_SDIO_HOST
-            && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
-            && runtime_notification_route(&RUNTIME_DESCRIPTOR.load())
-                == RuntimeNotificationRoute::SdioOwner
-        {
+        let signal_cyw43_before_commit = sdio_owner_completion_requires_precommit_signal(
+            command,
+            runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
+        );
+        if signal_cyw43_before_commit {
+            // Publish the wake edge before the sequence-last commit. If equal
+            // priority boosting preempts SDIO here, CYW43 sees a pending edge
+            // but cannot accept the incomplete record; after SDIO commits, the
+            // exact-completion path drains that same edge. This closes the
+            // commit-then-late-signal race without relying on priority order.
             runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT);
         }
+        publish_runtime_completion_sequence_last(completion);
         #[cfg(not(sel4_config_kernel_mcs))]
         if intake.reply_cap_available {
             // SAFETY: Only `seL4_Call` installs the reply cap consumed here.
@@ -26776,11 +27061,6 @@ pub fn runtime_main(task_key: usize) -> ! {
                     core::ptr::null(),
                 );
             }
-        }
-        if runtime_notification_route(&RUNTIME_DESCRIPTOR.load())
-            == RuntimeNotificationRoute::Cyw43Client
-        {
-            cyw43_resignal_deferred_dpc();
         }
         last_sequence = command.sequence;
         publish_runtime_progress(
@@ -27227,13 +27507,13 @@ mod tests {
     }
 
     #[test]
-    fn dpc_self_signals_only_for_device_or_latch_work() {
+    fn dpc_defers_device_or_latch_work_without_starving_commands() {
         for route in [
             cyw43_dpc_continuation_route(false, I_HMB_HOST_INT, false, 0, 1),
             cyw43_dpc_continuation_route(false, 0, true, 0, 1),
             cyw43_dpc_continuation_route(false, 0, false, 64, 1),
         ] {
-            assert_eq!(route, Cyw43DpcContinuationRoute::ImmediateSelfSignal);
+            assert_eq!(route, Cyw43DpcContinuationRoute::DeferredLocalWork);
         }
         assert_eq!(
             cyw43_dpc_continuation_route(false, 0, false, 0, 0),
@@ -27243,6 +27523,12 @@ mod tests {
             cyw43_dpc_continuation_route(true, I_HMB_HOST_INT, true, 64, 1),
             Cyw43DpcContinuationRoute::CompleteAndRearm
         );
+        assert!(!cyw43_should_run_deferred_dpc(true, true, false));
+        assert!(cyw43_should_run_deferred_dpc(false, true, false));
+        assert!(!cyw43_should_run_deferred_dpc(false, false, false));
+        assert!(!cyw43_should_run_deferred_dpc(false, true, true));
+        assert_eq!(CYW43_DPC_RX_DRAIN_BUDGET, 1);
+        assert!(CYW43_DPC_RX_DRAIN_BUDGET < CYW43_RX_DRAIN_BUDGET);
     }
 
     #[test]
@@ -28501,6 +28787,14 @@ mod tests {
         assert_eq!(staged.opcode, command.opcode);
         assert_eq!(staged.arg0, command.arg0);
         assert_eq!(staged.frame, command.frame);
+        assert!(sdio_owner_completion_requires_precommit_signal(
+            staged,
+            RuntimeNotificationRoute::SdioOwner
+        ));
+        assert!(!sdio_owner_completion_requires_precommit_signal(
+            command,
+            RuntimeNotificationRoute::SdioOwner
+        ));
 
         let mut child = Cyw43SdioChildState::new(command.sequence);
         assert!(child.take_publication());
@@ -28559,6 +28853,19 @@ mod tests {
         );
         assert!(cyw43_sdio_dpc_service_deferred(true));
         assert!(!cyw43_sdio_dpc_service_deferred(false));
+        assert_eq!(
+            cyw43_sdio_child_wait_timeout_us(0),
+            SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US * CYW43_SDIO_CHILD_WAIT_STAGE_BUDGET
+                + CYW43_SDIO_CHILD_WAIT_MARGIN_US
+        );
+        assert!(!cyw43_sdio_child_resignal_due(
+            CYW43_SDIO_CHILD_RESIGNAL_INTERVAL - 1
+        ));
+        assert!(cyw43_sdio_child_resignal_due(
+            CYW43_SDIO_CHILD_RESIGNAL_INTERVAL
+        ));
+        assert!(cyw43_engine_init_can_reset(false));
+        assert!(!cyw43_engine_init_can_reset(true));
     }
 
     #[test]
@@ -28571,11 +28878,10 @@ mod tests {
             DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT,
             DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT
         );
-        assert_eq!(
-            cyw43_sdio_child_wait_slot(),
-            DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT
+        assert_ne!(
+            DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
+            DRIVER_TASK_CHILD_COMMAND_SLOT
         );
-        assert_ne!(cyw43_sdio_child_wait_slot(), DRIVER_TASK_CHILD_COMMAND_SLOT);
     }
 
     #[test]
@@ -37583,6 +37889,28 @@ mod tests {
     }
 
     #[test]
+    fn sdio_pio_readiness_masks_stay_in_their_register_namespaces() {
+        assert_eq!(sdhci_present_buffer_ready_mask(true), SDHCI_SPACE_AVAILABLE);
+        assert_eq!(sdhci_present_buffer_ready_mask(false), SDHCI_DATA_AVAILABLE);
+        assert_eq!(
+            sdhci_interrupt_buffer_ready_mask(true),
+            SDHCI_INT_SPACE_AVAIL
+        );
+        assert_eq!(
+            sdhci_interrupt_buffer_ready_mask(false),
+            SDHCI_INT_DATA_AVAIL
+        );
+        assert_eq!(
+            sdhci_present_buffer_ready_mask(true) & sdhci_interrupt_buffer_ready_mask(true),
+            0
+        );
+        assert_eq!(
+            sdhci_present_buffer_ready_mask(false) & sdhci_interrupt_buffer_ready_mask(false),
+            0
+        );
+    }
+
+    #[test]
     fn sdio_descriptor_cmd53_byte_mode_keeps_descriptor_zero_and_host_one_block() {
         let flags = DRIVER_RUNTIME_SDIO_FLAG_DATA
             | DRIVER_RUNTIME_SDIO_FLAG_WRITE
@@ -38881,6 +39209,13 @@ mod tests {
     fn sdio_recovery_resets_cmd_data_path_before_cyw43_retry() {
         assert_eq!(SDHCI_CLOCK_RECOVERY_SETTLE_SPINS, 10_000);
         assert!(sdio_recover_command_path());
+        let mut exhausted = RuntimeDeadline::Iterations { remaining: 0 };
+        assert!(!sdio_recover_command_path_until(&mut exhausted));
+        assert!(!sdio_recovery_clock_cycle_until(0x1234, &mut exhausted));
+        let mut bounded = RuntimeDeadline::Iterations {
+            remaining: SDHCI_CLOCK_RECOVERY_SETTLE_SPINS,
+        };
+        assert!(sdio_recovery_clock_cycle_until(0x1234, &mut bounded));
     }
 
     #[test]

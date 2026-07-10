@@ -15720,19 +15720,15 @@ fn cyw43_active_prompt_poll_for_descriptor(
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_prompt_slice_active_descriptor_resume_ready(
+// The active ring command and HAL's staged-command fingerprint are continuation
+// authority. Progress is diagnostic: before the runtime observes this command,
+// it may legitimately identify an earlier DPC-owned CYW43-to-SDIO child turn.
+fn cyw43_prompt_slice_active_descriptor_matches(
     active_request: u32,
-    progress: Option<DriverTaskRingProgressSnapshot>,
     expected: DriverRuntimeCyw43CommandDescriptor,
     active: DriverRuntimeCyw43CommandDescriptor,
 ) -> bool {
-    let Some(progress) = progress else {
-        return false;
-    };
     active_request != 0
-        && progress.marker_valid
-        && progress.sequence == active_request
-        && progress.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
         && cyw43_runtime_descriptor_uses_prompt_slice(expected.op)
         && expected.op == active.op
         && expected.flags == active.flags
@@ -15741,6 +15737,7 @@ fn cyw43_prompt_slice_active_descriptor_resume_ready(
         && expected.total_len == active.total_len
         && expected.arg0 == active.arg0
         && expected.arg1 == active.arg1
+        && expected.reserved == active.reserved
 }
 
 #[cfg(feature = "kernel")]
@@ -15754,12 +15751,7 @@ fn cyw43_active_prompt_descriptor_resume_ready(
     else {
         return false;
     };
-    cyw43_prompt_slice_active_descriptor_resume_ready(
-        active_request,
-        crate::hal::driver_task::latest_driver_task_ring_progress(contract),
-        descriptor,
-        active_descriptor,
-    )
+    cyw43_prompt_slice_active_descriptor_matches(active_request, descriptor, active_descriptor)
 }
 
 #[cfg(feature = "kernel")]
@@ -17914,6 +17906,9 @@ fn run_cyw43_control_descriptor_command(
                 prompt_slice_resumes,
             };
         }
+        // Re-entering the HAL with the same staged bytes can only resume the
+        // immutable active fingerprint. It cannot publish a second control
+        // frame or allocate another BCDC id.
         prompt_slice_resumes = prompt_slice_resumes.saturating_add(1);
         core::hint::spin_loop();
     }
@@ -24515,16 +24510,16 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_control_exchange_prompt_resume_uses_active_descriptor_progress() {
-        let progress = crate::hal::driver_task::DriverTaskRingProgressSnapshot {
+    fn cyw43_bootstrap_control_resume_survives_prior_owner_progress() {
+        let prior_owner_progress = crate::hal::driver_task::DriverTaskRingProgressSnapshot {
             marker_valid: true,
-            sequence: 182,
+            sequence: 0xeff1_c941,
             phase: 142,
             phase_name: "cyw43-sdio-owner-wait-begin",
             aux0: DRIVER_RUNTIME_CYW43_COMMAND_AUX,
         };
         let descriptor = DriverRuntimeCyw43CommandDescriptor {
-            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
             flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
             payload_len: 36,
             total_len: 36,
@@ -24538,51 +24533,45 @@ mod tests {
         };
 
         assert_eq!(
-            cyw43_active_prompt_poll_for_descriptor(182, Some(progress), descriptor),
+            cyw43_active_prompt_poll_for_descriptor(174, Some(prior_owner_progress), descriptor),
             None
         );
-        assert!(cyw43_prompt_slice_active_descriptor_resume_ready(
-            182,
-            Some(progress),
+        assert!(cyw43_prompt_slice_active_descriptor_matches(
+            174,
             descriptor,
             active_descriptor,
         ));
-        assert!(!cyw43_prompt_slice_active_descriptor_resume_ready(
-            181,
-            Some(progress),
+        assert_eq!(
+            cyw43_control_descriptor_resume_limit(true, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME),
+            CYW43_RUNTIME_CONTROL_FRAME_NO_REPLY_RESUMES
+        );
+        assert_eq!(
+            cyw43_control_descriptor_resume_limit(false, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME),
+            0
+        );
+        assert!(!cyw43_prompt_slice_active_descriptor_matches(
+            0,
             descriptor,
             active_descriptor,
         ));
-        assert!(!cyw43_prompt_slice_active_descriptor_resume_ready(
-            182,
-            Some(crate::hal::driver_task::DriverTaskRingProgressSnapshot {
-                aux0: 0,
-                ..progress
-            }),
-            descriptor,
-            active_descriptor,
-        ));
-        assert!(!cyw43_prompt_slice_active_descriptor_resume_ready(
-            182,
-            Some(progress),
+        assert!(!cyw43_prompt_slice_active_descriptor_matches(
+            174,
             descriptor,
             DriverRuntimeCyw43CommandDescriptor {
                 flags: 0,
                 ..active_descriptor
             },
         ));
-        assert!(!cyw43_prompt_slice_active_descriptor_resume_ready(
-            182,
-            Some(progress),
+        assert!(!cyw43_prompt_slice_active_descriptor_matches(
+            174,
             descriptor,
             DriverRuntimeCyw43CommandDescriptor {
                 payload_len: 32,
                 ..active_descriptor
             },
         ));
-        assert!(!cyw43_prompt_slice_active_descriptor_resume_ready(
-            182,
-            Some(progress),
+        assert!(!cyw43_prompt_slice_active_descriptor_matches(
+            174,
             DriverRuntimeCyw43CommandDescriptor {
                 op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
                 ..descriptor
@@ -24590,6 +24579,14 @@ mod tests {
             DriverRuntimeCyw43CommandDescriptor {
                 op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
                 ..descriptor
+            },
+        ));
+        assert!(!cyw43_prompt_slice_active_descriptor_matches(
+            174,
+            descriptor,
+            DriverRuntimeCyw43CommandDescriptor {
+                reserved: 1,
+                ..active_descriptor
             },
         ));
     }

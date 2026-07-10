@@ -321,14 +321,41 @@ Capture only these operator-facing lines from that session:
 - Historical USB note: preserve-state and bootloader-exported halted-seed lanes are no longer active on Pi 4. Current local-seat treats those records as diagnostics only and the proof loop reports them as `USB_BOOTLOADER_HANDOFF_SEEN=yes`.
 - The first control-plane ioctl timeout on the startup-link probe lane is now treated as the preserved blocker if the cached exact error already names the same first-reply fault. That keeps `nettest` from collapsing the first timeout to a generic `cyw43 protocol error: ioctl-timeout`, and it stops the driver from re-entering the same long resend path once the exact blocker has already been observed. The bounded driver-side ioctl wait ladder is now `32000 / 8000 / 2000` loops for first startup-link / rescue / repeat-rescue waits, and once the final bounded probe is armed with `probe_pending=no` it collapses again to a `1000`-loop last wait instead of burning another full startup-link timeout.
 - Current matched-control proof captures include `CYW43_DRIVER_TASK_CONTROL_REQUEST` before every BCDC/CDC exchange, isolated runtime progress markers for `cyw43-control-tx-begin` and `cyw43-control-tx-done`, root-side `CYW43_DRIVER_TASK_CONTROL_SPLIT` TX/poll/timeout lines, and `CYW43_DRIVER_TASK_CONTROL_REPLY` CDC header lines when a control/event frame arrives. Split/reply lines include completion sequence, expected command/id/header/iovar, expected response length, reply-match status, and nonmatching/malformed frame counts; nonterminal poll samples are context until the same attempt emits a terminal split failure. Nested SDIO-owner bus-link progress is attributed to the active parent CYW43 request sequence, while the private owner sequence remains the SDIO completion key. For the active June 14 txglomalign frontier, the next boot must show either a matched `cyw43-control-txglomalign ready` reply or a precise `cyw43-control-tx-*`, `cyw43-control-rx-*`, or `cyw43-control-reply-*` blocker instead of another opaque no-reply pause.
+- A freshly queued bootstrap control command can initially sit behind an
+  asynchronous CYW43 DPC child whose progress still carries the private SDIO
+  owner sequence. Root preserves that exact command only while the active ring
+  command, decoded descriptor, staged-byte fingerprint, and request remain
+  unchanged. It resumes within the existing bounded bootstrap deadline without
+  restaging a different payload, retransmitting the frame, or allocating a new
+  BCDC id; mutable progress telemetry is evidence, not continuation authority.
 - Current CYW43/SDIO producer proof is one-way: root bootstraps the SDIO
   descriptor and engine, CYW43 engine init validates the sealed generated link,
+  HAL verifies the committed sequence-matched SDIO and CYW43 engine-init
+  command/completion pairs rather than the mutable diagnostic progress marker,
   then `DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio ...
   root_endpoint=deleted root_submit=disabled ... status=ready` transfers the
   sole command-page producer to CYW43. A missing handoff, active root turn,
-  undrained completion, later root SDIO submit/stage, or attempted root recovery
-  leaves Wi-Fi acceptance red; recovery after handoff is CYW43-owned or fails
-  closed without modifying the delegated ring.
+  command/completion identity mismatch, undrained completion, later root SDIO
+  submit/stage, or attempted root recovery leaves Wi-Fi acceptance red with a
+  predicate-specific rejection reason; recovery after handoff is CYW43-owned
+  or fails closed without modifying the delegated ring.
+- Post-handoff SDIO PIO proof must keep FIFO readiness masks in their actual
+  register namespaces: present-state bits are never ORed with interrupt-status
+  bits. The owner uses one aggregate virtual-counter deadline across inhibit,
+  command, FIFO, finish, settle, bounded recovery, and retry, and must publish
+  either an exact completion or fault while restoring the saved card clock on
+  every recovery exit. The owner signals CYW43 before the
+  sequence-last completion commit, closing the late-edge race even while both
+  runtimes are temporarily priority-boosted. CYW43's child wait is independently bounded and
+  sequence-polls the shared completion while periodically re-doorbelling the
+  owner, so a lost or coalesced notification cannot strand the runtime. Exact
+  completion drains the reverse notification before the slot is released; an
+  issued-unknown timeout quarantines the slot for the runtime generation rather
+  than overwriting an owner that may still be executing; engine-init cannot
+  clear that quarantine inside the same runtime boot. DPC continuation is
+  local deferred work, not a self-notification loop: root control command
+  intake wins before each one-frame DPC quantum, and the loop rechecks deferred
+  work before blocking.
 - Current M26b Wi-Fi correction: the ALP-only firmware proof gate remains bounded, but a transport-unavailable Linux-shaped CMD53 read after a successful firmware/NVRAM/tail upload is evidence-only. Cohesix no longer burns additional pre-release SDIO setup commands just to retry a readback Linux does not require. A byte mismatch remains terminal; unavailable readback proceeds to ARMCR4 release as an unverified Linux-style upload.
 - Current M26b USB correction: after the post-mailbox `platform-reset-complete` path has live BAR/COMMAND proof, runtime treats any captured pre-reset stop seed as stale, replays `CONFIG.MaxSlotsEn`, publishes fresh Cohesix-owned DCBAA/rings, starts the controller, then mirrors U-Boot's poll-only post-start interrupter state with PCIe-owner-flushed `IMOD=0` / `IMAN=0` writes before command proof. Runtime continues to root-port enumeration only after U-Boot-shaped command/event-ring proof. The port-event command-proof frontier does not pre-acknowledge `ERDP.EHB` / `IMAN.IP`, does not seed Linux-style `DNCTRL`, `IMOD`, or `IMAN.IE`, preserves current-boot Port Status Change events, submits Enable Slot as the first real U-Boot allocation command, and skips/acknowledges leading PSCs while waiting for that matching command completion. No Op is diagnostic-only and cannot prove gate 4 or authorize recovery. Each command publish flushes only the 16-byte submitted command TRB range before the doorbell, matching U-Boot's `queue_trb()` cache contract, and ERDP acknowledgement now fails closed if the event-ring dequeue pointer cannot be translated to the device-visible DMA address. A pending Enable Slot command may re-ring DB0 while no command events have been consumed, but that edge is liveness recovery only; the active proof lane is still U-Boot poll-only and requires a fresh matching Enable Slot completion event. Linux-shaped recovery helpers remain diagnostic only. Pre-reset quiesce uses the generated seL4/GIC PCIe host, child INTx-A, and MSI caps (`179`, `175`, and `180`) through HAL only after the HAL BCM2711 EXT_CFG path has masked/cleared the PCIe host sources; ACK breadcrumbs include `source_clear=hal-ext-cfg-prior`. IRQ27 remains the kernel timer and is never bound as a USB interrupt. If live BAR/COMMAND proof is absent, runtime returns before controller entry; no stop-state, bootloader-authorized, or preserve-state lane is promoted, and the proof script reports `USB_BOOTLOADER_HANDOFF_SEEN=yes` if any such USB evidence appears.
 5. Validate diagnostics surfaces:
