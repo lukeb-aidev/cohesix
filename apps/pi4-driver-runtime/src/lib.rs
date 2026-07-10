@@ -42,9 +42,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR, DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
-    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
-    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN, DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
-    DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES,
+    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+    DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE, DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
     DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
@@ -65,6 +65,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NOT_READY, DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NO_RFRAME,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RFRAME_READ_FAILED,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_SDPCM_DECODE_MISS,
+    DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET,
     DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CACHED,
     DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT,
     DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FRAME_INDICATED,
@@ -1246,7 +1247,7 @@ const CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES: usize = 16;
 // from buffer capacity so a larger shared RX window cannot widen readahead.
 const CYW43_SDPCM_NEXT_FRAME_MAX_BYTES: usize = 2_048;
 const CYW43_RX_DRAIN_BUDGET: usize = 50;
-const CYW43_DPC_RX_DRAIN_BUDGET: usize = 1;
+const CYW43_DPC_CHILD_FALLBACK_POLLS: u32 = 1_048_576;
 const CYW43_SERVICE_PROGRESS_CREDIT: u32 = 1 << 0;
 const CYW43_SERVICE_PROGRESS_QUEUE_DEPTH: u32 = 1 << 1;
 const CYW43_SERVICE_PROGRESS_QUEUE_HIGH_WATER: u32 = 1 << 2;
@@ -1303,11 +1304,18 @@ const CYW43_CONTROL_RX_FIRSTREAD_CAPACITY: usize =
     CYW43_CONTROL_RX_FIRSTREAD_BYTES + CYW43_CONTROL_RX_BULK_READ_BYTES;
 const CYW43_CONTROL_RX_BLOCK_PROBE_CAPACITY: usize =
     CYW43_CONTROL_RX_BLOCK_PROBE_BYTES + CYW43_CONTROL_RX_BULK_READ_BYTES;
+// Keep DPC-local backplane word transfers outside root's complete staged
+// command/payload window. A deferred interrupt turn may execute while a root
+// CYW43 command is queued, so reusing DRIVER_TASK_RING_FRAME_OFFSET here would
+// corrupt the queued descriptor before command admission.
+const CYW43_BACKPLANE_WORD_SCRATCH_OFFSET: usize =
+    DRIVER_TASK_RING_FRAME_OFFSET + MAX_DRIVER_TASK_FRAME_BYTES;
 const CYW43_SDPCM_TX_OFFSET: usize = DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET as usize;
 const CYW43_SDPCM_TX_PAYLOAD_BYTES: usize = DRIVER_TASK_RING_PAGE_BYTES - CYW43_SDPCM_TX_OFFSET;
-const CYW43_RUNTIME_RX_BUFFER_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
-const CYW43_RUNTIME_RX_BUFFER_OFFSET: usize = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize;
-const CYW43_FIRMWARE_STAGE_BYTES: usize = CYW43_RUNTIME_RX_BUFFER_BYTES;
+const CYW43_RUNTIME_RX_BUFFER_BYTES: usize = DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES as usize;
+const CYW43_RUNTIME_RX_BUFFER_OFFSET: usize =
+    DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET as usize;
+const CYW43_FIRMWARE_STAGE_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
 const CYW43_FIRMWARE_STAGE_OFFSET: usize = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize;
 const CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY: bool = true;
 const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
@@ -2114,6 +2122,140 @@ impl SdioRuntimeState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcAction {
+    None,
+    CaptureStatus,
+    AckStatus,
+    FlowAck,
+    FlowRead,
+    HostmailRead,
+    HostmailAck,
+    RframeLow,
+    RframeHigh,
+    FifoWindow,
+    Firstread,
+    Remainder,
+    PostStatus,
+    PostAck,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcIoKind {
+    None,
+    BackplaneRead32,
+    BackplaneWrite32,
+    WindowOnly,
+    Cmd52Read,
+    Function2Read,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcIoPhase {
+    Idle,
+    WindowLow,
+    WindowMid,
+    WindowHigh,
+    Transfer,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcTurnRoute {
+    Quarantine,
+    PollChild,
+    CompleteEvent,
+    AdvanceState,
+    SubmitChild,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43DpcChild {
+    active: bool,
+    issued_unknown: bool,
+    expected_sequence: u32,
+    started_ticks: u64,
+    timeout_cycles: u64,
+    fallback_polls: u32,
+    command_result: u32,
+    read_frame: DriverFrameDescriptor,
+}
+
+impl Cyw43DpcChild {
+    const fn empty() -> Self {
+        Self {
+            active: false,
+            issued_unknown: false,
+            expected_sequence: 0,
+            started_ticks: 0,
+            timeout_cycles: 0,
+            fallback_polls: 0,
+            command_result: 0,
+            read_frame: DriverFrameDescriptor::empty(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43DpcCursor {
+    event_sequence: u32,
+    action: Cyw43DpcAction,
+    io_kind: Cyw43DpcIoKind,
+    io_phase: Cyw43DpcIoPhase,
+    io_addr: u32,
+    io_value: u32,
+    io_byte_index: u8,
+    io_frame: DriverFrameDescriptor,
+    io_block_size: u16,
+    io_block_count: u16,
+    child: Cyw43DpcChild,
+    captured_status: u32,
+    mailbox_data: u32,
+    rframe_low: u8,
+    frame_len: u16,
+    actual_frame_len: u16,
+}
+
+impl Cyw43DpcCursor {
+    const fn empty() -> Self {
+        Self {
+            event_sequence: 0,
+            action: Cyw43DpcAction::None,
+            io_kind: Cyw43DpcIoKind::None,
+            io_phase: Cyw43DpcIoPhase::Idle,
+            io_addr: 0,
+            io_value: 0,
+            io_byte_index: 0,
+            io_frame: DriverFrameDescriptor::empty(),
+            io_block_size: 0,
+            io_block_count: 0,
+            child: Cyw43DpcChild::empty(),
+            captured_status: 0,
+            mailbox_data: 0,
+            rframe_low: 0,
+            frame_len: 0,
+            actual_frame_len: 0,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::empty();
+    }
+}
+
+const fn cyw43_dpc_turn_route(cursor: &Cyw43DpcCursor) -> Cyw43DpcTurnRoute {
+    if cursor.child.issued_unknown {
+        Cyw43DpcTurnRoute::Quarantine
+    } else if cursor.child.active {
+        Cyw43DpcTurnRoute::PollChild
+    } else if matches!(cursor.action, Cyw43DpcAction::None) {
+        Cyw43DpcTurnRoute::CompleteEvent
+    } else if matches!(cursor.io_phase, Cyw43DpcIoPhase::Idle) {
+        Cyw43DpcTurnRoute::AdvanceState
+    } else {
+        Cyw43DpcTurnRoute::SubmitChild
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43RuntimeState {
     initialized: bool,
     transport_ready: bool,
@@ -2230,6 +2372,7 @@ struct Cyw43RuntimeState {
     dpc_events_consumed: u32,
     dpc_epoch_errors: u32,
     dpc_sequence_errors: u32,
+    dpc_cursor: Cyw43DpcCursor,
     recovery_required: bool,
     transport_detail: u16,
     card_init_phase: u8,
@@ -2357,6 +2500,7 @@ impl Cyw43RuntimeState {
             dpc_events_consumed: 0,
             dpc_epoch_errors: 0,
             dpc_sequence_errors: 0,
+            dpc_cursor: Cyw43DpcCursor::empty(),
             recovery_required: false,
             transport_detail: DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START,
             card_init_phase: CYW43_CARD_INIT_PHASE_HOST_CONFIG,
@@ -2374,6 +2518,7 @@ impl Cyw43RuntimeState {
         self.dpc_link_ready = false;
         self.dpc_active_sequence = 0;
         self.dpc_events_consumed = 0;
+        self.dpc_cursor.reset();
         self.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START;
         self.reset_firmware_upload_state();
     }
@@ -3669,6 +3814,13 @@ enum DpcConsumerWakeRoute {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioDpcCaptureDisposition {
+    HoldPending,
+    InspectSource,
+    Fault,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43DpcReadinessAction {
     Drain,
     AdvanceAndRearm,
@@ -3786,6 +3938,10 @@ const fn cyw43_should_run_deferred_dpc(
     deferred && !command_ready && !child_active
 }
 
+const fn cyw43_dpc_child_blocks_cursor(global_child_active: bool, dpc_child_active: bool) -> bool {
+    global_child_active && !dpc_child_active
+}
+
 const fn cyw43_dpc_readiness_action(
     initialized: bool,
     transport_ready: bool,
@@ -3889,6 +4045,19 @@ fn dpc_consumer_wake_route(ring: &DriverRuntimeDpcEventRing, epoch: u32) -> DpcC
         DpcRingConsumeResult::Empty => DpcConsumerWakeRoute::OwnerRearm,
         DpcRingConsumeResult::BadEpoch | DpcRingConsumeResult::BadSequence => {
             DpcConsumerWakeRoute::Fault
+        }
+    }
+}
+
+fn sdio_dpc_capture_disposition(
+    ring: &DriverRuntimeDpcEventRing,
+    epoch: u32,
+) -> SdioDpcCaptureDisposition {
+    match dpc_event_ring_peek(ring, epoch) {
+        DpcRingConsumeResult::Event(_) => SdioDpcCaptureDisposition::HoldPending,
+        DpcRingConsumeResult::Empty => SdioDpcCaptureDisposition::InspectSource,
+        DpcRingConsumeResult::BadEpoch | DpcRingConsumeResult::BadSequence => {
+            SdioDpcCaptureDisposition::Fault
         }
     }
 }
@@ -5192,6 +5361,544 @@ const fn cyw43_engine_init_can_reset(child_active: bool) -> bool {
 }
 
 #[cfg(target_os = "none")]
+fn cyw43_dpc_prepare_backplane_io(
+    state: &Cyw43RuntimeState,
+    cursor: &mut Cyw43DpcCursor,
+    action: Cyw43DpcAction,
+    kind: Cyw43DpcIoKind,
+    addr: u32,
+    value: u32,
+) {
+    cursor.action = action;
+    cursor.io_kind = kind;
+    cursor.io_addr = addr;
+    cursor.io_value = value;
+    cursor.io_byte_index = 0;
+    cursor.io_frame = DriverFrameDescriptor::empty();
+    cursor.io_block_size = 0;
+    cursor.io_block_count = 0;
+    let window = addr & BACKPLANE_WINDOW_MASK;
+    cursor.io_phase = if state.backplane_window_valid && state.backplane_window == window {
+        if kind == Cyw43DpcIoKind::WindowOnly {
+            Cyw43DpcIoPhase::Idle
+        } else {
+            Cyw43DpcIoPhase::Transfer
+        }
+    } else {
+        Cyw43DpcIoPhase::WindowLow
+    };
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_prepare_cmd52_read(cursor: &mut Cyw43DpcCursor, action: Cyw43DpcAction, addr: u32) {
+    cursor.action = action;
+    cursor.io_kind = Cyw43DpcIoKind::Cmd52Read;
+    cursor.io_phase = Cyw43DpcIoPhase::Transfer;
+    cursor.io_addr = addr;
+    cursor.io_value = 0;
+    cursor.io_byte_index = 0;
+    cursor.io_frame = DriverFrameDescriptor {
+        offset: CYW43_BACKPLANE_WORD_SCRATCH_OFFSET as u32,
+        len: 1,
+        flags: 0,
+    };
+    cursor.io_block_size = 0;
+    cursor.io_block_count = 0;
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_prepare_function2_read(
+    cursor: &mut Cyw43DpcCursor,
+    action: Cyw43DpcAction,
+    frame: DriverFrameDescriptor,
+) {
+    let (block_size, block_count) = cyw43_function2_cmd53_shape(usize::from(frame.len));
+    cursor.action = action;
+    cursor.io_kind = Cyw43DpcIoKind::Function2Read;
+    cursor.io_phase = Cyw43DpcIoPhase::Transfer;
+    cursor.io_addr = BACKPLANE_32BIT_FLAG;
+    cursor.io_value = 0;
+    cursor.io_byte_index = 0;
+    cursor.io_frame = frame;
+    cursor.io_block_size = block_size;
+    cursor.io_block_count = block_count;
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_start_capture(state: &Cyw43RuntimeState, cursor: &mut Cyw43DpcCursor) {
+    cyw43_dpc_prepare_backplane_io(
+        state,
+        cursor,
+        Cyw43DpcAction::CaptureStatus,
+        Cyw43DpcIoKind::BackplaneRead32,
+        CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS,
+        0,
+    );
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_start_rframe_or_post(state: &Cyw43RuntimeState, cursor: &mut Cyw43DpcCursor) {
+    if state.rxskip {
+        cyw43_dpc_prepare_backplane_io(
+            state,
+            cursor,
+            Cyw43DpcAction::PostStatus,
+            Cyw43DpcIoKind::BackplaneRead32,
+            CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS,
+            0,
+        );
+    } else {
+        cyw43_dpc_prepare_cmd52_read(cursor, Cyw43DpcAction::RframeLow, SBSDIO_FUNC1_RFRAMEBCLO);
+    }
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_start_hostmail_or_rx(state: &Cyw43RuntimeState, cursor: &mut Cyw43DpcCursor) {
+    if state.pending_intstatus & I_HMB_HOST_INT != 0 {
+        cyw43_dpc_prepare_backplane_io(
+            state,
+            cursor,
+            Cyw43DpcAction::HostmailRead,
+            Cyw43DpcIoKind::BackplaneRead32,
+            CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOHOSTMAILBOXDATA,
+            0,
+        );
+    } else {
+        cyw43_dpc_start_rframe_or_post(state, cursor);
+    }
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_start_flow_or_hostmail(state: &mut Cyw43RuntimeState, cursor: &mut Cyw43DpcCursor) {
+    if state.pending_intstatus & I_HMB_FC_CHANGE != 0 {
+        state.pending_intstatus &= !I_HMB_FC_CHANGE;
+        state.flowcontrol_all = true;
+        cyw43_dpc_prepare_backplane_io(
+            state,
+            cursor,
+            Cyw43DpcAction::FlowAck,
+            Cyw43DpcIoKind::BackplaneWrite32,
+            CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS,
+            I_HMB_FC_CHANGE,
+        );
+    } else {
+        state.pending_intstatus &= !I_HMB_FC_STATE;
+        cyw43_dpc_start_hostmail_or_rx(state, cursor);
+    }
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor) -> bool {
+    if cyw43_dpc_turn_route(cursor) != Cyw43DpcTurnRoute::SubmitChild {
+        return false;
+    }
+    let sequence = cyw43_sdio_bus_link_next_sequence();
+    let command = match cursor.io_phase {
+        Cyw43DpcIoPhase::WindowLow | Cyw43DpcIoPhase::WindowMid | Cyw43DpcIoPhase::WindowHigh => {
+            let (low, mid, high) = cyw43_backplane_window_register_bytes(cursor.io_addr);
+            let (addr, value) = match cursor.io_phase {
+                Cyw43DpcIoPhase::WindowLow => (SBSDIO_FUNC1_SBADDRLOW, low),
+                Cyw43DpcIoPhase::WindowMid => (SBSDIO_FUNC1_SBADDRMID, mid),
+                Cyw43DpcIoPhase::WindowHigh => (SBSDIO_FUNC1_SBADDRHIGH, high),
+                Cyw43DpcIoPhase::Idle | Cyw43DpcIoPhase::Transfer => return false,
+            };
+            write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value);
+            driver_task_shared_store_barrier();
+            driver_task_shared_clean_range(
+                DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
+                1,
+            );
+            sdio_bus_link_cmd52_descriptor_command(sequence, true, 1, addr)
+        }
+        Cyw43DpcIoPhase::Transfer => match cursor.io_kind {
+            Cyw43DpcIoKind::BackplaneRead32 => {
+                let frame = DriverFrameDescriptor {
+                    offset: CYW43_BACKPLANE_WORD_SCRATCH_OFFSET as u32,
+                    len: 4,
+                    flags: 0,
+                };
+                let arg = sdio_cmd53_arg(
+                    false,
+                    1,
+                    cyw43_backplane_function_addr(cursor.io_addr),
+                    true,
+                    0,
+                    4,
+                );
+                sdio_bus_link_descriptor_command(
+                    sequence,
+                    SDIO_CMD53,
+                    arg,
+                    DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+                    frame,
+                    4,
+                    0,
+                    0,
+                )
+            }
+            Cyw43DpcIoKind::BackplaneWrite32 => {
+                let index = usize::from(cursor.io_byte_index);
+                let Some(addr) = (cursor.io_addr & BACKPLANE_ADDRESS_MASK)
+                    .checked_add(cursor.io_byte_index as u32)
+                else {
+                    return false;
+                };
+                let value = cursor.io_value.to_le_bytes()[index];
+                write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value);
+                driver_task_shared_store_barrier();
+                driver_task_shared_clean_range(
+                    DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
+                    1,
+                );
+                sdio_bus_link_cmd52_descriptor_command(sequence, true, 1, addr)
+            }
+            Cyw43DpcIoKind::Cmd52Read => {
+                sdio_bus_link_cmd52_descriptor_command(sequence, false, 1, cursor.io_addr)
+            }
+            Cyw43DpcIoKind::Function2Read => {
+                let arg = sdio_cmd53_arg(
+                    false,
+                    2,
+                    cursor.io_addr,
+                    false,
+                    cursor.io_block_count,
+                    cursor.io_frame.len,
+                );
+                sdio_bus_link_descriptor_command(
+                    sequence,
+                    SDIO_CMD53,
+                    arg,
+                    DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+                    cursor.io_frame,
+                    cursor.io_block_size,
+                    cursor.io_block_count,
+                    0,
+                )
+            }
+            Cyw43DpcIoKind::None | Cyw43DpcIoKind::WindowOnly => return false,
+        },
+        Cyw43DpcIoPhase::Idle => return false,
+    };
+    let Some(command) = command else {
+        return false;
+    };
+    let read_frame = match (cursor.io_phase, cursor.io_kind) {
+        (Cyw43DpcIoPhase::Transfer, Cyw43DpcIoKind::BackplaneRead32) => DriverFrameDescriptor {
+            offset: CYW43_BACKPLANE_WORD_SCRATCH_OFFSET as u32,
+            len: 4,
+            flags: 0,
+        },
+        (Cyw43DpcIoPhase::Transfer, Cyw43DpcIoKind::Cmd52Read) => cursor.io_frame,
+        (Cyw43DpcIoPhase::Transfer, Cyw43DpcIoKind::Function2Read) => cursor.io_frame,
+        _ => DriverFrameDescriptor::empty(),
+    };
+    cyw43_dpc_child_submit_once(cursor, command, read_frame)
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_complete_frame(state: &mut Cyw43RuntimeState, cursor: &mut Cyw43DpcCursor) -> bool {
+    let actual_frame_len = usize::from(cursor.actual_frame_len);
+    if cyw43_runtime_reject_nested_control_payload(
+        state,
+        match cyw43_rx_sdpcm_header_prefix_at(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            actual_frame_len,
+            CYW43_RUNTIME_RX_BUFFER_BYTES,
+        ) {
+            Some(header) => header,
+            None => {
+                state.recovery_required = true;
+                return false;
+            }
+        },
+    )
+    .is_some()
+    {
+        state.recovery_required = true;
+        return false;
+    }
+    cyw43_runtime_clear_rx_irq_source_after_frame_drain(state);
+    match cyw43_runtime_decode_rx_frame_detailed_for(
+        state,
+        CYW43_RUNTIME_RX_BUFFER_OFFSET,
+        actual_frame_len,
+        0,
+    ) {
+        Cyw43RxDecodeResult::Frame(_) => {
+            state.recovery_required = true;
+            return false;
+        }
+        Cyw43RxDecodeResult::QueuedOrConsumed => {
+            state.rx_retransmit_pending = false;
+            cyw43_record_rx_drain_turn(state, 1);
+        }
+        Cyw43RxDecodeResult::DecodeMiss => {
+            state.recovery_required = true;
+            return false;
+        }
+    }
+    cyw43_dpc_prepare_cmd52_read(cursor, Cyw43DpcAction::RframeLow, SBSDIO_FUNC1_RFRAMEBCLO);
+    true
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_finish_post_capture(
+    state: &mut Cyw43RuntimeState,
+    cursor: &mut Cyw43DpcCursor,
+) -> bool {
+    if state.rxskip {
+        cursor.action = Cyw43DpcAction::None;
+        cursor.io_kind = Cyw43DpcIoKind::None;
+        cursor.io_phase = Cyw43DpcIoPhase::Idle;
+        return true;
+    }
+    if state.rx_service_quiescent
+        && state.sdpcm_next_frame_len == 0
+        && cursor.captured_status & I_HMB_FRAME_IND == 0
+    {
+        state.pending_intstatus &= !I_HMB_FRAME_IND;
+        state.rxpending = false;
+        cyw43_runtime_reset_rx_irq_source_asserted_empty_episode(state);
+        cursor.action = Cyw43DpcAction::None;
+        cursor.io_kind = Cyw43DpcIoKind::None;
+        cursor.io_phase = Cyw43DpcIoPhase::Idle;
+        return true;
+    }
+    cyw43_dpc_start_flow_or_hostmail(state, cursor);
+    false
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_finish_action(
+    state: &mut Cyw43RuntimeState,
+    cursor: &mut Cyw43DpcCursor,
+    value: u32,
+) -> bool {
+    match cursor.action {
+        Cyw43DpcAction::None => true,
+        Cyw43DpcAction::CaptureStatus => {
+            let captured = value & HOSTINTMASK;
+            cursor.captured_status = captured;
+            state.flowcontrol_all = captured & I_HMB_FC_STATE != 0;
+            state.pending_intstatus |= captured;
+            if captured == 0 {
+                cyw43_dpc_start_flow_or_hostmail(state, cursor);
+            } else {
+                cyw43_dpc_prepare_backplane_io(
+                    state,
+                    cursor,
+                    Cyw43DpcAction::AckStatus,
+                    Cyw43DpcIoKind::BackplaneWrite32,
+                    CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS,
+                    captured,
+                );
+            }
+            false
+        }
+        Cyw43DpcAction::AckStatus => {
+            cyw43_dpc_start_flow_or_hostmail(state, cursor);
+            false
+        }
+        Cyw43DpcAction::FlowAck => {
+            cyw43_dpc_prepare_backplane_io(
+                state,
+                cursor,
+                Cyw43DpcAction::FlowRead,
+                Cyw43DpcIoKind::BackplaneRead32,
+                CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS,
+                0,
+            );
+            false
+        }
+        Cyw43DpcAction::FlowRead => {
+            let sampled = value & HOSTINTMASK;
+            state.flowcontrol_all = sampled & (I_HMB_FC_STATE | I_HMB_FC_CHANGE) != 0;
+            state.pending_intstatus |= sampled;
+            state.pending_intstatus &= !I_HMB_FC_STATE;
+            cyw43_dpc_start_hostmail_or_rx(state, cursor);
+            false
+        }
+        Cyw43DpcAction::HostmailRead => {
+            cursor.mailbox_data = value;
+            cyw43_dpc_prepare_backplane_io(
+                state,
+                cursor,
+                Cyw43DpcAction::HostmailAck,
+                Cyw43DpcIoKind::BackplaneWrite32,
+                CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX,
+                SMB_INT_ACK,
+            );
+            false
+        }
+        Cyw43DpcAction::HostmailAck => {
+            state.pending_intstatus &= !I_HMB_HOST_INT;
+            if cursor.mailbox_data & HMB_DATA_FC != 0 {
+                state.flowcontrol =
+                    ((cursor.mailbox_data & HMB_DATA_FCDATA_MASK) >> HMB_DATA_FCDATA_SHIFT) as u8;
+            }
+            if cursor.mailbox_data & HMB_DATA_NAKHANDLED != 0 {
+                state.rxskip = false;
+                state.rx_retransmit_pending = false;
+                state.pending_intstatus |= I_HMB_FRAME_IND;
+                state.rxpending = true;
+                state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED;
+            }
+            cyw43_dpc_start_rframe_or_post(state, cursor);
+            false
+        }
+        Cyw43DpcAction::RframeLow => {
+            cursor.rframe_low = value as u8;
+            cyw43_dpc_prepare_cmd52_read(
+                cursor,
+                Cyw43DpcAction::RframeHigh,
+                SBSDIO_FUNC1_RFRAMEBCHI,
+            );
+            false
+        }
+        Cyw43DpcAction::RframeHigh => {
+            cursor.frame_len = u16::from(cursor.rframe_low) | ((value as u16) << 8);
+            state.rx_trace_rframe_reads = state.rx_trace_rframe_reads.saturating_add(1);
+            state.rx_trace_last_rframe = cursor.frame_len;
+            if cursor.frame_len == 0 {
+                state.rx_service_quiescent = true;
+                cyw43_dpc_prepare_backplane_io(
+                    state,
+                    cursor,
+                    Cyw43DpcAction::PostStatus,
+                    Cyw43DpcIoKind::BackplaneRead32,
+                    CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS,
+                    0,
+                );
+            } else {
+                state.rx_service_quiescent = false;
+                cyw43_dpc_prepare_backplane_io(
+                    state,
+                    cursor,
+                    Cyw43DpcAction::FifoWindow,
+                    Cyw43DpcIoKind::WindowOnly,
+                    CYW43_CHIPCOMMON_BASE,
+                    0,
+                );
+            }
+            false
+        }
+        Cyw43DpcAction::FifoWindow => {
+            let frame = DriverFrameDescriptor {
+                offset: CYW43_RUNTIME_RX_BUFFER_OFFSET as u32,
+                len: CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16,
+                flags: 0,
+            };
+            cyw43_dpc_prepare_function2_read(cursor, Cyw43DpcAction::Firstread, frame);
+            false
+        }
+        Cyw43DpcAction::Firstread => {
+            cyw43_rx_trace_record_firstread(
+                state,
+                CYW43_CONTROL_RX_FIRSTREAD_BYTES,
+                cursor.io_block_size,
+                cursor.io_block_count,
+            );
+            let Some(header) = cyw43_rx_sdpcm_header_prefix_at(
+                CYW43_RUNTIME_RX_BUFFER_OFFSET,
+                CYW43_CONTROL_RX_FIRSTREAD_BYTES,
+                CYW43_RUNTIME_RX_BUFFER_BYTES,
+            ) else {
+                state.recovery_required = true;
+                return true;
+            };
+            if header.packet_len > CYW43_CONTROL_RX_FIRSTREAD_CAPACITY {
+                state.recovery_required = true;
+                return true;
+            }
+            cursor.actual_frame_len = header.packet_len as u16;
+            if let Some(remainder_len) = cyw43_control_rx_remainder_request_len(
+                CYW43_CONTROL_RX_FIRSTREAD_BYTES,
+                header.packet_len,
+            ) {
+                let frame = DriverFrameDescriptor {
+                    offset: (CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_CONTROL_RX_FIRSTREAD_BYTES)
+                        as u32,
+                    len: remainder_len as u16,
+                    flags: 0,
+                };
+                cyw43_dpc_prepare_function2_read(cursor, Cyw43DpcAction::Remainder, frame);
+                false
+            } else {
+                !cyw43_dpc_complete_frame(state, cursor)
+            }
+        }
+        Cyw43DpcAction::Remainder => !cyw43_dpc_complete_frame(state, cursor),
+        Cyw43DpcAction::PostStatus => {
+            let captured = value & HOSTINTMASK;
+            cursor.captured_status = captured;
+            state.flowcontrol_all = captured & I_HMB_FC_STATE != 0;
+            state.pending_intstatus |= captured;
+            if captured == 0 {
+                cyw43_dpc_finish_post_capture(state, cursor)
+            } else {
+                cyw43_dpc_prepare_backplane_io(
+                    state,
+                    cursor,
+                    Cyw43DpcAction::PostAck,
+                    Cyw43DpcIoKind::BackplaneWrite32,
+                    CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS,
+                    captured,
+                );
+                false
+            }
+        }
+        Cyw43DpcAction::PostAck => cyw43_dpc_finish_post_capture(state, cursor),
+    }
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_apply_exact_completion(
+    state: &mut Cyw43RuntimeState,
+    cursor: &mut Cyw43DpcCursor,
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    if completion.code == COMPLETION_FAULT {
+        state.recovery_required = true;
+        return false;
+    }
+    match cursor.io_phase {
+        Cyw43DpcIoPhase::WindowLow => cursor.io_phase = Cyw43DpcIoPhase::WindowMid,
+        Cyw43DpcIoPhase::WindowMid => cursor.io_phase = Cyw43DpcIoPhase::WindowHigh,
+        Cyw43DpcIoPhase::WindowHigh => {
+            state.backplane_window = cursor.io_addr & BACKPLANE_WINDOW_MASK;
+            state.backplane_window_valid = true;
+            if cursor.io_kind == Cyw43DpcIoKind::WindowOnly {
+                cursor.io_phase = Cyw43DpcIoPhase::Idle;
+                return cyw43_dpc_finish_action(state, cursor, 0);
+            }
+            cursor.io_phase = Cyw43DpcIoPhase::Transfer;
+        }
+        Cyw43DpcIoPhase::Transfer => {
+            if cursor.io_kind == Cyw43DpcIoKind::BackplaneWrite32 && cursor.io_byte_index < 3 {
+                cursor.io_byte_index = cursor.io_byte_index.saturating_add(1);
+                return false;
+            }
+            let value = match cursor.io_kind {
+                Cyw43DpcIoKind::BackplaneRead32 => {
+                    read_ring_u32(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET)
+                }
+                Cyw43DpcIoKind::Cmd52Read => {
+                    u32::from(read_ring_byte(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET))
+                }
+                Cyw43DpcIoKind::BackplaneWrite32
+                | Cyw43DpcIoKind::Function2Read
+                | Cyw43DpcIoKind::WindowOnly
+                | Cyw43DpcIoKind::None => completion.result,
+            };
+            cursor.io_phase = Cyw43DpcIoPhase::Idle;
+            return cyw43_dpc_finish_action(state, cursor, value);
+        }
+        Cyw43DpcIoPhase::Idle => return cyw43_dpc_finish_action(state, cursor, 0),
+    }
+    false
+}
+
+#[cfg(target_os = "none")]
 fn cyw43_runtime_service_dpc_event() -> bool {
     let mut should_defer_local = false;
     let mut should_rearm_owner = false;
@@ -5226,30 +5933,71 @@ fn cyw43_runtime_service_dpc_event() -> bool {
             state.firmware_released,
         ) == Cyw43DpcReadinessAction::Drain
         {
-            let _ = cyw43_runtime_poll_rx_detailed_with_budget(
-                state,
-                0,
-                event.sequence,
-                true,
-                Cyw43AssertedEmptyPolicy::RequestRetransmit,
-                false,
-                CYW43_DPC_RX_DRAIN_BUDGET,
-            );
+            let mut cursor = state.dpc_cursor;
+            if cursor.event_sequence == 0 {
+                cursor.reset();
+                cursor.event_sequence = event.sequence;
+                state.reset_rx_idle_trace();
+                state.rx_service_active = true;
+                state.rx_service_quiescent = false;
+                cyw43_dpc_start_capture(state, &mut cursor);
+            } else if cursor.event_sequence != event.sequence {
+                state.dpc_sequence_errors = state.dpc_sequence_errors.saturating_add(1);
+                return false;
+            }
 
-            let continuation = cyw43_dpc_continuation_route(
-                state.rxskip,
-                state.pending_intstatus,
-                state.rxpending,
-                state.sdpcm_next_frame_len,
-                state.rx_queue_count,
-            );
-            match continuation {
-                Cyw43DpcContinuationRoute::DeferredLocalWork => {
+            if cursor.child.issued_unknown {
+                state.dpc_cursor = cursor;
+                cyw43_mark_issued_unknown(state);
+                return false;
+            }
+
+            if cursor.child.active {
+                match cyw43_dpc_child_poll_once(&mut cursor) {
+                    Cyw43DpcChildPoll::Pending => {
+                        state.dpc_cursor = cursor;
+                        return true;
+                    }
+                    Cyw43DpcChildPoll::IssuedUnknown => {
+                        state.dpc_cursor = cursor;
+                        cyw43_mark_issued_unknown(state);
+                        return false;
+                    }
+                    Cyw43DpcChildPoll::Exact(completion) => {
+                        let terminal =
+                            cyw43_dpc_apply_exact_completion(state, &mut cursor, completion);
+                        if state.recovery_required {
+                            state.dpc_cursor = cursor;
+                            return false;
+                        }
+                        if !terminal {
+                            state.dpc_cursor = cursor;
+                            should_defer_local = true;
+                            return true;
+                        }
+                    }
+                }
+            } else if cursor.io_phase == Cyw43DpcIoPhase::Idle {
+                let terminal = cyw43_dpc_finish_action(state, &mut cursor, 0);
+                if state.recovery_required {
+                    state.dpc_cursor = cursor;
+                    return false;
+                }
+                if !terminal {
+                    state.dpc_cursor = cursor;
                     should_defer_local = true;
                     return true;
                 }
-                Cyw43DpcContinuationRoute::CompleteAndRearm => {}
+            } else if cyw43_dpc_submit_current_io(&mut cursor) {
+                state.dpc_cursor = cursor;
+                return true;
+            } else {
+                state.dpc_cursor = cursor;
+                state.recovery_required = true;
+                return false;
             }
+
+            state.dpc_cursor = cursor;
         }
 
         // `rxskip` deliberately completes this event so CARD_INT can be
@@ -5257,6 +6005,8 @@ fn cyw43_runtime_service_dpc_event() -> bool {
         if dpc_event_ring_advance_at(base, state.dpc_shared_epoch, event.sequence) {
             state.dpc_active_sequence = 0;
             state.dpc_events_consumed = state.dpc_events_consumed.saturating_add(1);
+            state.dpc_cursor.reset();
+            state.rx_service_active = false;
             let ring = dpc_event_ring_read_at(base);
             match dpc_consumer_wake_route(&ring, state.dpc_shared_epoch) {
                 DpcConsumerWakeRoute::SelfSignal => should_defer_local = true,
@@ -5287,7 +6037,11 @@ fn service_runtime_notification(badge: u32) -> bool {
     match runtime_notification_route(&descriptor) {
         RuntimeNotificationRoute::SdioOwner => sdio_runtime_service_notification(badge),
         RuntimeNotificationRoute::Cyw43Client => {
-            if cyw43_sdio_dpc_service_deferred(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)) {
+            let dpc_child_active =
+                CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.child.active);
+            if cyw43_sdio_dpc_service_deferred(
+                CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire) && !dpc_child_active,
+            ) {
                 CYW43_DPC_DEFERRED.store(true, Ordering::Release);
                 true
             } else {
@@ -5646,6 +6400,33 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
             return false;
         }
     }
+
+    #[cfg(target_os = "none")]
+    let ring = dpc_event_ring_read_at(
+        DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+    );
+    #[cfg(not(target_os = "none"))]
+    let ring =
+        DriverRuntimeDpcEventRing::empty(SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch));
+    let epoch = SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch);
+    match sdio_dpc_capture_disposition(&ring, epoch) {
+        SdioDpcCaptureDisposition::HoldPending => {
+            // Linux keeps the level source masked until the current DPC has
+            // consumed the retained event. Runtime idle polls and coalesced
+            // child doorbells must not publish the same CARD_INT again.
+            SDIO_RUNTIME_STATE.with_mut(|state| state.card_irq_masked = true);
+            sdio_program_interrupt_policy();
+            sdio_record_dpc_health(false);
+            return true;
+        }
+        SdioDpcCaptureDisposition::InspectSource => {}
+        SdioDpcCaptureDisposition::Fault => {
+            SDIO_RUNTIME_STATE.with_mut(|state| state.dpc_poisoned = true);
+            sdio_record_dpc_health(false);
+            return false;
+        }
+    }
+
     let host_int_status = sdio_read32(SDHCI_INT_STATUS);
     if host_int_status & SDHCI_INT_CARD_INT != 0 {
         return sdio_publish_card_interrupt_event(host_int_status, badge);
@@ -5663,28 +6444,15 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
         }
     }
 
-    #[cfg(target_os = "none")]
-    let ring = dpc_event_ring_read_at(
-        DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
-    );
-    #[cfg(not(target_os = "none"))]
-    let ring =
-        DriverRuntimeDpcEventRing::empty(SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch));
-    if !ring.valid() {
-        SDIO_RUNTIME_STATE.with_mut(|state| state.dpc_poisoned = true);
-        sdio_record_dpc_health(false);
-        return false;
-    }
-    if ring.producer != ring.consumer {
-        return true;
-    }
-
     // Pair the empty-ring observation with a fresh source read before rearm.
     // If CARD_INT relatched while signaling was masked, publish another event
     // instead of opening an interrupt-storm window.
     let relatched = sdio_read32(SDHCI_INT_STATUS);
     if relatched & SDHCI_INT_CARD_INT != 0 {
         return sdio_publish_card_interrupt_event(relatched, badge);
+    }
+    if !SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked) {
+        return true;
     }
     SDIO_RUNTIME_STATE.with_mut(|state| {
         state.card_irq_masked = false;
@@ -6173,10 +6941,20 @@ fn cyw43_descriptor_invalid_result(desc: DriverRuntimeCyw43CommandDescriptor) ->
     let payload_end = u32::from(desc.payload_offset).saturating_add(u32::from(desc.payload_len));
     let ring_payload = usize::from(desc.payload_offset) >= DRIVER_TASK_RING_FRAME_OFFSET
         && payload_end <= DRIVER_TASK_RING_PAGE_BYTES as u32;
-    let shared_payload = desc.payload_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+    let bulk_shared_payload = desc.payload_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
         && payload_end
             <= u32::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE)
                 + u32::from(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES);
+    let post_release_shared_payload = desc.payload_offset
+        == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+        && payload_end
+            <= u32::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE)
+                + u32::from(DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES);
+    let shared_payload = (bulk_stream_payload && bulk_shared_payload)
+        || ((desc.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
+            || desc.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+            || desc.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX)
+            && post_release_shared_payload);
     let payload_ok = (carries_payload && desc.payload_len != 0 && (ring_payload || shared_payload))
         || (zero_payload && desc.payload_len == 0);
     let total_len_ok = desc.total_len == 0 || desc.total_len >= u32::from(desc.payload_len);
@@ -6290,6 +7068,16 @@ fn service_cyw43_descriptor_command(
             FAULT_CYW43_DESCRIPTOR_INVALID,
             cyw43_descriptor_invalid_result(desc),
         );
+    }
+    #[cfg(target_os = "none")]
+    if CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.child.active)
+        && (desc.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
+            || desc.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL)
+    {
+        // A retained DPC child owns the linked SDIO ring. Admit the root poll
+        // and return a typed idle completion without entering another physical
+        // operation; the next runtime quantum polls the exact child instead.
+        return DriverTaskCompletionRecord::idle(command.sequence);
     }
     cyw43_clear_last_fault();
     let mut exact_fault = None;
@@ -7419,6 +8207,13 @@ enum Cyw43SdioChildCompletion {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcChildPoll {
+    Pending,
+    Exact(DriverTaskCompletionRecord),
+    IssuedUnknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43SdioChildState {
     expected_sequence: u32,
     published: bool,
@@ -7750,6 +8545,168 @@ fn cyw43_sdio_child_poll_exact(state: Cyw43SdioChildState) -> Cyw43SdioChildComp
         )
     };
     state.completion(first, second)
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_child_submit_once(
+    cursor: &mut Cyw43DpcCursor,
+    mut command: DriverTaskCommandRecord,
+    read_frame: DriverFrameDescriptor,
+) -> bool {
+    if cursor.child.active
+        || cursor.child.issued_unknown
+        || CYW43_SDIO_CHILD_ACTIVE
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+    {
+        return false;
+    }
+    command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+    let command_result = cyw43_sdio_bus_link_command_result(command);
+    let timeout_us =
+        cyw43_sdio_child_wait_timeout_us(cyw43_sdio_bus_link_owner_timeout_us(command));
+    let started_ticks = runtime_timer_counter_ticks();
+    let timeout_cycles = runtime_micros_to_cycles(u64::from(timeout_us));
+    let progress_sequence = command.sequence;
+    publish_runtime_progress(
+        progress_sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
+    let staged_command = cyw43_sdio_bus_link_staged_command(command);
+    let completion_reset = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
+    // SAFETY: The generated CYW43/SDIO bus-link maps this fixed command and
+    // completion ring into both runtimes. The staged body and reset completion
+    // are cleaned before sequence-last publication and the single doorbell.
+    unsafe {
+        core::ptr::write_volatile(
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                as *mut DriverTaskCompletionRecord,
+            completion_reset,
+        );
+        core::ptr::write_volatile(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR as *mut DriverTaskCommandRecord,
+            staged_command,
+        );
+        driver_task_shared_store_barrier();
+        driver_task_shared_clean_range(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            core::mem::size_of::<DriverTaskCommandRecord>(),
+        );
+        driver_task_shared_clean_range(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
+            core::mem::size_of::<DriverTaskCompletionRecord>(),
+        );
+        core::ptr::write_volatile(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR as *mut u32,
+            command.sequence,
+        );
+        driver_task_shared_store_barrier();
+        driver_task_shared_clean_range(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            core::mem::size_of::<u32>(),
+        );
+        sel4_sys::seL4_Signal(DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT);
+    }
+    publish_runtime_progress(
+        progress_sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
+    publish_runtime_progress(
+        progress_sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
+    cursor.child = Cyw43DpcChild {
+        active: true,
+        issued_unknown: false,
+        expected_sequence: command.sequence,
+        started_ticks,
+        timeout_cycles,
+        fallback_polls: 0,
+        command_result,
+        read_frame,
+    };
+    true
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_child_poll_once(cursor: &mut Cyw43DpcCursor) -> Cyw43DpcChildPoll {
+    if cursor.child.issued_unknown {
+        return Cyw43DpcChildPoll::IssuedUnknown;
+    }
+    if !cursor.child.active {
+        return Cyw43DpcChildPoll::Pending;
+    }
+    let mut child = Cyw43SdioChildState::new(cursor.child.expected_sequence);
+    if let Cyw43SdioChildCompletion::Exact(mut completion) = cyw43_sdio_child_poll_exact(child) {
+        publish_runtime_progress(
+            cursor.child.expected_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        if completion.code == COMPLETION_FAULT {
+            if let Some(frame) = cyw43_copy_sdio_fault_telemetry(completion.frame) {
+                completion.frame = frame;
+            }
+            cyw43_record_last_fault_with_result(completion.detail, completion.result);
+            cyw43_record_last_fault_frame(completion.frame);
+        } else if cursor.child.read_frame.len != 0 {
+            if completion.code != COMPLETION_FRAME_READY
+                || !sdio_bus_link_payload_bounds(
+                    completion.frame.offset as usize,
+                    completion.frame.len as usize,
+                )
+            {
+                cursor.child.issued_unknown = true;
+                return Cyw43DpcChildPoll::IssuedUnknown;
+            }
+            let copy_len =
+                usize::from(completion.frame.len).min(usize::from(cursor.child.read_frame.len));
+            if sdio_bus_link_copy_from_owner_payload(
+                completion.frame.offset as usize,
+                cursor.child.read_frame,
+                copy_len,
+            )
+            .is_none()
+            {
+                cursor.child.issued_unknown = true;
+                return Cyw43DpcChildPoll::IssuedUnknown;
+            }
+        }
+        cyw43_sdio_child_drain_local_notification();
+        child.note_notification();
+        CYW43_SDIO_CHILD_ACTIVE.store(false, Ordering::Release);
+        cursor.child = Cyw43DpcChild::empty();
+        return Cyw43DpcChildPoll::Exact(completion);
+    }
+    cursor.child.fallback_polls = cursor.child.fallback_polls.saturating_add(1);
+    let now = runtime_timer_counter_ticks();
+    let timed_out =
+        if cursor.child.started_ticks != 0 && cursor.child.timeout_cycles != 0 && now != 0 {
+            now.wrapping_sub(cursor.child.started_ticks) >= cursor.child.timeout_cycles
+        } else {
+            cursor.child.fallback_polls >= CYW43_DPC_CHILD_FALLBACK_POLLS
+        };
+    if timed_out {
+        publish_runtime_progress(
+            cursor.child.expected_sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        cyw43_record_last_fault_with_result(
+            FAULT_CYW43_TRANSPORT_BUS_LINK,
+            cursor.child.command_result,
+        );
+        cursor.child.issued_unknown = true;
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+        return Cyw43DpcChildPoll::IssuedUnknown;
+    }
+    if cyw43_sdio_child_resignal_due(cursor.child.fallback_polls as usize) {
+        runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT);
+    }
+    Cyw43DpcChildPoll::Pending
 }
 
 const fn cyw43_sdio_dpc_service_deferred(child_active: bool) -> bool {
@@ -10613,8 +11570,8 @@ fn cyw43_backplane_write_ring_with_mode_result(
 }
 
 fn cyw43_backplane_write_u32(state: &mut Cyw43RuntimeState, addr: u32, value: u32) -> bool {
-    write_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET, value);
-    if cyw43_backplane_write_ring(state, addr, DRIVER_TASK_RING_FRAME_OFFSET, 4) {
+    write_ring_u32(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET, value);
+    if cyw43_backplane_write_ring(state, addr, CYW43_BACKPLANE_WORD_SCRATCH_OFFSET, 4) {
         #[cfg(all(not(target_os = "none"), test))]
         test_cyw43_backplane_write_u32_response(addr, value);
         return true;
@@ -10670,7 +11627,7 @@ fn cyw43_backplane_read_u32_cmd53(
         return None;
     }
     let frame = DriverFrameDescriptor {
-        offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+        offset: CYW43_BACKPLANE_WORD_SCRATCH_OFFSET as u32,
         len: 4,
         flags: 0,
     };
@@ -10682,7 +11639,7 @@ fn cyw43_backplane_read_u32_cmd53(
         4,
         0,
     )?;
-    Some(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET))
+    Some(read_ring_u32(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET))
 }
 
 fn cyw43_backplane_read_u32_cmd52_current_window(
@@ -26410,10 +27367,10 @@ fn sdio_recover_command_path_until(owner_deadline: &mut RuntimeDeadline) -> bool
         sdio_software_reset_until(SDHCI_RESET_CMD | SDHCI_RESET_DATA, owner_deadline);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     let present = sdio_read32(SDHCI_PRESENT_STATE);
-    if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) != 0 {
-        if !sdio_recovery_clock_cycle_until(clock, owner_deadline) {
-            return false;
-        }
+    if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) != 0
+        && !sdio_recovery_clock_cycle_until(clock, owner_deadline)
+    {
+        return false;
     }
     reset_ok && post_clock_reset_ok && sdio_wait_inhibit_clear_until(true, owner_deadline)
 }
@@ -26964,12 +27921,17 @@ pub fn runtime_main(task_key: usize) -> ! {
                 false
             };
         let child_active = CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire);
-        if deferred_dpc && child_active {
-            // An issued-unknown child owns the SDIO ring until restart; retain
-            // any coalesced DPC work without attempting another child turn.
+        let dpc_child_active = notification_route == RuntimeNotificationRoute::Cyw43Client
+            && CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.child.active);
+        let blocking_child_active = cyw43_dpc_child_blocks_cursor(child_active, dpc_child_active);
+        if deferred_dpc && blocking_child_active {
+            // A foreground or issued-unknown non-DPC child owns the SDIO ring;
+            // retain coalesced DPC work without attempting a cursor child turn.
+            // A cursor-owned child is different: the next DPC turn must poll
+            // that exact child or its completion notification would be lost.
             CYW43_DPC_DEFERRED.store(true, Ordering::Release);
         }
-        if cyw43_should_run_deferred_dpc(intake.is_some(), deferred_dpc, child_active) {
+        if cyw43_should_run_deferred_dpc(intake.is_some(), deferred_dpc, blocking_child_active) {
             // Linux services latched DPC work as scheduled quanta. Always
             // admit a queued control command before the next local quantum.
             let _ = cyw43_runtime_service_dpc_event();
@@ -27291,6 +28253,45 @@ mod tests {
     }
 
     #[test]
+    fn sdio_masked_dpc_capture_coalesces_until_consumer_advances() {
+        let epoch = 0x4359_5301;
+        let mut ring = DriverRuntimeDpcEventRing::empty(epoch);
+        assert_eq!(
+            sdio_dpc_capture_disposition(&ring, epoch),
+            SdioDpcCaptureDisposition::InspectSource
+        );
+        assert_eq!(
+            dpc_event_ring_publish(
+                &mut ring,
+                epoch,
+                SDHCI_INT_CARD_INT,
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(1)
+        );
+        for _ in 0..128 {
+            assert_eq!(
+                sdio_dpc_capture_disposition(&ring, epoch),
+                SdioDpcCaptureDisposition::HoldPending
+            );
+        }
+        assert_eq!(ring.producer, 1);
+        assert_eq!(ring.consumer, 0);
+        assert_eq!(ring.overruns, 0);
+        assert!(dpc_event_ring_advance(&mut ring, epoch, 1));
+        assert_eq!(
+            sdio_dpc_capture_disposition(&ring, epoch),
+            SdioDpcCaptureDisposition::InspectSource
+        );
+        assert_eq!(
+            sdio_dpc_capture_disposition(&ring, epoch.wrapping_add(1)),
+            SdioDpcCaptureDisposition::Fault
+        );
+    }
+
+    #[test]
     fn sdio_unmasked_rearm_programs_mmio_before_publishing_shared_health() {
         assert_eq!(
             SDIO_UNMASKED_REARM_ORDER,
@@ -27527,8 +28528,58 @@ mod tests {
         assert!(cyw43_should_run_deferred_dpc(false, true, false));
         assert!(!cyw43_should_run_deferred_dpc(false, false, false));
         assert!(!cyw43_should_run_deferred_dpc(false, true, true));
-        assert_eq!(CYW43_DPC_RX_DRAIN_BUDGET, 1);
-        assert!(CYW43_DPC_RX_DRAIN_BUDGET < CYW43_RX_DRAIN_BUDGET);
+        assert!(!cyw43_dpc_child_blocks_cursor(false, false));
+        assert!(cyw43_dpc_child_blocks_cursor(true, false));
+        assert!(!cyw43_dpc_child_blocks_cursor(true, true));
+    }
+
+    #[test]
+    fn dpc_cursor_routes_exactly_one_child_action_per_turn() {
+        let mut cursor = Cyw43DpcCursor::empty();
+        assert_eq!(
+            cyw43_dpc_turn_route(&cursor),
+            Cyw43DpcTurnRoute::CompleteEvent
+        );
+
+        cursor.event_sequence = 41;
+        cursor.action = Cyw43DpcAction::CaptureStatus;
+        cursor.io_kind = Cyw43DpcIoKind::BackplaneRead32;
+        cursor.io_phase = Cyw43DpcIoPhase::WindowLow;
+        assert_eq!(
+            cyw43_dpc_turn_route(&cursor),
+            Cyw43DpcTurnRoute::SubmitChild
+        );
+
+        cursor.child.active = true;
+        cursor.child.expected_sequence = 0x8000_0042;
+        assert_eq!(cyw43_dpc_turn_route(&cursor), Cyw43DpcTurnRoute::PollChild);
+        assert_eq!(cursor.event_sequence, 41);
+
+        cursor.child.issued_unknown = true;
+        assert_eq!(cyw43_dpc_turn_route(&cursor), Cyw43DpcTurnRoute::Quarantine);
+        assert_eq!(cursor.child.expected_sequence, 0x8000_0042);
+    }
+
+    #[test]
+    fn dpc_cursor_retains_event_until_terminal_state_and_reset() {
+        let mut cursor = Cyw43DpcCursor::empty();
+        cursor.event_sequence = 7;
+        cursor.action = Cyw43DpcAction::FifoWindow;
+        cursor.io_kind = Cyw43DpcIoKind::WindowOnly;
+        cursor.io_phase = Cyw43DpcIoPhase::Idle;
+        assert_eq!(
+            cyw43_dpc_turn_route(&cursor),
+            Cyw43DpcTurnRoute::AdvanceState
+        );
+        assert_eq!(cursor.event_sequence, 7);
+
+        cursor.action = Cyw43DpcAction::None;
+        assert_eq!(
+            cyw43_dpc_turn_route(&cursor),
+            Cyw43DpcTurnRoute::CompleteEvent
+        );
+        cursor.reset();
+        assert_eq!(cursor, Cyw43DpcCursor::empty());
     }
 
     #[test]
@@ -29453,6 +30504,12 @@ mod tests {
 
     #[test]
     fn cyw43_sdpcm_tx_scratch_is_separate_from_command_payload_window() {
+        assert_eq!(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET % 4, 0);
+        assert!(
+            CYW43_BACKPLANE_WORD_SCRATCH_OFFSET
+                >= DRIVER_TASK_RING_FRAME_OFFSET + MAX_DRIVER_TASK_FRAME_BYTES
+        );
+        assert!(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET + 4 <= CYW43_SDPCM_TX_OFFSET);
         assert!(
             CYW43_SDPCM_TX_OFFSET >= DRIVER_TASK_RING_FRAME_OFFSET + MAX_DRIVER_TASK_FRAME_BYTES
         );
@@ -29460,6 +30517,55 @@ mod tests {
         assert!(
             CYW43_SDPCM_TX_OFFSET + CYW43_DATA_TX_MIN_FUNCTION2_BYTES
                 <= DRIVER_TASK_RING_PAGE_BYTES
+        );
+    }
+
+    #[test]
+    fn cyw43_post_release_tx_and_dpc_rx_shared_slices_are_disjoint() {
+        let tx_start = usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE);
+        let tx_end = tx_start + usize::from(DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES);
+        assert_eq!(CYW43_RUNTIME_RX_BUFFER_OFFSET, tx_end);
+        assert_eq!(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET % DRIVER_TASK_RING_PAGE_BYTES,
+            0
+        );
+        assert_eq!(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_RUNTIME_RX_BUFFER_BYTES,
+            usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE)
+                + usize::from(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES)
+        );
+    }
+
+    #[test]
+    fn cyw43_backplane_word_scratch_preserves_queued_root_descriptor() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+            target_addr: 263,
+            payload_offset: cyw43_runtime_payload_offset(),
+            payload_len: 36,
+            total_len: 36,
+            arg0: 1,
+            arg1: 0,
+            reserved: 0,
+        };
+        stage_cyw43_descriptor(descriptor);
+
+        write_ring_u32(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET, 0xa5a5_5a5a);
+
+        assert_eq!(
+            read_cyw43_command_descriptor(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>() as u16,
+                flags: 0,
+            }),
+            Some(descriptor)
+        );
+        assert_eq!(
+            read_ring_u32(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET),
+            0xa5a5_5a5a
         );
     }
 
@@ -38013,7 +39119,10 @@ mod tests {
         state.transport_ready = true;
         state.firmware_upload_prepared = true;
 
-        assert_eq!(CYW43_FIRMWARE_STAGE_BYTES, CYW43_RUNTIME_RX_BUFFER_BYTES);
+        assert_eq!(
+            CYW43_FIRMWARE_STAGE_BYTES,
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize
+        );
         assert!(CYW43_FIRMWARE_STAGE_BYTES > CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES);
         for chunk in 0..2usize {
             for index in 0..CYW43_FIRMWARE_STAGE_BYTES {
@@ -39337,10 +40446,11 @@ mod tests {
                 function: 2,
                 response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
                 addr: BACKPLANE_32BIT_FLAG,
-                data_offset: CYW43_RUNTIME_RX_BUFFER_OFFSET as u16,
+                data_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
                 len: 0,
                 block_size: CYW43_FUNCTION2_BLOCK_BYTES as u16,
-                block_count: (CYW43_RUNTIME_RX_BUFFER_BYTES / CYW43_FUNCTION2_BLOCK_BYTES) as u16,
+                block_count: (DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize
+                    / CYW43_FUNCTION2_BLOCK_BYTES) as u16,
                 ..DriverRuntimeSdioCommandDescriptor::empty()
             },
         );
@@ -39355,7 +40465,7 @@ mod tests {
             budget: DriverTaskBudgetGrant {
                 max_ops: 1,
                 max_frames: 1,
-                max_bytes: CYW43_RUNTIME_RX_BUFFER_BYTES as u32,
+                max_bytes: DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32,
             },
             frame: DriverFrameDescriptor {
                 offset: desc_offset as u32,
@@ -39367,8 +40477,8 @@ mod tests {
             completion,
             DriverTaskCompletionRecord::frame_ready_at(
                 76,
-                CYW43_RUNTIME_RX_BUFFER_OFFSET as u32,
-                CYW43_RUNTIME_RX_BUFFER_BYTES as u16
+                DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
+                DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES
             )
         );
     }
@@ -39452,7 +40562,7 @@ mod tests {
             )
         );
         let desc_offset = DRIVER_TASK_RING_FRAME_OFFSET;
-        let data_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET;
+        let data_offset = usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE);
         let timeout_us = 250_000;
         for index in 0..CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES {
             write_runtime_payload_byte(data_offset + index, (index & 0xff) as u8);

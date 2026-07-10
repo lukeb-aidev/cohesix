@@ -1542,11 +1542,33 @@ context and the retry/poll window.
   the runtime generation instead of permitting concurrent ring reuse. A later
   engine-init cannot clear this quarantine; only a fresh runtime boot resets
   the process-local producer state.
-  Coalesced completion/DPC work becomes an internal deferred bit; the runtime
-  admits a queued root control command before the next one-frame DPC drain
-  quantum and rechecks deferred work before sleeping. Device latches and the
-  DPC event stay retained until a later quantum reaches the existing rearm-safe
-  condition.
+  Coalesced completion/DPC work becomes an internal deferred bit. The CYW43
+  runtime retains a private DPC cursor containing the event sequence, semantic
+  phase, backplane-window phase, exact child sequence, deadline, interrupt and
+  mailbox samples, RFRAME length, and Function 2 first-read/remainder state.
+  A DPC turn performs at most one SDIO-child submission or one exact completion
+  poll and then yields to command intake; it never hides a compound status,
+  W1C, mailbox, RFRAME, Function 2, and post-capture sequence inside one
+  blocking child wait. A queued root control command is admitted before the
+  next local DPC turn, and deferred work is rechecked before sleeping. Wrong or
+  stale completions leave the cursor retained. A child deadline is
+  issued-unknown, poisons the current generation, and forbids ring reuse.
+  Device latches and the DPC event stay retained until a later turn reaches
+  post-capture quiescence. While any event remains unconsumed, the SDIO owner
+  keeps CARD_INT masked and refuses to resample or republish the same level-held
+  source from idle polls or coalesced child doorbells. Only an empty event ring
+  permits one fresh source read followed by either one retained publication or
+  an unmask.
+  The complete root-staged command and payload window remains
+  immutable until admission: DPC-local 32-bit backplane CMD53 transfers use a
+  private aligned scratch word after that window and before the separately
+  generated SDPCM transmit frame. Background interrupt capture therefore
+  cannot overwrite a queued root command descriptor while unwinding a DPC
+  quantum. Post-release shared payload ownership is equally disjoint: root TX
+  commands use the first 4 KiB shared slice and CYW43 DPC Function 2 RX uses
+  the second 4 KiB slice. Firmware/NVRAM bootstrap may use the full 8 KiB arena
+  only before post-release DPC service begins. Descriptor validation enforces
+  the narrower post-release TX bound.
 - Firmware supplicant offload must prove `sup_wpa`, valid PMK programming, and
   `PSK_SUP` plus carrier confirmation before DHCP/data. The isolated runtime
   host-EAPOL path still performs the May 18-19 old-good `sup_wpa` and

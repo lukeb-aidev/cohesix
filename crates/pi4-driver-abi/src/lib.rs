@@ -1238,6 +1238,16 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY: u32 = 118;
 pub const DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE: u16 = DRIVER_RUNTIME_RING_PAGE_BYTES;
 /// Maximum SDIO descriptor payload carried outside the owner command ring.
 pub const DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES: u16 = 8192;
+/// Root-to-CYW43 post-release TX slice in the shared payload arena.
+pub const DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES: u16 =
+    DRIVER_RUNTIME_RING_PAGE_BYTES;
+/// CYW43-private post-release Function 2 RX slice in the shared payload arena.
+pub const DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET: u16 =
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+        + DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES;
+/// Bytes reserved for CYW43-private post-release Function 2 RX.
+pub const DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES: u16 =
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES - DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES;
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
 /// Child CSpace slot containing each runtime's local notification receive cap.
@@ -1985,19 +1995,23 @@ impl DriverRuntimeCyw43CommandDescriptor {
         let payload_end = self.payload_offset as u32 + self.payload_len as u32;
         let ring_payload = self.payload_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
             && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32;
-        let shared_payload = self.payload_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+        let bulk_shared_payload = self.payload_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
             && payload_end
                 <= DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
                     + DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32;
-        let shared_payload_allowed = bulk_stream_payload
-            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
-            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
-            || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX;
+        let post_release_shared_payload = self.payload_offset
+            == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+            && payload_end
+                <= DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
+                    + DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as u32;
+        let shared_payload = (bulk_stream_payload && bulk_shared_payload)
+            || ((self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
+                || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+                || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX)
+                && post_release_shared_payload);
         known_op
             && known_flags
-            && ((carries_payload
-                && self.payload_len != 0
-                && (ring_payload || (shared_payload_allowed && shared_payload)))
+            && ((carries_payload && self.payload_len != 0 && (ring_payload || shared_payload))
                 || (zero_payload && self.payload_len == 0))
             && (self.total_len == 0 || self.total_len >= self.payload_len as u32)
     }
@@ -3689,6 +3703,11 @@ mod tests {
         assert!(descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         assert!(descriptor.valid());
+        descriptor.payload_len = DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES + 1;
+        descriptor.total_len = descriptor.payload_len as u32;
+        assert!(!descriptor.valid());
+        descriptor.payload_len = 16;
+        descriptor.total_len = 16;
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
         assert!(!descriptor.valid());

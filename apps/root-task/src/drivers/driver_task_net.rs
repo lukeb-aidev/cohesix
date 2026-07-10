@@ -49,6 +49,7 @@ use pi4_driver_abi::{
     driver_runtime_genet_result_rx_queue_high_water, driver_runtime_genet_result_tx_free,
     driver_runtime_genet_result_tx_in_flight, DriverRuntimeCyw43CommandDescriptor,
     DriverRuntimeSdioCommandDescriptor, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES,
     DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
     DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE, DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
     DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
@@ -15254,6 +15255,18 @@ const fn cyw43_runtime_command_uses_shared_payload(op: u16) -> bool {
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_runtime_shared_payload_limit(op: u16) -> usize {
+    if matches!(
+        op,
+        DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK | DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+    ) {
+        DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize
+    } else {
+        DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn submit_cyw43_runtime_command_checked(
     contract: DriverTaskContract,
     descriptor: DriverRuntimeCyw43CommandDescriptor,
@@ -15276,6 +15289,19 @@ fn submit_cyw43_runtime_command_checked_with_stage(
     )?;
     let use_shared_payload =
         !payload.is_empty() && cyw43_runtime_command_uses_shared_payload(descriptor.op);
+    let shared_payload_limit = cyw43_runtime_shared_payload_limit(descriptor.op);
+    if use_shared_payload && payload.len() > shared_payload_limit {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "budget-exceeded",
+            None,
+        );
+        return Err(Cyw43CommandSubmitError::Runtime(
+            DriverTaskNetError::RuntimeInit("cyw43-command-budget"),
+        ));
+    }
     if !use_shared_payload && payload.len() > ring_payload_limit {
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             contract,
@@ -28184,6 +28210,18 @@ mod tests {
         assert!(!cyw43_runtime_command_uses_shared_payload(
             DRIVER_RUNTIME_CYW43_OP_RX_POLL
         ));
+        assert_eq!(
+            cyw43_runtime_shared_payload_limit(DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK),
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize
+        );
+        assert_eq!(
+            cyw43_runtime_shared_payload_limit(DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME),
+            DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize
+        );
+        assert_eq!(
+            cyw43_runtime_shared_payload_limit(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
+            DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize
+        );
         assert!(cyw43_runtime_descriptor_uses_prompt_slice(
             DRIVER_RUNTIME_CYW43_OP_RX_POLL
         ));

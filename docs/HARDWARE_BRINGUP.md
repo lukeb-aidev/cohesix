@@ -355,7 +355,19 @@ Capture only these operator-facing lines from that session:
   clear that quarantine inside the same runtime boot. DPC continuation is
   local deferred work, not a self-notification loop: root control command
   intake wins before each one-frame DPC quantum, and the loop rechecks deferred
-  work before blocking.
+  work before blocking. A non-empty DPC event ring keeps SDIO CARD_INT masked;
+  owner idle polls and coalesced child notifications cannot resample or
+  republish that same level source. After the consumer empties the ring, the
+  owner reads the source once and either publishes one retained event or
+  unmasks it. The root-staged CYW43 command/payload window is also
+  protected across that deferred turn: background 32-bit backplane CMD53
+  transfers use a private aligned word after the maximum root frame and before
+  the generated SDPCM transmit scratch, so interrupt capture cannot corrupt a
+  command that root has already queued. After firmware release, root-owned
+  control/data TX payloads occupy the first 4 KiB shared slice while DPC
+  Function 2 RX occupies the second 4 KiB slice; descriptor admission rejects
+  post-release TX that exceeds its slice. Firmware/NVRAM staging may reuse the
+  full 8 KiB arena only during bootstrap before DPC RX becomes active.
 - Current M26b Wi-Fi correction: the ALP-only firmware proof gate remains bounded, but a transport-unavailable Linux-shaped CMD53 read after a successful firmware/NVRAM/tail upload is evidence-only. Cohesix no longer burns additional pre-release SDIO setup commands just to retry a readback Linux does not require. A byte mismatch remains terminal; unavailable readback proceeds to ARMCR4 release as an unverified Linux-style upload.
 - Current M26b USB correction: after the post-mailbox `platform-reset-complete` path has live BAR/COMMAND proof, runtime treats any captured pre-reset stop seed as stale, replays `CONFIG.MaxSlotsEn`, publishes fresh Cohesix-owned DCBAA/rings, starts the controller, then mirrors U-Boot's poll-only post-start interrupter state with PCIe-owner-flushed `IMOD=0` / `IMAN=0` writes before command proof. Runtime continues to root-port enumeration only after U-Boot-shaped command/event-ring proof. The port-event command-proof frontier does not pre-acknowledge `ERDP.EHB` / `IMAN.IP`, does not seed Linux-style `DNCTRL`, `IMOD`, or `IMAN.IE`, preserves current-boot Port Status Change events, submits Enable Slot as the first real U-Boot allocation command, and skips/acknowledges leading PSCs while waiting for that matching command completion. No Op is diagnostic-only and cannot prove gate 4 or authorize recovery. Each command publish flushes only the 16-byte submitted command TRB range before the doorbell, matching U-Boot's `queue_trb()` cache contract, and ERDP acknowledgement now fails closed if the event-ring dequeue pointer cannot be translated to the device-visible DMA address. A pending Enable Slot command may re-ring DB0 while no command events have been consumed, but that edge is liveness recovery only; the active proof lane is still U-Boot poll-only and requires a fresh matching Enable Slot completion event. Linux-shaped recovery helpers remain diagnostic only. Pre-reset quiesce uses the generated seL4/GIC PCIe host, child INTx-A, and MSI caps (`179`, `175`, and `180`) through HAL only after the HAL BCM2711 EXT_CFG path has masked/cleared the PCIe host sources; ACK breadcrumbs include `source_clear=hal-ext-cfg-prior`. IRQ27 remains the kernel timer and is never bound as a USB interrupt. If live BAR/COMMAND proof is absent, runtime returns before controller entry; no stop-state, bootloader-authorized, or preserve-state lane is promoted, and the proof script reports `USB_BOOTLOADER_HANDOFF_SEEN=yes` if any such USB evidence appears.
 5. Validate diagnostics surfaces:
@@ -812,6 +824,25 @@ Capture only these operator-facing lines from that session:
   preserve the source without aborting it. This code requires a fresh
   image plus repeated serial/pcap/cohsh and pressure proof before perfect Wi-Fi
   boot is accepted.
+- Current M26d linked-service correction: the readback-verified
+  `[BUILD] 639f853f7-dirty 2026-07-10T21:48:02Z` boot proves the CARD_INT
+  coalescing policy is stable (`captures=52790`, `published=52790`,
+  `consumed=52789`, `overruns=0`, and zero epoch, sequence, or ACK failures),
+  but the first `bus:txglomalign` reply window still fails before association.
+  Its queued root control poll recorded zero resumes while the CYW43 runtime
+  remained at private SDIO child phase `cyw43-sdio-owner-wait-begin`. A
+  one-frame DPC budget was therefore not a service-time bound: one nominal
+  frame could still synchronously perform status/W1C, flow-control, hostmail,
+  RFRAME, first-read/remainder, and post-capture transfers. The isolated CYW43
+  runtime now retains that work in a private event/phase/child cursor and
+  performs at most one child submission or one exact nonblocking completion
+  poll per runtime turn. Root command intake wins before the next DPC turn;
+  CARD_INT remains masked and the event remains unconsumed until terminal
+  post-capture quiescence. Stale completions do not advance the cursor, and an
+  issued-unknown deadline poisons the generation without reusing the shared
+  owner ring. This implementation is host-tested but still requires a fresh
+  image, repeated paced boot diagnostics, packet proof, authenticated `cohsh`,
+  and REST/hive pressure proof before Wi-Fi/TCP acceptance.
 - Current M26b USB correction: after `set_device_context` publishes a DCBAA slot entry, Cohesix USB stack now re-shares the DCBAA before the later Address Device command consumes that slot pointer. This does not change the current command-ring blocker, but it closes the next DMA publication edge after command completion starts working.
 - Current M26b USB cold-boot correction: U-Boot xHCI handoff is no longer part of the active design. Root-task may parse old handoff/stop-state DT properties for diagnostics, but local-seat does not trust them, does not generate stop-seed or preserve-state strategies, and does not let bootloader reset authority substitute for the mailbox reset plus live HAL BCM2711 EXT_CFG BAR/COMMAND proof. The only enumerating high-BAR lane is cold boot: Linux capture supplies layout and DMA-range evidence only, VideoCore mailbox reset establishes the platform boundary, HAL proves live PCIe/VL805 ownership, Cohesix publishes fresh high-alias DMA/rings, and Cohesix USB stack starts the controller with `run=run-cold`. `scripts/pi4_gate_proof.sh` now rejects traces with `USB_BOOTLOADER_HANDOFF_SEEN=yes`.
 - Current M26b USB correction: the live HAL-proven `platform-reset-complete` lane now matches U-Boot's controller-ownership handoff order while keeping doorbells readback-free. Cohesix USB stack replays `CONFIG.MaxSlotsEn`, publishes DCBAAP, CRCR, ERSTSZ, ERSTBA, the initial ERDP, scratchpad DCBAA slot 0, and DNCTRL, drains non-doorbell xHCI operational writes with same-runtime xHCI MMIO readback, preserves `CRCR` low bits only from a trusted snapshot or live read and otherwise uses U-Boot's zero reserved-bit cold-publish seed, starts the controller, applies U-Boot post-`RUN` `IMOD=0` / `IMAN=0` writes through the same-runtime xHCI readback drain, and only then rings doorbell `0` for the first proof command with barriers only. The prompt-safe command timeout path emits one bounded final live snapshot for `CRCR`, `USBCMD` / `USBSTS`, `DCBAAP`, `IMAN`, `ERSTSZ`, `ERSTBA`, and `ERDP`; repeated live polling remains forbidden because earlier board traces proved that unbounded post-doorbell live reads can halt through the seL4 timer path. The latest command-consumption audit also found that the RUN write could preserve a stale snapshot `USBCMD.HCRST` bit and publish `USBCMD=0x00000003`; Cohesix USB stack now clears reset/save/restore command bits before the `USBCMD.RUN` store, and the normalizer reports old traces with that shape as `USB_BLOCKER=usbcmd-run-preserved-reset-bit`.
