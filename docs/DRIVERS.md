@@ -1160,13 +1160,18 @@ continuously poking the RX latch. The network stack treats host-EAPOL pending
 as the steady Linux-equivalent service state: while DHCP/data is parked, each
 normal stack poll spends a bounded CYW43 control/data service burst on the
 pending session, and budgeted service turns spend a smaller charged burst.
-  Boot-time join windows are only a kickstart and proof surface, not the sole
-  event pump. After host-EAPOL secure release, direct unbudgeted stack polls
-  also spend a bounded CYW43 data pre-poll burst before smoltcp/DHCP/TCP work,
-  and budgeted turns keep the same charged burst, so preserved DHCP, ARP, and
-  TCP frames do not depend on an outer poll wrapper. Post-association hintless
-  first-read recovery still waits for the sparse post-EAPOL-start cadence.
-  Host-EAPOL status
+The boot-time join path spends exactly one `64`-poll kickstart burst and then
+returns pending so construction of the normal network/event pump is never held
+behind association, AP retransmission, a rescue join, or key installation. It
+does not run synchronous post-rescue or post-activity windows. The same
+`64`-poll bound is the normal steady stack-service burst; budgeted turns use a
+smaller charged `16`-poll burst. Rescue and post-association work therefore
+resume on later event-pump turns instead of recursively extending bootstrap.
+After host-EAPOL secure release, direct unbudgeted stack polls also spend a
+bounded CYW43 data pre-poll burst before smoltcp/DHCP/TCP work, and budgeted
+turns keep the same charged burst, so preserved DHCP, ARP, and TCP frames do not
+depend on an outer poll wrapper. Post-association hintless first-read recovery
+still waits for the sparse post-EAPOL-start cadence. Host-EAPOL status
 records still report `rx_firstread_attempts`, `rx_firstread_empty`,
 `rx_firstread_invalid`, `rx_firstread_failed`,
 `rx_firstread_remainder_failed`, `rx_firstread_decode_miss`,
@@ -1185,12 +1190,11 @@ millisecond milestones. A valid AP BSSID from `WLC_GET_BSSID` is recorded as a
 candidate AP diagnostic only; association proof must come from a Broadcom
 association/link event or from direct EAPOL receive proving the AP is already
 talking to the station. After association, link-up, direct EAPOL progress, or a
-valid-BSSID/no-carrier diagnostic, the boot-time join-submit path spends one
-bounded post-activity service window so M3, group-key frames, and M4 completion
-are not missed at the end of the initial slice. The steady stack poll then
-continues the same bounded control/data service model until secure completion
-or an explicit required blocker. DHCP/data still remains blocked until secure
-host-EAPOL completion. If the primary Linux-shaped `bsscfg:join` returned
+valid-BSSID/no-carrier diagnostic, the next steady stack turn continues the
+same bounded control/data service model so M3, group-key frames, M4, rescue, and
+reassociation remain continuously serviced without monopolizing bootstrap.
+DHCP/data still remains blocked until secure host-EAPOL completion. If the
+primary Linux-shaped `bsscfg:join` returned
 success and a bounded probe later returns `BCME_NOTASSOCIATED` or reports a
 valid BSSID without association/link carrier, root may spend exactly one
 isolated runtime `bsscfg:join` rescue and records it as
@@ -1396,30 +1400,24 @@ context and the retry/poll window.
   matched `BCME_UNSUPPORTED` reply for the optional `ulp_sdioctrl` query, sends
   `bus:rxglom=1`, reads `cur_etheraddr`,
   issues `BRCMF_C_GET_REVINFO` (`cmd=98`) with a 68-byte zeroed response window,
-  then records the current `mpc=0` compatibility edge and applies the Linux
-  prejoin association defaults before matched CDC exchanges for `WLC_UP`,
-  `WLC_SET_INFRA`, WPA2 setup, firmware-supplicant probing, PAE multicast
-  admission, and `WLC_SET_SSID`/primary-BSS join.
-  The prejoin association sequence stays inside the isolated runtime:
-  current Pi 4 firmware alignment does not emit `cyw43-control-prejoin-mpc`;
-  data admission remains disabled through the explicit `mpc=0` compatibility
-  edge until secure host-EAPOL proof releases DHCP/data. The remaining prejoin
-  exchanges use the runtime's bounded control pre-TX drain so stale control/event
-  frames cannot leave the next SDPCM submit behind an uncleared F2 condition on
-  real Pi 4 WiFi,
-  `cyw43-control-prejoin-join-pref` sends the captured
-  `04 02 08 01 01 02 00 00` `join_pref` bytes,
-  `cyw43-control-prejoin-if-event-message` gets global `event_msgs`, sets the
-  interface-event bit (`54`), and writes the preserved mask back before scan
-  channel and unassociated dwell times are set to `40 ms`.
-  `cyw43-control-prejoin-txbf` is
-  best-effort with only matched `BCME_UNSUPPORTED` tolerated.
-  After `WLC_UP`/`WLC_SET_INFRA`, root sends `WLC_SET_PM=0` (`PM_OFF`) so the
-  dongle stays in the same low-latency power policy Linux applies when power
-  save is disabled. Immediately before join, root replays the Linux
+  then records the current `mpc=0` compatibility edge and enables the event
+  mask needed to observe bring-up. Linux-order station policy is applied after
+  the matched `WLC_UP` reply: scan channel and unassociated dwell times are set
+  to `40 ms`, root sends `WLC_SET_PM=0` (`PM_OFF`), then programs
+  `bcn_timeout=4` and `roam_off=1`. This ordering matters because firmware UP
+  may reset accepted pre-UP roam settings. Root then sends the captured
+  `04 02 08 01 01 02 00 00` `join_pref` bytes, refreshes the event mask,
+  applies best-effort `txbf=1`, and only then issues `WLC_SET_INFRA`, WPA2
+  setup, firmware-supplicant probing, PAE multicast admission, and
+  `WLC_SET_SSID`/primary-BSS join. These exchanges remain bounded isolated
+  runtime controls; data admission stays closed through the explicit `mpc=0`
+  compatibility edge until secure host-EAPOL proof releases DHCP/data.
+  Immediately before join, root replays the Linux
   connect-time station policy as isolated runtime control exchanges: `mpc=0` is
   required, while `arp_ol=0`, `arpoe=0`, and `ndoe=0` are best-effort and
-  tolerate only matched `BCME_UNSUPPORTED` replies.
+  tolerate only matched `BCME_UNSUPPORTED` replies. The post-UP roam policy
+  prevents firmware-internal roaming from retaining a stale AP identity or
+  racing Cohesix's bounded reassociation state machine.
   Additional Linux probe telemetry such as firmware `ver`, `clmver`, and
   event-mask setup remains useful comparison evidence, but it is not accepted as
   proof unless the isolated runtime observes the corresponding CDC reply. Do not
@@ -1473,7 +1471,8 @@ context and the retry/poll window.
   remains fatal. Host-EAPOL unwraps
   GTK with AES-128 key unwrap and waits after Group M2 before secure release when
   the GTK arrives in the group-key handshake. Post-secure filter restoration
-  (`mcast_list`, `allmulti`, `promisc`) is a best-effort data-reception repair:
+  (`mcast_list`, `allmulti=0`, `promisc=0`) returns to Linux station mode and is
+  a best-effort data-reception repair:
   root attempts all three controls and reports `repair-deferred` when one times
   out or returns a transport fault, but it does not hold DHCP/data closed after
   association, link-up, M3/M4, and PTK/GTK `wsec_key` proof are present.
@@ -1483,14 +1482,42 @@ context and the retry/poll window.
   Pi 4 firmware returns nonmatching/no-reply evidence. The deferred outcome is
   diagnostic in STA mode and does not reopen the secure-release gate because
   Linux exposes `BRCMF_C_SET_SCB_AUTHORIZE` through its station-authorized
-  `change_station` path, separate from `wsec_key` key installation. Commandless/no-id
-  nonzero CDC statuses observed during PTK/GTK install are stale nonmatching
-  frame evidence unless the reply matches the expected `wsec_key` ioctl id; only
-  a matched nonzero reply or bounded timeout fails the key. EAPOL TX uses the
+  `change_station` path, separate from `wsec_key` key installation. An id-zero,
+  nonzero-status control frame observed during PTK/GTK install is stale
+  nonmatching evidence unless the reply matches the expected `wsec_key` ioctl
+  id. Root keeps receiving for four additional `CONTROL_POLL` turns so an
+  adjacent carrier event or the current matched reply wins. Carrier loss aborts
+  the key wait without retry; otherwise expiration produces one encoded
+  nonmatching result for the existing bounded fresh-id retry. Only a matched
+  nonzero reply or bounded retry exhaustion fails the key. EAPOL TX uses the
   extended SDPCM data shape with BDC priority `6`; control writes may wait for
   CDC replies, but data/event writes must not inherit a control-plane reply wait.
   `eapol_start` counts only the bounded isolated runtime 802.1X start frames; it
   is not DHCP/data success by itself.
+- Every active split-control reply window is channel-first. A runtime
+  `CONTROL_POLL` returns a queued control-channel frame before queued data,
+  event, or EAPOL frames; root then accepts only the exact CDC command/id and
+  retains nonmatching replies in its bounded keyed queue. Root defers every
+  interleaved data-channel frame into the bounded pending queue without
+  recursively entering host-EAPOL while the outer control transaction owns the
+  reply window; the normal service turn replays those frames after the outer
+  transaction completes. Pre-secure EAPOL remains owned by the host-EAPOL
+  service and never reaches smoltcp. When a bounded root or runtime queue must
+  coalesce frames, later handshake progress wins
+  (`M3` over group-key over `M1`), and the newest equal-progress frame replaces
+  the older duplicate. Firmware control/event frames outrank protected EAPOL in
+  the runtime queue, so carrier-loss and CDC reply evidence cannot be starved
+  behind retransmitted M1 traffic. Post-secure M1, M3, and group-key responses
+  are protocol work and must not be discarded merely because DHCP has not bound
+  yet.
+- Any authoritative association/link-down event closes secure/data admission,
+  clears the unproven Wi-Fi address, advances a monotonic connection epoch, and
+  reopens bounded host-EAPOL reassociation. PTK, GTK, M4, SCB authorization,
+  filter restoration, and secure publication revalidate that epoch after every
+  split-control wait. A reply from an invalidated handshake may complete the
+  outer CDC ownership transaction, but it cannot publish keys or secure state.
+  A previously secure marker cannot keep DHCP, ARP, or TCP open while
+  association or link state is down.
 - `WIFI_GATE=7`, `wifi-host-eapol-pending`, and
   `wifi-host-eapol-required` are not Wi-Fi connection success. They preserve the
   secure boundary while event-pump turns yield back to serial, USB keyboard,

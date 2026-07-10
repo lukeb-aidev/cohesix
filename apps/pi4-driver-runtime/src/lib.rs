@@ -1158,10 +1158,10 @@ const CYW43_SDPCM_CONTROL_TX_BLOCK_BYTES: usize = 512;
 const CYW43_SDPCM_CONTROL_TX_EXT_HEADER_BYTES: usize =
     CYW43_SDPCM_HEADER_BYTES + CYW43_SDPCM_HWEXT_BYTES;
 const CYW43_BDC_HEADER_BYTES: usize = 4;
-const CYW43_SDPCM_DATA_TX_HEADER_BYTES: usize = CYW43_SDPCM_HEADER_BYTES;
-#[cfg(test)]
-const CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET: usize = CYW43_SDPCM_HWHDR_BYTES;
-const CYW43_SDPCM_DATA_TX_PADDING_BYTES: usize = 0;
+const CYW43_SDPCM_DATA_TX_HEADER_BYTES: usize = CYW43_SDPCM_HEADER_BYTES + CYW43_SDPCM_HWEXT_BYTES;
+const CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET: usize =
+    CYW43_SDPCM_HWHDR_BYTES + CYW43_SDPCM_HWEXT_BYTES;
+const CYW43_SDPCM_DATA_TX_PADDING_BYTES: usize = 6;
 const CYW43_SDPCM_DATA_TX_BDC_OFFSET: usize =
     CYW43_SDPCM_DATA_TX_HEADER_BYTES + CYW43_SDPCM_DATA_TX_PADDING_BYTES;
 const CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES: usize =
@@ -1244,11 +1244,18 @@ const CYW43_COHSH_PROOF_PORT: u16 = 31339;
 const CYW43_RX_PRIORITY_LOW: u8 = 1;
 const CYW43_RX_PRIORITY_EAPOL: u8 = 2;
 const CYW43_RX_PRIORITY_GENERIC_DATA: u8 = 3;
-const CYW43_RX_PRIORITY_CONTROL_EVENT: u8 = 4;
 const CYW43_RX_PRIORITY_IPV4: u8 = 5;
 const CYW43_RX_PRIORITY_ARP: u8 = 6;
 const CYW43_RX_PRIORITY_DHCP: u8 = 7;
 const CYW43_RX_PRIORITY_PROTECTED_EAPOL: u8 = 8;
+const CYW43_RX_PRIORITY_PROTECTED_GROUP_KEY: u8 = 9;
+const CYW43_RX_PRIORITY_PROTECTED_M3: u8 = 10;
+const CYW43_RX_PRIORITY_EVENT: u8 = 11;
+const CYW43_RX_PRIORITY_CONTROL: u8 = 12;
+const CYW43_EAPOL_KEY_INFO_OFFSET: usize = CYW43_ETH_HEADER_BYTES + 5;
+const CYW43_EAPOL_KEY_INFO_PAIRWISE: u16 = 1 << 3;
+const CYW43_EAPOL_KEY_INFO_ACK: u16 = 1 << 7;
+const CYW43_EAPOL_KEY_INFO_MIC: u16 = 1 << 8;
 const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
 const CYW43_RX_QUEUE_CAP: usize = CYW43_RX_DRAIN_BUDGET;
@@ -5415,9 +5422,8 @@ fn service_cyw43_descriptor_command(
             state.rx_queue_protect_eapol = true;
             let before = Cyw43RuntimeServiceSnapshot::from_state(state);
             let credit_observations_before = state.sdpcm_credit_observations;
-            match cyw43_runtime_poll_rx_detailed(
+            match cyw43_runtime_poll_control_rx_detailed(
                 state,
-                CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT,
                 command.sequence,
                 desc.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD != 0,
             ) {
@@ -10150,6 +10156,32 @@ fn cyw43_runtime_poll_rx_detailed(
     )
 }
 
+fn cyw43_runtime_poll_control_rx_detailed(
+    state: &mut Cyw43RuntimeState,
+    sequence: u32,
+    allow_hintless_firstread: bool,
+) -> Cyw43RxPollResult {
+    match cyw43_runtime_poll_rx_detailed(
+        state,
+        CYW43_RX_FRAME_FLAG_MASK_CONTROL,
+        sequence,
+        allow_hintless_firstread,
+    ) {
+        frame @ Cyw43RxPollResult::Frame(_) => frame,
+        Cyw43RxPollResult::Idle(reason) => {
+            if let Some(frame) =
+                cyw43_rx_queue_pop_matching(state, CYW43_RX_FRAME_FLAG_MASK_SERVICE)
+            {
+                state.rx_frames = state.rx_frames.saturating_add(1);
+                state.rx_retransmit_pending = false;
+                Cyw43RxPollResult::Frame(frame)
+            } else {
+                Cyw43RxPollResult::Idle(reason)
+            }
+        }
+    }
+}
+
 fn cyw43_runtime_poll_rx_detailed_with_policy(
     state: &mut Cyw43RuntimeState,
     wanted_mask: u16,
@@ -12684,13 +12716,19 @@ fn cyw43_rx_queue_evict_for_runtime_payload(
     flags: u16,
 ) -> bool {
     let incoming_priority = cyw43_runtime_payload_priority(state, packet_offset, packet_len, flags);
+    let replace_equal_eapol = state.rx_queue_protect_eapol
+        && flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK
+            == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+        && cyw43_runtime_payload_ethertype(packet_offset, packet_len) == Some(CYW43_ETH_P_EAPOL);
     let mut candidate = None;
     let mut candidate_priority = u8::MAX;
     let mut index = 0u8;
     while index < state.rx_queue_count {
         let logical_index = usize::from(index);
         let priority = cyw43_rx_queue_payload_priority_at(state, logical_index);
-        if priority < incoming_priority && priority < candidate_priority {
+        if (priority < incoming_priority || (replace_equal_eapol && priority == incoming_priority))
+            && priority < candidate_priority
+        {
             candidate = Some(logical_index);
             candidate_priority = priority;
             if priority == CYW43_RX_PRIORITY_LOW {
@@ -12835,11 +12873,8 @@ fn cyw43_rx_queue_payload_priority_at(state: &Cyw43RuntimeState, logical_index: 
 }
 
 fn cyw43_rx_queue_max_priority(state: &Cyw43RuntimeState) -> u8 {
-    if state.rx_queue_protect_eapol {
-        CYW43_RX_PRIORITY_PROTECTED_EAPOL
-    } else {
-        CYW43_RX_PRIORITY_DHCP
-    }
+    let _ = state;
+    CYW43_RX_PRIORITY_CONTROL
 }
 
 fn cyw43_runtime_payload_priority(
@@ -12852,8 +12887,8 @@ fn cyw43_runtime_payload_priority(
         DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA => {
             cyw43_runtime_data_payload_priority(state, packet_offset, packet_len)
         }
-        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL
-        | DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT => CYW43_RX_PRIORITY_CONTROL_EVENT,
+        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL => CYW43_RX_PRIORITY_CONTROL,
+        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT => CYW43_RX_PRIORITY_EVENT,
         _ => CYW43_RX_PRIORITY_LOW,
     }
 }
@@ -12868,8 +12903,8 @@ fn cyw43_stored_payload_priority(
         DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA => {
             cyw43_stored_data_payload_priority(state, packet, packet_len)
         }
-        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL
-        | DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT => CYW43_RX_PRIORITY_CONTROL_EVENT,
+        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL => CYW43_RX_PRIORITY_CONTROL,
+        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT => CYW43_RX_PRIORITY_EVENT,
         _ => CYW43_RX_PRIORITY_LOW,
     }
 }
@@ -12882,7 +12917,7 @@ fn cyw43_runtime_data_payload_priority(
     match cyw43_runtime_payload_ethertype(packet_offset, packet_len) {
         Some(CYW43_ETH_P_ARP) => CYW43_RX_PRIORITY_ARP,
         Some(CYW43_ETH_P_EAPOL) if state.rx_queue_protect_eapol => {
-            CYW43_RX_PRIORITY_PROTECTED_EAPOL
+            cyw43_runtime_protected_eapol_priority(packet_offset, packet_len)
         }
         Some(CYW43_ETH_P_EAPOL) => CYW43_RX_PRIORITY_EAPOL,
         Some(CYW43_ETH_P_IPV4) => {
@@ -12905,7 +12940,7 @@ fn cyw43_stored_data_payload_priority(
     match cyw43_stored_payload_ethertype(packet, packet_len) {
         Some(CYW43_ETH_P_ARP) => CYW43_RX_PRIORITY_ARP,
         Some(CYW43_ETH_P_EAPOL) if state.rx_queue_protect_eapol => {
-            CYW43_RX_PRIORITY_PROTECTED_EAPOL
+            cyw43_stored_protected_eapol_priority(packet, packet_len)
         }
         Some(CYW43_ETH_P_EAPOL) => CYW43_RX_PRIORITY_EAPOL,
         Some(CYW43_ETH_P_IPV4) => {
@@ -12917,6 +12952,40 @@ fn cyw43_stored_data_payload_priority(
         }
         Some(_) => CYW43_RX_PRIORITY_GENERIC_DATA,
         None => CYW43_RX_PRIORITY_LOW,
+    }
+}
+
+fn cyw43_runtime_protected_eapol_priority(packet_offset: usize, packet_len: usize) -> u8 {
+    if packet_len < CYW43_EAPOL_KEY_INFO_OFFSET + 2 {
+        return CYW43_RX_PRIORITY_PROTECTED_EAPOL;
+    }
+    let key_info_offset = packet_offset + CYW43_EAPOL_KEY_INFO_OFFSET;
+    let key_info = (u16::from(read_runtime_payload_byte(key_info_offset)) << 8)
+        | u16::from(read_runtime_payload_byte(key_info_offset + 1));
+    cyw43_protected_eapol_priority(key_info)
+}
+
+fn cyw43_stored_protected_eapol_priority(
+    packet: &[u8; MAX_DRIVER_TASK_FRAME_BYTES],
+    packet_len: usize,
+) -> u8 {
+    if packet_len < CYW43_EAPOL_KEY_INFO_OFFSET + 2 {
+        return CYW43_RX_PRIORITY_PROTECTED_EAPOL;
+    }
+    let key_info = (u16::from(packet[CYW43_EAPOL_KEY_INFO_OFFSET]) << 8)
+        | u16::from(packet[CYW43_EAPOL_KEY_INFO_OFFSET + 1]);
+    cyw43_protected_eapol_priority(key_info)
+}
+
+const fn cyw43_protected_eapol_priority(key_info: u16) -> u8 {
+    let acknowledged = key_info & CYW43_EAPOL_KEY_INFO_ACK != 0;
+    let mic = key_info & CYW43_EAPOL_KEY_INFO_MIC != 0;
+    if acknowledged && mic && key_info & CYW43_EAPOL_KEY_INFO_PAIRWISE != 0 {
+        CYW43_RX_PRIORITY_PROTECTED_M3
+    } else if acknowledged && mic {
+        CYW43_RX_PRIORITY_PROTECTED_GROUP_KEY
+    } else {
+        CYW43_RX_PRIORITY_PROTECTED_EAPOL
     }
 }
 
@@ -13183,13 +13252,24 @@ const fn cyw43_control_rx_remainder_request_len(
 }
 
 fn cyw43_write_sdpcm_data_tx_header(offset: usize, total_len: usize, seq: u8) {
-    write_sdpcm_header(
-        offset,
-        total_len,
-        CYW43_SDPCM_DATA_TX_BDC_OFFSET,
-        seq,
-        CYW43_SDPCM_CHANNEL_DATA,
+    let total = total_len as u16;
+    write_ring_byte(offset, (total & 0xff) as u8);
+    write_ring_byte(offset + 1, (total >> 8) as u8);
+    let inv = !total;
+    write_ring_byte(offset + 2, (inv & 0xff) as u8);
+    write_ring_byte(offset + 3, (inv >> 8) as u8);
+    write_ring_u32(
+        offset + CYW43_SDPCM_HWHDR_BYTES,
+        (total_len.saturating_sub(CYW43_SDPCM_HWHDR_BYTES) as u32) | CYW43_SDPCM_LAST_FRAME,
     );
+    write_ring_u32(offset + CYW43_SDPCM_HWHDR_BYTES + 4, 0);
+    write_ring_u32(
+        offset + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET,
+        u32::from(seq)
+            | (u32::from(CYW43_SDPCM_CHANNEL_DATA) << 8)
+            | ((CYW43_SDPCM_DATA_TX_BDC_OFFSET as u32) << 24),
+    );
+    write_ring_u32(offset + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET + 4, 0);
     for index in CYW43_SDPCM_DATA_TX_HEADER_BYTES..CYW43_SDPCM_DATA_TX_BDC_OFFSET {
         write_ring_byte(offset + index, 0);
     }
@@ -27220,15 +27300,20 @@ mod tests {
         });
         assert_eq!(read_ring_u16(CYW43_SDPCM_TX_OFFSET), data_tx_len as u16);
         assert_eq!(
-            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES),
+            read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES),
+            ((data_tx_len - CYW43_SDPCM_HWHDR_BYTES) as u32) | CYW43_SDPCM_LAST_FRAME
+        );
+        assert_eq!(
+            read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 4),
             0
         );
         assert_eq!(
-            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 1) & 0x0f,
+            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET + 1) & 0x0f,
             CYW43_SDPCM_CHANNEL_DATA
         );
         assert_eq!(
-            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 3) as usize,
+            read_ring_byte(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET + 3)
+                as usize,
             CYW43_SDPCM_DATA_TX_BDC_OFFSET
         );
         assert_eq!(
@@ -27355,8 +27440,8 @@ mod tests {
         let ipv4_tcp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + ipv4_tcp.len();
         let (ipv4_tcp_request_len, ipv4_tcp_block_mode) =
             cyw43_data_tx_request_len_for_frame(frame, ipv4_tcp_total_len);
-        assert_eq!(ipv4_tcp_total_len, 110);
-        assert_eq!(cyw43_data_tx_request_len_default(ipv4_tcp_total_len), 112);
+        assert_eq!(ipv4_tcp_total_len, 124);
+        assert_eq!(cyw43_data_tx_request_len_default(ipv4_tcp_total_len), 124);
         assert_eq!(ipv4_tcp_request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert!(!ipv4_tcp_block_mode);
         assert_eq!(
@@ -27692,8 +27777,8 @@ mod tests {
         test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_discover.len();
-        assert_eq!(total_len, 316);
-        assert_eq!(cyw43_data_tx_request_len_default(total_len), 316);
+        assert_eq!(total_len, 330);
+        assert_eq!(cyw43_data_tx_request_len_default(total_len), 332);
         let frame = DriverFrameDescriptor {
             offset: payload_offset as u32,
             len: dhcp_discover.len() as u16,
@@ -27834,7 +27919,7 @@ mod tests {
             total_len,
         )
         .0;
-        assert_eq!(total_len, 58);
+        assert_eq!(total_len, 72);
         assert_eq!(CYW43_DATA_TX_MIN_FUNCTION2_BYTES, 128);
         assert_eq!(request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert_eq!(service_command(0, cyw43_descriptor_command(177)), {
@@ -27961,8 +28046,8 @@ mod tests {
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + m2_frame.len();
         let request_len = cyw43_data_tx_request_len_default(total_len);
-        assert_eq!(total_len, 151);
-        assert_eq!(request_len, 152);
+        assert_eq!(total_len, 165);
+        assert_eq!(request_len, 168);
         assert_eq!(service_command(0, cyw43_descriptor_command(176)), {
             let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 176,
@@ -28947,7 +29032,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_data_tx_uses_linux_short_header_and_eapol_priority() {
+    fn cyw43_data_tx_uses_linux_extended_header_and_eapol_priority() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -28978,6 +29063,14 @@ mod tests {
         let hw_len = u16::from(read_ring_byte(CYW43_SDPCM_TX_OFFSET))
             | (u16::from(read_ring_byte(CYW43_SDPCM_TX_OFFSET + 1)) << 8);
         assert_eq!(usize::from(hw_len), packet_len);
+        assert_eq!(
+            read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES),
+            ((packet_len - CYW43_SDPCM_HWHDR_BYTES) as u32) | CYW43_SDPCM_LAST_FRAME
+        );
+        assert_eq!(
+            read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_HWHDR_BYTES + 4),
+            0
+        );
         let sw_header = read_ring_u32(CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_SW_HEADER_OFFSET);
         assert_eq!(sw_header & 0xff, 9);
         assert_eq!((sw_header >> 8) & 0x0f, u32::from(CYW43_SDPCM_CHANNEL_DATA));
@@ -28998,12 +29091,12 @@ mod tests {
             CYW43_HOST_EAPOL_BDC_PRIORITY
         );
         assert_eq!(
-            read_frame_prefix::<14>(DriverFrameDescriptor {
+            read_frame_prefix::<CYW43_ETH_HEADER_BYTES>(DriverFrameDescriptor {
                 offset: (CYW43_SDPCM_TX_OFFSET + CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES) as u32,
                 len: packet.len() as u16,
                 flags: 0,
             }),
-            packet
+            packet,
         );
     }
 
@@ -30199,6 +30292,115 @@ mod tests {
             }),
             event
         );
+    }
+
+    #[test]
+    fn cyw43_control_poll_services_data_eapol_during_control_window() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let packet = [
+            0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10, 0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5, 0x88, 0x8e,
+            0x01, 0x03, 0x00, 0x5f,
+        ];
+        let frame_len = stage_sdpcm_data_subframe(CYW43_RUNTIME_RX_BUFFER_OFFSET, &packet, 6);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq = 5;
+            state.sdpcm_seq_max = 5;
+            state.sdpcm_next_frame_len = frame_len as u16;
+        });
+
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(286)),
+            DriverTaskCompletionRecord::frame_ready_with_descriptor(
+                286,
+                DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: packet.len() as u16,
+                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 6),
+                }
+            )
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.rx_queue_count, 0);
+            assert_eq!(state.sdpcm_seq_max, 6);
+        });
+        assert_eq!(
+            read_frame_prefix::<18>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: packet.len() as u16,
+                flags: 0,
+            }),
+            packet
+        );
+    }
+
+    #[test]
+    fn cyw43_control_poll_prefers_queued_control_reply_over_eapol() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let eapol = [
+            0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10, 0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5, 0x88, 0x8e,
+            0x01, 0x03, 0x00, 0x5f,
+        ];
+        let control = *b"matched-cdc-reply";
+        let eapol_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x100;
+        let control_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x200;
+        stage_bytes(eapol_offset, &eapol);
+        stage_bytes(control_offset, &control);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            assert!(cyw43_rx_queue_push_from_runtime(
+                state,
+                eapol_offset,
+                eapol.len(),
+                cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 6),
+            ));
+            assert!(cyw43_rx_queue_push_from_runtime(
+                state,
+                control_offset,
+                control.len(),
+                cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 7),
+            ));
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(287)),
+            DriverTaskCompletionRecord::frame_ready_with_descriptor(
+                287,
+                DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: control.len() as u16,
+                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 7),
+                },
+            )
+        );
+        assert_eq!(
+            read_frame_prefix::<17>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: control.len() as u16,
+                flags: 0,
+            }),
+            control,
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.rx_queue_count, 1);
+            assert_eq!(
+                cyw43_rx_queue_payload_priority_at(state, 0),
+                CYW43_RX_PRIORITY_PROTECTED_EAPOL,
+            );
+        });
     }
 
     #[test]
@@ -31802,6 +32004,164 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_rx_queue_full_replaces_duplicate_m1_with_m3_progress() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.rx_queue_protect_eapol = true;
+        let m1_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x100;
+        let m3_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x300;
+        let mut m1 = [0u8; 113];
+        let mut m3 = [0u8; 169];
+        for (frame, key_info) in [(&mut m1[..], 0x008au16), (&mut m3[..], 0x13cau16)] {
+            frame[12..14].copy_from_slice(&CYW43_ETH_P_EAPOL.to_be_bytes());
+            frame[CYW43_EAPOL_KEY_INFO_OFFSET..CYW43_EAPOL_KEY_INFO_OFFSET + 2]
+                .copy_from_slice(&key_info.to_be_bytes());
+        }
+        stage_bytes(m1_offset, &m1);
+        stage_bytes(m3_offset, &m3);
+
+        for _ in 0..CYW43_RX_QUEUE_CAP {
+            assert!(cyw43_rx_queue_push_from_runtime(
+                &mut state,
+                m1_offset,
+                m1.len(),
+                cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 1)
+            ));
+        }
+        assert!(cyw43_rx_queue_push_from_runtime(
+            &mut state,
+            m3_offset,
+            m3.len(),
+            cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 2)
+        ));
+        assert_eq!(usize::from(state.rx_queue_count), CYW43_RX_QUEUE_CAP);
+        assert_eq!(state.rx_queue_overflows, 1);
+
+        let frame = cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_DATA)
+            .expect("M3 should replace duplicate M1 backlog");
+        assert_eq!(frame.len, m3.len() as u16);
+        assert_eq!(
+            cyw43_stored_protected_eapol_priority(
+                &state.rx_queue_frames[cyw43_rx_queue_slot_at(&state, 0)],
+                usize::from(state.rx_queue_lens[cyw43_rx_queue_slot_at(&state, 0)])
+            ),
+            CYW43_RX_PRIORITY_PROTECTED_EAPOL
+        );
+    }
+
+    #[test]
+    fn cyw43_rx_queue_full_replaces_old_equal_progress_eapol() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.rx_queue_protect_eapol = true;
+        let old_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x100;
+        let new_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x300;
+        let mut old_m1 = [0u8; 113];
+        let mut new_m1 = [0u8; 113];
+        for frame in [&mut old_m1, &mut new_m1] {
+            frame[12..14].copy_from_slice(&CYW43_ETH_P_EAPOL.to_be_bytes());
+            frame[CYW43_EAPOL_KEY_INFO_OFFSET..CYW43_EAPOL_KEY_INFO_OFFSET + 2]
+                .copy_from_slice(&0x008au16.to_be_bytes());
+        }
+        old_m1[0] = 0x11;
+        new_m1[0] = 0x22;
+        stage_bytes(old_offset, &old_m1);
+        stage_bytes(new_offset, &new_m1);
+
+        for _ in 0..CYW43_RX_QUEUE_CAP {
+            assert!(cyw43_rx_queue_push_from_runtime(
+                &mut state,
+                old_offset,
+                old_m1.len(),
+                cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 1)
+            ));
+        }
+        assert!(cyw43_rx_queue_push_from_runtime(
+            &mut state,
+            new_offset,
+            new_m1.len(),
+            cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 2)
+        ));
+        assert_eq!(state.rx_queue_overflows, 1);
+        let newest_slot = cyw43_rx_queue_slot_at(&state, CYW43_RX_QUEUE_CAP - 1);
+        assert_eq!(state.rx_queue_frames[newest_slot][0], 0x22);
+    }
+
+    #[test]
+    fn cyw43_rx_queue_full_never_starves_firmware_event_behind_eapol() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.rx_queue_protect_eapol = true;
+        let m3_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x100;
+        let event_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x400;
+        let mut m3 = [0u8; 169];
+        m3[12..14].copy_from_slice(&CYW43_ETH_P_EAPOL.to_be_bytes());
+        m3[CYW43_EAPOL_KEY_INFO_OFFSET..CYW43_EAPOL_KEY_INFO_OFFSET + 2]
+            .copy_from_slice(&0x13cau16.to_be_bytes());
+        let event = [0x55u8; 80];
+        stage_bytes(m3_offset, &m3);
+        stage_bytes(event_offset, &event);
+
+        for _ in 0..CYW43_RX_QUEUE_CAP {
+            assert!(cyw43_rx_queue_push_from_runtime(
+                &mut state,
+                m3_offset,
+                m3.len(),
+                cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 1)
+            ));
+        }
+        assert!(cyw43_rx_queue_push_from_runtime(
+            &mut state,
+            event_offset,
+            event.len(),
+            cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 2)
+        ));
+        assert_eq!(state.rx_queue_overflows, 1);
+
+        let frame = cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT)
+            .expect("firmware event should preempt protected EAPOL backlog");
+        assert_eq!(frame.len, event.len() as u16);
+        assert_eq!(read_frame_prefix::<4>(frame), [0x55; 4]);
+    }
+
+    #[test]
+    fn cyw43_rx_queue_full_never_starves_control_reply_behind_events() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        let event_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x100;
+        let control_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x400;
+        let event = [0x55u8; 80];
+        let control = [0xaau8; 32];
+        stage_bytes(event_offset, &event);
+        stage_bytes(control_offset, &control);
+
+        for _ in 0..CYW43_RX_QUEUE_CAP {
+            assert!(cyw43_rx_queue_push_from_runtime(
+                &mut state,
+                event_offset,
+                event.len(),
+                cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 1)
+            ));
+        }
+        assert!(cyw43_rx_queue_push_from_runtime(
+            &mut state,
+            control_offset,
+            control.len(),
+            cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 2)
+        ));
+        assert_eq!(state.rx_queue_overflows, 1);
+
+        let frame = cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_CONTROL)
+            .expect("control reply should preempt firmware event backlog");
+        assert_eq!(frame.len, control.len() as u16);
+        assert_eq!(read_frame_prefix::<4>(frame), [0xaa; 4]);
+    }
+
+    #[test]
     fn cyw43_rx_queue_full_does_not_evict_dhcp_for_lower_priority_data() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -32944,7 +33304,7 @@ mod tests {
         );
         assert_eq!(
             cyw43_data_tx_request_len_default(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14),
-            32
+            44
         );
         let tiny_frame = DriverFrameDescriptor {
             offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
@@ -32961,7 +33321,7 @@ mod tests {
         );
         assert_eq!(
             cyw43_data_tx_request_len_default(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 300),
-            316
+            332
         );
         assert_eq!(
             cyw43_data_tx_request_len_for_frame(

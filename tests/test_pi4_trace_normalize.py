@@ -9600,6 +9600,92 @@ def test_gate_summary_refines_host_eapol_ptk_poll_timeout_after_split_tx() -> No
     assert gates.wifi_phase == "cyw43-sdio-owner-wait-begin"
 
 
+def test_gate_summary_clears_key_timeout_after_retry_matched_reply() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-host-eapol-post-secure-gtk status=poll-timeout "
+            "acceptance=no "
+            "blocker=cyw43-host-eapol-post-secure-gtk-poll-timeout "
+            "progress_phase=142 "
+            "progress_phase_name=cyw43-sdio-owner-wait-begin",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY_RETRY contract=cyw43455 "
+            "stage=cyw43-host-eapol-post-secure-gtk iovar=wsec_key "
+            "action=resubmit reason=cyw43-control-exchange",
+            "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 "
+            "stage=cyw43-host-eapol-post-secure-gtk event=matched-reply "
+            "poll=1 flags=0x0004 cmd=263 id=50 status=0x00000000 "
+            "response_len=173 iovar=wsec_key reply_match=yes",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=gtk "
+            "stage=cyw43-host-eapol-post-secure-gtk status=ready",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=secure reason=none polls=8197 data_rx=6 eapol_rx=6 "
+            "non_eapol_rx=0 event_rx=2 control_rx=0 associated=yes "
+            "link_up=yes next_action=release-dhcp-data",
+            "[dhcp] tx queued xid=0x12345678",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 8
+    assert gates.wifi_blocker == "dhcp-pending"
+    assert gates.wifi_exact != "cyw43-host-eapol-post-secure-gtk-poll-timeout"
+
+
+def test_gate_summary_maps_cyw43_deauth_reason_to_link_down() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=secure reason=none polls=8197 data_rx=6 eapol_rx=6 "
+            "non_eapol_rx=0 event_rx=2 control_rx=0 associated=yes "
+            "link_up=yes next_action=release-dhcp-data",
+            "CYW43_DRIVER_TASK_EVENT_RX contract=cyw43455 stage=data-path "
+            "flags=0x6301 len=80 event_type=6 status=0x00000000 "
+            "reason=0x00000002 auth=0x00000000 label=deauth-ind retained=yes",
+            "netstats: mode=dhcp policy=wifi active=wifi standby=none "
+            "addr_src=wifi-link-down ip=0.0.0.0 gateway=0.0.0.0 "
+            "dhcp=link-down",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 8
+    assert gates.wifi_blocker == "wifi-link-down"
+    assert gates.wifi_exact == "wifi-link-down"
+
+
+def test_gate_summary_clears_key_timeout_after_key_ready_marker() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-host-eapol-gtk status=poll-timeout acceptance=no "
+            "blocker=cyw43-host-eapol-gtk-poll-timeout",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY_RETRY contract=cyw43455 "
+            "stage=cyw43-host-eapol-gtk iovar=wsec_key action=accept-after-tx",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=gtk "
+            "stage=cyw43-host-eapol-gtk status=ready",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=secure reason=none polls=8197 data_rx=6 eapol_rx=6 "
+            "non_eapol_rx=0 event_rx=2 control_rx=0 associated=yes "
+            "link_up=yes next_action=release-dhcp-data",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 8
+    assert gates.wifi_blocker == "none"
+    assert gates.wifi_exact == "none"
+
+
+def test_normalize_wifi_zero_status_is_not_a_blocker() -> None:
+    for value in ("0", "0x0", "0x00", "0x0000", "0x00000000"):
+        assert normalizer.normalize_wifi_blocker(value) == "none"
+        assert normalizer.normalize_wifi_exact(value) == "none"
+
+
 def test_gate_summary_names_firstread_source_asserted_empty() -> None:
     events = normalizer.parse_events(
         [

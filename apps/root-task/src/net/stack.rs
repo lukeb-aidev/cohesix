@@ -58,6 +58,7 @@ use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
 use crate::drivers::driver_task_net::{
     Cyw43DriverTaskDevice, DriverTaskNetError, GenetDriverTaskDevice,
+    CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS,
 };
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
@@ -108,7 +109,6 @@ const DHCP_RESTART_BACKOFF_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 const CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS: u64 = 0;
 const CYW43_DHCP_POST_SECURE_EAPOL_OVERSHOOT_LOG_MS: u64 = 1_000;
 const CYW43_DHCP_RX_ADMISSION_RETRY_MS: u64 = 250;
-const CYW43_HOST_EAPOL_STACK_SERVICE_POLLS: usize = 64;
 const CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS: usize = 16;
 const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
@@ -249,7 +249,7 @@ fn wifi_host_eapol_blocks_driver_task_pre_poll(bringup_status: Option<&'static s
 
 fn wifi_host_eapol_stack_service_polls(bringup_status: Option<&'static str>) -> usize {
     if wifi_host_eapol_blocks_data_path(bringup_status) {
-        CYW43_HOST_EAPOL_STACK_SERVICE_POLLS
+        CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS
     } else {
         1
     }
@@ -8165,15 +8165,17 @@ mod tests {
     fn host_eapol_pending_uses_linux_style_service_burst() {
         assert_eq!(
             wifi_host_eapol_stack_service_polls(Some("wifi-host-eapol-pending")),
-            CYW43_HOST_EAPOL_STACK_SERVICE_POLLS
+            CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS
         );
         assert_eq!(
             wifi_host_eapol_stack_service_polls(Some("wifi-host-eapol-required")),
-            CYW43_HOST_EAPOL_STACK_SERVICE_POLLS
+            CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS
         );
         assert_eq!(wifi_host_eapol_stack_service_polls(None), 1);
         assert_eq!(wifi_host_eapol_stack_service_polls(Some("dhcp-pending")), 1);
-        assert!(CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS < CYW43_HOST_EAPOL_STACK_SERVICE_POLLS);
+        assert!(
+            CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS < CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS
+        );
     }
 
     #[test]

@@ -2387,6 +2387,27 @@ def cyw43_host_eapol_key_tx_no_reply_detail(
     return exact, phase
 
 
+def cyw43_host_eapol_key_install_success_stage(event: TraceEvent) -> str | None:
+    """Return the key stage when later runtime evidence marks it successful."""
+
+    raw = event.raw.lower()
+    stage = event.fields.get("stage", "").lower()
+    if stage not in CYW43_HOST_EAPOL_KEY_STAGES:
+        return None
+    if (
+        "cyw43_driver_task_host_eapol_key" in raw
+        and event.fields.get("status", "").lower() == "ready"
+    ):
+        return stage
+    if "cyw43_driver_task_control_reply" not in raw:
+        return None
+    if event.fields.get("event", "").lower() != "matched-reply":
+        return None
+    if parse_hex_int(event.fields.get("status")) != 0:
+        return None
+    return stage
+
+
 def normalize_wifi_gate7_subgate(value: str | None) -> str:
     """Return a stable Gate 7 sub-gate label."""
 
@@ -3154,7 +3175,18 @@ def normalize_wifi_blocker(value: str) -> str:
 
     lower = value.lower()
     stripped = lower.strip()
-    if stripped in {"none", "ok", "online", "ready", "success"}:
+    if stripped in {
+        "0",
+        "0x0",
+        "0x00",
+        "0x0000",
+        "0x00000000",
+        "none",
+        "ok",
+        "online",
+        "ready",
+        "success",
+    }:
         return "none"
     if (
         "stale-admission-exhausted" in lower
@@ -3921,7 +3953,17 @@ def normalize_wifi_exact(value: str) -> str:
     """Preserve exact CYW43 terminal reasons while keeping stable blockers."""
 
     lower = value.lower()
-    if lower.strip() in {"", "none", "n/a", "net-ready"}:
+    if lower.strip() in {
+        "",
+        "0",
+        "0x0",
+        "0x00",
+        "0x0000",
+        "0x00000000",
+        "none",
+        "n/a",
+        "net-ready",
+    }:
         return "none"
     if (
         "stale-admission-exhausted" in lower
@@ -5399,6 +5441,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         fields = event.fields
         cached_only_evidence = fields.get("source", "").lower() == "cached"
         explicit_blocker = None
+        key_success_stage = cyw43_host_eapol_key_install_success_stage(event)
+        if (
+            key_success_stage is not None
+            and host_eapol_terminal_blocker is not None
+            and host_eapol_terminal_blocker.startswith(f"{key_success_stage}-")
+        ):
+            recovered_blocker = host_eapol_terminal_blocker
+            host_eapol_terminal_blocker = None
+            if blocker == recovered_blocker:
+                blocker = "none"
         if (
             "[cohsh-net][auth] auth ok" in raw
             or "[net-console] auth ok" in raw
@@ -5436,6 +5488,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if split_control_exact is not None:
             raw_contract_blocker = split_control_exact
             explicit_blocker = split_control_exact
+        if (
+            "cyw43_driver_task_event_rx" in raw
+            and fields.get("label", "").lower()
+            in {"deauth", "deauth-ind", "disassoc", "disassoc-ind"}
+        ):
+            raw_contract_blocker = "wifi-link-down"
+            explicit_blocker = "wifi-link-down"
         host_eapol_key_tx_no_reply = cyw43_host_eapol_key_tx_no_reply_detail(event)
         if host_eapol_key_tx_no_reply is not None:
             exact, _phase = host_eapol_key_tx_no_reply
