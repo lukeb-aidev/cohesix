@@ -843,6 +843,29 @@ Capture only these operator-facing lines from that session:
   owner ring. This implementation is host-tested but still requires a fresh
   image, repeated paced boot diagnostics, packet proof, authenticated `cohsh`,
   and REST/hive pressure proof before Wi-Fi/TCP acceptance.
+- Current M26d linked-service serialization correction: two boots of the
+  readback-verified `[BUILD] 639f853f7-dirty 2026-07-10T22:14:31Z` image prove
+  the first persistent cursor removed the permanently blocking child but did
+  not yet serialize every physical SDIO operation. W01 admitted root control
+  polls through poll 212 after successful `txglomalign` TX but never decoded
+  the reply; W02 first faulted post-release HT, recovered, then failed that same
+  control before TX with `FAULT_CYW43_TRANSPORT_BUS_LINK`. W01 DPC accounting
+  stayed lossless at 329551 captures/publications, one retained event, and zero
+  overrun/epoch/sequence/ACK failures, while the paired pcaps showed no Pi
+  traffic. This same-image gate variation is a bus-ordering defect, not RF,
+  DHCP, TCP, USB, or SMP variation.
+  The isolated runtime now keeps every queued CYW43 command plus its reply-cap
+  intake immutable and uncompleted behind a nonterminal DPC cursor, does not
+  receive the endpoint again, advances exactly one cursor quantum per outer
+  turn, and executes the command only after a terminal bus boundary. Exact child code/result/frame shape is mandatory; malformed and
+  issued-unknown outcomes retain the event/mask and quarantine without replay.
+  Hardware W1C uses the full sampled status while software retains only service
+  causes. Post-capture services newly latched flow and hostmail causes before rearm.
+  Invalid Function 2 first-read data follows the asynchronous Linux recovery
+  order `F2 abort -> RF_TERM -> bounded RFRAME drain -> SMB_NAK`, and only a
+  later acknowledged `NAKHANDLED` releases `rxskip`. This correction is tested
+  but still requires a fresh rebuild/flash/readback and repeated hardware proof
+  before any WiFi/TCP acceptance claim.
 - Current M26b USB correction: after `set_device_context` publishes a DCBAA slot entry, Cohesix USB stack now re-shares the DCBAA before the later Address Device command consumes that slot pointer. This does not change the current command-ring blocker, but it closes the next DMA publication edge after command completion starts working.
 - Current M26b USB cold-boot correction: U-Boot xHCI handoff is no longer part of the active design. Root-task may parse old handoff/stop-state DT properties for diagnostics, but local-seat does not trust them, does not generate stop-seed or preserve-state strategies, and does not let bootloader reset authority substitute for the mailbox reset plus live HAL BCM2711 EXT_CFG BAR/COMMAND proof. The only enumerating high-BAR lane is cold boot: Linux capture supplies layout and DMA-range evidence only, VideoCore mailbox reset establishes the platform boundary, HAL proves live PCIe/VL805 ownership, Cohesix publishes fresh high-alias DMA/rings, and Cohesix USB stack starts the controller with `run=run-cold`. `scripts/pi4_gate_proof.sh` now rejects traces with `USB_BOOTLOADER_HANDOFF_SEEN=yes`.
 - Current M26b USB correction: the live HAL-proven `platform-reset-complete` lane now matches U-Boot's controller-ownership handoff order while keeping doorbells readback-free. Cohesix USB stack replays `CONFIG.MaxSlotsEn`, publishes DCBAAP, CRCR, ERSTSZ, ERSTBA, the initial ERDP, scratchpad DCBAA slot 0, and DNCTRL, drains non-doorbell xHCI operational writes with same-runtime xHCI MMIO readback, preserves `CRCR` low bits only from a trusted snapshot or live read and otherwise uses U-Boot's zero reserved-bit cold-publish seed, starts the controller, applies U-Boot post-`RUN` `IMOD=0` / `IMAN=0` writes through the same-runtime xHCI readback drain, and only then rings doorbell `0` for the first proof command with barriers only. The prompt-safe command timeout path emits one bounded final live snapshot for `CRCR`, `USBCMD` / `USBSTS`, `DCBAAP`, `IMAN`, `ERSTSZ`, `ERSTBA`, and `ERDP`; repeated live polling remains forbidden because earlier board traces proved that unbounded post-doorbell live reads can halt through the seL4 timer path. The latest command-consumption audit also found that the RUN write could preserve a stale snapshot `USBCMD.HCRST` bit and publish `USBCMD=0x00000003`; Cohesix USB stack now clears reset/save/restore command bits before the `USBCMD.RUN` store, and the normalizer reports old traces with that shape as `USB_BLOCKER=usbcmd-run-preserved-reset-bit`.

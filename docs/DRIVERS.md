@@ -1547,14 +1547,34 @@ context and the retry/poll window.
   phase, backplane-window phase, exact child sequence, deadline, interrupt and
   mailbox samples, RFRAME length, and Function 2 first-read/remainder state.
   A DPC turn performs at most one SDIO-child submission or one exact completion
-  poll and then yields to command intake; it never hides a compound status,
-  W1C, mailbox, RFRAME, Function 2, and post-capture sequence inside one
-  blocking child wait. A queued root control command is admitted before the
-  next local DPC turn, and deferred work is rechecked before sleeping. Wrong or
-  stale completions leave the cursor retained. A child deadline is
-  issued-unknown, poisons the current generation, and forbids ring reuse.
+  poll; it never hides a compound status, W1C, mailbox, RFRAME, Function 2, and
+  post-capture sequence inside one blocking child wait. Command intake may
+  observe a queued immutable root command while the cursor is active, but the
+  runtime retains the complete command intake, including the non-MCS implicit
+  reply-cap ownership, and does not poll/receive the endpoint again, advance
+  the command sequence, or execute any foreground CYW43 operation until the
+  cursor reaches a terminal bus boundary.
+  Each outer turn advances one cursor quantum first. This is the linked-runtime
+  equivalent of Linux's single serialized SDIO bus thread: foreground control,
+  RX, TX, backplane-window, and interrupt work cannot interleave physical bus
+  phases. Deferred work is rechecked before sleeping.
+  Exact child completions must match the retained sequence, completion code,
+  result, payload offset, payload length, and flags. Wrong/stale sequences wait;
+  a stable malformed completion releases known-terminal child ownership and
+  quarantines the generation. A child deadline is issued-unknown, retains the
+  event and CARD_INT mask, poisons the current generation, and forbids event
+  advancement, rearm, resubmission, or ring reuse.
+  Empty, malformed, or oversized authoritative Function 2 first-read data uses
+  the Linux-shaped asynchronous recovery order within the same cursor:
+  Function 2 abort, `RF_TERM`, bounded RFRAME-count drain to zero, `SMB_NAK`,
+  then wait for a fresh acknowledged `NAKHANDLED` mailbox event. The drain is
+  bounded by both protocol attempts and the virtual-counter deadline; a
+  nonzero count at either bound quarantines without posting NAK.
   Device latches and the DPC event stay retained until a later turn reaches
-  post-capture quiescence. While any event remains unconsumed, the SDIO owner
+  post-capture quiescence. Hardware W1C always uses the complete sampled
+  `HOSTINTMASK`; software retains only frame, flow-change, and hostmail causes,
+  records flow-state as a sampled level, and services new flow/hostmail work
+  before an `rxskip` terminal rearm. While any event remains unconsumed, the SDIO owner
   keeps CARD_INT masked and refuses to resample or republish the same level-held
   source from idle polls or coalesced child doorbells. Only an empty event ring
   permits one fresh source read followed by either one retained publication or
