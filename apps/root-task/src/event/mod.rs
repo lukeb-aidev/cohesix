@@ -2014,9 +2014,14 @@ where
     ticket_usage: Option<TicketUsage>,
     session_id: Option<u64>,
     session_origin: Option<ConsoleInputSource>,
+    #[cfg(feature = "net-console")]
+    session_net_conn_id: Option<u64>,
     next_session_id: u64,
     last_input_source: ConsoleInputSource,
     stream_end_pending: bool,
+    stream_output_source: Option<ConsoleInputSource>,
+    #[cfg(feature = "net-console")]
+    stream_net_conn_id: Option<u64>,
     tail_active: bool,
     throttle: AuthThrottle,
     #[cfg(feature = "kernel")]
@@ -2139,9 +2144,14 @@ where
             ticket_usage: None,
             session_id: None,
             session_origin: None,
+            #[cfg(feature = "net-console")]
+            session_net_conn_id: None,
             next_session_id: 1,
             last_input_source: ConsoleInputSource::Serial,
             stream_end_pending: false,
+            stream_output_source: None,
+            #[cfg(feature = "net-console")]
+            stream_net_conn_id: None,
             tail_active: false,
             throttle: AuthThrottle::default(),
             #[cfg(feature = "kernel")]
@@ -3904,12 +3914,24 @@ where
     }
 
     fn try_emit_console_line(&mut self, line: &str) -> bool {
-        if self.last_input_source.is_physical_console() {
+        self.try_emit_console_line_from(line, self.last_input_source, None)
+    }
+
+    fn try_emit_console_line_from(
+        &mut self,
+        line: &str,
+        source: ConsoleInputSource,
+        expected_net_conn_id: Option<u64>,
+    ) -> bool {
+        if source.is_physical_console() {
             self.emit_serial_line(line);
             return true;
         }
         #[cfg(feature = "net-console")]
-        if self.last_input_source == ConsoleInputSource::Net {
+        if source == ConsoleInputSource::Net {
+            if expected_net_conn_id.is_some() && self.net_conn_id != expected_net_conn_id {
+                return false;
+            }
             let sent = if let Some(net) = self.net.as_mut() {
                 net.send_console_line(line)
             } else {
@@ -3924,6 +3946,37 @@ where
         self.mirror_local_seat_line_if_ready(line);
         self.service_local_seat_keyboard_during_output();
         false
+    }
+
+    fn begin_stream_output(&mut self) {
+        self.stream_end_pending = true;
+        self.stream_output_source = Some(self.last_input_source);
+        #[cfg(feature = "net-console")]
+        {
+            self.stream_net_conn_id = if self.last_input_source == ConsoleInputSource::Net {
+                self.net_conn_id
+            } else {
+                None
+            };
+        }
+    }
+
+    fn clear_stream_output(&mut self) {
+        self.stream_end_pending = false;
+        self.stream_output_source = None;
+        #[cfg(feature = "net-console")]
+        {
+            self.stream_net_conn_id = None;
+        }
+    }
+
+    fn try_emit_stream_line(&mut self, line: &str) -> bool {
+        let source = self.stream_output_source.unwrap_or(self.last_input_source);
+        #[cfg(feature = "net-console")]
+        let expected_net_conn_id = self.stream_net_conn_id;
+        #[cfg(not(feature = "net-console"))]
+        let expected_net_conn_id = None;
+        self.try_emit_console_line_from(line, source, expected_net_conn_id)
     }
 
     fn emit_serial_line(&mut self, line: &str) {
@@ -12956,6 +13009,7 @@ where
     #[cfg(feature = "net-console")]
     fn drain_net_console_events(&mut self) {
         let session_is_net = matches!(self.session_origin, Some(ConsoleInputSource::Net));
+        let session_net_conn_id = self.session_net_conn_id;
         let mut end_reason: Option<NetConsoleDisconnectReason> = None;
         if let Some(net) = self.net.as_mut() {
             net.drain_console_events(&mut |event| match event {
@@ -12997,7 +13051,8 @@ where
                         bytes_read,
                         bytes_written,
                     );
-                    if session_is_net && end_reason.is_none() {
+                    let disconnects_current_session = session_net_conn_id == Some(conn_id);
+                    if session_is_net && disconnects_current_session && end_reason.is_none() {
                         end_reason = Some(reason);
                     }
                 }
@@ -13600,7 +13655,7 @@ where
                                     self.metrics.ui_reads = self.metrics.ui_reads.saturating_add(1);
                                     let detail = format_message(format_args!("path={}", path_str));
                                     self.emit_ack_ok(verb_label, Some(detail.as_str()));
-                                    self.stream_end_pending = true;
+                                    self.begin_stream_output();
                                     self.tail_active = true;
                                     let sid = self.session_id.unwrap_or(0);
                                     self.audit_tail_start(sid, path_str);
@@ -13911,7 +13966,7 @@ where
                                             self.emit_ack_ok(verb_label, Some(detail.as_str()));
                                             self.metrics.ui_reads =
                                                 self.metrics.ui_reads.saturating_add(1);
-                                            self.stream_end_pending = true;
+                                            self.begin_stream_output();
                                             if let Some(pending) = self.pending_stream.as_mut() {
                                                 pending.next_line = 0;
                                                 pending.bandwidth_bytes = stream_bytes;
@@ -14008,7 +14063,7 @@ where
                                         pending.bandwidth_bytes = data_bytes;
                                         pending.cursor = None;
                                     }
-                                    self.stream_end_pending = true;
+                                    self.begin_stream_output();
                                 }
                             } else {
                                 cmd_status = "err";
@@ -14054,7 +14109,7 @@ where
                             self.metrics.accepted_commands += 1;
                             self.metrics.ui_reads = self.metrics.ui_reads.saturating_add(1);
                             self.emit_ack_ok(verb_label, None);
-                            self.stream_end_pending = true;
+                            self.begin_stream_output();
                             self.tail_active = true;
                             let sid = self.session_id.unwrap_or(0);
                             self.audit_tail_start(sid, path_str);
@@ -14226,7 +14281,7 @@ where
         #[cfg(feature = "kernel")]
         if forwarded {
             if let Err(err) = self.forward_to_ninedoor(&command_clone) {
-                self.stream_end_pending = false;
+                self.clear_stream_output();
                 self.pending_stream = None;
                 cmd_status = "err";
                 #[cfg(feature = "cohesix-dev")]
@@ -14419,10 +14474,10 @@ where
                     return;
                 }
             }
-            if !self.try_emit_console_line("END") {
+            if !self.try_emit_stream_line("END") {
                 return;
             }
-            self.stream_end_pending = false;
+            self.clear_stream_output();
             if self.tail_active {
                 let sid = self.session_id.unwrap_or(0);
                 self.audit_tail_stop(sid, "eof");
@@ -14462,7 +14517,7 @@ where
                     self.pending_stream = Some(pending);
                     return;
                 }
-                if !self.try_emit_console_line(line) {
+                if !self.try_emit_stream_line(line) {
                     self.pending_stream = Some(pending);
                     return;
                 }
@@ -14511,6 +14566,11 @@ where
         }
         if matches!(self.session_origin, Some(ConsoleInputSource::Net)) && self.session_id.is_some()
         {
+            #[cfg(feature = "net-console")]
+            let conn_id = self
+                .session_net_conn_id
+                .unwrap_or_else(|| self.active_tcp_conn_id());
+            #[cfg(not(feature = "net-console"))]
             let conn_id = self.active_tcp_conn_id();
             self.audit_tcp_session_detach(conn_id, sid, reason);
         }
@@ -14520,7 +14580,11 @@ where
         self.ticket_usage = None;
         self.session_id = None;
         self.session_origin = None;
-        self.stream_end_pending = false;
+        #[cfg(feature = "net-console")]
+        {
+            self.session_net_conn_id = None;
+        }
+        self.clear_stream_output();
         #[cfg(feature = "kernel")]
         {
             self.pending_stream = None;
@@ -15028,6 +15092,14 @@ where
             self.session_ticket = ticket_str.map(|value| value.to_owned());
             self.ticket_usage = ticket_usage;
             self.session_origin = Some(self.last_input_source);
+            #[cfg(feature = "net-console")]
+            {
+                self.session_net_conn_id = if self.last_input_source == ConsoleInputSource::Net {
+                    self.net_conn_id
+                } else {
+                    None
+                };
+            }
             let sid = self.next_session_id;
             self.next_session_id = self.next_session_id.wrapping_add(1);
             self.session_id = Some(sid);
@@ -17535,6 +17607,8 @@ mod tests {
         exhaust_poll_budget: bool,
         exhaust_flush_budget: bool,
         disconnect_requests: usize,
+        active_conn_id: Option<u64>,
+        events: heapless::Vec<NetConsoleEvent, 8>,
         driver_contract: crate::hal::driver_task::DriverTaskContract,
     }
 
@@ -17558,6 +17632,8 @@ mod tests {
                 exhaust_poll_budget: false,
                 exhaust_flush_budget: false,
                 disconnect_requests: 0,
+                active_conn_id: None,
+                events: heapless::Vec::new(),
                 driver_contract: crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
             }
         }
@@ -17672,6 +17748,16 @@ mod tests {
 
         fn request_disconnect(&mut self) {
             self.disconnect_requests = self.disconnect_requests.saturating_add(1);
+        }
+
+        fn drain_console_events(&mut self, visitor: &mut dyn FnMut(NetConsoleEvent)) {
+            while !self.events.is_empty() {
+                visitor(self.events.remove(0));
+            }
+        }
+
+        fn active_console_conn_id(&self) -> Option<u64> {
+            self.active_conn_id
         }
 
         fn start_self_test(&mut self, _now_ms: u64) -> NetSelfTestStartResult {
@@ -21023,8 +21109,12 @@ mod tests {
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.session = Some(SessionRole::Worker);
             pump.session_origin = Some(ConsoleInputSource::Net);
+            pump.session_net_conn_id = Some(2);
+            pump.net_conn_id = Some(2);
             pump.last_input_source = ConsoleInputSource::Net;
             pump.stream_end_pending = true;
+            pump.stream_output_source = Some(ConsoleInputSource::Net);
+            pump.stream_net_conn_id = Some(2);
             pump.tail_active = true;
 
             let mut pending = PendingStream::new();
@@ -21039,9 +21129,11 @@ mod tests {
             pump.flush_pending_stream();
             assert!(pump.stream_end_pending);
             assert!(pump.pending_stream.is_some());
+            pump.last_input_source = ConsoleInputSource::Serial;
             pump.flush_pending_stream();
             assert!(!pump.stream_end_pending);
             assert!(pump.pending_stream.is_none());
+            assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
         }
 
         assert_eq!(net.sent.len(), total_lines + 1);
@@ -21049,6 +21141,102 @@ mod tests {
             assert_eq!(net.sent[index].as_str(), format!("line-{index:02}"));
         }
         assert_eq!(net.sent[total_lines].as_str(), "END");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn stale_disconnect_preserves_replacement_network_stream() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(2);
+        net.events
+            .push(NetConsoleEvent::Disconnected {
+                conn_id: 1,
+                reason: NetConsoleDisconnectReason::Eof,
+                bytes_read: 64,
+                bytes_written: 4096,
+            })
+            .expect("fake event queue must accept stale disconnect");
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.session = Some(SessionRole::Worker);
+            pump.session_id = Some(7);
+            pump.session_origin = Some(ConsoleInputSource::Net);
+            pump.session_net_conn_id = Some(2);
+            pump.net_conn_id = Some(2);
+            pump.stream_end_pending = true;
+            pump.stream_output_source = Some(ConsoleInputSource::Net);
+            pump.stream_net_conn_id = Some(2);
+            pump.tail_active = true;
+            let mut pending = PendingStream::new();
+            let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+            line.push_str("replacement-stream")
+                .expect("test line must fit pending stream capacity");
+            pending
+                .lines
+                .push(line)
+                .expect("pending stream must accept test line");
+            pump.pending_stream = Some(pending);
+
+            pump.drain_net_console_events();
+
+            assert_eq!(pump.session, Some(SessionRole::Worker));
+            assert_eq!(pump.session_net_conn_id, Some(2));
+            assert!(pump.stream_end_pending);
+            assert!(pump.pending_stream.is_some());
+            assert!(pump.tail_active);
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn matching_disconnect_clears_owned_network_stream_after_stack_close() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = None;
+        net.events
+            .push(NetConsoleEvent::Disconnected {
+                conn_id: 2,
+                reason: NetConsoleDisconnectReason::Eof,
+                bytes_read: 64,
+                bytes_written: 4096,
+            })
+            .expect("fake event queue must accept owned disconnect");
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.session = Some(SessionRole::Worker);
+            pump.session_id = Some(7);
+            pump.session_origin = Some(ConsoleInputSource::Net);
+            pump.session_net_conn_id = Some(2);
+            pump.net_conn_id = None;
+            pump.stream_end_pending = true;
+            pump.stream_output_source = Some(ConsoleInputSource::Net);
+            pump.stream_net_conn_id = Some(2);
+            pump.tail_active = true;
+            pump.pending_stream = Some(PendingStream::new());
+
+            pump.drain_net_console_events();
+
+            assert_eq!(pump.session, None);
+            assert_eq!(pump.session_net_conn_id, None);
+            assert!(!pump.stream_end_pending);
+            assert!(pump.pending_stream.is_none());
+            assert!(!pump.tail_active);
+        }
     }
 
     #[cfg(feature = "kernel")]

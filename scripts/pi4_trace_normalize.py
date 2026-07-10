@@ -567,6 +567,8 @@ class GateSummary:
     wifi_rx_irq_preserve_reason: str = "none"
     wifi_rx_irq_preserve_int: int = 0
     wifi_rx_irq_preserve_ack: int = 0
+    wifi_rx_irq_episode_preserves: int = 0
+    wifi_rx_irq_episode_rearms: int = 0
     wifi_rxtrace_seq: int = 0
     wifi_rxtrace_start_ticks: int = 0
     wifi_rxtrace_pre_sample_delta_ticks: int = 0
@@ -781,6 +783,8 @@ class GateSummary:
             "WIFI_RX_IRQ_PRESERVE_REASON": self.wifi_rx_irq_preserve_reason,
             "WIFI_RX_IRQ_PRESERVE_INT": f"0x{self.wifi_rx_irq_preserve_int:08x}",
             "WIFI_RX_IRQ_PRESERVE_ACK": f"0x{self.wifi_rx_irq_preserve_ack:08x}",
+            "WIFI_RX_IRQ_EPISODE_PRESERVES": self.wifi_rx_irq_episode_preserves,
+            "WIFI_RX_IRQ_EPISODE_REARMS": self.wifi_rx_irq_episode_rearms,
             "WIFI_RXTRACE_SEQ": self.wifi_rxtrace_seq,
             "WIFI_RXTRACE_START_TICKS": f"0x{self.wifi_rxtrace_start_ticks:08x}",
             "WIFI_RXTRACE_PRE_SAMPLE_DELTA_TICKS": self.wifi_rxtrace_pre_sample_delta_ticks,
@@ -7834,13 +7838,15 @@ WIFI_RX_IRQ_PRESERVE_REASONS = {
 
 def summarize_wifi_rx_irq_preserve(
     events: Iterable[TraceEvent],
-) -> tuple[int, str, int, int]:
+) -> tuple[int, str, int, int, int, int]:
     """Return CYW43 frame-interrupt preservation proof from RX trace lines."""
 
     best_count = 0
     best_reason = "none"
     best_int = 0
     best_ack = 0
+    best_episode_preserves = 0
+    best_episode_rearms = 0
     best_line = 0
     for event in events:
         raw = event.raw.lower()
@@ -7858,8 +7864,19 @@ def summarize_wifi_rx_irq_preserve(
         )
         best_int = parse_hex_int(event.fields.get("irq_preserve_int")) or 0
         best_ack = parse_hex_int(event.fields.get("irq_preserve_ack")) or 0
+        best_episode_preserves = (
+            parse_hex_int(event.fields.get("irq_episode_preserves")) or 0
+        )
+        best_episode_rearms = parse_hex_int(event.fields.get("irq_episode_rearms")) or 0
         best_line = event.line
-    return best_count, best_reason, best_int, best_ack
+    return (
+        best_count,
+        best_reason,
+        best_int,
+        best_ack,
+        best_episode_preserves,
+        best_episode_rearms,
+    )
 
 
 def summarize_wifi_rxtrace_timing(
@@ -11219,6 +11236,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_rx_irq_preserve_reason,
         wifi_rx_irq_preserve_int,
         wifi_rx_irq_preserve_ack,
+        wifi_rx_irq_episode_preserves,
+        wifi_rx_irq_episode_rearms,
     ) = summarize_wifi_rx_irq_preserve(event_list)
     (
         wifi_rxtrace_seq,
@@ -11677,6 +11696,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_rx_irq_preserve_reason=wifi_rx_irq_preserve_reason,
         wifi_rx_irq_preserve_int=wifi_rx_irq_preserve_int,
         wifi_rx_irq_preserve_ack=wifi_rx_irq_preserve_ack,
+        wifi_rx_irq_episode_preserves=wifi_rx_irq_episode_preserves,
+        wifi_rx_irq_episode_rearms=wifi_rx_irq_episode_rearms,
         wifi_rxtrace_seq=wifi_rxtrace_seq,
         wifi_rxtrace_start_ticks=wifi_rxtrace_start_ticks,
         wifi_rxtrace_pre_sample_delta_ticks=wifi_rxtrace_pre_sample_delta_ticks,

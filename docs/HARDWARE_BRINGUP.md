@@ -156,19 +156,34 @@
   publishing the real sequence, and invalidates completion/progress records
   before consuming isolated runtime evidence. Runtime-side cache maintenance is
   still reserved for descriptor-declared device DMA buffers.
-- As-built Wi-Fi correction: the June 14 22:12 log is the current Wi-Fi truth.
-  The previous CYW43 `runtime-ring-submit status=busy` theory is stale; the
-  live blocker is the first post-join host-EAPOL prompt poll reaching
-  `cyw43-sdio-owner-reply` for parent request `477`, after which no parent
-  CYW43 completion was published and fresh requests became stale against
-  runtime sequence `477`. The serial console still starts before a hidden
-  Wi-Fi wait so diagnostics remain available, but unresolved CYW43 transport
-  resumes no longer consume the logical host-EAPOL proof window. CYW43
-  RX-source telemetry is passive while CYW43 is connected through the SDIO owner
-  runtime: after an empty Function 2 first-read it keeps the idle detail and
-  probe length, but does not issue extra CMD52, backplane, or SDHCI host
-  interrupt reads before returning the parent poll completion. Repeated CYW43
-  abort lines remain sparse repeat-count diagnostics.
+- As-built Wi-Fi service model: a CYW43 PromptSlice performs one HAL service
+  attempt and returns to the outer event pump while HAL retains the exact active
+  descriptor, staged payload, request sequence, and BCDC id. Runtime
+  `CONTROL_POLL` delivers SERVICE frames in SDPCM wire order, not control-first
+  priority order. RX/control service captures and W1C-acknowledges hardware
+  interrupt bits at the service boundary, retains them in software
+  `pending_intstatus`/`rxpending`, processes hostmail before Function 2, and
+  permits reads after `SMB_NAK` only when `HMB_DATA_NAKHANDLED` clears
+  `rxskip`. Valid SDPCM headers advance an expected RX sequence and update the
+  per-priority XOFF mask; global flow-control changes are acknowledged and
+  reread before DATA TX resumes, while mailbox FCDATA replaces the priority
+  mask and glom subframes cannot overwrite superframe XOFF/credit authority.
+  DATA honors global and BDC-priority XOFF while CONTROL remains exempt. An
+  unsent ETH TX retains exact payload identity and performs one credit action
+  per outer turn; one-shot DATA/CONTROL CMD53 writes never replay an ambiguous
+  issued sequence. Root retains deferred M2/M4/group-M2 submissions until
+  submitted proof. Their credit drain and PTK/GTK reply waits are persistent
+  one-action-per-turn phases; they never replay an ambiguously submitted frame,
+  and carrier epoch is revalidated before key commit or secure release.
+- Current live Wi-Fi boundary: three boots of build
+  `918a58c09-dirty` reached association and host-EAPOL but emitted no DHCP,
+  ARP, IPv4/IPv6, TCP, or authenticated-console traffic. Identical boots varied
+  between no PTK commit and PTK committed with GTK pending because one logical
+  key poll recursively resumed a retained PromptSlice for tens of seconds,
+  older EVENT/DATA could sit behind a CONTROL reply, and hardware interrupt
+  bits lacked a persistent software DPC latch. The service-model corrections
+  above are newer than that live image and require a fresh build/flash plus
+  repeated boot proof before DHCP/TCP or benchmark acceptance.
 - As-built USB diagnostics now split the hub child-port edge after
   `usb-hub-port-power-done`: the isolated runtime publishes
   `usb-hub-port-status-begin`, `usb-hub-port-status-doorbell-done`,
@@ -580,12 +595,180 @@ Capture only these operator-facing lines from that session:
   pump. Genet and shared smoltcp/TCP behavior are unchanged.
   The same boot also showed the first GTK `wsec_key` request receive a short
   id-zero/nonzero-status control frame at poll 1, followed by the authoritative
-  deauthentication at poll 2; the fresh-id retry matched only after the old
-  five-second wait. Host-EAPOL now treats that status as a four-turn stale-reply
-  grace: it keeps draining for the adjacent event/current reply, aborts without
-  retry if the connection epoch changes, and only resubmits a fresh ioctl id if
-  the grace expires on the same carrier. This removes the AP-visible five-second
-  M4 delay without allowing a retry to outrun deauthentication.
+  deauthentication at poll 2. Host-EAPOL treats that status as a four-turn
+  stale-reply grace: it keeps draining for the adjacent event/current reply and
+  aborts if the connection epoch changes. Later repeated-boot evidence proved
+  that allocating a fresh ioctl id after grace expiration was incorrect; the
+  corrected service retains one outstanding key request and continues
+  receive-only on that original id.
+- Current M26d Wi-Fi disconnect-rejoin correction: two boots of the
+  readback-verified `[BUILD] f9b192581-dirty 2026-07-10T00:18:15Z` image,
+  `/Users/lukasbower/pi4-serial-20260710-102017.log` plus its paced direct
+  diagnostics and
+  `/Users/lukasbower/pi4-serial-20260710-103000-m26d-continuous-W02-pyserial.log`,
+  both reached association/link-up, M1/M2/M3/M4, PTK/GTK installation, SCB
+  authorization, secure release, and two credit-proven DHCP discovers. Both
+  then received authoritative `EVENT_LINK` down-carrier before any lease or
+  inbound data. The continuous service correctly invalidated secure/data state,
+  but successful `WLC_GET_BSSID` probes returned `00:00:00:00:00:00`; that value
+  was classified as an ordinary ignored candidate, so the new epoch exhausted
+  its join window and became terminal `host-eapol-required` instead of asking
+  firmware to reconnect. Root now mints one reconnect token for the newly
+  advanced connection epoch. The next idle service turn claims that exact token
+  and submits one fresh Linux-shaped `bsscfg:join` without waiting for a BSSID
+  diagnostic. One transient pre-acceptance control failure may re-arm the same
+  epoch for a final bounded submit; accepted join consumes the authority,
+  initial-join zero BSSID stays diagnostic-only, association/link-up clears an
+  unused token, and stale epochs cannot consume it. Event traces name an
+  `EVENT_LINK` frame without the link flag as `link-down` rather than `none`.
+  The same two boots also exposed the initial-collapse cause: each AP sent two
+  more M3 frames while Cohesix installed PTK and GTK, because Cohesix had
+  incorrectly deferred M4 until after both firmware key controls. Root now uses
+  the Linux supplicant sequence on initial handshake and rekey: submit and
+  credit-drain M4 while the old/no pairwise key is still active, then install
+  PTK, install any M3-carried GTK, authorize the SCB, and release secure data.
+  M4 TX-shape evidence now includes the same total/request-length proof as M2.
+  M4 credit drain is also channel-first: a credit-bearing event, control, or
+  data `FrameReady` is applied or preserved and the connection epoch is checked
+  before its SDPCM credit may authorize key installation.
+  This correction requires a new full image and repeated serial-plus-pcap boots
+  before DHCP, TCP, `cohsh`, or benchmark acceptance can be claimed.
+- Current M26d Wi-Fi Linux-service correction: two boots of the readback-verified
+  `[BUILD] 918a58c09-dirty 2026-07-10T01:12:12Z` image share
+  `/Users/lukasbower/pi4-serial-20260710-112833.log` and the boot-paired
+  `tcpdump-wifi-20260710-112826.pcap` / `tcpdump-usb-eth-20260710-112826.pcap`.
+  Boot one completed M1/M2/M3/M4 and key setup but never received association or
+  link carrier. Boot two received AUTH/ASSOC/LINK, bound DHCP address
+  `192.168.86.154`, answered ARP and ICMP, and completed a valid TCP three-way
+  handshake on port `31337`; the Mac closed that probe without authentication,
+  so this is raw listener proof rather than `cohsh` proof. The GTK controls did
+  not have valid completion proof: PTK matched exact CDC command/id with zero
+  status, while GTK surfaced `cmd=0xffb3004c`, the SDPCM `0x004c/0xffb3`
+  length/complement pair, as a 16-byte nonmatching control payload and then used
+  the now-removed `accept-after-tx` path. The isolated runtime now treats
+  `RFRAME` as a hint, reparses the authoritative SDPCM length after every
+  64-byte first-read, reads the header-declared remainder, and decodes with the
+  complete length. PTK/GTK requires an exact zero-status completion after the
+  bounded same-id continuation budget; no-reply/nonmatching exhaustion cannot
+  publish a key.
+  Initial and post-secure duplicate-M3 M4 retransmits now use the same
+  credit-drain and connection-epoch proof as first M4; any post-secure key
+  protocol TX, drain, or key-install failure now revokes secure/data/IP
+  admission and enters a fresh connection epoch. Root coalesces
+  replay-equivalent EAPOL and exact duplicate pre-secure frames before the
+  32-entry pending queue fills, so intentional replacement no longer produces a
+  false `wifi-rx-overflow` blocker. Stable `pending`, `required`, and
+  `secure-awaiting-carrier` rows are sampled every 64 unchanged observations to
+  keep serial diagnostics from dominating service cadence. On boot two,
+  paced direct diagnostics completed `netstats`, `nettest`, `wifi diag`, and
+  `wifi probe-ht`; `usb diag` then echoed without completing and the target lost
+  network reachability, so `usb probe-kbd`, `smp activity`, authenticated
+  `cohsh`, and REST pressure remain unproved for that image. This correction
+  requires another full image and repeated serial-plus-pcap boots before perfect
+  Wi-Fi boot or performance acceptance can be claimed.
+- Current M26d repeated-boot correction: three fresh boots of the readback-
+  verified `918a58c09-dirty` image all reached M1/M2/M3/M4, exact PTK install,
+  and the GTK control window, then exposed the same 16-byte raw SDPCM prefix as
+  `cmd=0xffb3004c` and failed closed before DHCP/TCP. The prior RFRAME fix was
+  necessary but incomplete because the runtime stored SDPCM `nextlen` and
+  Function 1 RFRAME lengths in one field and discarded their provenance.
+  Linux treats those paths differently: data/event `nextlen` readahead may be
+  delivered, but control readahead is terminated and NAKed for a normal
+  header-first retry. The isolated runtime now preserves that provenance, uses
+  bounded rounded reads for true data/event readahead, rejects mismatched or
+  control readahead before queue publication, and retains the authoritative
+  64-byte first-read path for RFRAME/hintless service. Root independently
+  rejects an SDPCM length/complement prefix as a BCDC control reply. The next
+  acceptance boundary is a rebuilt/reflashed image with repeated serial-plus-
+  pcap boots proving exact GTK zero-status completion, secure EAPOL, DHCP, TCP,
+  serialized `cohsh` scripts, and only then the REST/hive-gateway pressure run.
+- Current M26d `wsec_key` single-request correction: two current-image boots,
+  `/Users/lukasbower/pi4-serial-20260710-135019.log` with paced diagnostics in
+  `/Users/lukasbower/pi4-serial-20260710-141800-m26d-nextlen-W01-direct-diag.log`
+  and
+  `/Users/lukasbower/pi4-serial-20260710-142300-m26d-nextlen-W02-pyserial.log`,
+  both completed association, M1/M2/M3/M4, and exact zero-status PTK install.
+  They also proved that the SDPCM next-length provenance correction removed the
+  old raw `0x004c/0xffb3` prefix failure: first-read invalid, remainder, and
+  decode-miss counters stayed zero. GTK still failed closed because each
+  bounded retry allocated a new ioctl id; an exact zero-status completion for
+  the immediately previous GTK id then arrived while root was waiting for the
+  new id and was correctly classified as nonmatching. Boot one used ids
+  44/45/46 and received id 45 while waiting for 46; boot two used 47/48/49 and
+  received id 48 while waiting for 49. This deterministic stale-id chase, not
+  RF variability, prevented DHCP/TCP. The Linux-equivalent correction transmits
+  one `wsec_key` request with one BCDC id, keeps servicing data/event/control
+  traffic, and opens bounded receive-only continuation windows for that same id.
+  It never retransmits key material or allocates a new id; exact zero status is
+  still mandatory, carrier-epoch change still aborts, an ambiguous initial
+  Function 2 key-TX fault is not replayed, and matched nonzero or continuation
+  exhaustion still fails closed. Both boots completed all seven paced serial
+  diagnostics; USB remained Gate 10 and SMP placement stayed 6/6.
+  In the W01/W02 packet-time slices correlated to those serial logs, and through
+  Wi-Fi capture packet time `2026-07-10 14:28:46.262334`, the still-active
+  `tcpdump-wifi-20260710-135017.pcap` contains only two Pi-source LLC XID
+  responses and no Pi DHCP, ARP, IPv4, ICMP, TCP, or `cohsh` traffic. The paired
+  USB-Ethernet pcap is quiescent. Later packets in the active Wi-Fi capture
+  require a new cutoff and serial correlation; they cannot be retroactively
+  attributed to these boot slices. A rebuilt/reflashed image and repeated boots
+  remain the next acceptance boundary.
+- Current M26d asserted-empty episode correction: the first two boots of the
+  readback-verified single-request image are
+  `/Users/lukasbower/pi4-serial-20260710-143929.log` with paced diagnostics in
+  `/Users/lukasbower/pi4-serial-20260710-144400-m26d-sameid-W01-direct-diag.log`
+  and
+  `/Users/lukasbower/pi4-serial-20260710-144600-m26d-sameid-W02-pyserial.log`.
+  Both completed all seven required serial diagnostics at 60 ms/character;
+  USB remained Gate 10 and SMP placement remained configured/applied 6/6.
+  Boot one reached exact PTK success, submitted GTK once as id 47, and exhausted
+  two receive-only same-id continuation windows without an exact reply. Boot
+  two proved the request and key material are valid: exact PTK id 43 and GTK id
+  44 both completed with zero status, secure state was reached, and a duplicate
+  M3 caused a post-secure M4 retransmit. Its credit-drain wait then saw no
+  control/credit frame, revoked secure state, rejoined, and the reconnect GTK
+  id 54 failed with the same asserted-empty/no-reply shape as boot one. Neither
+  boot reached DHCP or TCP.
+  In both boots every runtime RX trace froze at cumulative
+  `irq_preserve_count=2`, reason source-asserted-empty,
+  `int_status=0x00020040`, and `ack=0`, while the root pending queue reached
+  30-31 entries and the runtime queue remained bounded at high-water 5 with no
+  overflow. The old lifetime-global asserted-empty preserve budget therefore
+  disabled the later control/credit visibility needed by both GTK and the
+  post-secure M4 drain. The isolated runtime now bounds preservation per
+  asserted-empty episode and rearms only after confirmed terminal
+  acknowledgement, a fresh Function-2-ready quiescent source sample, or
+  concrete SDPCM-next/RFRAME progress; failed acknowledgements stay exhausted.
+  Trace version 8 exposes the current episode count and cumulative rearm count.
+  A successfully submitted duplicate-M4 retransmission drain timeout is now
+  advisory because it changes no key state. Only that exact
+  AP/ANonce/replay-counter tuple is rearmed for one final bounded M4 response;
+  a third identical M3 is dropped. Post-secure PTK/GTK maintenance remains
+  fail-closed.
+  The packet-time-qualified slices in `tcpdump-wifi-20260710-143922.pcap`
+  contain one Pi LLC XID response for boot one and two for boot two, with no Pi
+  DHCP, ARP, IPv4, ICMP, TCP/31337, or `cohsh` traffic. A rebuilt/reflashed image
+  and at least three fully diagnosed Wi-Fi boots remain required before TCP or
+  performance acceptance.
+- Current M26d Wi-Fi/TCP ownership correction: the readback-verified W01 boot of
+  `[BUILD] 918a58c09-dirty 2026-07-10T02:06:57Z` completed exact PTK/GTK,
+  association/link, DHCP at `192.168.86.154`, ARP/ICMP, raw TCP, and
+  authenticated `boot_v0.coh` plus `smp_parity.coh`; post-run `netstats`
+  recorded `tcp_accepts=4`, `tcp_auth=4`, `tcp_ready=yes`, zero root/runtime Wi-Fi
+  queue loss, and no TCP post-flush exhaustion. `tcp_basic.coh` then reproduced
+  `OK TAIL` plus one fully acknowledged 1108-1260-byte batch followed by silence,
+  while ping and later port-31337 connections remained healthy. The paired
+  `tcpdump-wifi-20260710-112826.pcap` shows each failed client arrived 3-10 ms
+  after the preceding client closed, proving a delayed old-connection lifecycle
+  event rather than CYW43 loss. Root now binds each authenticated session and
+  multi-turn stream to its exact connection/source: only a matching disconnect
+  may clear the pending stream/`END`, and interleaved serial diagnostics cannot
+  redirect TCP tail output. The CYW43 first-read path also rejects empty or
+  malformed SDPCM headers even when `RFRAME` looks plausible; normal RX performs
+  the Linux-shaped Function 2 abort/`RF_TERM`/`SMB_NAK` recovery, including for
+  a valid header beyond the bounded receive capacity, while pre-TX probes
+  preserve the source without aborting it. This code requires a fresh
+  image plus repeated serial/pcap/cohsh and pressure proof before perfect Wi-Fi
+  boot is accepted.
 - Current M26b USB correction: after `set_device_context` publishes a DCBAA slot entry, Cohesix USB stack now re-shares the DCBAA before the later Address Device command consumes that slot pointer. This does not change the current command-ring blocker, but it closes the next DMA publication edge after command completion starts working.
 - Current M26b USB cold-boot correction: U-Boot xHCI handoff is no longer part of the active design. Root-task may parse old handoff/stop-state DT properties for diagnostics, but local-seat does not trust them, does not generate stop-seed or preserve-state strategies, and does not let bootloader reset authority substitute for the mailbox reset plus live HAL BCM2711 EXT_CFG BAR/COMMAND proof. The only enumerating high-BAR lane is cold boot: Linux capture supplies layout and DMA-range evidence only, VideoCore mailbox reset establishes the platform boundary, HAL proves live PCIe/VL805 ownership, Cohesix publishes fresh high-alias DMA/rings, and Cohesix USB stack starts the controller with `run=run-cold`. `scripts/pi4_gate_proof.sh` now rejects traces with `USB_BOOTLOADER_HANDOFF_SEEN=yes`.
 - Current M26b USB correction: the live HAL-proven `platform-reset-complete` lane now matches U-Boot's controller-ownership handoff order while keeping doorbells readback-free. Cohesix USB stack replays `CONFIG.MaxSlotsEn`, publishes DCBAAP, CRCR, ERSTSZ, ERSTBA, the initial ERDP, scratchpad DCBAA slot 0, and DNCTRL, drains non-doorbell xHCI operational writes with same-runtime xHCI MMIO readback, preserves `CRCR` low bits only from a trusted snapshot or live read and otherwise uses U-Boot's zero reserved-bit cold-publish seed, starts the controller, applies U-Boot post-`RUN` `IMOD=0` / `IMAN=0` writes through the same-runtime xHCI readback drain, and only then rings doorbell `0` for the first proof command with barriers only. The prompt-safe command timeout path emits one bounded final live snapshot for `CRCR`, `USBCMD` / `USBSTS`, `DCBAAP`, `IMAN`, `ERSTSZ`, `ERSTBA`, and `ERDP`; repeated live polling remains forbidden because earlier board traces proved that unbounded post-doorbell live reads can halt through the seL4 timer path. The latest command-consumption audit also found that the RUN write could preserve a stale snapshot `USBCMD.HCRST` bit and publish `USBCMD=0x00000003`; Cohesix USB stack now clears reset/save/restore command bits before the `USBCMD.RUN` store, and the normalizer reports old traces with that shape as `USB_BLOCKER=usbcmd-run-preserved-reset-bit`.
@@ -608,8 +791,8 @@ Capture only these operator-facing lines from that session:
 - Current June 7 post-reflash correction: `/Users/lukasbower/pi4-serial-20260607-193658.log` is still fail-closed. USB is at gate 4 with `enable-slot-completion-pending`; that proves the Enable Slot command is in flight, not that a keyboard is accepted. Wi-Fi is at firmware upload, not DHCP: CMD7/card-select and shared-payload visibility are proven, but the final firmware owner window exhausted retained-stage recovery before NVRAM, ARMCR4 release, DHCP, `nettest`, or `netstats`.
 - Current M26b Wi-Fi correction: probe-attach KSO initialization now follows upstream `brcmf_sdio_kso_init()` rather than runtime `brcmf_sdio_kso_control()`. Root-task sets/observes `SLEEPCSR.KSO` at `stage=linux-probe-attach-kso` before CARDCTRL, PMU reload, or core reset work; `DEVON` is not a pre-upload contract on this path.
 - Current proof-normalizer correction: a `debug-probe-ht` CMD52 failure against `CHIPCLKCSR` (`cmd=52 arg=0x12001c00`) before Function 2 readiness is classified as `WIFI_BLOCKER=chipclkcsr-cmd52-pre-f2`, not as a generic backplane CMD52 rejection or Function 2-ready state.
-- Current M26b Wi-Fi gate 7-10 correction: the Linux/host-supplicant comparison now keeps M3 and group-key replay protection anchored to the last accepted counter, holds queued glommed normal data behind the same host-EAPOL secure predicate as live RX, and makes the M4/group-M2 drain path seek a fresh SDPCM credit observation before key install or DHCP/data release. Missing TX proof remains fatal, but a valid M4 TX completion is enough to proceed to PTK/GTK `wsec_key` install when no later fresh credit is observed; that prevents the post-M4 drain telemetry from blocking secure release. The TCP console listener is also gated behind real DHCP address availability and reports TCP Established separately from authenticated `cohsh` readiness (`tcp_accepts` versus `tcp_auth`), so remote-shell proof cannot be inferred before the lease and auth handshake complete.
-- Current M26b Wi-Fi control-correlation correction: the June 25 root-cause fix preserves valid CDC replies that arrive while root is waiting for a different control `(cmd,id)` instead of dropping them as nonmatching noise. Root stores those copied replies in a bounded pending-control queue keyed by exact command and ioctl id, restages the copied frame into the driver-task ring when the matching exchange starts, and then validates status, response length, and CDC body shape through the normal matched-reply path. The `wsec_key` PTK/GTK reply deadline and poll budget are unchanged; next-boot evidence should show either ordinary `matched-reply` / `response-ready` or, when the race is exercised, `cached-matched-reply` / `cached-response-ready`, with no new `cyw43-host-eapol-post-secure-{ptk,gtk}` timeout unless a real firmware reply is still absent. Boot logging now also suppresses repeated pending `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS` rows when only poll counters change; the next full status row reports `suppressed_status=<count>`, while required, secure, event, RX-observed, EAPOL-progress, admission, and post-secure rows remain full evidence.
+- Current M26b Wi-Fi gate 7-10 correction: the Linux/host-supplicant comparison now keeps M3 and group-key replay protection anchored to the last accepted counter, holds queued glommed normal data behind the same host-EAPOL secure predicate as live RX, and makes the M4/group-M2 drain path seek a fresh SDPCM credit observation before key install or DHCP/data release. Missing M4 TX or drain proof remains fatal and cannot publish PTK/GTK or secure data; once M4 is credit-drained, matched PTK/GTK `wsec_key` completion remains the next gate. The TCP console listener is also gated behind real DHCP address availability and reports TCP Established separately from authenticated `cohsh` readiness (`tcp_accepts` versus `tcp_auth`), so remote-shell proof cannot be inferred before the lease and auth handshake complete.
+- Current M26b Wi-Fi control-correlation correction: the June 25 root-cause fix preserves valid CDC replies that arrive while root is waiting for a different control `(cmd,id)` instead of dropping them as nonmatching noise. Root stores those copied replies in a bounded pending-control queue keyed by exact command and ioctl id, restages the copied frame into the driver-task ring when the matching exchange starts, and then validates status, response length, and CDC body shape through the normal matched-reply path. The `wsec_key` PTK/GTK reply deadline and poll budget are unchanged; next-boot evidence should show either ordinary `matched-reply` / `response-ready` or, when the race is exercised, `cached-matched-reply` / `cached-response-ready`, with no new `cyw43-host-eapol-post-secure-{ptk,gtk}` timeout unless a real firmware reply is still absent. Boot logging suppresses repeated unchanged `pending`, `required`, and `secure-awaiting-carrier` `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS` rows; the next full status row reports `suppressed_status=<count>`, while secure completion, errors, event/RX/EAPOL progress, admission changes, and post-secure state changes remain full evidence.
 - Current M26b USB cold-boot correction: if old U-Boot DT properties export halted stop-state evidence, Cohesix records them only as diagnostics and the proof normalizer reports `USB_BOOTLOADER_HANDOFF_SEEN=yes`. They do not authorize `origin=reset-owned-stop-seed`, `origin=seeded-cold-start`, ring publication, `RUN`, or enumeration.
 - Current M26b USB cold-boot correction: prompt-safe USB probing never treats a halted stop-state snapshot as sufficient authority. The only active hardware path is isolated PCIe owner replay followed by the isolated `usb-local-seat` runtime.
 - Boot must fail before ticket registration if:

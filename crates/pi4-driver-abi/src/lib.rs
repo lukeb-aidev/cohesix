@@ -267,6 +267,8 @@ pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_FAILED: u16 = 
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_TOO_LARGE: u16 = 0x570d;
 /// CYW43 RX idle detail: source stayed asserted after bounded empty first-read retry.
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_SOURCE_ASSERTED_EMPTY: u16 = 0x570e;
+/// CYW43 RX idle detail: next-frame readahead was terminated and NAKed for retry.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NEXT_FRAME_READAHEAD_RETRY: u16 = 0x570f;
 /// CYW43 RX first-read result: high bit marks a packed RX-source snapshot.
 pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC: u32 = 0x8000_0000;
 /// CYW43 RX first-read result: low bits carry the attempted Function 2 probe length.

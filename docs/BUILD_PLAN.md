@@ -8486,7 +8486,12 @@ claim Linux-like parallel activity handling until this milestone has evidence.
 - Physical hardware service remains restricted to manifest-declared isolated
   driver runtimes. Root-task may schedule bounded service turns and observe
   evidence; it must not regain steady-state device ownership.
-- Under load, physical operator input and emergency/fatal status must not be
+- Operator priority is conditional on authenticated TCP-console state, not one
+  static ranking. With no authenticated TCP session, service serial input,
+  then USB local-seat input, then HDMI feedback. With an authenticated TCP
+  session, make TCP command/response progress primary while preserving bounded
+  serial/local-seat, emergency-diagnostic, and fatal-status service.
+- Under load, active operator input and emergency/fatal status must not be
   hidden behind HDMI redraws, verbose diagnostics, large tails, telemetry spam,
   storage drains, or network proof traffic.
 - A "100x better" claim must be grounded in accepted 26d/27c baseline evidence:
@@ -8521,8 +8526,10 @@ persistence work progress fairly and observably under mixed load.
   - `diagnostics`
   - `telemetry-spool`
 - Each lane declares priority class, starvation deadline, max work per turn,
-  max bytes per turn, bounded queue depth, backpressure policy, and degradation
-  policy.
+  max bytes per turn, bounded queue depth, backpressure policy, degradation
+  policy, and its generated behavior for TCP-authenticated versus no-TCP
+  operator modes. Runtime session state selects between those generated modes;
+  clients cannot supply or raise lane priority.
 - Validation rejects unbounded lanes, authority overlap, physical-driver lane
   ownership drift, and any lane that can bypass generated service-bucket or HAL
   resource limits.
@@ -8530,11 +8537,12 @@ persistence work progress fairly and observably under mixed load.
 #### B) Deterministic lane scheduler
 - Root-task drains generated lanes using bounded deterministic policy over the
   27c service buckets.
-- Physical input lanes stay above routine network data, HDMI redraw, verbose
-  diagnostics, telemetry, and storage drains.
-- Authenticated TCP response flush receives bounded priority for `ACK`/`ERR` /
-  `END` liveness, but cannot starve serial/local-seat input, emergency
-  diagnostics, or fatal status.
+- With no authenticated TCP session, serial input precedes USB local-seat
+  input, which precedes HDMI feedback; all three stay above routine network
+  data, verbose diagnostics, telemetry, and storage drains.
+- With an authenticated TCP session, TCP receive and response flush become the
+  primary control-plane shell lanes for bounded `ACK`/`ERR`/`END` liveness, but
+  cannot starve serial/local-seat input, emergency diagnostics, or fatal status.
 - Saturated lanes return explicit busy/yield/drop evidence rather than growing
   queues.
 
@@ -8554,6 +8562,9 @@ persistence work progress fairly and observably under mixed load.
   tails degrade before command liveness.
 - Storage/spool drains inherit Milestone 27 persistence semantics and must not
   preempt USB local-seat or serial input.
+- Serial and local-seat output includes rate-limited `idle`, `busy`,
+  `high-load`, or `overload` summaries plus the strongest known blocker; these
+  summaries are bounded lane work and cannot create a new output backlog.
 - Network proof traffic remains classified separately from production TCP or
   REST throughput; proof-mode overrides must be explicit and lane-visible.
 
@@ -8597,6 +8608,11 @@ persistence work progress fairly and observably under mixed load.
   pressure.
 - Authenticated TCP console responses preserve bounded `ACK`/`ERR`/`END`
   liveness without starving physical input or fatal/emergency status.
+- No-TCP and authenticated-TCP pressure fixtures prove the generated priority
+  transition: serial -> USB local-seat -> HDMI feedback without TCP, and TCP as
+  the primary shell with bounded physical/emergency progress when authenticated.
+- Serial and local-seat load summaries are rate-limited, bounded, and report
+  only `idle`, `busy`, `high-load`, or `overload` plus the strongest blocker.
 - Long diagnostics, large tails, HDMI redraws, telemetry drains, and persistence
   drains are resumable and cannot monopolize an event-pump turn.
 - Console grammar, Secure9P semantics, worker namespace paths, persistence
@@ -8622,11 +8638,11 @@ Title/ID: m27d-operator-lane-ir
 Goal: Add generated operator-lane policy and validation.
 Inputs: tools/coh-rtc, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/USERLAND_AND_CLI.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — lane schema for priority, deadline, work/byte bounds, queue depth, and degradation policy.
+  - tools/coh-rtc/src/ir.rs — lane schema for TCP-authenticated/no-TCP priority modes, deadline, work/byte bounds, queue depth, and degradation policy.
   - tools/coh-rtc/src/validate.rs — reject unbounded lanes, authority overlap, physical-driver ownership drift, and incompatible service-bucket references.
   - tools/coh-rtc/src/codegen/* — emit Rust/docs/proof-witness lane tables.
 Commands: cargo test -p coh-rtc && scripts/check-generated.sh
-Checks: Lane policy is compiler-owned, generated docs match resolved manifests, and invalid topology fails closed.
+Checks: Lane policy and authenticated-session mode transitions are compiler-owned, generated docs match resolved manifests, clients cannot raise priority, and invalid topology fails closed.
 Deliverables: Generated operator-lane contract for QEMU and Pi 4 profiles.
 
 Title/ID: m27d-event-pump-qos
@@ -8638,7 +8654,7 @@ Changes:
   - apps/root-task/src/net/** — lane-aware TCP response flush and network-control/data polling.
   - apps/root-task/src/storage/** — persistence drain scheduling that cannot preempt physical input.
 Commands: cargo test -p root-task --tests schedule && cargo test -p root-task --test operator_lanes
-Checks: Physical input and TCP response liveness stay bounded; saturated lanes report busy/yield/drop evidence.
+Checks: No-TCP and authenticated-TCP priority modes match the charter, physical input and TCP response liveness stay bounded, and saturated lanes report busy/yield/drop evidence.
 Deliverables: Bounded operator-lane scheduler without a thread pool or new protocol.
 
 Title/ID: m27d-resumable-output-and-diagnostics
@@ -8937,7 +8953,7 @@ Milestones 25g and 25h delivered host tickets, federation relay, and bounded WAL
 
 This milestone closes those gaps using existing as-built mechanisms (`hive-gateway`, `cohsh-core` ticket claims, `/host/tickets/*`, relay WAL, manifest compiler) without introducing new VM protocols or relaxing single-writer semantics.
 
-**As-built alignment note:** The current REST gateway requires a gateway request-auth token for mutating routes, but REST writes still execute through the gateway's configured role/ticket rather than a delegated per-request capability ticket. Host-ticket idempotency by `id + idempotency_key` and relay dedupe exist, but writer-epoch fencing and strict Queen intent dedupe are not yet implemented. Milestone 28b hardens those specific gaps; it must not present current request-auth, relay dedupe, or host-ticket idempotency as delegated REST identity or failover fencing.
+**As-built alignment note:** The current REST gateway requires a gateway request-auth token for mutating routes, but REST writes still execute through the gateway's configured role/ticket rather than a delegated per-request capability ticket. Host-ticket idempotency by `id + idempotency_key` and relay dedupe exist, but writer-epoch fencing and strict Queen intent dedupe are not yet implemented. Milestone 28b hardens those specific gaps; it must not present current request-auth, relay dedupe, or host-ticket idempotency as delegated REST identity or failover fencing. Because the current upstream console session still authenticates as the gateway role/ticket, 28b must also distinguish **gateway-enforced caller delegation** from any future **VM-verified caller identity** claim.
 
 **Sequencing note:** Milestone 28b closes the host/gateway authority floor required by the Milestone 28b1 coexistence gate and by Milestones 28c, 28d, and 29b. Full VM cap-bundle authority and structured worker/driver fault lifecycle are split into Milestone 28e so the host actuation floor can ship and be audited without bundling every seL4 cap-bundle conversion into the same atomic gate.
 
@@ -8968,15 +8984,16 @@ Strengthen authority and failover guarantees while preserving current transport 
 
 ## Deliverables
 
-### 1) Delegated REST Identity (No Shared Queen Principal for Writes)
+### 1) Caller-Scoped REST Delegation (No Undifferentiated Write Authority)
 **Purpose:** Preserve gateway multiplexing while restoring caller-level capability boundaries.
 
 Implementation requirements:
 - Mutating REST routes (`/v1/fs/echo` and equivalent write paths) require:
   - gateway request-auth token, and
   - delegated capability ticket header (`x-cohesix-ticket`), validated using existing ticket claims rules.
-- Gateway maintains caller identity and quota state keyed by delegated ticket identity (hash). If the VM console transport remains single-client or single-writer for the selected profile, the gateway must serialize writes over the existing authenticated console path rather than opening parallel VM console sessions.
-- Delegated ticket claims (`role`, `subject`, `mount scopes`, `budgets`) constrain what each REST caller can mutate.
+- Gateway maintains caller identity and quota state keyed by delegated ticket identity (hash). The gateway's configured upstream role/ticket is a transport-authority ceiling, not the caller identity: a request is admitted only when the delegated ticket is valid and the concrete path/action is within both the delegated claims and the gateway ceiling.
+- If the VM console transport remains single-client or single-writer for the selected profile, the gateway serializes writes over the existing authenticated console path rather than opening parallel sessions or reattaching a shared session between callers. Audit/evidence records bind the delegated ticket hash, gateway credential class, concrete path/action, and upstream `ACK`/`ERR` result.
+- Delegated ticket claims (`role`, `subject`, `mount scopes`, `budgets`) constrain what each REST caller can mutate. Gateway-enforced delegation must not be described as VM-verified caller identity unless a separately versioned VM envelope/path actually carries and verifies the caller binding.
 - Read-only REST routes may remain gateway-role scoped in compatibility mode. The delegated-ticket requirement for mutating REST paths is an authority-contract change and must update `docs/API_GUIDELINES.md`, `docs/HOST_API.md`, OpenAPI fixtures, CLI/REST tests, and release notes in the same milestone work.
 
 As-built leverage:
@@ -9127,6 +9144,7 @@ Implementation requirements:
 ## Checks (Definition of Done)
 - Mutating REST request without delegated ticket is denied deterministically and audited.
 - Delegated caller cannot exceed ticket scopes/quotas even when gateway is multiplexing many clients.
+- Generated profile state and evidence distinguish gateway-enforced delegation from VM-verified caller identity; the default single-console projection cannot claim the latter.
 - Duplicate strict Queen intent (`id + idempotency_key`) never repeats side effects.
 - Legacy `/queen/ctl` fixtures either continue to pass through compatibility mode or are updated under the full breaking-change process with schema-version evidence.
 - Stale writer epoch is rejected deterministically across local and relayed host tickets.
@@ -9146,6 +9164,7 @@ Implementation requirements:
 ## Compiler touchpoints
 - `coh-rtc` schema/version update for:
   - delegated-ticket enforcement policy on REST mutating paths,
+  - delegated-identity claim class (`gateway_enforced` versus a separately evidenced `vm_verified` path) and gateway transport-authority ceiling,
   - idempotent Queen intent envelope schema, compatibility mode, and dedupe bounds,
   - writer-epoch fencing policy and relay requirements,
   - production secret references,
@@ -9169,14 +9188,14 @@ Title/ID: m28b-rest-delegated-identity
 Goal: Require delegated capability tickets for mutating REST operations while preserving gateway multiplexing.
 Inputs: apps/hive-gateway, apps/coh, apps/cohsh, docs/HOST_API.md, docs/API_GUIDELINES.md
 Changes:
-  - apps/hive-gateway/src/main.rs — require x-cohesix-ticket on mutating routes and enforce ticket-scoped upstream session routing.
-  - apps/hive-gateway/src/auth.rs — delegated ticket validation + bounded cache keyed by ticket hash.
+  - apps/hive-gateway/src/main.rs — require x-cohesix-ticket on mutating routes, intersect delegated scope with the gateway transport-authority ceiling, serialize the single upstream console session, and correlate each write with its upstream ACK/ERR result.
+  - apps/hive-gateway/src/auth.rs — delegated ticket validation + bounded cache keyed by ticket hash, with explicit gateway-enforced versus VM-verified claim classification.
   - apps/coh/src/rest.rs — pass delegated ticket header for mutating REST calls.
   - apps/cohsh/src/transport/rest.rs — propagate delegated ticket on write paths.
   - docs/HOST_API.md + docs/API_GUIDELINES.md + resources/openapi/hive-gateway.yaml — version and document the delegated REST authority contract.
 Commands: cargo test -p hive-gateway && cargo test -p coh && cargo test -p cohsh
-Checks: Writes without delegated ticket fail deterministically; writes with scoped ticket succeed only within claims.
-Deliverables: Gateway no longer executes all writes as an undifferentiated shared Queen principal.
+Checks: Writes without delegated ticket fail deterministically; writes with scoped tickets succeed only within the intersection of caller claims and gateway ceiling; single-console profiles do not claim VM-verified caller identity.
+Deliverables: Gateway writes are caller-scoped and attributable without overstating the identity visible to the VM.
 
 Title/ID: m28b-queen-ctl-idempotency
 Goal: Add deterministic idempotency for Queen intents without silently breaking legacy /queen/ctl fixtures.
@@ -10031,11 +10050,11 @@ Implementation requirements:
 - Add an MCP server mode to `apps/hive-gateway` with:
   - stdio transport for local MCP hosts that launch the gateway as a subprocess,
   - Streamable HTTP endpoint for remote-capable MCP clients, sharing the gateway's loopback-only default and non-loopback risk override,
-  - protocol revision and capability negotiation pinned in `docs/HOST_API.md` and generated gateway metadata,
+  - protocol revision, JSON Schema dialect, authorization mode, and capability negotiation pinned in `docs/HOST_API.md` and generated gateway metadata,
   - HTTP `MCP-Protocol-Version` handling, optional `Mcp-Session-Id` lifecycle, explicit session termination behavior, and deterministic unsupported-version errors,
   - `tools`, `resources`, and `prompts` capabilities with paginated discovery where needed,
   - optional list-change notifications only when the implementation has deterministic change detection.
-- Remote MCP transport must validate `Origin`, require gateway request auth, and require delegated tickets for mutating tools.
+- Remote MCP transport must validate `Origin`, require gateway request auth, and require delegated tickets for mutating tools. A production non-loopback profile must implement the authorization contract of the pinned MCP revision or explicitly document and test a narrower compatibility mode; a preconfigured loopback bearer token alone is not generic remote MCP authorization conformance.
 - Stdio mode must read credentials only from environment/config, never from prompts or tool arguments.
 - MCP stdout/stdin must carry only valid MCP JSON-RPC messages; logs go to stderr or the existing gateway log path.
 - Streamable HTTP mode must support the accepted request/response content types, bounded SSE streams when enabled, explicit cancellation handling, and no broadcast of one client's server messages to another client.
@@ -10121,11 +10140,12 @@ As-built leverage:
 Implementation requirements:
 - Add an A2A-compatible HTTP facade in `hive-gateway` behind existing gateway request auth, loopback default, non-loopback exposure override, rate limits, and broker backpressure.
 - Record the accepted A2A protocol revision, Agent Card `protocolVersion`, endpoint paths, supported binding, media type, extension policy, unsupported-version errors, and streaming/push support in `docs/HOST_API.md` and generated gateway metadata.
+- Pin one accepted binding/revision mapping in generated policy. JSON-RPC, HTTP+JSON, and gRPC method or endpoint names must not be mixed across protocol revisions, and fixtures must be regenerated when that mapping changes.
 - Publish an Agent Card from `/.well-known/agent-card.json` when A2A is enabled; alternate generated paths may exist only as additional configured aliases. The card must advertise only enabled Cohesix skills, authentication requirements, endpoint interfaces, and safe capability summaries; it must not expose raw tickets, secrets, host paths, or executor internals.
 - Provide the authenticated extended Agent Card endpoint only when policy enables it, and ensure the extended card obeys stricter access checks than the public discovery card.
 - A2A skills map to the same real-world operational families as MCP tools: CUDA/GPU inventory and leases, PEFT import/activate/rollback, optional NeMo probe/infer/guardrail/evaluator actions, K8s cordon/drain/lease sync, systemd status/start/stop/restart, Docker status/stop/restart, and evidence/timeline inspection.
-- A2A JSON-RPC `message/send` and `message/stream` create or resume 28c run/task envelopes only after fixed skill/action/input schema validation. Free-form natural language is never translated directly into host execution.
-- A2A task query, cancel, resubscribe, push-notification config, and streaming update methods are projections of existing run/checkpoint/evidence records, host-ticket receipt state, and gateway audit state. Cancellation may append a validated Cohesix cancel/control request when one exists; it must not kill provider executors directly.
+- A2A `SendMessage` and `SendStreamingMessage` operations (or the exact generated equivalents for the pinned binding/revision) create or resume 28c run/task envelopes only after fixed skill/action/input schema validation. Free-form natural language is never translated directly into host execution.
+- A2A `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`, push-notification configuration, and streaming update operations (or their generated binding equivalents) are projections of existing run/checkpoint/evidence records, host-ticket receipt state, and gateway audit state. Cancellation may append a validated Cohesix cancel/control request when one exists; it must not kill provider executors directly.
 - A2A artifacts are bounded, redacted references to evidence packs, timelines, checkpoint summaries, provider receipts, and MCP/Cohesix resource refs. Large files, secrets, raw ticket material, and provider credentials are never embedded in artifacts.
 - A2A push notification configs are disabled by default. If enabled, they require SSRF-safe URL validation, generated allowlists, per-task auth material, bounded retry/backoff, signed or authenticated delivery where configured, and audit evidence for every callback attempt.
 
@@ -10260,7 +10280,7 @@ As-built leverage:
 
 **Checks (Definition of Done)**
 - MCP lifecycle, `MCP-Protocol-Version`, optional `Mcp-Session-Id`, cancellation, `tools/list`, `tools/call`, `resources/list`, `resources/templates/list`, `resources/read`, `prompts/list`, and `prompts/get` pass against the accepted protocol revision recorded in the docs.
-- A2A Agent Card discovery, Agent Card `protocolVersion`, optional authenticated extended Agent Card, JSON-RPC `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`, `tasks/resubscribe`, push-notification config, artifact updates, and streaming updates pass against the accepted protocol revision recorded in the docs.
+- A2A Agent Card discovery, Agent Card `protocolVersion`, optional authenticated extended Agent Card, and the generated `SendMessage`, streaming, task query/list/cancel/subscribe, push-notification, artifact, and update mappings pass against the accepted protocol revision and binding recorded in the docs.
 - `crates/cohsh-core/fixtures/grammar.sha256` and generated `docs/snippets/cohsh_grammar.md` remain unchanged unless a separately approved breaking grammar milestone changes them.
 - Every MCP read maps to existing `LS`, `CAT`, or `TAIL`; every MCP write maps to existing `ECHO` into a documented Cohesix control file or `/host/tickets/spec`.
 - Every A2A task maps to an existing 28c run/checkpoint/evidence record and, when mutating, an existing Cohesix host-ticket/control action. No A2A message text or metadata becomes authorization.
@@ -10288,6 +10308,7 @@ As-built leverage:
 - `coh-rtc` emits `gateway.mcp.*` policy:
   - enabled transports (`stdio`, `streamable_http`),
   - accepted MCP protocol revision,
+  - JSON Schema dialect and authorization mode for the accepted revision,
   - HTTP protocol-version header policy, optional session-id policy, cancellation policy, and SSE enablement/bounds,
   - endpoint path,
   - resource URI roots and path allowlists,
@@ -10299,11 +10320,12 @@ As-built leverage:
   - redaction and evidence-export flags.
 - Manifest validation rejects MCP enablement when Milestone 28b delegated write identity or required audit/replay/fencing prerequisites are disabled for mutating tools.
 - Manifest validation rejects NeMo MCP tools unless the 28c optional NeMo provider family and parity checks are enabled.
-- `coh-rtc` emits a shared `gateway.provider_actions.*` registry for every provider operation exposed through MCP tools or A2A skills, including action ids, target schema refs, dry-run support, idempotency requirements, writer-epoch requirements, receipt schema refs, and evidence-export behavior.
+- `coh-rtc` emits a protocol-neutral `gateway.provider_actions.*` projection derived solely from the Milestone 28b1 `providers.*` registry for every provider operation exposed through MCP tools or A2A skills, including action ids, target schema refs, dry-run support, idempotency requirements, writer-epoch requirements, receipt schema refs, and evidence-export behavior. It is generated compatibility metadata, not a second action registry or authority source.
 - Manifest validation rejects any MCP tool or A2A skill whose provider action mapping is absent from the shared registry or whose schema diverges between the two protocol projections.
 - `coh-rtc` emits `gateway.a2a.*` policy:
   - enabled endpoint/binding,
   - accepted A2A protocol revision,
+  - binding-specific operation and endpoint mappings for that revision,
   - Agent Card `protocolVersion` and extension policy,
   - Agent Card path, provider metadata, skill ids, and interface declarations,
   - task, artifact, stream, and push-notification bounds,
@@ -10331,22 +10353,22 @@ Title/ID: m28d-mcp-policy-ir
 Goal: Admit MCP gateway policy in compiler IR without changing Cohesix console or NineDoor grammar.
 Inputs: tools/coh-rtc, configs/root_task.toml, docs/HOST_API.md, docs/SECURITY.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — `gateway.mcp.*` schema for transports, endpoint, resource roots, tool allowlists, prompt ids, bounds, and prerequisite gates.
-  - tools/coh-rtc/src/validate.rs — reject mutating MCP tools without delegated identity, audit/replay, and provider action prerequisites.
+  - tools/coh-rtc/src/ir.rs — `gateway.mcp.*` schema for revision, JSON Schema dialect, authorization mode, transports, endpoint, resource roots, tool allowlists, prompt ids, bounds, and prerequisite gates.
+  - tools/coh-rtc/src/validate.rs — reject mutating MCP tools without delegated identity, audit/replay, and provider action prerequisites, and reject non-loopback production profiles whose authorization mode does not satisfy the pinned revision.
   - tools/coh-rtc/src/codegen/* — generated gateway MCP defaults and docs snippets.
 Commands: cargo test -p coh-rtc && scripts/check-generated.sh
-Checks: MCP policy is compiler-owned, profile-gated, and does not touch `cohsh-core` grammar specs.
+Checks: MCP revision/schema/auth policy is compiler-owned, profile-gated, conformance claims match the selected mode, and `cohsh-core` grammar specs remain untouched.
 Deliverables: Generated MCP gateway policy and validation gates.
 
 Title/ID: m28d-a2a-policy-ir
 Goal: Admit A2A gateway policy in compiler IR without changing Cohesix console or NineDoor grammar.
 Inputs: tools/coh-rtc, configs/root_task.toml, docs/HOST_API.md, docs/SECURITY.md, docs/TEST_PLAN.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — `gateway.a2a.*` schema for endpoint/binding, accepted revision, Agent Card path, skill ids, task/artifact/stream/push bounds, callback allowlists, and prerequisite gates.
-  - tools/coh-rtc/src/validate.rs — reject A2A task-creating or task-mutating skills without 28b delegated authority, 28c durable run/task state, audit/replay, evidence export, and provider action prerequisites.
+  - tools/coh-rtc/src/ir.rs — `gateway.a2a.*` schema for endpoint/binding, accepted revision, binding-specific operation mappings, Agent Card path, skill ids, task/artifact/stream/push bounds, callback allowlists, and prerequisite gates.
+  - tools/coh-rtc/src/validate.rs — reject mixed-revision or mixed-binding operation names and reject A2A task-creating or task-mutating skills without 28b delegated authority, 28c durable run/task state, audit/replay, evidence export, and provider action prerequisites.
   - tools/coh-rtc/src/codegen/* — generated A2A gateway defaults, Agent Card metadata, and docs snippets.
 Commands: cargo test -p coh-rtc && scripts/check-generated.sh
-Checks: A2A policy is compiler-owned, profile-gated, and does not touch `cohsh-core` grammar specs or NineDoor semantics.
+Checks: A2A revision/binding mappings are compiler-owned and internally consistent, profile gates hold, and `cohsh-core` grammar specs and NineDoor semantics remain untouched.
 Deliverables: Generated A2A gateway policy, Agent Card metadata, and validation gates.
 
 Title/ID: m28d-provider-action-registry-projection
@@ -10417,7 +10439,7 @@ Goal: Implement A2A Agent Card discovery and task/message/artifact projection ov
 Inputs: apps/hive-gateway, apps/host-ticket-agent, apps/coh/src/evidence.rs, generated provider action registry, docs/HOST_API.md, docs/API_GUIDELINES.md, accepted A2A protocol revision.
 Changes:
   - apps/hive-gateway/src/a2a/agent_card.rs — generated Agent Card publication with enabled skills, auth requirements, supported interfaces, and no secret/internal executor data.
-  - apps/hive-gateway/src/a2a/tasks.rs — `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`, `tasks/resubscribe`, push-notification config, status mapping, idempotency, and refusal handling backed by 28c run/checkpoint/evidence records.
+  - apps/hive-gateway/src/a2a/tasks.rs — generated `SendMessage`, streaming, task query/list/cancel/subscribe, push-notification, status, idempotency, and refusal mappings for the pinned A2A binding/revision, backed by 28c run/checkpoint/evidence records.
   - apps/hive-gateway/src/a2a/artifacts.rs — bounded redacted artifact references for evidence packs, timelines, checkpoints, provider receipts, and Cohesix resource refs.
   - apps/hive-gateway/src/a2a/push.rs — disabled-by-default push notification config with allowlist, SSRF validation, per-task auth material, bounded retry, and audit evidence.
   - apps/hive-gateway/tests/a2a_protocol.rs + apps/hive-gateway/tests/a2a_tasks.rs — Agent Card, message, stream, task, artifact, cancel, push-refusal, duplicate, and unauthorized fixtures.
@@ -11208,7 +11230,9 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (platform):**  
-Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is the read-only ESP image (UEFI loader + kernel + rootserver + manifest).
+Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a guest-stateless AMI sourced from an immutable snapshot containing the ESP image (UEFI loader + kernel + rootserver + manifest).
+
+On EC2, an EBS-backed AMI launches with a persistent root EBS volume created from the AMI snapshot. "Diskless" therefore means that Cohesix admits no runtime block-storage service, never mounts or writes the boot volume after firmware/loader handoff, and reconstructs runtime state from signed boot/fabric inputs; it does **not** mean EC2 presents physically read-only or absent boot media.
 
 **Goal**  
 Boot Cohesix on AWS EC2 (Arm64) via **UEFI -> elfloader.efi -> seL4 -> root-task**, then bring up ENA networking through a manifest-declared isolated AWS network runtime admitted by root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
@@ -11217,21 +11241,31 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 
 **As-built alignment note:** The repo currently has UEFI profile/configuration material, a UEFI shim crate, and `scripts/uefi/*` helpers, but it does not have AWS profile admission, `scripts/aws/*`, isolated ENA runtime descriptors/images, outbound 9door mount code, or approved root-task TLS/HTTP/IMDS support. Milestone 30 must start with boot-chain and TCB reconciliation before runtime code depends on UEFI, TLS/HTTP, IMDS, or AWS-specific assumptions.
 
+**Prerequisites**
+- Milestone **26d** completed for the accepted seL4 15 provenance and timer/syscall baseline. Milestone 30 must still create and validate a separate AWS-selected seL4 build; Pi 4 or QEMU artifacts are not AWS boot proof.
+- Milestone **27b** completed before production AWS assurance claims so generated witnesses, HAL authority checks, and claim-class separation cover the AWS profile.
+- Milestone **27c** completed before D2 peak-performance work so ENA queue affinity and service-bucket evidence consume the generated core-local scheduling substrate rather than inventing a parallel scheduler.
+- Milestone **28e** completed before any production profile claims linked ENA runtime cap-bundle authority or structured fault containment. A pre-28e EC2 boot/first-link probe is permitted only as explicitly non-production feasibility evidence.
+
 **Non-negotiable constraints**
+- The first executable gate is EC2 Arm64 platform feasibility, not ENA implementation. Re-check the selected instance family's current custom-OS support posture, then prove AMI registration, UEFI entry, serial/console evidence, selected seL4 platform support, and the hardware-description handoff used for memory, GIC/timer, PCIe configuration, and interrupts (ACPI, DT, or a documented conversion). If that gate fails, stop before ENA, TLS/HTTP, IMDS, or fabric-mount code.
 - Milestone 30 may not assume the UEFI/ESP baseline is authoritative until the first AWS task reconciles it against the current Pi 4 U-Boot pivot, `scripts/uefi/esp-build.sh`, `docs/BOOT_REFERENCE.md`, `docs/HARDWARE_BRINGUP.md`, and the charter rule for UEFI tooling. If the baseline is stale, AWS work starts by refreshing or reintroducing it under this milestone with docs and tests.
-- AWS boot work must produce a boot-resource map before ENA, TLS/HTTP, IMDS, or outbound fabric code depends on the profile. The map records ESP contents, kernel/root-task/rootserver artifacts, manifest hash, signed bootstrap manifest, trust anchors, seL4 handoff assumptions, attestation evidence, and explicit non-claims.
+- AWS boot work must produce a boot-resource map before ENA, TLS/HTTP, IMDS, or outbound fabric code depends on the profile. The map records AMI snapshot/root-volume geometry, ESP contents, kernel/root-task/rootserver artifacts, manifest hash, signed bootstrap manifest, trust anchors, seL4 handoff and ACPI/DT assumptions, attestation evidence, firmware-managed persistent state, and explicit non-claims.
+- The AWS diskless profile disables Milestone 27 VM-local persistence and rejects the EC2 root EBS device, ESP, or any other local block device as a spool/settings backend. The immutable AMI snapshot is build provenance; the launched root EBS volume is persistent platform boot media that Cohesix treats as read-only and outside runtime authority.
 - In-VM TLS, HTTP, and IMDSv2 are a deliberate TCB expansion, not a routine AWS delta. They are disabled by default until `docs/ARCHITECTURE.md`, `docs/NETWORK_CONFIG.md`, `docs/SECURITY.md`, `docs/SECURITY_NIST_800_53.md`, and `docs/AWS_AMI.md` explicitly approve the bounded client-only threat model and generated manifest gates.
 - AWS VM profiles require dependency-closure evidence before runtime code lands: no `std`, libc, POSIX filesystem/process API, DNS resolver, web framework, unapproved TLS/HTTP stack, or host-only ecosystem dependency may enter the root-task or isolated runtime closure.
 - No listener is introduced in the VM. AWS networking is outbound-only after seL4, and any Secure9P fabric mount must preserve existing frame bounds, role-scoped authority, and deterministic error behavior.
 - AWS ecosystem coexistence remains host/fabric-side unless explicitly admitted by the TCB gate. Cloud-side adapters, observability, deployment automation, and policy workflows must reuse `/host/tickets/*`, provider registry evidence, and host/fabric termination where the security review rejects in-VM TLS/HTTP.
 - If the security review rejects in-VM TLS/HTTP, the milestone must use a signed bootstrap manifest and a host/fabric-side termination design instead of importing a web/TLS stack into the root-task closure.
 - ENA is PCIe/MMIO/DMA-backed physical hardware. Steady ENA admin queue, IO queue, interrupt/poll, RX/TX descriptor, and DMA/cache service must live in a manifest-declared isolated AWS network runtime over the fixed driver-task ABI after HAL admission. Root-task remains the HAL/resource admitter, descriptor publisher, bounded service-turn client, network stack owner, and diagnostics publisher; it must not contain a root-owned steady ENA driver.
+- AWS ENA records must extend the existing fixed driver-task ABI without forking a second incompatible contract. A platform-neutral ABI extraction is allowed only with byte-layout/version compatibility tests for existing Pi 4 descriptors, generated migration, and no change to accepted Pi evidence by implication.
 - The initial single TX/RX queue polling path is bootstrap evidence only. Peak-performance AWS claims require a later generated multi-queue, MSI-X or equivalent notification, queue-affinity, and core-local service-bucket evidence phase.
 
 **Deliverables**
 #### A0) Boot-chain / TCB reconciliation and boot-resource map
-- Reconcile the current UEFI/ESP builder, Pi 4 U-Boot pivot, seL4 handoff assumptions, and AWS profile requirements before runtime AWS code lands.
-- Produce a boot-resource map covering ESP layout, elfloader, kernel, root task/rootserver, optional initrd, resolved manifest hash, signed fabric bootstrap manifest, root trust anchors, selected attestation inputs, and explicit non-claims.
+- Reconcile the current UEFI/ESP builder, Pi 4 U-Boot pivot, selected EC2 instance family, seL4 platform/handoff assumptions, and AWS profile requirements before runtime AWS code lands.
+- Prove a bounded EC2 Arm64 feasibility chain before ENA work: register an EBS-backed UEFI AMI, reach a deterministic UEFI/serial marker, identify the selected seL4 platform gap or reach root-task, and capture the ACPI/DT, memory, GIC/timer, PCIe, interrupt, and console inputs the port must consume.
+- Produce a boot-resource map covering AMI snapshot/root-volume geometry, ESP layout, elfloader, kernel, root task/rootserver, optional initrd, resolved manifest hash, signed fabric bootstrap manifest, root trust anchors, selected attestation inputs, hardware-description handoff, firmware-managed persistent state, and explicit non-claims.
 - Record whether root-task TLS/HTTP/IMDS is accepted, rejected, or deferred. If deferred or rejected, AWS bootstrap must use signed manifest inputs and host/fabric-side termination rather than importing those stacks into the VM closure.
 
 #### A) AWS compiler + profile admission
@@ -11241,9 +11275,10 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
   - bootstrap retry limits
   - signed fabric bootstrap manifest requirements
   - optional IMDSv2 allowlist and bounded response sizes
+  - explicit diskless state that disables `persistence.*` and rejects local block backends
 
 #### B) EFI System Partition integration for AWS
-- Reuse the existing deterministic ESP builder as the canonical packager and produce an AWS-consumable ESP image containing:
+- Reuse the existing deterministic ESP builder as the canonical packager and produce an AWS-consumable EBS root image whose firmware-visible ESP contains:
   - `EFI/BOOT/BOOTAA64.EFI` (elfloader EFI)
   - `kernel.elf`
   - `rootserver` (root task ELF)
@@ -11253,6 +11288,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 
 #### C) ENA isolated network runtime (adminq + single TX/RX queue bootstrap)
 - ENA PCIe discovery, BAR admission, adminq, completion path, and single TX/RX queue pair run in a manifest-declared isolated AWS network runtime using HAL-declared PCIe/MMIO/DMA/shared-buffer resources.
+- ENA command/completion records consume the single fixed driver-task ABI contract; any platform-neutral extraction preserves existing Pi 4 ABI layout/version behavior through explicit compatibility fixtures.
 - Root-task owns only generated descriptor publication, bounded ENA service turns, net-stack integration, and diagnostics.
 - Minimal polling dataplane with single TX/RX queue pair is accepted only as first-link/bootstrap evidence, not as peak AWS throughput closure.
 
@@ -11279,8 +11315,9 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 - Dependency-closure and hostile-fabric evidence for every AWS-enabled VM profile before production claims.
 
 **Commands**
-- `cmake --build seL4/build --target elfloader.efi`
-- `scripts/uefi/esp-build.sh --manifest configs/generated/root_task_resolved.json`
+- `cmake --build "$SEL4_BUILD_DIR" --target rootserver_image`
+- `scripts/uefi/esp-build.sh --manifest configs/generated/root_task_resolved.json --sel4-build-dir "$SEL4_BUILD_DIR"`
+- `scripts/aws/platform-feasibility.sh --state-dir out/aws/m30-platform-feasibility`
 - `scripts/aws/build-esp.sh`
 - `scripts/aws/register-ami.sh`
 - `scripts/aws/launch-smoke.sh`
@@ -11291,24 +11328,28 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 
 **Checks (DoD)**
 - EC2 instance boots directly into Cohesix with no intermediate OS.
+- EC2 Arm64 feasibility evidence identifies the supported instance family, AMI registration path, UEFI/serial result, selected seL4 platform status, and authoritative ACPI/DT hardware-description path before ENA runtime work is accepted.
 - Boot-chain reconciliation and the boot-resource map are complete before AWS runtime code cites UEFI, TLS/HTTP, IMDS, ENA, or outbound fabric assumptions.
 - AWS dependency-closure gate proves the VM profile remains `no_std` and excludes libc, POSIX filesystem/process APIs, DNS resolver, web framework, and unapproved TLS/HTTP dependencies.
 - ENA link comes up deterministically; DHCP lease acquired within bounded time.
 - ENA hardware service must use a manifest-declared isolated ENA runtime; root-task direct ENA MMIO/DMA paths fail profile validation outside explicitly named QEMU/host compatibility tests.
+- ENA runtime records use the fixed shared driver-task ABI, and any platform-neutral extraction proves existing Pi 4 descriptor layout/version compatibility.
 - 9door namespace mounts successfully and control plane is reachable.
 - Single-queue polling evidence is classified as bootstrap/link proof. Peak AWS performance claims require the D2 multi-queue/core-local evidence lane.
 - ENA benchmark artifacts are archived for bootstrap and, where peak-performance claims are made, multi-queue or notification-backed service-bucket runs. EC2 results are compared against the latest accepted rolling benchmark baseline only for capacity/context; AWS target evidence is its own lane and must not overwrite Pi/QEMU proof.
 - IMDSv2 metadata fetch is absent by default or optional and bounded after approval; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
 - If TLS/HTTP is approved, proof shows it remains client-only and non-persistent: no listener, no background refresh loop, bounded trust-anchor/cert storage from signed manifest inputs, bounded handshake/input parsing, and deterministic boot behavior when fabric, TLS, or IMDS is unavailable.
-- Power cycle returns to identical clean state (no persistence).
+- Cohesix never mounts or writes the root EBS volume after boot handoff, the AWS profile exposes no Milestone 27 persistence backend, and reboot/stop-start restores runtime state only from signed inputs. Any firmware-managed UEFI-variable persistence is inventoried separately and cannot be described as Cohesix control-plane persistence.
 - Failure cases (no fabric, hostile fabric, forged remote manifest, auth failure, ticket widening attempt, Secure9P-bound relaxation attempt, replay, malformed frame, link down) fail terminally or refuse boundedly with explicit console diagnostics, no local policy mutation, no widened authority, and no partial trust state.
 - AWS security docs record the accepted posture for any root-task TLS/HTTP code, or explicitly state that TLS/HTTP termination remains outside the VM.
 
 **Compiler touchpoints**
 - `coh-rtc` emits:
   - AWS profile / backend admission for `ena`
-  - boot-resource map schema, artifact hashes, signed-bootstrap manifest references, trust-anchor references, selected attestation inputs, and generated non-claim summaries for AWS profiles.
+  - boot-resource map schema, AMI/root-volume geometry, artifact hashes, hardware-description handoff, signed-bootstrap manifest references, trust-anchor references, selected attestation inputs, firmware-state inventory, and generated non-claim summaries for AWS profiles.
   - isolated ENA runtime descriptors, ENA queue bounds, bootstrap retry limits, and later multi-queue/core-local performance gates.
+  - explicit diskless-profile validation that disables `persistence.*` and rejects the root EBS/ESP or other local block devices as runtime persistence backends.
+  - the single fixed driver-task ABI version and any generated AWS extension records, with compatibility evidence for existing Pi 4 descriptors.
   - Fabric bootstrap manifest schema and signature requirements.
   - dependency-closure allow/deny lists for AWS VM profile crates.
   - IMDSv2 allowlist, max response bytes, and retry bounds (optional gate).
@@ -11317,31 +11358,61 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 **Task Breakdown**
 ```
 Title/ID: m30-uefi-and-tcb-reconciliation
-Goal: Reconcile AWS boot/security assumptions with the current Cohesix UEFI baseline and tiny-TCB networking posture before runtime work starts.
+Goal: Reconcile AWS platform, boot, and security assumptions with the current Cohesix UEFI baseline and tiny-TCB networking posture before runtime work starts.
 Inputs: scripts/uefi/esp-build.sh, docs/BOOT_REFERENCE.md, docs/HARDWARE_BRINGUP.md, docs/NETWORK_CONFIG.md, docs/SECURITY.md, docs/SECURITY_NIST_800_53.md, docs/AWS_AMI.md, AGENTS.md.
 Changes:
-- docs/AWS_AMI.md — state the accepted AWS boot chain, whether the UEFI/ESP builder is current, the boot-resource map fields, and what evidence proves them.
+- docs/AWS_AMI.md — state the selected EC2 Arm64/custom-OS support posture, accepted AWS boot chain, whether the UEFI/ESP builder is current, the boot-resource map fields, EBS root-volume truth, hardware-description handoff, and what evidence proves them.
 - docs/NETWORK_CONFIG.md + docs/SECURITY.md + docs/SECURITY_NIST_800_53.md — record whether root-task TLS/HTTP/IMDS is accepted, rejected, or deferred for AWS.
 - docs/BUILD_PLAN.md — keep Milestone 30 subtasks synchronized with the accepted TCB posture.
 Commands:
 - scripts/uefi/esp-build.sh --help
 - scripts/ci/check_test_plan.sh
 Checks:
-- AWS work has an explicit boot-chain baseline, boot-resource map, and security-approved plan for TLS/HTTP/IMDS before ENA bootstrap code depends on those assumptions.
+- AWS work has an explicit platform-support decision, boot-chain baseline, boot-resource map, hardware-description path, and security-approved plan for TLS/HTTP/IMDS before ENA bootstrap code depends on those assumptions.
 Deliverables:
-- UEFI/ESP and AWS TCB reconciliation note, including a boot-resource map, that blocks accidental import of web/TLS stacks into the VM.
+- EC2 platform/UEFI and AWS TCB reconciliation note, including a boot-resource map, that blocks unsupported platform assumptions and accidental import of web/TLS stacks into the VM.
+
+Title/ID: m30-uefi-esp
+Goal: Validate or refresh the deterministic ESP builder and selected seL4 UEFI build before EC2 feasibility work.
+Inputs: upstream elfloader EFI build, selected `SEL4_BUILD_DIR`, `scripts/uefi/esp-build.sh`, manifest outputs, accepted m30 UEFI/TCB reconciliation.
+Changes:
+- scripts/uefi/esp-build.sh — remain the canonical ESP builder for Cohesix only if `m30-uefi-and-tcb-reconciliation` accepts it as current; otherwise refresh or replace it under the same documented contract.
+- scripts/aws/build-esp.sh — thin AWS wrapper producing an AMI-ready EBS root/ESP image from the canonical builder output.
+Commands:
+- cmake --build "$SEL4_BUILD_DIR" --target rootserver_image
+- scripts/uefi/esp-build.sh --manifest configs/generated/root_task_resolved.json --sel4-build-dir "$SEL4_BUILD_DIR"
+Checks:
+- The selected build directory supplies the UEFI elfloader, kernel, and embedded rootserver truth; the ESP reaches the deterministic UEFI/root-task marker required by the platform-feasibility probe.
+Deliverables:
+- Documented ESP layout and build recipe for the selected Arm64 UEFI profile.
+
+Title/ID: m30-ec2-arm64-platform-feasibility
+Goal: Prove the selected EC2 Arm64 family can launch a custom Cohesix UEFI/seL4 payload and expose the platform inputs required before ENA implementation.
+Inputs: accepted m30 UEFI/TCB reconciliation, selected `SEL4_BUILD_DIR`, scripts/uefi/esp-build.sh, AWS account/region/instance-family test profile, docs/AWS_AMI.md.
+Changes:
+- scripts/aws/platform-feasibility.sh — register a disposable EBS-backed Arm64 UEFI probe image, launch the selected instance family, capture console/serial and lifecycle evidence, and clean up bounded test resources.
+- docs/audit/M30_EC2_PLATFORM_FEASIBILITY.md — record AMI registration, UEFI marker, seL4/root-task reachability or exact platform blocker, ACPI/DT handoff, GIC/timer, memory, PCIe/interrupt, console, root-volume, and unsupported-feature evidence.
+- docs/AWS_AMI.md — classify the selected family as supported for further implementation, experimental with a named blocker, or unsupported.
+Commands:
+- scripts/aws/platform-feasibility.sh --state-dir out/aws/m30-platform-feasibility
+Checks:
+- AMI registration and UEFI entry are proven on the named instance family, and the selected seL4 platform either reaches root-task or has a bounded, explicit porting task before ENA work.
+- The evidence identifies the authoritative ACPI/DT and PCIe/interrupt discovery path; QEMU `virt` addresses or Pi DT assumptions are not reused implicitly.
+Deliverables:
+- Go/no-go EC2 Arm64 platform evidence that gates every later AWS runtime task.
 
 Title/ID: m30-aws-profile
 Goal: Admit AWS/ENA/IMDS bootstrap in compiler IR and profile selection before runtime implementation.
 Inputs: tools/coh-rtc, configs/, docs/AWS_AMI.md.
 Changes:
-- tools/coh-rtc/src/ir.rs — AWS profile, `ena` backend, isolated ENA runtime descriptor schema, bounded bootstrap schema, and later performance-gate fields.
+- tools/coh-rtc/src/ir.rs — AWS profile, selected hardware-description path, `ena` backend, isolated ENA runtime descriptor schema, bounded bootstrap schema, explicit diskless/no-persistence state, and later performance-gate fields.
 - tools/coh-rtc/src/codegen/{docs,rust}.rs — generated AWS/profile snippets and dependency allow/deny policy summaries.
 Commands:
 - cargo test -p coh-rtc
 Checks:
 - Runtime code can consume authoritative AWS/ENA/IMDS limits from generated outputs, and physical AWS profiles cannot enable root-owned ENA MMIO/DMA paths.
 - AWS profiles cannot enable TLS/HTTP/IMDS/fabric support without matching TCB posture and dependency-closure gates.
+- AWS diskless profiles reject `persistence.*`, the root EBS/ESP, and all local block backends as runtime spool/settings storage.
 Deliverables:
 - Compiler-defined AWS admission with docs snippets updated.
 
@@ -11361,23 +11432,27 @@ Checks:
 Deliverables:
 - Reproducible AWS VM dependency-closure evidence before runtime code can cite TLS/HTTP/IMDS or outbound fabric support.
 
-Title/ID: m30-uefi-esp
-Goal: Reuse the existing deterministic ESP builder for AWS Arm64 packaging.
-Inputs: upstream elfloader EFI build, `scripts/uefi/esp-build.sh`, manifest outputs.
+Title/ID: m30-shared-driver-task-abi
+Goal: Extend one fixed driver-task ABI for AWS without cloning or silently changing the accepted Pi 4 contract.
+Inputs: crates/pi4-driver-abi, apps/pi4-driver-runtime, apps/root-task/src/hal/driver_task.rs, tools/coh-rtc, accepted Pi 4 ABI fixtures and proof evidence.
 Changes:
-- `scripts/uefi/esp-build.sh` — remain the canonical ESP builder for Cohesix only if `m30-uefi-and-tcb-reconciliation` accepts it as current; otherwise refresh or replace it under the same documented contract.
-- `scripts/aws/build-esp.sh` — thin AWS wrapper producing an AMI-ready ESP image from the canonical builder output.
+- crates/driver-task-abi/src/** — extract only platform-neutral versioned headers, resource descriptors, command/completion framing, and proof fields needed by both Pi 4 and AWS runtimes.
+- crates/pi4-driver-abi/src/** — consume or re-export the shared records while preserving existing Pi 4 wire layout, version behavior, and profile-generated descriptors.
+- tools/coh-rtc/src/** — emit one ABI version/family plus platform-specific extension records; reject conflicting Pi/AWS layouts.
+- tests/fixtures/driver_task_abi/** — byte-layout, version, bounds, and old-Pi-fixture compatibility tests.
 Commands:
-- cmake --build seL4/build --target elfloader.efi
-- scripts/uefi/esp-build.sh --manifest configs/generated/root_task_resolved.json
+- cargo test -p driver-task-abi
+- cargo test -p pi4-driver-abi
+- cargo test -p pi4-driver-runtime
+- scripts/check-generated.sh
 Checks:
-- ESP boots to root-task via elfloader with deterministic serial output.
+- Existing Pi 4 descriptors and accepted fixtures remain byte-compatible, AWS extensions are versioned and bounded, and no second incompatible ring/service-turn contract is introduced.
 Deliverables:
-- Documented ESP layout and build recipe for Arm64.
+- One compiler-declared fixed driver-task ABI family ready for isolated ENA records.
 
 Title/ID: m30-ena-runtime-adminq
 Goal: Implement ENA PCIe discovery and admin queue in a manifest-declared isolated AWS network runtime.
-Inputs: apps/root-task HAL admission, shared driver-task ABI, apps/aws-driver-runtime, docs/AWS_AMI.md.
+Inputs: accepted m30 platform-feasibility evidence, apps/root-task HAL admission, m30 shared driver-task ABI, apps/aws-driver-runtime, docs/AWS_AMI.md.
 Changes:
 - apps/root-task/src/hal/aws_ena.rs — HAL admission for ENA PCIe BARs, IRQ/notification policy, DMA/shared-buffer descriptors, and runtime image selection.
 - crates/driver-task-abi/src/** — fixed-layout ENA init/adminq command records and completion evidence, preserving compatibility with the Pi 4 driver-task ABI shape.
@@ -11390,6 +11465,7 @@ Commands:
 Checks:
 - Feature negotiation succeeds with minimal feature set.
 - ENA BAR/MMIO/DMA access occurs only in the isolated runtime after HAL admission; root-task remains a bounded client.
+- ENA records use the generated shared ABI version and cannot alter existing Pi descriptor layout or evidence classification.
 Deliverables:
 - AdminQ protocol notes in docs/AWS_AMI.md.
 

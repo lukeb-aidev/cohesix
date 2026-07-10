@@ -1029,6 +1029,8 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_RX_IRQ_PRESERVE_REASON": "none",
         "WIFI_RX_IRQ_PRESERVE_INT": "0x00000000",
         "WIFI_RX_IRQ_PRESERVE_ACK": "0x00000000",
+        "WIFI_RX_IRQ_EPISODE_PRESERVES": 0,
+        "WIFI_RX_IRQ_EPISODE_REARMS": 0,
         "WIFI_RXTRACE_SEQ": 0,
         "WIFI_RXTRACE_START_TICKS": "0x00000000",
         "WIFI_RXTRACE_PRE_SAMPLE_DELTA_TICKS": 0,
@@ -10154,6 +10156,7 @@ def test_gate_summary_preserves_v3_rxtrace_shape_from_detail_line() -> None:
             "transfer_result=0x00000000 payload_after=0x00000000 "
             "irq_preserve_count=2 irq_preserve_reason=2 "
             "irq_preserve_int=0x20000040 irq_preserve_ack=0x20000000 "
+            "irq_episode_preserves=1 irq_episode_rearms=4 "
             "trace_seq=17 start_ticks_lo=0x12345678 "
             "pre_sample_delta_ticks=12 transfer_delta_ticks=345 "
             "post_sample_delta_ticks=456",
@@ -10168,6 +10171,8 @@ def test_gate_summary_preserves_v3_rxtrace_shape_from_detail_line() -> None:
     assert gates.wifi_phase == "runtime-rx"
     assert gates.wifi_rx_irq_preserve_count == 2
     assert gates.wifi_rx_irq_preserve_reason == "rframe-pending"
+    assert gates.wifi_rx_irq_episode_preserves == 1
+    assert gates.wifi_rx_irq_episode_rearms == 4
     assert gates.wifi_rxtrace_seq == 17
     assert gates.wifi_rxtrace_start_ticks == 0x12345678
     assert gates.wifi_rxtrace_pre_sample_delta_ticks == 12

@@ -957,10 +957,12 @@ CYW43 parent prompt polls also preserve the parent request while the child
 reports same-request SDIO-owner progress. `cyw43-sdio-owner-reply` means the
 SDIO owner completed its nested turn but the CYW43 parent has not yet published
 the parent completion; root gives only that phase a larger finite keep-active
-window. Parent `CONTROL_POLL` turns also get a bounded same-descriptor no-reply
-resume budget so a split BCDC reply can publish after stale control/event frames
-are drained; data `RX_POLL` still gets no such budget, and unresolved transport
-resumes do not count as host-EAPOL RX polls.
+window. A parent `CONTROL_POLL`, `RX_POLL`, `CONTROL_FRAME`, or data-TX
+PromptSlice performs exactly one HAL service attempt per outer event-pump turn.
+HAL retains a still-active descriptor, staged payload, and request sequence for
+the next turn; root never runs a private same-descriptor resume loop. An
+unresolved transport slice does not spend the logical host-EAPOL RX poll or
+allocate a new BCDC id.
 SDIO engine-init completion details are part of the isolated runtime ABI: success
 returns `0x5500` (`ready`), and faults preserve the exact subgate as
 `0x5501` (`adopt-power-missing`), `0x5502` (`adopt-clock-failed`), `0x5503`
@@ -1072,13 +1074,13 @@ M4-adjacent RX/credit/control-idle evidence before the matched key completion,
 so pairwise PTK and initial GTK installs both use the long bounded
 16,384-poll/5,000 ms matched-reply window. If stale/nonmatching evidence is the
 terminal proof for a host-EAPOL `wsec_key` install that already used the
-extended SDPCM header and explicit pre-TX drain, root may resubmit the same key
-body with a fresh BCDC ioctl id under the bounded key-specific retry budget.
-The retry gate accepts either the preserved split reason or the encoded `0x430*`
-control-exchange timeout reason, so a terminal generic
+extended SDPCM header and explicit pre-TX drain, root retains that one
+outstanding request and continues bounded receive-only reply windows for the
+same CDC command and ioctl id. It does not retransmit the key body or allocate
+a new id. The continuation gate accepts either the preserved split reason or
+the encoded `0x430*` control-exchange timeout reason, so a terminal generic
 `cyw43-control-exchange` fault with nonmatching-reply evidence still reaches the
-bounded retry path. Matched nonzero firmware status remains fatal and is not
-retried as stale.
+bounded same-id receive path. Matched nonzero firmware status remains fatal.
 progress. Those lines emit `CYW43_DRIVER_TASK_EVENT_RX` and remain linked
 runtime evidence; they do not release DHCP/data without EAPOL secure proof.
 Isolated runtime RX polls now request
@@ -1099,11 +1101,12 @@ into `rxsrc_mode`, `rxsrc_*`,
 `control_rxsrc_mode`, and `control_rxsrc_*` fields on
 `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS`; sampled owner state with missing
 `IENx=0x07` or Function 2 readiness reports
-`next_action=inspect-sdio-owner-function2-rx-source`. Repeated pending
-host-EAPOL status rows with no semantic progress may be suppressed; the next
-full status row carries `suppressed_status=<count>`, while required, secure,
-event, RX-observed, EAPOL, admission refresh/rescue, and post-secure rows remain
-unsuppressed. In proof-oriented RX
+`next_action=inspect-sdio-owner-function2-rx-source`. Repeated unchanged
+`pending`, `required`, and `secure-awaiting-carrier` host-EAPOL status rows may
+be suppressed; the next full status row carries `suppressed_status=<count>`,
+while secure completion, error, event, RX-observed, EAPOL-progress, admission
+refresh/rescue, and post-secure state changes remain unsuppressed. In
+proof-oriented RX
 polls, if a 512-byte hintless byte-mode wide probe is empty while owner-sampled
 CYW43 source bits still show Function 2 ready plus frame-indication,
 host-interrupt, or card-interrupt asserted, the isolated runtime now forces a
@@ -1120,9 +1123,15 @@ frame and keeps queued nonmatching frames for the matching root poll; an empty
 retry keeps DHCP/data blocked and names the RX-source latch as the next
 blocker. The linked runtime owns SDIO interrupt-source clearing: when Function 1
 `RFRAME` is zero but source bits still assert a pending frame, it preserves
-`I_HMB_FRAME_IND` only for a boot-local bounded grace budget, then acknowledges
-the stale frame-indication bit so an obsolete source latch cannot trap later control
-reply polling. If a Function 2 CMD53 transfer itself fails before the runtime can
+`I_HMB_FRAME_IND` only for a bounded asserted-empty episode, then acknowledges
+the stale frame-indication bit so an obsolete source latch cannot trap later
+control-reply polling. A fresh Function-2-ready source sample with no frame,
+host, or card interrupt, concrete SDPCM-next/RFRAME progress, or a confirmed
+FRAME_IND acknowledgement rearms the next episode. A failed terminal
+acknowledgement does not rearm it. The cumulative preserve counter remains
+diagnostic-only; the trace separately exports current episode use and rearm
+count so an early episode cannot silently disable later control or credit
+service. If a Function 2 CMD53 transfer itself fails before the runtime can
 classify the first-read payload, the isolated runtime now performs the same
 bounded recovery on the real transfer path: it aborts Function 2, writes
 Function 1 `FRAMECTRL.RF_TERM` for RX or `FRAMECTRL.WF_TERM` for TX, drains the
@@ -1134,10 +1143,37 @@ DHCP policy. After post-release Function 2 readiness, the isolated runtime also 
 interrupt path by writing CCCR `IENx=0x07` before the SDIO core `HOSTINTMASK` /
 `FUNCTIONINTMASK` programming, so association events and AP M1 can reach the
 Function 2 receive lane.
-After a successfully drained frame, the runtime preserves the frame interrupt
-only for concrete queued work such as a cached SDPCM next-frame length or a
-nonzero Function 1 `RFRAME` count; a pre-ACK reread of `I_HMB_FRAME_IND` alone
-is stale source evidence and must be cleared, not preserved.
+RX and control-poll service follows Linux's software-latched DPC contract.
+At service entry the runtime captures `SDIO_INT_STATUS & HOSTINTMASK`, W1C
+acknowledges exactly the captured hardware bits, and retains them in persistent
+`pending_intstatus`/`rxpending` state. Host mailbox work runs before Function 2
+drain. Posting `SMB_NAK` sets `rxskip`; only an observed
+`HMB_DATA_NAKHANDLED` clears it and relatches `I_HMB_FRAME_IND`, so a timeout or
+quiet RFRAME sample cannot authorize a speculative read. Frames no longer W1C
+the device status individually. A bounded drain retains software FRAME_IND
+while next-length, RFRAME, queue, or drain-budget work remains, then performs
+one post-drain hardware recapture so an edge crossing the first acknowledgement
+is serviced on the next outer turn.
+Every fully validated SDPCM header advances a persistent expected RX sequence;
+a mismatch increments bounded diagnostics, accepts the otherwise valid frame,
+and resynchronizes to the observed sequence plus one, matching brcmfmac instead
+of dropping retransmit evidence. SDPCM byte 8 updates the ordered per-priority
+XOFF mask. `I_HMB_FC_STATE` supplies global XOFF and `I_HMB_FC_CHANGE` is
+acknowledged and reread before DATA TX resumes, retaining XOFF when the reread
+fails or another edge crossed the acknowledgement. DATA TX checks both masks
+before and after credit service using the packet's BDC priority; CONTROL TX is
+exempt so recovery ioctls can still make forward progress. Mailbox
+`HMB_DATA_FC/FCDATA` is an ordered replacement for the per-priority XOFF mask.
+Glom subframes advance only RX-sequence diagnostics; the glom superframe header
+alone owns XOFF and TX-window updates.
+An unsent ETH TX retains its exact payload offset, length, and digest before the
+wire boundary. Each PromptSlice performs at most one RX/credit action and does
+not assign an SDPCM sequence until credit and flow-control admission both pass.
+DATA and CONTROL Function 2 writes are one-shot: once CMD53 is issued, a
+host-ambiguous completion advances that exact sequence once and is never
+replayed. Root retains the exact M2/M4/group-M2 frame, connection epoch, and
+continuation across an idle pre-credit slice, then starts the existing
+incremental credit drain only after submitted-sequence proof.
 Post-release firmware-mailbox readiness, CYW43 control replies, SDPCM TX
 credit, and RX retransmit acknowledgement waits use Pi-counter millisecond
 deadlines on timer-enabled builds; their legacy loop counts remain fallback or
@@ -1200,7 +1236,15 @@ valid BSSID without association/link carrier, root may spend exactly one
 isolated runtime `bsscfg:join` rescue and records it as
 `CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE`; `WLC_SET_SSID` is only the matched
 unsupported/badarg fallback for that rescue, and neither rescue success nor a
-SET_SSID event is carrier proof. Gate 7 is reported with stable sub-gates:
+SET_SSID event is carrier proof. An authoritative association/link loss also
+mints a single-consumer reconnect token bound to the newly advanced connection
+epoch. The next idle host-EAPOL service turn claims that matching token before
+submitting one fresh `bsscfg:join`, independently of `WLC_GET_BSSID` diagnostic
+contents. A transient pre-acceptance control failure may re-arm the same epoch
+for one final bounded submit; an accepted join consumes the token, and
+association/link-up clears an unused token. Zero BSSID remains diagnostic-only
+during an ordinary initial join. Stale sessions and later epochs cannot consume
+an older token. Gate 7 is reported with stable sub-gates:
 `7a=join-submit`, `7b=association`, `7c=eapol-rx`,
 `7d=eapol-handshake`, and `7e=secure-release`; the normalizer keeps
 `WIFI_GATE=7` for compatibility and adds `WIFI_SUBGATE` /
@@ -1454,23 +1498,59 @@ context and the retry/poll window.
 - Host-EAPOL admits the PAE group multicast, sends bounded EAPOL-Start frames
   through the isolated CYW43 `ETH_TX` descriptor while waiting for AP M1, derives
   PMK/PTK locally, writes M2/M4 in WPA2-PSK order, verifies M3 MIC/replay state,
-  installs the pairwise PTK before transmitting M4, and installs any M3-carried
-  GTK before secure data release. Missing M4 TX proof and matched `wsec_key`
-  failures remain fatal; a duplicate generic `wsec` refresh is not part of the
-  Linux-equivalent completion gate because AES `wsec` was already programmed in
-  station security setup before join.
+  transmits and credit-drains M4 before changing firmware key state, then
+  installs the pairwise PTK and any M3-carried GTK before secure data release.
+  Initial handshakes, duplicate-M3 M4 retransmits, and pairwise rekeys use the
+  same Linux order: every M4 submit is credit-drained and connection-epoch
+  revalidated before later key or secure-state work. Missing M4 TX or drain
+  proof, failed post-secure M2/group-M2 work, and matched `wsec_key` failures
+  revoke secure/data/IP admission, advance the connection epoch, and reopen
+  reauthentication; a duplicate
+  generic `wsec` refresh is not part of the Linux-equivalent completion gate
+  because AES `wsec` was already programmed in station security setup before
+  join.
+  The pure WPA state distinguishes prepared key material from committed
+  firmware state. M3 may prepare PTK/GTK bytes and M4, but `ptk_installed`,
+  `gtk_installed`, and secure completion remain false until the corresponding
+  exact zero-status firmware completions are committed in PTK-then-GTK order.
+  Timeout, carrier-epoch loss, or transport failure aborts the pending install
+  instead of leaving a multi-turn false-installed state.
   Those `wsec_key` installs use the split `CONTROL_FRAME`/`CONTROL_POLL` path
   with the host-EAPOL key reply window and always request the runtime pre-TX
   drain. PTK and initial GTK both use the long bounded key window because the
   firmware can trail M4-adjacent control/data evidence before returning the
-  matched `wsec_key` completion. Stale, commandless, or nonmatching replies
-  trigger only the bounded fresh-id retry budget. When that budget is exhausted
-  after the control frame was accepted for TX and only interleaved
-  event/nonmatching reply evidence was observed, Cohesix records
-  `action=accept-after-tx` and continues; matched nonzero firmware status
-  remains fatal. Host-EAPOL unwraps
+  matched `wsec_key` completion. The production boot path keeps each pairwise,
+  embedded GTK, and later group-GTK install as an incremental transaction
+  across event-pump turns: it submits exactly one
+  `CONTROL_FRAME` with one ioctl id, performs exactly one receive-only
+  `CONTROL_POLL` operation per outer service slice, retains the original id through
+  bounded late-reply windows, and enforces one aggregate transaction deadline.
+  Only an exact command/id/zero-status reply whose declared response length fits
+  the received payload commits the prepared key. Broadcom carrier-loss events
+  received on either the event or data channel advance the connection epoch
+  before a later control reply can commit stale key state. Progress projection
+  drains at most two retained event summaries per service slice; the global
+  carrier/epoch transition still occurs immediately at capture time. A
+  credit-bearing
+  `FrameReady` completion is
+  channel work before it is TX-drain proof: root applies event/carrier state,
+  retains control replies, or defers data/EAPOL into the bounded RX queue, then
+  revalidates the connection epoch before honoring its SDPCM credit. Stale,
+  commandless, or nonmatching replies open only bounded receive-only
+  continuation windows for the original command/ioctl id; they never cause a
+  second key-install TX. A PTK or GTK is accepted only after that exact CDC
+  command/ioctl id returns zero status. Continuation exhaustion, no reply, a
+  nonmatching reply, and a matched nonzero firmware status all remain fatal;
+  TX acceptance alone is never key-install proof. An ambiguous Function 2
+  timeout, CRC, R5, or other initial key-TX fault fails closed and is not
+  eligible for the generic split-control same-command replay. Host-EAPOL unwraps
   GTK with AES-128 key unwrap and waits after Group M2 before secure release when
-  the GTK arrives in the group-key handshake. Post-secure filter restoration
+  the GTK arrives in the group-key handshake. M2, M4, post-secure M4, and Group
+  M2 credit drain are persistent event-pump phases: each retains the submitted
+  SDPCM sequence proof plus connection epoch, performs one receive/control
+  action per outer slice, and cannot replay the submitted EAPOL frame. M4 key
+  install and Group-M2 GTK commit occur only on a later slice after credit-drain
+  and carrier-epoch proof. Post-secure filter restoration
   (`mcast_list`, `allmulti=0`, `promisc=0`) returns to Linux station mode and is
   a best-effort data-reception repair:
   root attempts all three controls and reports `repair-deferred` when one times
@@ -1487,17 +1567,22 @@ context and the retry/poll window.
   nonmatching evidence unless the reply matches the expected `wsec_key` ioctl
   id. Root keeps receiving for four additional `CONTROL_POLL` turns so an
   adjacent carrier event or the current matched reply wins. Carrier loss aborts
-  the key wait without retry; otherwise expiration produces one encoded
-  nonmatching result for the existing bounded fresh-id retry. Only a matched
-  nonzero reply or bounded retry exhaustion fails the key. EAPOL TX uses the
+  the key wait; otherwise expiration produces one encoded nonmatching result
+  for the existing bounded same-id continuation path. Only a matched nonzero
+  reply or bounded continuation exhaustion fails the key. EAPOL TX uses the
   extended SDPCM data shape with BDC priority `6`; control writes may wait for
   CDC replies, but data/event writes must not inherit a control-plane reply wait.
   `eapol_start` counts only the bounded isolated runtime 802.1X start frames; it
   is not DHCP/data success by itself.
-- Every active split-control reply window is channel-first. A runtime
-  `CONTROL_POLL` returns a queued control-channel frame before queued data,
-  event, or EAPOL frames; root then accepts only the exact CDC command/id and
-  retains nonmatching replies in its bounded keyed queue. Root defers every
+- Every active split-control reply window is wire-order first. A runtime
+  `CONTROL_POLL` returns the oldest already-read SERVICE frame. When its queue
+  is empty it performs one bounded physical drain with a zero wanted mask so
+  DATA, EVENT, and CONTROL frames enter the queue in SDPCM order, then returns
+  the head. Root accepts only the exact CDC command/id as the awaited reply and
+  retains nonmatching replies in its bounded keyed queue. A full keyed queue
+  preserves its older copied replies instead of evicting the likely outstanding
+  ioctl, and an exact reply is removed only after successful ring restaging.
+  Root defers every
   interleaved data-channel frame into the bounded pending queue without
   recursively entering host-EAPOL while the outer control transaction owns the
   reply window; the normal service turn replays those frames after the outer
@@ -1510,14 +1595,46 @@ context and the retry/poll window.
   behind retransmitted M1 traffic. Post-secure M1, M3, and group-key responses
   are protocol work and must not be discarded merely because DHCP has not bound
   yet.
+- The isolated CYW43 runtime treats Function 1 `RFRAME` as a readiness/read-ahead
+  hint, not as authoritative SDPCM packet length. Every hinted RX performs the
+  Linux-shaped 64-byte first-read, validates the SDPCM length/complement pair,
+  reads the remainder named by that header, and decodes against the complete
+  packet length. Stale short, invalid, and over-capacity `RFRAME` values cannot
+  reject the first read or truncate a larger CDC reply into a header fragment;
+  only the validated header length may reject an oversized packet. A plausible
+  nonzero `RFRAME` never substitutes for an empty or malformed first-read
+  header. Empty first-reads retain their source-aware idle result, malformed
+  length/complement/header prefixes return `firstread-invalid`, and the normal
+  receive path terminates Function 2 RX plus posts `SMB_NAK` before returning.
+  A valid header whose packet length exceeds the bounded receive capacity uses
+  the same recovery while retaining its precise remainder-too-large result.
+  Pre-TX drain probes preserve the latch without abort/NAK. Rejected first-read
+  data is never credited as a drained frame and never clears the RX source. While a
+  control reply owns the outer
+  transaction, replay-equivalent EAPOL frames and exact duplicate pre-secure
+  data frames are coalesced on arrival in the bounded root queue; intentional
+  coalescing is not reported as an RX drop, while real capacity loss remains
+  counted and fail-closed.
+- Authenticated TCP console sessions bind their root session to the exact
+  transport connection ID captured at `ATTACH`. A delayed disconnect event may
+  tear down only the session owned by that ID, so a quick replacement
+  connection cannot lose its pending `TAIL` data or `END` sentinel to the prior
+  connection's close notification. Multi-turn stream output also captures its
+  command source and network connection when the stream begins; later serial or
+  local-seat diagnostics cannot redirect the remaining TCP stream while all
+  operator inputs remain serviceable between bounded stream turns.
 - Any authoritative association/link-down event closes secure/data admission,
   clears the unproven Wi-Fi address, advances a monotonic connection epoch, and
-  reopens bounded host-EAPOL reassociation. PTK, GTK, M4, SCB authorization,
-  filter restoration, and secure publication revalidate that epoch after every
-  split-control wait. A reply from an invalidated handshake may complete the
-  outer CDC ownership transaction, but it cannot publish keys or secure state.
-  A previously secure marker cannot keep DHCP, ARP, or TCP open while
-  association or link state is down.
+  reopens bounded host-EAPOL reassociation. The disconnect epoch itself owns one
+  accepted reconnect, independent of diagnostic BSSID contents. Root claims the
+  epoch token before submission, allows at most two pre-acceptance control
+  attempts, and consumes the authority only after `bsscfg:join` or its matched
+  fallback is accepted. Initial-join zero BSSID remains non-authoritative. PTK,
+  GTK, M4, SCB authorization, filter restoration, and secure publication
+  revalidate that epoch after every split-control wait. A reply from an
+  invalidated handshake may complete the outer CDC ownership transaction, but
+  it cannot publish keys or secure state. A previously secure marker cannot keep
+  DHCP, ARP, or TCP open while association or link state is down.
 - `WIFI_GATE=7`, `wifi-host-eapol-pending`, and
   `wifi-host-eapol-required` are not Wi-Fi connection success. They preserve the
   secure boundary while event-pump turns yield back to serial, USB keyboard,
@@ -1562,7 +1679,8 @@ context and the retry/poll window.
   isolated runtime evidence; bounded `wifi probe-ht` and stateful `wifi load-fw` /
   `wifi retry` fail closed with `pi4-wifi-driver-task-runtime-required` when no
   isolated runtime can satisfy the request. Post-join `EVENT_LINK` without the
-  link flag is `wifi-link-down`, not DHCP progress.
+  link flag is `link-down` in the host-EAPOL event trace and `wifi-link-down` at
+  the network gate, not DHCP progress.
 - Join-completion event delivery is now subscribed in the isolated control path,
   but it is still not Wi-Fi success by itself. The secure-completion
   gate is host-EAPOL: M1/M2/M3/M4, PTK/GTK `wsec_key` installation, and secure
@@ -1778,7 +1896,22 @@ context and the retry/poll window.
   remembered across polls and consumed before falling back to the Function 1
   RFRAME byte count, so a glom descriptor, event frame, or data frame that
   points at the next Function 2 frame can be drained before root observes a false
-  empty poll. Pi 4 keeps Linux's `bus:rxglom=1` through attach and join; any
+  empty poll. The runtime preserves whether the pending length came from SDPCM
+  `nextlen` or Function 1 RFRAME instead of conflating the two. True `nextlen`
+  data/event readahead uses the bounded rounded length directly. As in Linux,
+  a control-channel frame or length mismatch encountered through `nextlen`
+  readahead is terminated and NAKed for a normal header-first retry before it
+  can be decoded, queued, or published to root. RFRAME and hintless reads retain
+  the 64-byte first-read plus header-authoritative remainder path. Those paths
+  validate the complete channel-0 payload before acknowledging `FRAME_IND`: if
+  the would-be BCDC payload still begins with a valid SDPCM length/complement
+  envelope, the runtime clears the pending read-ahead hint, terminates Function
+  2 RX, and posts `SMB_NAK` for a header-first retry. It never publishes that
+  truncated nested envelope through the driver-task ABI. Root also
+  rejects a control token whose first four bytes are an SDPCM length/complement
+  pair, so a leaked `0x004c/0xffb3` prefix cannot become a false BCDC
+  `cmd=0xffb3004c` key reply. Pi 4 keeps Linux's `bus:rxglom=1` through attach
+  and join; any
   future runtime disable or superframe expansion must be owned by the Wi-Fi
   driver task after secure carrier proof, with bounded work, counters, and
   recovery gates.
@@ -2560,8 +2693,9 @@ Required Cohesix shape:
   discipline with the long bounded key-install reply window: commandless
   (`cmd=0`, `id=0`) BADARG/UNSUPPORTED-style statuses are nonmatching stale
   evidence for that key install, not the completion of the expected ioctl. A
-  host-EAPOL `wsec_key` terminal stale/nonmatching timeout may be retried with
-  a fresh BCDC ioctl id under the key-specific retry budget. After PTK/GTK and
+  host-EAPOL `wsec_key` terminal stale/nonmatching timeout continues polling
+  receive-only for the original BCDC ioctl id under the key-specific bounded
+  window budget. No key-install request is retransmitted. After PTK/GTK and
   `wsec` are proven, Cohesix mirrors
   Linux's `BRCMF_C_SET_SCB_AUTHORIZE` port-authorized command with the AP/BSSID
   MAC. A matched zero-status reply records `authorized`; nonmatching, no-reply,

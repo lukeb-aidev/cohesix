@@ -194,6 +194,24 @@ impl HostEapolPairwiseDuplicateWindow {
     fn reset(&mut self) {
         *self = Self::empty();
     }
+
+    fn release_exact_response(
+        &mut self,
+        ap_mac: [u8; ETHER_ADDR_LEN],
+        anonce: &[u8],
+        replay_counter: &[u8],
+    ) -> bool {
+        if !self.valid
+            || self.ap_mac != ap_mac
+            || self.anonce.as_slice() != anonce
+            || self.replay_counter.as_slice() != replay_counter
+            || self.responses == 0
+        {
+            return false;
+        }
+        self.responses -= 1;
+        true
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -278,6 +296,9 @@ pub struct HostEapolState {
     group_replay_counter_valid: bool,
     ptk_installed: bool,
     gtk_installed: bool,
+    ptk_install_pending: bool,
+    gtk_install_pending: bool,
+    reset_duplicate_windows_on_gtk_commit: bool,
     m2_sent: bool,
     m4_sent: bool,
     ptk_candidates: [HostPtkCandidate; HOST_EAPOL_PTK_CANDIDATES],
@@ -325,6 +346,9 @@ impl HostEapolState {
             group_replay_counter_valid: false,
             ptk_installed: false,
             gtk_installed: false,
+            ptk_install_pending: false,
+            gtk_install_pending: false,
+            reset_duplicate_windows_on_gtk_commit: false,
             m2_sent: false,
             m4_sent: false,
             ptk_candidates: [HostPtkCandidate::empty(); HOST_EAPOL_PTK_CANDIDATES],
@@ -347,8 +371,77 @@ impl HostEapolState {
         self.post_secure_duplicate_drops
     }
 
+    pub fn rearm_exact_post_secure_m3_retransmit(&mut self, packet: &[u8]) -> bool {
+        let Some(body) = host_eapol_key_body(packet) else {
+            return false;
+        };
+        let Some(ap_mac) = ethernet_src(packet) else {
+            return false;
+        };
+        let anonce =
+            &body[EAPOL_KEY_BODY_NONCE_OFFSET..EAPOL_KEY_BODY_NONCE_OFFSET + WPA_NONCE_LEN];
+        let replay_counter = &body
+            [EAPOL_KEY_BODY_REPLAY_OFFSET..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN];
+        self.post_secure_m3_duplicate
+            .release_exact_response(ap_mac, anonce, replay_counter)
+    }
+
     pub const fn secure_complete(&self) -> bool {
         self.m2_sent && self.m4_sent && self.ptk_installed && self.gtk_installed
+    }
+
+    pub const fn ptk_install_pending(&self) -> bool {
+        self.ptk_install_pending
+    }
+
+    pub const fn gtk_install_pending(&self) -> bool {
+        self.gtk_install_pending
+    }
+
+    pub fn commit_ptk_install(&mut self) -> Result<(), &'static str> {
+        if !self.ptk_install_pending {
+            return Err("host-eapol-ptk-commit-without-pending");
+        }
+        self.ptk_install_pending = false;
+        self.ptk_installed = true;
+        self.record_installed_ptk_candidate(HostPtkCandidate {
+            valid: true,
+            ap_mac: self.ap_mac,
+            anonce: self.anonce,
+            snonce: self.snonce,
+            m1_replay_counter: self.m1_replay_counter,
+            ptk: self.ptk,
+        });
+        if self.reset_duplicate_windows_on_gtk_commit && !self.gtk_install_pending {
+            self.reset_post_secure_duplicate_windows();
+            self.reset_duplicate_windows_on_gtk_commit = false;
+        }
+        Ok(())
+    }
+
+    pub fn commit_gtk_install(&mut self) -> Result<(), &'static str> {
+        if !self.gtk_install_pending {
+            return Err("host-eapol-gtk-commit-without-pending");
+        }
+        if !self.ptk_installed {
+            return Err("host-eapol-gtk-commit-before-ptk");
+        }
+        self.gtk_install_pending = false;
+        self.gtk_installed = true;
+        if self.reset_duplicate_windows_on_gtk_commit {
+            self.reset_post_secure_duplicate_windows();
+            self.reset_duplicate_windows_on_gtk_commit = false;
+        }
+        Ok(())
+    }
+
+    pub fn abort_pending_key_install(&mut self) {
+        self.ptk_install_pending = false;
+        self.gtk_install_pending = false;
+        self.reset_duplicate_windows_on_gtk_commit = false;
+        self.ptk_installed = false;
+        self.gtk_installed = false;
+        self.m4_sent = false;
     }
 
     pub fn supplicant_rsn_ie(&self) -> &[u8] {
@@ -532,7 +625,6 @@ impl HostEapolState {
         if !secure_retransmit {
             self.apply_ptk_candidate(matched_candidate);
             self.m3_replay_counter.copy_from_slice(replay_counter);
-            self.record_installed_ptk_candidate(matched_candidate);
         }
         let key_data = host_eapol_key_data(body).ok_or("host-eapol-m3-key-data")?;
         let mut unwrapped = [0u8; HOST_EAPOL_KEY_DATA_MAX_LEN];
@@ -576,9 +668,13 @@ impl HostEapolState {
         );
         self.m4_sent = true;
         self.group_replay_counter_valid = false;
-        self.ptk_installed = true;
-        self.gtk_installed = gtk.is_some();
-        self.reset_post_secure_duplicate_windows();
+        self.ptk_installed = false;
+        if gtk.is_some() {
+            self.gtk_installed = false;
+        }
+        self.ptk_install_pending = true;
+        self.gtk_install_pending = gtk.is_some();
+        self.reset_duplicate_windows_on_gtk_commit = true;
         Ok(HostEapolAction::SendM4InstallKeys {
             len,
             keys: HostEapolInstallKeys {
@@ -763,7 +859,7 @@ impl HostEapolState {
         )?;
         self.group_replay_counter.copy_from_slice(replay_counter);
         self.group_replay_counter_valid = true;
-        self.gtk_installed = true;
+        self.gtk_install_pending = true;
         if !duplicate_group_replay {
             self.post_secure_group_duplicate.reset();
         }
@@ -1813,6 +1909,29 @@ fn write_test_gtk_kde(plain: &mut [u8], offset: &mut usize) -> Result<(), &'stat
 mod tests {
     use super::*;
 
+    fn commit_pairwise_action(state: &mut HostEapolState, action: HostEapolAction) {
+        let HostEapolAction::SendM4InstallKeys { keys, .. } = action else {
+            panic!("pairwise install action required");
+        };
+        assert!(state.ptk_install_pending());
+        assert!(!state.secure_complete());
+        state.commit_ptk_install().expect("commit PTK");
+        if keys.gtk.is_some() {
+            assert!(state.gtk_install_pending());
+            assert!(!state.secure_complete());
+            state.commit_gtk_install().expect("commit GTK");
+        }
+    }
+
+    fn commit_group_action(state: &mut HostEapolState, action: HostEapolAction) {
+        assert!(matches!(
+            action,
+            HostEapolAction::SendGroupM2InstallGtk { .. }
+        ));
+        assert!(state.gtk_install_pending());
+        state.commit_gtk_install().expect("commit group GTK");
+    }
+
     #[test]
     fn pbkdf2_matches_ieee_vector() {
         let mut pmk = [0u8; WSEC_PMK_LEN];
@@ -2079,6 +2198,7 @@ mod tests {
             m3_action,
             HostEapolAction::SendM4InstallKeys { .. }
         ));
+        commit_pairwise_action(&mut state, m3_action);
         assert_eq!(state.ptk, first_ptk);
         assert_eq!(state.snonce, first_snonce);
         assert!(state.secure_complete());
@@ -2126,6 +2246,7 @@ mod tests {
             m3_action,
             HostEapolAction::SendM4InstallKeys { .. }
         ));
+        commit_pairwise_action(&mut state, m3_action);
         assert_eq!(state.ptk, first_ptk);
         assert_eq!(state.snonce, first_snonce);
         assert!(state.secure_complete());
@@ -2167,8 +2288,12 @@ mod tests {
             _ => panic!("ptk-only m3 should send m4"),
         }
         assert!(state.m4_sent);
-        assert!(state.ptk_installed);
+        assert!(!state.ptk_installed);
+        assert!(state.ptk_install_pending());
         assert!(!state.gtk_installed);
+        assert!(!state.secure_complete());
+        state.commit_ptk_install().expect("commit PTK");
+        assert!(state.ptk_installed);
         assert!(!state.secure_complete());
 
         let mut group = [0u8; MAX_FRAME_LEN];
@@ -2182,7 +2307,61 @@ mod tests {
             group_action,
             HostEapolAction::SendGroupM2InstallGtk { .. }
         ));
+        commit_group_action(&mut state, group_action);
         assert!(state.secure_complete());
+    }
+
+    #[test]
+    fn key_install_stays_prepared_until_ordered_firmware_commits() {
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len = write_test_m1_frame(&mut m1, &station, &ap).expect("m1");
+        let mut tx = [0u8; MAX_FRAME_LEN];
+        assert!(matches!(
+            state
+                .handle_packet(station, &m1[..m1_len], &mut tx)
+                .expect("m1"),
+            HostEapolAction::SendM2 { .. }
+        ));
+        let mut m3 = [0u8; MAX_FRAME_LEN];
+        let m3_len = write_test_m3_frame(&mut m3, &station, &state).expect("m3");
+        assert!(matches!(
+            state
+                .handle_packet(station, &m3[..m3_len], &mut tx)
+                .expect("m3"),
+            HostEapolAction::SendM4InstallKeys { .. }
+        ));
+
+        assert!(state.ptk_install_pending());
+        assert!(state.gtk_install_pending());
+        assert!(!state.ptk_installed);
+        assert!(!state.gtk_installed);
+        assert!(!state.secure_complete());
+        assert_eq!(
+            state.commit_gtk_install(),
+            Err("host-eapol-gtk-commit-before-ptk")
+        );
+        state.commit_ptk_install().expect("commit PTK");
+        assert!(state.ptk_installed);
+        assert!(!state.secure_complete());
+        assert_eq!(
+            state.commit_ptk_install(),
+            Err("host-eapol-ptk-commit-without-pending")
+        );
+        state.commit_gtk_install().expect("commit GTK");
+        assert!(state.secure_complete());
+
+        state.ptk_install_pending = true;
+        state.gtk_install_pending = true;
+        state.abort_pending_key_install();
+        assert!(!state.ptk_install_pending());
+        assert!(!state.gtk_install_pending());
+        assert!(!state.ptk_installed);
+        assert!(!state.gtk_installed);
+        assert!(!state.m4_sent);
+        assert!(!state.secure_complete());
     }
 
     #[test]
@@ -2202,12 +2381,14 @@ mod tests {
 
         let mut m3 = [0u8; MAX_FRAME_LEN];
         let m3_len = write_test_m3_frame(&mut m3, &station, &state).expect("m3");
+        let first_install = state
+            .handle_packet(station, &m3[..m3_len], &mut tx)
+            .expect("first m3");
         assert!(matches!(
-            state
-                .handle_packet(station, &m3[..m3_len], &mut tx)
-                .expect("first m3"),
+            first_install,
             HostEapolAction::SendM4InstallKeys { .. }
         ));
+        commit_pairwise_action(&mut state, first_install);
         assert!(state.secure_complete());
 
         let retransmit = state
@@ -2244,12 +2425,14 @@ mod tests {
         ));
         let mut m3 = [0u8; MAX_FRAME_LEN];
         let m3_len = write_test_m3_frame(&mut m3, &station, &state).expect("m3");
+        let first_install = state
+            .handle_packet(station, &m3[..m3_len], &mut tx)
+            .expect("first m3");
         assert!(matches!(
-            state
-                .handle_packet(station, &m3[..m3_len], &mut tx)
-                .expect("first m3"),
+            first_install,
             HostEapolAction::SendM4InstallKeys { .. }
         ));
+        commit_pairwise_action(&mut state, first_install);
         assert!(state.secure_complete());
         let installed_ptk = state.installed_ptk;
         let installed_snonce = state.installed_snonce;
@@ -2316,12 +2499,14 @@ mod tests {
 
         let mut m3 = [0u8; MAX_FRAME_LEN];
         let m3_len = write_test_m3_frame(&mut m3, &station, &state).expect("m3");
+        let first_install = state
+            .handle_packet(station, &m3[..m3_len], &mut tx)
+            .expect("first m3");
         assert!(matches!(
-            state
-                .handle_packet(station, &m3[..m3_len], &mut tx)
-                .expect("first m3"),
+            first_install,
             HostEapolAction::SendM4InstallKeys { .. }
         ));
+        commit_pairwise_action(&mut state, first_install);
         assert!(state.secure_complete());
         let first_ptk = state.ptk;
 
@@ -2346,12 +2531,64 @@ mod tests {
 
         let mut later_m3 = [0u8; MAX_FRAME_LEN];
         let later_m3_len = write_test_m3_frame(&mut later_m3, &station, &state).expect("later m3");
+        let later_install = state
+            .handle_packet(station, &later_m3[..later_m3_len], &mut tx)
+            .expect("later m3");
         assert!(matches!(
-            state
-                .handle_packet(station, &later_m3[..later_m3_len], &mut tx)
-                .expect("later m3"),
+            later_install,
             HostEapolAction::SendM4InstallKeys { .. }
         ));
+        commit_pairwise_action(&mut state, later_install);
+        assert!(state.secure_complete());
+    }
+
+    #[test]
+    fn post_secure_ptk_only_rekey_preserves_installed_gtk() {
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len = write_test_m1_frame(&mut m1, &station, &ap).expect("m1");
+        let mut tx = [0u8; MAX_FRAME_LEN];
+        assert!(matches!(
+            state
+                .handle_packet(station, &m1[..m1_len], &mut tx)
+                .expect("m1"),
+            HostEapolAction::SendM2 { .. }
+        ));
+        let mut m3 = [0u8; MAX_FRAME_LEN];
+        let m3_len = write_test_m3_frame(&mut m3, &station, &state).expect("m3");
+        let initial_install = state
+            .handle_packet(station, &m3[..m3_len], &mut tx)
+            .expect("initial m3");
+        commit_pairwise_action(&mut state, initial_install);
+        assert!(state.secure_complete());
+
+        let mut rekey_m1 = m1;
+        let body = ETH_HEADER_LEN + EAPOL_HEADER_LEN;
+        rekey_m1[body + EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN - 1] = 3;
+        rekey_m1[body + EAPOL_KEY_BODY_NONCE_OFFSET + WPA_NONCE_LEN - 1] = 0x7e;
+        assert!(matches!(
+            state
+                .handle_packet(station, &rekey_m1[..m1_len], &mut tx)
+                .expect("pairwise rekey m1"),
+            HostEapolAction::SendM2 { .. }
+        ));
+
+        let mut rekey_m3 = [0u8; MAX_FRAME_LEN];
+        let rekey_m3_len = write_test_m3_frame_without_gtk(&mut rekey_m3, &station, &state)
+            .expect("PTK-only rekey m3");
+        let rekey_install = state
+            .handle_packet(station, &rekey_m3[..rekey_m3_len], &mut tx)
+            .expect("PTK-only rekey m3");
+        match rekey_install {
+            HostEapolAction::SendM4InstallKeys { keys, .. } => assert!(keys.gtk.is_none()),
+            _ => panic!("PTK-only rekey should prepare only the pairwise key"),
+        }
+        assert!(state.gtk_installed);
+        assert!(!state.secure_complete());
+        commit_pairwise_action(&mut state, rekey_install);
+        assert!(state.gtk_installed);
         assert!(state.secure_complete());
     }
 
@@ -2373,22 +2610,26 @@ mod tests {
         let mut m3 = [0u8; MAX_FRAME_LEN];
         let m3_len =
             write_test_m3_frame_without_gtk(&mut m3, &station, &state).expect("ptk-only m3");
+        let pairwise_install = state
+            .handle_packet(station, &m3[..m3_len], &mut tx)
+            .expect("m3 without gtk");
         assert!(matches!(
-            state
-                .handle_packet(station, &m3[..m3_len], &mut tx)
-                .expect("m3 without gtk"),
+            pairwise_install,
             HostEapolAction::SendM4InstallKeys { .. }
         ));
+        commit_pairwise_action(&mut state, pairwise_install);
 
         let mut group = [0u8; MAX_FRAME_LEN];
         let group_len =
             write_test_group_key_frame(&mut group, &station, &state).expect("group key");
+        let first_group_install = state
+            .handle_packet(station, &group[..group_len], &mut tx)
+            .expect("first group key");
         assert!(matches!(
-            state
-                .handle_packet(station, &group[..group_len], &mut tx)
-                .expect("first group key"),
+            first_group_install,
             HostEapolAction::SendGroupM2InstallGtk { .. }
         ));
+        commit_group_action(&mut state, first_group_install);
         assert!(state.secure_complete());
 
         let retransmit = state
@@ -2398,6 +2639,7 @@ mod tests {
             retransmit,
             HostEapolAction::SendGroupM2InstallGtk { .. }
         ));
+        commit_group_action(&mut state, retransmit);
         let rx_after_group_retransmit = state.rx_packets();
         let duplicate = state
             .handle_packet(station, &group[..group_len], &mut tx)
