@@ -7891,7 +7891,7 @@ CYW43_ARMCR4_RESET_EDGE_EXACT = {
 def summarize_terminal_cyw43_release_fault(
     events: Iterable[TraceEvent],
 ) -> tuple[str, str, int] | None:
-    """Return the last CYW43 RELEASE fault not followed by generation recovery."""
+    """Return the causal CYW43 RELEASE fault until a later release succeeds."""
 
     terminal: tuple[str, str, int] | None = None
     for event in events:
@@ -7921,13 +7921,6 @@ def summarize_terminal_cyw43_release_fault(
                 terminal = (blocker, stage, event.line)
             continue
         if terminal is None:
-            continue
-        if (
-            raw.startswith("driver_task_resource_init")
-            and stage == "cyw43-firmware-recover"
-            and status == "generation-reset-ready"
-        ):
-            terminal = None
             continue
         if (
             raw.startswith("driver_task_resource_init")

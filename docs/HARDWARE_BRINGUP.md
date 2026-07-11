@@ -298,9 +298,9 @@ Capture only these operator-facing lines from that session:
 - `[cyw43] host-eapol action=data-tx-shape ... bdc_priority=6 ...`
 - `[cyw43] host-eapol proof window ...`
 - `[cyw43] host-eapol proof counters ... eapol_rx_total=...`
-- `CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE ... status=ready action=set-ssid`
+- `CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE ... status=ready action=bsscfg-join`
 - `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS ... reason=cyw43-association-not-associated ...`
-- `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS ... assoc_set_ssid_rescue=yes ... next_action=inspect-cyw43-association-event-after-set-ssid-rescue`
+- `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS ... assoc_join_rescue=yes ... next_action=inspect-cyw43-association-event-after-bsscfg-join-rescue`
 - `[cyw43] host-eapol action=send-m2 ...`
 - `[cyw43] host-eapol action=send-m4 ...`
 - `[cyw43] host-eapol action=wait-pending-8021x-drain ...`
@@ -547,7 +547,7 @@ Capture only these operator-facing lines from that session:
 - Current M26b Wi-Fi correction: the follow-up 2026-05-13 board trace progressed through Function 2, multiple control replies, CLM upload, and `clmver`, then stalled only after Cohesix disabled `bus:txglom`/`bus:rxglom` before Linux's `mpc` preinit iovar. Root-task now keeps the Linux SDIO-preinit glom state through firmware `ver`, `clmver`, and `mpc`; RX-glom superframes remain bounded at the post-attach receive path instead of changing the preinit transport order.
 - Current M26b Wi-Fi correction: the Linux Pi 4 capture also proves `BRCMF_C_GET_REVINFO` (`cmd=98`, 68-byte response) between `cur_etheraddr` and CLM upload. Root-task now issues that mandatory attach proof before `clmload`, closing the remaining pre-CLM ordering gap before the current Gate 7 `mpc` frontier.
 - Current M26b Wi-Fi correction: the 2026-05-13 19:04 Cohesix trace supersedes that `mpc` frontier. The board now reaches Linux-order `revinfo`, CLM, firmware `ver`, `clmver`, `mpc`, `join_pref`, scan timing, event-mask, and `WLC_UP`, then stalls at the local legacy `WLC_SET_GMODE` (`cmd=110`) tail gate that is absent from the Pi 4 Linux station attach capture. Root-task now skips early `WLC_SET_GMODE`, `WLC_SET_BAND`, `WLC_SET_ANTDIV`, local AMPDU-limit writes, and `WLC_SET_PM` before join, while the proof normalizer reports that historical trace as `control-plane-legacy-gmode-stall` instead of flattening it to a generic partial-hint visibility timeout.
-- Current M26b Wi-Fi correction: the 2026-05-13 20:12 Cohesix trace supersedes the `gmode` frontier. The flashed image reached post-`UP` join programming, but the first join-security control path used a local raw `WLC_SET_WSEC` shape and then spun on Function 1 `0x0c020` host-latch/no-dongle-source polls after an `EVENT_IF`. Root-task now drains bounded post-`UP` events before join, uses the Linux primary-BSS FWIL path for join security, sends Linux's extended join payload first, and falls back to legacy `WLC_SET_SSID` only after an explicit join-iovar failure. The proof normalizer reports the old 20:12 trace as `WIFI_BLOCKER=join-programming-host-latch-loop`; the earlier ARMCR4 CMD53 R5 line in that same capture is recovered history because later control-plane replies and `WLC_UP` are present.
+- Current M26b Wi-Fi correction: the 2026-05-13 20:12 Cohesix trace supersedes the `gmode` frontier. The flashed image reached post-`UP` join programming, but the first join-security control path used a local raw `WLC_SET_WSEC` shape and then spun on Function 1 `0x0c020` host-latch/no-dongle-source polls after an `EVENT_IF`. Root-task now drains bounded post-`UP` events before join, uses the Linux primary-BSS FWIL path for join security, and sends only Linux's extended join payload. The former legacy `WLC_SET_SSID` fallback has been removed from initial join and reassociation; an exact `bsscfg:join` error fails closed. The proof normalizer reports the old 20:12 trace as `WIFI_BLOCKER=join-programming-host-latch-loop`; the earlier ARMCR4 CMD53 R5 line in that same capture is recovered history because later control-plane replies and `WLC_UP` are present.
 - Current M26b Wi-Fi correction: the 2026-05-13 20:40 post-flash trace keeps the board at the same Gate 7 family but narrows the cause. The first join-security command timed out as `name=bsscfg:wsec`; Linux `brcmf_fil_bsscfg_*` sends plain primary-BSS iovar names when `bsscfgidx=0`, with no literal `bsscfg:` prefix and no leading zero index. That intermediate fix moved join-security traffic to primary-BSS payload shape; the 22:00 correction below supersedes its remaining order drift and removes the uncaptured `infra=1` station-join write. The proof normalizer reports the old 20:40 trace as `WIFI_BLOCKER=primary-bsscfg-wrapper-join-security-loop`; IRQ 27 remains timer-only evidence.
 - Current M26b Wi-Fi correction: the 2026-05-13 22:00 trace supersedes the wrapper blocker and proves the remaining endless loop is join-security order. The image reached post-`UP` join and sent plain `wsec` first, then repeated IRQ158 host-latch/no-dongle-source clears until the `wsec` ioctl timed out; the serial root prompt appeared only after that terminal Wi-Fi failure, which is too late for usable boot. Linux programs `wpa_auth=0x00c0`, `auth=0`, `wsec=0x0004`, final `wpa_auth=0x0080`, `sup_wpa=1`, PMK, and then `join`; root-task now follows that order, removes the uncaptured `infra=1` write from station join, logs join-security iovar begin/ready edges, preserves `cyw43-join-security-wsec-first-loop` in post-failure `wifi diag`, reports host-only SDIO latches with `progress=no`, and fail-fasts after bounded no-progress polling so Wi-Fi cannot starve root-console handoff again. The proof normalizer reports the old 22:00 trace as `WIFI_BLOCKER=join-security-wsec-first-loop`.
 - Current M26b Wi-Fi correction: the 2026-05-13 22:45 trace proves that ordered-security image was live on hardware. The board reached the first `wpa_auth` iovar, received a late async `EVENT_IF` in the ioctl reply window, and then only cleared host-side IRQ158 latches with `progress=no` until bounded fail-fast. Root-task now keeps the strict control-reply wait active across non-control frames, programs the supported WPA2-PSK/CCMP RSN IE through `wpaie` before initial `wpa_auth`, preserves exact `wpa_auth` initial/final join-security blockers, and updates proof tooling to report this capture as `WIFI_BLOCKER=join-security-wpa-auth-initial-loop` rather than the stale `wsec` label. IRQ 27 remains timer-only evidence.
@@ -928,8 +928,9 @@ Capture only these operator-facing lines from that session:
   Function 2; it had not returned the selected SDIO card to idle. The corrected
   lifetime model keeps card enumeration in the persistent SDIO owner, halts
   ARMCR4 before advancing the firmware generation, preserves the enumerated
-  transport, and makes recovery `TRANSPORT_INIT` return ready without CMD0 or
-  CMD5. CARD_INT is now masked through initial attach and recovery reload, then
+  transport, and makes recovery `TRANSPORT_INIT` resume from retained
+  `CARD_READY` without CMD0/CMD5/CMD3/CMD7 while re-proving the FBR, host, and
+  backplane state. CARD_INT is now masked through initial attach and recovery reload, then
   rearmed only when CYW43 reports a fully successful `RELEASE`. This avoids
   publishing early or old-firmware events into the new DPC epoch and retains no
   physical RX fallback. Hardware proof is still required on a newly flashed
@@ -946,6 +947,17 @@ Capture only these operator-facing lines from that session:
   shadowed until one combined COMMAND commit, and writes at 400 kHz or below
   wait four SD clocks. This closes the Arasan successive-write loss window that
   the old direct root HAL avoided but the first linked runtime did not.
+- The next readback-proven boot
+  `[BUILD] 7171e9a69-dirty 2026-07-11T08:24:27Z` proved the combined iProc
+  commits by completing selected-card transport and the entire firmware/NVRAM
+  upload. Its first release read then exposed a separate polled-IRQ race: the
+  command waiter W1C-cleared co-arriving `DATA_AVAIL`/`DATA_END` but retained
+  only command state, so the strict four-byte ARMCR4 flush read waited for a
+  data edge it had already consumed. SDIO polling now acknowledges only the
+  requested positive phase plus terminal errors, leaving the other phase
+  latched. Early release recovery also honors the persistent selected-card
+  state instead of replaying CMD0/CMD5. This carries Linux's one-snapshot
+  command/data dispatch semantics into the serialized linked-runtime model.
 - W01/W02 of the resulting readback-proven
   `[BUILD] 7171e9a69-dirty 2026-07-11T02:26:39Z` image prove that persistent
   card recovery now works: both exact generation resets preserve the selected

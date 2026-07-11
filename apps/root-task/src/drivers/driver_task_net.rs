@@ -272,7 +272,6 @@ const CYW43_WLC_UP: u32 = 2;
 const CYW43_WLC_SET_PROMISC: u32 = 10;
 const CYW43_WLC_SET_INFRA: u32 = 20;
 const CYW43_WLC_GET_BSSID: u32 = 23;
-const CYW43_WLC_SET_SSID: u32 = 26;
 const CYW43_WLC_SET_PM: u32 = 86;
 const CYW43_WLC_GET_REVINFO: u32 = 98;
 const CYW43_WLC_SET_SCB_AUTHORIZE: u32 = 121;
@@ -688,6 +687,14 @@ static CYW43_LAST_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultSt
     Mutex::new(None);
 #[cfg(feature = "kernel")]
 static CYW43_LAST_SDIO_OWNER_FAULT: Mutex<Option<Cyw43SdioOwnerFaultStatus>> = Mutex::new(None);
+#[cfg(feature = "kernel")]
+static CYW43_BOOTSTRAP_CAUSAL_CAPTURE_ACTIVE: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultStatus>> =
+    Mutex::new(None);
+#[cfg(feature = "kernel")]
+static CYW43_BOOTSTRAP_CAUSAL_SDIO_OWNER_FAULT: Mutex<Option<Cyw43SdioOwnerFaultStatus>> =
+    Mutex::new(None);
 #[cfg(feature = "kernel")]
 static SDIO_LAST_RUNTIME_REPLAY_STATUS: Mutex<Option<SdioRuntimeReplayStatus>> = Mutex::new(None);
 
@@ -1521,7 +1528,6 @@ struct Cyw43HostEapolProgress {
     assoc_probe_status: Option<&'static str>,
     assoc_probe_result: u32,
     assoc_join_rescue_attempted: bool,
-    assoc_set_ssid_rescue_attempted: bool,
     auth_timeout_seen: bool,
     set_ssid_failure_seen: bool,
     eapol_error: Option<&'static str>,
@@ -1643,7 +1649,6 @@ struct Cyw43HostEapolStatusKey {
     assoc_probe: &'static str,
     assoc_probe_result: u32,
     assoc_join_rescue: bool,
-    assoc_set_ssid_rescue: bool,
     firstread_class: &'static str,
     rx_idle_detail: u16,
     rx_idle_result: u32,
@@ -1719,7 +1724,6 @@ fn cyw43_host_eapol_status_key(
         assoc_probe: progress.assoc_probe_status.unwrap_or("none"),
         assoc_probe_result: progress.assoc_probe_result,
         assoc_join_rescue: progress.assoc_join_rescue_attempted,
-        assoc_set_ssid_rescue: progress.assoc_set_ssid_rescue_attempted,
         firstread_class: cyw43_host_eapol_firstread_class(progress),
         rx_idle_detail: progress.last_rx_idle_detail,
         rx_idle_result: progress.last_rx_idle_result,
@@ -1858,10 +1862,6 @@ impl Cyw43HostEapolProgress {
 
     fn record_assoc_join_rescue_attempt(&mut self) {
         self.assoc_join_rescue_attempted = true;
-    }
-
-    fn record_assoc_set_ssid_rescue_attempt(&mut self) {
-        self.assoc_set_ssid_rescue_attempted = true;
     }
 
     fn restart_assoc_window_after_rescue(&mut self) {
@@ -2599,6 +2599,18 @@ pub(crate) fn latest_cyw43_sdio_owner_fault_status() -> Option<Cyw43SdioOwnerFau
 }
 
 #[cfg(feature = "kernel")]
+pub(crate) fn bootstrap_causal_cyw43_runtime_command_fault_status(
+) -> Option<Cyw43RuntimeCommandFaultStatus> {
+    *CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT.lock()
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn bootstrap_causal_cyw43_sdio_owner_fault_status() -> Option<Cyw43SdioOwnerFaultStatus>
+{
+    *CYW43_BOOTSTRAP_CAUSAL_SDIO_OWNER_FAULT.lock()
+}
+
+#[cfg(feature = "kernel")]
 pub(crate) fn latest_sdio_runtime_replay_status() -> Option<SdioRuntimeReplayStatus> {
     *SDIO_LAST_RUNTIME_REPLAY_STATUS.lock()
 }
@@ -2609,8 +2621,49 @@ fn clear_cyw43_runtime_command_fault_status() {
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
 }
 
+#[cfg(feature = "kernel")]
+fn begin_cyw43_bootstrap_causal_fault_capture() {
+    *CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT.lock() = None;
+    *CYW43_BOOTSTRAP_CAUSAL_SDIO_OWNER_FAULT.lock() = None;
+    CYW43_BOOTSTRAP_CAUSAL_CAPTURE_ACTIVE.store(1, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+fn finish_cyw43_bootstrap_causal_fault_capture() {
+    CYW43_BOOTSTRAP_CAUSAL_CAPTURE_ACTIVE.store(0, Ordering::Release);
+    *CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT.lock() = None;
+    *CYW43_BOOTSTRAP_CAUSAL_SDIO_OWNER_FAULT.lock() = None;
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_runtime_command_fault_status(status: Cyw43RuntimeCommandFaultStatus) {
+    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(status);
+    if CYW43_BOOTSTRAP_CAUSAL_CAPTURE_ACTIVE.load(Ordering::Acquire) != 0 {
+        let mut causal = CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT.lock();
+        if causal.is_none() {
+            *causal = Some(status);
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_sdio_owner_fault_status(status: Cyw43SdioOwnerFaultStatus) {
+    *CYW43_LAST_SDIO_OWNER_FAULT.lock() = Some(status);
+    if CYW43_BOOTSTRAP_CAUSAL_CAPTURE_ACTIVE.load(Ordering::Acquire) == 0
+        || bootstrap_causal_cyw43_runtime_command_fault_status()
+            != latest_cyw43_runtime_command_fault_status()
+    {
+        return;
+    }
+    let mut causal = CYW43_BOOTSTRAP_CAUSAL_SDIO_OWNER_FAULT.lock();
+    if causal.is_none() {
+        *causal = Some(status);
+    }
+}
+
 #[cfg(all(test, feature = "kernel"))]
 pub(crate) fn test_clear_cyw43_runtime_replay_status() {
+    finish_cyw43_bootstrap_causal_fault_capture();
     clear_cyw43_runtime_command_fault_status();
     *SDIO_LAST_RUNTIME_REPLAY_STATUS.lock() = None;
 }
@@ -3517,6 +3570,7 @@ fn complete_cyw43_linked_runtime_firmware_with_bundle(
         .ok_or(DriverTaskNetError::RuntimeInit("cyw43-rstvec"))?;
     let nvram_len = crate::hal::pi4_wifi::normalize_nvram(bundle.nvram).len();
     clear_cyw43_runtime_command_fault_status();
+    begin_cyw43_bootstrap_causal_fault_capture();
     let mut recovery_attempts = 0usize;
     let mut generation_recovery_attempts = 0usize;
     let mut last_resume_offset = None;
@@ -3536,6 +3590,7 @@ fn complete_cyw43_linked_runtime_firmware_with_bundle(
         };
         match result {
             Ok(()) => {
+                finish_cyw43_bootstrap_causal_fault_capture();
                 clear_cyw43_runtime_command_fault_status();
                 return Ok(());
             }
@@ -4347,29 +4402,6 @@ fn cyw43_submit_bcdc_u32_optional_filter(
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_submit_bcdc_ssid(
-    contract: DriverTaskContract,
-    credentials: crate::net::WifiCredentials,
-    stage: &'static str,
-) -> Result<(), DriverTaskNetError> {
-    let ssid_len = usize::from(credentials.ssid_len);
-    let mut ssid_payload = [0u8; 36];
-    ssid_payload[..4].copy_from_slice(&(ssid_len as u32).to_le_bytes());
-    ssid_payload[4..4 + ssid_len].copy_from_slice(&credentials.ssid[..ssid_len]);
-    emit_cyw43_set_ssid_payload_trace(contract, credentials, &ssid_payload);
-    let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
-    let id = cyw43_next_bcdc_ioctl_id();
-    let len = cyw43_write_bcdc_frame(
-        &mut frame,
-        CYW43_WLC_SET_SSID,
-        CYW43_BCDC_FLAG_SET,
-        id,
-        &ssid_payload,
-    )?;
-    cyw43_submit_control_exchange_checked(contract, &frame[..len], CYW43_WLC_SET_SSID, id, stage)
-}
-
-#[cfg(feature = "kernel")]
 fn cyw43_submit_join_request(
     contract: DriverTaskContract,
     credentials: crate::net::WifiCredentials,
@@ -4386,18 +4418,6 @@ fn cyw43_submit_join_request(
             );
             return Ok(());
         }
-        Err(Cyw43CommandSubmitError::Completion(completion))
-            if cyw43_join_iovar_completion_allows_set_ssid(completion) =>
-        {
-            CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
-            emit_cyw43_join_request_trace(
-                contract,
-                "primary-bsscfg:join",
-                "fallback-set-ssid",
-                usize::from(credentials.ssid_len),
-                completion.result,
-            );
-        }
         Err(err) => {
             CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
             let result = match &err {
@@ -4407,23 +4427,13 @@ fn cyw43_submit_join_request(
             emit_cyw43_join_request_trace(
                 contract,
                 "primary-bsscfg:join",
-                "fail-no-fallback",
+                "failed",
                 usize::from(credentials.ssid_len),
                 result,
             );
             return Err(err.into_net_error());
         }
     }
-
-    cyw43_submit_bcdc_ssid(contract, credentials, "cyw43-control-ssid")?;
-    emit_cyw43_join_request_trace(
-        contract,
-        "set-ssid",
-        "ready",
-        usize::from(credentials.ssid_len),
-        0,
-    );
-    Ok(())
 }
 
 #[cfg(feature = "kernel")]
@@ -4508,16 +4518,6 @@ fn cyw43_write_linux_bsscfg_join_payload(
 }
 
 #[cfg(feature = "kernel")]
-const fn cyw43_join_iovar_completion_allows_set_ssid(
-    completion: DriverTaskCompletionRecord,
-) -> bool {
-    completion.code == DriverTaskCompletionCode::Fault.as_u16()
-        && completion.detail == CYW43_CONTROL_EXCHANGE_FAULT_DETAIL
-        && (completion.result == CYW43_BCME_UNSUPPORTED_STATUS
-            || completion.result == CYW43_BCME_BADARG_STATUS)
-}
-
-#[cfg(feature = "kernel")]
 fn emit_cyw43_join_request_trace(
     contract: DriverTaskContract,
     path: &'static str,
@@ -4582,26 +4582,6 @@ fn emit_cyw43_join_policy_trace(
         host_eapol_rx,
         connect_policy,
         order,
-    );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
-}
-
-#[cfg(feature = "kernel")]
-fn emit_cyw43_set_ssid_payload_trace(
-    contract: DriverTaskContract,
-    credentials: WifiCredentials,
-    payload: &[u8],
-) {
-    use core::fmt::Write;
-
-    let mut line = heapless::String::<192>::new();
-    let _ = write!(
-        line,
-        "CYW43_DRIVER_TASK_SET_SSID_PAYLOAD contract={} payload_len={} ssid_len={} digest=0x{:08x}",
-        contract.name,
-        payload.len(),
-        credentials.ssid_len,
-        cyw43_redacted_payload_digest(payload),
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
@@ -8961,39 +8941,6 @@ fn cyw43_submit_host_eapol_assoc_rescue(
             );
             true
         }
-        Err(Cyw43CommandSubmitError::Completion(completion))
-            if cyw43_join_iovar_completion_allows_set_ssid(completion) =>
-        {
-            session.progress.record_assoc_set_ssid_rescue_attempt();
-            match cyw43_submit_bcdc_ssid(contract, credentials, "cyw43-host-eapol-set-ssid-rescue")
-            {
-                Ok(()) => {
-                    session.restart_pre_assoc_window_after_rescue(crate::hal::timebase().now_ms());
-                    emit_cyw43_host_eapol_assoc_rescue(
-                        contract,
-                        poll,
-                        attempt,
-                        "ready",
-                        "bsscfg-join-unsupported-fallback",
-                        "set-ssid-fallback",
-                        0,
-                    );
-                    true
-                }
-                Err(_) => {
-                    emit_cyw43_host_eapol_assoc_rescue(
-                        contract,
-                        poll,
-                        attempt,
-                        "failed",
-                        "set-ssid-control-error",
-                        "set-ssid-fallback",
-                        0,
-                    );
-                    false
-                }
-            }
-        }
         Err(Cyw43CommandSubmitError::Completion(completion)) => {
             emit_cyw43_host_eapol_assoc_rescue(
                 contract,
@@ -10527,7 +10474,7 @@ fn emit_cyw43_host_eapol_status(
     let mut line = heapless::String::<4096>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} suppressed_status={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} assoc_probe={} assoc_probe_result=0x{:08x} assoc_join_rescue={} assoc_set_ssid_rescue={} firstread_class={} rx_probe_poll={} rx_probe_flags=0x{:04x} control_rx_probe_poll={} control_rx_probe_flags=0x{:04x} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} rxsrc_mode={} rxsrc_probe_len={} rxsrc_ien=0x{:02x} rxsrc_frame_ind={} rxsrc_host_int={} rxsrc_card_int={} rxsrc_f2_ready={} control_rxsrc_mode={} control_rxsrc_probe_len={} control_rxsrc_ien=0x{:02x} control_rxsrc_frame_ind={} control_rxsrc_host_int={} control_rxsrc_card_int={} control_rxsrc_f2_ready={} rxtrace_valid={} rxtrace_flags=0x{:04x} rxtrace_detail=0x{:04x} rxtrace_probe_len={} rxtrace_source=0x{:08x} rxtrace_prefix=0x{:08x} rxtrace_digest=0x{:08x} rxtrace_rframe=0x{:04x} rxtrace_firstread_reads={} rxtrace_block_reads={} rxtrace_rframe_reads={} rxtrace_request_len={} rxtrace_block_size={} rxtrace_block_count={} rxtrace_retx_sample=0x{:04x} rxtrace_retx_action={} rxtrace_queue_depth={} rxtrace_queue_high_water={} rxtrace_cmd53_arg=0x{:08x} rxtrace_cmd53_fn={} rxtrace_cmd53_addr=0x{:05x} rxtrace_cmd53_write={} rxtrace_cmd53_mode={} rxtrace_cmd53_inc={} rxtrace_cmd53_count={} rxtrace_transfer_result=0x{:08x} rxtrace_payload_before=0x{:08x} rxtrace_payload_after=0x{:08x} control_rxtrace_valid={} control_rxtrace_flags=0x{:04x} control_rxtrace_detail=0x{:04x} control_rxtrace_probe_len={} control_rxtrace_source=0x{:08x} control_rxtrace_prefix=0x{:08x} control_rxtrace_digest=0x{:08x} control_rxtrace_rframe=0x{:04x} control_rxtrace_firstread_reads={} control_rxtrace_block_reads={} control_rxtrace_rframe_reads={} control_rxtrace_request_len={} control_rxtrace_block_size={} control_rxtrace_block_count={} control_rxtrace_retx_sample=0x{:04x} control_rxtrace_retx_action={} control_rxtrace_queue_depth={} control_rxtrace_queue_high_water={} control_rxtrace_cmd53_arg=0x{:08x} control_rxtrace_cmd53_fn={} control_rxtrace_cmd53_addr=0x{:05x} control_rxtrace_cmd53_write={} control_rxtrace_cmd53_mode={} control_rxtrace_cmd53_inc={} control_rxtrace_cmd53_count={} control_rxtrace_transfer_result=0x{:08x} control_rxtrace_payload_before=0x{:08x} control_rxtrace_payload_after=0x{:08x} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} suppressed_status={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} assoc_probe={} assoc_probe_result=0x{:08x} assoc_join_rescue={} firstread_class={} rx_probe_poll={} rx_probe_flags=0x{:04x} control_rx_probe_poll={} control_rx_probe_flags=0x{:04x} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} rxsrc_mode={} rxsrc_probe_len={} rxsrc_ien=0x{:02x} rxsrc_frame_ind={} rxsrc_host_int={} rxsrc_card_int={} rxsrc_f2_ready={} control_rxsrc_mode={} control_rxsrc_probe_len={} control_rxsrc_ien=0x{:02x} control_rxsrc_frame_ind={} control_rxsrc_host_int={} control_rxsrc_card_int={} control_rxsrc_f2_ready={} rxtrace_valid={} rxtrace_flags=0x{:04x} rxtrace_detail=0x{:04x} rxtrace_probe_len={} rxtrace_source=0x{:08x} rxtrace_prefix=0x{:08x} rxtrace_digest=0x{:08x} rxtrace_rframe=0x{:04x} rxtrace_firstread_reads={} rxtrace_block_reads={} rxtrace_rframe_reads={} rxtrace_request_len={} rxtrace_block_size={} rxtrace_block_count={} rxtrace_retx_sample=0x{:04x} rxtrace_retx_action={} rxtrace_queue_depth={} rxtrace_queue_high_water={} rxtrace_cmd53_arg=0x{:08x} rxtrace_cmd53_fn={} rxtrace_cmd53_addr=0x{:05x} rxtrace_cmd53_write={} rxtrace_cmd53_mode={} rxtrace_cmd53_inc={} rxtrace_cmd53_count={} rxtrace_transfer_result=0x{:08x} rxtrace_payload_before=0x{:08x} rxtrace_payload_after=0x{:08x} control_rxtrace_valid={} control_rxtrace_flags=0x{:04x} control_rxtrace_detail=0x{:04x} control_rxtrace_probe_len={} control_rxtrace_source=0x{:08x} control_rxtrace_prefix=0x{:08x} control_rxtrace_digest=0x{:08x} control_rxtrace_rframe=0x{:04x} control_rxtrace_firstread_reads={} control_rxtrace_block_reads={} control_rxtrace_rframe_reads={} control_rxtrace_request_len={} control_rxtrace_block_size={} control_rxtrace_block_count={} control_rxtrace_retx_sample=0x{:04x} control_rxtrace_retx_action={} control_rxtrace_queue_depth={} control_rxtrace_queue_high_water={} control_rxtrace_cmd53_arg=0x{:08x} control_rxtrace_cmd53_fn={} control_rxtrace_cmd53_addr=0x{:05x} control_rxtrace_cmd53_write={} control_rxtrace_cmd53_mode={} control_rxtrace_cmd53_inc={} control_rxtrace_cmd53_count={} control_rxtrace_transfer_result=0x{:08x} control_rxtrace_payload_before=0x{:08x} control_rxtrace_payload_after=0x{:08x} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
         contract.name,
         status,
         reason,
@@ -10549,7 +10496,6 @@ fn emit_cyw43_host_eapol_status(
         assoc_probe,
         progress.assoc_probe_result,
         yes_no(progress.assoc_join_rescue_attempted),
-        yes_no(progress.assoc_set_ssid_rescue_attempted),
         firstread_class,
         progress.last_rx_probe_poll,
         progress.last_rx_probe_flags,
@@ -12280,9 +12226,6 @@ fn cyw43_host_eapol_next_action(
     if progress.assoc_join_rescue_attempted && !progress.associated {
         return "inspect-cyw43-association-event-after-bsscfg-join-rescue";
     }
-    if progress.assoc_set_ssid_rescue_attempted && !progress.associated {
-        return "inspect-cyw43-association-event-after-set-ssid-rescue";
-    }
     if cyw43_host_eapol_valid_bssid_without_carrier(progress) {
         return "inspect-cyw43-valid-bssid-no-carrier-or-rejoin";
     }
@@ -12321,8 +12264,6 @@ fn cyw43_host_eapol_next_action(
             "inspect-cyw43-assoc-event-rx-or-sdio-owner-ienx-snapshot"
         } else if progress.assoc_join_rescue_attempted {
             "inspect-cyw43-association-event-after-bsscfg-join-rescue"
-        } else if progress.assoc_set_ssid_rescue_attempted {
-            "inspect-cyw43-association-event-after-set-ssid-rescue"
         } else {
             "inspect-cyw43-association-event-or-join-policy"
         }
@@ -12333,8 +12274,6 @@ fn cyw43_host_eapol_next_action(
             "inspect-cyw43-assoc-event-rx-or-sdio-owner-ienx-snapshot"
         } else if progress.assoc_join_rescue_attempted {
             "inspect-cyw43-association-event-after-bsscfg-join-rescue"
-        } else if progress.assoc_set_ssid_rescue_attempted {
-            "inspect-cyw43-association-event-after-set-ssid-rescue"
         } else {
             "inspect-cyw43-assoc-event-rx-or-ienx"
         }
@@ -12347,8 +12286,6 @@ fn cyw43_host_eapol_next_action(
             "inspect-association-event-or-sdio-owner-rx-source"
         } else if progress.assoc_join_rescue_attempted {
             "inspect-cyw43-association-event-after-bsscfg-join-rescue"
-        } else if progress.assoc_set_ssid_rescue_attempted {
-            "inspect-cyw43-association-event-after-set-ssid-rescue"
         } else {
             "inspect-association-event-or-cyw43-rx-latch"
         }
@@ -14274,7 +14211,7 @@ fn record_cyw43_control_split_failure(
 ) {
     let (detail, result) =
         completion.map_or((0, 0), |completion| (completion.detail, completion.result));
-    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
+    record_cyw43_runtime_command_fault_status(Cyw43RuntimeCommandFaultStatus {
         stage,
         op: descriptor.op,
         flags: descriptor.flags,
@@ -16067,7 +16004,7 @@ fn record_cyw43_runtime_command_no_reply_with_control_meta(
 ) {
     use core::fmt::Write;
 
-    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
+    record_cyw43_runtime_command_fault_status(Cyw43RuntimeCommandFaultStatus {
         stage,
         op: descriptor.op,
         flags: descriptor.flags,
@@ -16236,7 +16173,7 @@ fn emit_cyw43_runtime_command_fault(
         return;
     }
     let reason = cyw43_runtime_fault_reason_for_descriptor(descriptor, completion);
-    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
+    record_cyw43_runtime_command_fault_status(Cyw43RuntimeCommandFaultStatus {
         stage,
         op: descriptor.op,
         flags: descriptor.flags,
@@ -16433,7 +16370,7 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
     } else {
         cyw43_owner_retry_label(snapshot, descriptor, completion.detail)
     };
-    *CYW43_LAST_SDIO_OWNER_FAULT.lock() = Some(Cyw43SdioOwnerFaultStatus {
+    record_cyw43_sdio_owner_fault_status(Cyw43SdioOwnerFaultStatus {
         stage,
         op: descriptor.op,
         cmd: snapshot.cmd,
@@ -21534,22 +21471,6 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_set_ssid_fallback_payload_is_bounded_and_redacted() {
-        let credentials = crate::net::WifiCredentials::new("DachshundHub", "passphrase")
-            .expect("valid wifi credentials");
-        let mut payload = [0u8; 36];
-        let ssid_len = usize::from(credentials.ssid_len);
-
-        payload[..4].copy_from_slice(&(ssid_len as u32).to_le_bytes());
-        payload[4..4 + ssid_len].copy_from_slice(&credentials.ssid[..ssid_len]);
-
-        assert_eq!(payload.len(), 36);
-        assert_eq!(cyw43_read_le_u32(&payload, 0), Some(12));
-        assert_eq!(&payload[4..16], b"DachshundHub");
-        assert_ne!(cyw43_redacted_payload_digest(&payload), 0);
-    }
-
-    #[test]
     fn cyw43_join_event_mask_matches_old_good_event_msgs_ext_shape() {
         let mask = cyw43_linux_join_event_mask().expect("join event mask must fit");
         let mut payload = [0u8; CYW43_EVENTMSGS_EXT_PAYLOAD_LEN];
@@ -21617,41 +21538,6 @@ mod tests {
             &payload[CYW43_LINUX_EXT_JOIN_ASSOC_OFFSET + 8..CYW43_LINUX_EXT_JOIN_ASSOC_OFFSET + 12],
             &0u32.to_le_bytes()
         );
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn cyw43_join_iovar_fallback_is_limited_to_known_firmware_statuses() {
-        let unsupported = DriverTaskCompletionRecord {
-            sequence: 0,
-            code: DriverTaskCompletionCode::Fault.as_u16(),
-            detail: CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
-            result: CYW43_BCME_UNSUPPORTED_STATUS,
-            frame: DriverFrameDescriptor {
-                offset: 0,
-                len: 0,
-                flags: 0,
-            },
-        };
-        let badarg = DriverTaskCompletionRecord {
-            result: CYW43_BCME_BADARG_STATUS,
-            ..unsupported
-        };
-        let transport_fault = DriverTaskCompletionRecord {
-            detail: DriverTaskFaultCode::RejectedCommand.as_u16(),
-            ..unsupported
-        };
-        let other_status = DriverTaskCompletionRecord {
-            result: 0xffff_ffff,
-            ..unsupported
-        };
-
-        assert!(cyw43_join_iovar_completion_allows_set_ssid(unsupported));
-        assert!(cyw43_join_iovar_completion_allows_set_ssid(badarg));
-        assert!(!cyw43_join_iovar_completion_allows_set_ssid(
-            transport_fault
-        ));
-        assert!(!cyw43_join_iovar_completion_allows_set_ssid(other_status));
     }
 
     #[cfg(feature = "kernel")]
@@ -24723,14 +24609,12 @@ mod tests {
             CYW43_HOST_EAPOL_ASSOC_RESCUE_MS - 1
         ));
         assert!(!session.progress.assoc_join_rescue_attempted);
-        assert!(!session.progress.assoc_set_ssid_rescue_attempted);
         session
             .progress
             .record_assoc_probe("not-associated", CYW43_BCME_NOTASSOCIATED_STATUS);
         session.progress.record_assoc_join_rescue_attempt();
         assert!(session.progress.assoc_probe_not_associated);
         assert!(session.progress.assoc_join_rescue_attempted);
-        assert!(!session.progress.assoc_set_ssid_rescue_attempted);
         assert_eq!(
             cyw43_host_eapol_next_action("required", &session.progress),
             "inspect-cyw43-association-event-after-bsscfg-join-rescue"
@@ -30327,6 +30211,125 @@ mod tests {
         SDIO_LINKED_RUNTIME_READY.store(1, Ordering::Release);
         assert!(sdio_owner_recovery_can_preserve_ready_state());
         SDIO_LINKED_RUNTIME_READY.store(0, Ordering::Release);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn bootstrap_causal_fault_preserves_first_cause_until_boundary() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 causal fault tests must serialize");
+        test_clear_cyw43_runtime_replay_status();
+
+        let first = Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-release",
+            op: DRIVER_RUNTIME_CYW43_OP_RELEASE,
+            flags: 0,
+            target_addr: 0x1800_3000,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x531f,
+            reason: "cyw43-armcr4-prereset-flush",
+            result: 2,
+        };
+        let later = Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-transport-cmd5",
+            op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            detail: 0x5325,
+            reason: "sdio-card-ocr",
+            result: 0x00ff_8000,
+            ..first
+        };
+        let first_owner = Cyw43SdioOwnerFaultStatus {
+            stage: first.stage,
+            op: first.op,
+            cmd: 53,
+            arg: 0x1548_1004,
+            function: 1,
+            addr: 0x0000_a408,
+            target_addr: first.target_addr,
+            effective_target: first.target_addr,
+            chunk_offset: 0,
+            payload_offset: 0,
+            increment: true,
+            write: false,
+            block_mode: false,
+            len: 4,
+            block_size: 64,
+            block_count: 1,
+            cmd53_count: 4,
+            desc_block_count: 0,
+            host_block_count: 1,
+            transfer_mode: 0,
+            host_control: 0,
+            host_mode: "sdma",
+            power_control: 0,
+            clock_control: 0,
+            clock_state: "stable",
+            present_state: 0,
+            int_status: 0,
+            response0: 0,
+            block_size_count_reg: 0,
+            detail: first.detail,
+            reason: first.reason,
+            transfer_stage: "data-wait",
+            transfer_status: 0,
+            transfer_reason: "none",
+            r5: 0,
+            owner_window: "strict-ai-word",
+            retry: "none",
+            payload_first: 0,
+            payload_last: 0,
+            payload_xor: 0,
+            payload_sum: 0,
+        };
+        let later_owner = Cyw43SdioOwnerFaultStatus {
+            stage: later.stage,
+            op: later.op,
+            arg: 0x0000_0005,
+            detail: later.detail,
+            reason: later.reason,
+            ..first_owner
+        };
+
+        begin_cyw43_bootstrap_causal_fault_capture();
+        record_cyw43_runtime_command_fault_status(first);
+        record_cyw43_sdio_owner_fault_status(first_owner);
+        record_cyw43_runtime_command_fault_status(later);
+        record_cyw43_sdio_owner_fault_status(later_owner);
+
+        assert_eq!(latest_cyw43_runtime_command_fault_status(), Some(later));
+        assert_eq!(latest_cyw43_sdio_owner_fault_status(), Some(later_owner));
+        assert_eq!(
+            bootstrap_causal_cyw43_runtime_command_fault_status(),
+            Some(first)
+        );
+        assert_eq!(
+            bootstrap_causal_cyw43_sdio_owner_fault_status(),
+            Some(first_owner)
+        );
+
+        clear_cyw43_runtime_command_fault_status();
+        assert_eq!(
+            bootstrap_causal_cyw43_runtime_command_fault_status(),
+            Some(first)
+        );
+        begin_cyw43_bootstrap_causal_fault_capture();
+        assert_eq!(bootstrap_causal_cyw43_runtime_command_fault_status(), None);
+        assert_eq!(bootstrap_causal_cyw43_sdio_owner_fault_status(), None);
+
+        record_cyw43_runtime_command_fault_status(later);
+        finish_cyw43_bootstrap_causal_fault_capture();
+        assert_eq!(bootstrap_causal_cyw43_runtime_command_fault_status(), None);
+        record_cyw43_runtime_command_fault_status(first);
+        assert_eq!(bootstrap_causal_cyw43_runtime_command_fault_status(), None);
+
+        test_clear_cyw43_runtime_replay_status();
     }
 
     #[cfg(feature = "kernel")]

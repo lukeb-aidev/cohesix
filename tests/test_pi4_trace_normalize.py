@@ -7211,7 +7211,7 @@ def test_probe_attach_fault_is_a_gate_five_hardware_frontier() -> None:
     assert record["WIFI_PHASE"] == "cyw43-firmware-prep"
 
 
-def test_post_generation_retry_reports_terminal_card_discovery_fault() -> None:
+def test_failed_generation_retry_preserves_causal_release_fault() -> None:
     events = normalizer.parse_events(
         [
             "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
@@ -7228,8 +7228,29 @@ def test_post_generation_retry_reports_terminal_card_discovery_fault() -> None:
 
     gates = normalizer.summarize_gates(events)
 
-    assert gates.wifi_gate == 2
-    assert gates.wifi_blocker == "cyw43-transport-card-cmd5-ocr"
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-post-release-ht-clock"
+
+
+def test_failed_generation_retry_preserves_causal_armcr4_flush_fault() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_COMMAND_FAULT stage=cyw43-firmware-release "
+            "op=5 detail=21279 reason=cyw43-armcr4-prereset-flush result=2",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-firmware-recover status=generation-reset-ready",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT stage=cyw43-transport-init "
+            "op=1 detail=21285 reason=cyw43-transport-card-cmd5-ocr "
+            "result=84082688",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 6
+    assert gates.wifi_blocker == "cyw43-armcr4-prereset-flush"
+    assert gates.wifi_exact == "cyw43-armcr4-prereset-flush"
+    assert gates.wifi_phase == "cyw43-firmware-release"
 
 
 def test_retained_cmd5_ocr_fault_outranks_generic_firmware_replay_failure() -> None:

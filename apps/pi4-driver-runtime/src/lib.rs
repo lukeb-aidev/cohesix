@@ -745,6 +745,14 @@ const SDHCI_INT_DATA_READY_MASK: u32 = SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_AV
 const SDHCI_INT_DATA_ERROR_MASK: u32 =
     SDHCI_INT_ERROR | SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC | SDHCI_INT_DATA_END_BIT;
 const SDHCI_INT_DATA_FINISH_MASK: u32 = SDHCI_INT_DATA_END | SDHCI_INT_DATA_ERROR_MASK;
+const SDHCI_INT_ALL_ERROR_MASK: u32 = SDHCI_INT_ERROR
+    | SDHCI_INT_TIMEOUT
+    | SDHCI_INT_CRC
+    | SDHCI_INT_END_BIT
+    | SDHCI_INT_INDEX
+    | SDHCI_INT_DATA_TIMEOUT
+    | SDHCI_INT_DATA_CRC
+    | SDHCI_INT_DATA_END_BIT;
 const SDHCI_INT_WAIT_ACK_MASK: u32 = SDHCI_INT_CMD_MASK
     | SDHCI_INT_DATA_MASK
     | SDHCI_INT_SPACE_AVAIL
@@ -10124,7 +10132,13 @@ fn sdio_wait_inhibit_clear_until(wait_data: bool, deadline: &mut RuntimeDeadline
 }
 
 const fn sdhci_wait_int_ack_bits(mask: u32, status: u32) -> u32 {
-    status & (mask | SDHCI_INT_WAIT_ACK_MASK) & !SDHCI_INT_CARD_INT
+    // Linux snapshots one interrupt status word, clears it, then dispatches
+    // both command and data handlers from that retained snapshot. This polled
+    // owner advances those phases separately, so it must leave a co-arriving
+    // DATA_AVAIL/DATA_END (or RESPONSE during a data wait) latched for the
+    // later phase. Clearing every positive bit here loses that only edge and
+    // makes a valid short CMD53 read time out in `data-wait`.
+    status & (mask | SDHCI_INT_ALL_ERROR_MASK) & !SDHCI_INT_CARD_INT
 }
 
 #[cfg(target_os = "none")]
@@ -10417,7 +10431,9 @@ fn cyw43_transport_init_step(
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_ADOPT_BEGIN,
                 aux0,
             );
-            if !cyw43_sdio_card_init_step(sequence, aux0, state)? {
+            if cyw43_transport_card_init_required(state.sdio_transport_enumerated)
+                && !cyw43_sdio_card_init_step(sequence, aux0, state)?
+            {
                 return Ok(state.transport_detail);
             }
             state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY;
@@ -10525,6 +10541,10 @@ fn cyw43_transport_init_step(
             Err(FAULT_CYW43_TRANSPORT_INIT)
         }
     }
+}
+
+const fn cyw43_transport_card_init_required(sdio_transport_enumerated: bool) -> bool {
+    !sdio_transport_enumerated
 }
 
 fn cyw43_sdio_card_init_step(
@@ -29925,6 +29945,9 @@ mod tests {
         assert_eq!(state.dpc_epoch_errors, 13);
         assert_eq!(state.dpc_sequence_errors, 17);
         assert!(state.sdio_transport_enumerated);
+        assert!(!cyw43_transport_card_init_required(
+            state.sdio_transport_enumerated
+        ));
     }
 
     #[test]
@@ -40533,11 +40556,23 @@ mod tests {
     }
 
     #[test]
-    fn sdio_runtime_int_ack_preserves_card_interrupt() {
-        let status = SDHCI_INT_RESPONSE | SDHCI_INT_DATA_END | SDHCI_INT_CARD_INT | SDHCI_INT_ERROR;
+    fn sdio_runtime_int_ack_preserves_other_phase_and_card_interrupt() {
+        let status = SDHCI_INT_RESPONSE
+            | SDHCI_INT_DATA_AVAIL
+            | SDHCI_INT_DATA_END
+            | SDHCI_INT_CARD_INT
+            | SDHCI_INT_ERROR;
         assert_eq!(
             sdhci_wait_int_ack_bits(SDHCI_INT_RESPONSE, status),
-            SDHCI_INT_RESPONSE | SDHCI_INT_DATA_END | SDHCI_INT_ERROR
+            SDHCI_INT_RESPONSE | SDHCI_INT_ERROR
+        );
+        assert_eq!(
+            sdhci_wait_int_ack_bits(SDHCI_INT_DATA_AVAIL, status),
+            SDHCI_INT_DATA_AVAIL | SDHCI_INT_ERROR
+        );
+        assert_eq!(
+            sdhci_wait_int_ack_bits(SDHCI_INT_DATA_FINISH_MASK, status),
+            SDHCI_INT_DATA_END | SDHCI_INT_ERROR
         );
         assert_eq!(SDHCI_INT_COMMAND_DATA_CLEAR_MASK & SDHCI_INT_CARD_INT, 0);
         assert_ne!(SDHCI_INT_DATA_FINISH_MASK & SDHCI_INT_DATA_END, 0);

@@ -9254,6 +9254,26 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_cyw43_runtime_command_fault_status(
+    ) -> Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus> {
+        crate::drivers::driver_task_net::bootstrap_causal_cyw43_runtime_command_fault_status()
+            .or_else(crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_cyw43_sdio_owner_fault_status(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> Option<crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus> {
+        let causal =
+            crate::drivers::driver_task_net::bootstrap_causal_cyw43_runtime_command_fault_status();
+        if causal == Some(fault) {
+            crate::drivers::driver_task_net::bootstrap_causal_cyw43_sdio_owner_fault_status()
+        } else {
+            crate::drivers::driver_task_net::latest_cyw43_sdio_owner_fault_status()
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_driver_task_runtime_snapshot_if_present(
         &mut self,
         command: WifiDebugCommand,
@@ -9275,7 +9295,7 @@ where
         let fault = if live_net_supersedes_runtime || host_eapol_exact.is_some() {
             None
         } else {
-            crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status()
+            Self::wifi_diag_cyw43_runtime_command_fault_status()
         };
         let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
         let progress_present = Self::wifi_driver_task_runtime_progress_present();
@@ -10126,7 +10146,7 @@ where
         firmware_trace: Option<WifiFirmwareContractTrace>,
         control_trace: Option<WifiControlPlaneTrace>,
     ) {
-        let fault = crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status();
+        let fault = Self::wifi_diag_cyw43_runtime_command_fault_status();
         self.emit_console_line("wifi: diag recorder=startup-blackbox mode=passive source=cached");
         self.emit_wifi_startup_gates_from_evidence(
             Some(snapshot),
@@ -10578,8 +10598,7 @@ where
             "acceptance-complete",
         );
         if let Some(fault) = fault {
-            let owner_fault =
-                crate::drivers::driver_task_net::latest_cyw43_sdio_owner_fault_status();
+            let owner_fault = Self::wifi_diag_cyw43_sdio_owner_fault_status(fault);
             let fault_line = format_message(format_args!(
                 "wifi: evidence cyw43 stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} detail=0x{:04x} reason={} result=0x{:08x}",
                 fault.stage,

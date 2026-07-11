@@ -1253,9 +1253,9 @@ primary Linux-shaped `bsscfg:join` returned
 success and a bounded probe later returns `BCME_NOTASSOCIATED` or reports a
 valid BSSID without association/link carrier, root may spend exactly one
 isolated runtime `bsscfg:join` rescue and records it as
-`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE`; `WLC_SET_SSID` is only the matched
-unsupported/badarg fallback for that rescue, and neither rescue success nor a
-SET_SSID event is carrier proof. An authoritative association/link loss also
+`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE`. A matched join error terminates
+that rescue without a second command shape, and rescue success alone is not
+carrier proof. An authoritative association/link loss also
 mints a single-consumer reconnect token bound to the newly advanced connection
 epoch. The next idle host-EAPOL service turn claims that matching token before
 submitting one fresh `bsscfg:join`, independently of `WLC_GET_BSSID` diagnostic
@@ -1290,11 +1290,9 @@ interface-event subscription before scan dwell setup, then programs the Linux
 drain, falling back to global `event_msgs` only on matched `BCME_UNSUPPORTED`.
 The primary join request is Linux's `join` iovar
 (`CYW43_DRIVER_TASK_JOIN_REQUEST path=primary-bsscfg:join`) with the 68-byte
-`brcmf_ext_join_params` shape. Legacy `WLC_SET_SSID` fallback is allowed only
-for matched `BCME_UNSUPPORTED` or `BCME_BADARG` join-submit firmware statuses;
-transport faults do not fall back. After an accepted `bsscfg:join`, the only
-post-join `WLC_SET_SSID` use is the single diagnostic host-EAPOL association
-rescue described above. Carrier/data release proof must come from secure
+`brcmf_ext_join_params` shape. Any matched firmware or transport error fails
+closed; the active initial and reassociation paths never submit legacy
+`WLC_SET_SSID`. Carrier/data release proof must come from secure
 host-EAPOL completion after association evidence or direct EAPOL receive; a
 valid BSSID probe is diagnostic only and cannot promote the association wait or
 release DHCP/data.
@@ -1472,7 +1470,7 @@ context and the retry/poll window.
   `04 02 08 01 01 02 00 00` `join_pref` bytes, refreshes the event mask,
   applies best-effort `txbf=1`, and only then issues `WLC_SET_INFRA`, WPA2
   setup, firmware-supplicant probing, PAE multicast admission, and
-  `WLC_SET_SSID`/primary-BSS join. These exchanges remain bounded isolated
+  primary-BSS `join`. These exchanges remain bounded isolated
   runtime controls; data admission stays closed through the explicit `mpc=0`
   compatibility edge until secure host-EAPOL proof releases DHCP/data.
   Immediately before join, root replays the Linux
@@ -1529,7 +1527,13 @@ context and the retry/poll window.
   directly reprimes the SDIO owner ring.
 - The linked SDIO owner keeps FIFO readiness register-specific: SDHCI
   `PRESENT_STATE` uses only `SPACE_AVAILABLE`/`DATA_AVAILABLE`, while
-  `INT_STATUS` waits use only `INT_SPACE_AVAIL`/`INT_DATA_AVAIL`. Every PIO
+  `INT_STATUS` waits use only `INT_SPACE_AVAIL`/`INT_DATA_AVAIL`. Its polled
+  phases acknowledge only the requested positive interrupt bits plus terminal
+  errors: command wait leaves co-arriving `DATA_AVAIL`/`DATA_END` latched, data
+  readiness leaves `RESPONSE`/`DATA_END` latched, and finish consumes the final
+  data edge. This is the serialized-runtime equivalent of Linux clearing one
+  captured ISR word while dispatching both command and data handlers from the
+  retained snapshot; no phase may W1C another phase's only edge. Every PIO
   descriptor attempt has one aggregate virtual-counter deadline across
   inhibit, command, FIFO, finish, and settle. A failed attempt receives a new
   bounded containment deadline because the transfer deadline may already be
@@ -1633,8 +1637,12 @@ context and the retry/poll window.
   SDIO card enumeration is a longer-lived bus-owner state than a dongle
   firmware/DPC generation. A dongle-generation reset therefore preserves the
   proved selected-card transport, halts ARMCR4, aborts Function 2, advances the
-  DPC epoch, and makes the next `TRANSPORT_INIT` an idempotent ready result; it
-  must not issue CMD0/CMD5 against the still-selected card. Before W1C/IRQ ack
+  DPC epoch, and makes the next `TRANSPORT_INIT` resume from retained
+  `CARD_READY`: it may replay FBR block sizes, Function 1 enable, host config,
+  and strict backplane proof, but it must not issue CMD0/CMD5/CMD3/CMD7 against
+  the still-selected card. The same retained-card rule applies when an
+  early/pre-execution RELEASE failure resets the CYW43 firmware state without
+  advancing the dongle epoch. Before W1C/IRQ ack
   and epoch commit, reset quiesce clears CCCR `IENx` so an old 0x07 card route
   cannot relatch into the new generation. SDIO keeps CARD_INT masked from
   initial owner admission through firmware attach, and across every recovery
@@ -1841,8 +1849,8 @@ context and the retry/poll window.
   reopens bounded host-EAPOL reassociation. The disconnect epoch itself owns one
   accepted reconnect, independent of diagnostic BSSID contents. Root claims the
   epoch token before submission, allows at most two pre-acceptance control
-  attempts, and consumes the authority only after `bsscfg:join` or its matched
-  fallback is accepted. Initial-join zero BSSID remains non-authoritative. PTK,
+  attempts, and consumes the authority only after an exact `bsscfg:join` reply
+  is accepted. Initial-join zero BSSID remains non-authoritative. PTK,
   GTK, M4, SCB authorization, filter restoration, and secure publication
   revalidate that epoch after every split-control wait. A reply from an
   invalidated handshake may complete the outer CDC ownership transaction, but
@@ -1857,8 +1865,9 @@ context and the retry/poll window.
   `wsec-pmk-bad-argument`; transport errors remain fatal and must not be masked
   by later SDIO hint probes.
 - Join programming drains bounded post-`UP` events, sends the upstream
-  primary-BSS `join` extended payload, and falls back to legacy `WLC_SET_SSID`
-  only after an explicit `join` iovar failure. Pre-join Function 1 host-latch
+  primary-BSS `join` extended payload, and fails closed on any matched join
+  error. The active Pi path contains no legacy `WLC_SET_SSID` join or
+  reassociation fallback. Pre-join Function 1 host-latch
   loops are join-programming blockers until a control reply, `join pending`, or
   terminal join event proves acceptance. Diagnostic labels must preserve the
   active security frontier, for example
