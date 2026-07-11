@@ -4208,10 +4208,33 @@ const fn cyw43_dpc_command_requires_preflight(
     pending_command && !cursor_active && !child_active && !quarantined && event_pending
 }
 
-const fn cyw43_dpc_explicit_recovery_command(command: DriverTaskCommandRecord) -> bool {
-    command.opcode == OPCODE_SERVICE
+fn cyw43_dpc_explicit_recovery_command(
+    command: DriverTaskCommandRecord,
+    generation_transport_pending: bool,
+) -> bool {
+    if command.opcode == OPCODE_SERVICE
         && command.frame.len == 0
         && command_is_engine_init_aux(command.aux0)
+    {
+        return true;
+    }
+    if !generation_transport_pending
+        || command.opcode != OPCODE_SERVICE
+        || command.arg0 != HOT_PATH_CYW43_WIFI
+        || command.aux0 != DRIVER_RUNTIME_CYW43_COMMAND_AUX
+    {
+        return false;
+    }
+    // A generation reset deliberately leaves the DPC ring poisoned until the
+    // CYW43 owner has rebuilt the card-side transport and obtained the SDIO
+    // owner's exact GENERATION_COMMIT completion. TRANSPORT_INIT is the only
+    // foreground command capable of performing that bounded transition. It
+    // must cross quarantine for each one-phase service turn; all firmware,
+    // control, RX, and TX descriptors remain rejected until commit clears the
+    // recovery state.
+    read_cyw43_command_descriptor(command.frame).is_some_and(|descriptor| {
+        descriptor.valid() && descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+    })
 }
 
 const fn cyw43_dpc_generation_quarantined(recovery_required: bool, issued_unknown: bool) -> bool {
@@ -29587,11 +29610,23 @@ pub fn runtime_main(task_key: usize) -> ! {
         let blocking_child_active = cyw43_dpc_child_blocks_cursor(child_active, dpc_child_active);
         let mut quarantine_command_fault = false;
         if notification_route == RuntimeNotificationRoute::Cyw43Client && pending_intake.is_some() {
-            let recovery_admissible = CYW43_RUNTIME_STATE.with_ref(|state| {
-                !state.dpc_cursor.child.active && !state.dpc_cursor.child.issued_unknown
-            });
+            let (recovery_admissible, generation_transport_pending) =
+                CYW43_RUNTIME_STATE.with_ref(|state| {
+                    (
+                        !state.dpc_cursor.child.active && !state.dpc_cursor.child.issued_unknown,
+                        state.recovery_required
+                            && state.dpc_pending_epoch != 0
+                            && state.bus_link_ready
+                            && state.dpc_link_ready,
+                    )
+                });
             let explicit_recovery = pending_intake
-                .map(|intake| cyw43_dpc_explicit_recovery_command(intake.command))
+                .map(|intake| {
+                    cyw43_dpc_explicit_recovery_command(
+                        intake.command,
+                        generation_transport_pending,
+                    )
+                })
                 .unwrap_or(false)
                 && recovery_admissible;
             match cyw43_dpc_pending_command_route(
@@ -30684,6 +30719,8 @@ mod tests {
 
     #[test]
     fn dpc_cursor_serializes_every_foreground_cyw43_command_until_terminal() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         assert!(!cyw43_post_release_dpc_missing(false, false));
         assert!(!cyw43_post_release_dpc_missing(false, true));
         assert!(!cyw43_post_release_dpc_missing(true, true));
@@ -30756,10 +30793,30 @@ mod tests {
             },
             frame: DriverFrameDescriptor::empty(),
         };
-        assert!(cyw43_dpc_explicit_recovery_command(recovery));
+        assert!(cyw43_dpc_explicit_recovery_command(recovery, false));
         let mut physical = recovery;
         physical.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
-        assert!(!cyw43_dpc_explicit_recovery_command(physical));
+        assert!(!cyw43_dpc_explicit_recovery_command(physical, true));
+
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+        let transport = cyw43_descriptor_command(92);
+        assert!(!cyw43_dpc_explicit_recovery_command(transport, false));
+        assert!(cyw43_dpc_explicit_recovery_command(transport, true));
+
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            payload_len: 64,
+            total_len: 64,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+        assert!(!cyw43_dpc_explicit_recovery_command(
+            cyw43_descriptor_command(93),
+            true,
+        ));
     }
 
     #[test]

@@ -2953,7 +2953,17 @@ Required Cohesix shape:
   before firmware upload; `WAKEUPCTRL`, cardcap, watermark, and the remaining
   Function 2 sideband stay after real HT and Function 2 readiness. Recovery
   replays that complete probe/download boundary before each new firmware
-  execution while preserving the longer-lived selected-card transport.
+  execution. The manifest-declared CYW43-to-SDIO capability link is
+  longer-lived than a card generation, but no selected-card state is: an exact
+  `GENERATION_RESET` poisons the old DPC epoch and the recovery engine-init
+  leaves only a pending generation token. While that quarantine is active,
+  the runtime admits only validated `TRANSPORT_INIT` descriptors. Those
+  bounded turns repeat host startup, CMD0/CMD5/CMD3/CMD7, FBR, Function 1,
+  host/card lane, and backplane setup, then clear quarantine only after the
+  SDIO owner returns the exact `GENERATION_COMMIT` completion. Firmware,
+  control, RX, and TX descriptors remain rejected before that commit. This is
+  the same linked-runtime service path, not retained-card or direct-SDIO
+  fallback.
   CM3-only SOCSRAM remap writes are not part of this path.
 - Station control uses matched CDC exchanges for writes and read iovars. The
   first startup `bus:txglomalign=8` write, its value-`4` fallback, and all later
