@@ -11602,8 +11602,12 @@ where
             return match crate::drivers::driver_task_net::cyw43_armcr4_reset_fault_reason(
                 fault.result,
             ) {
-                "cyw43-armcr4-prereset-write" => "inspect-armcr4-prereset-cmd53-write",
-                "cyw43-armcr4-prereset-flush" => "inspect-armcr4-prereset-cmd53-flush",
+                "cyw43-armcr4-prereset-write" => {
+                    "inspect-promoted-release-lane-armcr4-prereset-cmd53-write"
+                }
+                "cyw43-armcr4-prereset-flush" => {
+                    "inspect-promoted-release-lane-armcr4-prereset-cmd53-flush"
+                }
                 "cyw43-armcr4-assert-write" => "inspect-armcr4-reset-assert-cmd53-write",
                 "cyw43-armcr4-in-reset-write" => "inspect-armcr4-in-reset-cmd53-write",
                 "cyw43-armcr4-in-reset-flush" => "inspect-armcr4-in-reset-cmd53-flush",
@@ -11621,7 +11625,7 @@ where
         match detail {
             0x5101 => "verify-sdio-owner-command-availability",
             0x5102 => "verify-cyw43-to-sdio-descriptor-window",
-            0x5103 => "inspect-sdio-owner-cmd53-after-block-and-byte-retries",
+            0x5103 => "inspect-sdio-owner-terminal-transfer-no-retry",
             0x5104 => "verify-sdio-host-config-replay",
             0x5302 | 0x5303 | 0x5308 => "inspect-cyw43-firmware-upload",
             0x5309 | 0x530a => "verify-cyw43-command-descriptor-shared-payload-window",

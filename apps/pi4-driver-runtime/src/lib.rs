@@ -11941,6 +11941,19 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
     {
         return false;
     }
+    // Firmware staging is deliberately bounded on Cohesix's conservative
+    // one-bit upload lane. Linux does not carry that host-only demotion into
+    // brcmf_sdio_buscore_activate: its intstatus, reset-vector, and AI-wrapper
+    // readl/writel sequence runs on the normal promoted SDIO bus. Restore the
+    // card/host pair before the first release backplane access so every strict
+    // four-byte CMD53 operation observes the same lane as probe attach.
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN,
+    );
+    if !cyw43_promote_firmware_upload_clock(state) {
+        return cyw43_release_fail_closed(state);
+    }
     // Linux brcmf_sdio_buscore_activate clears every stale SDIO-core cause
     // before publishing the reset vector or releasing ARMCR4.  This is
     // generation-critical: a recovery must not inherit an interrupt from the
@@ -11973,13 +11986,6 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
         0,
         0,
     ) {
-        return cyw43_release_fail_closed(state);
-    }
-    cyw43_publish_release_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN,
-    );
-    if !cyw43_promote_firmware_upload_clock(state) {
         return cyw43_release_fail_closed(state);
     }
     cyw43_publish_release_progress(
@@ -42229,7 +42235,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_release_clears_intstatus_before_reset_vector_and_arm_release() {
+    fn cyw43_release_promotes_lane_before_intstatus_reset_vector_and_arm_release() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -42241,6 +42247,11 @@ mod tests {
 
         assert!(cyw43_release_firmware(&mut state, 0xb83e_f198, 3));
 
+        let card_width = test_sdio_first_transfer_index(|record| {
+            record.cmd == SDIO_CMD52
+                && record.arg == sdio_cmd52_arg(true, 0, SDIO_CCCR_IF, SDIO_BUS_WIDTH_4BIT)
+        })
+        .expect("release must promote the card lane before backplane access");
         let write_index = |addr: u32| {
             test_sdio_first_transfer_index(|record| {
                 record.cmd == SDIO_CMD53
@@ -42252,6 +42263,7 @@ mod tests {
         let intstatus = write_index(CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS);
         let reset_vector = write_index(CYW43_FIRMWARE_RESET_VECTOR_ADDR);
         let arm_release = write_index(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET);
+        assert!(card_width < intstatus);
         assert!(intstatus < reset_vector);
         assert!(reset_vector < arm_release);
         assert!(state.firmware_execution_started);

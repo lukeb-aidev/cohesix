@@ -958,6 +958,19 @@ Capture only these operator-facing lines from that session:
   latched. Early release recovery also honors the persistent selected-card
   state instead of replaying CMD0/CMD5. This carries Linux's one-snapshot
   command/data dispatch semantics into the serialized linked-runtime model.
+- The fresh readback-proven
+  `[BUILD] 5c8796908-dirty 2026-07-11T09:11:06Z` boot eliminates that W1C
+  hypothesis: it reaches the identical ARMCR4 pre-reset flush with
+  `INT_STATUS=0`, so no co-arriving data edge existed to preserve. The owner
+  snapshot exposes the actual remaining order defect: firmware upload had
+  deliberately demoted the card/host pair to the conservative one-bit lane,
+  but `RELEASE` attempted SDIO-core `INTSTATUS`, reset-vector, and strict
+  ARMCR4 AI-wrapper accesses before restoring four-bit/fast operation. Linux
+  never carries a Cohesix-only upload demotion into buscore activation. The
+  linked runtime now promotes the card and host immediately after validating
+  the complete firmware/NVRAM/tail and before its first release backplane
+  operation; strict four-byte CMD53 remains the sole AI-register route and no
+  CMD52 or retry fallback is introduced.
 - W01/W02 of the resulting readback-proven
   `[BUILD] 7171e9a69-dirty 2026-07-11T02:26:39Z` image prove that persistent
   card recovery now works: both exact generation resets preserve the selected

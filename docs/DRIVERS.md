@@ -1618,6 +1618,13 @@ context and the retry/poll window.
   backplane transaction; the read need not equal the write because
   core-specific and read-only wrapper bits may remain visible. RESETCTRL clear
   repeats the strict write plus bounded settle/read shape used by Linux. The
+  Cohesix-only conservative one-bit firmware-upload lane ends before
+  `brcmf_sdio_buscore_activate` semantics begin: `RELEASE` first restores the
+  card to four-bit mode and the host to the selected fast/high-speed mode, then
+  clears SDIO-core `INTSTATUS`, writes the reset vector, and performs every
+  strict ARMCR4 AI-wrapper access. Promotion after the ARMCR4 reset is invalid
+  because it makes the first release `readl` use a lane Linux never uses for
+  activation.
   immediate read is advisory because Linux's bus read has no error return;
   mailbox/devready is the authoritative execution proof. A failed strict write
   or missing IOCTRL flush remains fail-closed.
@@ -2066,8 +2073,8 @@ context and the retry/poll window.
   `0x5101` failure on an `sdio-cmd*` or `sdio-card-init*` stage is reported
   as an SDIO command-unavailable card-select blocker; it is earlier than
   CYW43 firmware upload, DHCP, `nettest`, and `netstats` acceptance. A
-  `0x5103` failure is reported as a CMD53 descriptor-transfer blocker with
-  `wifi: next_action=inspect-sdio-owner-cmd53-after-block-and-byte-retries`, and an
+  `0x5103` failure is reported as a terminal descriptor-transfer blocker with
+  `wifi: next_action=inspect-sdio-owner-terminal-transfer-no-retry`, and an
   exhausted retained-stage ladder reports `0x5329` as `firmware-retry-exhausted`
   while preserving the SDHCI transfer result plus the actual owner-lane label
   (`forced-byte-mode-conservative`, `byte-conservative`, or
