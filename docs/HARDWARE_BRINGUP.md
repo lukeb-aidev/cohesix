@@ -998,6 +998,26 @@ Capture only these operator-facing lines from that session:
   activation, followed by one promotion before the SD-only fence and pure HT
   request. Same-generation reuse, pre-proof FORCE_HT, and generic transfer
   fallbacks remain prohibited.
+- The readback-proven successor
+  `[BUILD] 5f1566a8c-dirty 2026-07-11T10:14:27Z` proves the PMU CMD52 repair:
+  recovery crosses probe attach and performs three complete 609309-byte
+  firmware plus 1744-byte NVRAM uploads. All three releases nevertheless stop
+  at the identical pre-Function-2 `CHIPCLKCSR=0x50`. This exposed that the
+  operation named generation reset only cleared `IENx`, aborted Function 2,
+  and advanced the software/DPC epoch; it preserved the selected SDIO card and
+  therefore never activated the already-programmed `CARDCTRL.WLANRESET` plus
+  `PMUCONTROL.RES_RELOAD` policy. The linked SDIO owner now replaces that
+  retained-card replay with Linux MMC reset semantics: read CCCR `ABORT`, write
+  the value ORed with `RES=0x08`, leave the old epoch current and
+  masked/poisoned on any primitive or reprobe failure, invalidate CYW43
+  enumeration state, and require fresh
+  host startup, CMD0/CMD5/CMD3/CMD7, block sizes, Function 1, and backplane
+  proof before a separate typed generation commit installs a clean new epoch
+  and permits firmware reload. Historical failure counters are retained, but
+  old poison does not make an otherwise healthy recovered generation
+  permanently fail Gate 10. This is one deterministic primary path; it
+  does not restore the older same-generation overwrite or any transfer
+  fallback.
 - W01/W02 of the resulting readback-proven
   `[BUILD] 7171e9a69-dirty 2026-07-11T02:26:39Z` image prove that persistent
   card recovery now works: both exact generation resets preserve the selected

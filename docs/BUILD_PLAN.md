@@ -6409,7 +6409,7 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 
 - **CYW43/SDIO Wi-Fi driver task**
   - Promote SDIO host I/O, CYW43 firmware/control plane, EAPOL admission, RX/TX queues, credit handling, and optional glom/deaggregation into `driver-wifi`.
-  - Graduate standalone `sdio-host` into the 26b acceptance set with one HAL-declared SDHCI MMIO page, fixed-layout CMD52/CMD53/POLL_IRQ service records, and required owner-state proof.
+  - Graduate standalone `sdio-host` into the 26b acceptance set with one HAL-declared SDHCI MMIO page, fixed-layout CMD52/CMD53/POLL_IRQ service records, atomic card-reset/pending-generation/commit records, and required owner-state proof.
   - Split Wi-Fi work into network-control and network-data budgets so EAPOL/DHCP/TCP ACK progress cannot be starved by bulk RX/TX, while USB/serial still preempt both.
   - Preserve the May 18-19 Linux-shaped host-EAPOL order as an additive isolated runtime replay contract. Final Wi-Fi closure requires both `WIFI_GATE=10` / `WIFI_BLOCKER=none` and `WIFI_OLDGOOD_REPLAY=yes` / `WIFI_OLDGOOD_MISSING=none`; DHCP/netstats and condensed `join complete` summaries cannot substitute for ordered SDIO/CYW43 owner-state, control setup, association/link, M1/M2/M3/M4, PTK/GTK, secure release, DHCP, nettest, and final netstats proof.
   - Root receives Ethernet frames through bounded IPC/rings and never waits synchronously on SDIO credit, CMD52/CMD53 loops, firmware replies, or glom deaggregation.
@@ -6523,7 +6523,7 @@ Inputs: apps/root-task/src/drivers/driver_task_net.rs, apps/root-task/src/hal/pi
 Changes:
   - apps/root-task/src/hal/pi4_wifi.rs — grant only SDIO, power/reset, firmware-bundle, IRQ/OOB, and DMA/ring resources declared for `driver-wifi`.
   - apps/root-task/src/drivers/driver_task_net.rs — keep root as the CYW43 ring client only and fail closed when isolated SDIO/CYW43 service has not returned owner progress.
-  - crates/pi4-driver-abi/src/lib.rs + apps/pi4-driver-runtime/src/lib.rs — define fixed-layout SDIO CMD52/CMD53/POLL_IRQ command records and service them in the isolated SDIO runtime as the bus-owner ABI that CYW43 must use.
+  - crates/pi4-driver-abi/src/lib.rs + apps/pi4-driver-runtime/src/lib.rs — define fixed-layout SDIO CMD52/CMD53/POLL_IRQ plus atomic card-reset/pending-generation/commit command records and service them in the isolated SDIO runtime as the bus-owner ABI that CYW43 must use.
   - apps/root-task/src/net/* — consume bounded Ethernet-frame IPC without changing authenticated TCP console semantics.
 Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi

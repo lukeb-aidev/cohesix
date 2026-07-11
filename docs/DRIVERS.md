@@ -1649,19 +1649,35 @@ context and the retry/poll window.
   `RELEASE` also retains its last internal phase in the terminal completion
   result, so `wifi diag` and the offline normalizer report the Gate-6 release
   substage even after the shared progress slot returns to runtime polling.
-  SDIO card enumeration is a longer-lived bus-owner state than a dongle
-  firmware/DPC generation. A dongle-generation reset therefore preserves the
-  proved selected-card transport, halts ARMCR4, aborts Function 2, advances the
-  DPC epoch, and makes the next `TRANSPORT_INIT` resume from retained
-  `CARD_READY`: it may replay FBR block sizes, Function 1 enable, host config,
-  and strict backplane proof, but it must not issue CMD0/CMD5/CMD3/CMD7 against
-  the still-selected card. The same retained-card rule applies when an
-  early/pre-execution RELEASE failure resets the CYW43 firmware state without
-  advancing the dongle epoch. Before W1C/IRQ ack
-  and epoch commit, reset quiesce clears CCCR `IENx` so an old 0x07 card route
-  cannot relatch into the new generation. SDIO keeps CARD_INT masked from
-  initial owner admission through firmware attach, and across every recovery
-  reload. Ordinary idle turns and child notifications cannot rearm it.
+  A quarantined firmware/DPC generation cannot reuse the selected-card
+  lifetime. Linux programs `CARDCTRL.WLANRESET` and
+  `PMUCONTROL.RES_RELOAD` so its MMC card-reset edge also resets the WLAN
+  backplane and reloads PMU state. Cohesix performs that same reset through the
+  sole linked SDIO owner: after masking CARD_INT it clears CCCR `IENx`, aborts
+  Function 2, reads CCCR `ABORT`, writes the read value ORed with `RES=0x08`,
+  and fails closed if either CMD52 operation is not proved complete. That first
+  typed operation records only a quarantined pending epoch; the old poisoned
+  ring remains current and CARD_INT remains masked. The CYW43 runtime
+  invalidates its former RCA,
+  enumeration, FBR, host/card-lane, and backplane-aperture assumptions; the
+  next typed `TRANSPORT_INIT` must run host startup plus
+  CMD0/CMD5/CMD3/CMD7, restore both function block sizes, enable Function 1,
+  and prove the backplane before sending the separate typed
+  `GENERATION_COMMIT`. Only that exact completion atomically installs a clean
+  current-generation ring, advances both owner and CYW43 epochs, and permits
+  firmware preparation. Prior poison/overrun/ack history remains in cumulative
+  counters rather than contaminating the new generation's health flags. There is no
+  retained-card generation retry, controller shortcut, same-generation
+  firmware overwrite, or root-owned reset path. An early pre-execution attach
+  failure that has not started ARM may still reset local firmware staging
+  without asserting the card-wide generation reset. SDIO keeps CARD_INT masked
+  from initial owner admission through firmware attach and across every
+  recovery re-enumeration; while reset is pending, the owner admits only the
+  exact host startup, CMD0/5/3/7, FBR block-size, F1-only `IOEx`, ALP/window,
+  and ChipCommon-read shapes required for typed reprobe. Premature F2 or
+  `IENx` enable, unrelated Function-0/1 access, Function 2, DPC activation, and
+  ordinary steady service remain rejected. Ordinary idle turns and child notifications cannot
+  rearm it.
   Release follows mailbox-version, Function 2, dongle interrupt masks,
   CYW43455 sideband, and CCCR `IENx` order; reprime repeats the masks and samples
   `RFRAME` before `IENx`, never the reverse. After a successful

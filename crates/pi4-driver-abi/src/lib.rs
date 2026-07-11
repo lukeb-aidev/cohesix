@@ -341,6 +341,8 @@ pub const DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND: u16 = 7;
 pub const DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET: u16 = 8;
 /// SDIO bus-owner operation: activate post-release CARD_INT/DPC service.
 pub const DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE: u16 = 9;
+/// SDIO bus-owner operation: admit a reset generation after card re-enumeration.
+pub const DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT: u16 = 10;
 /// SDIO engine-init detail: SDIO host reached ready state.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY: u16 = 0x5500;
 /// SDIO engine-init detail: HAL-prepared host did not show powered/card-present state.
@@ -1874,10 +1876,12 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG
             || self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND
             || self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET
+            || self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT
             || self.op == DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE;
         let host_config = self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG;
         let card_command = self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND;
         let generation_reset = self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET;
+        let generation_commit = self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT;
         let dpc_activate = self.op == DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE;
         let known_response = self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_OCR
@@ -1892,7 +1896,12 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
         let effective_len = if read_result {
             1
-        } else if host_config || card_command || generation_reset || dpc_activate {
+        } else if host_config
+            || card_command
+            || generation_reset
+            || generation_commit
+            || dpc_activate
+        {
             0
         } else if self.block_count != 0 {
             (self.block_count as u32).saturating_mul(self.block_size as u32)
@@ -1912,6 +1921,7 @@ impl DriverRuntimeSdioCommandDescriptor {
             && (host_config
                 || card_command
                 || generation_reset
+                || generation_commit
                 || dpc_activate
                 || self.addr < (1 << 17))
             && (!host_config
@@ -1941,6 +1951,16 @@ impl DriverRuntimeSdioCommandDescriptor {
                     && self.block_count == 0
                     && self.flags == 0
                     && self.reserved == 0))
+            && (!generation_commit
+                || (self.function == 0
+                    && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
+                    && self.addr != 0
+                    && self.data_offset == 0
+                    && self.len == 0
+                    && self.block_size == 0
+                    && self.block_count == 0
+                    && self.flags == 0
+                    && self.reserved == 0))
             && (!dpc_activate
                 || (self.function == 0
                     && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
@@ -1961,6 +1981,7 @@ impl DriverRuntimeSdioCommandDescriptor {
             && (host_config
                 || card_command
                 || generation_reset
+                || generation_commit
                 || dpc_activate
                 || (effective_len != 0 && (ring_payload || shared_payload)))
     }
@@ -3679,6 +3700,33 @@ mod tests {
         descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
         assert!(!descriptor.valid());
         descriptor.data_offset = 0;
+        descriptor.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
+        assert!(!descriptor.valid());
+    }
+
+    #[test]
+    fn sdio_command_descriptor_validates_generation_commit_without_payload() {
+        let mut descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: 0x4359_5302,
+            data_offset: 0,
+            len: 0,
+            block_size: 0,
+            block_count: 0,
+            flags: 0,
+            reserved: 0,
+            timeout_us: 1_000,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.addr = 0;
+        assert!(!descriptor.valid());
+        descriptor.addr = 0x4359_5302;
+        descriptor.function = 1;
+        assert!(!descriptor.valid());
+        descriptor.function = 0;
         descriptor.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
         assert!(!descriptor.valid());
     }

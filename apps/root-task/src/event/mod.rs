@@ -11632,7 +11632,7 @@ where
             0x5326 => "verify-linked-sdio-cmd5-ready-ocr",
             0x5327 => "verify-linked-sdio-cmd3-rca",
             0x5328 => "verify-linked-sdio-cmd7-select",
-            0x532a => "verify-full-generation-recovery-after-post-release-ht-miss",
+            0x532a => "verify-card-reset-and-reenumeration-before-generation-reload",
             0x5333 | 0x5334 => "inspect-probe-pmucontrol-cmd52-word-primary",
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
             0x5331..=0x5336 => "inspect-linux-probe-attach-state",
@@ -15601,6 +15601,26 @@ mod tests {
             "data-wait"
         );
         assert_eq!(TestPump::wifi_sdio_transfer_failure_r5(data_wait), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_ht_fault_routes_to_card_reset_and_reenumeration_proof() {
+        type TestPump<'a> = EventPump<
+            'a,
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >;
+
+        assert_eq!(
+            TestPump::wifi_cyw43_fault_next_action(0x532a),
+            "verify-card-reset-and-reenumeration-before-generation-reload"
+        );
     }
 
     #[cfg(feature = "kernel")]
