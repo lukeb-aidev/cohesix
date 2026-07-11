@@ -11795,9 +11795,7 @@ where
         fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
     ) -> &'static str {
         match fault.op {
-            2 if fault.flags & 1 != 0 => "byte-retry",
-            2 => "block-first",
-            3 => "byte",
+            2 | 3 => "linux-normal",
             7 | 8 | 9 | 10 => "fifo-fixed",
             _ => "unknown",
         }
@@ -11811,10 +11809,8 @@ where
             "non-cmd53"
         } else if fault.block_mode {
             "block"
-        } else if fault.len == 512 {
-            "byte512"
         } else {
-            "byte-narrow"
+            "byte-remainder"
         }
     }
 

@@ -228,7 +228,6 @@ pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BACKPLANE_READY: u16 = 0x5407;
 /// CYW43 transport detail: transport is ready for firmware prep/upload.
 pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY: u16 = 0x5408;
 /// CYW43 command flag: force Function 1 backplane writes through byte-mode retry.
-pub const DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE: u16 = 1 << 0;
 /// CYW43 command flag: transmit control frames with the Linux SDPCM hw extension.
 pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER: u16 = 1 << 1;
 /// CYW43 command flag: permit a bounded Function 2 first-read on zero-RFRAME RX polls.
@@ -2090,9 +2089,7 @@ impl DriverRuntimeCyw43CommandDescriptor {
             || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
             || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL;
         let known_flags = match self.op {
-            DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK => {
-                self.flags & !DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE == 0
-            }
+            DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK => self.flags == 0,
             DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME => {
                 self.flags
                     & !(DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
@@ -3813,9 +3810,9 @@ mod tests {
             reserved: 0,
         };
         assert!(descriptor.valid());
-        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
-        assert!(descriptor.valid());
-        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE << 1;
+        descriptor.flags = 1 << 0;
+        assert!(!descriptor.valid());
+        descriptor.flags = (1 << 0) << 1;
         assert!(!descriptor.valid());
         descriptor.flags = 0;
 
@@ -3849,7 +3846,7 @@ mod tests {
         assert!(descriptor.valid());
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN;
         assert!(descriptor.valid());
-        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
+        descriptor.flags = 1 << 0;
         assert!(!descriptor.valid());
         descriptor.flags = 0;
         descriptor.payload_len = 1;
@@ -3887,7 +3884,7 @@ mod tests {
         descriptor.payload_len = 16;
         descriptor.total_len = 16;
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
-        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
+        descriptor.flags = 1 << 0;
         assert!(!descriptor.valid());
 
         descriptor = DriverRuntimeCyw43CommandDescriptor {
@@ -3912,7 +3909,7 @@ mod tests {
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         assert!(descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
-        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
+        descriptor.flags = 1 << 0;
         assert!(!descriptor.valid());
 
         descriptor = DriverRuntimeCyw43CommandDescriptor {

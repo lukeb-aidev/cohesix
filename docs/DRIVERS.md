@@ -1442,16 +1442,18 @@ context and the retry/poll window.
   logical plain-header payload or the CDC command/id observed by root.
 - Firmware streaming stays inside the generated 8192-byte shared-payload/RX
   owner window. The isolated runtime preserves incoming chunk bytes before any
-  retained-stage replay, pads only the final logical chunk to a 512-byte physical
-  boundary, rejects malformed padding, reports `CYW43_DRIVER_TASK_STREAM_TAIL_PAD`
-  when active, and advances accounting by logical byte count. Multi-block CMD53
+  retained-stage replay, rounds only the final logical chunk to Linux's four-byte
+  SDIO transport alignment, rejects malformed padding, reports the logical length,
+  transport length, and exact pad in `CYW43_DRIVER_TASK_STREAM_TAIL_PAD`, and
+  advances accounting by logical byte count. Multi-block CMD53
   turns must set `SDHCI_TRNS_MULTI`; block-mode count zero is illegal except for
   512-byte byte-mode CMD53. The isolated runtime decodes SDIO R5 out-of-range as
   `0x0800` (`resp0=0x1800` in current Pi 4 traces) and tolerates that bit only
   on Function 1 backplane writes; Function 2 and other CMD53 response faults
-  still fail closed. A transfer fault such as `0x5103` retries through the
-  retained SDIO owner state and byte-mode fallback without replaying CMD0/CMD5 or
-  CYW43 power/reset state. Retained-stage replay keeps a runtime-local flush
+  still fail closed. A transfer fault such as `0x5103` may replay the retained
+  SDIO owner state only on the same negotiated Linux-normal lane; it never changes
+  card width, host clock, high-speed timing, or selects a byte-mode rescue profile.
+  Retained-stage replay keeps a runtime-local flush
   offset inside the 8192-byte stage, so a later owner retry resumes at the first
   unflushed subtransfer instead of rewriting the completed prefix. The same
   cursor covers the normalized NVRAM chunk, and root may resume into the
@@ -1538,7 +1540,11 @@ context and the retry/poll window.
   readiness leaves `RESPONSE`/`DATA_END` latched, and finish consumes the final
   data edge. This is the serialized-runtime equivalent of Linux clearing one
   captured ISR word while dispatching both command and data handlers from the
-  retained snapshot; no phase may W1C another phase's only edge. Every PIO
+  retained snapshot; no phase may W1C another phase's only edge. After the
+  entry ready interrupt is consumed, PIO drains every complete block advertised
+  by `PRESENT_STATE` without reading or acknowledging `INT_STATUS` inside that
+  drain. A ready edge that relatches remains pending for the next outer service
+  episode after `PRESENT_STATE` deasserts. Every PIO
   descriptor attempt has one aggregate virtual-counter deadline across
   inhibit, command, FIFO, finish, and settle. A failed attempt receives a new
   bounded containment deadline because the transfer deadline may already be
@@ -1625,19 +1631,24 @@ context and the retry/poll window.
   halfword accesses are 32-bit read/extract or read/modify/write operations,
   BLOCK_SIZE plus BLOCK_COUNT and TRANSFER_MODE plus COMMAND are shadowed and
   each committed as one 32-bit word when COMMAND is issued, and every write at
-  400 kHz or below receives a virtual-counter-backed four-SD-clock gap.
+  400 kHz or below receives a virtual-counter-backed four-SD-clock gap. The
+  same Linux platform data declares `SDHCI_QUIRK_NO_HISPD_BIT`: card-side
+  `CCCR_SPEED.EHS` and the negotiated fast clock remain authoritative, while
+  SDHCI `HOST_CONTROL.HISPD` stays clear. Diagnostics label the expected host
+  register state `4bit+iproc-no-hispd`; any `*hispd-unexpected` label is a
+  platform-contract fault.
   Narrow MMIO and immediate paired-halfword commits are not valid Pi 4 SDHCI
   operations. An IOCTRL write is followed by a mandatory CMD52 read of the same
   low-byte address to flush the backplane transaction; the read need not equal
   the write because
   core-specific and read-only wrapper bits may remain visible. RESETCTRL clear
-  repeats the strict write plus bounded settle/read shape used by Linux. The
-  Cohesix-only conservative one-bit firmware-upload lane remains continuous
-  through stale `INTSTATUS` clear, reset-vector publication, and ARMCR4
-  activation. `RELEASE` then promotes card and host exactly once before the
-  SD-only fence and single `HT_AVAIL_REQ`. This matches the hardware-proven
-  Gate-10 sequence and preserves Linux's invariant that firmware staging and
-  `brcmf_chip_set_active` do not contain an intervening host-lane transition.
+  repeats the strict write plus bounded settle/read shape used by Linux. Card
+  width and timing are negotiated once after card selection and Function 1
+  enable, before buscore preparation or AI-core access. That Linux-normal lane
+  remains unchanged through firmware/NVRAM upload, stale `INTSTATUS` clear,
+  reset-vector publication, and ARMCR4 activation. `RELEASE` performs no card
+  or SDHCI reconfiguration: it moves directly through the SD-only fence, one
+  `HT_AVAIL_REQ`, strict HT proof, and post-proof `FORCE_HT` for Function 2.
   The immediate read is advisory because Linux's bus read has no error return;
   mailbox/devready is the authoritative execution proof. A failed strict write
   or missing IOCTRL flush remains fail-closed.
@@ -1714,8 +1725,10 @@ context and the retry/poll window.
   without asserting the card-wide generation reset. SDIO keeps CARD_INT masked
   from initial owner admission through firmware attach and across every
   recovery re-enumeration; while reset is pending, the owner admits only the
-  exact host startup, CMD0/5/3/7, FBR block-size, F1-only `IOEx`, ALP/window,
-  and ChipCommon-read shapes required for typed reprobe. Premature F2 or
+  exact host startup, CMD0/5/3/7, FBR block-size, F1-only `IOEx`, CCCR
+  `IF`/`SPEED`, the negotiated 50 MHz high-speed or 25 MHz default host
+  configuration, ALP/window, and ChipCommon-read shapes required for typed
+  reprobe. Alternate one-bit, reduced-clock, byte-mode, premature F2 or
   `IENx` enable, unrelated Function-0/1 access, Function 2, DPC activation, and
   ordinary steady service remain rejected. Ordinary idle turns and child notifications cannot
   rearm it.
@@ -2140,10 +2153,10 @@ context and the retry/poll window.
   CYW43 firmware upload, DHCP, `nettest`, and `netstats` acceptance. A
   `0x5103` failure is reported as a terminal descriptor-transfer blocker with
   `wifi: next_action=inspect-sdio-owner-terminal-transfer-no-retry`, and an
-  exhausted retained-stage ladder reports `0x5329` as `firmware-retry-exhausted`
-  while preserving the SDHCI transfer result plus the actual owner-lane label
-  (`forced-byte-mode-conservative`, `byte-conservative`, or
-  `byte-narrow-conservative`). The R5 `0x0800` out-of-range bit is no longer
+  exhausted retained-stage replay reports `0x5329` as `firmware-retry-exhausted`
+  while preserving the SDHCI transfer result plus the actual same-lane transfer
+  shape (`linux-normal-block` or `linux-byte-remainder`). The R5 `0x0800`
+  out-of-range bit is no longer
   misclassified as a hard firmware-upload rejection for Function 1 backplane
   writes; if it appears on Function 2 or non-backplane CMD53 turns it remains a
   fault. The retained-stage flush cursor is internal to
@@ -2979,8 +2992,8 @@ Required Cohesix shape:
   applies `SLEEPCSR.KSO`, Function 0 `CARDCTRL.WLANRESET`, ChipCommon
   `PMUCONTROL.RES_RELOAD`, Function 0 `IOEx.F2=0`, and the
   paired card/host download lane. Card `CCCR_IF` and SDHCI `HOST_CONTROL`
-  width/high-speed state are read back before a lane transition is accepted,
-  and release always restores the four-bit/high-speed pair even when successful
+  width/iProc-no-HISPD state are read back before a lane transition is accepted,
+  and release always restores the four-bit/negotiated-fast-clock pair even when successful
   upload slices reset the retry cursor. Each read or write is strict and has a
   dedicated fault; there is no root-owned or best-effort legacy fallback.
   Probe-attach KSO is wake evidence only and does not require `DEVON` or
