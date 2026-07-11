@@ -581,6 +581,10 @@ class GateSummary:
     net_dhcp: str = "unknown"
     net_tcp_ready: bool = False
     nettest_proof: bool = False
+    cohsh_tcp_auth_proof: bool = False
+    tcp_accepts: int = 0
+    tcp_auth_sessions: int = 0
+    tcp_rx_bytes: int = 0
     wifi_data_path_tx: int = 0
     wifi_data_path_rx_preserved: int = 0
     wifi_data_path_rx_delivered: int = 0
@@ -811,6 +815,10 @@ class GateSummary:
             "NET_DHCP": self.net_dhcp,
             "NET_TCP_READY": "yes" if self.net_tcp_ready else "no",
             "NETTEST_PROOF": "yes" if self.nettest_proof else "no",
+            "COHSH_TCP_AUTH_PROOF": "yes" if self.cohsh_tcp_auth_proof else "no",
+            "TCP_ACCEPTS": self.tcp_accepts,
+            "TCP_AUTH_SESSIONS": self.tcp_auth_sessions,
+            "TCP_RX_BYTES": self.tcp_rx_bytes,
             "WIFI_DATA_PATH_TX": self.wifi_data_path_tx,
             "WIFI_DATA_PATH_RX_PRESERVED": self.wifi_data_path_rx_preserved,
             "WIFI_DATA_PATH_RX_DELIVERED": self.wifi_data_path_rx_delivered,
@@ -3913,6 +3921,46 @@ def normalize_wifi_blocker(value: str) -> str:
         return "cyw43-post-release-protocol-version"
     if lower in {"21295", "0x532f"} or "cyw43-post-release-rframe-sample" in lower:
         return "cyw43-post-release-rframe-sample"
+    if lower in {"21296", "0x5330"} or "cyw43-post-release-dpc-activate" in lower:
+        return "cyw43-post-release-dpc-activate"
+    probe_attach_faults = {
+        "21297": "cyw43-probe-cardctrl-read",
+        "0x5331": "cyw43-probe-cardctrl-read",
+        "21298": "cyw43-probe-cardctrl-write",
+        "0x5332": "cyw43-probe-cardctrl-write",
+        "21299": "cyw43-probe-pmucontrol-read",
+        "0x5333": "cyw43-probe-pmucontrol-read",
+        "21300": "cyw43-probe-pmucontrol-write",
+        "0x5334": "cyw43-probe-pmucontrol-write",
+        "21301": "cyw43-probe-function2-disable-read",
+        "0x5335": "cyw43-probe-function2-disable-read",
+        "21302": "cyw43-probe-function2-disable-write",
+        "0x5336": "cyw43-probe-function2-disable-write",
+        "21303": "cyw43-probe-sdonly-clock",
+        "0x5338": "cyw43-release-intstatus-clear",
+    }
+    if lower in probe_attach_faults:
+        return probe_attach_faults[lower]
+    for fault in set(probe_attach_faults.values()):
+        if fault in lower:
+            return fault
+    card_command_faults = {
+        "21284": "cyw43-transport-card-cmd0",
+        "0x5324": "cyw43-transport-card-cmd0",
+        "21285": "cyw43-transport-card-cmd5-ocr",
+        "0x5325": "cyw43-transport-card-cmd5-ocr",
+        "21286": "cyw43-transport-card-cmd5-ready",
+        "0x5326": "cyw43-transport-card-cmd5-ready",
+        "21287": "cyw43-transport-card-cmd3-rca",
+        "0x5327": "cyw43-transport-card-cmd3-rca",
+        "21288": "cyw43-transport-card-cmd7-select",
+        "0x5328": "cyw43-transport-card-cmd7-select",
+    }
+    if lower in card_command_faults:
+        return card_command_faults[lower]
+    for fault in set(card_command_faults.values()):
+        if fault in lower:
+            return fault
     if lower in {"20737", "0x5101"} or "sdio-command-unavailable" in lower:
         return "sdio-command-unavailable"
     if "function2-disabled" in lower:
@@ -4090,6 +4138,16 @@ def normalize_wifi_exact(value: str) -> str:
         "0x5322": "cyw43-post-release-cardcap",
         "21283": "cyw43-backplane-chipcommon-read",
         "0x5323": "cyw43-backplane-chipcommon-read",
+        "21284": "cyw43-transport-card-cmd0",
+        "0x5324": "cyw43-transport-card-cmd0",
+        "21285": "cyw43-transport-card-cmd5-ocr",
+        "0x5325": "cyw43-transport-card-cmd5-ocr",
+        "21286": "cyw43-transport-card-cmd5-ready",
+        "0x5326": "cyw43-transport-card-cmd5-ready",
+        "21287": "cyw43-transport-card-cmd3-rca",
+        "0x5327": "cyw43-transport-card-cmd3-rca",
+        "21288": "cyw43-transport-card-cmd7-select",
+        "0x5328": "cyw43-transport-card-cmd7-select",
         "20737": "sdio-command-unavailable",
         "0x5101": "sdio-command-unavailable",
         "20738": "cyw43-sdio-descriptor-unavailable",
@@ -4113,6 +4171,22 @@ def normalize_wifi_exact(value: str) -> str:
         "0x532e": "cyw43-post-release-protocol-version",
         "21295": "cyw43-post-release-rframe-sample",
         "0x532f": "cyw43-post-release-rframe-sample",
+        "21296": "cyw43-post-release-dpc-activate",
+        "0x5330": "cyw43-post-release-dpc-activate",
+        "21297": "cyw43-probe-cardctrl-read",
+        "0x5331": "cyw43-probe-cardctrl-read",
+        "21298": "cyw43-probe-cardctrl-write",
+        "0x5332": "cyw43-probe-cardctrl-write",
+        "21299": "cyw43-probe-pmucontrol-read",
+        "0x5333": "cyw43-probe-pmucontrol-read",
+        "21300": "cyw43-probe-pmucontrol-write",
+        "0x5334": "cyw43-probe-pmucontrol-write",
+        "21301": "cyw43-probe-function2-disable-read",
+        "0x5335": "cyw43-probe-function2-disable-read",
+        "21302": "cyw43-probe-function2-disable-write",
+        "0x5336": "cyw43-probe-function2-disable-write",
+        "21303": "cyw43-probe-sdonly-clock",
+        "0x5338": "cyw43-release-intstatus-clear",
     }
     if lower in cyw43_transport_details:
         return cyw43_transport_details[lower]
@@ -4185,6 +4259,14 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-post-release-mailbox-ready",
         "cyw43-post-release-protocol-version",
         "cyw43-post-release-rframe-sample",
+        "cyw43-post-release-dpc-activate",
+        "cyw43-probe-cardctrl-read",
+        "cyw43-probe-cardctrl-write",
+        "cyw43-probe-pmucontrol-read",
+        "cyw43-probe-pmucontrol-write",
+        "cyw43-probe-function2-disable-read",
+        "cyw43-probe-function2-disable-write",
+        "cyw43-probe-sdonly-clock",
         "cyw43-protocol-error-cur-etheraddr-len",
         "wsec-pmk-bad-argument",
         "firmware-supplicant-unsupported",
@@ -5502,9 +5584,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     early_startup_blackbox_gate = 0
     host_eapol_firstread_blocker_seen: str | None = None
     host_eapol_terminal_blocker: str | None = None
+    generation_reset_ready_seen = False
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
+        if (
+            "driver_task_resource_init" in raw
+            and fields.get("stage") == "cyw43-firmware-recover"
+            and fields.get("status") == "generation-reset-ready"
+        ):
+            generation_reset_ready_seen = True
         cached_only_evidence = fields.get("source", "").lower() == "cached"
         explicit_blocker = None
         key_success_stage = cyw43_host_eapol_key_install_success_stage(event)
@@ -5578,6 +5667,15 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 blocker = fault_blocker
+                continue
+            if fault_blocker.startswith("cyw43-transport-card-cmd"):
+                # A post-generation-reset card-discovery fault is a new attach
+                # attempt, not subordinate evidence for the earlier release
+                # failure. Report the terminal retry frontier rather than
+                # leaving the recovered 0x532a detail sticky.
+                gate = 2 if generation_reset_ready_seen else max(gate, 2)
+                blocker = fault_blocker
+                explicit_blocker = fault_blocker
                 continue
         if raw_contract_blocker == "uboot-policy-missing":
             gate = max(gate, 1)
@@ -7659,6 +7757,14 @@ def summarize_wifi_failure_detail(
                 "cyw43-post-release-mailbox-ready",
                 "cyw43-post-release-protocol-version",
                 "cyw43-post-release-rframe-sample",
+                "cyw43-post-release-dpc-activate",
+                "cyw43-probe-cardctrl-read",
+                "cyw43-probe-cardctrl-write",
+                "cyw43-probe-pmucontrol-read",
+                "cyw43-probe-pmucontrol-write",
+                "cyw43-probe-function2-disable-read",
+                "cyw43-probe-function2-disable-write",
+                "cyw43-probe-sdonly-clock",
             }
         ):
             candidate = wifi_blocker
@@ -7753,6 +7859,84 @@ def summarize_wifi_failure_detail(
             )
             line = event.line
     return exact, phase, line
+
+
+CYW43_RELEASE_PHASE_EXACT = {
+    206: "cyw43-release-precondition",
+    207: "cyw43-release-reset-vector",
+    208: "cyw43-release-armcr4-reset",
+    209: "cyw43-release-upload-clock",
+    210: "cyw43-release-function2-sideband",
+    211: "cyw43-release-ht-clock",
+    212: "cyw43-release-function2-enable",
+    213: "cyw43-release-interrupt-mask",
+    214: "cyw43-release-corecontrol",
+    215: "cyw43-release-mailbox-version",
+    216: "cyw43-release-firmware-ready",
+    217: "cyw43-release-post-ready",
+}
+
+CYW43_ARMCR4_RESET_EDGE_EXACT = {
+    1: "cyw43-armcr4-prereset-write",
+    2: "cyw43-armcr4-prereset-flush",
+    3: "cyw43-armcr4-assert-write",
+    4: "cyw43-armcr4-in-reset-write",
+    5: "cyw43-armcr4-in-reset-flush",
+    6: "cyw43-armcr4-clear-write",
+    7: "cyw43-armcr4-postreset-write",
+    8: "cyw43-armcr4-postreset-flush",
+}
+
+
+def summarize_terminal_cyw43_release_fault(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, int] | None:
+    """Return the last CYW43 RELEASE fault not followed by generation recovery."""
+
+    terminal: tuple[str, str, int] | None = None
+    for event in events:
+        raw = event.raw.lower()
+        stage = event.fields.get("stage", "").lower()
+        status = event.fields.get("status", "").lower()
+        if raw.startswith("cyw43_driver_task_command_fault") and stage in {
+            "cyw43-firmware-prep",
+            "cyw43-firmware-release",
+        }:
+            blocker = normalize_wifi_exact(
+                event.fields.get("reason")
+                or event.fields.get("detail")
+                or event.raw
+            )
+            if blocker == "cyw43-release" and stage == "cyw43-firmware-release":
+                phase = parse_hex_int(event.fields.get("result")) or 0
+                blocker = CYW43_RELEASE_PHASE_EXACT.get(phase, blocker)
+            elif blocker == "cyw43-backplane-armcr4-reset":
+                result = parse_hex_int(event.fields.get("result")) or 0
+                blocker = CYW43_ARMCR4_RESET_EDGE_EXACT.get(
+                    result & 0xFF, blocker
+                )
+            if blocker.startswith(
+                ("cyw43-release", "cyw43-post-release-", "cyw43-armcr4-")
+            ) or blocker == "cyw43-backplane-armcr4-reset":
+                terminal = (blocker, stage, event.line)
+            continue
+        if terminal is None:
+            continue
+        if (
+            raw.startswith("driver_task_resource_init")
+            and stage == "cyw43-firmware-recover"
+            and status == "generation-reset-ready"
+        ):
+            terminal = None
+            continue
+        if (
+            raw.startswith("driver_task_resource_init")
+            and event.fields.get("contract", "").lower() == "cyw43455"
+            and stage in {"cyw43-firmware-release", "cyw43-function2"}
+            and status == "ready"
+        ):
+            terminal = None
+    return terminal
 
 
 def wifi_address_source(fields: Mapping[str, str]) -> str | None:
@@ -8642,7 +8826,6 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
             host_tcp_proof = True
             tcp_ready = True
         if raw.startswith("ok nettest") and (detail == "pass" or "success" in raw):
-            tcp_ready = True
             nettest_proof = True
         if raw.startswith("err nettest") or "detail=net-disabled" in raw:
             host_tcp_proof = False
@@ -8652,7 +8835,6 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
             "[net-selftest] result" in raw
             and field_lower(event, "result") in {"pass", "peer-assisted-pass"}
         ):
-            tcp_ready = True
             nettest_proof = True
         if raw.startswith("[dhcp]") or "[dhcp]" in raw:
             interface = event.fields.get("interface")
@@ -8680,6 +8862,32 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
         elif tcp_ready_field == "no":
             tcp_ready = host_tcp_proof
     return active, addr_src, dhcp, tcp_ready, nettest_proof
+
+
+def summarize_cohsh_tcp_auth(events: Iterable[TraceEvent]) -> tuple[bool, int, int, int]:
+    """Return same-boot authenticated TCP counters, separate from nettest."""
+
+    auth_line_seen = False
+    accepts = 0
+    auth_sessions = 0
+    rx_bytes = 0
+    for event in events:
+        raw = event.raw.lower()
+        if "[cohsh-net][auth] auth ok" in raw or "[net-console] auth ok" in raw:
+            auth_line_seen = True
+        if not (
+            raw.startswith("netstats:")
+            or "wifi: gate 10" in raw
+            or "wifi: acceptance" in raw
+        ):
+            continue
+        accepts = max(accepts, parse_hex_int(event.fields.get("tcp_accepts")) or 0)
+        auth_sessions = max(
+            auth_sessions, parse_hex_int(event.fields.get("tcp_auth")) or 0
+        )
+        rx_bytes = max(rx_bytes, parse_hex_int(event.fields.get("tcp_rx_bytes")) or 0)
+    proof = accepts > 0 and auth_sessions > 0 and rx_bytes > 0
+    return proof or (auth_line_seen and rx_bytes > 0), accepts, auth_sessions, rx_bytes
 
 
 def classify_driver_task_role(label: str) -> str | None:
@@ -10549,6 +10757,28 @@ def wifi_control_txglomalign_step(event: TraceEvent) -> bool:
     )
 
 
+def wifi_control_txglom_pre_tx_drain_ready_step(event: TraceEvent) -> bool:
+    """Return true when split txglom proves the FIFO empty before TX."""
+
+    raw = event.raw.lower()
+    return (
+        "cyw43_driver_task_control_split" in raw
+        and field_lower(event, "stage") == "cyw43-control-txglomalign"
+        and field_lower(event, "event") == "pre-tx-drain-ready"
+    )
+
+
+def wifi_control_txglom_tx_complete_step(event: TraceEvent) -> bool:
+    """Return true when txglom TX follows the completed pre-TX drain."""
+
+    raw = event.raw.lower()
+    return (
+        "cyw43_driver_task_control_split" in raw
+        and field_lower(event, "stage") == "cyw43-control-txglomalign"
+        and field_lower(event, "event") == "tx-complete"
+    )
+
+
 def wifi_control_ulp_sdioctrl_step(event: TraceEvent) -> bool:
     """Return true once the optional ULP SDIO control step is resolved."""
 
@@ -10849,6 +11079,37 @@ def wifi_netstats_secure_step(event: TraceEvent) -> bool:
     )
 
 
+def wifi_tcp_authenticated_step(event: TraceEvent) -> bool:
+    """Return true for non-empty authenticated WiFi TCP console traffic."""
+
+    raw = event.raw.lower()
+    if "[cohsh-net][auth] auth ok" in raw or "[net-console] auth ok" in raw:
+        return True
+    return (
+        event.domain == "wifi"
+        and raw.startswith("netstats:")
+        and (parse_hex_int(event.fields.get("tcp_accepts")) or 0) > 0
+        and (parse_hex_int(event.fields.get("tcp_auth")) or 0) > 0
+        and (parse_hex_int(event.fields.get("tcp_rx_bytes")) or 0) > 0
+    )
+
+
+def wifi_tcp_ready_step(event: TraceEvent) -> bool:
+    """Return true for explicit same-trace WiFi TCP readiness."""
+
+    return (
+        event.domain == "wifi"
+        and event.raw.lower().startswith(("netstatus:", "netstats:"))
+        and field_lower(event, "tcp_ready") == "yes"
+    )
+
+
+def wifi_dpc_healthy_step(event: TraceEvent) -> bool:
+    """Return true for a complete healthy DPC sample after TCP proof."""
+
+    return summarize_wifi_dpc_proof([event]).proof
+
+
 def wifi_forbidden_shortcut(event: TraceEvent) -> bool:
     """Return true for root/shortcut evidence that cannot satisfy acceptance."""
 
@@ -11012,6 +11273,13 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
             SequenceStep("cyw43-transport-ready", wifi_cyw43_transport_step),
             SequenceStep("firmware-ready", wifi_firmware_ready_step),
             SequenceStep("function2-ready", wifi_function2_ready_step),
+            SequenceStep(
+                "control-txglom-pre-tx-drain-ready",
+                wifi_control_txglom_pre_tx_drain_ready_step,
+            ),
+            SequenceStep(
+                "control-txglom-tx-complete", wifi_control_txglom_tx_complete_step
+            ),
             SequenceStep("control-txglomalign", wifi_control_txglomalign_step),
             SequenceStep("control-ulp-sdioctrl", wifi_control_ulp_sdioctrl_step),
             SequenceStep("control-rxglom", wifi_control_rxglom_step),
@@ -11052,8 +11320,11 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
             SequenceStep("dhcp-bound", wifi_dhcp_bound_step),
             SequenceStep("nettest", wifi_nettest_step),
             SequenceStep("netstats-counters", wifi_netstats_counters_step),
+            SequenceStep("tcp-authenticated", wifi_tcp_authenticated_step),
             SequenceStep("netstats-bound", wifi_netstats_bound_step),
             SequenceStep("netstats-secure", wifi_netstats_secure_step),
+            SequenceStep("tcp-ready", wifi_tcp_ready_step),
+            SequenceStep("dpc-healthy-after-tcp", wifi_dpc_healthy_step),
         ],
     )
 
@@ -11347,6 +11618,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     net_active, net_addr_src, net_dhcp, net_tcp_ready, nettest_proof = (
         summarize_net_state(event_list)
     )
+    cohsh_tcp_auth_proof, tcp_accepts, tcp_auth_sessions, tcp_rx_bytes = (
+        summarize_cohsh_tcp_auth(event_list)
+    )
     (
         wifi_data_path_tx,
         wifi_data_path_rx_preserved,
@@ -11599,12 +11873,26 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 wifi_phase = replay_phase
                 wifi_blocker_line = replay_line
             elif replay_exact in {
+                "cyw43-probe-cardctrl-read",
+                "cyw43-probe-cardctrl-write",
+                "cyw43-probe-pmucontrol-read",
+                "cyw43-probe-pmucontrol-write",
+                "cyw43-probe-function2-disable-read",
+                "cyw43-probe-function2-disable-write",
+            }:
+                wifi_gate = 5
+                wifi_blocker = replay_exact
+                wifi_exact = replay_exact
+                wifi_phase = replay_phase
+                wifi_blocker_line = replay_line
+            elif replay_exact in {
                 "cyw43-post-release-ht-clock",
                 "cyw43-post-release-function2-ready",
                 "cyw43-post-release-corecontrol",
                 "cyw43-post-release-mailbox-ready",
                 "cyw43-post-release-protocol-version",
                 "cyw43-post-release-rframe-sample",
+                "cyw43-post-release-dpc-activate",
             }:
                 wifi_gate = max(wifi_gate, 7)
                 wifi_blocker = replay_exact
@@ -11656,12 +11944,26 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 wifi_phase = replay_phase
                 wifi_blocker_line = replay_line
             elif replay_exact in {
+                "cyw43-probe-cardctrl-read",
+                "cyw43-probe-cardctrl-write",
+                "cyw43-probe-pmucontrol-read",
+                "cyw43-probe-pmucontrol-write",
+                "cyw43-probe-function2-disable-read",
+                "cyw43-probe-function2-disable-write",
+            }:
+                wifi_gate = 5
+                wifi_blocker = replay_exact
+                wifi_exact = replay_exact
+                wifi_phase = replay_phase
+                wifi_blocker_line = replay_line
+            elif replay_exact in {
                 "cyw43-post-release-ht-clock",
                 "cyw43-post-release-function2-ready",
                 "cyw43-post-release-corecontrol",
                 "cyw43-post-release-mailbox-ready",
                 "cyw43-post-release-protocol-version",
                 "cyw43-post-release-rframe-sample",
+                "cyw43-post-release-dpc-activate",
             }:
                 wifi_gate = max(wifi_gate, 7)
                 wifi_blocker = replay_exact
@@ -11751,6 +12053,57 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     ):
         wifi_gate = 7
         wifi_exact, wifi_phase, wifi_blocker_line = split_descriptor_fault
+    terminal_card_fault: tuple[str, int] | None = None
+    for event in event_list:
+        raw = event.raw.lower()
+        if raw.startswith("cyw43_driver_task_command_fault"):
+            fault = normalize_wifi_blocker(
+                event.fields.get("reason")
+                or event.fields.get("detail")
+                or event.raw
+            )
+            if fault.startswith("cyw43-transport-card-cmd"):
+                terminal_card_fault = (fault, event.line)
+                continue
+        if (
+            terminal_card_fault is not None
+            and raw.startswith("driver_task_resource_init")
+            and event.fields.get("stage") == "cyw43-transport-init"
+            and event.fields.get("status") == "ready"
+        ):
+            terminal_card_fault = None
+    if terminal_card_fault is not None:
+        # A retained card-discovery fault is the current Gate-2 frontier even
+        # when a later generic replay summary says only that firmware replay
+        # failed. A subsequent transport-ready record clears this terminal
+        # fault and permits the normal later-gate evidence to take precedence.
+        wifi_blocker, wifi_blocker_line = terminal_card_fault
+        wifi_gate = 2
+        wifi_exact = wifi_blocker
+        wifi_phase = "cyw43-transport-init"
+    terminal_release_fault = summarize_terminal_cyw43_release_fault(event_list)
+    if terminal_release_fault is not None:
+        # Passive diagnostics repeat inferred later gate names and their
+        # subcommand in ERR lines. Neither is evidence that Function 2 or DHCP
+        # was reached, so the last unrecovered hardware RELEASE fault wins.
+        wifi_blocker, wifi_phase, wifi_blocker_line = terminal_release_fault
+        wifi_gate = 7 if wifi_blocker.startswith("cyw43-post-release-") else 6
+        wifi_exact = wifi_blocker
+    if wifi_gate >= 10 and not cohsh_tcp_auth_proof:
+        wifi_gate = 9
+        wifi_blocker = "tcp-auth-proof-missing"
+        wifi_exact = wifi_blocker
+        wifi_phase = "tcp-console"
+    elif wifi_gate >= 10 and not net_tcp_ready:
+        wifi_gate = 9
+        wifi_blocker = "tcp-ready-proof-missing"
+        wifi_exact = wifi_blocker
+        wifi_phase = "tcp-console"
+    elif wifi_gate >= 10 and not wifi_dpc.proof:
+        wifi_gate = 9
+        wifi_blocker = "wifi-dpc-proof-missing"
+        wifi_exact = wifi_blocker
+        wifi_phase = "cyw43-dpc"
     if driver_task_active_net == "genet" or net_active == "wired":
         wifi_gate = 0
         wifi_blocker = "not-selected"
@@ -11812,6 +12165,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         net_dhcp=net_dhcp,
         net_tcp_ready=net_tcp_ready,
         nettest_proof=nettest_proof,
+        cohsh_tcp_auth_proof=cohsh_tcp_auth_proof,
+        tcp_accepts=tcp_accepts,
+        tcp_auth_sessions=tcp_auth_sessions,
+        tcp_rx_bytes=tcp_rx_bytes,
         wifi_data_path_tx=wifi_data_path_tx,
         wifi_data_path_rx_preserved=wifi_data_path_rx_preserved,
         wifi_data_path_rx_delivered=wifi_data_path_rx_delivered,
@@ -12854,6 +13211,9 @@ def wifi_dpc_acceptance_required(
         return True
     if exact.get("WIFI_OLDGOOD_REPLAY") == "yes":
         return True
+    exact_gate = parse_hex_int(exact.get("WIFI_GATE"))
+    if exact_gate is not None and exact_gate >= 10:
+        return True
     minimum_gate = parse_hex_int(minimum.get("WIFI_GATE"))
     return minimum_gate is not None and minimum_gate >= 10
 
@@ -13150,6 +13510,12 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
                 blockers.append("wifi-dpc-proof-missing")
             else:
                 blockers.append("wifi-dpc-proof-invalid")
+        if record.get("NET_TCP_READY") != "yes":
+            blockers.append("wifi-tcp-ready-proof-missing")
+        if record.get("COHSH_TCP_AUTH_PROOF") != "yes":
+            blockers.append("wifi-tcp-auth-proof-missing")
+        if record.get("NETTEST_PROOF") != "yes":
+            blockers.append("wifi-nettest-proof-missing")
     elif net_active == "wired":
         if record.get("DRIVER_TASK_ACTIVE_NET") != "genet":
             blockers.append("wired-driver-task-not-active")
@@ -13159,7 +13525,9 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
             blockers.append("wired-address-not-ready")
     else:
         blockers.append("network-active-missing")
-    if record.get("NET_TCP_READY") != "yes" and record.get("NETTEST_PROOF") != "yes":
+    if net_active != "wifi" and record.get("NET_TCP_READY") != "yes" and record.get(
+        "NETTEST_PROOF"
+    ) != "yes":
         blockers.append("network-tcp-proof-missing")
     if (parse_hex_int(str(record.get("USB_GATE", "0"))) or 0) < 10:
         blockers.append("local-seat-usb-gate-incomplete")
@@ -13312,7 +13680,6 @@ def main(argv: list[str] | None = None) -> int:
         wifi_dpc_ok = True
         if (
             wifi_dpc_acceptance_required(exact_expectations, minimum_expectations)
-            and exact_expectations.get("WIFI_DPC_PROOF") != "yes"
             and not gate_summary.wifi_dpc_proof
         ):
             print(

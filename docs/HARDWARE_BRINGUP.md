@@ -85,7 +85,7 @@
 - Default USB-menu builds stay on the seL4-aligned `usbkbd` interrupt-polling baseline (`CONFIG_SYS_USB_EVENT_POLL=y`) so the HDMI/USB wizard matches the previously working Pi 4 input path; the explicit serial menu opt-out does not require U-Boot USB keyboard polling.
 - The SD staging step also writes Linux comparison helpers `brcmfmac-dyndbg.cmdline` and `brcmfmac-dyndbg.sh` to the FAT partition. Use the `.cmdline` contents when booting a Linux known-good image to capture brcmfmac/MMC/SDHCI debug from module load, or run the shell helper after boot to enable the same dynamic-debug selectors through debugfs. These files are diagnostics only; the Cohesix cold-boot path does not append Linux bootargs to the seL4 handoff.
 - `scripts/pi4-image-build.sh` deliberately does not run `scripts/pi4_trace_normalize.py`. The build script owns deterministic image staging/flashing and has no authoritative post-boot serial input; trace normalization is a post-capture evidence step. A future hardware-in-the-loop wrapper may call build, flash, serial capture, and normalization in sequence, but the staging script itself should remain artifact-only.
-- `scripts/pi4_gate_proof.sh` is the hardware-in-the-loop wrapper for proof captures. By default it sends `smp activity` before the USB/Wi-Fi probes, sends `usb probe-kbd`, and sends a final `smp activity` after `netstats` so post-prompt owner-state proof is visible in the serial transcript. Capture commands are sent with character-paced serial writes and the wrapper waits for a fresh `cohesix>` prompt after each command before sending the next one, so the harness does not create merged-command or interleaved-output false failures. The default mode is a frontier sanity capture requiring `USB_GATE>=3`, `WIFI_GATE>=1`, a clean parsed serial stream (`SERIAL_CLEAN=yes`), no kernel halt (`BOOT_HALTED=no`), no seL4 timer entry (`TIMER_IRQ27_SEEN=no`), no U-Boot xHCI handoff evidence (`USB_BOOTLOADER_HANDOFF_SEEN=no`), and positive Cohesix-owned cold-boot evidence (`USB_COLD_BOOT_SEEN=yes`) before succeeding. `--require-driver-task-proof` additionally requires `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no` before latency proof can satisfy performance evidence. `--require-usb-ready` is the full USB acceptance mode and requires `USB_GATE=10`, `USB_BLOCKER=none`, `USB_LOCAL_SEAT_STATE=ready`, `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_BUSY_AFTER_READY=no`, `USB_OLDGOOD_REPLAY=yes`, and `USB_OLDGOOD_MISSING=none`; `--require-wifi-ready` and `--require-ready` likewise require `WIFI_GATE=10`, `WIFI_BLOCKER=none`, `WIFI_OLDGOOD_REPLAY=yes`, and `WIFI_OLDGOOD_MISSING=none`. The normalizer `--boot-summary` ledger is fail-closed: a slice is not scored `pass` unless selected-network proof, `NET_TCP_READY=yes` or `NETTEST_PROOF=yes`, dedicated driver-task owner/DMA proof, USB cold-boot and old-good local-seat proof, USB burst proof, and serial/HDMI responsiveness are all present. Use `--allow-summary-only` only for exploratory summaries that must not be treated as proof evidence.
+- `scripts/pi4_gate_proof.sh` is the hardware-in-the-loop wrapper for proof captures. By default it sends `smp activity` before the USB/Wi-Fi probes, sends `usb probe-kbd`, and sends a final `smp activity` after `netstats` so post-prompt owner-state proof is visible in the serial transcript. Capture commands are sent with character-paced serial writes and the wrapper waits for a fresh `cohesix>` prompt after each command before sending the next one, so the harness does not create merged-command or interleaved-output false failures. The default mode is a frontier sanity capture requiring `USB_GATE>=3`, `WIFI_GATE>=1`, a clean parsed serial stream (`SERIAL_CLEAN=yes`), no kernel halt (`BOOT_HALTED=no`), no seL4 timer entry (`TIMER_IRQ27_SEEN=no`), no U-Boot xHCI handoff evidence (`USB_BOOTLOADER_HANDOFF_SEEN=no`), and positive Cohesix-owned cold-boot evidence (`USB_COLD_BOOT_SEEN=yes`) before succeeding. `--require-driver-task-proof` additionally requires `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no` before latency proof can satisfy performance evidence. `--require-usb-ready` is the full USB acceptance mode and requires `USB_GATE=10`, `USB_BLOCKER=none`, `USB_LOCAL_SEAT_STATE=ready`, `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_BUSY_AFTER_READY=no`, `USB_OLDGOOD_REPLAY=yes`, and `USB_OLDGOOD_MISSING=none`; `--require-wifi-ready` and `--require-ready` additionally require Wi-Fi DHCP, explicit `NET_TCP_READY=yes`, a completed `nettest`, nonzero TCP accept/auth/RX-byte proof, healthy unmasked DPC accounting after TCP, exact captured firmware/CLM identity, and the ordered old-good replay including `pre-tx-drain-ready -> tx-complete`. The normalizer `--boot-summary` ledger is fail-closed: a Wi-Fi slice is not scored `pass` unless those TCP/DPC conditions, dedicated driver-task owner/DMA proof, USB cold-boot and old-good local-seat proof, USB burst proof, and serial/HDMI responsiveness are all present. Use `--allow-summary-only` only for exploratory summaries that must not be treated as proof evidence.
 - Optional Cohesix net-policy overrides mirrored into DTB `/chosen` by the staged boot script:
 - `setenv coh_net_mode <off|static|dhcp>`
 - `setenv coh_net_interface <wired|wifi|auto>`
@@ -166,6 +166,25 @@
   `CONTROL_POLL` path as the remaining matched station controls; root no longer
   selects runtime-private `CONTROL_EXCHANGE` for either its value-8 primary
   request or value-4 fallback. Runtime
+  flagged `CONTROL_FRAME` service first returns every already-published DPC FIFO
+  head to root, one per terminal turn and in wire order. Root routes each head
+  and resubmits the unchanged control descriptor; only an empty FIFO permits
+  SDPCM TX. This preserves the startup-status drain proven by the authenticated
+  Gate-10/TCP boots without restoring the retired monolithic exchange.
+  Firmware preparation likewise follows one fail-closed generation order:
+  checked ARMCR4/D11 passive state, KSO/CARDCTRL/PMU/F2-disable, paired card and
+  host lane configuration with CCCR/SDHCI readback, ALP-only download clock,
+  firmware/NVRAM staging,
+  SDIO-core `INTSTATUS=0xffffffff`, reset vector, checked ARMCR4 release, then
+  SD-only/HT/F2/DPC activation. ARMCR4 release repeats Linux's bounded
+  reset-clear/50-us/readback sequence and quarantines any generation whose
+  execution may have begun. Reset and D11 transfer failures are terminal;
+  no advisory reset or physical-RX fallback remains.
+  DPC activation publishes either CARD_INT or a nonzero retained RFRAME source;
+  the CYW43 runtime imports that generation-bound hint before capture. Valid
+  empty startup CONTROL status and all-zero terminal first-read evidence are
+  consumed/quiesced without retransmit recovery, while nonzero malformed frames
+  remain fail-closed.
   `CONTROL_POLL` delivers SERVICE frames in SDPCM wire order, not control-first
   priority order. RX/control service captures and W1C-acknowledges hardware
   interrupt bits at the service boundary, retains them in software
@@ -513,7 +532,7 @@ Capture only these operator-facing lines from that session:
 - As-built refinement: after firmware/NVRAM staging, Pi 4 Wi-Fi restores the Linux high-speed activation lane before the reset-vector write and ARMCR4 release, including the case where the bounded verify fallback ended on the conservative 1-bit retry lane. That restore emits `firmware stage=firmware-release-width action=restore-4bit ... reason=linux-pre-armcr4-ht-proof`, keeps the 4-bit lane through the required `wait-ht-clock` poll, and runs a bounded `armcr4-release-proof` readback before HT. Concrete `CPUHALT` or reset-asserted readback still stops before the clock gate with `cyw43-armcr4-release-not-live`; fragile unavailable readback now stops before HT with `cyw43-armcr4-release-readback-unavailable` so production Function 2 is not reached on cached release evidence alone. The path no longer demotes the HT transition back to the 400 kHz startup lane after a successful upload.
 - As-built refinement: the `post-release-proof` tuple records the firmware upload range, normalized NVRAM range, NVRAM tail magic, reset-vector address/value, CPUHALT release value, upload/current/preferred SDIO clocks, and cached `CHIPCLKCSR` / `WAKEUPCTRL` / `SLEEPCSR` / `CARDCAP` labels. It remains diagnostic cached state, while the separate `armcr4-release-proof` breadcrumb is the live production gate; fragile SDIO readback failures log `action=fail-before-ht` instead of authorizing the DEVON/HT-clock proof.
 - As-built correction: the normal Pi 4 CYW43455 firmware and control-plane target now matches the Linux capture by programming CCCR `SPEED.EHS`, setting SDHCI `HOST_CONTROL.HISPD`, and requesting a 50 MHz high-speed 4-bit SDIO lane (Linux final actual clock was `41666667 Hz` from the `fe300000.mmcnr` parent divider). Firmware image upload uses the same Linux-shaped high-speed Function 1 block-transfer lane first, with 32 KiB windowed writes, then retries at 25 MHz and 12.5 MHz before falling back to 1.5625 MHz byte-mode. Successful HT/F2 paths no longer lower `wait-firmware-ready` or pre-HT control-plane probes back to 400 kHz just to poll the mailbox.
-- As-built refinement: Pi 4 Wi-Fi keeps the Linux/OpenBSD probe-attach order and now treats pre-firmware KSO as wake evidence only, not clock proof. Firmware load mirrors upstream `brcmf_sdio_kso_init()` by setting `SLEEPCSR.KSO` without requiring `DEVON`, then performs `CARDCTRL.WLANRESET`, best-effort ChipCommon `PMUCONTROL.RES_RELOAD` with live readback skipped, keeps F2 disabled before firmware upload, and clears `CHIPCLKCSR=0` before the ARMCR4/SOCRAM reset/upload sequence. After ARMCR4 release, the required HT path preserves the live sideband state and requests `HT_AVAIL_REQ` while still requiring real `HT_AVAIL` before any Function 2 readiness check; SR sideband remains refreshed again after Function 2 readiness.
+- As-built refinement: Pi 4 Wi-Fi keeps the Linux/OpenBSD probe-attach order and treats pre-firmware KSO as wake evidence only, not clock proof. On every initial or recovered firmware generation, the isolated CYW43 runtime sets `SLEEPCSR.KSO` without requiring `DEVON`, performs strict unconditional read/modify/write operations for `CARDCTRL.WLANRESET` and ChipCommon `PMUCONTROL.RES_RELOAD`, strictly reads and writes `IOEx` with F2 cleared, and writes the `CHIPCLKCSR=0` SD-only boundary before re-establishing the ALP-only download clock and ARMCR4 reset/upload sequence. Every access has a typed terminal detail and may trigger only the bounded SDIO-owner recovery ladder; there is no best-effort PMU skip or root-owned physical fallback. After ARMCR4 release, the required HT path preserves the live sideband state and requests `HT_AVAIL_REQ` while still requiring real `HT_AVAIL` before any Function 2 readiness check; SR sideband remains refreshed again after Function 2 readiness.
 - As-built correction: after firmware/NVRAM staging and before ARMCR4 release, Pi 4 Wi-Fi now mirrors `brcmfmac` activation by clearing SDIO-core `intstatus` with `0xffffffff` and writing the little-endian firmware reset vector from bytes `0..4` to backplane address `0x00000000`. That closes the gap where firmware bytes were present at `0x00198000` but the ARMCR4 release had no reset-vector handoff.
 - As-built correction: ARMCR4 passive/active setup now follows the Linux `brcmfmac` resetcore shape. The passive stage leaves ARMCR4 clocked and CPU-halted while firmware/NVRAM are staged, and the post-reset-vector release re-enters reset with CPUHALT asserted before clearing CPUHALT and releasing ARMCR4. The required post-release clock wait now treats live `SLEEPCSR.KSO|DEVON` as the production precondition for the Linux firmware-callback `CHIPCLKCSR=0` clock-off transition and `CHIPCLKCSR.HT_AVAIL_REQ` write. A stable `0x50` timeout shape is a blocker, not authority to assert `FORCE_HT` or attempt mailbox/control traffic without the strict ready bit.
 - Historical USB note: older traces used `origin=seeded-cold-start` to characterize a weak halted stop-state lane and its ERDP/ERST failure edges. Current Pi 4 code does not select that lane, does not treat a bootloader stop-state seed as reset authority, and does not submit commands against rings the controller has not adopted.
@@ -866,6 +885,146 @@ Capture only these operator-facing lines from that session:
   later acknowledged `NAKHANDLED` releases `rxskip`. This correction is tested
   but still requires a fresh rebuild/flash/readback and repeated hardware proof
   before any WiFi/TCP acceptance claim.
+- Current M26d DPC-only correction: W01 and W02 of readback-proven
+  `[BUILD] 12dc380d8-dirty 2026-07-10T22:42:38Z` proved the preceding outer
+  serialization still admitted a legacy synchronous physical RX engine below
+  `service_command`. W01 transmitted `txglomalign` and stalled at child-owner
+  wait phase 142; W02 delivered that exact reply, transmitted
+  `ulp_sdioctrl`, and stalled at the same phase. Both boot-paired captures had
+  zero Pi-MAC traffic, while USB stayed Gate 10 and SMP stayed 6/6. The active
+  linked-runtime lane now performs direct DPC event-ring preflight before every
+  retained command, makes quarantine dominate cursor state, and makes
+  `CONTROL_POLL`, `RX_POLL`, and background polling strict DPC-FIFO consumers.
+  Pre-TX drain and credit paths cannot enter physical RX, synchronous
+  `CONTROL_EXCHANGE` fails closed, and a released firmware generation without
+  its generated DPC link is terminal rather than permission to fall back.
+  `LegacyPhysical` routing and every call site that can select it are compiled
+  only for host differential tests; the Pi target routing enum contains only
+  `QueueOnly` and therefore cannot select the legacy service model.
+  Within DPC, latched `FRAME_IND` triggers the fixed Function 2 first read even
+  with zero `RFRAME`; saved SDPCM next-frame length is consumed first, while an
+  RFRAME-derived hint still requires an authoritative SDPCM header. This image
+  must be rebuilt, flashed, read back, and exercised on repeated WiFi boots
+  before association, DHCP, TCP, `cohsh`, or performance acceptance is credited.
+- W01/W02 of `[BUILD] 7171e9a69-dirty 2026-07-10T23:29:14Z` then proved a
+  separate generation-lifecycle defect. ARMCR4 started, the later HT gate
+  failed with `0x532a`, and root reloaded firmware after replaying only the
+  SDIO owner. The first `txglomalign` was consequently rejected by the retained
+  DPC quarantine (`0x5310`, event sequence 1) before any Function 2 transfer.
+  Runtime state now records ARMCR4 execution immediately, quarantines every
+  later release failure, and admits only engine-init while quarantined. Root
+  tags the `RELEASE` operation separately, routes every recoverable release
+  fault through engine-init rather than detail-specific owner replay, bounds
+  full reloads to two attempts, and leaves protocol-version mismatch terminal.
+  The exact SDIO generation reset is performed only when runtime quarantine
+  requires it. Function 2 writes are non-retryable, command preflight is
+  re-evaluated against the live DPC ring before every foreground command, and
+  linked startup drain preserves strict FIFO. This source correction still
+  requires a fresh exact-image flash and repeated hardware proof.
+- The first two boots of that exact image then proved the reset was only half
+  complete. W01 and W02 both completed `E -> E+1` after the deterministic
+  post-start HT `0x532a` failure, but root immediately restarted card discovery
+  and CMD5 failed with `0x5325` because the current reset had only aborted
+  Function 2; it had not returned the selected SDIO card to idle. The corrected
+  lifetime model keeps card enumeration in the persistent SDIO owner, halts
+  ARMCR4 before advancing the firmware generation, preserves the enumerated
+  transport, and makes recovery `TRANSPORT_INIT` return ready without CMD0 or
+  CMD5. CARD_INT is now masked through initial attach and recovery reload, then
+  rearmed only when CYW43 reports a fully successful `RELEASE`. This avoids
+  publishing early or old-firmware events into the new DPC epoch and retains no
+  physical RX fallback. Hardware proof is still required on a newly flashed
+  image.
+- The persistent card lifetime has one Linux-shaped enumeration state machine,
+  not an attach-time re-enumeration escape path. It performs one CMD0, waits a
+  virtual-counter-backed 1 ms, makes one successful zero-argument CMD5 OCR
+  query, retries failed card commands in place up to Linux's three-retry bound,
+  and polls nonzero CMD5 readiness at 10 ms intervals for at most 100 samples.
+  A first strict ChipCommon word failure preserves the exact owner telemetry
+  and terminates attach without CMD0/CMD5 replay. Beneath that primitive the
+  SDIO owner now matches BCM2711's Linux iProc operations: all narrow register
+  accesses use 32-bit extraction/RMW, paired block and command halfwords are
+  shadowed until one combined COMMAND commit, and writes at 400 kHz or below
+  wait four SD clocks. This closes the Arasan successive-write loss window that
+  the old direct root HAL avoided but the first linked runtime did not.
+- W01/W02 of the resulting readback-proven
+  `[BUILD] 7171e9a69-dirty 2026-07-11T02:26:39Z` image prove that persistent
+  card recovery now works: both exact generation resets preserve the selected
+  transport and no CMD0/CMD5 restart occurs. All three firmware executions on
+  each boot instead stop at post-release `CHIPCLKCSR=0x52`, with ALP available
+  but no real HT bit. The older Gate-10 comparison exposes two missing Linux
+  invariants in the linked runtime. Probe attach must perform
+  `brcmf_sdio_kso_init` semantics before firmware download by read/modify/write
+  and readback of `SLEEPCSR.KSO`, without requiring `DEVON`; and the
+  post-release transition is one SD-only fence followed by one
+  `HT_AVAIL_REQ`, not a second fence plus pre-proof `FORCE_HT`. The corrected
+  runtime re-proves KSO before every initial or recovered firmware generation,
+  polls the single HT request to its virtual-counter deadline, masks read-only
+  status bits from later CSR writes, and permits `FORCE_HT` only after strict
+  HT proof. The old unsafe retry of an already-running ARM generation is not a
+  fallback and remains removed. Fresh image and repeated hardware proof are
+  still required.
+- The same W01/W02 audit found that an ordinary SDIO idle/child notification
+  could undo the intended attach mask before `RELEASE`. The linked-runtime ABI
+  now carries an explicit generation-bound `DPC_ACTIVATE` operation. Initial
+  attach and every generation reset set `dpc_activation_allowed=false`; idle
+  turns and unrelated child completions preserve the CARD_INT mask. Only the
+  exact post-release activation completion may sample/publish a latched source
+  or perform a clean unmasked rearm. Rejected, malformed, missing, or failed
+  activation completes as `0x5330 cyw43-post-release-dpc-activate`, remains
+  masked, and routes through full owner-generation recovery rather than a
+  same-command retry. The device-side order now matches Linux and the proven
+  Gate-10 path: mailbox version, Function 2, dongle masks, CYW43455 sideband,
+  then CCCR `IENx`; reprime repeats masks and samples `RFRAME` before `IENx`.
+  Generation reset first clears an old CCCR `IENx=0x07` before W1C/IRQ ack and
+  epoch commit. SDHCI signalling remains masked until typed activation, so no
+  pre-ready or old-generation event is consumed. Fresh image and repeated
+  hardware proof are still required.
+- Current M26d release-readback correction: the current-image
+  `7171e9a69-dirty 2026-07-11T06:14:52Z` boot completed the entire firmware and
+  NVRAM stream but failed the first `RELEASE` as generic `0x5305`, with no Pi
+  frame on the paired capture. The new verifier had compared every ARMCR4
+  IOCTRL readback through a union mask that also contained D11-only bits. Linux
+  uses a 32-bit IOCTRL write followed by a read to flush the transaction; it
+  does not require exact equality. Cohesix now follows that contract while
+  retaining strict bounded RESETCTRL state polling. Generic release failures
+  carry the last internal release phase in the completion result, and
+  `wifi diag` plus `pi4_trace_normalize.py` keep that unrecovered Gate-6
+  hardware failure authoritative over later passive `wifi load-fw` policy
+  output.
+- Current M26d strict ARMCR4 correction: the readback-proven
+  `[BUILD] 7171e9a69-dirty 2026-07-11T06:46:55Z` image completed transport,
+  the 609309-byte firmware stream, the 1744-byte NVRAM stream, and NVRAM-tail
+  publication, then failed its first Gate-6 `RELEASE` at
+  `detail=0x531f result=0` before any Gate-7 subgate or Pi frame on the paired
+  capture. The failure proved that AI reset still called generic backplane
+  helpers whose upload-recovery machinery could change the SDIO lane, try
+  CMD52 or fixed-address CMD53, and clear the first primitive fault. ARMCR4
+  IOCTRL/RESETCTRL now use only an incrementing four-byte Function 1 CMD53
+  transaction after backplane-window selection. There is no legacy transfer
+  fallback or retry-lane mutation. IOCTRL uses Linux's write/read flush without
+  equality; RESETCTRL uses Linux's bounded repeated clear/settle/read shape,
+  with the later mailbox/devready gate authoritative when immediate reset
+  readback is unavailable. Strict write and IOCTRL-flush failures remain
+  terminal. The completion result now identifies the exact ARMCR4 write/flush
+  edge, attempt, and optional readback; execution state is set only after an
+  accepted reset-clear write, and failed recovery engine-init preserves that
+  exact result instead of returning generic detail 3.
+- Current M26d SDIO-owner containment correction: the next exact image
+  `[BUILD] 7171e9a69-dirty 2026-07-11T07:18:47Z` reached the strict
+  firmware-prep ARMCR4 `PRERESET_WRITE`, then failed before command issue with
+  `PRESENT_STATE=0x01ff0202`, `DATA_INHIBIT=1`, `detail=0x531f`, and encoded
+  edge `result=1`. The identical owner replay reused the same expired transfer
+  deadline, so recovery could not clear the data path. The older working byte
+  access had bypassed the SDHCI data engine and hidden this owner-lifecycle
+  defect; restoring it would be a legacy fallback, not a fix. The SDIO owner
+  now uses fresh-deadline containment, withholds completion until command/data
+  inhibit is clear, retries exactly once only for a provably not-issued entry
+  inhibit on Function 1, and never replays Function 2 or a later-stage
+  Function 1 failure. Failed containment poisons the generation and admits
+  only exact generation reset. CARD_COMMAND/HOST_CONFIG use the same contract,
+  and a partial backplane-window write invalidates the cached aperture. Root
+  diagnostics and the offline normalizer now identify firmware-prep ARMCR4
+  edges and label the strict lane without a false byte-fallback retry.
 - Current M26b USB correction: after `set_device_context` publishes a DCBAA slot entry, Cohesix USB stack now re-shares the DCBAA before the later Address Device command consumes that slot pointer. This does not change the current command-ring blocker, but it closes the next DMA publication edge after command completion starts working.
 - Current M26b USB cold-boot correction: U-Boot xHCI handoff is no longer part of the active design. Root-task may parse old handoff/stop-state DT properties for diagnostics, but local-seat does not trust them, does not generate stop-seed or preserve-state strategies, and does not let bootloader reset authority substitute for the mailbox reset plus live HAL BCM2711 EXT_CFG BAR/COMMAND proof. The only enumerating high-BAR lane is cold boot: Linux capture supplies layout and DMA-range evidence only, VideoCore mailbox reset establishes the platform boundary, HAL proves live PCIe/VL805 ownership, Cohesix publishes fresh high-alias DMA/rings, and Cohesix USB stack starts the controller with `run=run-cold`. `scripts/pi4_gate_proof.sh` now rejects traces with `USB_BOOTLOADER_HANDOFF_SEEN=yes`.
 - Current M26b USB correction: the live HAL-proven `platform-reset-complete` lane now matches U-Boot's controller-ownership handoff order while keeping doorbells readback-free. Cohesix USB stack replays `CONFIG.MaxSlotsEn`, publishes DCBAAP, CRCR, ERSTSZ, ERSTBA, the initial ERDP, scratchpad DCBAA slot 0, and DNCTRL, drains non-doorbell xHCI operational writes with same-runtime xHCI MMIO readback, preserves `CRCR` low bits only from a trusted snapshot or live read and otherwise uses U-Boot's zero reserved-bit cold-publish seed, starts the controller, applies U-Boot post-`RUN` `IMOD=0` / `IMAN=0` writes through the same-runtime xHCI readback drain, and only then rings doorbell `0` for the first proof command with barriers only. The prompt-safe command timeout path emits one bounded final live snapshot for `CRCR`, `USBCMD` / `USBSTS`, `DCBAAP`, `IMAN`, `ERSTSZ`, `ERSTBA`, and `ERDP`; repeated live polling remains forbidden because earlier board traces proved that unbounded post-doorbell live reads can halt through the seL4 timer path. The latest command-consumption audit also found that the RUN write could preserve a stale snapshot `USBCMD.HCRST` bit and publish `USBCMD=0x00000003`; Cohesix USB stack now clears reset/save/restore command bits before the `USBCMD.RUN` store, and the normalizer reports old traces with that shape as `USB_BLOCKER=usbcmd-run-preserved-reset-bit`.
@@ -886,7 +1045,7 @@ Capture only these operator-facing lines from that session:
 - Current June 8 latest-log correction: `/Users/lukasbower/pi4-serial-20260608-224646.log` supersedes the 22:12 capture. USB reached gate 4 after proving xHCI init and scratchpad publication, then blocked at the command/event proof edge before root-port sampling; gates 1-3 pass, gate 4 is the active frontier, and gates 5-10 remain blocked. The isolated runtime now restores the May 18 doorbell discipline by publishing command and endpoint doorbells with barriers only, carries the root request sequence into the Enable Slot proof, emits command-proof submit/TRB/doorbell/poll markers, and may re-ring DB0 on later pending turns only while no command events have been consumed. Wi-Fi reached CYW43 transport detail `0x5401` (`bus-link-ready`) and then no-replied during SDIO card adoption before CCCR/FBR proof. The isolated CYW43 runtime now raises the bounded SDIO-owner wait budget, re-notifies the isolated SDIO owner while polling the owner completion slot, and bursts the known-good May 18-19 card-select/early-transport sequence inside one CYW43 transport turn while emitting nested owner send/wait/reply/timeout plus host-config, CMD0, CMD5 OCR, CMD5 ready, CMD3 RCA, and CMD7 markers. The next trace should therefore either move into F1/F2/Function 1/backplane gates or name the exact nested owner/card-select blocker.
 - Earlier June 9 USB/Wi-Fi correction: `/Users/lukasbower/pi4-serial-20260609-074208.log` superseded the 07:06 capture at the time. USB still reached the command/event-ring frontier: xHCI descriptor replay, engine init, scratchpad publication, Enable Slot TRB publication, and doorbell 0 publication are proven, but no matching Command Completion Event was published before root's bounded no-reply guard. The earliest actionable blocker is gate 4 `enable-slot-completion-pending`; the later gate-5/root-port failure is derived because live root-port sampling is intentionally locked until gate 4 completes. The isolated runtime fix keeps the U-Boot-shaped Enable Slot proof, keeps DB0 publishes barrier-only, makes command-proof ERDP acknowledgement prompt-safe with explicit event/ack markers, records first-turn `usb-command-proof-return-pending`, and keeps each later poll turn bounded so the next boot should either advance to root-port power/sampling or name the exact event, ERDP-ack, command-completion, or terminal Enable Slot failure edge. Its Wi-Fi gate-3 interpretation is now superseded by the 09:33 Wi-Fi isolated runtime command-delivery correction above.
 - Current June 7 post-reflash correction: `/Users/lukasbower/pi4-serial-20260607-193658.log` is still fail-closed. USB is at gate 4 with `enable-slot-completion-pending`; that proves the Enable Slot command is in flight, not that a keyboard is accepted. Wi-Fi is at firmware upload, not DHCP: CMD7/card-select and shared-payload visibility are proven, but the final firmware owner window exhausted retained-stage recovery before NVRAM, ARMCR4 release, DHCP, `nettest`, or `netstats`.
-- Current M26b Wi-Fi correction: probe-attach KSO initialization now follows upstream `brcmf_sdio_kso_init()` rather than runtime `brcmf_sdio_kso_control()`. Root-task sets/observes `SLEEPCSR.KSO` at `stage=linux-probe-attach-kso` before CARDCTRL, PMU reload, or core reset work; `DEVON` is not a pre-upload contract on this path.
+- Current M26b Wi-Fi correction: probe-attach KSO initialization follows upstream `brcmf_sdio_kso_init()` rather than runtime `brcmf_sdio_kso_control()`. The isolated CYW43 runtime, not root-task, sets/observes `SLEEPCSR.KSO` before the adjacent strict CARDCTRL, PMU reload, F2-disable, SD-only, and ALP download-clock operations; `DEVON` is not a pre-upload contract on this path.
 - Current proof-normalizer correction: a `debug-probe-ht` CMD52 failure against `CHIPCLKCSR` (`cmd=52 arg=0x12001c00`) before Function 2 readiness is classified as `WIFI_BLOCKER=chipclkcsr-cmd52-pre-f2`, not as a generic backplane CMD52 rejection or Function 2-ready state.
 - Current M26b Wi-Fi gate 7-10 correction: the Linux/host-supplicant comparison now keeps M3 and group-key replay protection anchored to the last accepted counter, holds queued glommed normal data behind the same host-EAPOL secure predicate as live RX, and makes the M4/group-M2 drain path seek a fresh SDPCM credit observation before key install or DHCP/data release. Missing M4 TX or drain proof remains fatal and cannot publish PTK/GTK or secure data; once M4 is credit-drained, matched PTK/GTK `wsec_key` completion remains the next gate. The TCP console listener is also gated behind real DHCP address availability and reports TCP Established separately from authenticated `cohsh` readiness (`tcp_accepts` versus `tcp_auth`), so remote-shell proof cannot be inferred before the lease and auth handshake complete.
 - Current M26b Wi-Fi control-correlation correction: the June 25 root-cause fix preserves valid CDC replies that arrive while root is waiting for a different control `(cmd,id)` instead of dropping them as nonmatching noise. Root stores those copied replies in a bounded pending-control queue keyed by exact command and ioctl id, restages the copied frame into the driver-task ring when the matching exchange starts, and then validates status, response length, and CDC body shape through the normal matched-reply path. The `wsec_key` PTK/GTK reply deadline and poll budget are unchanged; next-boot evidence should show either ordinary `matched-reply` / `response-ready` or, when the race is exercised, `cached-matched-reply` / `cached-response-ready`, with no new `cyw43-host-eapol-post-secure-{ptk,gtk}` timeout unless a real firmware reply is still absent. Boot logging suppresses repeated unchanged `pending`, `required`, and `secure-awaiting-carrier` `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS` rows; the next full status row reports `suppressed_status=<count>`, while secure completion, errors, event/RX/EAPOL progress, admission changes, and post-secure state changes remain full evidence.

@@ -339,6 +339,8 @@ pub const DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG: u16 = 6;
 pub const DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND: u16 = 7;
 /// SDIO bus-owner operation: recover an issued-unknown CYW43 generation.
 pub const DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET: u16 = 8;
+/// SDIO bus-owner operation: activate post-release CARD_INT/DPC service.
+pub const DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE: u16 = 9;
 /// SDIO engine-init detail: SDIO host reached ready state.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY: u16 = 0x5500;
 /// SDIO engine-init detail: HAL-prepared host did not show powered/card-present state.
@@ -789,6 +791,57 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN: u32 
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN: u32 = 216;
 /// CYW43 runtime observed firmware ready/devready mailbox proof.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE: u32 = 217;
+/// ARMCR4 reset diagnostic edge: pre-reset IOCTRL write failed.
+pub const DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_PRERESET_WRITE: u8 = 1;
+/// ARMCR4 reset diagnostic edge: pre-reset IOCTRL flush read failed.
+pub const DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_PRERESET_FLUSH: u8 = 2;
+/// ARMCR4 reset diagnostic edge: RESETCTRL assert write failed.
+pub const DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_ASSERT_WRITE: u8 = 3;
+/// ARMCR4 reset diagnostic edge: in-reset IOCTRL write failed.
+pub const DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_IN_RESET_WRITE: u8 = 4;
+/// ARMCR4 reset diagnostic edge: in-reset IOCTRL flush read failed.
+pub const DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_IN_RESET_FLUSH: u8 = 5;
+/// ARMCR4 reset diagnostic edge: RESETCTRL clear write failed.
+pub const DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_CLEAR_WRITE: u8 = 6;
+/// ARMCR4 reset diagnostic edge: post-reset IOCTRL write failed.
+pub const DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_POSTRESET_WRITE: u8 = 7;
+/// ARMCR4 reset diagnostic edge: post-reset IOCTRL flush read failed.
+pub const DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_POSTRESET_FLUSH: u8 = 8;
+/// ARMCR4 reset result bit marking a valid RESETCTRL readback byte.
+pub const DRIVER_RUNTIME_CYW43_ARMCR4_RESET_RESULT_READBACK_VALID: u32 = 1 << 16;
+
+/// Pack an exact ARMCR4 reset edge, bounded attempt, and optional readback.
+pub const fn driver_runtime_cyw43_armcr4_reset_result(
+    edge: u8,
+    attempt: u8,
+    readback: Option<u8>,
+) -> u32 {
+    let mut result = edge as u32 | ((attempt as u32) << 8);
+    if let Some(readback) = readback {
+        result |= DRIVER_RUNTIME_CYW43_ARMCR4_RESET_RESULT_READBACK_VALID;
+        result |= (readback as u32) << 24;
+    }
+    result
+}
+
+/// Return the exact ARMCR4 reset edge from a packed completion result.
+pub const fn driver_runtime_cyw43_armcr4_reset_result_edge(result: u32) -> u8 {
+    (result & 0xff) as u8
+}
+
+/// Return the bounded ARMCR4 reset attempt from a packed completion result.
+pub const fn driver_runtime_cyw43_armcr4_reset_result_attempt(result: u32) -> u8 {
+    ((result >> 8) & 0xff) as u8
+}
+
+/// Return the ARMCR4 RESETCTRL readback when the packed result carries one.
+pub const fn driver_runtime_cyw43_armcr4_reset_result_readback(result: u32) -> Option<u8> {
+    if result & DRIVER_RUNTIME_CYW43_ARMCR4_RESET_RESULT_READBACK_VALID != 0 {
+        Some((result >> 24) as u8)
+    } else {
+        None
+    }
+}
 /// CYW43 runtime is issuing the SDPCM Function 2 control write.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_BEGIN: u32 = 338;
 /// CYW43 runtime completed the SDPCM Function 2 control write.
@@ -1820,10 +1873,12 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ
             || self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG
             || self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND
-            || self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET;
+            || self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET
+            || self.op == DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE;
         let host_config = self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG;
         let card_command = self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND;
         let generation_reset = self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET;
+        let dpc_activate = self.op == DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE;
         let known_response = self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_OCR
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_SHORT
@@ -1837,7 +1892,7 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
         let effective_len = if read_result {
             1
-        } else if host_config || card_command || generation_reset {
+        } else if host_config || card_command || generation_reset || dpc_activate {
             0
         } else if self.block_count != 0 {
             (self.block_count as u32).saturating_mul(self.block_size as u32)
@@ -1854,7 +1909,11 @@ impl DriverRuntimeSdioCommandDescriptor {
         known_op
             && known_response
             && self.function <= 7
-            && (host_config || card_command || generation_reset || self.addr < (1 << 17))
+            && (host_config
+                || card_command
+                || generation_reset
+                || dpc_activate
+                || self.addr < (1 << 17))
             && (!host_config
                 || (self.function == 0
                     && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
@@ -1882,6 +1941,16 @@ impl DriverRuntimeSdioCommandDescriptor {
                     && self.block_count == 0
                     && self.flags == 0
                     && self.reserved == 0))
+            && (!dpc_activate
+                || (self.function == 0
+                    && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
+                    && self.addr != 0
+                    && self.data_offset == 0
+                    && self.len == 0
+                    && self.block_size == 0
+                    && self.block_count == 0
+                    && self.flags == 0
+                    && self.reserved == 0))
             && (!cmd52 || (self.len == 1 && self.block_count == 0 && self.block_size == 0))
             && (!cmd53
                 || ((self.len != 0 || self.block_count != 0)
@@ -1892,6 +1961,7 @@ impl DriverRuntimeSdioCommandDescriptor {
             && (host_config
                 || card_command
                 || generation_reset
+                || dpc_activate
                 || (effective_len != 0 && (ring_payload || shared_payload)))
     }
 }
@@ -3614,6 +3684,33 @@ mod tests {
     }
 
     #[test]
+    fn sdio_command_descriptor_validates_generation_bound_dpc_activation() {
+        let mut descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: 0x4359_5302,
+            data_offset: 0,
+            len: 0,
+            block_size: 0,
+            block_count: 0,
+            flags: 0,
+            reserved: 0,
+            timeout_us: 1_000,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.addr = 0;
+        assert!(!descriptor.valid());
+        descriptor.addr = 0x4359_5302;
+        descriptor.len = 1;
+        assert!(!descriptor.valid());
+        descriptor.len = 0;
+        descriptor.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
+        assert!(!descriptor.valid());
+    }
+
+    #[test]
     fn cyw43_command_descriptor_validates_ring_payload_bounds() {
         assert_eq!(DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK & 0xfff0, 0);
         assert_eq!(DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT, 8);
@@ -3748,5 +3845,33 @@ mod tests {
         assert!(descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE + 1;
         assert!(!descriptor.valid());
+    }
+
+    #[test]
+    fn cyw43_armcr4_reset_result_round_trips_edge_attempt_and_readback() {
+        let result = driver_runtime_cyw43_armcr4_reset_result(
+            DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_CLEAR_WRITE,
+            17,
+            Some(0x01),
+        );
+        assert_eq!(
+            driver_runtime_cyw43_armcr4_reset_result_edge(result),
+            DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_CLEAR_WRITE
+        );
+        assert_eq!(driver_runtime_cyw43_armcr4_reset_result_attempt(result), 17);
+        assert_eq!(
+            driver_runtime_cyw43_armcr4_reset_result_readback(result),
+            Some(0x01)
+        );
+
+        let result = driver_runtime_cyw43_armcr4_reset_result(
+            DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_PRERESET_FLUSH,
+            0,
+            None,
+        );
+        assert_eq!(
+            driver_runtime_cyw43_armcr4_reset_result_readback(result),
+            None
+        );
     }
 }

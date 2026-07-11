@@ -23,7 +23,7 @@ BOOT_WAIT_SECONDS=12
 CONSOLE_READY_TIMEOUT_SECONDS=60
 CAPTURE_SECONDS=10
 COMMAND_DELAY_SECONDS=2
-COMMAND_CHAR_DELAY_SECONDS="${COHESIX_PI4_COMMAND_CHAR_DELAY_SECONDS:-0.02}"
+COMMAND_CHAR_DELAY_SECONDS="${COHESIX_PI4_COMMAND_CHAR_DELAY_SECONDS:-0.06}"
 COMMAND_PROMPT_TIMEOUT_SECONDS=30
 SKIP_BUILD=0
 NO_CAPTURE=0
@@ -38,6 +38,7 @@ REQUIRE_INPUT_RESPONSIVE=0
 DEFAULT_COMMANDS=(
     "smp activity"
     "wifi diag"
+    "wifi probe-ht"
     "nettest"
     "netstats"
     "usb status"
@@ -117,8 +118,9 @@ Options:
                              for exploratory summaries only, not proof output.
   --require-usb-ready        Require USB gate 10, USB_BLOCKER=none, and the
                              linked old-good USB replay contract.
-  --require-wifi-ready       Require WiFi gate 10, WIFI_BLOCKER=none, and the
-                             linked old-good CYW43 replay contract.
+  --require-wifi-ready       Require WiFi gate 10, DHCP, nettest, authenticated
+                             TCP bytes, healthy DPC, and the linked old-good
+                             CYW43 replay contract.
   --require-wired-ready      Require netstats to report active=wired.
   --require-driver-task-proof
                              Require driver-task substrate, capset, fault,
@@ -134,6 +136,7 @@ Options:
 Default proof commands:
   smp activity
   wifi diag
+  wifi probe-ht
   nettest
   netstats
   usb status
@@ -556,6 +559,17 @@ run_normalizer() {
     fi
     if [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]; then
         args+=("--expect-min" "WIFI_GATE=10" "--expect" "WIFI_BLOCKER=none")
+        args+=("--expect" "NET_ACTIVE=wifi")
+        args+=("--expect" "NET_ADDR_SRC=dhcp-lease")
+        args+=("--expect" "NET_DHCP=bound")
+        args+=("--expect" "NET_TCP_READY=yes")
+        args+=("--expect" "NETTEST_PROOF=yes")
+        args+=("--expect" "COHSH_TCP_AUTH_PROOF=yes")
+        args+=("--expect-min" "TCP_ACCEPTS=1")
+        args+=("--expect-min" "TCP_AUTH_SESSIONS=1")
+        args+=("--expect-min" "TCP_RX_BYTES=1")
+        args+=("--expect" "WIFI_DPC_PROOF=yes")
+        args+=("--expect" "WIFI_DPC_REASON=none")
         args+=("--expect" "WIFI_OLDGOOD_REPLAY=yes")
         args+=("--expect" "WIFI_OLDGOOD_MISSING=none")
         args+=("--expect" "WIFI_FIRMWARE_IDENTITY_PROOF=yes")

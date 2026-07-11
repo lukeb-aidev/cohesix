@@ -331,6 +331,10 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "action=interrupts-armed path=sel4-irq "
         "source=hostintmask+cccr-ienx+sdhci-card-int "
         "fn_int_mask_policy=linux-unused ien=0x07",
+        "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+        "stage=cyw43-control-txglomalign event=pre-tx-drain-ready poll=0",
+        "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+        "stage=cyw43-control-txglomalign event=tx-complete result=16",
         "wifi: control_exchange step=cyw43-control-txglomalign "
         "status=matched bus:txglomalign=8",
         "wifi: control_exchange step=cyw43-control-ulp-sdioctrl "
@@ -362,9 +366,16 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "server=192.168.10.1 lease_s=3600",
         "OK NETTEST detail=pass scope=serial-local",
         "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+        "netstats: udp_rx=2 udp_tx=4 tcp_accepts=1 tcp_auth=1 "
+        "tcp_rx_bytes=58 tcp_tx_bytes=6782",
         "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
+        "netstatus: ip=192.168.10.50 gateway=192.168.10.1 "
+        "src=dhcp-lease dhcp=bound tcp_ready=yes",
+        "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
+        "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
+        "ack_failures=0 poisoned=no masked=no",
     ]
 
 

@@ -1147,10 +1147,13 @@ matching `RFRAME` or `WFRAME` counter, posts `SMB_NAK` for RX retransmit, and
 retries the CMD53 transfer once. A second failed RX attempt remains
 `last_rx_idle_detail=0x5709`; a second failed TX attempt keeps the parent
 control/data submit blocked instead of falling through to association, EAPOL, or
-DHCP policy. After post-release Function 2 readiness, the isolated runtime also mirrors the old HAL
-interrupt path by writing CCCR `IENx=0x07` before the SDIO core `HOSTINTMASK` /
-`FUNCTIONINTMASK` programming, so association events and AP M1 can reach the
-Function 2 receive lane.
+DHCP policy. After post-release Function 2 readiness, the isolated runtime
+mirrors Linux and the proven old HAL Gate-10 path: it programs the SDIO-core
+`HOSTINTMASK` / `FUNCTIONINTMASK` and CYW43455 watermark/device sideband before
+CCCR `IENx=0x07`. SDHCI `CARD_INT` signalling stays masked until the typed
+generation-bound activation samples the retained source, publishes it, or
+performs the clean empty-ring rearm. Association events and AP M1 can then
+reach the Function 2 receive lane without an early pre-ready interrupt window.
 RX and control-poll service follows Linux's software-latched DPC contract.
 At service entry the runtime captures `SDIO_INT_STATUS & HOSTINTMASK`, W1C
 acknowledges exactly the captured hardware bits, and retains them in persistent
@@ -1527,10 +1530,18 @@ context and the retry/poll window.
 - The linked SDIO owner keeps FIFO readiness register-specific: SDHCI
   `PRESENT_STATE` uses only `SPACE_AVAILABLE`/`DATA_AVAILABLE`, while
   `INT_STATUS` waits use only `INT_SPACE_AVAIL`/`INT_DATA_AVAIL`. Every PIO
-  descriptor transfer has one aggregate virtual-counter deadline shared by
-  inhibit, command, FIFO, finish, settle, bounded recovery, and its permitted
-  retry; data-path settle failure returns a fault completion rather than a
-  false success, and every recovery exit restores the saved card clock. The
+  descriptor attempt has one aggregate virtual-counter deadline across
+  inhibit, command, FIFO, finish, and settle. A failed attempt receives a new
+  bounded containment deadline because the transfer deadline may already be
+  exhausted. The owner does not publish completion until command/data inhibit
+  is clear. Only an entry-inhibit failure proves non-issue and permits one
+  identical Function 1 CMD53 replay with another fresh deadline; later-stage
+  Function 1 failures and every Function 2 failure surface without replay.
+  Failed containment masks CARD_INT, poisons the owner generation, and rejects
+  every operation except the exact generation reset. Card commands and host
+  configuration obey the same containment rule. Data-path settle failure
+  returns a fault completion rather than a false success, and every recovery
+  exit restores the saved card clock. The
   owner publishes the reverse notification before the
   sequence-last completion commit, so equal-priority boosting cannot leave a
   late completion edge behind after CYW43 accepts the record. CYW43
@@ -1557,14 +1568,102 @@ context and the retry/poll window.
   Each outer turn advances one cursor quantum first. This is the linked-runtime
   equivalent of Linux's single serialized SDIO bus thread: foreground control,
   RX, TX, backplane-window, and interrupt work cannot interleave physical bus
-  phases. Deferred work is rechecked before sleeping.
+  phases. A retained root command performs a direct event-ring preflight even
+  when no DPC cursor exists yet; one pending CARD_INT quantum wins before the
+  command and the complete intake/reply capability remains retained. Deferred
+  work is rechecked before sleeping. Once firmware is released, loss of the
+  generated DPC link is terminal and cannot admit the old synchronous CYW43 RX
+  path.
+  The linked lane has no legacy physical RX fallback. `CONTROL_POLL`,
+  `RX_POLL`, and background polling consume only the DPC-owned strict FIFO;
+  an empty FIFO returns typed idle. Pre-control-TX drains, SDPCM credit waits,
+  and Ethernet credit service inspect DPC-published state without borrowing
+  Function 2, and synchronous `CONTROL_EXCHANGE` fails closed. Physical RX,
+  interrupt W1C, hostmail, flow-control updates, and retransmit recovery have
+  exactly one owner: the persistent DPC cursor.
+  Host tests use that same queue-only root-poll path. Low-level Function 2 and
+  DPC parser tests call their internal owner helpers directly; no production or
+  test routing enum can select a legacy physical root-poll model.
+  ARMCR4 leaving reset is the firmware-generation boundary, even before the
+  later HT, Function 2, sideband, mailbox, and RFRAME attach gates complete.
+  Any failure after that boundary quarantines the active generation. Root may
+  recover a failed `RELEASE` only by issuing engine-init; the CYW43 runtime then
+  asks the SDIO owner for an exact `E -> E+1` DPC-ring reset when quarantine is
+  active, clears SDPCM state, and requires a full firmware reload. Generic
+  owner replay is reserved for provably pre-start or retained upload work, and
+  protocol-version mismatch remains terminal. Full-generation recovery is
+  independently bounded to two attempts. Function 2 FIFO writes are never
+  automatically replayed. An explicitly addressed Function 1 transfer
+  qualifies for one identical replay only when the owner proves entry inhibit
+  prevented command issue.
+  AI-wrapper `BCMA_IOCTL` and `BCMA_RESET_CTL` accesses remain 32-bit, matching
+  Linux. They use one dedicated strict lane: set the backplane window, then
+  issue an incrementing four-byte Function 1 CMD53 transfer. This lane cannot
+  invoke firmware-upload retry policy, change card width or host clock, fall
+  back to CMD52 or fixed-address CMD53, or clear the first transfer fault. An
+  initial ChipCommon word failure terminates attach with the exact SDIO-owner
+  detail/result/frame; it never reconfigures the host or reruns
+  CMD0/CMD5/CMD3/CMD7 against the selected card. The SDIO owner implements the
+  BCM2711 Linux iProc register contract beneath this strict lane: byte and
+  halfword accesses are 32-bit read/extract or read/modify/write operations,
+  BLOCK_SIZE plus BLOCK_COUNT and TRANSFER_MODE plus COMMAND are shadowed and
+  each committed as one 32-bit word when COMMAND is issued, and every write at
+  400 kHz or below receives a virtual-counter-backed four-SD-clock gap.
+  Narrow MMIO and immediate paired-halfword commits are not valid Pi 4 SDHCI
+  operations. An IOCTRL write is followed by a mandatory read on that same lane to flush the
+  backplane transaction; the read need not equal the write because
+  core-specific and read-only wrapper bits may remain visible. RESETCTRL clear
+  repeats the strict write plus bounded settle/read shape used by Linux. The
+  immediate read is advisory because Linux's bus read has no error return;
+  mailbox/devready is the authoritative execution proof. A failed strict write
+  or missing IOCTRL flush remains fail-closed.
+  ARMCR4 reset failures encode the exact write/flush edge, bounded attempt, and
+  optional RESETCTRL byte in the completion result. Firmware execution becomes
+  possible only after the first reset-clear write is accepted, so a pre-clear
+  failure does not force recovery through an impossible second ARM halt. An
+  engine-init failure preserves this exact CYW43 result instead of collapsing
+  it to generic resource detail.
+  Backplane-window LOW/MID/HIGH programming invalidates the cached aperture
+  before its first write and marks it valid only after all three writes
+  succeed. A partial window failure therefore cannot make a later strict word
+  access skip programming and target a mixed hardware aperture.
+  `RELEASE` also retains its last internal phase in the terminal completion
+  result, so `wifi diag` and the offline normalizer report the Gate-6 release
+  substage even after the shared progress slot returns to runtime polling.
+  SDIO card enumeration is a longer-lived bus-owner state than a dongle
+  firmware/DPC generation. A dongle-generation reset therefore preserves the
+  proved selected-card transport, halts ARMCR4, aborts Function 2, advances the
+  DPC epoch, and makes the next `TRANSPORT_INIT` an idempotent ready result; it
+  must not issue CMD0/CMD5 against the still-selected card. Before W1C/IRQ ack
+  and epoch commit, reset quiesce clears CCCR `IENx` so an old 0x07 card route
+  cannot relatch into the new generation. SDIO keeps CARD_INT masked from
+  initial owner admission through firmware attach, and across every recovery
+  reload. Ordinary idle turns and child notifications cannot rearm it.
+  Release follows mailbox-version, Function 2, dongle interrupt masks,
+  CYW43455 sideband, and CCCR `IENx` order; reprime repeats the masks and samples
+  `RFRAME` before `IENx`, never the reverse. After a successful
+  firmware/F2/mailbox release, CYW43 submits the typed, generation-bound SDIO
+  `DPC_ACTIVATE` operation. `RELEASE` succeeds only when
+  the exact activation completion proves that SDIO sampled and published any
+  latched source or performed the clean empty-ring rearm. Activation checks both
+  SDHCI `CARD_INT` and Function 1 `RFRAME`; a nonzero retained frame count is
+  published as a generation-bound `SOURCE_PENDING` event and imported by the
+  CYW43 DPC before its first status capture. A rejection or
+  sampling/rearm failure remains masked, reports
+  `cyw43-post-release-dpc-activate`, and quarantines the generation. Thus
+  neither an early old-firmware interrupt nor a partially attached new
+  firmware instance can publish into the active DPC generation.
   Exact child completions must match the retained sequence, completion code,
   result, payload offset, payload length, and flags. Wrong/stale sequences wait;
   a stable malformed completion releases known-terminal child ownership and
   quarantines the generation. A child deadline is issued-unknown, retains the
   event and CARD_INT mask, poisons the current generation, and forbids event
   advancement, rearm, resubmission, or ring reuse.
-  Empty, malformed, or oversized authoritative Function 2 first-read data uses
+  A header-valid 12-byte empty CONTROL/EVENT startup status is consumed as an
+  ordered status frame. An all-zero confirming first-read is quiescence, and a
+  zero-cause CARD_INT/flow/mailbox tail reaches post-status rearm; neither case
+  enters retransmit recovery or loops with CARD_INT masked. Nonzero malformed or
+  oversized authoritative Function 2 first-read data uses
   the Linux-shaped asynchronous recovery order within the same cursor:
   Function 2 abort, `RF_TERM`, bounded RFRAME-count drain to zero, `SMB_NAK`,
   then wait for a fresh acknowledged `NAKHANDLED` mailbox event. The drain is
@@ -1574,11 +1673,21 @@ context and the retry/poll window.
   post-capture quiescence. Hardware W1C always uses the complete sampled
   `HOSTINTMASK`; software retains only frame, flow-change, and hostmail causes,
   records flow-state as a sampled level, and services new flow/hostmail work
-  before an `rxskip` terminal rearm. While any event remains unconsumed, the SDIO owner
+  before an `rxskip` terminal rearm. A latched `I_HMB_FRAME_IND` authorizes the
+  fixed Function 2 first read even when Function 1 `RFRAME` is zero. After a
+  decoded packet, a saved SDPCM next-frame length is consumed before any
+  RFRAME diagnostic; an RFRAME-derived hint still requires the authoritative
+  SDPCM length/complement first read. While any event remains unconsumed, the SDIO owner
   keeps CARD_INT masked and refuses to resample or republish the same level-held
   source from idle polls or coalesced child doorbells. Only an empty event ring
   permits one fresh source read followed by either one retained publication or
   an unmask.
+  A structurally valid frame that cannot enter the bounded CYW43 RX queue is a
+  counted `ValidNotAdmitted` pressure event: its already-proved SDPCM sequence
+  and credit observations remain committed, but its payload is dropped without
+  poisoning or resetting the firmware generation. Only malformed or ambiguous
+  wire data is a decode fault requiring generation recovery. This distinction
+  keeps bounded host admission pressure separate from physical SDIO integrity.
   The complete root-staged command and payload window remains
   immutable until admission: DPC-local 32-bit backplane CMD53 transfers use a
   private aligned scratch word after that window and before the separately
@@ -2750,7 +2859,12 @@ Required Cohesix shape:
   control, clock, and payload digest telemetry on owner faults.
   That card-adoption sequence is sliced across bounded isolated runtime turns:
   host-config, CMD0, CMD5 OCR, CMD5 ready, CMD3 RCA, and CMD7 select each publish
-  progress before issuing the owner command. A no-reply at this layer is Wi-Fi
+  progress before issuing the owner command. The only enumeration lifecycle
+  follows Linux MMC semantics: one CMD0 with a 1 ms post-command settle, one
+  successful zero-argument CMD5 OCR query, up to three command-local retries
+  without restarting CMD0, and at most 100 nonzero-OCR readiness polls paced
+  10 ms apart. CMD3 and CMD7 use the same command-local retry bound; CMD7 never
+  changes response shape after failure. A no-reply at this layer is Wi-Fi
   gate 2 `sdio-card-select` evidence, not a HAL power/reset or DHCP failure.
 - Function 2 traffic is forbidden until firmware release, real
   `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness are proven.
@@ -2764,25 +2878,53 @@ Required Cohesix shape:
 - Diagnostic no-HT or forced clock paths must be explicit. They are not
   production promotions unless a future milestone adds a separate hardware proof
   and updates this guide in the same change.
-- Pi 4 CYW43455 firmware upload follows the ARMCR4 path: Function 1 backplane
-  transport init, SDIO width/high-speed upload prep, firmware/NVRAM into ARMCR4
-  RAM, reset-vector release, then post-release Function 2 readiness. After
-  `CHIPCLKCSR.ALP_AVAIL|HT_AVAIL` is proven, the isolated runtime mirrors the
-  Linux-shaped Function 2 edge by applying `FORCE_HT`, allowing one bounded
-  `IOEx` clear/set retry, and re-confirming the 512-byte Function 2 block size.
+- Pi 4 CYW43455 firmware upload follows the ARMCR4 path. On every initial or
+  recovered firmware generation, the isolated CYW43 runtime reproduces the
+  Linux passive/probe-attach sequence through typed SDIO-owner operations.
+  ARMCR4 and D11 first enter their checked passive/reset state; then the runtime
+  applies `SLEEPCSR.KSO`, Function 0 `CARDCTRL.WLANRESET`, ChipCommon
+  `PMUCONTROL.RES_RELOAD`, Function 0 `IOEx.F2=0`, and the
+  paired card/host download lane. Card `CCCR_IF` and SDHCI `HOST_CONTROL`
+  width/high-speed state are read back before a lane transition is accepted,
+  and release always restores the four-bit/high-speed pair even when successful
+  upload slices reset the retry cursor. Each read or write is strict and has a
+  dedicated fault; there is no root-owned or best-effort legacy fallback.
+  Probe-attach KSO is wake evidence only and does not require `DEVON` or
+  authorize Function 2. The runtime then configures the SDIO width/high-speed
+  lane and requests the ALP-only download clock before staging firmware/NVRAM.
+  Activation W1C-clears SDIO-core `INTSTATUS` with `0xffffffff`, writes the
+  reset vector, and releases ARMCR4 with 32-bit AI-wrapper accesses, masked
+  IOCTRL readback, and Linux's bounded repeated `RESETCTRL=0`, 50-us settle,
+  readback loop. Any failure after reset-clear becomes possible quarantined
+  firmware execution and requires a fresh generation. After release, the runtime performs one
+  Linux-shaped SD-only `CHIPCLKCSR=0`
+  transition, writes only `HT_AVAIL_REQ`, and polls for real `HT_AVAIL`.
+  `FORCE_HT` is applied only after that proof; it is never a second pre-proof
+  request or a `0x50 -> 0x52` fallback. The runtime then allows one bounded
+  `IOEx` clear/set retry and re-confirms the 512-byte Function 2 block size.
   The runtime writes the firmware mailbox protocol version before F2 enable.
   After `IORx.F2` is live, it writes the SDIO core interrupt masks, programs
   CYW43455 wake/KSO/cardcap/watermark/device-control sideband, then arms CCCR
-  `IENx` before corecontrol readiness work proceeds. The isolated runtime must not perform
-  KSO/WAKEUPCTRL/watermark/Function 2 sideband work as part of
-  `transport-init`; that sideband belongs after firmware release. CM3-only
-  SOCSRAM remap writes are not part of this path.
+  `IENx` before corecontrol readiness work proceeds. The probe-attach KSO,
+  CARDCTRL, PMUCONTROL, F2-disable, passive-core, and fresh ALP sequence belongs
+  before firmware upload; `WAKEUPCTRL`, cardcap, watermark, and the remaining
+  Function 2 sideband stay after real HT and Function 2 readiness. Recovery
+  replays that complete probe/download boundary before each new firmware
+  execution while preserving the longer-lived selected-card transport.
+  CM3-only SOCSRAM remap writes are not part of this path.
 - Station control uses matched CDC exchanges for writes and read iovars. The
   first startup `bus:txglomalign=8` write, its value-`4` fallback, and all later
   station exchanges use split isolated runtime sequences: a bounded
   `DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME` TX turn followed by bounded
   `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL` turns that decode the CDC header in
-  root. Exact `BCME_BADARG` and `BCME_UNSUPPORTED` statuses on the txglomalign
+  root. When the pre-TX drain flag is set, the runtime returns exactly one
+  preexisting DPC FIFO head as `FrameReady` without touching Function 2 or
+  advancing the SDPCM sequence. Root routes DATA/EVENT in wire order, consumes
+  stale pre-request CONTROL without admitting it as the new ioctl reply, and
+  resubmits the identical descriptor, payload, command, and BCDC id. Only an
+  empty FIFO admits the actual TX. Trace order is
+  `pre-tx-drain-frame*`, `pre-tx-drain-ready`, `tx-complete`, then the matched
+  or optional reply. Exact `BCME_BADARG` and `BCME_UNSUPPORTED` statuses on the txglomalign
   negotiation are reported to root as optional negotiation rejects; other
   commandless nonzero CDC statuses (`cmd=0`, `id=0`, `status!=0`) remain
   fail-fast instead of generic idle-loop timeouts. A control-plane command is

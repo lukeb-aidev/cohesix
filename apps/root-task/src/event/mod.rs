@@ -127,7 +127,8 @@ use crate::net::NetSelfTestStartResult;
 #[cfg(feature = "net-console")]
 use crate::net::{
     ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDiagSnapshot,
-    NetPoller, NetStatusReport, NetTelemetry, CONSOLE_DISPATCH_BURST, NET_DIAG, NET_DIAG_FEATURED,
+    NetPoller, NetSelfTestReport, NetStatusReport, NetTelemetry, CONSOLE_DISPATCH_BURST, NET_DIAG,
+    NET_DIAG_FEATURED,
 };
 #[cfg(feature = "kernel")]
 use crate::ninedoor::TelemetryTailMeta;
@@ -10259,7 +10260,12 @@ where
                     || trace.backplane_window_mid != 0
                     || trace.backplane_window_high != 0
             });
+        let release_preconditions_passed = fault.is_some_and(|fault| {
+            fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
+                && fault.result > pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN
+        });
         let firmware_uploaded = live_net_channel_ready
+            || release_preconditions_passed
             || firmware_trace
                 .and_then(|trace| trace.proof)
                 .is_some_and(|proof| proof.upload_state == "uploaded" || proof.verified);
@@ -10307,7 +10313,7 @@ where
             f2_enabled && f2_ready,
             channel_ready && cyw43_fault_gate.is_none(),
             dhcp_pass,
-            false,
+            self.wifi_diag_acceptance_pass(),
         );
         let failing_gate: u8 = if let Some(gate) = driver_task_gate {
             gate
@@ -10751,6 +10757,11 @@ where
         if Self::wifi_runtime_fault_is_firmware_stream(fault) {
             return 6;
         }
+        if fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
+            && matches!(fault.detail, 0x5305 | 0x531f | 0x5338)
+        {
+            return 6;
+        }
         Self::wifi_cyw43_fault_gate(fault.detail)
     }
 
@@ -11158,6 +11169,22 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY => Some(5),
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_RESET_VECTOR_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_ARMCR4_RESET_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_POST_CONFIG_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN => {
+                Some(6)
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE => {
+                Some(7)
+            }
             _ => None,
         }
     }
@@ -11300,6 +11327,42 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY => {
                 "cyw43-firmware-prep-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN => {
+                "cyw43-release-precondition"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_RESET_VECTOR_BEGIN => {
+                "cyw43-release-reset-vector"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_ARMCR4_RESET_BEGIN => {
+                "cyw43-release-armcr4-reset"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN => {
+                "cyw43-release-upload-clock"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN => {
+                "cyw43-release-ht-clock"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN => {
+                "cyw43-release-mailbox-version"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN => {
+                "cyw43-release-function2-enable"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN => {
+                "cyw43-release-interrupt-mask"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_POST_CONFIG_BEGIN => {
+                "cyw43-release-function2-sideband"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN => {
+                "cyw43-release-corecontrol"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN => {
+                "cyw43-release-firmware-ready"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE => {
+                "cyw43-release-post-ready"
+            }
             _ => "cyw43-linked-runtime-progress-no-reply",
         }
     }
@@ -11440,6 +11503,42 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY => {
                 "continue-cyw43-firmware-prep-and-upload"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN => {
+                "inspect-cyw43-release-preconditions"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_RESET_VECTOR_BEGIN => {
+                "inspect-cyw43-reset-vector-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_ARMCR4_RESET_BEGIN => {
+                "inspect-cyw43-armcr4-reset-sequence"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN => {
+                "inspect-cyw43-release-bus-width-and-clock-promotion"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN => {
+                "inspect-cyw43-post-release-ht-clock"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN => {
+                "inspect-cyw43-mailbox-version-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN => {
+                "inspect-cyw43-function2-enable"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN => {
+                "inspect-cyw43-dongle-interrupt-mask-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_POST_CONFIG_BEGIN => {
+                "inspect-cyw43-function2-sideband-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN => {
+                "inspect-cyw43-corecontrol-ready"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN => {
+                "inspect-cyw43-firmware-mailbox-ready"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE => {
+                "activate-generation-bound-cyw43-dpc"
+            }
             _ => "inspect-linked-cyw43-runtime-progress",
         }
     }
@@ -11455,6 +11554,8 @@ where
             0x531a..=0x5323 => 5,
             0x5329 => 6,
             0x532a..=0x532e => 7,
+            0x5331..=0x5336 => 5,
+            0x5338 => 6,
             _ => 8,
         }
     }
@@ -11471,6 +11572,27 @@ where
         }
         if Self::wifi_runtime_fault_is_firmware_stream(fault) {
             return "inspect-cyw43-firmware-shared-payload-and-sdio-owner-transfer";
+        }
+        if fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
+            && fault.detail == 0x5305
+            && fault.result != 0
+        {
+            return Self::wifi_cyw43_runtime_progress_next_action(fault.result);
+        }
+        if fault.detail == 0x531f && fault.result != 0 {
+            return match crate::drivers::driver_task_net::cyw43_armcr4_reset_fault_reason(
+                fault.result,
+            ) {
+                "cyw43-armcr4-prereset-write" => "inspect-armcr4-prereset-cmd53-write",
+                "cyw43-armcr4-prereset-flush" => "inspect-armcr4-prereset-cmd53-flush",
+                "cyw43-armcr4-assert-write" => "inspect-armcr4-reset-assert-cmd53-write",
+                "cyw43-armcr4-in-reset-write" => "inspect-armcr4-in-reset-cmd53-write",
+                "cyw43-armcr4-in-reset-flush" => "inspect-armcr4-in-reset-cmd53-flush",
+                "cyw43-armcr4-clear-write" => "inspect-armcr4-reset-clear-cmd53-write",
+                "cyw43-armcr4-postreset-write" => "inspect-armcr4-postreset-cmd53-write",
+                "cyw43-armcr4-postreset-flush" => "inspect-armcr4-postreset-cmd53-flush",
+                _ => "inspect-cyw43-armcr4-reset-sequence",
+            };
         }
         Self::wifi_cyw43_fault_next_action(fault.detail)
     }
@@ -11491,6 +11613,8 @@ where
             0x5327 => "verify-linked-sdio-cmd3-rca",
             0x5328 => "verify-linked-sdio-cmd7-select",
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
+            0x5331..=0x5336 => "inspect-linux-probe-attach-state",
+            0x5338 => "inspect-pre-release-intstatus-clear",
             _ => "inspect-cyw43-runtime-fault-stage",
         }
     }
@@ -11565,6 +11689,7 @@ where
         Self::wifi_runtime_fault_is_sdio_card_select(fault)
             || Self::wifi_runtime_fault_is_transport_no_reply(fault)
             || Self::wifi_runtime_fault_is_firmware_stream(fault)
+            || fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
     }
 
     #[cfg(feature = "kernel")]
@@ -11806,6 +11931,66 @@ where
         }
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn wifi_diag_acceptance_pass_from(
+        status: &NetStatusReport,
+        stats: &NetCounters,
+        report: &NetSelfTestReport,
+    ) -> bool {
+        let nettest_pass = report.last_result.is_some_and(|result| {
+            result.tx_ok
+                && result.console_ok
+                && (result.tcp_ok || result.udp_echo_ok || result.peer_assisted_ok)
+        });
+        status.active_interface == "wifi"
+            && status.active_driver == "cyw43"
+            && status.address_source == "dhcp-lease"
+            && status.dhcp_phase == "bound"
+            && status.tcp_ready
+            && stats.rx_packets != 0
+            && stats.tx_packets != 0
+            && stats.tcp_accepts != 0
+            && stats.tcp_auth_sessions != 0
+            && stats.tcp_rx_bytes != 0
+            && nettest_pass
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_acceptance_pass(&self) -> bool {
+        #[cfg(feature = "net-console")]
+        {
+            return self.net.as_ref().is_some_and(|net| {
+                let status = net.status_report();
+                let stats = net.stats();
+                let report = net.self_test_report();
+                Self::wifi_diag_acceptance_pass_from(&status, &stats, &report)
+                    && crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic()
+                        .is_some_and(Self::wifi_diag_dpc_acceptance_pass_from)
+            });
+        }
+        #[cfg(not(feature = "net-console"))]
+        {
+            false
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_dpc_acceptance_pass_from(
+        snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic,
+    ) -> bool {
+        snapshot.generation != 0
+            && snapshot.captures != 0
+            && snapshot.captures == snapshot.published
+            && snapshot.published == snapshot.consumed
+            && snapshot.rearms >= snapshot.captures
+            && snapshot.overruns == 0
+            && snapshot.epoch_errors == 0
+            && snapshot.sequence_errors == 0
+            && snapshot.ack_failures == 0
+            && !snapshot.poisoned
+            && !snapshot.masked
+    }
+
     #[cfg(feature = "kernel")]
     fn wifi_diag_network_evidence(&self) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         #[cfg(feature = "net-console")]
@@ -11834,16 +12019,32 @@ where
         {
             if let Some(net) = self.net.as_ref() {
                 let status = net.status_report();
+                let stats = net.stats();
+                let report = net.self_test_report();
+                let nettest_pass = report.last_result.is_some_and(|result| {
+                    result.tx_ok
+                        && result.console_ok
+                        && (result.tcp_ok || result.udp_echo_ok || result.peer_assisted_ok)
+                });
+                let dpc_pass = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic()
+                    .is_some_and(Self::wifi_diag_dpc_acceptance_pass_from);
                 return format_message(format_args!(
-                    "nettest=requires-command netstats=requires-command cohsh=requires-nettest profile_backend={} active_driver={} tcp_ready={}",
+                    "nettest={} netstats={} cohsh={} dpc={} profile_backend={} active_driver={} tcp_ready={} tcp_accepts={} tcp_auth={} tcp_rx_bytes={}",
+                    if nettest_pass { "pass" } else { "requires-command" },
+                    if stats.rx_packets != 0 && stats.tx_packets != 0 { "pass" } else { "requires-command" },
+                    if stats.tcp_auth_sessions != 0 { "authenticated" } else { "requires-auth" },
+                    if dpc_pass { "pass" } else { "requires-proof" },
                     status.profile_backend,
                     status.active_driver,
                     if status.tcp_ready { "yes" } else { "no" },
+                    stats.tcp_accepts,
+                    stats.tcp_auth_sessions,
+                    stats.tcp_rx_bytes,
                 ));
             }
         }
         format_message(format_args!(
-            "nettest=unavailable netstats=unavailable cohsh=unavailable profile_backend=none active_driver=none tcp_ready=no"
+            "nettest=unavailable netstats=unavailable cohsh=unavailable dpc=unavailable profile_backend=none active_driver=none tcp_ready=no"
         ))
     }
 
@@ -15241,7 +15442,10 @@ mod tests {
         WIFI_BOUNDED_PHASE_RECORD_CAPACITY, WIFI_HT_PHASE_RECORD_CAPACITY,
     };
     #[cfg(feature = "net-console")]
-    use crate::net::{NetCounters, NetSelfTestStartResult, NetStatusReport, NetTelemetry};
+    use crate::net::{
+        NetCounters, NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStatusReport,
+        NetTelemetry,
+    };
     #[cfg(feature = "kernel")]
     use crate::ninedoor::NineDoorBridge;
     use crate::serial::test_support::LoopbackSerial;
@@ -22196,6 +22400,82 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn wifi_generic_release_fault_stays_at_gate_six_and_uses_internal_phase() {
+        let fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-release",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x5305,
+            reason: "cyw43-release-armcr4-reset",
+            result: pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_ARMCR4_RESET_BEGIN,
+        };
+
+        assert_eq!(KernelConsoleTestPump::wifi_runtime_fault_gate(fault), 6);
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_next_action(fault),
+            "inspect-cyw43-armcr4-reset-sequence"
+        );
+        assert!(KernelConsoleTestPump::wifi_runtime_fault_implies_hal_power_ready(fault));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_armcr4_release_fault_names_exact_reset_edge() {
+        let fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-release",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x531f,
+            reason: "cyw43-armcr4-clear-write",
+            result: pi4_driver_abi::driver_runtime_cyw43_armcr4_reset_result(
+                pi4_driver_abi::DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_CLEAR_WRITE,
+                2,
+                Some(1),
+            ),
+        };
+
+        assert_eq!(KernelConsoleTestPump::wifi_runtime_fault_gate(fault), 6);
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_next_action(fault),
+            "inspect-armcr4-reset-clear-cmd53-write"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_probe_attach_faults_stay_at_gate_five() {
+        for detail in 0x5331..=0x5336 {
+            assert_eq!(KernelConsoleTestPump::wifi_cyw43_fault_gate(detail), 5);
+            assert_eq!(
+                KernelConsoleTestPump::wifi_cyw43_fault_next_action(detail),
+                "inspect-linux-probe-attach-state"
+            );
+        }
+        assert_eq!(KernelConsoleTestPump::wifi_cyw43_fault_gate(0x5338), 6);
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_fault_next_action(0x5338),
+            "inspect-pre-release-intstatus-clear"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_sdio_replay_no_reply_reports_linked_runtime_blocker() {
         let status = crate::drivers::driver_task_net::SdioRuntimeReplayStatus {
             stage: "engine-init",
@@ -24585,6 +24865,91 @@ mod tests {
             ),
             10
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn wifi_gate_ten_requires_authenticated_tcp_and_completed_nettest() {
+        let status = NetStatusReport {
+            active_driver: "cyw43",
+            active_interface: "wifi",
+            address_source: "dhcp-lease",
+            dhcp_phase: "bound",
+            tcp_ready: true,
+            ..NetStatusReport::default()
+        };
+        let stats = NetCounters {
+            rx_packets: 10,
+            tx_packets: 9,
+            tcp_accepts: 1,
+            tcp_auth_sessions: 1,
+            tcp_rx_bytes: 58,
+            ..NetCounters::default()
+        };
+        let report = NetSelfTestReport {
+            last_result: Some(NetSelfTestResult {
+                tx_ok: true,
+                console_ok: true,
+                peer_assisted_ok: true,
+                ..NetSelfTestResult::default()
+            }),
+            ..NetSelfTestReport::default()
+        };
+
+        assert!(KernelConsoleTestPump::wifi_diag_acceptance_pass_from(
+            &status, &stats, &report
+        ));
+        let mut unauthenticated = stats;
+        unauthenticated.tcp_auth_sessions = 0;
+        assert!(!KernelConsoleTestPump::wifi_diag_acceptance_pass_from(
+            &status,
+            &unauthenticated,
+            &report
+        ));
+        let mut no_nettest = report;
+        no_nettest.last_result = None;
+        assert!(!KernelConsoleTestPump::wifi_diag_acceptance_pass_from(
+            &status,
+            &stats,
+            &no_nettest
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_gate_ten_requires_healthy_unmasked_dpc_accounting() {
+        let healthy = crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic {
+            generation: 7,
+            captures: 4,
+            published: 4,
+            consumed: 4,
+            rearms: 4,
+            overruns: 0,
+            epoch_errors: 0,
+            sequence_errors: 0,
+            ack_failures: 0,
+            poisoned: false,
+            masked: false,
+        };
+        assert!(KernelConsoleTestPump::wifi_diag_dpc_acceptance_pass_from(
+            healthy
+        ));
+
+        let mut poisoned = healthy;
+        poisoned.poisoned = true;
+        assert!(!KernelConsoleTestPump::wifi_diag_dpc_acceptance_pass_from(
+            poisoned
+        ));
+        let mut masked = healthy;
+        masked.masked = true;
+        assert!(!KernelConsoleTestPump::wifi_diag_dpc_acceptance_pass_from(
+            masked
+        ));
+        let mut unconsumed = healthy;
+        unconsumed.consumed = 3;
+        assert!(!KernelConsoleTestPump::wifi_diag_dpc_acceptance_pass_from(
+            unconsumed
+        ));
     }
 
     #[cfg(feature = "kernel")]
