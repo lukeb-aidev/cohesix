@@ -9528,6 +9528,7 @@ WIFI_REPLAY_REFINABLE_BLOCKERS = frozenset(
         "none",
         "wifi-driver-task-runtime-unproved",
         "wifi-started-no-replay",
+        "sdio-host-linked-runtime",
         "sdio-linked-runtime-progress-no-reply",
         "runtime-power-reset",
         "hal-power-reset",
@@ -11869,7 +11870,23 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
                 event_list, wifi_blocker
             )
-            if replay_exact in {
+            if replay_exact_default.startswith("wifi-pwrseq-"):
+                # The replay record is the authoritative operation-level
+                # failure. Later passive diagnostics can repeat only the
+                # generic linked-runtime cause; do not let that erase which
+                # retained Linux pwrseq transaction actually failed.
+                wifi_exact = replay_exact_default
+                wifi_phase = replay_phase_default
+                wifi_blocker_line = next(
+                    (
+                        event.line
+                        for event in event_list
+                        if event.raw.startswith("SDIO_DRIVER_TASK_REPLAY_STATUS")
+                        and event.fields.get("blocker") == replay_exact_default
+                    ),
+                    replay_line,
+                )
+            elif replay_exact in {
                 "cyw43-runtime-command-rejected",
                 "cyw43-transport-command-admission",
             }:

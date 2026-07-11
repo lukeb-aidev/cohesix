@@ -308,7 +308,12 @@ pending epoch until the terminal phase. Each GET_CONFIG, SET_CONFIG,
 ASSERT_LOW, and RELEASE_HIGH firmware-property operation must post exactly
 once, retain the DMA request page across later reply-poll turns, use a
 virtual-counter deadline, and publish distinct begin/done progress plus an
-operation-specific terminal detail. Root must extend same-request retention
+operation-specific terminal detail. Property requests must carry a zero
+request/response-size word. SET replies with the response bit and a bounded
+zero-byte returned length must be accepted, while missing response bits,
+oversized returned lengths, nonzero returned GPIO tokens, wrong tags, and bad
+end tags must fail; GET_CONFIG still requires its complete polarity payload.
+Root must extend same-request retention
 only while one of those exact begin phases is current; mismatched sequence,
 aux, contract, mode, done phase, or unrelated progress retains the ordinary
 SDIO bound. Tests must prove timeout retention cannot permit a new request to

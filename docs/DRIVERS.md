@@ -1672,6 +1672,12 @@ context and the retry/poll window.
   ABI returns GPIO zero on success rather than echoing GPIO 129, so the owner
   validates that zero token, obtains the existing expander polarity with
   GET_GPIO_CONFIG, and preserves it in SET_GPIO_CONFIG exactly as Linux does.
+  The property-tag request/response-size word is zero on every request, as in
+  Linux `rpi_firmware_property`; GET_CONFIG requires its complete returned
+  payload, while SET_CONFIG and SET_STATE accept any response-bit-set returned
+  length bounded by the declared tag buffer, including zero. Global success,
+  the exact tag and buffer size, the returned zero GPIO token, and the end tag
+  remain mandatory. This is the firmware ABI, not a legacy GPIO fallback.
   Each firmware-property operation is a retained mailbox cursor: it encodes
   and posts the proven Pi 4 VC address once, leaves the request page
   firmware-owned, samples at most one reply per service turn, and terminates on

@@ -4027,6 +4027,32 @@ def test_gate_summary_reports_wifi_pwrseq_engine_init_failure_at_gate_one() -> N
         assert record["WIFI_PHASE"] == "engine-init"
 
 
+def test_gate_summary_keeps_pwrseq_exact_after_generic_passive_diagnostics() -> None:
+    events = normalizer.parse_events(
+        [
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=engine-init "
+            "blocker=wifi-pwrseq-set-config-failed",
+            "[net-console] deferred failed detail=sdio-host-linked-runtime "
+            "driver-task runtime init failed",
+            "wifi: driver-task replay failure detail=net-disabled "
+            "cause=sdio-host-linked-runtime driver-task runtime init failed",
+            "wifi: gate 1 name=runtime-power-reset status=inferred "
+            "evidence=power=unknown reset=unknown "
+            "pwrseq_status=wifi-pwrseq-set-config-failed "
+            "pwrseq_phase=runtime-poll-ready source=hal-runtime-required "
+            "next=sdio-card-select",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "wifi-pwrseq-set-config-failed"
+    assert record["WIFI_EXACT"] == "wifi-pwrseq-set-config-failed"
+    assert record["WIFI_PHASE"] == "engine-init"
+    assert record["WIFI_BLOCKER_LINE"] == 1
+
+
 def test_gate_summary_preserves_sdio_hardware_entry_progress_blocker() -> None:
     events = normalizer.parse_events(
         [

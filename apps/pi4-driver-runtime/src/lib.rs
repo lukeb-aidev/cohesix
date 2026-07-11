@@ -1215,6 +1215,7 @@ const PI4_WIFI_PWRSEQ_MAILBOX_FULL: u32 = 0x8000_0000;
 const PI4_WIFI_PWRSEQ_MAILBOX_CHANNEL_PROPERTY: u32 = 8;
 const PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS: u32 = 0x8000_0000;
 const PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE: u32 = 1 << 31;
+const PI4_WIFI_PWRSEQ_MAILBOX_REQUEST_SIZE: u32 = 0;
 const PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE: u32 = 0x0003_8041;
 const PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG: u32 = 0x0003_0043;
 const PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG: u32 = 0x0003_8043;
@@ -5502,7 +5503,10 @@ fn sdio_wifi_pwrseq_encode_request(vaddr: usize, level: u32) {
     write_dma_u32(vaddr, 8 * core::mem::size_of::<u32>() as u32);
     write_dma_u32(vaddr + 8, PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE);
     write_dma_u32(vaddr + 12, 8);
-    write_dma_u32(vaddr + 16, 8);
+    // Linux's Raspberry Pi firmware transport always submits property tags
+    // with a zero request/response-size word. The firmware replaces this word
+    // with its response flag and returned-byte count.
+    write_dma_u32(vaddr + 16, PI4_WIFI_PWRSEQ_MAILBOX_REQUEST_SIZE);
     write_dma_u32(vaddr + 20, PI4_WIFI_PWRSEQ_GPIO_WL_ON);
     write_dma_u32(vaddr + 24, level);
     dma_store_barrier();
@@ -5516,7 +5520,7 @@ fn sdio_wifi_pwrseq_encode_get_config_request(vaddr: usize) {
     write_dma_u32(vaddr, 11 * core::mem::size_of::<u32>() as u32);
     write_dma_u32(vaddr + 8, PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG);
     write_dma_u32(vaddr + 12, 20);
-    write_dma_u32(vaddr + 16, 4);
+    write_dma_u32(vaddr + 16, PI4_WIFI_PWRSEQ_MAILBOX_REQUEST_SIZE);
     write_dma_u32(vaddr + 20, PI4_WIFI_PWRSEQ_GPIO_WL_ON);
     dma_store_barrier();
 }
@@ -5529,7 +5533,7 @@ fn sdio_wifi_pwrseq_encode_config_request(vaddr: usize, polarity: u32) {
     write_dma_u32(vaddr, 12 * core::mem::size_of::<u32>() as u32);
     write_dma_u32(vaddr + 8, PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG);
     write_dma_u32(vaddr + 12, 24);
-    write_dma_u32(vaddr + 16, 24);
+    write_dma_u32(vaddr + 16, PI4_WIFI_PWRSEQ_MAILBOX_REQUEST_SIZE);
     write_dma_u32(vaddr + 20, PI4_WIFI_PWRSEQ_GPIO_WL_ON);
     write_dma_u32(vaddr + 24, PI4_WIFI_PWRSEQ_GPIO_DIRECTION_OUT);
     write_dma_u32(vaddr + 28, polarity);
@@ -5539,7 +5543,7 @@ fn sdio_wifi_pwrseq_encode_config_request(vaddr: usize, polarity: u32) {
     dma_store_barrier();
 }
 
-fn sdio_wifi_pwrseq_response_header_complete(
+fn sdio_wifi_pwrseq_response_header_valid(
     status: u32,
     reply_tag: u32,
     expected_tag: u32,
@@ -5552,15 +5556,38 @@ fn sdio_wifi_pwrseq_response_header_complete(
     status == PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS
         && reply_tag == expected_tag
         && value_len == expected_value_len
-        && value_status == (PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | expected_value_len)
+        && value_status & PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE != 0
+        && (value_status & !PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE) <= value_len
         && returned_gpio == 0
         && end_tag == 0
+}
+
+fn sdio_wifi_pwrseq_get_response_header_complete(
+    status: u32,
+    reply_tag: u32,
+    expected_tag: u32,
+    value_len: u32,
+    expected_value_len: u32,
+    value_status: u32,
+    returned_gpio: u32,
+    end_tag: u32,
+) -> bool {
+    sdio_wifi_pwrseq_response_header_valid(
+        status,
+        reply_tag,
+        expected_tag,
+        value_len,
+        expected_value_len,
+        value_status,
+        returned_gpio,
+        end_tag,
+    ) && value_status == (PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | expected_value_len)
 }
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
 fn sdio_wifi_pwrseq_response_complete(vaddr: usize) -> bool {
     dma_load_barrier();
-    sdio_wifi_pwrseq_response_header_complete(
+    sdio_wifi_pwrseq_response_header_valid(
         read_dma_u32(vaddr + 4),
         read_dma_u32(vaddr + 8),
         PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
@@ -5575,7 +5602,7 @@ fn sdio_wifi_pwrseq_response_complete(vaddr: usize) -> bool {
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
 fn sdio_wifi_pwrseq_config_response_complete(vaddr: usize) -> bool {
     dma_load_barrier();
-    sdio_wifi_pwrseq_response_header_complete(
+    sdio_wifi_pwrseq_response_header_valid(
         read_dma_u32(vaddr + 4),
         read_dma_u32(vaddr + 8),
         PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
@@ -5590,7 +5617,7 @@ fn sdio_wifi_pwrseq_config_response_complete(vaddr: usize) -> bool {
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
 fn sdio_wifi_pwrseq_get_config_response(vaddr: usize) -> Option<u32> {
     dma_load_barrier();
-    sdio_wifi_pwrseq_response_header_complete(
+    sdio_wifi_pwrseq_get_response_header_complete(
         read_dma_u32(vaddr + 4),
         read_dma_u32(vaddr + 8),
         PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
@@ -41592,18 +41619,69 @@ mod tests {
     }
 
     #[test]
-    fn sdio_wifi_pwrseq_accepts_firmware_zero_gpio_success_token() {
-        assert!(sdio_wifi_pwrseq_response_header_complete(
+    fn sdio_wifi_pwrseq_set_response_matches_linux_property_contract() {
+        assert_eq!(PI4_WIFI_PWRSEQ_MAILBOX_REQUEST_SIZE, 0);
+        assert!(sdio_wifi_pwrseq_response_header_valid(
             PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
             PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
             PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
             8,
             8,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 8,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
             0,
             0,
         ));
-        assert!(!sdio_wifi_pwrseq_response_header_complete(
+        assert!(sdio_wifi_pwrseq_response_header_valid(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+            24,
+            24,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 24,
+            0,
+            0,
+        ));
+        assert!(!sdio_wifi_pwrseq_response_header_valid(
+            0,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+            24,
+            24,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
+            0,
+            0,
+        ));
+        assert!(!sdio_wifi_pwrseq_response_header_valid(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+            24,
+            24,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
+            0,
+            0,
+        ));
+        assert!(!sdio_wifi_pwrseq_response_header_valid(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+            8,
+            24,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
+            0,
+            0,
+        ));
+        assert!(!sdio_wifi_pwrseq_response_header_valid(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+            24,
+            24,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 25,
+            0,
+            0,
+        ));
+        assert!(!sdio_wifi_pwrseq_response_header_valid(
             PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
             PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
             PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
@@ -41613,11 +41691,31 @@ mod tests {
             PI4_WIFI_PWRSEQ_GPIO_WL_ON,
             0,
         ));
+        assert!(!sdio_wifi_pwrseq_response_header_valid(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+            8,
+            8,
+            8,
+            0,
+            0,
+        ));
+        assert!(!sdio_wifi_pwrseq_response_header_valid(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+            8,
+            8,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
+            0,
+            1,
+        ));
     }
 
     #[test]
     fn sdio_wifi_pwrseq_get_config_requires_exact_firmware_reply_shape() {
-        assert!(sdio_wifi_pwrseq_response_header_complete(
+        assert!(sdio_wifi_pwrseq_get_response_header_complete(
             PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
             PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
             PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
@@ -41627,7 +41725,7 @@ mod tests {
             0,
             0,
         ));
-        assert!(!sdio_wifi_pwrseq_response_header_complete(
+        assert!(!sdio_wifi_pwrseq_get_response_header_complete(
             PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
             PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
             PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
