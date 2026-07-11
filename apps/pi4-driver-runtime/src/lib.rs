@@ -203,10 +203,18 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
@@ -443,7 +451,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR, DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED, DRIVER_RUNTIME_SDIO_IRQ,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_GET_CONFIG_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED, DRIVER_RUNTIME_SDIO_IRQ,
     DRIVER_RUNTIME_SDIO_IRQ_BADGE, DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND,
     DRIVER_RUNTIME_SDIO_OP_CMD52_READ, DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,
     DRIVER_RUNTIME_SDIO_OP_CMD53_READ, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
@@ -1211,8 +1223,8 @@ const PI4_WIFI_PWRSEQ_GPIO_DIRECTION_OUT: u32 = 1;
 const PI4_WIFI_PWRSEQ_OFF_SETTLE_US: u32 = 2_000;
 const PI4_WIFI_PWRSEQ_POWER_UP_SETTLE_US: u32 = 10_000;
 const PI4_WIFI_PWRSEQ_POST_CLOCK_SETTLE_US: u32 = 10_000;
-const PI4_WIFI_PWRSEQ_WAIT_MS: u64 = 1;
-const PI4_WIFI_PWRSEQ_WAIT_POLLS: usize = 20_000;
+const PI4_WIFI_PWRSEQ_MAILBOX_TIMEOUT_MS: u64 = 500;
+const PI4_WIFI_PWRSEQ_MAILBOX_FALLBACK_TURNS: usize = 32;
 const PI4_WIFI_PWRSEQ_DRAIN_LIMIT: usize = 64;
 const SDHCI_CLOCK_RECOVERY_SETTLE_SPINS: usize = 10_000;
 const SDHCI_STARTUP_CLOCK_HZ: u32 = 400_000;
@@ -2260,6 +2272,58 @@ impl SdioPwrseqSettle {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioWifiPwrseqMailboxOp {
+    GetConfig,
+    SetConfig { polarity: u32 },
+    SetState { level: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioPwrseqMailboxPhase {
+    Idle,
+    WaitSend,
+    WaitReply,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SdioPwrseqMailboxCursor {
+    phase: SdioPwrseqMailboxPhase,
+    op: SdioWifiPwrseqMailboxOp,
+    request_addr: u32,
+    overall_deadline: RuntimeDeadline,
+}
+
+impl SdioPwrseqMailboxCursor {
+    const fn idle() -> Self {
+        Self {
+            phase: SdioPwrseqMailboxPhase::Idle,
+            op: SdioWifiPwrseqMailboxOp::GetConfig,
+            request_addr: 0,
+            overall_deadline: RuntimeDeadline::Iterations { remaining: 0 },
+        }
+    }
+
+    const fn active(self) -> bool {
+        !matches!(self.phase, SdioPwrseqMailboxPhase::Idle)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioPwrseqMailboxFault {
+    Resource,
+    Timer,
+    Timeout,
+    Protocol,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioPwrseqMailboxTurn {
+    Pending,
+    Complete(u32),
+    Fault(SdioPwrseqMailboxFault),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SdioPwrseqCursor {
     purpose: SdioPwrseqPurpose,
     phase: SdioPwrseqPhase,
@@ -2267,6 +2331,7 @@ struct SdioPwrseqCursor {
     aux0: u32,
     gpio_polarity: u32,
     settle: SdioPwrseqSettle,
+    mailbox: SdioPwrseqMailboxCursor,
 }
 
 impl SdioPwrseqCursor {
@@ -2278,6 +2343,7 @@ impl SdioPwrseqCursor {
             aux0: 0,
             gpio_polarity: 0,
             settle: SdioPwrseqSettle::idle(),
+            mailbox: SdioPwrseqMailboxCursor::idle(),
         }
     }
 
@@ -2289,6 +2355,7 @@ impl SdioPwrseqCursor {
             aux0,
             gpio_polarity: 0,
             settle: SdioPwrseqSettle::idle(),
+            mailbox: SdioPwrseqMailboxCursor::idle(),
         }
     }
 
@@ -5537,30 +5604,18 @@ fn sdio_wifi_pwrseq_get_config_response(vaddr: usize) -> Option<u32> {
 }
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
-#[derive(Clone, Copy)]
-enum SdioWifiPwrseqMailboxOp {
-    GetConfig,
-    SetConfig { polarity: u32 },
-    SetState { level: u32 },
-}
-
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
-fn sdio_wifi_pwrseq_mailbox_call(op: SdioWifiPwrseqMailboxOp) -> Option<u32> {
+fn sdio_wifi_pwrseq_mailbox_resources() -> Option<(usize, usize, u32)> {
     let descriptor = RUNTIME_DESCRIPTOR.load();
-    let Some(mailbox) = runtime_resource_range(
+    let mailbox = runtime_resource_range(
         &descriptor,
         DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
         DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
-    ) else {
-        return None;
-    };
-    let Some(request) = runtime_resource_range(
+    )?;
+    let request = runtime_resource_range(
         &descriptor,
         DRIVER_RUNTIME_RESOURCE_KIND_DMA,
         DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
-    ) else {
-        return None;
-    };
+    )?;
     if mailbox.page_count != 1
         || request.page_count < 1
         || request.paddr > 0x3fff_ffff
@@ -5568,21 +5623,62 @@ fn sdio_wifi_pwrseq_mailbox_call(op: SdioWifiPwrseqMailboxOp) -> Option<u32> {
     {
         return None;
     }
-    let mailbox_vaddr = mailbox.vaddr as usize;
-    let request_vaddr = request.vaddr as usize;
-    let request_addr = request.paddr as u32 & 0x3fff_fff0;
-    for alias in [0xc000_0000u32, 0x4000_0000u32] {
-        match op {
-            SdioWifiPwrseqMailboxOp::GetConfig => {
-                sdio_wifi_pwrseq_encode_get_config_request(request_vaddr);
-            }
-            SdioWifiPwrseqMailboxOp::SetConfig { polarity } => {
-                sdio_wifi_pwrseq_encode_config_request(request_vaddr, polarity);
-            }
-            SdioWifiPwrseqMailboxOp::SetState { level } => {
-                sdio_wifi_pwrseq_encode_request(request_vaddr, level);
-            }
+    Some((
+        mailbox.vaddr as usize,
+        request.vaddr as usize,
+        request.paddr as u32 & 0x3fff_fff0,
+    ))
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_encode_mailbox_op(request_vaddr: usize, op: SdioWifiPwrseqMailboxOp) {
+    match op {
+        SdioWifiPwrseqMailboxOp::GetConfig => {
+            sdio_wifi_pwrseq_encode_get_config_request(request_vaddr);
         }
+        SdioWifiPwrseqMailboxOp::SetConfig { polarity } => {
+            sdio_wifi_pwrseq_encode_config_request(request_vaddr, polarity);
+        }
+        SdioWifiPwrseqMailboxOp::SetState { level } => {
+            sdio_wifi_pwrseq_encode_request(request_vaddr, level);
+        }
+    }
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_mailbox_response(
+    request_vaddr: usize,
+    op: SdioWifiPwrseqMailboxOp,
+) -> Option<u32> {
+    match op {
+        SdioWifiPwrseqMailboxOp::GetConfig => sdio_wifi_pwrseq_get_config_response(request_vaddr),
+        SdioWifiPwrseqMailboxOp::SetConfig { .. } => {
+            sdio_wifi_pwrseq_config_response_complete(request_vaddr).then_some(0)
+        }
+        SdioWifiPwrseqMailboxOp::SetState { .. } => {
+            sdio_wifi_pwrseq_response_complete(request_vaddr).then_some(0)
+        }
+    }
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_mailbox_turn(
+    cursor: &mut SdioPwrseqMailboxCursor,
+    op: SdioWifiPwrseqMailboxOp,
+) -> SdioPwrseqMailboxTurn {
+    let Some((mailbox_vaddr, request_vaddr, request_addr)) = sdio_wifi_pwrseq_mailbox_resources()
+    else {
+        return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Resource);
+    };
+    if !cursor.active() {
+        let deadline = runtime_deadline_from_millis_or_iterations(
+            PI4_WIFI_PWRSEQ_MAILBOX_TIMEOUT_MS,
+            PI4_WIFI_PWRSEQ_MAILBOX_FALLBACK_TURNS,
+        );
+        if !matches!(deadline, RuntimeDeadline::Counter { .. }) {
+            return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Timer);
+        }
+        sdio_wifi_pwrseq_encode_mailbox_op(request_vaddr, op);
         for _ in 0..PI4_WIFI_PWRSEQ_DRAIN_LIMIT {
             if sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_STATUS0)
                 & PI4_WIFI_PWRSEQ_MAILBOX_EMPTY
@@ -5592,92 +5688,64 @@ fn sdio_wifi_pwrseq_mailbox_call(op: SdioWifiPwrseqMailboxOp) -> Option<u32> {
             }
             let _ = sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_READ);
         }
-        let mut polls = 0usize;
-        let mut send_deadline = runtime_deadline_from_millis_or_iterations(
-            PI4_WIFI_PWRSEQ_WAIT_MS,
-            PI4_WIFI_PWRSEQ_WAIT_POLLS,
-        );
-        while sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_STATUS1)
-            & PI4_WIFI_PWRSEQ_MAILBOX_FULL
-            != 0
-        {
-            polls = polls.saturating_add(1);
-            if runtime_deadline_iteration_cap_reached(
-                &send_deadline,
-                polls,
-                PI4_WIFI_PWRSEQ_WAIT_POLLS,
-            ) || runtime_deadline_expired(&mut send_deadline)
+        *cursor = SdioPwrseqMailboxCursor {
+            phase: SdioPwrseqMailboxPhase::WaitSend,
+            op,
+            request_addr,
+            overall_deadline: deadline,
+        };
+    } else if cursor.op != op || cursor.request_addr != request_addr {
+        *cursor = SdioPwrseqMailboxCursor::idle();
+        return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol);
+    }
+
+    if runtime_deadline_expired(&mut cursor.overall_deadline) {
+        *cursor = SdioPwrseqMailboxCursor::idle();
+        return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Timeout);
+    }
+    match cursor.phase {
+        SdioPwrseqMailboxPhase::Idle => {
+            SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol)
+        }
+        SdioPwrseqMailboxPhase::WaitSend => {
+            if sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_STATUS1)
+                & PI4_WIFI_PWRSEQ_MAILBOX_FULL
+                != 0
             {
-                break;
+                return SdioPwrseqMailboxTurn::Pending;
             }
-            runtime_poll_pause();
+            // The primary 0xc000_0000 VC alias is the hardware-proven Pi 4
+            // property-channel address. Post this request exactly once. After
+            // publication the request page is firmware-owned until a matching
+            // reply or terminal timeout, so no alias retry may re-encode it.
+            let token =
+                cursor.request_addr | 0xc000_0000 | PI4_WIFI_PWRSEQ_MAILBOX_CHANNEL_PROPERTY;
+            sdio_wifi_pwrseq_mailbox_write(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_WRITE, token);
+            dma_store_barrier();
+            cursor.phase = SdioPwrseqMailboxPhase::WaitReply;
+            SdioPwrseqMailboxTurn::Pending
         }
-        if polls >= PI4_WIFI_PWRSEQ_WAIT_POLLS {
-            continue;
-        }
-        let token = request_addr | alias | PI4_WIFI_PWRSEQ_MAILBOX_CHANNEL_PROPERTY;
-        sdio_wifi_pwrseq_mailbox_write(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_WRITE, token);
-        dma_store_barrier();
-        polls = 0;
-        let mut recv_deadline = runtime_deadline_from_millis_or_iterations(
-            PI4_WIFI_PWRSEQ_WAIT_MS,
-            PI4_WIFI_PWRSEQ_WAIT_POLLS,
-        );
-        while !runtime_deadline_iteration_cap_reached(
-            &recv_deadline,
-            polls,
-            PI4_WIFI_PWRSEQ_WAIT_POLLS,
-        ) && !runtime_deadline_expired(&mut recv_deadline)
-        {
+        SdioPwrseqMailboxPhase::WaitReply => {
             if sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_STATUS0)
                 & PI4_WIFI_PWRSEQ_MAILBOX_EMPTY
-                == 0
+                != 0
             {
-                let reply =
-                    sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_READ);
-                if reply & 0xf == PI4_WIFI_PWRSEQ_MAILBOX_CHANNEL_PROPERTY
-                    && reply & 0x3fff_fff0 == request_addr
-                    && match op {
-                        SdioWifiPwrseqMailboxOp::GetConfig => {
-                            sdio_wifi_pwrseq_get_config_response(request_vaddr).is_some()
-                        }
-                        SdioWifiPwrseqMailboxOp::SetConfig { .. } => {
-                            sdio_wifi_pwrseq_config_response_complete(request_vaddr)
-                        }
-                        SdioWifiPwrseqMailboxOp::SetState { .. } => {
-                            sdio_wifi_pwrseq_response_complete(request_vaddr)
-                        }
-                    }
-                {
-                    return Some(match op {
-                        SdioWifiPwrseqMailboxOp::GetConfig => {
-                            sdio_wifi_pwrseq_get_config_response(request_vaddr).unwrap_or(0)
-                        }
-                        SdioWifiPwrseqMailboxOp::SetConfig { .. }
-                        | SdioWifiPwrseqMailboxOp::SetState { .. } => 0,
-                    });
-                }
+                return SdioPwrseqMailboxTurn::Pending;
             }
-            polls = polls.saturating_add(1);
-            runtime_poll_pause();
+            let reply = sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_READ);
+            if reply & 0xf != PI4_WIFI_PWRSEQ_MAILBOX_CHANNEL_PROPERTY
+                || reply & 0x3fff_fff0 != cursor.request_addr
+            {
+                return SdioPwrseqMailboxTurn::Pending;
+            }
+            let Some(value) = sdio_wifi_pwrseq_mailbox_response(request_vaddr, op) else {
+                *cursor = SdioPwrseqMailboxCursor::idle();
+                return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol);
+            };
+            *cursor = SdioPwrseqMailboxCursor::idle();
+            SdioPwrseqMailboxTurn::Complete(value)
         }
     }
-    None
-}
-
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
-fn sdio_wifi_pwrseq_get_polarity() -> Option<u32> {
-    sdio_wifi_pwrseq_mailbox_call(SdioWifiPwrseqMailboxOp::GetConfig)
-}
-
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
-fn sdio_wifi_pwrseq_configure_output_low(polarity: u32) -> bool {
-    sdio_wifi_pwrseq_mailbox_call(SdioWifiPwrseqMailboxOp::SetConfig { polarity }).is_some()
-}
-
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
-fn sdio_wifi_pwrseq_set_level(level: u32) -> bool {
-    sdio_wifi_pwrseq_mailbox_call(SdioWifiPwrseqMailboxOp::SetState { level }).is_some()
 }
 
 #[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
@@ -5687,26 +5755,41 @@ static TEST_SDIO_WIFI_PWRSEQ_LEVELS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
 static TEST_SDIO_WIFI_PWRSEQ_CONFIGS: AtomicU32 = AtomicU32::new(0);
+#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
+static TEST_SDIO_WIFI_PWRSEQ_POSTS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
-fn sdio_wifi_pwrseq_get_polarity() -> Option<u32> {
-    Some(0)
-}
-
-#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
-fn sdio_wifi_pwrseq_configure_output_low(_polarity: u32) -> bool {
-    TEST_SDIO_WIFI_PWRSEQ_CONFIGS.fetch_add(1, Ordering::AcqRel);
-    true
-}
-
-#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
-fn sdio_wifi_pwrseq_set_level(level: u32) -> bool {
-    TEST_SDIO_WIFI_PWRSEQ_CALLS.fetch_add(1, Ordering::AcqRel);
-    let _ =
-        TEST_SDIO_WIFI_PWRSEQ_LEVELS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |seen| {
-            Some((seen << 1) | (level & 1))
-        });
-    true
+fn sdio_wifi_pwrseq_mailbox_turn(
+    cursor: &mut SdioPwrseqMailboxCursor,
+    op: SdioWifiPwrseqMailboxOp,
+) -> SdioPwrseqMailboxTurn {
+    if !cursor.active() {
+        cursor.phase = SdioPwrseqMailboxPhase::WaitReply;
+        cursor.op = op;
+        TEST_SDIO_WIFI_PWRSEQ_POSTS.fetch_add(1, Ordering::AcqRel);
+        return SdioPwrseqMailboxTurn::Pending;
+    }
+    if cursor.op != op {
+        *cursor = SdioPwrseqMailboxCursor::idle();
+        return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol);
+    }
+    *cursor = SdioPwrseqMailboxCursor::idle();
+    match op {
+        SdioWifiPwrseqMailboxOp::GetConfig => SdioPwrseqMailboxTurn::Complete(0),
+        SdioWifiPwrseqMailboxOp::SetConfig { .. } => {
+            TEST_SDIO_WIFI_PWRSEQ_CONFIGS.fetch_add(1, Ordering::AcqRel);
+            SdioPwrseqMailboxTurn::Complete(0)
+        }
+        SdioWifiPwrseqMailboxOp::SetState { level } => {
+            TEST_SDIO_WIFI_PWRSEQ_CALLS.fetch_add(1, Ordering::AcqRel);
+            let _ = TEST_SDIO_WIFI_PWRSEQ_LEVELS.fetch_update(
+                Ordering::AcqRel,
+                Ordering::Acquire,
+                |seen| Some((seen << 1) | (level & 1)),
+            );
+            SdioPwrseqMailboxTurn::Complete(0)
+        }
+    }
 }
 
 fn runtime_shared_buffer_bytes(descriptor: &DriverRuntimeInitDescriptor) -> usize {
@@ -8457,7 +8540,7 @@ fn service_sdio_pwrseq_command_turn(
                 DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND)
             }
         }),
-        SdioPwrseqTurn::Fault(detail) => {
+        SdioPwrseqTurn::Fault { detail, result } => {
             if matches!(purpose, SdioPwrseqPurpose::EngineInit) {
                 SDIO_RUNTIME_STATE.with_mut(|state| state.initialized = false);
                 publish_runtime_progress(
@@ -8465,15 +8548,16 @@ fn service_sdio_pwrseq_command_turn(
                     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
                     aux0,
                 );
-                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
                     command.sequence,
                     detail,
+                    result,
                 ))
             } else {
                 RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
                     command.sequence,
                     FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
-                    u32::from(detail),
+                    (u32::from(detail) << 16) | (result & 0xffff),
                 ))
             }
         }
@@ -8489,11 +8573,11 @@ fn service_sdio_generation_reset(sequence: u32, requested: u32) -> DriverTaskCom
         match sdio_linux_wifi_power_cycle_turn() {
             SdioPwrseqTurn::Pending => {}
             SdioPwrseqTurn::Ready => return finish_sdio_generation_reset(sequence, requested),
-            SdioPwrseqTurn::Fault(detail) => {
+            SdioPwrseqTurn::Fault { detail, result } => {
                 return DriverTaskCompletionRecord::fault_with_result(
                     sequence,
                     FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
-                    u32::from(detail),
+                    (u32::from(detail) << 16) | (result & 0xffff),
                 );
             }
         }
@@ -19391,7 +19475,7 @@ fn sdio_runtime_init(
                     .then_some(DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY)
                     .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
             }
-            SdioPwrseqTurn::Fault(detail) => {
+            SdioPwrseqTurn::Fault { detail, .. } => {
                 SDIO_RUNTIME_STATE.with_mut(|state| state.initialized = false);
                 return Err(detail);
             }
@@ -29882,7 +29966,7 @@ fn sdio_arm_card_interrupt_after_init() -> bool {
 enum SdioPwrseqTurn {
     Pending,
     Ready,
-    Fault(u16),
+    Fault { detail: u16, result: u32 },
 }
 
 fn sdio_pwrseq_store_cursor(cursor: SdioPwrseqCursor) {
@@ -29891,13 +29975,33 @@ fn sdio_pwrseq_store_cursor(cursor: SdioPwrseqCursor) {
 
 fn sdio_pwrseq_fail(detail: u16) -> SdioPwrseqTurn {
     sdio_pwrseq_store_cursor(SdioPwrseqCursor::idle());
-    SdioPwrseqTurn::Fault(detail)
+    SdioPwrseqTurn::Fault { detail, result: 0 }
+}
+
+const fn sdio_pwrseq_mailbox_fault_result(fault: SdioPwrseqMailboxFault) -> u32 {
+    match fault {
+        SdioPwrseqMailboxFault::Resource => 1,
+        SdioPwrseqMailboxFault::Timer => 2,
+        SdioPwrseqMailboxFault::Timeout => 3,
+        SdioPwrseqMailboxFault::Protocol => 4,
+    }
+}
+
+fn sdio_pwrseq_mailbox_fail(detail: u16, fault: SdioPwrseqMailboxFault) -> SdioPwrseqTurn {
+    sdio_pwrseq_store_cursor(SdioPwrseqCursor::idle());
+    SdioPwrseqTurn::Fault {
+        detail,
+        result: sdio_pwrseq_mailbox_fault_result(fault),
+    }
 }
 
 fn sdio_linux_wifi_power_cycle_turn() -> SdioPwrseqTurn {
     let mut cursor = SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq);
     if !cursor.active() {
-        return SdioPwrseqTurn::Fault(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+        return SdioPwrseqTurn::Fault {
+            detail: DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED,
+            result: 0,
+        };
     }
     let sequence = cursor.sequence;
     let aux0 = cursor.aux0;
@@ -29906,28 +30010,108 @@ fn sdio_linux_wifi_power_cycle_turn() -> SdioPwrseqTurn {
             return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
         }
         SdioPwrseqPhase::GetGpioConfig => {
-            publish_runtime_progress(
-                sequence,
-                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN,
-                aux0,
-            );
-            let Some(polarity) = sdio_wifi_pwrseq_get_polarity() else {
-                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
-            };
-            cursor.gpio_polarity = polarity;
-            cursor.phase = SdioPwrseqPhase::ConfigureOutputLow;
+            if !cursor.mailbox.active() {
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN,
+                    aux0,
+                );
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_BEGIN,
+                    aux0,
+                );
+            }
+            match sdio_wifi_pwrseq_mailbox_turn(
+                &mut cursor.mailbox,
+                SdioWifiPwrseqMailboxOp::GetConfig,
+            ) {
+                SdioPwrseqMailboxTurn::Pending => {
+                    sdio_pwrseq_store_cursor(cursor);
+                    return SdioPwrseqTurn::Pending;
+                }
+                SdioPwrseqMailboxTurn::Complete(polarity) => {
+                    publish_runtime_progress(
+                        sequence,
+                        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_DONE,
+                        aux0,
+                    );
+                    cursor.gpio_polarity = polarity;
+                    cursor.phase = SdioPwrseqPhase::ConfigureOutputLow;
+                }
+                SdioPwrseqMailboxTurn::Fault(fault) => {
+                    return sdio_pwrseq_mailbox_fail(
+                        DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_GET_CONFIG_FAILED,
+                        fault,
+                    );
+                }
+            }
         }
         SdioPwrseqPhase::ConfigureOutputLow => {
-            if !sdio_wifi_pwrseq_configure_output_low(cursor.gpio_polarity) {
-                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            if !cursor.mailbox.active() {
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_BEGIN,
+                    aux0,
+                );
             }
-            cursor.phase = SdioPwrseqPhase::AssertLow;
+            match sdio_wifi_pwrseq_mailbox_turn(
+                &mut cursor.mailbox,
+                SdioWifiPwrseqMailboxOp::SetConfig {
+                    polarity: cursor.gpio_polarity,
+                },
+            ) {
+                SdioPwrseqMailboxTurn::Pending => {
+                    sdio_pwrseq_store_cursor(cursor);
+                    return SdioPwrseqTurn::Pending;
+                }
+                SdioPwrseqMailboxTurn::Complete(_) => {
+                    publish_runtime_progress(
+                        sequence,
+                        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_DONE,
+                        aux0,
+                    );
+                    cursor.phase = SdioPwrseqPhase::AssertLow;
+                }
+                SdioPwrseqMailboxTurn::Fault(fault) => {
+                    return sdio_pwrseq_mailbox_fail(
+                        DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED,
+                        fault,
+                    );
+                }
+            }
         }
         SdioPwrseqPhase::AssertLow => {
-            if !sdio_wifi_pwrseq_set_level(0) {
-                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            if !cursor.mailbox.active() {
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_BEGIN,
+                    aux0,
+                );
             }
-            cursor.phase = SdioPwrseqPhase::PowerOff;
+            match sdio_wifi_pwrseq_mailbox_turn(
+                &mut cursor.mailbox,
+                SdioWifiPwrseqMailboxOp::SetState { level: 0 },
+            ) {
+                SdioPwrseqMailboxTurn::Pending => {
+                    sdio_pwrseq_store_cursor(cursor);
+                    return SdioPwrseqTurn::Pending;
+                }
+                SdioPwrseqMailboxTurn::Complete(_) => {
+                    publish_runtime_progress(
+                        sequence,
+                        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_DONE,
+                        aux0,
+                    );
+                    cursor.phase = SdioPwrseqPhase::PowerOff;
+                }
+                SdioPwrseqMailboxTurn::Fault(fault) => {
+                    return sdio_pwrseq_mailbox_fail(
+                        DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED,
+                        fault,
+                    );
+                }
+            }
         }
         SdioPwrseqPhase::PowerOff => {
             publish_runtime_progress(
@@ -29989,15 +30173,41 @@ fn sdio_linux_wifi_power_cycle_turn() -> SdioPwrseqTurn {
             cursor.phase = SdioPwrseqPhase::ReleaseHigh;
         }
         SdioPwrseqPhase::ReleaseHigh => {
-            publish_runtime_progress(
-                sequence,
-                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN,
-                aux0,
-            );
-            if !sdio_wifi_pwrseq_set_level(1) {
-                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            if !cursor.mailbox.active() {
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN,
+                    aux0,
+                );
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_BEGIN,
+                    aux0,
+                );
             }
-            cursor.phase = SdioPwrseqPhase::ProgramStartupClock;
+            match sdio_wifi_pwrseq_mailbox_turn(
+                &mut cursor.mailbox,
+                SdioWifiPwrseqMailboxOp::SetState { level: 1 },
+            ) {
+                SdioPwrseqMailboxTurn::Pending => {
+                    sdio_pwrseq_store_cursor(cursor);
+                    return SdioPwrseqTurn::Pending;
+                }
+                SdioPwrseqMailboxTurn::Complete(_) => {
+                    publish_runtime_progress(
+                        sequence,
+                        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_DONE,
+                        aux0,
+                    );
+                    cursor.phase = SdioPwrseqPhase::ProgramStartupClock;
+                }
+                SdioPwrseqMailboxTurn::Fault(fault) => {
+                    return sdio_pwrseq_mailbox_fail(
+                        DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED,
+                        fault,
+                    );
+                }
+            }
         }
         SdioPwrseqPhase::ProgramStartupClock => {
             sdio_write8(SDHCI_TIMEOUT_CONTROL, 0x0e);
@@ -30066,7 +30276,7 @@ fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> Result<(), u16> {
                     .then_some(())
                     .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
             }
-            SdioPwrseqTurn::Fault(detail) => return Err(detail),
+            SdioPwrseqTurn::Fault { detail, .. } => return Err(detail),
         }
     }
 }
@@ -30705,6 +30915,7 @@ mod tests {
         TEST_SDIO_WIFI_PWRSEQ_CALLS.store(0, Ordering::Release);
         TEST_SDIO_WIFI_PWRSEQ_LEVELS.store(0, Ordering::Release);
         TEST_SDIO_WIFI_PWRSEQ_CONFIGS.store(0, Ordering::Release);
+        TEST_SDIO_WIFI_PWRSEQ_POSTS.store(0, Ordering::Release);
         reset_sdio_register_shadows();
         PCIE_RUNTIME_FLAGS.store(0, Ordering::Release);
         PCIE_OP_COUNT.store(0, Ordering::Release);
@@ -41232,7 +41443,10 @@ mod tests {
         });
 
         let expected = [
+            SdioPwrseqPhase::GetGpioConfig,
             SdioPwrseqPhase::ConfigureOutputLow,
+            SdioPwrseqPhase::ConfigureOutputLow,
+            SdioPwrseqPhase::AssertLow,
             SdioPwrseqPhase::AssertLow,
             SdioPwrseqPhase::PowerOff,
             SdioPwrseqPhase::WaitOff,
@@ -41240,6 +41454,7 @@ mod tests {
             SdioPwrseqPhase::ResetAllAndPowerOn,
             SdioPwrseqPhase::WaitPowerUp,
             SdioPwrseqPhase::WaitPowerUp,
+            SdioPwrseqPhase::ReleaseHigh,
             SdioPwrseqPhase::ReleaseHigh,
             SdioPwrseqPhase::ProgramStartupClock,
             SdioPwrseqPhase::WaitPostClock,
@@ -41265,6 +41480,46 @@ mod tests {
             .expect("host fallback settle must exist");
         assert!(!settle.ready());
         assert!(settle.ready());
+    }
+
+    #[test]
+    fn sdio_wifi_mailbox_posts_once_then_completes_on_a_later_turn() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut mailbox = SdioPwrseqMailboxCursor::idle();
+        let op = SdioWifiPwrseqMailboxOp::GetConfig;
+        assert_eq!(
+            sdio_wifi_pwrseq_mailbox_turn(&mut mailbox, op),
+            SdioPwrseqMailboxTurn::Pending
+        );
+        assert!(mailbox.active());
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_POSTS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            sdio_wifi_pwrseq_mailbox_turn(&mut mailbox, op),
+            SdioPwrseqMailboxTurn::Complete(0)
+        );
+        assert!(!mailbox.active());
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_POSTS.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn sdio_wifi_mailbox_fault_result_preserves_phase_reason() {
+        assert_eq!(
+            sdio_pwrseq_mailbox_fault_result(SdioPwrseqMailboxFault::Resource),
+            1
+        );
+        assert_eq!(
+            sdio_pwrseq_mailbox_fault_result(SdioPwrseqMailboxFault::Timer),
+            2
+        );
+        assert_eq!(
+            sdio_pwrseq_mailbox_fault_result(SdioPwrseqMailboxFault::Timeout),
+            3
+        );
+        assert_eq!(
+            sdio_pwrseq_mailbox_fault_result(SdioPwrseqMailboxFault::Protocol),
+            4
+        );
     }
 
     #[test]

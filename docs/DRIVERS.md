@@ -975,7 +975,13 @@ SDIO engine-init completion details are part of the isolated runtime ABI: succes
 returns `0x5500` (`ready`), and faults preserve the exact subgate as
 `0x5510` (`reset-all-failed`), `0x5511`
 (`reset-cmd-data-failed`), `0x5512` (`clock-failed`), or `0x5513`
-(`inhibit-failed`), plus `0x5515` (`wifi-pwrseq-failed`). Root projects those details through
+(`inhibit-failed`), plus `0x5515` (`wifi-pwrseq-failed`), `0x5516`
+(`wifi-pwrseq-get-config-failed`), `0x5517`
+(`wifi-pwrseq-set-config-failed`), `0x5518`
+(`wifi-pwrseq-assert-low-failed`), and `0x5519`
+(`wifi-pwrseq-release-high-failed`). The completion result distinguishes
+missing resources, missing counter authority, elapsed deadline, and malformed
+firmware response. Root projects those details through
 `SDIO_DRIVER_TASK_REPLAY_STATUS ... stage=engine-init blocker=<status>
 owner=linked-runtime proof_effect=<effect> next_action=<action>` and
 `DRIVER_TASK_RESOURCE_INIT ... stage=sdio-engine-init status=<status>
@@ -1666,6 +1672,13 @@ context and the retry/poll window.
   ABI returns GPIO zero on success rather than echoing GPIO 129, so the owner
   validates that zero token, obtains the existing expander polarity with
   GET_GPIO_CONFIG, and preserves it in SET_GPIO_CONFIG exactly as Linux does.
+  Each firmware-property operation is a retained mailbox cursor: it encodes
+  and posts the proven Pi 4 VC address once, leaves the request page
+  firmware-owned, samples at most one reply per service turn, and terminates on
+  a 500 ms virtual-counter deadline. Root retains the same engine-init request
+  through a finite phase-specific envelope and cannot replace the request page
+  while firmware owns it. There is no synchronous spin, address-alias retry,
+  state-only GPIO path, confirm-read path, or root mailbox fallback.
   The fixed 2 ms, 10 ms, and 10 ms intervals use the exported virtual counter;
   no service turn waits through an interval, and the SDIO contract remains
   bounded at 20 ms. That first

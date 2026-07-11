@@ -106,8 +106,13 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED, DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED, DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
-    DRIVER_RUNTIME_SDIO_RESP_NONE, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_GET_CONFIG_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED,
+    DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG, DRIVER_RUNTIME_SDIO_RESP_NONE,
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
 };
 
 const GENET_DRIVER_TASK_MAC: EthernetAddress =
@@ -3041,6 +3046,18 @@ const fn sdio_engine_init_detail_status(detail: u16) -> Option<&'static str> {
             Some("resource-check-failed")
         }
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED => Some("wifi-pwrseq-failed"),
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_GET_CONFIG_FAILED => {
+            Some("wifi-pwrseq-get-config-failed")
+        }
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED => {
+            Some("wifi-pwrseq-set-config-failed")
+        }
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED => {
+            Some("wifi-pwrseq-assert-low-failed")
+        }
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED => {
+            Some("wifi-pwrseq-release-high-failed")
+        }
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED => Some("reset-all-failed"),
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED => Some("reset-cmd-data-failed"),
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED => Some("clock-failed"),
@@ -28815,6 +28832,30 @@ mod tests {
         assert_eq!(
             sdio_engine_init_detail_status(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED),
             Some("wifi-pwrseq-failed")
+        );
+        assert_eq!(
+            sdio_engine_init_detail_status(
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_GET_CONFIG_FAILED,
+            ),
+            Some("wifi-pwrseq-get-config-failed")
+        );
+        assert_eq!(
+            sdio_engine_init_detail_status(
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED,
+            ),
+            Some("wifi-pwrseq-set-config-failed")
+        );
+        assert_eq!(
+            sdio_engine_init_detail_status(
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED,
+            ),
+            Some("wifi-pwrseq-assert-low-failed")
+        );
+        assert_eq!(
+            sdio_engine_init_detail_status(
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED,
+            ),
+            Some("wifi-pwrseq-release-high-failed")
         );
         assert_eq!(
             sdio_engine_init_detail_status(

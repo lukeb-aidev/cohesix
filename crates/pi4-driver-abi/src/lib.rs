@@ -357,6 +357,14 @@ pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED: u16 = 0x5513;
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR: u16 = 0x5514;
 /// SDIO engine-init detail: the manifest-declared Pi 4 WL_ON power sequence failed.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED: u16 = 0x5515;
+/// SDIO engine-init detail: firmware GET_GPIO_CONFIG did not complete successfully.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_GET_CONFIG_FAILED: u16 = 0x5516;
+/// SDIO engine-init detail: firmware SET_GPIO_CONFIG did not complete successfully.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED: u16 = 0x5517;
+/// SDIO engine-init detail: firmware SET_GPIO_STATE low did not complete successfully.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED: u16 = 0x5518;
+/// SDIO engine-init detail: firmware SET_GPIO_STATE high did not complete successfully.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED: u16 = 0x5519;
 /// SDIO response kind: no response.
 pub const DRIVER_RUNTIME_SDIO_RESP_NONE: u8 = 0;
 /// SDIO response kind: OCR/R4 response.
@@ -1202,6 +1210,22 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE: u32 = 435;
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN: u32 = 436;
 /// SDIO owner completed the bounded Pi 4 WL_ON high/startup interval.
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE: u32 = 437;
+/// SDIO owner started a retained firmware GET_GPIO_CONFIG transaction.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_BEGIN: u32 = 438;
+/// SDIO owner completed the retained firmware GET_GPIO_CONFIG transaction.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_DONE: u32 = 439;
+/// SDIO owner started a retained firmware SET_GPIO_CONFIG transaction.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_BEGIN: u32 = 440;
+/// SDIO owner completed the retained firmware SET_GPIO_CONFIG transaction.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_DONE: u32 = 441;
+/// SDIO owner started a retained firmware SET_GPIO_STATE-low transaction.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_BEGIN: u32 = 442;
+/// SDIO owner completed the retained firmware SET_GPIO_STATE-low transaction.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_DONE: u32 = 443;
+/// SDIO owner started a retained firmware SET_GPIO_STATE-high transaction.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_BEGIN: u32 = 444;
+/// SDIO owner completed the retained firmware SET_GPIO_STATE-high transaction.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_DONE: u32 = 445;
 /// Runtime recognized an engine-init aux word before entering the handler.
 pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH: u32 = 34;
 /// Runtime entered the engine-init handler.

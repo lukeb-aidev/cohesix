@@ -304,7 +304,15 @@ wait, release-high, startup-clock, 10 ms wait, and finalize phases one turn at
 a time. Pending turns publish no completion or owner notification, wait phases
 must not repeat physical writes, firmware GPIO success requires the returned
 zero GPIO token, and generation reset must remain poisoned/masked with no
-pending epoch until the terminal phase.
+pending epoch until the terminal phase. Each GET_CONFIG, SET_CONFIG,
+ASSERT_LOW, and RELEASE_HIGH firmware-property operation must post exactly
+once, retain the DMA request page across later reply-poll turns, use a
+virtual-counter deadline, and publish distinct begin/done progress plus an
+operation-specific terminal detail. Root must extend same-request retention
+only while one of those exact begin phases is current; mismatched sequence,
+aux, contract, mode, done phase, or unrelated progress retains the ordinary
+SDIO bound. Tests must prove timeout retention cannot permit a new request to
+replace the firmware-owned page.
 
 Host tests must prove the fixed-layout pointer-free command/completion records remain primitive-only and bounded, including primitive aux fields for service-turn arguments, nonzero-progress/frame-ready-only hot-path credit, owner-state descriptor rejection when the matching runtime spec is not acceptance-eligible, owner-state acceptance requiring the explicit owner hot-path mask plus acceptance-eligible runtime images, the separate root-context diagnostic versus pointer-free selector registration classes, the common `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit forced onto transitional root-context ring commands, and the one-way command flag used by send-only bootstrap/background turns so isolated runtimes do not call `Reply` without a reply cap. Runtime-init records must carry primitive MMIO/DMA/shared physical page metadata, fixed virtual bases, semantic resource ranges for large apertures and large buffer arenas, bus-address policy, optional IRQ descriptors, optional bus-link descriptors, and framebuffer metadata without root pointers.
 

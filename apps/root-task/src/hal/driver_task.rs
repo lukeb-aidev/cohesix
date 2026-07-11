@@ -147,10 +147,18 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
@@ -2129,6 +2137,10 @@ const DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 256;
 const DRIVER_TASK_USB_ENUM_HUB_EVENT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 1024;
 const DRIVER_TASK_PCIE_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 8;
+// The Pi firmware property call historically required a bounded 500 ms
+// hardware envelope. The SDIO owner now samples it in 20 ms-class service
+// turns; retain twice the derived 25-turn minimum plus scheduling margin.
+const DRIVER_TASK_SDIO_PWRSEQ_MAILBOX_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 64;
 const DRIVER_TASK_NET_ENGINE_INIT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 64;
 const DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 512;
@@ -5979,6 +5991,30 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE => "sdio-wl-on-low-done",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN => "sdio-wl-on-high-begin",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE => "sdio-wl-on-high-done",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_BEGIN => {
+            "sdio-wl-on-get-config-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_DONE => {
+            "sdio-wl-on-get-config-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_BEGIN => {
+            "sdio-wl-on-set-config-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_DONE => {
+            "sdio-wl-on-set-config-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_BEGIN => {
+            "sdio-wl-on-assert-low-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_DONE => {
+            "sdio-wl-on-assert-low-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_BEGIN => {
+            "sdio-wl-on-release-high-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_DONE => {
+            "sdio-wl-on-release-high-done"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_BEGIN => "cyw43-transport-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_READY => "cyw43-bus-link-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_ADOPT_BEGIN => "cyw43-card-adopt-begin",
@@ -6635,6 +6671,13 @@ fn driver_task_ring_timeout_keep_active_limit_for_progress(
         } else {
             limit
         }
+    } else if limit == DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT
+        && cached_driver_task_ring_progress_matches_request(slot, request, command.aux0)
+        && driver_task_ring_sdio_pwrseq_mailbox_phase(
+            slot.last_progress_phase.load(Ordering::Acquire),
+        )
+    {
+        DRIVER_TASK_SDIO_PWRSEQ_MAILBOX_TIMEOUT_KEEP_ACTIVE_LIMIT
     } else if limit == DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT
         && cached_driver_task_ring_progress_matches_request(slot, request, command.aux0)
         && driver_task_ring_cyw43_sdio_owner_phase(slot.last_progress_phase.load(Ordering::Acquire))
@@ -6654,6 +6697,17 @@ fn driver_task_ring_timeout_keep_active_limit_for_progress(
     } else {
         limit
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_sdio_pwrseq_mailbox_phase(phase: u32) -> bool {
+    matches!(
+        phase,
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_BEGIN
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -11913,6 +11967,189 @@ mod tests {
             command,
             DriverTaskRingCommandMode::NonBlocking
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_pwrseq_mailbox_progress_extends_the_same_engine_request() {
+        let command = runtime_engine_init_command(
+            DriverTaskHotPath::SdioHost,
+            DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
+        );
+        let request = 23;
+        for (phase, label) in [
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_BEGIN,
+                "sdio-wl-on-get-config-begin",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_BEGIN,
+                "sdio-wl-on-set-config-begin",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_BEGIN,
+                "sdio-wl-on-assert-low-begin",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_BEGIN,
+                "sdio-wl-on-release-high-begin",
+            ),
+        ] {
+            let slot = DriverTaskCommandSlot::new();
+            record_driver_task_ring_progress(
+                &slot,
+                DriverTaskRingProgressRecord {
+                    magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                    sequence: request,
+                    phase,
+                    aux0: command.aux0,
+                },
+            );
+            assert!(driver_task_ring_sdio_pwrseq_mailbox_phase(phase));
+            assert_eq!(driver_task_ring_progress_phase_label(phase), label);
+            assert_eq!(
+                driver_task_ring_timeout_keep_active_limit_for_progress(
+                    &slot,
+                    SDIO_HOST_DRIVER_TASK_CONTRACT,
+                    command,
+                    DriverTaskRingCommandMode::NonBlocking,
+                    request,
+                ),
+                DRIVER_TASK_SDIO_PWRSEQ_MAILBOX_TIMEOUT_KEEP_ACTIVE_LIMIT
+            );
+        }
+        assert!(
+            DRIVER_TASK_SDIO_PWRSEQ_MAILBOX_TIMEOUT_KEEP_ACTIVE_LIMIT
+                > DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_pwrseq_mailbox_extension_rejects_stale_or_terminal_progress() {
+        let command = runtime_engine_init_command(
+            DriverTaskHotPath::SdioHost,
+            DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
+        );
+        let request = 29;
+        for phase in [
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_DONE,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_SET_CONFIG_DONE,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_ASSERT_LOW_DONE,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_RELEASE_HIGH_DONE,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN,
+        ] {
+            let slot = DriverTaskCommandSlot::new();
+            record_driver_task_ring_progress(
+                &slot,
+                DriverTaskRingProgressRecord {
+                    magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                    sequence: request,
+                    phase,
+                    aux0: command.aux0,
+                },
+            );
+            assert!(!driver_task_ring_sdio_pwrseq_mailbox_phase(phase));
+            assert_eq!(
+                driver_task_ring_timeout_keep_active_limit_for_progress(
+                    &slot,
+                    SDIO_HOST_DRIVER_TASK_CONTRACT,
+                    command,
+                    DriverTaskRingCommandMode::NonBlocking,
+                    request,
+                ),
+                DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT
+            );
+        }
+
+        let stale_slot = DriverTaskCommandSlot::new();
+        record_driver_task_ring_progress(
+            &stale_slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request.wrapping_sub(1),
+                phase: DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_BEGIN,
+                aux0: command.aux0,
+            },
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &stale_slot,
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking,
+                request,
+            ),
+            DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &stale_slot,
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::Steady,
+                request,
+            ),
+            0
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_pwrseq_mailbox_retention_is_finite_and_exact() {
+        let command = runtime_engine_init_command(
+            DriverTaskHotPath::SdioHost,
+            DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
+        );
+        let request = 31;
+        let slot = DriverTaskCommandSlot::new();
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_GET_CONFIG_BEGIN,
+                aux0: command.aux0,
+            },
+        );
+        for expected_count in 1..DRIVER_TASK_SDIO_PWRSEQ_MAILBOX_TIMEOUT_KEEP_ACTIVE_LIMIT {
+            assert_eq!(
+                driver_task_ring_timeout_keep_decision(
+                    &slot,
+                    SDIO_HOST_DRIVER_TASK_CONTRACT,
+                    command,
+                    DriverTaskRingCommandMode::NonBlocking,
+                    request,
+                    false,
+                ),
+                (true, expected_count)
+            );
+        }
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking,
+                request,
+                false,
+            ),
+            (
+                false,
+                DRIVER_TASK_SDIO_PWRSEQ_MAILBOX_TIMEOUT_KEEP_ACTIVE_LIMIT
+            )
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking,
+                request,
+                true,
+            ),
+            (true, 0)
+        );
     }
 
     #[cfg(feature = "kernel")]

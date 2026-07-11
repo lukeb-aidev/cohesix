@@ -12004,6 +12004,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_exact = wifi_blocker
     if wifi_blocker == "runtime-power-reset" and not (
         wifi_exact == "wifi-pwrseq-failed"
+        or (
+            wifi_exact.startswith("wifi-pwrseq-")
+            and wifi_exact.endswith("-failed")
+        )
         or wifi_exact.startswith("sdio-wl-on-")
     ):
         wifi_exact = wifi_blocker
@@ -13169,8 +13173,10 @@ def classify_sdio_replay_gate(replay_blocker: str) -> tuple[int, str, str, str]:
     ):
         return 2, "sdio-card-select", f"{stage}-{status}", stage
     if stage == "engine-init":
-        if status == "wifi-pwrseq-failed":
-            return 1, "wifi-pwrseq-failed", status, stage
+        if status == "wifi-pwrseq-failed" or (
+            status.startswith("wifi-pwrseq-") and status.endswith("-failed")
+        ):
+            return 1, status, status, stage
         blocker = f"sdio-engine-init-{status}"
         return 2, blocker, blocker, stage
     if stage in {"hal-resource-prep", "descriptor-replay"}:
