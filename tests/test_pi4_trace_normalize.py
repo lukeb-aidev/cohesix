@@ -3302,6 +3302,26 @@ def test_gate_summary_tracks_driver_task_bootstrap_deferred() -> None:
     assert record["DRIVER_TASK_BOOTSTRAP_DEFERRED"] == 1
 
 
+def test_wifi_diagnostic_wrapper_does_not_replace_runtime_power_exact() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 1 name=runtime-power-reset status=fail "
+            "evidence=power=unknown reset=unknown pwrseq_status=unknown "
+            "pwrseq_phase=none source=hal-runtime-required next=sdio-card-select",
+            "wifi: next_action=verify-linked-runtime-power-reset-resources "
+            "blocker=wifi-power-reset proof_gate=0 target_gate=10 "
+            "source=hal-runtime-required",
+            "ERR WIFI reason=policy detail=subcommand=probe-ht "
+            "error=pi4-wifi-driver-task-runtime-required "
+            "source=linked-runtime-replay-failure",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_BLOCKER"] == "runtime-power-reset"
+    assert record["WIFI_EXACT"] == "runtime-power-reset"
+
+
 def test_gate_summary_tracks_driver_task_resource_init_blocker() -> None:
     events = normalizer.parse_events(
         [
@@ -3955,31 +3975,49 @@ def test_gate_summary_reports_exact_sdio_engine_init_subfault() -> None:
     assert record["WIFI_PHASE"] == "engine-init"
 
 
-def test_gate_summary_preserves_sdio_adopt_progress_blocker() -> None:
+def test_gate_summary_preserves_sdio_wl_on_progress_blocker() -> None:
     events = normalizer.parse_events(
         [
             "wifi: sdio linked_runtime_progress marker_valid=yes sequence=2 "
-            "phase=85 phase_name=sdio-adopt-present-read-begin "
-            "aux0=0x454e474e gate=2 blocker=sdio-adopt-present-read-no-reply "
-            "next_action=inspect-sdhci-present-state-read",
+            "phase=435 phase_name=sdio-wifi-pwrseq-low-done "
+            "aux0=0x454e474e gate=1 "
+            "blocker=sdio-wl-on-low-host-reset-no-reply "
+            "next_action=inspect-sdhci-all-reset-after-wl-on-low",
             "wifi: gate 1 name=hal-power-reset status=inferred "
-            "evidence=power=unknown reset=unknown source=hal-runtime-required "
+            "evidence=power=unknown reset=unknown pwrseq_status=no-reply "
+            "pwrseq_phase=sdio-wifi-pwrseq-low-done source=hal-runtime-required "
             "next=sdio-card-select",
             "wifi: gate 2 name=sdio-card-select status=fail "
-            "evidence=stage=engine-init status=no-reply phase=85 "
-            "phase_name=sdio-adopt-present-read-begin marker_valid=yes "
+            "evidence=stage=engine-init status=no-reply phase=435 "
+            "phase_name=sdio-wifi-pwrseq-low-done marker_valid=yes "
             "source=linked-runtime next=cccr-fbr-ready",
-            "wifi: next_action=inspect-sdhci-present-state-read "
-            "blocker=sdio-adopt-present-read-no-reply proof_gate=1 "
+            "wifi: next_action=inspect-sdhci-all-reset-after-wl-on-low "
+            "blocker=sdio-wl-on-low-host-reset-no-reply proof_gate=0 "
             "target_gate=10 source=hal-runtime-required",
         ]
     )
 
     record = normalizer.summarize_gates(events).to_record()
     assert record["WIFI_GATE"] == 1
-    assert record["WIFI_BLOCKER"] == "sdio-adopt-present-read-no-reply"
-    assert record["WIFI_EXACT"] == "sdio-adopt-present-read-no-reply"
-    assert record["WIFI_PHASE"] == "sdio-adopt-present-read-no-reply"
+    assert record["WIFI_BLOCKER"] == "sdio-wl-on-low-host-reset-no-reply"
+    assert record["WIFI_EXACT"] == "sdio-wl-on-low-host-reset-no-reply"
+    assert record["WIFI_PHASE"] == "sdio-wl-on-low-host-reset-no-reply"
+
+
+def test_gate_summary_reports_wifi_pwrseq_engine_init_failure_at_gate_one() -> None:
+    events = normalizer.parse_events(
+        [
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=engine-init "
+            "blocker=wifi-pwrseq-failed",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "wifi-pwrseq-failed"
+    assert record["WIFI_EXACT"] == "wifi-pwrseq-failed"
+    assert record["WIFI_PHASE"] == "engine-init"
 
 
 def test_gate_summary_preserves_sdio_hardware_entry_progress_blocker() -> None:

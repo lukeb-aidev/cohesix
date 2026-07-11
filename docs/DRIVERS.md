@@ -949,9 +949,9 @@ CARD_COMMAND and HOST_CONFIG turns for the proven card select and card/host
 4-bit/high-speed transition, but it must not write SDHCI host-control registers
 directly. Root may replay the SDIO owner descriptor, initialize the owner engine,
 and prove owner-state; it must not run a root-owned SDIO card-init ladder.
-SDIO descriptor replay and engine-init remain bounded prompt-safe turns, but
+SDIO descriptor replay and engine-init remain finite boot/recovery turns, but
 root keeps the active ring request across no-reply resume slices so a
-still-running isolated SDIO adoption/reset turn is not overwritten before it
+  still-running isolated SDIO power/reset turn is not overwritten before it
 returns ready or is explicitly reset. For payload-bearing SDIO/CYW43 turns, the
 active identity includes the staged descriptor and payload bytes; a changed
 descriptor, firmware/NVRAM chunk, SDIO owner payload, or shared-buffer segment is
@@ -973,10 +973,9 @@ BCDC id. An unresolved steady-state transport slice does not spend the logical
 host-EAPOL RX poll or allocate a new BCDC id.
 SDIO engine-init completion details are part of the isolated runtime ABI: success
 returns `0x5500` (`ready`), and faults preserve the exact subgate as
-`0x5501` (`adopt-power-missing`), `0x5502` (`adopt-clock-failed`), `0x5503`
-(`adopt-inhibit-failed`), `0x5510` (`reset-all-failed`), `0x5511`
+`0x5510` (`reset-all-failed`), `0x5511`
 (`reset-cmd-data-failed`), `0x5512` (`clock-failed`), or `0x5513`
-(`inhibit-failed`). Root projects those details through
+(`inhibit-failed`), plus `0x5515` (`wifi-pwrseq-failed`). Root projects those details through
 `SDIO_DRIVER_TASK_REPLAY_STATUS ... stage=engine-init blocker=<status>
 owner=linked-runtime proof_effect=<effect> next_action=<action>` and
 `DRIVER_TASK_RESOURCE_INIT ... stage=sdio-engine-init status=<status>
@@ -1652,10 +1651,24 @@ context and the retry/poll window.
   A quarantined firmware/DPC generation cannot reuse the selected-card
   lifetime. Linux programs `CARDCTRL.WLANRESET` and
   `PMUCONTROL.RES_RELOAD` so its MMC card-reset edge also resets the WLAN
-  backplane and reloads PMU state. Cohesix performs that same reset through the
-  sole linked SDIO owner: after masking CARD_INT it clears CCCR `IENx`, aborts
-  Function 2, reads CCCR `ABORT`, writes the read value ORed with `RES=0x08`,
-  and fails closed if either CMD52 operation is not proved complete. That first
+  backplane and reloads PMU state. Linux recovery then calls `mmc_hw_reset`,
+  whose SDIO implementation power-cycles and reinitializes the card; mainline
+  Pi 4 binds that power sequence to expander `WL_ON`. Cohesix performs the same
+  board-lifetime transition through the sole linked SDIO owner: after masking
+  CARD_INT and poisoning the old DPC generation, it configures firmware-expander
+  GPIO 129 as an output, asserts WL_ON low, disables SDHCI clock and slot power,
+  holds the Linux off interval, restores slot power while WL_ON remains low,
+  waits 10 ms, deasserts WL_ON, enables the 400 kHz startup clock, and waits a
+  further 10 ms before card enumeration. No CCCR response from the old firmware
+  is required before physical reset. The SDIO runtime retains that sequence as
+  one phase cursor: firmware GET/SET GPIO calls, clock/power actions, and each
+  counter-deadline observation are separate service turns. The firmware GPIO
+  ABI returns GPIO zero on success rather than echoing GPIO 129, so the owner
+  validates that zero token, obtains the existing expander polarity with
+  GET_GPIO_CONFIG, and preserves it in SET_GPIO_CONFIG exactly as Linux does.
+  The fixed 2 ms, 10 ms, and 10 ms intervals use the exported virtual counter;
+  no service turn waits through an interval, and the SDIO contract remains
+  bounded at 20 ms. That first
   typed operation records only a quarantined pending epoch; the old poisoned
   ring remains current and CARD_INT remains masked. Receipt of that exact
   linked-owner completion re-establishes the CYW43 runtime's logical
@@ -2890,12 +2903,25 @@ edge behavior.
 
 Required Cohesix shape:
 
-- The isolated CYW43 runtime owns Wi-Fi protocol state, CYW43 power/reset state,
-  firmware/NVRAM/CLM staging, SDPCM, CDC/BDC, association, and Ethernet
-  dataplane.
-- `sdio-host` owns the HAL-declared SDHCI MMIO page for acceptance-eligible
+- The isolated CYW43 runtime owns Wi-Fi protocol state, coordinates the
+  generation boundary, and owns firmware/NVRAM/CLM staging, SDPCM, CDC/BDC,
+  association, and the Ethernet dataplane.
+- The isolated SDIO runtime owns the physical CYW43 WL_ON/card-power and SDHCI
+  reset state.
+- `sdio-host` owns the HAL-declared SDHCI MMIO page, the noncontiguous Pi
+  firmware-mailbox page, and one private low uncached request page for the
+  fixed GPIO129 WL_ON contract. Root hands mailbox authority to SDIO once only
+  after PCIe link/root-complex readiness and interrupt-source masking prove that
+  boot-only PCIe/VL805 mailbox calls are complete; every later root mailbox
+  request is rejected. If root already preseeded the mailbox page for those
+  boot-only calls, HAL copies that cached admitted frame capability into the
+  SDIO VSpace; it never demands a second device-untyped retype and never grants
+  the child an unadmitted physical mapping.
+  `sdio-host` uses those resources for acceptance-eligible
   CARD_COMMAND/CMD52/CMD53/HOST_CONFIG/POLL_IRQ service turns behind the
   declared CYW43-to-SDIO boundary.
+- The CYW43 runtime has no direct-SDHCI fallback. A missing sealed bus link or
+  exact generated SDIO IRQ/DPC route fails closed before card enumeration.
 - Root does not issue SDIO card-select commands. CYW43 submits CMD0/CMD5/CMD3
   and CMD7 through the pointer-free SDIO owner descriptor during transport init,
   preserving nested SDHCI present-state, interrupt-status, response, host

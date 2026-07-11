@@ -10279,8 +10279,8 @@ where
         } else {
             cyw43_fault_gate
                 .or(cyw43_progress_gate)
-                .or(sdio_replay_gate)
                 .or(sdio_progress_gate)
+                .or(sdio_replay_gate)
         };
         let live_net_channel_ready = live_net_supersedes_runtime;
         let power_ready = live_net_channel_ready
@@ -10316,12 +10316,10 @@ where
                     || trace.backplane_window_mid != 0
                     || trace.backplane_window_high != 0
             });
-        let release_preconditions_passed = fault.is_some_and(|fault| {
-            fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
-                && fault.result > pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN
-        });
+        let release_fault_after_upload =
+            fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_uploaded);
         let firmware_uploaded = live_net_channel_ready
-            || release_preconditions_passed
+            || release_fault_after_upload
             || firmware_trace
                 .and_then(|trace| trace.proof)
                 .is_some_and(|proof| proof.upload_state == "uploaded" || proof.verified);
@@ -10393,6 +10391,10 @@ where
             exact_error
         } else if let Some(fault) = fault {
             fault.reason
+        } else if let Some(progress) =
+            sdio_runtime_progress.filter(|_| sdio_progress_gate == Some(1))
+        {
+            Self::wifi_sdio_runtime_progress_blocker(progress.phase)
         } else if let (Some(status), Some(_)) = (sdio_runtime_status, sdio_replay_gate) {
             Self::wifi_sdio_runtime_replay_blocker(status)
         } else if let Some(progress) = cyw43_runtime_progress {
@@ -10412,6 +10414,10 @@ where
             "inspect-host-eapol-rx-path"
         } else if let Some(fault) = fault {
             Self::wifi_runtime_fault_next_action(fault)
+        } else if let Some(progress) =
+            sdio_runtime_progress.filter(|_| sdio_progress_gate == Some(1))
+        {
+            Self::wifi_sdio_runtime_progress_next_action(progress.phase)
         } else if let (Some(status), Some(_)) = (sdio_runtime_status, sdio_replay_gate) {
             Self::wifi_sdio_runtime_replay_next_action(status)
         } else if let Some(progress) = cyw43_runtime_progress {
@@ -10507,8 +10513,12 @@ where
             "runtime-power-reset",
             Self::wifi_startup_gate_status(1, proof_gate, failing_gate),
             format_args!(
-                "power={} reset={} source={}",
-                gate1_power, gate1_reset, source,
+                "power={} reset={} pwrseq_status={} pwrseq_phase={} source={}",
+                gate1_power,
+                gate1_reset,
+                sdio_runtime_status.map_or("unknown", |status| status.status),
+                sdio_runtime_progress.map_or("none", |progress| progress.phase_name),
+                source,
             ),
             "sdio-card-select",
         );
@@ -10828,6 +10838,9 @@ where
         if matches!(status.status, "ready" | "preserved-ready") {
             return None;
         }
+        if status.stage == "engine-init" && status.status == "wifi-pwrseq-failed" {
+            return Some(1);
+        }
         match status.stage {
             "descriptor-replay" => Some(1),
             "engine-init" | "owner-state" | "sdio-card-init-restart" => Some(2),
@@ -10849,6 +10862,9 @@ where
     fn wifi_sdio_runtime_replay_blocker(
         status: crate::drivers::driver_task_net::SdioRuntimeReplayStatus,
     ) -> &'static str {
+        if status.stage == "engine-init" && status.status == "wifi-pwrseq-failed" {
+            return "wifi-pwrseq-failed";
+        }
         if status.stage == "engine-init" && status.status == "no-reply" {
             return "sdio-engine-init-no-reply";
         }
@@ -10871,6 +10887,9 @@ where
     fn wifi_sdio_runtime_replay_next_action(
         status: crate::drivers::driver_task_net::SdioRuntimeReplayStatus,
     ) -> &'static str {
+        if status.stage == "engine-init" && status.status == "wifi-pwrseq-failed" {
+            return "inspect-sdio-owned-mailbox-wl-on-low-high";
+        }
         match status.stage {
             "descriptor-replay" => "verify-linked-sdio-runtime-descriptor-replay",
             "engine-init" => "inspect-linked-sdio-runtime-engine-init-dispatch",
@@ -10883,6 +10902,10 @@ where
     #[cfg(feature = "kernel")]
     const fn wifi_sdio_runtime_progress_gate(phase: u32) -> Option<u8> {
         match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE => Some(1),
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
@@ -10918,12 +10941,6 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN
@@ -11011,23 +11028,19 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY => {
                 "sdio-sdhci-mmio-entry-no-reply"
             }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN => "sdio-adopt-no-reply",
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN => {
-                "sdio-adopt-int-clear-no-reply"
-            }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN => {
-                "sdio-adopt-present-read-no-reply"
-            }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING => {
-                "sdio-adopt-power-missing"
-            }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED => {
-                "sdio-adopt-clock-failed"
-            }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED => {
-                "sdio-adopt-inhibit-failed"
-            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN => "sdio-reset-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN => {
+                "sdio-wl-on-low-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE => {
+                "sdio-wl-on-low-host-reset-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN => {
+                "sdio-wl-on-high-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE => {
+                "sdio-wl-on-post-clock-inhibit-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN => {
                 "sdio-reset-clock-disable-no-reply"
             }
@@ -11119,26 +11132,20 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY => {
                 "inspect-sdhci-first-mmio-access"
             }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN => {
-                "inspect-sdhci-adopt-first-mmio-access"
-            }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN => {
-                "inspect-sdhci-interrupt-status-clear"
-            }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN => {
-                "inspect-sdhci-present-state-read"
-            }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING => {
-                "inspect-sdhci-power-and-card-present-state"
-            }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED => {
-                "inspect-sdhci-startup-clock-enable"
-            }
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED => {
-                "inspect-sdhci-command-data-inhibit-clear"
-            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN => {
                 "inspect-sdhci-reset-completion-loop"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN => {
+                "inspect-sdio-owned-mailbox-wl-on-low"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE => {
+                "inspect-sdhci-all-reset-after-wl-on-low"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN => {
+                "inspect-sdio-owned-mailbox-wl-on-high"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE => {
+                "inspect-post-clock-command-data-inhibit"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN => {
                 "inspect-sdhci-clock-disable-write"
@@ -11668,7 +11675,7 @@ where
             0x5326 => "verify-linked-sdio-cmd5-ready-ocr",
             0x5327 => "verify-linked-sdio-cmd3-rca",
             0x5328 => "verify-linked-sdio-cmd7-select",
-            0x532a => "verify-card-reset-and-reenumeration-before-generation-reload",
+            0x532a => "inspect-linux-post-release-power-ht-transition",
             0x5333 | 0x5334 => "inspect-probe-pmucontrol-cmd52-word-primary",
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
             0x5331..=0x5336 => "inspect-linux-probe-attach-state",
@@ -11748,6 +11755,17 @@ where
             || Self::wifi_runtime_fault_is_transport_no_reply(fault)
             || Self::wifi_runtime_fault_is_firmware_stream(fault)
             || fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_runtime_fault_implies_firmware_uploaded(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> bool {
+        // RELEASE is admitted only after the bounded firmware stream, normalized
+        // NVRAM stream, and tail publication have completed. The result field on
+        // a release fault carries register/fault evidence (for example 0x50 at
+        // the post-release HT wait), not a runtime progress-phase identifier.
+        fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
     }
 
     #[cfg(feature = "kernel")]
@@ -15641,7 +15659,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn wifi_ht_fault_routes_to_card_reset_and_reenumeration_proof() {
+    fn wifi_ht_fault_reports_linux_post_release_power_ht_frontier() {
         type TestPump<'a> = EventPump<
             'a,
             LoopbackSerial<16>,
@@ -15653,9 +15671,99 @@ mod tests {
             DEFAULT_LINE_CAPACITY,
         >;
 
+        let fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-release",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x532a,
+            reason: "cyw43-post-release-ht-clock",
+            result: 0x50,
+        };
+
+        assert_eq!(TestPump::wifi_runtime_fault_gate(fault), 7);
+        assert!(TestPump::wifi_runtime_fault_implies_firmware_uploaded(
+            fault
+        ));
+        assert_eq!(
+            TestPump::wifi_runtime_fault_next_action(fault),
+            "inspect-linux-post-release-power-ht-transition"
+        );
         assert_eq!(
             TestPump::wifi_cyw43_fault_next_action(0x532a),
-            "verify-card-reset-and-reenumeration-before-generation-reload"
+            "inspect-linux-post-release-power-ht-transition"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_ht_fault_rendering_preserves_completed_upload_frontier() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let sdio = crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT;
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(cyw43);
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(sdio);
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-release",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x532a,
+            reason: "cyw43-post-release-ht-clock",
+            result: 0x50,
+        };
+
+        pump.emit_wifi_startup_gates_from_evidence(
+            None,
+            None,
+            None,
+            Some(fault),
+            None,
+            None,
+            "linked-runtime-test",
+        );
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
+
+        assert!(
+            rendered.contains(
+                "wifi: gate 6 name=firmware-upload status=inferred evidence=uploaded=yes verified=no fault_detail=0x532a"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: next_action=inspect-linux-post-release-power-ht-transition blocker=cyw43-post-release-ht-clock"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("uploaded=no"), "{rendered}");
+        assert!(
+            !rendered.contains("verify-card-reset-and-reenumeration-before-generation-reload"),
+            "{rendered}"
         );
     }
 
@@ -22569,7 +22677,7 @@ mod tests {
         assert_eq!(KernelConsoleTestPump::wifi_runtime_fault_gate(fault), 6);
         assert_eq!(
             KernelConsoleTestPump::wifi_runtime_fault_next_action(fault),
-            "inspect-armcr4-reset-clear-cmd53-write"
+            "inspect-ai-control-cmd52-reset-clear-write"
         );
     }
 
@@ -22580,7 +22688,11 @@ mod tests {
             assert_eq!(KernelConsoleTestPump::wifi_cyw43_fault_gate(detail), 5);
             assert_eq!(
                 KernelConsoleTestPump::wifi_cyw43_fault_next_action(detail),
-                "inspect-linux-probe-attach-state"
+                if matches!(detail, 0x5333 | 0x5334) {
+                    "inspect-probe-pmucontrol-cmd52-word-primary"
+                } else {
+                    "inspect-linux-probe-attach-state"
+                }
             );
         }
         assert_eq!(KernelConsoleTestPump::wifi_cyw43_fault_gate(0x5338), 6);
@@ -22614,24 +22726,24 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn wifi_sdio_adopt_progress_reports_gate_two_blockers() {
+    fn wifi_sdio_pwrseq_progress_reports_gate_one_blockers() {
         assert_eq!(
             KernelConsoleTestPump::wifi_sdio_runtime_progress_gate(
-                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN,
             ),
-            Some(2)
+            Some(1)
         );
         assert_eq!(
             KernelConsoleTestPump::wifi_sdio_runtime_progress_blocker(
-                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE,
             ),
-            "sdio-adopt-present-read-no-reply"
+            "sdio-wl-on-low-host-reset-no-reply"
         );
         assert_eq!(
             KernelConsoleTestPump::wifi_sdio_runtime_progress_next_action(
-                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE,
             ),
-            "inspect-sdhci-present-state-read"
+            "inspect-sdhci-all-reset-after-wl-on-low"
         );
         assert_eq!(
             KernelConsoleTestPump::wifi_sdio_runtime_progress_gate(
@@ -22686,12 +22798,6 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY,
             ),
             "inspect-sdhci-first-mmio-access"
-        );
-        assert_eq!(
-            KernelConsoleTestPump::wifi_sdio_runtime_progress_blocker(
-                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
-            ),
-            "sdio-adopt-clock-failed"
         );
         assert_eq!(
             KernelConsoleTestPump::wifi_sdio_runtime_progress_next_action(

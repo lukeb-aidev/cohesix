@@ -4486,6 +4486,17 @@ impl<'a> KernelEnv<'a> {
         self.untyped.device_coverage(paddr, size_bits)
     }
 
+    /// Returns whether an admitted device page can be copied into a child VSpace.
+    ///
+    /// A page already retyped and cached by root no longer has fresh device-untyped
+    /// coverage at its original address, but its cached source capability remains
+    /// the authoritative HAL object for a one-way driver-runtime handoff.
+    #[must_use]
+    pub fn device_page_available_for_child(&self, paddr: usize) -> bool {
+        self.cached_device_frame_for_paddr(paddr).is_some()
+            || self.untyped.device_coverage(paddr, PAGE_BITS).is_some()
+    }
+
     fn dump_bootinfo_window_once(&self, label: &str) {
         if BOOTINFO_WINDOW_DUMPED
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -5401,22 +5412,44 @@ impl<'a> KernelEnv<'a> {
         &mut self,
         attr: sel4_sys::seL4_ARM_VMAttributes,
     ) -> Result<UnmappedRamFrame, seL4_Error> {
+        self.alloc_unmapped_ram_frame_attr_inner(attr, true)
+    }
+
+    /// Allocates a low-address DMA-capable RAM frame without a root mapping.
+    ///
+    /// This is reserved for child-owned devices such as the Pi firmware
+    /// mailbox whose bus protocol carries only a 30-bit request-page address.
+    pub fn alloc_unmapped_ram_frame_low_attr(
+        &mut self,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> Result<UnmappedRamFrame, seL4_Error> {
+        self.alloc_unmapped_ram_frame_attr_inner(attr, false)
+    }
+
+    fn alloc_unmapped_ram_frame_attr_inner(
+        &mut self,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        prefer_high: bool,
+    ) -> Result<UnmappedRamFrame, seL4_Error> {
         let trace_uncached = attr == sel4_sys::seL4_ARM_Page_Uncached;
         let trace_verbose = trace_uncached && LOCAL_SEAT_DMA_FRAME_VERBOSE_LOGS;
         if trace_verbose {
             let mut line = HeaplessString::<160>::new();
             let _ = write!(
                 &mut line,
-                "[driver-runtime] unmapped-ram-frame begin source=high attr=0x{:08x}",
+                "[driver-runtime] unmapped-ram-frame begin source={} attr=0x{:08x}",
+                if prefer_high { "high" } else { "low" },
                 vm_attributes_raw(attr) as u32
             );
             boot_log::force_uart_line(line.as_str());
         }
         BOOTINFO_WINDOW_GUARD.check("alloc_unmapped_ram_frame_attr");
-        let reserved = self
-            .untyped
-            .reserve_ram_high(PAGE_BITS as u8)
-            .ok_or(seL4_NotEnoughMemory)?;
+        let reserved = if prefer_high {
+            self.untyped.reserve_ram_high(PAGE_BITS as u8)
+        } else {
+            self.untyped.reserve_ram(PAGE_BITS as u8)
+        }
+        .ok_or(seL4_NotEnoughMemory)?;
         let frame_slot = self.allocate_slot();
         let mut trace = self.prepare_retype_trace(
             &reserved,
@@ -5465,7 +5498,8 @@ impl<'a> KernelEnv<'a> {
         self.record_retype(trace, RetypeStatus::Ok);
         ::log::debug!(
             target: "hal",
-            "[hal] unmapped ram frame allocated source=high slot=0x{slot:04x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
+            "[hal] unmapped ram frame allocated source={} slot=0x{slot:04x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
+            if prefer_high { "high" } else { "low" },
             slot = frame_slot,
             paddr = paddr,
             attr = vm_attributes_raw(attr) as usize,
@@ -6610,6 +6644,34 @@ mod tests {
         assert!(root_device_frame_cache_eligible(0xfe30_0000));
         assert!(root_device_frame_cache_eligible(0xfd50_0000));
         assert!(root_device_frame_cache_eligible(0x0000_0006_0000_0000));
+    }
+
+    #[test]
+    fn child_device_page_admission_accepts_cached_hal_capability() {
+        let mut bootinfo = blank_bootinfo_for_tests();
+        store_bootinfo_empty_region(
+            &mut bootinfo.empty,
+            0,
+            1 << 13,
+            "test.child_device_page_admission",
+        );
+        bootinfo.initThreadCNodeSizeBits = 13;
+        let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
+        let mut env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
+        let mailbox_paddr = 0xfe00_b000;
+
+        assert!(!env.device_page_available_for_child(mailbox_paddr));
+        assert!(env
+            .device_frame_cache
+            .push(DeviceFrameCacheEntry {
+                paddr: mailbox_paddr,
+                source_cap: 0x123,
+                root_cap: Some(0x124),
+                root_vaddr: Some(0xa000_0000),
+            })
+            .is_ok());
+
+        assert!(env.device_page_available_for_child(mailbox_paddr));
     }
 
     #[test]

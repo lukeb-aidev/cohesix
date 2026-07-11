@@ -4103,8 +4103,6 @@ def normalize_wifi_exact(value: str) -> str:
         "0x5301": "cyw43-transport-init",
         "21264": "cyw43-transport-bus-link-missing",
         "0x5310": "cyw43-transport-bus-link-missing",
-        "21265": "cyw43-transport-direct-sdio-init",
-        "0x5311": "cyw43-transport-direct-sdio-init",
         "21266": "cyw43-transport-card-init",
         "0x5312": "cyw43-transport-card-init",
         "21267": "cyw43-transport-f1-block-size",
@@ -4326,10 +4324,12 @@ def wifi_firmware_stream_fault_blocker(event: TraceEvent) -> str | None:
         detail = fields.get("detail") or fields.get("fault_detail") or fields.get("reason") or ""
     else:
         detail = fields.get("reason", "")
+    if status in {"blocked", "inferred", "pass", "ready"}:
+        return None
     if status not in {"fail", "failed", "fault"} and not detail:
         return None
-    exact = normalize_wifi_exact(detail) if detail else "cyw43-firmware-chunk"
-    return exact if exact != "none" else "cyw43-firmware-chunk"
+    exact = normalize_wifi_exact(detail) if detail else "none"
+    return exact if exact != "none" else None
 
 
 def wifi_ht_runtime_evidence(
@@ -7027,6 +7027,10 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
 
     exact = "none"
     raw = event.raw.lower()
+    if raw.startswith(("ok wifi", "err wifi")) and event.fields.get(
+        "detail", ""
+    ).lower().startswith("subcommand="):
+        return "none", "none"
     failure_domain = normalize_wifi_exact(event.fields.get("failure_domain", ""))
     if failure_domain in {
         "cyw43-control-tx-no-reply",
@@ -9976,7 +9980,6 @@ def wifi_blocker_is_exact_sdio_progress(blocker: str) -> bool:
 
     return blocker.startswith(
         (
-            "sdio-adopt-",
             "sdio-reset-",
             "sdio-engine-init-",
             "sdio-shadow-reset-",
@@ -9985,6 +9988,7 @@ def wifi_blocker_is_exact_sdio_progress(blocker: str) -> bool:
             "sdio-sdhci-",
             "sdio-power-",
             "sdio-clock-",
+            "sdio-wl-on-",
         )
     )
 
@@ -11993,6 +11997,17 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_phase = wifi_blocker
     if wifi_exact == "none" and wifi_blocker_is_exact_cyw43_progress(wifi_blocker):
         wifi_exact = wifi_blocker
+    if wifi_exact == "none" and wifi_blocker in {
+        "runtime-power-reset",
+        "wifi-driver-task-runtime-unproved",
+    }:
+        wifi_exact = wifi_blocker
+    if wifi_blocker == "runtime-power-reset" and not (
+        wifi_exact == "wifi-pwrseq-failed"
+        or wifi_exact.startswith("sdio-wl-on-")
+    ):
+        wifi_exact = wifi_blocker
+        wifi_phase = "pwrseq"
         wifi_phase = wifi_blocker
     revinfo_badarg = summarize_cyw43_control_revinfo_badarg(event_list)
     if revinfo_badarg is not None:
@@ -13154,6 +13169,8 @@ def classify_sdio_replay_gate(replay_blocker: str) -> tuple[int, str, str, str]:
     ):
         return 2, "sdio-card-select", f"{stage}-{status}", stage
     if stage == "engine-init":
+        if status == "wifi-pwrseq-failed":
+            return 1, "wifi-pwrseq-failed", status, stage
         blocker = f"sdio-engine-init-{status}"
         return 2, blocker, blocker, stage
     if stage in {"hal-resource-prep", "descriptor-replay"}:

@@ -345,13 +345,7 @@ pub const DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE: u16 = 9;
 pub const DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT: u16 = 10;
 /// SDIO engine-init detail: SDIO host reached ready state.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY: u16 = 0x5500;
-/// SDIO engine-init detail: HAL-prepared host did not show powered/card-present state.
-pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING: u16 = 0x5501;
-/// SDIO engine-init detail: HAL-prepared host could not enable startup clock.
-pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED: u16 = 0x5502;
-/// SDIO engine-init detail: HAL-prepared host could not clear command/data inhibit.
-pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED: u16 = 0x5503;
-/// SDIO engine-init detail: cold all-path reset failed after adoption failed.
+/// SDIO engine-init detail: cold all-path reset failed during power sequencing.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED: u16 = 0x5510;
 /// SDIO engine-init detail: command/data reset failed after cold power-on.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED: u16 = 0x5511;
@@ -361,6 +355,8 @@ pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED: u16 = 0x5512;
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED: u16 = 0x5513;
 /// SDIO engine-init detail: generated notification/IRQ topology was invalid.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR: u16 = 0x5514;
+/// SDIO engine-init detail: the manifest-declared Pi 4 WL_ON power sequence failed.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED: u16 = 0x5515;
 /// SDIO response kind: no response.
 pub const DRIVER_RUNTIME_SDIO_RESP_NONE: u8 = 0;
 /// SDIO response kind: OCR/R4 response.
@@ -1194,22 +1190,18 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY: u32 = 31;
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY: u32 = 32;
 /// SDIO runtime cleared command/data inhibit after clock enable.
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY: u32 = 33;
-/// SDIO runtime is adopting a HAL-prepared host before destructive reset.
-pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN: u32 = 80;
-/// SDIO runtime could not prove powered/card-present HAL state.
-pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING: u32 = 81;
-/// SDIO runtime could not enable a stable startup clock while adopting.
-pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED: u32 = 82;
-/// SDIO runtime could not clear command/data inhibit while adopting.
-pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED: u32 = 83;
-/// SDIO runtime is about to clear stale SDHCI interrupt state while adopting.
-pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN: u32 = 84;
-/// SDIO runtime is about to read SDHCI power/present state while adopting.
-pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN: u32 = 85;
 /// SDIO runtime is about to disable the SDHCI clock before reset.
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN: u32 = 86;
 /// SDIO runtime is about to drop SDHCI slot power before reset.
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN: u32 = 87;
+/// SDIO owner is asserting Pi 4 WL_ON low through its admitted power resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN: u32 = 434;
+/// SDIO owner completed the bounded Pi 4 WL_ON low/off interval.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE: u32 = 435;
+/// SDIO owner is deasserting Pi 4 WL_ON through its admitted power resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN: u32 = 436;
+/// SDIO owner completed the bounded Pi 4 WL_ON high/startup interval.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE: u32 = 437;
 /// Runtime recognized an engine-init aux word before entering the handler.
 pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH: u32 = 34;
 /// Runtime entered the engine-init handler.
@@ -1371,6 +1363,11 @@ pub const DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST: u32 = 8;
 pub const DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA: u32 = 9;
 /// Generic root/runtime shared control buffer tag.
 pub const DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL: u32 = 10;
+/// Pi 4 firmware-mailbox aperture used only by the SDIO owner for the
+/// manifest-declared CYW43 WL_ON power sequence.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ: u32 = 11;
+/// Low, uncached, runtime-private request page for the Pi firmware mailbox.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST: u32 = 12;
 
 /// Bus link flag: child runtime issues requests to the linked bus owner.
 pub const DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT: u32 = 1 << 0;

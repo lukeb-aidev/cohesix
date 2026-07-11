@@ -2847,6 +2847,12 @@ impl DriverRuntimeImageSpec {
                 self.id
             );
         }
+        if self.hot_path == "sdio-host" && (self.mmio_pages != 2 || self.dma_pages != 1) {
+            bail!(
+                "driver runtime image {} for sdio-host must declare exactly 2 mmio pages and 1 dma page for SDHCI plus WiFi pwrseq",
+                self.id
+            );
+        }
         Ok(())
     }
 }
@@ -3024,7 +3030,7 @@ mod tests {
             stack_pages: 1,
             ipc_pages: 1,
             ring_pages: 1,
-            mmio_pages: 1,
+            mmio_pages: if hot_path == "sdio-host" { 2 } else { 1 },
             dma_pages: 1,
             shared_buffer_pages: 1,
             root_context_required: true,
@@ -3074,6 +3080,23 @@ mod tests {
             bus_links: vec![cyw43_sdio_link()],
         };
         policy.validate().expect("complete driver runtime table");
+    }
+
+    #[test]
+    fn sdio_runtime_requires_exact_power_sequence_resources() {
+        let mut image = driver_runtime_image("sdio-host");
+        image.mmio_pages = 1;
+        let err = image.validate().expect_err("missing mailbox page rejected");
+        assert!(err
+            .to_string()
+            .contains("exactly 2 mmio pages and 1 dma page"));
+
+        let mut image = driver_runtime_image("sdio-host");
+        image.dma_pages = 0;
+        let err = image.validate().expect_err("missing request page rejected");
+        assert!(err
+            .to_string()
+            .contains("exactly 2 mmio pages and 1 dma page"));
     }
 
     #[test]

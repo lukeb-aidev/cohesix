@@ -12,11 +12,13 @@ use core::ptr;
 use core::sync::atomic::{fence, AtomicU32, Ordering};
 
 use super::{
-    DeviceHal, HalError, Irq, IrqServiceOutcome, IrqTrigger, KernelIrqBinding, SdioBusWidth,
-    SdioFunction, WifiBoundedPhaseRecord, WifiDebugSnapshot, WifiFirmwareBundle,
-    WifiFirmwareContractTrace, WifiFirmwareProofTrace, WifiHtPhaseRecord, WifiPowerState,
-    WifiResetState, WIFI_BOUNDED_PHASE_RECORD_CAPACITY, WIFI_HT_PHASE_RECORD_CAPACITY,
+    DeviceHal, HalError, IrqServiceOutcome, KernelIrqBinding, SdioBusWidth, SdioFunction,
+    WifiBoundedPhaseRecord, WifiDebugSnapshot, WifiFirmwareBundle, WifiFirmwareContractTrace,
+    WifiFirmwareProofTrace, WifiHtPhaseRecord, WifiPowerState, WifiResetState,
+    WIFI_BOUNDED_PHASE_RECORD_CAPACITY, WIFI_HT_PHASE_RECORD_CAPACITY,
 };
+#[cfg(test)]
+use super::{Irq, IrqTrigger};
 use crate::bootstrap::log as boot_log;
 use crate::rust_alloc::vec::Vec;
 use crate::sel4::{page_get_address, DeviceFrame, PAGE_BITS};
@@ -190,9 +192,16 @@ const BCM2711_GPPUPPDN0: usize = 0xE4;
 
 static PINNED_MAILBOX_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_GPIO_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
-static PINNED_SDHCI_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_MAILBOX_REQUEST: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static MAILBOX_CALL_LOCK: Mutex<()> = Mutex::new(());
+const MAILBOX_OWNER_ROOT: u32 = 0;
+const MAILBOX_OWNER_SDIO_RUNTIME: u32 = 1;
+static MAILBOX_OWNER: AtomicU32 = AtomicU32::new(MAILBOX_OWNER_ROOT);
+
+#[inline]
+const fn mailbox_root_call_admitted(owner: u32) -> bool {
+    owner == MAILBOX_OWNER_ROOT
+}
 static SDIO_IRQ_BINDING: Mutex<Option<KernelIrqBinding>> = Mutex::new(None);
 static MAILBOX_TRANSPORT_READY: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
@@ -203,6 +212,22 @@ static LAST_WIFI_DEBUG_SNAPSHOT: Mutex<Option<WifiDebugSnapshot>> = Mutex::new(N
 pub(crate) fn with_mailbox_call_lock<T>(call: impl FnOnce() -> T) -> T {
     let _mailbox_call_lock = MAILBOX_CALL_LOCK.lock();
     call()
+}
+
+/// Completes the one-way boot handoff of Pi firmware-mailbox authority to the
+/// manifest-declared SDIO runtime that owns CYW43 power sequencing.
+pub(crate) fn handoff_wifi_mailbox_to_sdio_runtime() -> bool {
+    with_mailbox_call_lock(|| {
+        match MAILBOX_OWNER.compare_exchange(
+            MAILBOX_OWNER_ROOT,
+            MAILBOX_OWNER_SDIO_RUNTIME,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) | Err(MAILBOX_OWNER_SDIO_RUNTIME) => true,
+            Err(_) => false,
+        }
+    })
 }
 static LAST_WIFI_FIRMWARE_CONTRACT_EVIDENCE: Mutex<Option<WifiFirmwareContractEvidence>> =
     Mutex::new(None);
@@ -5400,74 +5425,26 @@ where
     gpio
 }
 
-pub fn preseed_sdhci_mmio<H>(hal: &mut H) -> bool
-where
-    H: DeviceHal<Error = HalError>,
-{
-    if !root_sdhci_mmio_fallback_enabled() {
-        let _ = hal;
-        boot_log::force_uart_line(
-            "[pi4-platform] mmio preseeded sdhci=no reason=linked-runtime-owns-sdio",
-        );
-        return false;
-    }
-    let sdhci = preseed_register_block(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &PINNED_SDHCI_REGS);
-    boot_log::force_uart_line(if sdhci {
-        "[pi4-platform] mmio preseeded sdhci=yes"
-    } else {
-        "[pi4-platform] mmio preseeded sdhci=no"
-    });
-    sdhci
-}
-
-const fn root_sdhci_mmio_fallback_enabled() -> bool {
-    !cfg!(target_os = "none") || cfg!(test)
-}
-
 pub fn preseed_mmio<H>(hal: &mut H)
 where
     H: DeviceHal<Error = HalError>,
 {
     let mailbox = preseed_mailbox_mmio(hal);
     let gpio = preseed_gpio_mmio(hal);
-    let sdhci = preseed_sdhci_mmio(hal);
-    match (mailbox, gpio, sdhci) {
-        (true, true, true) => boot_log::force_uart_line(
-            "[pi4-platform] mmio preseed summary mailbox=yes gpio=yes sdhci=yes",
-        ),
-        (true, true, false) => boot_log::force_uart_line(
+    match (mailbox, gpio) {
+        (true, true) => boot_log::force_uart_line(
             "[pi4-platform] mmio preseed summary mailbox=yes gpio=yes sdhci=no",
         ),
-        (true, false, true) => boot_log::force_uart_line(
-            "[pi4-platform] mmio preseed summary mailbox=yes gpio=no sdhci=yes",
-        ),
-        (true, false, false) => boot_log::force_uart_line(
+        (true, false) => boot_log::force_uart_line(
             "[pi4-platform] mmio preseed summary mailbox=yes gpio=no sdhci=no",
         ),
-        (false, true, true) => boot_log::force_uart_line(
-            "[pi4-platform] mmio preseed summary mailbox=no gpio=yes sdhci=yes",
-        ),
-        (false, true, false) => boot_log::force_uart_line(
+        (false, true) => boot_log::force_uart_line(
             "[pi4-platform] mmio preseed summary mailbox=no gpio=yes sdhci=no",
         ),
-        (false, false, true) => boot_log::force_uart_line(
-            "[pi4-platform] mmio preseed summary mailbox=no gpio=no sdhci=yes",
-        ),
-        (false, false, false) => boot_log::force_uart_line(
+        (false, false) => boot_log::force_uart_line(
             "[pi4-platform] mmio preseed summary mailbox=no gpio=no sdhci=no",
         ),
     }
-}
-
-pub fn prepare_driver_task_sdio_resources<H>(hal: &mut H) -> Result<(), HalError>
-where
-    H: DeviceHal<Error = HalError>,
-{
-    let _ = hal;
-    emit_breadcrumb(format_args!(
-        "[pi4-wifi] driver-task sdio resource prep disabled reason=linked-runtime-owns-sdio action=fail-closed"
-    ));
-    Err(HalError::Unsupported("sdio-host-linked-runtime-required"))
 }
 
 const SDHCI_BLOCK_SIZE: usize = 0x04;
@@ -8095,6 +8072,9 @@ impl Mailbox {
         request_len_bytes: u32,
         payload: &mut [u32],
     ) -> Result<(), HalError> {
+        if !mailbox_root_call_admitted(MAILBOX_OWNER.load(Ordering::Acquire)) {
+            return Err(HalError::Unsupported("mailbox-owned-by-sdio-runtime"));
+        }
         let original_payload = payload.to_vec();
         let words = {
             // SAFETY: `self.request` is the locked, page-sized and word-aligned
@@ -8682,23 +8662,14 @@ struct SdioHost {
 }
 
 impl SdioHost {
+    #[cfg(test)]
     fn new<H>(hal: &mut H, mailbox: &Mailbox) -> Result<Self, HalError>
     where
         H: DeviceHal<Error = HalError>,
     {
-        if !root_sdhci_mmio_fallback_enabled() {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] sdhci access mode=linked-runtime-only action=fail-closed"
-            ));
-            return Err(HalError::Unsupported("sdio-host-linked-runtime-required"));
-        }
-        let regs = if let Some(regs) = cloned_pinned_regs(&PINNED_SDHCI_REGS) {
-            regs
-        } else {
-            let mut prefix_maps = Vec::new();
-            let regs = map_exact(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &mut prefix_maps)?;
-            MappedRegs::from_frame(&regs)
-        };
+        let mut prefix_maps = Vec::new();
+        let regs = map_exact(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &mut prefix_maps)?;
+        let regs = MappedRegs::from_frame(&regs);
         let regs_paddr = regs.paddr();
         let mut mailbox = MailboxRef(mailbox);
         let base_clock_hz = match mailbox.query_clock_hz() {
@@ -24118,8 +24089,10 @@ impl SdioHost {
     }
 }
 
+#[cfg(test)]
 struct MailboxRef<'a>(&'a Mailbox);
 
+#[cfg(test)]
 impl MailboxRef<'_> {
     fn query_clock_hz(&mut self) -> Result<u32, HalError> {
         let mut cloned = Mailbox {
@@ -24620,6 +24593,13 @@ mod tests {
         SMB_INT_ACK, TAG_GET_CLOCK_RATE, TAG_NOTIFY_XHCI_RESET, TAG_SET_GPIO_CONFIG,
         TAG_SET_POWER_STATE,
     };
+
+    #[test]
+    fn mailbox_handoff_forbids_every_late_root_property_call() {
+        assert!(mailbox_root_call_admitted(MAILBOX_OWNER_ROOT));
+        assert!(!mailbox_root_call_admitted(MAILBOX_OWNER_SDIO_RUNTIME));
+        assert!(!mailbox_root_call_admitted(u32::MAX));
+    }
 
     #[test]
     fn sdio_bus_owner_queue_is_fixed_layout_and_bounded() {

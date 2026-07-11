@@ -103,12 +103,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED, DRIVER_RUNTIME_ENGINE_INIT_AUX,
     DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED, DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED, DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED, DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
     DRIVER_RUNTIME_SDIO_RESP_NONE, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
 };
 
@@ -3042,9 +3040,7 @@ const fn sdio_engine_init_detail_status(detail: u16) -> Option<&'static str> {
         {
             Some("resource-check-failed")
         }
-        DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING => Some("adopt-power-missing"),
-        DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED => Some("adopt-clock-failed"),
-        DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED => Some("adopt-inhibit-failed"),
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED => Some("wifi-pwrseq-failed"),
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED => Some("reset-all-failed"),
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED => Some("reset-cmd-data-failed"),
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED => Some("clock-failed"),
@@ -3067,6 +3063,13 @@ fn sdio_engine_init_completion_status(
         }
         _ => driver_task_resource_completion_status(completion, ready),
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn sdio_engine_init_completion_pending(
+    completion: Option<DriverTaskCompletionRecord>,
+) -> bool {
+    completion.is_none()
 }
 
 #[cfg(feature = "kernel")]
@@ -14640,10 +14643,22 @@ fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
         return Err(DriverTaskNetError::RuntimePending("sdio-host"));
     }
     emit_sdio_driver_task_replay_status("descriptor-replay", "ready");
+    if !crate::hal::pi4_pcie::pi4_pcie_link_and_rc_ready_proven()
+        || !crate::hal::pi4_pcie::pi4_pcie_irq_sources_masked_proven()
+    {
+        emit_sdio_driver_task_replay_status("engine-init", "mailbox-prereq-pending");
+        return Err(DriverTaskNetError::RuntimePending(
+            "sdio-host-mailbox-prereq",
+        ));
+    }
     let command = crate::hal::driver_task::runtime_engine_init_command(
         DriverTaskHotPath::SdioHost,
         DriverTaskBudgetGrant::from_contract(contract),
     );
+    if !crate::hal::pi4_wifi::handoff_wifi_mailbox_to_sdio_runtime() {
+        emit_sdio_driver_task_replay_status("engine-init", "mailbox-handoff-failed");
+        return Err(DriverTaskNetError::RuntimeInit("sdio-host-mailbox-handoff"));
+    }
     emit_sdio_driver_task_replay_status("engine-init", "begin");
     let completion = run_driver_task_net_service(contract, command);
     let initialized = completion.is_some_and(|completion| {
@@ -14658,6 +14673,9 @@ fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
         status,
         completion,
     );
+    if sdio_engine_init_completion_pending(completion) {
+        return Err(DriverTaskNetError::RuntimePending("sdio-host-pwrseq"));
+    }
     if !initialized {
         return Err(DriverTaskNetError::RuntimeInit("sdio-host-linked-runtime"));
     }
@@ -16855,7 +16873,6 @@ pub(crate) const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
         0x530a => "cyw43-descriptor-invalid",
         CYW43_CONTROL_EXCHANGE_FAULT_DETAIL => "cyw43-control-exchange",
         0x5310 => "cyw43-transport-bus-link-missing",
-        0x5311 => "cyw43-transport-direct-sdio-init",
         0x5312 => "cyw43-transport-card-init",
         0x5313 => "cyw43-transport-f1-block-size",
         0x5314 => "cyw43-transport-f2-block-size",
@@ -28796,8 +28813,8 @@ mod tests {
     #[test]
     fn sdio_engine_init_status_preserves_exact_fault_detail() {
         assert_eq!(
-            sdio_engine_init_detail_status(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING),
-            Some("adopt-power-missing")
+            sdio_engine_init_detail_status(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED),
+            Some("wifi-pwrseq-failed")
         );
         assert_eq!(
             sdio_engine_init_detail_status(
@@ -28822,6 +28839,10 @@ mod tests {
             ),
             "clock-failed"
         );
+        assert!(sdio_engine_init_completion_pending(None));
+        assert!(!sdio_engine_init_completion_pending(Some(
+            DriverTaskCompletionRecord::progress(2, 1)
+        )));
     }
 
     #[cfg(feature = "kernel")]

@@ -113,6 +113,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
     DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
     DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
     DRIVER_RUNTIME_RING_PROGRESS_BYTES, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY,
@@ -192,12 +193,6 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
@@ -208,6 +203,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
@@ -440,13 +439,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR, DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_FLAG_WRITE,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED, DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR, DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED,
-    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED, DRIVER_RUNTIME_SDIO_IRQ,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED, DRIVER_RUNTIME_SDIO_IRQ,
     DRIVER_RUNTIME_SDIO_IRQ_BADGE, DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND,
     DRIVER_RUNTIME_SDIO_OP_CMD52_READ, DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,
     DRIVER_RUNTIME_SDIO_OP_CMD53_READ, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
@@ -604,7 +601,6 @@ const CYW43_FIRMWARE_RANGE_STAGE_ADDR: u32 = 1 << 4;
 const CYW43_FIRMWARE_RANGE_STAGE_APPEND: u32 = 1 << 5;
 const FAULT_CYW43_COMMAND: u16 = 0x53ff;
 const FAULT_CYW43_TRANSPORT_BUS_LINK: u16 = 0x5310;
-const FAULT_CYW43_TRANSPORT_DIRECT_SDIO: u16 = 0x5311;
 const FAULT_CYW43_TRANSPORT_F1_BLOCK_SIZE: u16 = 0x5313;
 const FAULT_CYW43_TRANSPORT_F2_BLOCK_SIZE: u16 = 0x5314;
 const FAULT_CYW43_TRANSPORT_F1_ENABLE: u16 = 0x5315;
@@ -774,8 +770,8 @@ const GENET_REQUIRED_SHARED_PAGES: u16 = 32;
 const CYW43_REQUIRED_MMIO_PAGES: u16 = 0;
 const CYW43_REQUIRED_DMA_PAGES: u16 = 0;
 const CYW43_REQUIRED_SHARED_PAGES: u16 = 64;
-const SDIO_REQUIRED_MMIO_PAGES: u16 = 1;
-const SDIO_REQUIRED_DMA_PAGES: u16 = 0;
+const SDIO_REQUIRED_MMIO_PAGES: u16 = 2;
+const SDIO_REQUIRED_DMA_PAGES: u16 = 1;
 const SDIO_REQUIRED_SHARED_PAGES: u16 = 32;
 const PCIE_REQUIRED_MMIO_PAGES: u16 = 10;
 const PCIE_REQUIRED_SHARED_PAGES: u16 = 16;
@@ -1197,10 +1193,27 @@ const SDHCI_SPEC_300: u16 = 2;
 const SDHCI_RESET_ALL: u8 = 0x01;
 const SDHCI_RESET_CMD: u8 = 0x02;
 const SDHCI_RESET_DATA: u8 = 0x04;
-const SDHCI_CARD_PRESENT: u32 = 1 << 16;
-const SDHCI_CARD_STATE_STABLE: u32 = 1 << 17;
 const SDHCI_INIT_SPINS: usize = 100_000;
-const SDHCI_POWER_READY_SPINS: usize = 500_000;
+const PI4_WIFI_PWRSEQ_MAILBOX_READ: usize = 0x880;
+const PI4_WIFI_PWRSEQ_MAILBOX_STATUS0: usize = 0x898;
+const PI4_WIFI_PWRSEQ_MAILBOX_WRITE: usize = 0x8a0;
+const PI4_WIFI_PWRSEQ_MAILBOX_STATUS1: usize = 0x8b8;
+const PI4_WIFI_PWRSEQ_MAILBOX_EMPTY: u32 = 0x4000_0000;
+const PI4_WIFI_PWRSEQ_MAILBOX_FULL: u32 = 0x8000_0000;
+const PI4_WIFI_PWRSEQ_MAILBOX_CHANNEL_PROPERTY: u32 = 8;
+const PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS: u32 = 0x8000_0000;
+const PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE: u32 = 1 << 31;
+const PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE: u32 = 0x0003_8041;
+const PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG: u32 = 0x0003_0043;
+const PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG: u32 = 0x0003_8043;
+const PI4_WIFI_PWRSEQ_GPIO_WL_ON: u32 = 129;
+const PI4_WIFI_PWRSEQ_GPIO_DIRECTION_OUT: u32 = 1;
+const PI4_WIFI_PWRSEQ_OFF_SETTLE_US: u32 = 2_000;
+const PI4_WIFI_PWRSEQ_POWER_UP_SETTLE_US: u32 = 10_000;
+const PI4_WIFI_PWRSEQ_POST_CLOCK_SETTLE_US: u32 = 10_000;
+const PI4_WIFI_PWRSEQ_WAIT_MS: u64 = 1;
+const PI4_WIFI_PWRSEQ_WAIT_POLLS: usize = 20_000;
+const PI4_WIFI_PWRSEQ_DRAIN_LIMIT: usize = 64;
 const SDHCI_CLOCK_RECOVERY_SETTLE_SPINS: usize = 10_000;
 const SDHCI_STARTUP_CLOCK_HZ: u32 = 400_000;
 const BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ: u32 = 250_000_000;
@@ -1392,7 +1405,6 @@ const SDIO_CCCR_IORX: u32 = 0x03;
 const SDIO_CCCR_IENX: u32 = 0x04;
 const SDIO_CCCR_INTX: u32 = 0x05;
 const SDIO_CCCR_ABORT: u32 = 0x06;
-const SDIO_CCCR_ABORT_RES: u8 = 0x08;
 const SDIO_CCCR_IF: u32 = 0x07;
 const SDIO_CCCR_SPEED: u32 = 0x13;
 const SDIO_CCCR_BRCM_CARDCAP: u32 = 0xf0;
@@ -2142,6 +2154,7 @@ struct SdioRuntimeState {
     dpc_events_published: u32,
     dpc_ring_overruns: u32,
     card_irq_rearms: u32,
+    pwrseq: SdioPwrseqCursor,
 }
 
 impl SdioRuntimeState {
@@ -2164,11 +2177,123 @@ impl SdioRuntimeState {
             dpc_events_published: 0,
             dpc_ring_overruns: 0,
             card_irq_rearms: 0,
+            pwrseq: SdioPwrseqCursor::idle(),
         }
     }
 
     fn reset(&mut self) {
         *self = Self::new();
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioPwrseqPurpose {
+    Idle,
+    EngineInit,
+    GenerationReset { requested_epoch: u32 },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioPwrseqPhase {
+    Idle,
+    GetGpioConfig,
+    ConfigureOutputLow,
+    AssertLow,
+    PowerOff,
+    WaitOff,
+    ResetAllAndPowerOn,
+    WaitPowerUp,
+    ReleaseHigh,
+    ProgramStartupClock,
+    WaitPostClock,
+    Finalize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SdioPwrseqSettle {
+    start_ticks: u64,
+    cycles: u64,
+    fallback_turns: u8,
+}
+
+impl SdioPwrseqSettle {
+    const fn idle() -> Self {
+        Self {
+            start_ticks: 0,
+            cycles: 0,
+            fallback_turns: 0,
+        }
+    }
+
+    fn start(us: u32) -> Option<Self> {
+        let start_ticks = runtime_timer_counter_ticks();
+        let cycles = runtime_micros_to_cycles(u64::from(us));
+        #[cfg(target_os = "none")]
+        if start_ticks == 0 || cycles == 0 {
+            return None;
+        }
+        Some(Self {
+            start_ticks,
+            cycles,
+            // Host tests do not expose CNTVCT. One continuation turn gives
+            // them deterministic phase behavior without pretending that an
+            // iteration count proves physical elapsed time.
+            fallback_turns: 1,
+        })
+    }
+
+    fn ready(&mut self) -> bool {
+        if self.start_ticks != 0 && self.cycles != 0 {
+            return runtime_counter_deadline_expired(
+                self.start_ticks,
+                self.cycles,
+                runtime_timer_counter_ticks(),
+            );
+        }
+        if self.fallback_turns == 0 {
+            true
+        } else {
+            self.fallback_turns = self.fallback_turns.saturating_sub(1);
+            false
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SdioPwrseqCursor {
+    purpose: SdioPwrseqPurpose,
+    phase: SdioPwrseqPhase,
+    sequence: u32,
+    aux0: u32,
+    gpio_polarity: u32,
+    settle: SdioPwrseqSettle,
+}
+
+impl SdioPwrseqCursor {
+    const fn idle() -> Self {
+        Self {
+            purpose: SdioPwrseqPurpose::Idle,
+            phase: SdioPwrseqPhase::Idle,
+            sequence: 0,
+            aux0: 0,
+            gpio_polarity: 0,
+            settle: SdioPwrseqSettle::idle(),
+        }
+    }
+
+    const fn begin(purpose: SdioPwrseqPurpose, sequence: u32, aux0: u32) -> Self {
+        Self {
+            purpose,
+            phase: SdioPwrseqPhase::GetGpioConfig,
+            sequence,
+            aux0,
+            gpio_polarity: 0,
+            settle: SdioPwrseqSettle::idle(),
+        }
+    }
+
+    const fn active(self) -> bool {
+        !matches!(self.purpose, SdioPwrseqPurpose::Idle)
     }
 }
 
@@ -2604,7 +2729,7 @@ impl Cyw43RuntimeState {
         self.reset_firmware_upload_state();
         // Preserve the selected-card fact only while engine-init is arranging
         // the typed SDIO-owner generation reset. The exact owner completion
-        // asserts CCCR ABORT.RES and clears this field before transport work
+        // completes the WL_ON power cycle and clears this field before transport work
         // can resume, forcing a fresh card enumeration for the new lifetime.
     }
 
@@ -3148,6 +3273,31 @@ const fn runtime_staged_completion(
 /// Service one fixed-layout command without using root pointers.
 #[must_use]
 pub fn service_command(
+    task_key: usize,
+    command: DriverTaskCommandRecord,
+) -> DriverTaskCompletionRecord {
+    loop {
+        match service_command_turn(task_key, command) {
+            RuntimeCommandTurn::Pending => {}
+            RuntimeCommandTurn::Complete(completion) => return completion,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeCommandTurn {
+    Pending,
+    Complete(DriverTaskCompletionRecord),
+}
+
+fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> RuntimeCommandTurn {
+    if let Some(turn) = service_sdio_pwrseq_command_turn(command) {
+        return turn;
+    }
+    RuntimeCommandTurn::Complete(service_command_immediate(task_key, command))
+}
+
+fn service_command_immediate(
     task_key: usize,
     command: DriverTaskCommandRecord,
 ) -> DriverTaskCompletionRecord {
@@ -3786,7 +3936,19 @@ fn runtime_engine_init_sdio(
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE,
         aux0,
     );
-    sdio_runtime_init(sequence, aux0, descriptor)
+    #[cfg(test)]
+    {
+        sdio_runtime_init(sequence, aux0, descriptor)
+    }
+    #[cfg(not(test))]
+    {
+        // Production SDIO engine initialization is admitted only by
+        // `service_sdio_pwrseq_command_turn`, which retains the command across
+        // bounded phases. Reaching this immediate path is a fail-closed
+        // programming error, never a synchronous power-sequence fallback.
+        let _ = descriptor;
+        Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR)
+    }
 }
 
 #[inline(never)]
@@ -3885,7 +4047,7 @@ fn descriptor_valid_ref(descriptor: &DriverRuntimeInitDescriptor) -> bool {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeNotificationRoute {
-    LegacyPoll,
+    Unavailable,
     SdioOwner,
     Cyw43Client,
 }
@@ -4075,7 +4237,7 @@ fn cyw43_complete_generation_reset(
     // the separate GENERATION_COMMIT completion below.
     state.bus_link_ready = true;
     state.dpc_link_ready = true;
-    // The SDIO owner has asserted CCCR ABORT.RES, so the former RCA,
+    // The SDIO owner has completed the WL_ON power cycle, so the former RCA,
     // Function-1 enable, block sizes, host/card lane, and backplane aperture
     // are no longer valid. Force the normal typed TRANSPORT_INIT state machine
     // to perform CMD0/CMD5/CMD3/CMD7 and every subsequent attach gate before
@@ -4676,14 +4838,14 @@ fn runtime_notification_route(
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> RuntimeNotificationRoute {
     let Some(_link) = descriptor_notification_dpc_link(descriptor) else {
-        return RuntimeNotificationRoute::LegacyPoll;
+        return RuntimeNotificationRoute::Unavailable;
     };
     match descriptor.hot_path {
         HOT_PATH_SDIO_HOST if descriptor_sdio_irq(descriptor).is_some() => {
             RuntimeNotificationRoute::SdioOwner
         }
         HOT_PATH_CYW43_WIFI => RuntimeNotificationRoute::Cyw43Client,
-        _ => RuntimeNotificationRoute::LegacyPoll,
+        _ => RuntimeNotificationRoute::Unavailable,
     }
 }
 
@@ -5097,13 +5259,22 @@ fn descriptor_resources_ready_checked(
             true
         }
         HOT_PATH_SDIO_HOST => {
+            let pwrseq_vaddr =
+                DRIVER_TASK_DEVICE_MMIO_VADDR.saturating_add(DRIVER_TASK_RING_PAGE_BYTES);
             if mmio_pages < SDIO_REQUIRED_MMIO_PAGES
                 || !descriptor_has_resource_range_at(
                     descriptor,
                     DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
                     DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
                     DRIVER_TASK_DEVICE_MMIO_VADDR as u64,
-                    SDIO_REQUIRED_MMIO_PAGES,
+                    1,
+                )
+                || !descriptor_has_resource_range_at(
+                    descriptor,
+                    DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+                    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+                    pwrseq_vaddr as u64,
+                    1,
                 )
             {
                 publish_resource_check_progress(
@@ -5116,7 +5287,15 @@ fn descriptor_resources_ready_checked(
                 progress,
                 DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY,
             );
-            if dma_pages < SDIO_REQUIRED_DMA_PAGES {
+            if dma_pages < SDIO_REQUIRED_DMA_PAGES
+                || !descriptor_has_resource_range_at(
+                    descriptor,
+                    DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+                    DRIVER_TASK_DMA_BUFFER_VADDR as u64,
+                    1,
+                )
+            {
                 publish_resource_check_progress(
                     progress,
                     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING,
@@ -5228,6 +5407,306 @@ fn runtime_resource_range(
         index += 1;
     }
     None
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_mailbox_read(base: usize, offset: usize) -> u32 {
+    // SAFETY: descriptor admission proves `base` is the single uncached Pi 4
+    // firmware-mailbox page whose active call authority was handed to the SDIO
+    // owner; root retains only a dormant, software-guarded mapping. Every caller
+    // supplies a 32-bit register offset within that page.
+    unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_mailbox_write(base: usize, offset: usize, value: u32) {
+    // SAFETY: descriptor admission proves `base` is the single uncached Pi 4
+    // firmware-mailbox page whose active call authority was handed to the SDIO
+    // owner; root retains only a dormant, software-guarded mapping. Every caller
+    // supplies a writable 32-bit register offset within that page.
+    unsafe { core::ptr::write_volatile((base + offset) as *mut u32, value) };
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_encode_request(vaddr: usize, level: u32) {
+    for index in 0..8usize {
+        write_dma_u32(vaddr + index * core::mem::size_of::<u32>(), 0);
+    }
+    write_dma_u32(vaddr, 8 * core::mem::size_of::<u32>() as u32);
+    write_dma_u32(vaddr + 8, PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE);
+    write_dma_u32(vaddr + 12, 8);
+    write_dma_u32(vaddr + 16, 8);
+    write_dma_u32(vaddr + 20, PI4_WIFI_PWRSEQ_GPIO_WL_ON);
+    write_dma_u32(vaddr + 24, level);
+    dma_store_barrier();
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_encode_get_config_request(vaddr: usize) {
+    for index in 0..11usize {
+        write_dma_u32(vaddr + index * core::mem::size_of::<u32>(), 0);
+    }
+    write_dma_u32(vaddr, 11 * core::mem::size_of::<u32>() as u32);
+    write_dma_u32(vaddr + 8, PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG);
+    write_dma_u32(vaddr + 12, 20);
+    write_dma_u32(vaddr + 16, 4);
+    write_dma_u32(vaddr + 20, PI4_WIFI_PWRSEQ_GPIO_WL_ON);
+    dma_store_barrier();
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_encode_config_request(vaddr: usize, polarity: u32) {
+    for index in 0..12usize {
+        write_dma_u32(vaddr + index * core::mem::size_of::<u32>(), 0);
+    }
+    write_dma_u32(vaddr, 12 * core::mem::size_of::<u32>() as u32);
+    write_dma_u32(vaddr + 8, PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG);
+    write_dma_u32(vaddr + 12, 24);
+    write_dma_u32(vaddr + 16, 24);
+    write_dma_u32(vaddr + 20, PI4_WIFI_PWRSEQ_GPIO_WL_ON);
+    write_dma_u32(vaddr + 24, PI4_WIFI_PWRSEQ_GPIO_DIRECTION_OUT);
+    write_dma_u32(vaddr + 28, polarity);
+    write_dma_u32(vaddr + 32, 0);
+    write_dma_u32(vaddr + 36, 0);
+    write_dma_u32(vaddr + 40, 0);
+    dma_store_barrier();
+}
+
+fn sdio_wifi_pwrseq_response_header_complete(
+    status: u32,
+    reply_tag: u32,
+    expected_tag: u32,
+    value_len: u32,
+    expected_value_len: u32,
+    value_status: u32,
+    returned_gpio: u32,
+    end_tag: u32,
+) -> bool {
+    status == PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS
+        && reply_tag == expected_tag
+        && value_len == expected_value_len
+        && value_status == (PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | expected_value_len)
+        && returned_gpio == 0
+        && end_tag == 0
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_response_complete(vaddr: usize) -> bool {
+    dma_load_barrier();
+    sdio_wifi_pwrseq_response_header_complete(
+        read_dma_u32(vaddr + 4),
+        read_dma_u32(vaddr + 8),
+        PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+        read_dma_u32(vaddr + 12),
+        8,
+        read_dma_u32(vaddr + 16),
+        read_dma_u32(vaddr + 20),
+        read_dma_u32(vaddr + 28),
+    )
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_config_response_complete(vaddr: usize) -> bool {
+    dma_load_barrier();
+    sdio_wifi_pwrseq_response_header_complete(
+        read_dma_u32(vaddr + 4),
+        read_dma_u32(vaddr + 8),
+        PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
+        read_dma_u32(vaddr + 12),
+        24,
+        read_dma_u32(vaddr + 16),
+        read_dma_u32(vaddr + 20),
+        read_dma_u32(vaddr + 44),
+    )
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_get_config_response(vaddr: usize) -> Option<u32> {
+    dma_load_barrier();
+    sdio_wifi_pwrseq_response_header_complete(
+        read_dma_u32(vaddr + 4),
+        read_dma_u32(vaddr + 8),
+        PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
+        read_dma_u32(vaddr + 12),
+        20,
+        read_dma_u32(vaddr + 16),
+        read_dma_u32(vaddr + 20),
+        read_dma_u32(vaddr + 40),
+    )
+    .then(|| read_dma_u32(vaddr + 28))
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+#[derive(Clone, Copy)]
+enum SdioWifiPwrseqMailboxOp {
+    GetConfig,
+    SetConfig { polarity: u32 },
+    SetState { level: u32 },
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_mailbox_call(op: SdioWifiPwrseqMailboxOp) -> Option<u32> {
+    let descriptor = RUNTIME_DESCRIPTOR.load();
+    let Some(mailbox) = runtime_resource_range(
+        &descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+        DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+    ) else {
+        return None;
+    };
+    let Some(request) = runtime_resource_range(
+        &descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+    ) else {
+        return None;
+    };
+    if mailbox.page_count != 1
+        || request.page_count < 1
+        || request.paddr > 0x3fff_ffff
+        || request.paddr & 0xf != 0
+    {
+        return None;
+    }
+    let mailbox_vaddr = mailbox.vaddr as usize;
+    let request_vaddr = request.vaddr as usize;
+    let request_addr = request.paddr as u32 & 0x3fff_fff0;
+    for alias in [0xc000_0000u32, 0x4000_0000u32] {
+        match op {
+            SdioWifiPwrseqMailboxOp::GetConfig => {
+                sdio_wifi_pwrseq_encode_get_config_request(request_vaddr);
+            }
+            SdioWifiPwrseqMailboxOp::SetConfig { polarity } => {
+                sdio_wifi_pwrseq_encode_config_request(request_vaddr, polarity);
+            }
+            SdioWifiPwrseqMailboxOp::SetState { level } => {
+                sdio_wifi_pwrseq_encode_request(request_vaddr, level);
+            }
+        }
+        for _ in 0..PI4_WIFI_PWRSEQ_DRAIN_LIMIT {
+            if sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_STATUS0)
+                & PI4_WIFI_PWRSEQ_MAILBOX_EMPTY
+                != 0
+            {
+                break;
+            }
+            let _ = sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_READ);
+        }
+        let mut polls = 0usize;
+        let mut send_deadline = runtime_deadline_from_millis_or_iterations(
+            PI4_WIFI_PWRSEQ_WAIT_MS,
+            PI4_WIFI_PWRSEQ_WAIT_POLLS,
+        );
+        while sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_STATUS1)
+            & PI4_WIFI_PWRSEQ_MAILBOX_FULL
+            != 0
+        {
+            polls = polls.saturating_add(1);
+            if runtime_deadline_iteration_cap_reached(
+                &send_deadline,
+                polls,
+                PI4_WIFI_PWRSEQ_WAIT_POLLS,
+            ) || runtime_deadline_expired(&mut send_deadline)
+            {
+                break;
+            }
+            runtime_poll_pause();
+        }
+        if polls >= PI4_WIFI_PWRSEQ_WAIT_POLLS {
+            continue;
+        }
+        let token = request_addr | alias | PI4_WIFI_PWRSEQ_MAILBOX_CHANNEL_PROPERTY;
+        sdio_wifi_pwrseq_mailbox_write(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_WRITE, token);
+        dma_store_barrier();
+        polls = 0;
+        let mut recv_deadline = runtime_deadline_from_millis_or_iterations(
+            PI4_WIFI_PWRSEQ_WAIT_MS,
+            PI4_WIFI_PWRSEQ_WAIT_POLLS,
+        );
+        while !runtime_deadline_iteration_cap_reached(
+            &recv_deadline,
+            polls,
+            PI4_WIFI_PWRSEQ_WAIT_POLLS,
+        ) && !runtime_deadline_expired(&mut recv_deadline)
+        {
+            if sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_STATUS0)
+                & PI4_WIFI_PWRSEQ_MAILBOX_EMPTY
+                == 0
+            {
+                let reply =
+                    sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_READ);
+                if reply & 0xf == PI4_WIFI_PWRSEQ_MAILBOX_CHANNEL_PROPERTY
+                    && reply & 0x3fff_fff0 == request_addr
+                    && match op {
+                        SdioWifiPwrseqMailboxOp::GetConfig => {
+                            sdio_wifi_pwrseq_get_config_response(request_vaddr).is_some()
+                        }
+                        SdioWifiPwrseqMailboxOp::SetConfig { .. } => {
+                            sdio_wifi_pwrseq_config_response_complete(request_vaddr)
+                        }
+                        SdioWifiPwrseqMailboxOp::SetState { .. } => {
+                            sdio_wifi_pwrseq_response_complete(request_vaddr)
+                        }
+                    }
+                {
+                    return Some(match op {
+                        SdioWifiPwrseqMailboxOp::GetConfig => {
+                            sdio_wifi_pwrseq_get_config_response(request_vaddr).unwrap_or(0)
+                        }
+                        SdioWifiPwrseqMailboxOp::SetConfig { .. }
+                        | SdioWifiPwrseqMailboxOp::SetState { .. } => 0,
+                    });
+                }
+            }
+            polls = polls.saturating_add(1);
+            runtime_poll_pause();
+        }
+    }
+    None
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_get_polarity() -> Option<u32> {
+    sdio_wifi_pwrseq_mailbox_call(SdioWifiPwrseqMailboxOp::GetConfig)
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_configure_output_low(polarity: u32) -> bool {
+    sdio_wifi_pwrseq_mailbox_call(SdioWifiPwrseqMailboxOp::SetConfig { polarity }).is_some()
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn sdio_wifi_pwrseq_set_level(level: u32) -> bool {
+    sdio_wifi_pwrseq_mailbox_call(SdioWifiPwrseqMailboxOp::SetState { level }).is_some()
+}
+
+#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
+static TEST_SDIO_WIFI_PWRSEQ_CALLS: AtomicU32 = AtomicU32::new(0);
+#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
+static TEST_SDIO_WIFI_PWRSEQ_LEVELS: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
+static TEST_SDIO_WIFI_PWRSEQ_CONFIGS: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
+fn sdio_wifi_pwrseq_get_polarity() -> Option<u32> {
+    Some(0)
+}
+
+#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
+fn sdio_wifi_pwrseq_configure_output_low(_polarity: u32) -> bool {
+    TEST_SDIO_WIFI_PWRSEQ_CONFIGS.fetch_add(1, Ordering::AcqRel);
+    true
+}
+
+#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
+fn sdio_wifi_pwrseq_set_level(level: u32) -> bool {
+    TEST_SDIO_WIFI_PWRSEQ_CALLS.fetch_add(1, Ordering::AcqRel);
+    let _ =
+        TEST_SDIO_WIFI_PWRSEQ_LEVELS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |seen| {
+            Some((seen << 1) | (level & 1))
+        });
+    true
 }
 
 fn runtime_shared_buffer_bytes(descriptor: &DriverRuntimeInitDescriptor) -> usize {
@@ -6702,7 +7181,7 @@ fn service_runtime_notification(badge: u32) -> bool {
                 cyw43_runtime_service_dpc_event()
             }
         }
-        RuntimeNotificationRoute::LegacyPoll => false,
+        RuntimeNotificationRoute::Unavailable => false,
     }
 }
 
@@ -7279,7 +7758,10 @@ fn service_sdio_descriptor_command(command: DriverTaskCommandRecord) -> DriverTa
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
     if desc.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET {
+        #[cfg(test)]
         return service_sdio_generation_reset(command.sequence, desc.addr);
+        #[cfg(not(test))]
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
     if desc.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT {
         return service_sdio_generation_commit(command.sequence, desc.addr);
@@ -7621,7 +8103,7 @@ fn sdio_generation_reprobe_cmd52_allowed(desc: DriverRuntimeSdioCommandDescripto
     }
 }
 
-fn sdio_generation_reset_quiesce() -> bool {
+fn sdio_generation_reset_quiesce() {
     SDIO_RUNTIME_STATE.with_mut(|state| {
         state.card_irq_masked = true;
         state.dpc_activation_allowed = false;
@@ -7629,85 +8111,10 @@ fn sdio_generation_reset_quiesce() -> bool {
     });
     sdio_record_dpc_health(false);
     sdio_program_interrupt_policy();
-    if !sdio_recover_command_path() {
-        return false;
-    }
-    sdio_clear_last_transfer_failure();
-    // Match Linux interrupt unregister before resetting a live firmware
-    // generation. Host SIGNAL masking alone is insufficient: a retained
-    // CCCR IENx=0x07 would let the old dongle source relatch CARD_INT into the
-    // new epoch while firmware reload is still synchronous.
-    let interrupt_disable_arg = sdio_cmd52_arg(true, 0, SDIO_CCCR_IENX, 0);
-    if sdio_execute_transfer_with_timeout(
-        52,
-        interrupt_disable_arg,
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        DriverFrameDescriptor::empty(),
-        1,
-        0,
-        sdio_owner_descriptor_timeout_us(0),
-    )
-    .is_none()
-    {
-        let _ = sdio_recover_command_path();
-        return false;
-    }
-    let abort_arg = sdio_cmd52_arg(true, 0, SDIO_CCCR_ABORT, SDIO_FUNCTION_NUMBER_2);
-    if sdio_execute_transfer_with_timeout(
-        52,
-        abort_arg,
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        DriverFrameDescriptor::empty(),
-        1,
-        0,
-        sdio_owner_descriptor_timeout_us(0),
-    )
-    .is_none()
-    {
-        let _ = sdio_recover_command_path();
-        return false;
-    }
-    // Linux mmc_sdio_reset() resets the complete SDIO card through the CCCR
-    // ABORT.RES bit. CARDCTRL.WLANRESET and PMUCONTROL.RES_RELOAD were
-    // programmed during probe specifically so this edge resets the WLAN
-    // backplane and reloads PMU state. A Function-2 abort alone cannot create
-    // a fresh firmware generation and would repeat the same poisoned HT/PMU
-    // lifetime. Keep one strict primary read/modify/write route and fail
-    // closed if either CMD52 operation is not proved complete.
-    let reset_read_arg = sdio_cmd52_arg(false, 0, SDIO_CCCR_ABORT, 0);
-    let Some(abort) = sdio_execute_transfer_with_timeout(
-        52,
-        reset_read_arg,
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        DriverFrameDescriptor::empty(),
-        1,
-        0,
-        sdio_owner_descriptor_timeout_us(0),
-    ) else {
-        let _ = sdio_recover_command_path();
-        return false;
-    };
-    let reset_write_arg = sdio_cmd52_arg(
-        true,
-        0,
-        SDIO_CCCR_ABORT,
-        (abort as u8) | SDIO_CCCR_ABORT_RES,
-    );
-    if sdio_execute_transfer_with_timeout(
-        52,
-        reset_write_arg,
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        DriverFrameDescriptor::empty(),
-        1,
-        0,
-        sdio_owner_descriptor_timeout_us(0),
-    )
-    .is_none()
-    {
-        let _ = sdio_recover_command_path();
-        return false;
-    }
-    sdio_recover_command_path()
+    // Host masking and the poisoned generation prevent further DPC service.
+    // Do not issue card commands here: the old firmware may be wedged, and a
+    // failed CCCR transaction must never prevent the authoritative WL_ON
+    // power sequence from stopping that generation.
 }
 
 fn sdio_generation_reset_ack_while_masked() -> bool {
@@ -7763,12 +8170,228 @@ fn sdio_generation_reset_commit(requested: u32) -> bool {
     true
 }
 
-fn service_sdio_generation_reset(sequence: u32, requested: u32) -> DriverTaskCompletionRecord {
-    let current = SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch);
-    if !sdio_notification_dpc_ready() || !sdio_generation_reset_ring_admitted(current, requested) {
-        return DriverTaskCompletionRecord::fault(sequence, FAULT_REJECTED_COMMAND);
+fn sdio_engine_init_command_candidate(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.opcode == OPCODE_SERVICE
+        && command.arg0 == HOT_PATH_SDIO_HOST
+        && command.arg1 == ROLE_SDIO
+        && command_is_engine_init_aux(command.aux0)
+        && command.frame.len == 0
+}
+
+fn sdio_generation_reset_command_candidate(
+    command: DriverTaskCommandRecord,
+) -> Option<DriverRuntimeSdioCommandDescriptor> {
+    if command.sequence == 0
+        || command.opcode != OPCODE_SERVICE
+        || command.arg0 != HOT_PATH_SDIO_HOST
+        || command.arg1 != ROLE_SDIO
+        || command.frame.len as usize != core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()
+    {
+        return None;
     }
-    if !sdio_generation_reset_quiesce() || !sdio_generation_reset_ack_while_masked() {
+    let desc = read_sdio_command_descriptor(command.frame)?;
+    (desc.valid() && desc.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET).then_some(desc)
+}
+
+fn begin_sdio_engine_init(command: DriverTaskCommandRecord) -> Result<(), u16> {
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+        command.aux0,
+    );
+    if RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) != HOT_PATH_SDIO_HOST {
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH,
+            command.aux0,
+        );
+        return Err(FAULT_DEVICE_UNAVAILABLE);
+    }
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
+        command.aux0,
+    );
+    publish_service_dispatch_progress(command);
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH,
+        command.aux0,
+    );
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER,
+        command.aux0,
+    );
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH,
+        command.aux0,
+    );
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY,
+        command.aux0,
+    );
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN,
+        command.aux0,
+    );
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER,
+        command.aux0,
+    );
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED,
+        command.aux0,
+    );
+    RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        if descriptor.hot_path != HOT_PATH_SDIO_HOST {
+            publish_runtime_progress(
+                command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH,
+                command.aux0,
+            );
+            return Err(DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH as u16);
+        }
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY,
+            command.aux0,
+        );
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN,
+            command.aux0,
+        );
+        if !descriptor_resources_ready_with_progress(
+            descriptor,
+            HOT_PATH_SDIO_HOST,
+            command.sequence,
+            command.aux0,
+        ) {
+            publish_runtime_progress(
+                command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
+                command.aux0,
+            );
+            return Err(DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED as u16);
+        }
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY,
+            command.aux0,
+        );
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN,
+            command.aux0,
+        );
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH,
+            command.aux0,
+        );
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_BEGIN,
+            command.aux0,
+        );
+        reset_sdio_register_shadows();
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE,
+            command.aux0,
+        );
+        sdio_runtime_prepare(command.sequence, command.aux0, descriptor)
+    })?;
+    SDIO_RUNTIME_FLAGS.fetch_and(
+        !(ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY),
+        Ordering::AcqRel,
+    );
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.pwrseq = SdioPwrseqCursor::begin(
+            SdioPwrseqPurpose::EngineInit,
+            command.sequence,
+            command.aux0,
+        );
+    });
+    Ok(())
+}
+
+fn begin_sdio_generation_reset(sequence: u32, requested: u32) -> Result<(), u16> {
+    let current = SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch);
+    if !SDIO_RUNTIME_STATE.with_ref(|state| state.initialized)
+        || !sdio_notification_dpc_ready()
+        || !sdio_generation_reset_ring_admitted(current, requested)
+    {
+        return Err(FAULT_REJECTED_COMMAND);
+    }
+    sdio_generation_reset_quiesce();
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.pending_epoch = 0;
+        state.pwrseq = SdioPwrseqCursor::begin(
+            SdioPwrseqPurpose::GenerationReset {
+                requested_epoch: requested,
+            },
+            sequence,
+            DRIVER_RUNTIME_NET_INIT_AUX,
+        );
+    });
+    Ok(())
+}
+
+fn finish_sdio_engine_init(sequence: u32, aux0: u32) -> DriverTaskCompletionRecord {
+    if !sdio_arm_card_interrupt_after_init() {
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.pwrseq = SdioPwrseqCursor::idle();
+            state.initialized = false;
+        });
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
+            aux0,
+        );
+        return DriverTaskCompletionRecord::fault(
+            sequence,
+            DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR,
+        );
+    }
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.pwrseq = SdioPwrseqCursor::idle();
+        state.initialized = true;
+    });
+    SDIO_RUNTIME_FLAGS.fetch_or(
+        ENGINE_STATE_INITIALIZED
+            | ENGINE_STATE_DESCRIPTOR_READY
+            | ENGINE_STATE_RESOURCE_READY
+            | ENGINE_STATE_HW_READY,
+        Ordering::AcqRel,
+    );
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE,
+        aux0,
+    );
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE,
+        aux0,
+    );
+    DriverTaskCompletionRecord::progress_with_detail(
+        sequence,
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+        1,
+    )
+}
+
+fn finish_sdio_generation_reset(sequence: u32, requested: u32) -> DriverTaskCompletionRecord {
+    if !sdio_generation_reset_ack_while_masked() {
+        SDIO_RUNTIME_STATE.with_mut(|state| state.pwrseq = SdioPwrseqCursor::idle());
         return DriverTaskCompletionRecord::fault_with_result(
             sequence,
             FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
@@ -7776,6 +8399,7 @@ fn service_sdio_generation_reset(sequence: u32, requested: u32) -> DriverTaskCom
         );
     }
     SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.pwrseq = SdioPwrseqCursor::idle();
         state.pending_epoch = requested;
         state.card_irq_masked = true;
         state.dpc_activation_allowed = false;
@@ -7786,6 +8410,94 @@ fn service_sdio_generation_reset(sequence: u32, requested: u32) -> DriverTaskCom
     sdio_record_dpc_health(false);
     sdio_program_interrupt_policy();
     DriverTaskCompletionRecord::progress(sequence, requested)
+}
+
+fn service_sdio_pwrseq_command_turn(
+    command: DriverTaskCommandRecord,
+) -> Option<RuntimeCommandTurn> {
+    let active = SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq);
+    if !active.active() {
+        if sdio_engine_init_command_candidate(command) {
+            if let Err(detail) = begin_sdio_engine_init(command) {
+                publish_runtime_progress(
+                    command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
+                    command.aux0,
+                );
+                return Some(RuntimeCommandTurn::Complete(
+                    DriverTaskCompletionRecord::fault(command.sequence, detail),
+                ));
+            }
+        } else if let Some(desc) = sdio_generation_reset_command_candidate(command) {
+            if let Err(detail) = begin_sdio_generation_reset(command.sequence, desc.addr) {
+                return Some(RuntimeCommandTurn::Complete(
+                    DriverTaskCompletionRecord::fault(command.sequence, detail),
+                ));
+            }
+        } else {
+            return None;
+        }
+    } else if active.sequence != command.sequence {
+        return Some(RuntimeCommandTurn::Complete(
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+        ));
+    }
+
+    let cursor = SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq);
+    let purpose = cursor.purpose;
+    let aux0 = cursor.aux0;
+    Some(match sdio_linux_wifi_power_cycle_turn() {
+        SdioPwrseqTurn::Pending => RuntimeCommandTurn::Pending,
+        SdioPwrseqTurn::Ready => RuntimeCommandTurn::Complete(match purpose {
+            SdioPwrseqPurpose::EngineInit => finish_sdio_engine_init(command.sequence, aux0),
+            SdioPwrseqPurpose::GenerationReset { requested_epoch } => {
+                finish_sdio_generation_reset(command.sequence, requested_epoch)
+            }
+            SdioPwrseqPurpose::Idle => {
+                DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND)
+            }
+        }),
+        SdioPwrseqTurn::Fault(detail) => {
+            if matches!(purpose, SdioPwrseqPurpose::EngineInit) {
+                SDIO_RUNTIME_STATE.with_mut(|state| state.initialized = false);
+                publish_runtime_progress(
+                    command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
+                    aux0,
+                );
+                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                    command.sequence,
+                    detail,
+                ))
+            } else {
+                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+                    command.sequence,
+                    FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                    u32::from(detail),
+                ))
+            }
+        }
+    })
+}
+
+#[cfg(test)]
+fn service_sdio_generation_reset(sequence: u32, requested: u32) -> DriverTaskCompletionRecord {
+    if let Err(detail) = begin_sdio_generation_reset(sequence, requested) {
+        return DriverTaskCompletionRecord::fault(sequence, detail);
+    }
+    loop {
+        match sdio_linux_wifi_power_cycle_turn() {
+            SdioPwrseqTurn::Pending => {}
+            SdioPwrseqTurn::Ready => return finish_sdio_generation_reset(sequence, requested),
+            SdioPwrseqTurn::Fault(detail) => {
+                return DriverTaskCompletionRecord::fault_with_result(
+                    sequence,
+                    FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                    u32::from(detail),
+                );
+            }
+        }
+    }
 }
 
 fn service_sdio_generation_commit(sequence: u32, requested: u32) -> DriverTaskCompletionRecord {
@@ -9011,16 +9723,24 @@ fn sdio_execute_transfer_with_timeout(
     block_count: u16,
     timeout_us: u32,
 ) -> Option<u32> {
-    if cyw43_uses_sdio_bus_link() {
-        return sdio_execute_via_bus_link(
-            cmd,
-            arg,
-            flags,
-            frame,
-            block_size,
-            block_count,
-            timeout_us,
-        );
+    match RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) {
+        HOT_PATH_CYW43_WIFI => {
+            if !cyw43_uses_sdio_bus_link() {
+                cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
+                return None;
+            }
+            return sdio_execute_via_bus_link(
+                cmd,
+                arg,
+                flags,
+                frame,
+                block_size,
+                block_count,
+                timeout_us,
+            );
+        }
+        HOT_PATH_SDIO_HOST => {}
+        _ => return None,
     }
     let timeout_us = sdio_owner_descriptor_timeout_us(timeout_us);
     let mut owner_deadline =
@@ -9209,10 +9929,18 @@ fn sdio_execute_via_bus_link(
 }
 
 fn cyw43_configure_sdio_host(target_hz: u32, flags: u16) -> bool {
-    if !cyw43_uses_sdio_bus_link() {
+    #[cfg(not(target_os = "none"))]
+    {
         return sdio_apply_host_config(target_hz, flags);
     }
-    cyw43_configure_sdio_host_via_bus_link(target_hz, flags)
+    #[cfg(target_os = "none")]
+    {
+        if !cyw43_uses_sdio_bus_link() {
+            cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
+            return false;
+        }
+        cyw43_configure_sdio_host_via_bus_link(target_hz, flags)
+    }
 }
 
 #[cfg(target_os = "none")]
@@ -10694,10 +11422,9 @@ fn cyw43_transport_init_step(
             state.reset_firmware_upload_state();
             state.transport_ready = false;
             state.backplane_window_valid = false;
-            if !cyw43_uses_sdio_bus_link()
-                && sdio_runtime_init_hw(sequence, DRIVER_RUNTIME_NET_INIT_AUX).is_err()
-            {
-                return Err(FAULT_CYW43_TRANSPORT_DIRECT_SDIO);
+            #[cfg(target_os = "none")]
+            if !cyw43_uses_sdio_bus_link() {
+                return Err(FAULT_CYW43_TRANSPORT_BUS_LINK);
             }
             state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY;
             publish_runtime_progress(
@@ -12388,42 +13115,56 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
 
 fn cyw43_sdio_cmd52_read(function: u8, addr: u32) -> Option<u8> {
     #[cfg(target_os = "none")]
-    if cyw43_uses_sdio_bus_link() {
+    {
+        if !cyw43_uses_sdio_bus_link() {
+            cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
+            return None;
+        }
         return cyw43_sdio_cmd52_read_via_bus_link(function, addr);
     }
-    let response = sdio_execute_transfer(
-        SDIO_CMD52,
-        sdio_cmd52_arg(false, function, addr, 0),
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        DriverFrameDescriptor::empty(),
-        1,
-        0,
-    )?;
-    #[cfg(all(not(target_os = "none"), test))]
-    if test_sdio_cmd52_read_none_response(function, addr) {
-        return None;
+    #[cfg(not(target_os = "none"))]
+    {
+        let response = sdio_execute_transfer(
+            SDIO_CMD52,
+            sdio_cmd52_arg(false, function, addr, 0),
+            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+            DriverFrameDescriptor::empty(),
+            1,
+            0,
+        )?;
+        #[cfg(all(not(target_os = "none"), test))]
+        if test_sdio_cmd52_read_none_response(function, addr) {
+            return None;
+        }
+        #[cfg(all(not(target_os = "none"), test))]
+        if let Some(value) = test_sdio_cmd52_read_response(function, addr) {
+            return Some(value);
+        }
+        Some((response & 0xff) as u8)
     }
-    #[cfg(all(not(target_os = "none"), test))]
-    if let Some(value) = test_sdio_cmd52_read_response(function, addr) {
-        return Some(value);
-    }
-    Some((response & 0xff) as u8)
 }
 
 fn cyw43_sdio_cmd52_write(function: u8, addr: u32, value: u8) -> bool {
     #[cfg(target_os = "none")]
-    if cyw43_uses_sdio_bus_link() {
+    {
+        if !cyw43_uses_sdio_bus_link() {
+            cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
+            return false;
+        }
         return cyw43_sdio_cmd52_write_via_bus_link(function, addr, value);
     }
-    sdio_execute_transfer(
-        SDIO_CMD52,
-        sdio_cmd52_arg(true, function, addr, value),
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        DriverFrameDescriptor::empty(),
-        1,
-        0,
-    )
-    .is_some()
+    #[cfg(not(target_os = "none"))]
+    {
+        sdio_execute_transfer(
+            SDIO_CMD52,
+            sdio_cmd52_arg(true, function, addr, value),
+            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+            DriverFrameDescriptor::empty(),
+            1,
+            0,
+        )
+        .is_some()
+    }
 }
 
 fn cyw43_set_card_bus_width(width: u8) -> bool {
@@ -18627,11 +19368,42 @@ fn genet_read_rx_desc(slot: usize) -> (u32, u32, u32) {
     }
 }
 
+#[cfg(test)]
 fn sdio_runtime_init(
     sequence: u32,
     aux0: u32,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Result<u16, u16> {
+    sdio_runtime_prepare(sequence, aux0, descriptor)?;
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.pwrseq = SdioPwrseqCursor::begin(SdioPwrseqPurpose::EngineInit, sequence, aux0);
+    });
+    loop {
+        match sdio_linux_wifi_power_cycle_turn() {
+            SdioPwrseqTurn::Pending => {}
+            SdioPwrseqTurn::Ready => {
+                let ready = sdio_arm_card_interrupt_after_init();
+                SDIO_RUNTIME_STATE.with_mut(|state| {
+                    state.pwrseq = SdioPwrseqCursor::idle();
+                    state.initialized = ready;
+                });
+                return ready
+                    .then_some(DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY)
+                    .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
+            }
+            SdioPwrseqTurn::Fault(detail) => {
+                SDIO_RUNTIME_STATE.with_mut(|state| state.initialized = false);
+                return Err(detail);
+            }
+        }
+    }
+}
+
+fn sdio_runtime_prepare(
+    sequence: u32,
+    aux0: u32,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Result<(), u16> {
     publish_runtime_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
@@ -18639,15 +19411,16 @@ fn sdio_runtime_init(
     );
     let link = descriptor_notification_dpc_link(descriptor)
         .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR)?;
-    let irq = descriptor_sdio_irq(descriptor);
+    let irq = descriptor_sdio_irq(descriptor)
+        .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR)?;
     SDIO_RUNTIME_STATE.with_mut(|state| {
         state.reset();
-        state.dpc_link_ready = irq.is_some();
+        state.dpc_link_ready = true;
         state.shared_epoch = link.shared_epoch;
-        state.irq_badge = irq.map_or(0, |irq| irq.badge);
-        state.irq_handler_slot = irq.map_or(0, |irq| irq.handler_slot);
+        state.irq_badge = irq.badge;
+        state.irq_handler_slot = irq.handler_slot;
         state.peer_notification_slot = link.peer_notification_slot;
-        state.card_irq_masked = irq.is_some();
+        state.card_irq_masked = true;
     });
     #[cfg(target_os = "none")]
     dpc_event_ring_initialize_at(
@@ -18660,11 +19433,7 @@ fn sdio_runtime_init(
         aux0,
     );
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY, aux0);
-    let result = sdio_runtime_init_hw(sequence, aux0);
-    SDIO_RUNTIME_STATE.with_mut(|state| {
-        state.initialized = result.is_ok();
-    });
-    result.map(|()| DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY)
+    Ok(())
 }
 
 fn pcie_runtime_init(state: &mut PcieRuntimeState) -> bool {
@@ -28944,31 +29713,6 @@ fn sdio_set_clock_hz(target_hz: u32) -> bool {
     true
 }
 
-fn sdio_power_ready(power: u8, present: u32) -> bool {
-    (power & (SDHCI_POWER_330 | SDHCI_POWER_ON)) == (SDHCI_POWER_330 | SDHCI_POWER_ON)
-        && (present & (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE))
-            == (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE)
-        && (present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) == 0
-}
-
-fn sdio_power_card_ready(power: u8, present: u32) -> bool {
-    (power & (SDHCI_POWER_330 | SDHCI_POWER_ON)) == (SDHCI_POWER_330 | SDHCI_POWER_ON)
-        && (present & (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE))
-            == (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE)
-}
-
-fn sdio_settle_power_on_ready() {
-    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_POWER_READY_SPINS);
-    while !runtime_deadline_expired(&mut deadline) {
-        let power = sdio_read8(SDHCI_POWER_CONTROL);
-        let present = sdio_read32(SDHCI_PRESENT_STATE);
-        if sdio_power_ready(power, present) || sdio_power_card_ready(power, present) {
-            return;
-        }
-        runtime_poll_pause();
-    }
-}
-
 fn sdio_clear_post_clock_inhibit() -> bool {
     let present = sdio_read32(SDHCI_PRESENT_STATE);
     if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) == 0 {
@@ -29108,8 +29852,7 @@ fn runtime_irq_handler_ack(_handler_slot: u32) -> bool {
 
 fn sdio_arm_card_interrupt_after_init() -> bool {
     if !sdio_notification_dpc_ready() {
-        sdio_program_interrupt_policy();
-        return true;
+        return false;
     }
     SDIO_RUNTIME_STATE.with_mut(|state| {
         state.card_irq_masked = true;
@@ -29135,142 +29878,197 @@ fn sdio_arm_card_interrupt_after_init() -> bool {
     true
 }
 
-fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> Result<(), u16> {
-    if sdio_adopt_hal_prepared_host(sequence, aux0).is_ok() {
-        return sdio_arm_card_interrupt_after_init()
-            .then_some(())
-            .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
-    }
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
-        aux0,
-    );
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
-        aux0,
-    );
-    sdio_write16(SDHCI_CLOCK_CONTROL, 0);
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN,
-        aux0,
-    );
-    sdio_write8(SDHCI_POWER_CONTROL, 0);
-    runtime_spin(SDHCI_POWER_READY_SPINS);
-    if !sdio_software_reset(SDHCI_RESET_ALL) {
-        if sdio_adopt_hal_prepared_host(sequence, aux0).is_ok() {
-            return sdio_arm_card_interrupt_after_init()
-                .then_some(())
-                .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
-        }
-        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED);
-    }
-    sdio_write8(SDHCI_POWER_CONTROL, SDHCI_POWER_330 | SDHCI_POWER_ON);
-    sdio_settle_power_on_ready();
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
-        aux0,
-    );
-    sdio_write8(SDHCI_TIMEOUT_CONTROL, 0x0e);
-    sdio_program_interrupt_policy();
-    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    let _ = sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
-        if !sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
-            return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED);
-        }
-        sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-        if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
-            return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED);
-        }
-    }
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY,
-        aux0,
-    );
-    if !sdio_clear_post_clock_inhibit() {
-        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED);
-    }
-    sdio_write8(SDHCI_HOST_CONTROL, sdio_read8(SDHCI_HOST_CONTROL) & !0x06);
-    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    if !sdio_arm_card_interrupt_after_init() {
-        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
-    }
-    publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, aux0);
-    Ok(())
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioPwrseqTurn {
+    Pending,
+    Ready,
+    Fault(u16),
 }
 
-fn sdio_adopt_hal_prepared_host(sequence: u32, aux0: u32) -> Result<(), u16> {
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
-        aux0,
-    );
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN,
-        aux0,
-    );
-    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
-        aux0,
-    );
-    let mut power = sdio_read8(SDHCI_POWER_CONTROL);
-    let mut present = sdio_read32(SDHCI_PRESENT_STATE);
-    if !sdio_power_card_ready(power, present) {
-        sdio_write8(SDHCI_POWER_CONTROL, SDHCI_POWER_330 | SDHCI_POWER_ON);
-        sdio_settle_power_on_ready();
-        power = sdio_read8(SDHCI_POWER_CONTROL);
-        present = sdio_read32(SDHCI_PRESENT_STATE);
-        if !sdio_power_card_ready(power, present) {
+fn sdio_pwrseq_store_cursor(cursor: SdioPwrseqCursor) {
+    SDIO_RUNTIME_STATE.with_mut(|state| state.pwrseq = cursor);
+}
+
+fn sdio_pwrseq_fail(detail: u16) -> SdioPwrseqTurn {
+    sdio_pwrseq_store_cursor(SdioPwrseqCursor::idle());
+    SdioPwrseqTurn::Fault(detail)
+}
+
+fn sdio_linux_wifi_power_cycle_turn() -> SdioPwrseqTurn {
+    let mut cursor = SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq);
+    if !cursor.active() {
+        return SdioPwrseqTurn::Fault(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+    }
+    let sequence = cursor.sequence;
+    let aux0 = cursor.aux0;
+    match cursor.phase {
+        SdioPwrseqPhase::Idle => {
+            return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+        }
+        SdioPwrseqPhase::GetGpioConfig => {
             publish_runtime_progress(
                 sequence,
-                DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN,
                 aux0,
             );
-            return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING);
+            let Some(polarity) = sdio_wifi_pwrseq_get_polarity() else {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            };
+            cursor.gpio_polarity = polarity;
+            cursor.phase = SdioPwrseqPhase::ConfigureOutputLow;
+        }
+        SdioPwrseqPhase::ConfigureOutputLow => {
+            if !sdio_wifi_pwrseq_configure_output_low(cursor.gpio_polarity) {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            }
+            cursor.phase = SdioPwrseqPhase::AssertLow;
+        }
+        SdioPwrseqPhase::AssertLow => {
+            if !sdio_wifi_pwrseq_set_level(0) {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            }
+            cursor.phase = SdioPwrseqPhase::PowerOff;
+        }
+        SdioPwrseqPhase::PowerOff => {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
+                aux0,
+            );
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
+                aux0,
+            );
+            sdio_write16(SDHCI_CLOCK_CONTROL, 0);
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN,
+                aux0,
+            );
+            sdio_write8(SDHCI_POWER_CONTROL, 0);
+            let Some(settle) = SdioPwrseqSettle::start(PI4_WIFI_PWRSEQ_OFF_SETTLE_US) else {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            };
+            cursor.settle = settle;
+            cursor.phase = SdioPwrseqPhase::WaitOff;
+        }
+        SdioPwrseqPhase::WaitOff => {
+            if !cursor.settle.ready() {
+                sdio_pwrseq_store_cursor(cursor);
+                return SdioPwrseqTurn::Pending;
+            }
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE,
+                aux0,
+            );
+            cursor.phase = SdioPwrseqPhase::ResetAllAndPowerOn;
+        }
+        SdioPwrseqPhase::ResetAllAndPowerOn => {
+            if !sdio_software_reset(SDHCI_RESET_ALL) {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED);
+            }
+            sdio_write8(SDHCI_POWER_CONTROL, SDHCI_POWER_330 | SDHCI_POWER_ON);
+            let Some(settle) = SdioPwrseqSettle::start(PI4_WIFI_PWRSEQ_POWER_UP_SETTLE_US) else {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            };
+            cursor.settle = settle;
+            cursor.phase = SdioPwrseqPhase::WaitPowerUp;
+        }
+        SdioPwrseqPhase::WaitPowerUp => {
+            if !cursor.settle.ready() {
+                sdio_pwrseq_store_cursor(cursor);
+                return SdioPwrseqTurn::Pending;
+            }
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
+                aux0,
+            );
+            cursor.phase = SdioPwrseqPhase::ReleaseHigh;
+        }
+        SdioPwrseqPhase::ReleaseHigh => {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN,
+                aux0,
+            );
+            if !sdio_wifi_pwrseq_set_level(1) {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            }
+            cursor.phase = SdioPwrseqPhase::ProgramStartupClock;
+        }
+        SdioPwrseqPhase::ProgramStartupClock => {
+            sdio_write8(SDHCI_TIMEOUT_CONTROL, 0x0e);
+            sdio_program_interrupt_policy();
+            sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+            let _ = sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+            sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+            if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
+                if !sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
+                    return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED);
+                }
+                sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+                if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
+                    return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED);
+                }
+            }
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY,
+                aux0,
+            );
+            let Some(settle) = SdioPwrseqSettle::start(PI4_WIFI_PWRSEQ_POST_CLOCK_SETTLE_US) else {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
+            };
+            cursor.settle = settle;
+            cursor.phase = SdioPwrseqPhase::WaitPostClock;
+        }
+        SdioPwrseqPhase::WaitPostClock => {
+            if !cursor.settle.ready() {
+                sdio_pwrseq_store_cursor(cursor);
+                return SdioPwrseqTurn::Pending;
+            }
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE,
+                aux0,
+            );
+            cursor.phase = SdioPwrseqPhase::Finalize;
+        }
+        SdioPwrseqPhase::Finalize => {
+            if !sdio_clear_post_clock_inhibit() {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED);
+            }
+            sdio_write8(SDHCI_HOST_CONTROL, sdio_read8(SDHCI_HOST_CONTROL) & !0x06);
+            sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+            publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, aux0);
+            return SdioPwrseqTurn::Ready;
         }
     }
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
-        aux0,
-    );
-    sdio_write8(SDHCI_TIMEOUT_CONTROL, 0x0e);
-    sdio_program_interrupt_policy();
-    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
-        publish_runtime_progress(
-            sequence,
-            DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
-            aux0,
-        );
-        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED);
+    sdio_pwrseq_store_cursor(cursor);
+    SdioPwrseqTurn::Pending
+}
+
+#[cfg(test)]
+fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> Result<(), u16> {
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.pwrseq = SdioPwrseqCursor::begin(SdioPwrseqPurpose::EngineInit, sequence, aux0);
+    });
+    loop {
+        match sdio_linux_wifi_power_cycle_turn() {
+            SdioPwrseqTurn::Pending => {}
+            SdioPwrseqTurn::Ready => {
+                let ready = sdio_arm_card_interrupt_after_init();
+                SDIO_RUNTIME_STATE.with_mut(|state| state.pwrseq = SdioPwrseqCursor::idle());
+                return ready
+                    .then_some(())
+                    .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
+            }
+            SdioPwrseqTurn::Fault(detail) => return Err(detail),
+        }
     }
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY,
-        aux0,
-    );
-    if !sdio_clear_post_clock_inhibit() {
-        publish_runtime_progress(
-            sequence,
-            DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED,
-            aux0,
-        );
-        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED);
-    }
-    sdio_write8(SDHCI_HOST_CONTROL, sdio_read8(SDHCI_HOST_CONTROL) & !0x06);
-    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, aux0);
-    Ok(())
 }
 
 fn sdio_apply_host_config(target_hz: u32, flags: u16) -> bool {
@@ -29715,7 +30513,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 );
             }
             let descriptor = RUNTIME_DESCRIPTOR.load();
-            if runtime_notification_route(&descriptor) != RuntimeNotificationRoute::LegacyPoll {
+            if runtime_notification_route(&descriptor) != RuntimeNotificationRoute::Unavailable {
                 // Poll the persistent ring/source once before sleeping so a
                 // coalesced or already-consumed doorbell cannot strand work.
                 let _ = service_runtime_notification(0);
@@ -29776,16 +30574,30 @@ pub fn runtime_main(task_key: usize) -> ! {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
             command.aux0,
         );
-        let completion = if quarantine_command_fault {
+        let turn = if quarantine_command_fault {
             let event_sequence =
                 CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.event_sequence);
-            DriverTaskCompletionRecord::fault_with_result(
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
                 command.sequence,
                 FAULT_CYW43_TRANSPORT_BUS_LINK,
                 event_sequence,
-            )
+            ))
         } else {
-            service_command(task_key, command)
+            service_command_turn(task_key, command)
+        };
+        let RuntimeCommandTurn::Complete(completion) = turn else {
+            // Retain the exact command intake and any implicit reply cap while
+            // one Linux-ordered SDIO power-sequence phase is pending. No
+            // completion sequence or peer notification is published until the
+            // hardware sequence reaches a terminal state.
+            pending_intake = Some(intake);
+            // SAFETY: One bounded physical action or one deadline sample was
+            // completed. Yield before the next phase so fixed settle intervals
+            // advance without monopolising the linked-runtime core.
+            unsafe {
+                sel4_sys::seL4_Yield();
+            }
+            continue;
         };
         driver_task_shared_store_barrier();
         if completion.code != COMPLETION_FAULT {
@@ -29890,6 +30702,9 @@ mod tests {
         SDIO_RUNTIME_FLAGS.store(0, Ordering::Release);
         SDIO_CMD_COUNT.store(0, Ordering::Release);
         TEST_SDIO_RESET_FAIL_ONCE_MASK.store(0, Ordering::Release);
+        TEST_SDIO_WIFI_PWRSEQ_CALLS.store(0, Ordering::Release);
+        TEST_SDIO_WIFI_PWRSEQ_LEVELS.store(0, Ordering::Release);
+        TEST_SDIO_WIFI_PWRSEQ_CONFIGS.store(0, Ordering::Release);
         reset_sdio_register_shadows();
         PCIE_RUNTIME_FLAGS.store(0, Ordering::Release);
         PCIE_OP_COUNT.store(0, Ordering::Release);
@@ -29930,12 +30745,47 @@ mod tests {
         malformed.irqs[0].handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT + 1;
         assert_eq!(
             runtime_notification_route(&malformed),
-            RuntimeNotificationRoute::LegacyPoll
+            RuntimeNotificationRoute::Unavailable
         );
     }
 
     #[test]
-    fn sdio_irq_bind_failure_retains_polling_diagnostic_service() {
+    fn sdio_descriptor_admits_only_fixed_wifi_power_resources() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+        assert!(descriptor_resources_ready(&descriptor, HOT_PATH_SDIO_HOST));
+        let sdhci = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+        )
+        .expect("SDIO host range");
+        let mailbox = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+        )
+        .expect("WiFi power mailbox range");
+        let request = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+        )
+        .expect("WiFi power request range");
+        assert_eq!(sdhci.page_count, 1);
+        assert_eq!(mailbox.page_count, 1);
+        assert_eq!(request.page_count, 1);
+        assert_eq!(
+            mailbox.vaddr,
+            sdhci.vaddr + DRIVER_RUNTIME_RESOURCE_PAGE_BYTES
+        );
+        assert_eq!(request.vaddr, DRIVER_TASK_DMA_BUFFER_VADDR as u64);
+        assert!(request.paddr <= 0x3fff_ffff);
+    }
+
+    #[test]
+    fn sdio_irq_bind_failure_is_not_a_service_route() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut descriptor = descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO);
@@ -29947,14 +30797,14 @@ mod tests {
 
         assert_eq!(
             runtime_notification_route(&descriptor),
-            RuntimeNotificationRoute::LegacyPoll
+            RuntimeNotificationRoute::Unavailable
         );
         assert_eq!(
             sdio_runtime_init(76, DRIVER_RUNTIME_ENGINE_INIT_AUX, &descriptor),
-            Ok(DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY)
+            Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR)
         );
         SDIO_RUNTIME_STATE.with_ref(|state| {
-            assert!(state.initialized);
+            assert!(!state.initialized);
             assert!(!state.dpc_link_ready);
             assert_eq!(state.irq_handler_slot, 0);
         });
@@ -30188,20 +31038,21 @@ mod tests {
         });
 
         let requested = dpc_generation_next(current);
-        // Model an old live generation whose CCCR route was already 0x07,
-        // then require the real reset service to disable it, abort Function 2,
-        // and assert the card-wide ABORT.RES bit before epoch commit. The card
-        // route must stay disabled throughout reload and re-enumeration.
+        // Model an old live generation, then require the authoritative WL_ON
+        // sequence to stop it without depending on any response from the old
+        // card or firmware generation.
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.card_irq_masked = false;
             state.dpc_activation_allowed = true;
         });
         reset_test_sdio_transfer_log();
-        test_sdio_cmd52_read_abort_response(SDIO_FUNCTION_NUMBER_2);
         assert_eq!(
             service_sdio_generation_reset(0x50f, requested),
             DriverTaskCompletionRecord::progress(0x50f, requested)
         );
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CALLS.load(Ordering::Acquire), 2);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_LEVELS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CONFIGS.load(Ordering::Acquire), 1);
         let ienx_disable = |record: TestSdioTransferRecord| {
             record.cmd == SDIO_CMD52 && record.arg == sdio_cmd52_arg(true, 0, SDIO_CCCR_IENX, 0)
         };
@@ -30209,39 +31060,8 @@ mod tests {
             record.cmd == SDIO_CMD52
                 && record.arg == sdio_cmd52_arg(true, 0, SDIO_CCCR_IENX, SDIO_INTERRUPT_ENABLE_MASK)
         };
-        let f2_abort = |record: TestSdioTransferRecord| {
-            record.cmd == SDIO_CMD52
-                && record.arg == sdio_cmd52_arg(true, 0, SDIO_CCCR_ABORT, SDIO_FUNCTION_NUMBER_2)
-        };
-        let card_reset_read = |record: TestSdioTransferRecord| {
-            record.cmd == SDIO_CMD52 && record.arg == sdio_cmd52_arg(false, 0, SDIO_CCCR_ABORT, 0)
-        };
-        let card_reset_write = |record: TestSdioTransferRecord| {
-            record.cmd == SDIO_CMD52
-                && record.arg
-                    == sdio_cmd52_arg(
-                        true,
-                        0,
-                        SDIO_CCCR_ABORT,
-                        SDIO_FUNCTION_NUMBER_2 | SDIO_CCCR_ABORT_RES,
-                    )
-        };
-        assert_eq!(test_sdio_transfer_count(ienx_disable), 1);
+        assert_eq!(test_sdio_transfer_count(ienx_disable), 0);
         assert_eq!(test_sdio_transfer_count(ienx_enable), 0);
-        assert_eq!(test_sdio_transfer_count(f2_abort), 1);
-        assert_eq!(test_sdio_transfer_count(card_reset_read), 1);
-        assert_eq!(test_sdio_transfer_count(card_reset_write), 1);
-        assert!(
-            test_sdio_first_transfer_index(ienx_disable) < test_sdio_first_transfer_index(f2_abort)
-        );
-        assert!(
-            test_sdio_first_transfer_index(f2_abort)
-                < test_sdio_first_transfer_index(card_reset_read)
-        );
-        assert!(
-            test_sdio_first_transfer_index(card_reset_read)
-                < test_sdio_first_transfer_index(card_reset_write)
-        );
         assert!(!sdio_runtime_service_notification(0));
         SDIO_RUNTIME_STATE.with_ref(|state| {
             assert_eq!(state.shared_epoch, current);
@@ -30314,37 +31134,34 @@ mod tests {
     }
 
     #[test]
-    fn sdio_generation_reset_faults_before_epoch_commit_on_card_reset_failure() {
+    fn sdio_generation_reset_does_not_depend_on_old_card_responses() {
         let _guard = test_guard();
         let current = 0x4359_5301;
         let requested = dpc_generation_next(current);
-        for failed_arg in [
-            sdio_cmd52_arg(false, 0, SDIO_CCCR_ABORT, 0),
-            sdio_cmd52_arg(true, 0, SDIO_CCCR_ABORT, SDIO_CCCR_ABORT_RES),
-        ] {
-            reset_runtime_for_test();
-            SDIO_RUNTIME_STATE.with_mut(|state| {
-                state.initialized = true;
-                state.dpc_link_ready = true;
-                state.shared_epoch = current;
-                state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
-                state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
-                state.card_irq_masked = false;
-                state.dpc_activation_allowed = true;
-            });
-            test_sdio_transfer_fail_next_arg(SDIO_CMD52, failed_arg);
+        reset_runtime_for_test();
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.dpc_link_ready = true;
+            state.shared_epoch = current;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = false;
+            state.dpc_activation_allowed = true;
+        });
+        test_sdio_transfer_fail_next_arg(SDIO_CMD52, sdio_cmd52_arg(false, 0, SDIO_CCCR_ABORT, 0));
 
-            let completion = service_sdio_generation_reset(0x520, requested);
-
-            assert_eq!(completion.code, COMPLETION_FAULT);
-            assert_eq!(completion.detail, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED);
-            SDIO_RUNTIME_STATE.with_ref(|state| {
-                assert_eq!(state.shared_epoch, current);
-                assert!(state.card_irq_masked);
-                assert!(!state.dpc_activation_allowed);
-                assert!(state.dpc_poisoned);
-            });
-        }
+        assert_eq!(
+            service_sdio_generation_reset(0x520, requested),
+            DriverTaskCompletionRecord::progress(0x520, requested)
+        );
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CONFIGS.load(Ordering::Acquire), 1);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.shared_epoch, current);
+            assert_eq!(state.pending_epoch, requested);
+            assert!(state.card_irq_masked);
+            assert!(!state.dpc_activation_allowed);
+            assert!(state.dpc_poisoned);
+        });
     }
 
     #[test]
@@ -31306,6 +32123,9 @@ mod tests {
             DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE
         );
         assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_ENGINE_INIT_AUX);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CALLS.load(Ordering::Acquire), 0);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_LEVELS.load(Ordering::Acquire), 0);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CONFIGS.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -32604,6 +33424,11 @@ mod tests {
         let mut range_index = 0usize;
         if mmio_pages != 0 {
             descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED;
+            let primary_mmio_pages = if hot_path == HOT_PATH_SDIO_HOST {
+                1
+            } else {
+                mmio_pages
+            };
             descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
                 DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
                 DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
@@ -32619,11 +33444,26 @@ mod tests {
                 },
                 DRIVER_TASK_DEVICE_MMIO_VADDR as u64,
                 0x1000_0000,
-                u64::from(mmio_pages) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
-                mmio_pages,
+                u64::from(primary_mmio_pages) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                primary_mmio_pages,
                 0,
             );
             range_index += 1;
+            if hot_path == HOT_PATH_SDIO_HOST {
+                descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+                    DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+                    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+                    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+                    DRIVER_TASK_DEVICE_MMIO_VADDR as u64 + DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                    0x1000_1000,
+                    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                    1,
+                    1,
+                );
+                range_index += 1;
+            }
         }
         if dma_pages != 0 {
             descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
@@ -32631,7 +33471,11 @@ mod tests {
                 DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
                     | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
                     | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
-                DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                if hot_path == HOT_PATH_SDIO_HOST {
+                    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST
+                } else {
+                    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA
+                },
                 DRIVER_TASK_DMA_BUFFER_VADDR as u64,
                 0x2000_0000,
                 u64::from(dma_pages) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
@@ -40363,23 +41207,181 @@ mod tests {
     }
 
     #[test]
-    fn sdio_adopt_without_present_state_reports_power_missing_marker() {
+    fn sdio_wifi_power_sequence_uses_linux_pi4_settle_intervals() {
+        assert_eq!(PI4_WIFI_PWRSEQ_OFF_SETTLE_US, 2_000);
+        assert_eq!(PI4_WIFI_PWRSEQ_POWER_UP_SETTLE_US, 10_000);
+        assert_eq!(PI4_WIFI_PWRSEQ_POST_CLOCK_SETTLE_US, 10_000);
+        assert_eq!(
+            PI4_WIFI_PWRSEQ_OFF_SETTLE_US
+                + PI4_WIFI_PWRSEQ_POWER_UP_SETTLE_US
+                + PI4_WIFI_PWRSEQ_POST_CLOCK_SETTLE_US,
+            22_000
+        );
+    }
+
+    #[test]
+    fn sdio_wifi_power_sequence_advances_one_bounded_action_per_turn() {
         let _guard = test_guard();
         reset_runtime_for_test();
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.pwrseq = SdioPwrseqCursor::begin(
+                SdioPwrseqPurpose::EngineInit,
+                0x701,
+                DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            );
+        });
+
+        let expected = [
+            SdioPwrseqPhase::ConfigureOutputLow,
+            SdioPwrseqPhase::AssertLow,
+            SdioPwrseqPhase::PowerOff,
+            SdioPwrseqPhase::WaitOff,
+            SdioPwrseqPhase::WaitOff,
+            SdioPwrseqPhase::ResetAllAndPowerOn,
+            SdioPwrseqPhase::WaitPowerUp,
+            SdioPwrseqPhase::WaitPowerUp,
+            SdioPwrseqPhase::ReleaseHigh,
+            SdioPwrseqPhase::ProgramStartupClock,
+            SdioPwrseqPhase::WaitPostClock,
+            SdioPwrseqPhase::WaitPostClock,
+            SdioPwrseqPhase::Finalize,
+        ];
+        for phase in expected {
+            assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+            assert_eq!(
+                SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.phase),
+                phase
+            );
+        }
+        assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Ready);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CONFIGS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CALLS.load(Ordering::Acquire), 2);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_LEVELS.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn sdio_wifi_settle_deadline_requires_a_continuation_turn_without_counter() {
+        let mut settle = SdioPwrseqSettle::start(PI4_WIFI_PWRSEQ_POWER_UP_SETTLE_US)
+            .expect("host fallback settle must exist");
+        assert!(!settle.ready());
+        assert!(settle.ready());
+    }
+
+    #[test]
+    fn sdio_engine_init_turn_withholds_completion_until_pwrseq_terminal() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+        let command = DriverTaskCommandRecord {
+            sequence: 0x702,
+            opcode: OPCODE_SERVICE,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
 
         assert_eq!(
-            sdio_adopt_hal_prepared_host(73, DRIVER_RUNTIME_ENGINE_INIT_AUX),
-            Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING)
+            service_command_turn(0, command),
+            RuntimeCommandTurn::Pending
         );
+        assert!(SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.active()));
+        assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.initialized));
+        assert!(!engine_initialized(&SDIO_RUNTIME_FLAGS));
 
-        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
-        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
-        assert_eq!(read_ring_u32(offset + 4), 73);
+        let completion = loop {
+            match service_command_turn(0, command) {
+                RuntimeCommandTurn::Pending => {}
+                RuntimeCommandTurn::Complete(completion) => break completion,
+            }
+        };
         assert_eq!(
-            read_ring_u32(offset + 8),
-            DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING
+            completion,
+            DriverTaskCompletionRecord::progress_with_detail(
+                command.sequence,
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+                1,
+            )
         );
-        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_ENGINE_INIT_AUX);
+        assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.active()));
+        assert!(SDIO_RUNTIME_STATE.with_ref(|state| state.initialized));
+        assert!(engine_initialized(&SDIO_RUNTIME_FLAGS));
+    }
+
+    #[test]
+    fn sdio_generation_reset_keeps_epoch_uncommitted_while_pwrseq_pending() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let current = 0x4359_5301;
+        let requested = dpc_generation_next(current);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.dpc_link_ready = true;
+            state.shared_epoch = current;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+        });
+        assert_eq!(begin_sdio_generation_reset(0x703, requested), Ok(()));
+        assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.shared_epoch, current);
+            assert_eq!(state.pending_epoch, 0);
+            assert!(state.card_irq_masked);
+            assert!(state.dpc_poisoned);
+            assert!(!state.dpc_activation_allowed);
+        });
+        assert!(!sdio_generation_reset_commit(requested));
+    }
+
+    #[test]
+    fn sdio_wifi_pwrseq_accepts_firmware_zero_gpio_success_token() {
+        assert!(sdio_wifi_pwrseq_response_header_complete(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+            8,
+            8,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 8,
+            0,
+            0,
+        ));
+        assert!(!sdio_wifi_pwrseq_response_header_complete(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
+            8,
+            8,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 8,
+            PI4_WIFI_PWRSEQ_GPIO_WL_ON,
+            0,
+        ));
+    }
+
+    #[test]
+    fn sdio_wifi_pwrseq_get_config_requires_exact_firmware_reply_shape() {
+        assert!(sdio_wifi_pwrseq_response_header_complete(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
+            PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
+            20,
+            20,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 20,
+            0,
+            0,
+        ));
+        assert!(!sdio_wifi_pwrseq_response_header_complete(
+            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+            PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
+            PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
+            20,
+            20,
+            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 20,
+            0,
+            1,
+        ));
     }
 
     #[test]
@@ -40441,12 +41443,22 @@ mod tests {
             DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE
         );
         assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_ENGINE_INIT_AUX);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CALLS.load(Ordering::Acquire), 2);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_LEVELS.load(Ordering::Acquire), 1);
+        assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CONFIGS.load(Ordering::Acquire), 1);
     }
 
     #[test]
     fn sdio_engine_init_programs_startup_clock_after_pre_clock_reset_miss() {
         let _guard = test_guard();
         reset_runtime_for_test();
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.shared_epoch = 0x4359_5301;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = true;
+        });
 
         TEST_SDIO_RESET_FAIL_ONCE_MASK.store(
             u32::from(SDHCI_RESET_CMD | SDHCI_RESET_DATA),

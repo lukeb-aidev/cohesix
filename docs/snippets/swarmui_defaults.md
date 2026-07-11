@@ -3,8 +3,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `cdf450fc38f44e8a9a2063c97b7aeda81bf11bf8989b6db09c4ef79d8eeecb19`
-- `swarmui.defaults.sha256`: `1e8da2af97084c0fafeff758992f5c144568dc535a4a0776608dd22fa9030a93`
+- `manifest.sha256`: `726441bd837cd419d81451de3e13b84ac152a9090bb47a0a66b233fc8307f315`
+- `swarmui.defaults.sha256`: `891b05e78a2e3ae2557e3cbcf7e57d3cd614ad951f04e9a587d30eb677bf1276`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -30,4 +30,4 @@
 - `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `cdf450fc38f44e8a9a2063c97b7aeda81bf11bf8989b6db09c4ef79d8eeecb19`)._
+_Generated from `configs/root_task.toml` (sha256: `726441bd837cd419d81451de3e13b84ac152a9090bb47a0a66b233fc8307f315`)._

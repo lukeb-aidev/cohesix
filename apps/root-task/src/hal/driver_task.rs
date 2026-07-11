@@ -137,12 +137,6 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
@@ -153,6 +147,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
@@ -5971,20 +5969,16 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN => "sdio-state-reset-begin",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE => "sdio-state-reset-done",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY => "sdio-hw-entry",
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN => "sdio-adopt-begin",
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING => "sdio-adopt-power-missing",
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED => "sdio-adopt-clock-failed",
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED => "sdio-adopt-inhibit-failed",
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN => "sdio-adopt-int-clear-begin",
-        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN => {
-            "sdio-adopt-present-read-begin"
-        }
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN => {
             "sdio-reset-clock-disable-begin"
         }
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN => {
             "sdio-reset-power-disable-begin"
         }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_BEGIN => "sdio-wl-on-low-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE => "sdio-wl-on-low-done",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN => "sdio-wl-on-high-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE => "sdio-wl-on-high-done",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_BEGIN => "cyw43-transport-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_READY => "cyw43-bus-link-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_ADOPT_BEGIN => "cyw43-card-adopt-begin",
@@ -8582,10 +8576,14 @@ impl DriverTaskContract {
     #[must_use]
     pub const fn max_service_us(self) -> u32 {
         match self.kind {
-            DriverTaskKind::Serial
-            | DriverTaskKind::LocalSeatUsb
-            | DriverTaskKind::SdioHost
-            | DriverTaskKind::WiredNic => 20_000,
+            DriverTaskKind::Serial | DriverTaskKind::LocalSeatUsb | DriverTaskKind::WiredNic => {
+                20_000
+            }
+            // The isolated SDIO owner advances Linux-equivalent WiFi power
+            // sequencing as one bounded physical action or deadline sample per
+            // retained command turn. Fixed settle intervals span turns and do
+            // not widen the per-turn scheduling contract.
+            DriverTaskKind::SdioHost => 20_000,
             DriverTaskKind::HdmiText => 300_000,
             DriverTaskKind::WifiNic => 4_000_000,
             DriverTaskKind::PcieRoot => 750,
@@ -15251,12 +15249,12 @@ mod tests {
                     );
                 }
                 DriverTaskHotPath::SdioHost => {
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 0);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 1);
                     assert_eq!(
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         32
                     );
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Mmio), 1);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Mmio), 2);
                 }
                 DriverTaskHotPath::PcieRoot => {
                     assert_eq!(
@@ -15296,7 +15294,7 @@ mod tests {
         assert_eq!(pcie.hot_path, DriverTaskHotPath::PcieRoot);
         assert!(genet.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 6);
         assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
-        assert_eq!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 1);
+        assert_eq!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 2);
         assert!(pcie.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 10);
     }
 

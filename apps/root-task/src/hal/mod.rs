@@ -82,7 +82,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
     DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
     DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
-    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1563,6 +1564,8 @@ const PI4_DRIVER_RUNTIME_GENET_MMIO_BASES: &[usize] = &[0xFD58_0000, 0x7D58_0000
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES: &[usize] = &[0xFE30_0000, 0x7E30_0000];
 #[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES: &[usize] = &[0xFE00_B000, 0x7E00_B000];
+#[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_NO_MMIO_BASES: &[usize] = &[];
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES: &[usize] = &[0xFD50_0000, 0xFE50_0000, 0x7D50_0000];
@@ -1590,7 +1593,7 @@ fn runtime_candidate_covers_pages(env: &KernelEnv<'_>, base: usize, pages: usize
         let Some(paddr) = base.checked_add(offset) else {
             return false;
         };
-        if env.device_coverage(paddr, sel4::PAGE_BITS).is_none() {
+        if !env.device_page_available_for_child(paddr) {
             return false;
         }
     }
@@ -1903,6 +1906,23 @@ impl RuntimeInitDescriptorBuilder {
         pages: usize,
         first_page_index: u16,
     ) -> Result<(), HalError> {
+        self.add_tagged_mmio_resource_range(
+            runtime_mmio_resource_tag(hot_path),
+            vaddr,
+            paddr,
+            pages,
+            first_page_index,
+        )
+    }
+
+    fn add_tagged_mmio_resource_range(
+        &mut self,
+        tag: u32,
+        vaddr: usize,
+        paddr: usize,
+        pages: usize,
+        first_page_index: u16,
+    ) -> Result<(), HalError> {
         let page_count = u16::try_from(pages)
             .map_err(|_| HalError::Unsupported("driver-runtime-init-mmio-range-pages"))?;
         self.add_resource_range(DriverRuntimeResourceRangeDescriptor::new(
@@ -1910,7 +1930,7 @@ impl RuntimeInitDescriptorBuilder {
             DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
                 | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
                 | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
-            runtime_mmio_resource_tag(hot_path),
+            tag,
             vaddr as u64,
             paddr as u64,
             (pages as u64).saturating_mul(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES),
@@ -1938,7 +1958,14 @@ impl RuntimeInitDescriptorBuilder {
                 if paddr_contiguous {
                     flags |= DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS;
                 }
-                (DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, flags)
+                (
+                    if hot_path == driver_task::DriverTaskHotPath::SdioHost {
+                        DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST
+                    } else {
+                        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA
+                    },
+                    flags,
+                )
             }
             DRIVER_RUNTIME_RESOURCE_KIND_SHARED => (
                 if hot_path == driver_task::DriverTaskHotPath::Cyw43Wifi {
@@ -3383,6 +3410,59 @@ impl<'a> KernelHal<'a> {
         }
         let page_bytes = 1usize << sel4::PAGE_BITS;
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
+        if hot_path == driver_task::DriverTaskHotPath::SdioHost && pages == 2 {
+            for (&sdhci_base, &pwrseq_base) in PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES
+                .iter()
+                .zip(PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES.iter())
+            {
+                if !runtime_candidate_covers_pages(&self.env, sdhci_base, 1)
+                    || !runtime_candidate_covers_pages(&self.env, pwrseq_base, 1)
+                {
+                    continue;
+                }
+                let first_page_index = init_descriptor
+                    .as_deref()
+                    .map(|builder| builder.descriptor.mmio_page_count)
+                    .unwrap_or(0);
+                for (page, paddr) in [sdhci_base, pwrseq_base].into_iter().enumerate() {
+                    let vaddr = runtime_region_page_vaddr(region, page)
+                        .ok_or(HalError::Unsupported("driver-runtime-mmio-vaddr"))?;
+                    self.env
+                        .map_device_page_into_vspace(
+                            paddr,
+                            vspace,
+                            vaddr,
+                            rights,
+                            sel4_sys::seL4_ARM_Page_Uncached,
+                            tracker,
+                        )
+                        .map_err(HalError::Sel4)?;
+                    if let Some(builder) = init_descriptor.as_deref_mut() {
+                        builder.add_mmio_page(paddr)?;
+                    }
+                }
+                if let Some(builder) = init_descriptor.as_deref_mut() {
+                    builder.add_tagged_mmio_resource_range(
+                        DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+                        region.vaddr,
+                        sdhci_base,
+                        1,
+                        first_page_index,
+                    )?;
+                    builder.add_tagged_mmio_resource_range(
+                        DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+                        region.vaddr.saturating_add(page_bytes),
+                        pwrseq_base,
+                        1,
+                        first_page_index.saturating_add(1),
+                    )?;
+                }
+                return Ok(true);
+            }
+            return Err(HalError::Unsupported(
+                "driver-runtime-sdio-pwrseq-mmio-not-covered",
+            ));
+        }
         for &base in runtime_mmio_candidate_bases(hot_path) {
             if !runtime_candidate_covers_pages(&self.env, base, pages) {
                 continue;
@@ -3467,11 +3547,23 @@ impl<'a> KernelHal<'a> {
             for page in 0..pages {
                 let _ = runtime_region_page_vaddr(region, page)
                     .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?;
-                let frame = self
-                    .env
-                    .alloc_unmapped_ram_frame_attr(attr)
-                    .map_err(HalError::Sel4)?;
+                let frame = if hot_path == driver_task::DriverTaskHotPath::SdioHost && pages == 1 {
+                    self.env
+                        .alloc_unmapped_ram_frame_low_attr(attr)
+                        .map_err(HalError::Sel4)?
+                } else {
+                    self.env
+                        .alloc_unmapped_ram_frame_attr(attr)
+                        .map_err(HalError::Sel4)?
+                };
                 let paddr = frame.paddr();
+                if hot_path == driver_task::DriverTaskHotPath::SdioHost
+                    && (paddr > 0x3fff_ffff || paddr & 0xf != 0)
+                {
+                    return Err(HalError::Unsupported(
+                        "driver-runtime-sdio-pwrseq-request-address",
+                    ));
+                }
                 if page == 0 {
                     first_paddr = paddr;
                 } else if paddr_contiguous

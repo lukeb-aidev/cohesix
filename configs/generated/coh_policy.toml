@@ -2,7 +2,7 @@
 # Purpose: Generated coh host policy derived from configs/root_task.toml.
 # Copyright 2026 Lukas Bower
 [meta]
-manifest_sha256 = "cdf450fc38f44e8a9a2063c97b7aeda81bf11bf8989b6db09c4ef79d8eeecb19"
+manifest_sha256 = "726441bd837cd419d81451de3e13b84ac152a9090bb47a0a66b233fc8307f315"
 
 [coh.mount]
 root = "/"

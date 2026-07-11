@@ -44,11 +44,15 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
      updated **in the same change**.
    - Precedence is explicit:
      - `AGENTS.md` and `docs/BUILD_PLAN.md` govern scope and milestone legality.
-     - `configs/root_task.toml`, resolved manifests, and `coh-rtc` outputs govern generated interfaces, defaults, and generated/as-built behavior.
+     - The selected `configs/root_task*.toml` profile, its resolved manifest, and
+       its `coh-rtc` outputs govern generated interfaces, defaults, and
+       generated/as-built behavior for that profile.
      - Prose documentation must describe generated/as-built truth and must be updated when that truth changes.
 
 2. **Compiler-Defined Reality**
-   - Manifests and compiler-generated artifacts (`root_task.toml`, `coh-rtc` outputs) are the **sole authority** on generated interfaces, defaults, namespace layout, bounds, and profile-selected system behavior.
+   - The selected source manifest, resolved manifest, and `coh-rtc` outputs are
+     the **sole authority** on generated interfaces, defaults, namespace layout,
+     bounds, and profile-selected system behavior.
    - Code or prose documentation that disagrees with generated output is **invalid by definition**.
    - The correct fix for disagreement is to update IR, regenerate artifacts, and update docs/tests — never to hand-edit generated code.
 
@@ -101,9 +105,12 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
      hardware acceptance proof.
 
 6. **Capability Discipline**
-   - All interactions occur via Secure9P namespaces and role-scoped capability tickets.
+   - Operator and host control-plane interactions use Secure9P namespaces or the
+     documented console grammar with role-scoped capability tickets.
    - No ad-hoc RPC, undeclared shared-memory shortcuts, or implicit authority.
-   - Shared command/completion rings are permitted only when compiler-declared, bounded, single-producer/single-consumer, and backed by generated manifests or milestone-specific ABI records.
+   - Driver-runtime service uses only compiler-declared endpoints/notifications
+     and bounded single-producer/single-consumer command/completion rings backed
+     by generated manifests or milestone-specific ABI records.
 
 7. **Simplicity & Correctness**
    - Implementations **MUST** prefer the simplest design that preserves:
@@ -174,6 +181,7 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
 ## Task Template (Use Verbatim)
 ```
 Title/ID: <slug>
+Milestone: <exact milestone/submilestone and task title/ID>
 Goal: <one sentence>
 Inputs: <artifacts, versions, paths>
 Changes:
@@ -216,7 +224,12 @@ No other agent roles exist unless explicitly introduced in `BUILD_PLAN.md`.
 ## Docs-as-Built Alignment (Mandatory from Milestone 8)
 
 ### 1. Docs → IR → Code
-- Any new behavior **MUST** land as IR fields with validation and codegen.
+- New manifest-controlled behavior or changes to generated interfaces, defaults,
+  bounds, namespaces, authority, or profile-selected VM behavior **MUST** land as
+  IR fields with validation and codegen.
+- Host-only presentation, parsing, or analysis that does not change protocol or
+  authority semantics need not add IR, but must remain protocol-faithful and
+  include appropriate tests and documentation.
 - Builds fail if IR:
   - references disabled gates,
   - violates Secure9P bounds,
@@ -227,6 +240,10 @@ No other agent roles exist unless explicitly introduced in `BUILD_PLAN.md`.
   scripts, and documentation snippets compared by `scripts/check-generated.sh`,
   including `apps/root-task/src/generated/*`, `configs/generated/*`,
   `scripts/cohsh/boot_v0.coh`, and `docs/snippets/*.md`.
+- `scripts/check-generated.sh` validates committed default-profile outputs from
+  `configs/root_task.toml`. Target builds must regenerate from the selected
+  profile manifest and preserve target-qualified manifest fingerprints and
+  evidence before restoring committed default-profile outputs.
 - Canonical docs may embed or mirror those generated snippets; generated files
   and embedded generated blocks are authoritative and must not be edited by hand.
 
