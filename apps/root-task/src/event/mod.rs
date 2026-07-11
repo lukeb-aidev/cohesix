@@ -10631,8 +10631,9 @@ where
                 self.emit_console_line(sdio_command.as_str());
             }
             if let Some(owner_fault) = owner_fault {
-                let cmd53 = format_message(format_args!(
-                    "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} len={} cmd53_count={} desc_blkcnt={} host_blkcnt={} increment={} block_mode={} mode={} op={} source=owner-terminal",
+                let sdio_owner = format_message(format_args!(
+                    "wifi: evidence sdio_owner cmd={} func={} addr=0x{:08x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} len={} cmd53_count={} desc_blkcnt={} host_blkcnt={} increment={} block_mode={} mode={} op={} source=owner-terminal",
+                    owner_fault.cmd,
                     owner_fault.function,
                     owner_fault.addr,
                     owner_fault.target_addr,
@@ -10648,7 +10649,7 @@ where
                     Self::wifi_sdio_owner_mode_label(owner_fault),
                     owner_fault.op,
                 ));
-                self.emit_console_line(cmd53.as_str());
+                self.emit_console_line(sdio_owner.as_str());
                 let status = format_message(format_args!(
                     "wifi: evidence sdio_status descriptor_status={} transfer_stage={} transfer_status=0x{:06x} transfer_reason={} r5=0x{:04x} retry={} host=0x{:02x} host_mode={} clock=0x{:04x} clock_state={}",
                     owner_fault.reason,
@@ -11602,18 +11603,14 @@ where
             return match crate::drivers::driver_task_net::cyw43_armcr4_reset_fault_reason(
                 fault.result,
             ) {
-                "cyw43-armcr4-prereset-write" => {
-                    "inspect-promoted-release-lane-armcr4-prereset-cmd53-write"
-                }
-                "cyw43-armcr4-prereset-flush" => {
-                    "inspect-promoted-release-lane-armcr4-prereset-cmd53-flush"
-                }
-                "cyw43-armcr4-assert-write" => "inspect-armcr4-reset-assert-cmd53-write",
-                "cyw43-armcr4-in-reset-write" => "inspect-armcr4-in-reset-cmd53-write",
-                "cyw43-armcr4-in-reset-flush" => "inspect-armcr4-in-reset-cmd53-flush",
-                "cyw43-armcr4-clear-write" => "inspect-armcr4-reset-clear-cmd53-write",
-                "cyw43-armcr4-postreset-write" => "inspect-armcr4-postreset-cmd53-write",
-                "cyw43-armcr4-postreset-flush" => "inspect-armcr4-postreset-cmd53-flush",
+                "cyw43-armcr4-prereset-write" => "inspect-ai-control-cmd52-prereset-write",
+                "cyw43-armcr4-prereset-flush" => "inspect-ai-control-cmd52-prereset-flush",
+                "cyw43-armcr4-assert-write" => "inspect-ai-control-cmd52-reset-assert-write",
+                "cyw43-armcr4-in-reset-write" => "inspect-ai-control-cmd52-in-reset-write",
+                "cyw43-armcr4-in-reset-flush" => "inspect-ai-control-cmd52-in-reset-flush",
+                "cyw43-armcr4-clear-write" => "inspect-ai-control-cmd52-reset-clear-write",
+                "cyw43-armcr4-postreset-write" => "inspect-ai-control-cmd52-postreset-write",
+                "cyw43-armcr4-postreset-flush" => "inspect-ai-control-cmd52-postreset-flush",
                 _ => "inspect-cyw43-armcr4-reset-sequence",
             };
         }

@@ -16359,13 +16359,16 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         .map(|offset| offset as usize);
     let owner_payload_offset = owner_suboffset
         .and_then(|offset| u32::from(descriptor.payload_offset).checked_add(offset as u32));
-    let strict_ai_word = cyw43_owner_strict_ai_word(descriptor, snapshot, completion.detail);
-    let owner_window = if strict_ai_word {
-        "strict-ai-word"
+    let ai_control_primary =
+        cyw43_owner_ai_control_primary(descriptor, snapshot, completion.detail);
+    let owner_window = if ai_control_primary && snapshot.cmd == 52 {
+        "ai-control-cmd52-primary"
+    } else if ai_control_primary {
+        "strict-ai-word-cmd53"
     } else {
         cyw43_owner_window_label(descriptor)
     };
-    let retry = if strict_ai_word {
+    let retry = if ai_control_primary {
         "none"
     } else {
         cyw43_owner_retry_label(snapshot, descriptor, completion.detail)
@@ -16456,8 +16459,10 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         sdio_transfer_failure_reason_label(result),
         sdio_transfer_failure_r5(result),
         owner_window,
-        if strict_ai_word {
-            "strict-ai-word"
+        if ai_control_primary && snapshot.cmd == 52 {
+            "ai-control-cmd52-primary"
+        } else if ai_control_primary {
+            "strict-ai-word-cmd53"
         } else {
             "descriptor"
         },
@@ -16633,11 +16638,22 @@ const fn cyw43_owner_window_label(descriptor: DriverRuntimeCyw43CommandDescripto
 }
 
 #[cfg(feature = "kernel")]
-const fn cyw43_owner_strict_ai_word(
+const fn cyw43_owner_ai_control_primary(
     descriptor: DriverRuntimeCyw43CommandDescriptor,
     snapshot: SdioFaultTelemetry,
     detail: u16,
 ) -> bool {
+    if snapshot.cmd53_function() != 1 {
+        return false;
+    }
+    if snapshot.cmd == 52 {
+        return detail == 0x531f
+            && matches!(
+                descriptor.op,
+                DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP | DRIVER_RUNTIME_CYW43_OP_RELEASE
+            )
+            && snapshot.len <= 1;
+    }
     (descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
         || (detail == 0x531f
             && matches!(
@@ -16645,7 +16661,6 @@ const fn cyw43_owner_strict_ai_word(
                 DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP | DRIVER_RUNTIME_CYW43_OP_RELEASE
             )))
         && snapshot.cmd == 53
-        && snapshot.cmd53_function() == 1
         && snapshot.cmd53_increment()
         && snapshot.len == 4
 }
@@ -29331,7 +29346,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_owner_strict_ai_word_includes_transport_init_control_reads() {
+    fn cyw43_owner_ai_control_primary_covers_cmd53_attach_and_cmd52_release() {
         let descriptor = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
@@ -29358,14 +29373,28 @@ mod tests {
             payload_sum: 0,
         };
 
-        assert!(cyw43_owner_strict_ai_word(descriptor, snapshot, 0x5325));
-        assert!(!cyw43_owner_strict_ai_word(
+        assert!(cyw43_owner_ai_control_primary(descriptor, snapshot, 0x5325));
+        assert!(!cyw43_owner_ai_control_primary(
             descriptor,
             SdioFaultTelemetry {
                 arg: snapshot.arg & !(1 << 26),
                 ..snapshot
             },
             0x5325
+        ));
+        let release = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_RELEASE,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert!(cyw43_owner_ai_control_primary(
+            release,
+            SdioFaultTelemetry {
+                arg: (1 << 28) | (0x0a408 << 9),
+                cmd: 52,
+                len: 1,
+                ..snapshot
+            },
+            0x531f
         ));
     }
 

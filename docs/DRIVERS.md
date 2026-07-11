@@ -1600,11 +1600,15 @@ context and the retry/poll window.
   automatically replayed. An explicitly addressed Function 1 transfer
   qualifies for one identical replay only when the owner proves entry inhibit
   prevented command issue.
-  AI-wrapper `BCMA_IOCTL` and `BCMA_RESET_CTL` accesses remain 32-bit, matching
-  Linux. They use one dedicated strict lane: set the backplane window, then
-  issue an incrementing four-byte Function 1 CMD53 transfer. This lane cannot
-  invoke firmware-upload retry policy, change card width or host clock, fall
-  back to CMD52 or fixed-address CMD53, or clear the first transfer fault. An
+  AI-wrapper `BCMA_IOCTL` and `BCMA_RESET_CTL` preserve Linux's exact masks,
+  ordering, settle bounds, and write/read fence. Their meaningful controls are
+  confined to the low byte, so the linked-runtime transport uses one dedicated
+  hardware-proven lane: set the backplane window, then issue one unflagged
+  current-window Function 1 CMD52 byte access. This lane cannot invoke
+  firmware-upload retry policy, change card width or host clock, fall back to
+  CMD53 or an alternate CMD52 address, or clear the first transfer fault. All
+  other 32-bit backplane registers, the reset vector, firmware/RAM transfer,
+  DPC service, and Function 2 retain their existing CMD53 owners. An
   initial ChipCommon word failure terminates attach with the exact SDIO-owner
   detail/result/frame; it never reconfigures the host or reruns
   CMD0/CMD5/CMD3/CMD7 against the selected card. The SDIO owner implements the
@@ -1614,8 +1618,9 @@ context and the retry/poll window.
   each committed as one 32-bit word when COMMAND is issued, and every write at
   400 kHz or below receives a virtual-counter-backed four-SD-clock gap.
   Narrow MMIO and immediate paired-halfword commits are not valid Pi 4 SDHCI
-  operations. An IOCTRL write is followed by a mandatory read on that same lane to flush the
-  backplane transaction; the read need not equal the write because
+  operations. An IOCTRL write is followed by a mandatory CMD52 read of the same
+  low-byte address to flush the backplane transaction; the read need not equal
+  the write because
   core-specific and read-only wrapper bits may remain visible. RESETCTRL clear
   repeats the strict write plus bounded settle/read shape used by Linux. The
   Cohesix-only conservative one-bit firmware-upload lane ends before
@@ -1625,7 +1630,7 @@ context and the retry/poll window.
   strict ARMCR4 AI-wrapper access. Promotion after the ARMCR4 reset is invalid
   because it makes the first release `readl` use a lane Linux never uses for
   activation.
-  immediate read is advisory because Linux's bus read has no error return;
+  The immediate read is advisory because Linux's bus read has no error return;
   mailbox/devready is the authoritative execution proof. A failed strict write
   or missing IOCTRL flush remains fail-closed.
   ARMCR4 reset failures encode the exact write/flush edge, bounded attempt, and

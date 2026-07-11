@@ -11595,7 +11595,10 @@ const fn cyw43_core_reset_prepare_hold_value(reset: u8) -> u8 {
 
 fn cyw43_ai_core_read8(state: &mut Cyw43RuntimeState, base: u32, offset: u32) -> Option<u8> {
     let addr = base.checked_add(offset)?;
-    cyw43_ai_backplane_read_u32_strict(state, addr).map(|value| value as u8)
+    if !cyw43_backplane_set_window(state, addr) {
+        return None;
+    }
+    cyw43_sdio_cmd52_read(1, addr & BACKPLANE_ADDRESS_MASK)
 }
 
 fn cyw43_ai_core_write8_verified(
@@ -11612,7 +11615,9 @@ fn cyw43_ai_core_write8_verified(
     }
     // Linux reads BCMA_IOCTL back after the 32-bit write to flush the
     // backplane transaction; it does not require exact equality. Keep that
-    // read on the same strict Function-1 CMD53 word lane as the write.
+    // read on the same Function-1 CMD52 control service as the write. These AI
+    // controls use only low-byte masks; preserving that exact byte transaction
+    // is the linked-runtime adaptation of Linux's ordered register fence.
     let readback = cyw43_ai_core_read8(state, base, offset);
     if cyw43_ai_core_flush_readback_accepted(readback) {
         true
@@ -11692,7 +11697,7 @@ fn cyw43_ai_core_release_reset(state: &mut Cyw43RuntimeState, base: u32) -> bool
     {
         // Linux retries one strict 32-bit RESETCTRL clear while the reset bit
         // remains asserted. Do not route this through firmware-upload retries
-        // or CMD52/fixed-address fallbacks.
+        // or an alternate Function-1 transfer primitive.
         if !cyw43_ai_core_write8(state, base, AI_RESETCTRL_OFFSET, 0) {
             cyw43_record_armcr4_reset_fault(
                 DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_CLEAR_WRITE,
@@ -11800,7 +11805,10 @@ fn cyw43_ai_core_write8(state: &mut Cyw43RuntimeState, base: u32, offset: u32, v
         cyw43_record_last_fault(FAULT_CYW43_BACKPLANE_WINDOW);
         return false;
     };
-    if cyw43_ai_backplane_write_u32_strict(state, addr, u32::from(value)) {
+    if !cyw43_backplane_set_window(state, addr) {
+        return false;
+    }
+    if cyw43_sdio_cmd52_write(1, addr & BACKPLANE_ADDRESS_MASK, value) {
         true
     } else {
         if cyw43_take_last_fault_detail().is_none() {
@@ -11808,42 +11816,6 @@ fn cyw43_ai_core_write8(state: &mut Cyw43RuntimeState, base: u32, offset: u32, v
         }
         false
     }
-}
-
-fn cyw43_ai_backplane_read_u32_strict(state: &mut Cyw43RuntimeState, addr: u32) -> Option<u32> {
-    cyw43_backplane_read_u32_cmd53(state, addr, cyw43_backplane_function_addr(addr), true)
-}
-
-fn cyw43_ai_backplane_write_u32_strict(
-    state: &mut Cyw43RuntimeState,
-    addr: u32,
-    value: u32,
-) -> bool {
-    if !cyw43_backplane_set_window(state, addr) {
-        return false;
-    }
-    write_ring_u32(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET, value);
-    let frame = DriverFrameDescriptor {
-        offset: CYW43_BACKPLANE_WORD_SCRATCH_OFFSET as u32,
-        len: 4,
-        flags: 0,
-    };
-    let written = sdio_execute_transfer(
-        SDIO_CMD53,
-        sdio_cmd53_arg(true, 1, cyw43_backplane_function_addr(addr), true, 0, 4),
-        DRIVER_RUNTIME_SDIO_FLAG_DATA
-            | DRIVER_RUNTIME_SDIO_FLAG_WRITE
-            | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        frame,
-        4,
-        0,
-    )
-    .is_some();
-    if written {
-        #[cfg(all(not(target_os = "none"), test))]
-        test_cyw43_backplane_write_u32_response(addr, value);
-    }
-    written
 }
 
 fn cyw43_record_armcr4_reset_fault(edge: u8, attempt: u8, readback: Option<u8>) {
@@ -12766,7 +12738,7 @@ fn cyw43_backplane_write_ring_with_mode_result(
 }
 
 fn cyw43_backplane_write_u32(state: &mut Cyw43RuntimeState, addr: u32, value: u32) -> bool {
-    if cyw43_ai_backplane_write_u32_strict(state, addr, value) {
+    if cyw43_backplane_write_u32_cmd53_strict(state, addr, value) {
         #[cfg(all(not(target_os = "none"), test))]
         test_cyw43_backplane_write_u32_response(addr, value);
         return true;
@@ -12779,7 +12751,39 @@ fn cyw43_backplane_read_u32(state: &mut Cyw43RuntimeState, addr: u32) -> Option<
     if let Some(value) = test_cyw43_backplane_read_u32_response(addr) {
         return Some(value);
     }
-    cyw43_ai_backplane_read_u32_strict(state, addr)
+    cyw43_backplane_read_u32_cmd53(state, addr, cyw43_backplane_function_addr(addr), true)
+}
+
+fn cyw43_backplane_write_u32_cmd53_strict(
+    state: &mut Cyw43RuntimeState,
+    addr: u32,
+    value: u32,
+) -> bool {
+    if !cyw43_backplane_set_window(state, addr) {
+        return false;
+    }
+    write_ring_u32(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET, value);
+    let frame = DriverFrameDescriptor {
+        offset: CYW43_BACKPLANE_WORD_SCRATCH_OFFSET as u32,
+        len: 4,
+        flags: 0,
+    };
+    let written = sdio_execute_transfer(
+        SDIO_CMD53,
+        sdio_cmd53_arg(true, 1, cyw43_backplane_function_addr(addr), true, 0, 4),
+        DRIVER_RUNTIME_SDIO_FLAG_DATA
+            | DRIVER_RUNTIME_SDIO_FLAG_WRITE
+            | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+        frame,
+        4,
+        0,
+    )
+    .is_some();
+    if written {
+        #[cfg(all(not(target_os = "none"), test))]
+        test_cyw43_backplane_write_u32_response(addr, value);
+    }
+    written
 }
 
 fn cyw43_backplane_read_u32_cmd53(
@@ -15192,7 +15196,7 @@ fn cyw43_runtime_write_service_register_u32(
     // so would overwrite a frame staged for decode before the bounded drain.
     // The private word scratch preserves that buffer and keeps all 32-bit
     // control registers on the same strict incrementing Function-1 CMD53 lane.
-    let written = cyw43_ai_backplane_write_u32_strict(state, addr, value);
+    let written = cyw43_backplane_write_u32_cmd53_strict(state, addr, value);
     #[cfg(all(not(target_os = "none"), test))]
     if written {
         test_cyw43_backplane_write_u32_response(addr, value);
@@ -32702,7 +32706,7 @@ mod tests {
             state.backplane_window = CYW43_ARMCR4_CORE_BASE & BACKPLANE_WINDOW_MASK;
             state.backplane_window_valid = true;
         });
-        test_sdio_transfer_fail_next(SDIO_CMD53, 1, true);
+        test_sdio_transfer_fail_next(SDIO_CMD52, 1, true);
         let init = DriverTaskCommandRecord {
             sequence: 94,
             opcode: OPCODE_SERVICE,
@@ -40020,17 +40024,13 @@ mod tests {
             assert!(f2_write_index < alp_index);
 
             let armcr4_write = |record: TestSdioTransferRecord| {
-                record.cmd == SDIO_CMD53
+                record.cmd == SDIO_CMD52
                     && record.arg
-                        == sdio_cmd53_arg(
+                        == sdio_cmd52_arg(
                             true,
                             1,
-                            cyw43_backplane_function_addr(
-                                CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET,
-                            ),
-                            true,
-                            0,
-                            4,
+                            (CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET) & BACKPLANE_ADDRESS_MASK,
+                            ARMCR4_BCMA_IOCTL_CPUHALT | AI_CORE_PRERESET_IOCTRL,
                         )
             };
             if prepared {
@@ -40137,17 +40137,13 @@ mod tests {
             );
             assert!(!state.firmware_upload_prepared);
             assert!(test_sdio_transfer_seen(|record| {
-                record.cmd == SDIO_CMD53
+                record.cmd == SDIO_CMD52
                     && record.arg
-                        == sdio_cmd53_arg(
+                        == sdio_cmd52_arg(
                             true,
                             1,
-                            cyw43_backplane_function_addr(
-                                CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET,
-                            ),
-                            true,
-                            0,
-                            4,
+                            (CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET) & BACKPLANE_ADDRESS_MASK,
+                            ARMCR4_BCMA_IOCTL_CPUHALT | AI_CORE_PRERESET_IOCTRL,
                         )
             }));
         }
@@ -42136,7 +42132,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_armcr4_reset_uses_only_incrementing_function1_cmd53_words() {
+    fn cyw43_armcr4_reset_uses_only_function1_cmd52_control_bytes() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -42155,28 +42151,38 @@ mod tests {
             0,
         ));
 
-        let ioctrl_addr = cyw43_backplane_function_addr(CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET);
-        let reset_addr =
-            cyw43_backplane_function_addr(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET);
-        let ai_access = |record: TestSdioTransferRecord| {
-            record.cmd == SDIO_CMD53
-                && matches!(sdio_cmd53_arg_addr(record.arg), addr if addr == ioctrl_addr || addr == reset_addr)
+        let ioctrl_addr = (CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET) & BACKPLANE_ADDRESS_MASK;
+        let reset_addr = (CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET) & BACKPLANE_ADDRESS_MASK;
+        let ai_cmd52 = |record: TestSdioTransferRecord| {
+            record.cmd == SDIO_CMD52
+                && ((record.arg >> 28) & 0x7) == 1
+                && matches!((record.arg >> 9) & 0x1ffff, addr if addr == ioctrl_addr || addr == reset_addr)
         };
-        assert!(test_sdio_transfer_count(ai_access) >= 8);
+        assert!(test_sdio_transfer_count(ai_cmd52) >= 8);
         assert_eq!(
             test_sdio_transfer_count(|record| {
-                ai_access(record)
-                    && (sdio_cmd53_arg_function(record.arg) != 1
-                        || record.arg & (1 << 26) == 0
-                        || record.block_size != 4
-                        || record.block_count != 0)
+                record.cmd == SDIO_CMD53
+                    && matches!(sdio_cmd53_arg_addr(record.arg), addr if addr == ioctrl_addr || addr == reset_addr)
             }),
             0
         );
-        assert_eq!(
-            test_sdio_transfer_count(|record| record.cmd == SDIO_CMD52),
-            0
-        );
+        assert!(test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD52
+                && record.arg
+                    == sdio_cmd52_arg(
+                        true,
+                        1,
+                        ioctrl_addr,
+                        ARMCR4_BCMA_IOCTL_CPUHALT | AI_CORE_PRERESET_IOCTRL,
+                    )
+        }));
+        assert!(test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD52
+                && record.arg == sdio_cmd52_arg(true, 1, reset_addr, AI_RESETCTRL_BIT_RESET)
+        }));
+        assert!(test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD52 && record.arg == sdio_cmd52_arg(false, 1, ioctrl_addr, 0)
+        }));
         assert!(state.firmware_byte_mode_fallback);
         assert!(state.firmware_narrow_byte_mode_fallback);
         assert_eq!(state.firmware_retry_clock_index, 3);
@@ -42190,7 +42196,7 @@ mod tests {
         let mut state = Cyw43RuntimeState::new();
         state.backplane_window = CYW43_ARMCR4_CORE_BASE & BACKPLANE_WINDOW_MASK;
         state.backplane_window_valid = true;
-        test_sdio_transfer_fail_next(SDIO_CMD53, 1, true);
+        test_sdio_transfer_fail_next(SDIO_CMD52, 1, true);
 
         assert!(!cyw43_core_reset(
             &mut state,
@@ -42262,10 +42268,20 @@ mod tests {
         };
         let intstatus = write_index(CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS);
         let reset_vector = write_index(CYW43_FIRMWARE_RESET_VECTOR_ADDR);
-        let arm_release = write_index(CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET);
+        let arm_reset_assert = test_sdio_first_transfer_index(|record| {
+            record.cmd == SDIO_CMD52
+                && record.arg
+                    == sdio_cmd52_arg(
+                        true,
+                        1,
+                        (CYW43_ARMCR4_CORE_BASE + AI_RESETCTRL_OFFSET) & BACKPLANE_ADDRESS_MASK,
+                        AI_RESETCTRL_BIT_RESET,
+                    )
+        })
+        .expect("release ARMCR4 reset assert must be present");
         assert!(card_width < intstatus);
         assert!(intstatus < reset_vector);
-        assert!(reset_vector < arm_release);
+        assert!(reset_vector < arm_reset_assert);
         assert!(state.firmware_execution_started);
     }
 

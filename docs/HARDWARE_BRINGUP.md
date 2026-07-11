@@ -969,8 +969,21 @@ Capture only these operator-facing lines from that session:
   never carries a Cohesix-only upload demotion into buscore activation. The
   linked runtime now promotes the card and host immediately after validating
   the complete firmware/NVRAM/tail and before its first release backplane
-  operation; strict four-byte CMD53 remains the sole AI-register route and no
-  CMD52 or retry fallback is introduced.
+  operation. At that candidate boundary, strict four-byte CMD53 remained the
+  sole AI-register route and no fallback had been introduced.
+- The following readback-proven
+  `[BUILD] 758872bf1-dirty 2026-07-11T09:27:30Z` boot proves that promotion
+  worked (`host_mode=4bit+high-speed`) but falsifies it as sufficient: the same
+  first ARMCR4 IOCTRL flush receives R5 success and still never receives a
+  short four-byte CMD53 data phase. This isolates the regression to the new AI
+  control primitive. The Gate-10/TCP implementation at `918a58c09` crossed
+  this hardware edge with one unflagged current-window Function 1 CMD52 byte
+  access. The linked CYW43 runtime now uses that proven primitive as the sole
+  primary route for AI IOCTRL/RESETCTRL writes and read fences while retaining
+  Linux masks, order, settle bounds, and mailbox/devready authority. Generic
+  backplane words, reset-vector/RAM, firmware, DPC, and Function 2 remain on
+  CMD53. There is no CMD53 rescue, retry ladder, lane mutation, or root-owned
+  physical access.
 - W01/W02 of the resulting readback-proven
   `[BUILD] 7171e9a69-dirty 2026-07-11T02:26:39Z` image prove that persistent
   card recovery now works: both exact generation resets preserve the selected
