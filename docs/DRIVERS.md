@@ -1657,7 +1657,10 @@ context and the retry/poll window.
   Function 2, reads CCCR `ABORT`, writes the read value ORed with `RES=0x08`,
   and fails closed if either CMD52 operation is not proved complete. That first
   typed operation records only a quarantined pending epoch; the old poisoned
-  ring remains current and CARD_INT remains masked. The CYW43 runtime
+  ring remains current and CARD_INT remains masked. Receipt of that exact
+  linked-owner completion re-establishes the CYW43 runtime's logical
+  bus-link/DPC readiness for the reprobe only; it does not adopt the reset
+  card, advance the epoch, unmask CARD_INT, or admit steady traffic. The CYW43 runtime
   invalidates its former RCA,
   enumeration, FBR, host/card-lane, and backplane-aperture assumptions; the
   next typed `TRANSPORT_INIT` must run host startup plus

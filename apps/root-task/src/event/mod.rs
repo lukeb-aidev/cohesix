@@ -9261,6 +9261,24 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_recovery_fault_after_causal(
+        causal: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+        latest: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+    ) -> Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus> {
+        latest.filter(|latest| Some(*latest) != causal)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_cyw43_recovery_command_fault_status(
+        causal: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+    ) -> Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus> {
+        Self::wifi_recovery_fault_after_causal(
+            causal,
+            crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status(),
+        )
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_cyw43_sdio_owner_fault_status(
         fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
     ) -> Option<crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus> {
@@ -9296,6 +9314,11 @@ where
             None
         } else {
             Self::wifi_diag_cyw43_runtime_command_fault_status()
+        };
+        let recovery_fault = if live_net_supersedes_runtime || host_eapol_exact.is_some() {
+            None
+        } else {
+            Self::wifi_diag_cyw43_recovery_command_fault_status(fault)
         };
         let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
         let progress_present = Self::wifi_driver_task_runtime_progress_present();
@@ -9385,6 +9408,19 @@ where
                 next, source
             ));
             self.emit_console_line(next_line.as_str());
+        }
+        if let Some(recovery_fault) = recovery_fault {
+            let next = Self::wifi_runtime_fault_next_action(recovery_fault);
+            let recovery_line = format_message(format_args!(
+                "wifi: recovery fault stage={} op={} detail=0x{:04x} reason={} result=0x{:08x} causal_preserved=yes next_action={}",
+                recovery_fault.stage,
+                recovery_fault.op,
+                recovery_fault.detail,
+                recovery_fault.reason,
+                recovery_fault.result,
+                next,
+            ));
+            self.emit_console_line(recovery_line.as_str());
         }
         if live_net_supersedes_runtime
             || Self::wifi_command_accepts_driver_task_snapshot_success(command)
@@ -22466,6 +22502,44 @@ mod tests {
             "inspect-cyw43-armcr4-reset-sequence"
         );
         assert!(KernelConsoleTestPump::wifi_runtime_fault_implies_hal_power_ready(fault));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_diagnostics_preserve_cause_and_report_distinct_recovery_fault() {
+        let causal = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-release",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x532a,
+            reason: "cyw43-post-release-ht-clock",
+            result: 0x50,
+        };
+        let recovery = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-transport-init",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            detail: 0x5310,
+            reason: "cyw43-transport-bus-link-missing",
+            result: 0,
+            ..causal
+        };
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_recovery_fault_after_causal(Some(causal), Some(recovery)),
+            Some(recovery)
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_recovery_fault_after_causal(Some(causal), Some(causal)),
+            None
+        );
     }
 
     #[cfg(feature = "kernel")]

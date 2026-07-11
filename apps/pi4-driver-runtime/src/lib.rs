@@ -4062,6 +4062,19 @@ fn cyw43_complete_generation_reset(
     }
     state.dpc_pending_epoch = requested;
     state.dpc_active_sequence = 0;
+    // This exact completion was received over the sealed CYW43 -> SDIO child
+    // link after the SDIO owner finished the card-reset turn. Treat it as the
+    // authoritative proof that the persistent transport link remains usable
+    // while the hardware/card state is deliberately rebuilt. A coalesced
+    // child/DPC notification may clear the transient readiness observation
+    // made before the child call; carrying that stale false value into
+    // TRANSPORT_INIT incorrectly reports 0x5310 before CMD0 can start.
+    // Re-establish only the compiler-declared link state here. This does not
+    // adopt the reset card, advance the epoch, unmask CARD_INT, or admit any
+    // legacy/direct SDIO route; those remain gated by fresh enumeration and
+    // the separate GENERATION_COMMIT completion below.
+    state.bus_link_ready = true;
+    state.dpc_link_ready = true;
     // The SDIO owner has asserted CCCR ABORT.RES, so the former RCA,
     // Function-1 enable, block sizes, host/card lane, and backplane aperture
     // are no longer valid. Force the normal typed TRANSPORT_INIT state machine
@@ -30527,6 +30540,8 @@ mod tests {
 
     #[test]
     fn cyw43_poison_clears_only_after_successful_generation_reset() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let sequence = 0x8000_0042;
         let current: u32 = 0x4359_5301;
         let requested: u32 = 0x4359_5302;
@@ -30534,6 +30549,11 @@ mod tests {
         state.dpc_shared_epoch = current;
         state.sdio_transport_enumerated = true;
         cyw43_mark_issued_unknown(&mut state);
+        // Model the target's coalesced completion/DPC edge: the persistent
+        // link exists and produced an exact reset completion, but the
+        // pre-call transient readiness observation has been cleared.
+        state.bus_link_ready = false;
+        state.dpc_link_ready = false;
 
         assert!(!cyw43_complete_generation_reset(
             &mut state,
@@ -30552,11 +30572,21 @@ mod tests {
         assert!(state.recovery_required);
         assert_eq!(state.dpc_shared_epoch, current);
         assert_eq!(state.dpc_pending_epoch, requested);
+        assert!(state.bus_link_ready);
+        assert!(state.dpc_link_ready);
         assert!(!state.sdio_transport_enumerated);
         assert!(!state.transport_ready);
         assert_eq!(
             state.transport_detail,
             DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START
+        );
+        assert_eq!(
+            cyw43_transport_init_step(
+                sequence.wrapping_add(1),
+                DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+                &mut state,
+            ),
+            Ok(DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY)
         );
         assert!(cyw43_complete_generation_commit(
             &mut state,
