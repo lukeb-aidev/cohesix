@@ -156,6 +156,7 @@ const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 192;
 const CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT: usize = 24;
 const CYW43_RUNTIME_FIRMWARE_GENERATION_RECOVERY_ATTEMPTS: usize = 2;
 const CYW43_BACKPLANE_ADDRESS_MASK: u32 = 0x7fff;
+const CYW43_CHIPCOMMON_PMUCONTROL_ADDR: u32 = 0x1800_0600;
 const CYW43_BACKPLANE_WINDOW_MASK: u32 = 0xffff_8000;
 const CYW43_BACKPLANE_32BIT_FLAG: u32 = 0x8000;
 const CYW43_CONTROL_PLANE_POLL_ATTEMPTS: usize = 256;
@@ -16361,14 +16362,18 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         .and_then(|offset| u32::from(descriptor.payload_offset).checked_add(offset as u32));
     let ai_control_primary =
         cyw43_owner_ai_control_primary(descriptor, snapshot, completion.detail);
-    let owner_window = if ai_control_primary && snapshot.cmd == 52 {
+    let probe_pmucontrol_primary =
+        cyw43_owner_probe_pmucontrol_primary(descriptor, snapshot, completion.detail);
+    let owner_window = if probe_pmucontrol_primary {
+        "probe-pmucontrol-cmd52-word-primary"
+    } else if ai_control_primary && snapshot.cmd == 52 {
         "ai-control-cmd52-primary"
     } else if ai_control_primary {
         "strict-ai-word-cmd53"
     } else {
         cyw43_owner_window_label(descriptor)
     };
-    let retry = if ai_control_primary {
+    let retry = if ai_control_primary || probe_pmucontrol_primary {
         "none"
     } else {
         cyw43_owner_retry_label(snapshot, descriptor, completion.detail)
@@ -16459,7 +16464,9 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         sdio_transfer_failure_reason_label(result),
         sdio_transfer_failure_r5(result),
         owner_window,
-        if ai_control_primary && snapshot.cmd == 52 {
+        if probe_pmucontrol_primary {
+            "probe-pmucontrol-cmd52-word-primary"
+        } else if ai_control_primary && snapshot.cmd == 52 {
             "ai-control-cmd52-primary"
         } else if ai_control_primary {
             "strict-ai-word-cmd53"
@@ -16663,6 +16670,24 @@ const fn cyw43_owner_ai_control_primary(
         && snapshot.cmd == 53
         && snapshot.cmd53_increment()
         && snapshot.len == 4
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_owner_probe_pmucontrol_primary(
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    snapshot: SdioFaultTelemetry,
+    detail: u16,
+) -> bool {
+    if descriptor.op != DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP
+        || !matches!(detail, 0x5333 | 0x5334)
+        || snapshot.cmd != 52
+        || snapshot.cmd53_function() != 1
+    {
+        return false;
+    }
+    let addr = snapshot.cmd53_addr();
+    let base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & CYW43_BACKPLANE_ADDRESS_MASK;
+    addr >= base && addr < base + 4 && snapshot.len <= 1
 }
 
 #[cfg(feature = "kernel")]
@@ -29395,6 +29420,22 @@ mod tests {
                 ..snapshot
             },
             0x531f
+        ));
+        let firmware_prep = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert!(cyw43_owner_probe_pmucontrol_primary(
+            firmware_prep,
+            SdioFaultTelemetry {
+                arg: (1 << 28)
+                    | (((CYW43_CHIPCOMMON_PMUCONTROL_ADDR & CYW43_BACKPLANE_ADDRESS_MASK) + 2)
+                        << 9),
+                cmd: 52,
+                len: 0,
+                ..snapshot
+            },
+            0x5333
         ));
     }
 

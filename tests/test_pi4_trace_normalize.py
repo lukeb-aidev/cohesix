@@ -3088,6 +3088,9 @@ def test_terminal_release_fault_outranks_later_passive_probe_diagnostics() -> No
     assert record["WIFI_EXACT"] == "cyw43-post-release-ht-clock"
     assert record["WIFI_PHASE"] == "cyw43-firmware-release"
     assert record["WIFI_BLOCKER_LINE"] == 3
+    assert record["WIFI_SUBGATE"] == "none"
+    assert record["WIFI_SUBGATE_NAME"] == "none"
+    assert record["WIFI_SUBGATE_SOURCE"] == "none"
 
 
 def test_generic_release_fault_uses_durable_phase_and_beats_load_fw_policy_error() -> None:

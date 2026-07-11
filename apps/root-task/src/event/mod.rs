@@ -11533,7 +11533,7 @@ where
                 "inspect-cyw43-armcr4-reset-sequence"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN => {
-                "inspect-cyw43-release-bus-width-and-clock-promotion"
+                "verify-upload-lane-preserved-through-arm-release-then-promote"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN => {
                 "inspect-cyw43-post-release-ht-clock"
@@ -11632,6 +11632,8 @@ where
             0x5326 => "verify-linked-sdio-cmd5-ready-ocr",
             0x5327 => "verify-linked-sdio-cmd3-rca",
             0x5328 => "verify-linked-sdio-cmd7-select",
+            0x532a => "verify-full-generation-recovery-after-post-release-ht-miss",
+            0x5333 | 0x5334 => "inspect-probe-pmucontrol-cmd52-word-primary",
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
             0x5331..=0x5336 => "inspect-linux-probe-attach-state",
             0x5338 => "inspect-pre-release-intstatus-clear",

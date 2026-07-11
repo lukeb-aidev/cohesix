@@ -984,6 +984,20 @@ Capture only these operator-facing lines from that session:
   backplane words, reset-vector/RAM, firmware, DPC, and Function 2 remain on
   CMD53. There is no CMD53 rescue, retry ladder, lane mutation, or root-owned
   physical access.
+- The subsequent exact
+  `[BUILD] ec82dbff1-dirty 2026-07-11T09:45:12Z` W01 proves the CMD52 AI
+  primary crosses ARMCR4 and advances the first causal frontier to
+  `cyw43-post-release-ht-clock result=0x50`. The authoritative Gate-10/TCP
+  build had the same first-generation HT miss and succeeded only after a clean
+  generation reset plus complete second firmware/NVRAM upload. Current W01
+  starts that same recovery but dies before the second upload on PMUCONTROL's
+  remaining short CMD53 read. Probe attach therefore now owns one deterministic
+  four-byte little-endian CMD52 PMU read/modify/write service with no CMD53
+  attempt or fallback. The obsolete early lane promotion is also removed:
+  conservative upload mode remains continuous through reset-vector and ARM
+  activation, followed by one promotion before the SD-only fence and pure HT
+  request. Same-generation reuse, pre-proof FORCE_HT, and generic transfer
+  fallbacks remain prohibited.
 - W01/W02 of the resulting readback-proven
   `[BUILD] 7171e9a69-dirty 2026-07-11T02:26:39Z` image prove that persistent
   card recovery now works: both exact generation resets preserve the selected

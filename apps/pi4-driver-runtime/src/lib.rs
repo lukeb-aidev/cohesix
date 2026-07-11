@@ -11050,7 +11050,33 @@ fn cyw43_linux_probe_write_pmucontrol(state: &mut Cyw43RuntimeState, value: u32)
     if TEST_CYW43_PROBE_PMUCONTROL_WRITE_FAIL.swap(false, Ordering::AcqRel) {
         return false;
     }
-    cyw43_backplane_write_u32(state, CYW43_CHIPCOMMON_PMUCONTROL_ADDR, value)
+    if !cyw43_backplane_set_window(state, CYW43_CHIPCOMMON_PMUCONTROL_ADDR) {
+        return false;
+    }
+    let base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
+    for (index, byte) in value.to_le_bytes().iter().copied().enumerate() {
+        let Some(byte_addr) = base.checked_add(index as u32) else {
+            cyw43_record_last_fault(FAULT_CYW43_BACKPLANE_WINDOW);
+            return false;
+        };
+        if !cyw43_sdio_cmd52_write(1, byte_addr, byte) {
+            return false;
+        }
+    }
+    true
+}
+
+fn cyw43_linux_probe_read_pmucontrol(state: &mut Cyw43RuntimeState) -> Option<u32> {
+    if !cyw43_backplane_set_window(state, CYW43_CHIPCOMMON_PMUCONTROL_ADDR) {
+        return None;
+    }
+    let base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
+    let mut bytes = [0u8; 4];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        let byte_addr = base.checked_add(index as u32)?;
+        *byte = cyw43_sdio_cmd52_read(1, byte_addr)?;
+    }
+    Some(u32::from_le_bytes(bytes))
 }
 
 fn cyw43_configure_linux_probe_attach_state(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
@@ -11070,7 +11096,7 @@ fn cyw43_configure_linux_probe_attach_state(state: &mut Cyw43RuntimeState) -> Re
         return Err(FAULT_CYW43_PROBE_CARDCTRL_WRITE);
     }
 
-    let Some(pmucontrol) = cyw43_backplane_read_u32(state, CYW43_CHIPCOMMON_PMUCONTROL_ADDR) else {
+    let Some(pmucontrol) = cyw43_linux_probe_read_pmucontrol(state) else {
         cyw43_record_last_fault_with_result(
             FAULT_CYW43_PROBE_PMUCONTROL_READ,
             CYW43_CHIPCOMMON_PMUCONTROL_ADDR,
@@ -11913,19 +11939,6 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
     {
         return false;
     }
-    // Firmware staging is deliberately bounded on Cohesix's conservative
-    // one-bit upload lane. Linux does not carry that host-only demotion into
-    // brcmf_sdio_buscore_activate: its intstatus, reset-vector, and AI-wrapper
-    // readl/writel sequence runs on the normal promoted SDIO bus. Restore the
-    // card/host pair before the first release backplane access so every strict
-    // four-byte CMD53 operation observes the same lane as probe attach.
-    cyw43_publish_release_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN,
-    );
-    if !cyw43_promote_firmware_upload_clock(state) {
-        return cyw43_release_fail_closed(state);
-    }
     // Linux brcmf_sdio_buscore_activate clears every stale SDIO-core cause
     // before publishing the reset vector or releasing ARMCR4.  This is
     // generation-critical: a recovery must not inherit an interrupt from the
@@ -11958,6 +11971,18 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
         0,
         0,
     ) {
+        return cyw43_release_fail_closed(state);
+    }
+    // Cohesix's conservative upload lane is an adaptation around the bulk RAM
+    // transfer. Keep that one card/host configuration intact through reset
+    // vector publication and ARM activation, matching the proven Gate-10 path
+    // and Linux's continuous bus lifetime. Promote exactly once before the
+    // SD-only fence and HT request.
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN,
+    );
+    if !cyw43_promote_firmware_upload_clock(state) {
         return cyw43_release_fail_closed(state);
     }
     cyw43_publish_release_progress(
@@ -39972,32 +39997,30 @@ mod tests {
                     && record.arg == sdio_cmd52_arg(true, 0, SDIO_CCCR_BRCM_CARDCTRL, 0xa2)
             })
             .expect("CARDCTRL write");
+            let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
             let pmu_read_index = test_sdio_first_transfer_index(|record| {
-                record.cmd == SDIO_CMD53
-                    && record.arg
-                        == sdio_cmd53_arg(
-                            false,
-                            1,
-                            cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
-                            true,
-                            0,
-                            4,
-                        )
+                record.cmd == SDIO_CMD52 && record.arg == sdio_cmd52_arg(false, 1, pmu_base, 0)
             })
-            .expect("PMUCONTROL read");
+            .expect("PMUCONTROL CMD52 read");
             let pmu_write_index = test_sdio_first_transfer_index(|record| {
-                record.cmd == SDIO_CMD53
-                    && record.arg
-                        == sdio_cmd53_arg(
-                            true,
-                            1,
-                            cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
-                            true,
-                            0,
-                            4,
-                        )
+                record.cmd == SDIO_CMD52 && record.arg == sdio_cmd52_arg(true, 1, pmu_base, 0)
             })
-            .expect("PMUCONTROL write");
+            .expect("PMUCONTROL CMD52 write");
+            for (index, byte) in [0u8, 0x40, 0, 0].iter().copied().enumerate() {
+                assert!(test_sdio_transfer_seen(|record| {
+                    record.cmd == SDIO_CMD52
+                        && record.arg == sdio_cmd52_arg(false, 1, pmu_base + index as u32, 0)
+                }));
+                assert!(test_sdio_transfer_seen(|record| {
+                    record.cmd == SDIO_CMD52
+                        && record.arg == sdio_cmd52_arg(true, 1, pmu_base + index as u32, byte)
+                }));
+            }
+            assert!(!test_sdio_transfer_seen(|record| {
+                record.cmd == SDIO_CMD53
+                    && sdio_cmd53_arg_addr(record.arg)
+                        == cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
+            }));
             let f2_read_index = test_sdio_first_transfer_index(|record| {
                 record.cmd == SDIO_CMD52
                     && record.arg == sdio_cmd52_arg(false, 0, SDIO_CCCR_IOEX, 0)
@@ -40084,36 +40107,9 @@ mod tests {
                     );
                 }
                 FAULT_CYW43_PROBE_PMUCONTROL_READ => {
-                    test_sdio_transfer_fail_next_arg(
-                        SDIO_CMD53,
-                        sdio_cmd53_arg(
-                            false,
-                            1,
-                            cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
-                            true,
-                            0,
-                            4,
-                        ),
-                    );
-                    test_sdio_transfer_fail_next_arg(
-                        SDIO_CMD52,
-                        sdio_cmd52_arg(
-                            false,
-                            1,
-                            CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK,
-                            0,
-                        ),
-                    );
-                    test_sdio_transfer_fail_next_arg(
-                        SDIO_CMD53,
-                        sdio_cmd53_arg(
-                            false,
-                            1,
-                            cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
-                            false,
-                            0,
-                            4,
-                        ),
+                    test_sdio_cmd52_read_none_once(
+                        1,
+                        CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK,
                     );
                 }
                 FAULT_CYW43_PROBE_PMUCONTROL_WRITE => {
@@ -40145,6 +40141,56 @@ mod tests {
                             (CYW43_ARMCR4_CORE_BASE + AI_IOCTRL_OFFSET) & BACKPLANE_ADDRESS_MASK,
                             ARMCR4_BCMA_IOCTL_CPUHALT | AI_CORE_PRERESET_IOCTRL,
                         )
+            }));
+        }
+    }
+
+    #[test]
+    fn cyw43_probe_pmucontrol_cmd52_primary_fails_each_byte_without_cmd53() {
+        let _guard = test_guard();
+        let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
+        for index in 0..4u32 {
+            reset_runtime_for_test();
+            test_sdio_cmd52_read_cardctrl_response(0xa0);
+            test_sdio_cmd52_read_ioex_response(0xa6);
+            test_sdio_cmd52_read_chipclkcsr_response(SBSDIO_ALP_AVAIL);
+            test_sdio_cmd52_read_none_once(1, pmu_base + index);
+            let mut state = Cyw43RuntimeState::new();
+            state.transport_ready = true;
+            state.sdio_transport_enumerated = true;
+
+            assert_eq!(
+                cyw43_prepare_firmware_upload_transport(&mut state),
+                Err(FAULT_CYW43_PROBE_PMUCONTROL_READ)
+            );
+            assert!(!test_sdio_transfer_seen(|record| {
+                record.cmd == SDIO_CMD53
+                    && sdio_cmd53_arg_addr(record.arg)
+                        == cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
+            }));
+        }
+
+        for (index, byte) in [0u8, 0x40, 0, 0].iter().copied().enumerate() {
+            reset_runtime_for_test();
+            test_sdio_cmd52_read_cardctrl_response(0xa0);
+            test_sdio_cmd52_read_ioex_response(0xa6);
+            test_sdio_cmd52_read_chipclkcsr_response(SBSDIO_ALP_AVAIL);
+            test_sdio_transfer_fail_next_arg(
+                SDIO_CMD52,
+                sdio_cmd52_arg(true, 1, pmu_base + index as u32, byte),
+            );
+            let mut state = Cyw43RuntimeState::new();
+            state.transport_ready = true;
+            state.sdio_transport_enumerated = true;
+
+            assert_eq!(
+                cyw43_prepare_firmware_upload_transport(&mut state),
+                Err(FAULT_CYW43_PROBE_PMUCONTROL_WRITE)
+            );
+            assert!(!test_sdio_transfer_seen(|record| {
+                record.cmd == SDIO_CMD53
+                    && sdio_cmd53_arg_addr(record.arg)
+                        == cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
             }));
         }
     }
@@ -42241,7 +42287,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_release_promotes_lane_before_intstatus_reset_vector_and_arm_release() {
+    fn cyw43_release_preserves_upload_lane_through_arm_release_then_promotes() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -42279,9 +42325,14 @@ mod tests {
                     )
         })
         .expect("release ARMCR4 reset assert must be present");
-        assert!(card_width < intstatus);
         assert!(intstatus < reset_vector);
         assert!(reset_vector < arm_reset_assert);
+        assert!(arm_reset_assert < card_width);
+        // The host test build intentionally stubs the target-only SD-only/HT
+        // transaction sequence. Its production request remains the pure Linux
+        // HT_AVAIL_REQ value; the observable ordering guarantee here is that
+        // lane promotion occurs only after the ARM reset/release transaction.
+        assert_eq!(cyw43_post_release_ht_request_value(), SBSDIO_HT_AVAIL_REQ);
         assert!(state.firmware_execution_started);
     }
 

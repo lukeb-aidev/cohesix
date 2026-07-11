@@ -1607,8 +1607,12 @@ context and the retry/poll window.
   current-window Function 1 CMD52 byte access. This lane cannot invoke
   firmware-upload retry policy, change card width or host clock, fall back to
   CMD53 or an alternate CMD52 address, or clear the first transfer fault. All
-  other 32-bit backplane registers, the reset vector, firmware/RAM transfer,
-  DPC service, and Function 2 retain their existing CMD53 owners. An
+  ChipCommon PMUCONTROL is the second explicit exception: probe attach uses one
+  four-byte little-endian CMD52 read/modify/write service because a clean
+  generation recovery must cross that register after a post-release HT miss.
+  It has no preceding or following CMD53 attempt. All remaining 32-bit
+  backplane registers, the reset vector, firmware/RAM transfer, DPC service,
+  and Function 2 retain their existing CMD53 owners. An
   initial ChipCommon word failure terminates attach with the exact SDIO-owner
   detail/result/frame; it never reconfigures the host or reruns
   CMD0/CMD5/CMD3/CMD7 against the selected card. The SDIO owner implements the
@@ -1623,13 +1627,12 @@ context and the retry/poll window.
   the write because
   core-specific and read-only wrapper bits may remain visible. RESETCTRL clear
   repeats the strict write plus bounded settle/read shape used by Linux. The
-  Cohesix-only conservative one-bit firmware-upload lane ends before
-  `brcmf_sdio_buscore_activate` semantics begin: `RELEASE` first restores the
-  card to four-bit mode and the host to the selected fast/high-speed mode, then
-  clears SDIO-core `INTSTATUS`, writes the reset vector, and performs every
-  strict ARMCR4 AI-wrapper access. Promotion after the ARMCR4 reset is invalid
-  because it makes the first release `readl` use a lane Linux never uses for
-  activation.
+  Cohesix-only conservative one-bit firmware-upload lane remains continuous
+  through stale `INTSTATUS` clear, reset-vector publication, and ARMCR4
+  activation. `RELEASE` then promotes card and host exactly once before the
+  SD-only fence and single `HT_AVAIL_REQ`. This matches the hardware-proven
+  Gate-10 sequence and preserves Linux's invariant that firmware staging and
+  `brcmf_chip_set_active` do not contain an intervening host-lane transition.
   The immediate read is advisory because Linux's bus read has no error return;
   mailbox/devready is the authoritative execution proof. A failed strict write
   or missing IOCTRL flush remains fail-closed.

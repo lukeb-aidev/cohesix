@@ -2574,6 +2574,15 @@ def summarize_wifi_gate7_subgate_detail(
     if wifi_gate != 7:
         return WifiGate7Subgate("none", "none")
     if wifi_blocker in {
+        "cyw43-post-release-ht-clock",
+        "cyw43-post-release-function2-ready",
+        "cyw43-post-release-corecontrol",
+        "cyw43-post-release-mailbox-ready",
+        "cyw43-post-release-protocol-version",
+        "cyw43-post-release-rframe-sample",
+    }:
+        return WifiGate7Subgate("none", "none", reason=wifi_blocker)
+    if wifi_blocker in {
         "cyw43-sdio-descriptor-transfer-failed",
         "cyw43-control-tx-no-reply",
         "cyw43-control-tx-retry-no-reply",
