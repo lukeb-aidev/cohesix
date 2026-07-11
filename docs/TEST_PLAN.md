@@ -309,10 +309,13 @@ ASSERT_LOW, and RELEASE_HIGH firmware-property operation must post exactly
 once, retain the DMA request page across later reply-poll turns, use a
 virtual-counter deadline, and publish distinct begin/done progress plus an
 operation-specific terminal detail. Property requests must carry a zero
-request/response-size word. SET replies with the response bit and a bounded
-zero-byte returned length must be accepted, while missing response bits,
-oversized returned lengths, nonzero returned GPIO tokens, wrong tags, and bad
-end tags must fail; GET_CONFIG still requires its complete polarity payload.
+request/response-size word. GET_CONFIG, SET_CONFIG, and SET_STATE acceptance
+must match Linux: global transaction success plus the firmware-overwritten zero
+GPIO token. Per-tag returned-length, tag, and end-marker fields are not consumer
+failure predicates because the Raspberry Pi property ABI permits extended
+response lengths and Linux does not expose those fields here. Tests must reject
+bad global status and nonzero GPIO tokens and preserve distinct protocol reason
+bits for status, token, retained-cursor identity, and mailbox phase.
 Root must extend same-request retention
 only while one of those exact begin phases is current; mismatched sequence,
 aux, contract, mode, done phase, or unrelated progress retains the ordinary

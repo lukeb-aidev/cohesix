@@ -365,6 +365,18 @@ pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED: u16 = 0
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED: u16 = 0x5518;
 /// SDIO engine-init detail: firmware SET_GPIO_STATE high did not complete successfully.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED: u16 = 0x5519;
+/// Low-byte class for an SDIO WiFi pwrseq firmware-mailbox protocol failure.
+pub const DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS: u32 = 4;
+/// Shift applied to SDIO WiFi pwrseq firmware-mailbox protocol reason bits.
+pub const DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_REASON_SHIFT: u32 = 8;
+/// Pwrseq protocol reason: firmware message did not report global success.
+pub const DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS: u32 = 1 << 0;
+/// Pwrseq protocol reason: firmware did not replace the requested GPIO with zero.
+pub const DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN: u32 = 1 << 1;
+/// Pwrseq protocol reason: a different retained request attempted to resume.
+pub const DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CURSOR: u32 = 1 << 2;
+/// Pwrseq protocol reason: the retained mailbox phase was internally invalid.
+pub const DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE: u32 = 1 << 3;
 /// SDIO response kind: no response.
 pub const DRIVER_RUNTIME_SDIO_RESP_NONE: u8 = 0;
 /// SDIO response kind: OCR/R4 response.

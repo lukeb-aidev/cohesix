@@ -34,6 +34,8 @@ use font8x8::legacy::BASIC_LEGACY;
 use pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN;
 #[cfg(target_os = "none")]
 use pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID;
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+use pi4_driver_abi::DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE;
 use pi4_driver_abi::{
     driver_runtime_cyw43_armcr4_reset_result, driver_runtime_genet_completion_result,
     DriverRuntimeBusLinkDescriptor, DriverRuntimeCyw43CommandDescriptor,
@@ -461,8 +463,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_OP_CMD53_READ, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
     DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE, DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT,
     DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET, DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
-    DRIVER_RUNTIME_SDIO_OP_POLL_IRQ, DRIVER_RUNTIME_SDIO_RESP_LONG, DRIVER_RUNTIME_SDIO_RESP_NONE,
-    DRIVER_RUNTIME_SDIO_RESP_OCR, DRIVER_RUNTIME_SDIO_RESP_SHORT,
+    DRIVER_RUNTIME_SDIO_OP_POLL_IRQ, DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS,
+    DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CURSOR, DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS,
+    DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN,
+    DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_REASON_SHIFT, DRIVER_RUNTIME_SDIO_RESP_LONG,
+    DRIVER_RUNTIME_SDIO_RESP_NONE, DRIVER_RUNTIME_SDIO_RESP_OCR, DRIVER_RUNTIME_SDIO_RESP_SHORT,
     DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
     DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
     DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_CONNECTION,
@@ -1214,7 +1219,6 @@ const PI4_WIFI_PWRSEQ_MAILBOX_EMPTY: u32 = 0x4000_0000;
 const PI4_WIFI_PWRSEQ_MAILBOX_FULL: u32 = 0x8000_0000;
 const PI4_WIFI_PWRSEQ_MAILBOX_CHANNEL_PROPERTY: u32 = 8;
 const PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS: u32 = 0x8000_0000;
-const PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE: u32 = 1 << 31;
 const PI4_WIFI_PWRSEQ_MAILBOX_REQUEST_SIZE: u32 = 0;
 const PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE: u32 = 0x0003_8041;
 const PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG: u32 = 0x0003_0043;
@@ -2314,7 +2318,7 @@ enum SdioPwrseqMailboxFault {
     Resource,
     Timer,
     Timeout,
-    Protocol,
+    Protocol { reason: u32 },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -5543,91 +5547,41 @@ fn sdio_wifi_pwrseq_encode_config_request(vaddr: usize, polarity: u32) {
     dma_store_barrier();
 }
 
-fn sdio_wifi_pwrseq_response_header_valid(
-    status: u32,
-    reply_tag: u32,
-    expected_tag: u32,
-    value_len: u32,
-    expected_value_len: u32,
-    value_status: u32,
-    returned_gpio: u32,
-    end_tag: u32,
-) -> bool {
-    status == PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS
-        && reply_tag == expected_tag
-        && value_len == expected_value_len
-        && value_status & PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE != 0
-        && (value_status & !PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE) <= value_len
-        && returned_gpio == 0
-        && end_tag == 0
-}
-
-fn sdio_wifi_pwrseq_get_response_header_complete(
-    status: u32,
-    reply_tag: u32,
-    expected_tag: u32,
-    value_len: u32,
-    expected_value_len: u32,
-    value_status: u32,
-    returned_gpio: u32,
-    end_tag: u32,
-) -> bool {
-    sdio_wifi_pwrseq_response_header_valid(
-        status,
-        reply_tag,
-        expected_tag,
-        value_len,
-        expected_value_len,
-        value_status,
-        returned_gpio,
-        end_tag,
-    ) && value_status == (PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | expected_value_len)
+fn sdio_wifi_pwrseq_linux_response_fault(status: u32, returned_gpio: u32) -> u32 {
+    let mut reason = 0;
+    if status != PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS {
+        reason |= DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS;
+    }
+    if returned_gpio != 0 {
+        reason |= DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN;
+    }
+    reason
 }
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
-fn sdio_wifi_pwrseq_response_complete(vaddr: usize) -> bool {
+fn sdio_wifi_pwrseq_response_complete(vaddr: usize) -> Result<(), u32> {
     dma_load_barrier();
-    sdio_wifi_pwrseq_response_header_valid(
-        read_dma_u32(vaddr + 4),
-        read_dma_u32(vaddr + 8),
-        PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-        read_dma_u32(vaddr + 12),
-        8,
-        read_dma_u32(vaddr + 16),
-        read_dma_u32(vaddr + 20),
-        read_dma_u32(vaddr + 28),
-    )
+    let reason =
+        sdio_wifi_pwrseq_linux_response_fault(read_dma_u32(vaddr + 4), read_dma_u32(vaddr + 20));
+    (reason == 0).then_some(()).ok_or(reason)
 }
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
-fn sdio_wifi_pwrseq_config_response_complete(vaddr: usize) -> bool {
+fn sdio_wifi_pwrseq_config_response_complete(vaddr: usize) -> Result<(), u32> {
     dma_load_barrier();
-    sdio_wifi_pwrseq_response_header_valid(
-        read_dma_u32(vaddr + 4),
-        read_dma_u32(vaddr + 8),
-        PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-        read_dma_u32(vaddr + 12),
-        24,
-        read_dma_u32(vaddr + 16),
-        read_dma_u32(vaddr + 20),
-        read_dma_u32(vaddr + 44),
-    )
+    let reason =
+        sdio_wifi_pwrseq_linux_response_fault(read_dma_u32(vaddr + 4), read_dma_u32(vaddr + 20));
+    (reason == 0).then_some(()).ok_or(reason)
 }
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
-fn sdio_wifi_pwrseq_get_config_response(vaddr: usize) -> Option<u32> {
+fn sdio_wifi_pwrseq_get_config_response(vaddr: usize) -> Result<u32, u32> {
     dma_load_barrier();
-    sdio_wifi_pwrseq_get_response_header_complete(
-        read_dma_u32(vaddr + 4),
-        read_dma_u32(vaddr + 8),
-        PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
-        read_dma_u32(vaddr + 12),
-        20,
-        read_dma_u32(vaddr + 16),
-        read_dma_u32(vaddr + 20),
-        read_dma_u32(vaddr + 40),
-    )
-    .then(|| read_dma_u32(vaddr + 28))
+    let reason =
+        sdio_wifi_pwrseq_linux_response_fault(read_dma_u32(vaddr + 4), read_dma_u32(vaddr + 20));
+    (reason == 0)
+        .then(|| read_dma_u32(vaddr + 28))
+        .ok_or(reason)
 }
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
@@ -5676,14 +5630,14 @@ fn sdio_wifi_pwrseq_encode_mailbox_op(request_vaddr: usize, op: SdioWifiPwrseqMa
 fn sdio_wifi_pwrseq_mailbox_response(
     request_vaddr: usize,
     op: SdioWifiPwrseqMailboxOp,
-) -> Option<u32> {
+) -> Result<u32, u32> {
     match op {
         SdioWifiPwrseqMailboxOp::GetConfig => sdio_wifi_pwrseq_get_config_response(request_vaddr),
         SdioWifiPwrseqMailboxOp::SetConfig { .. } => {
-            sdio_wifi_pwrseq_config_response_complete(request_vaddr).then_some(0)
+            sdio_wifi_pwrseq_config_response_complete(request_vaddr).map(|()| 0)
         }
         SdioWifiPwrseqMailboxOp::SetState { .. } => {
-            sdio_wifi_pwrseq_response_complete(request_vaddr).then_some(0)
+            sdio_wifi_pwrseq_response_complete(request_vaddr).map(|()| 0)
         }
     }
 }
@@ -5723,7 +5677,9 @@ fn sdio_wifi_pwrseq_mailbox_turn(
         };
     } else if cursor.op != op || cursor.request_addr != request_addr {
         *cursor = SdioPwrseqMailboxCursor::idle();
-        return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol);
+        return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol {
+            reason: DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CURSOR,
+        });
     }
 
     if runtime_deadline_expired(&mut cursor.overall_deadline) {
@@ -5732,7 +5688,9 @@ fn sdio_wifi_pwrseq_mailbox_turn(
     }
     match cursor.phase {
         SdioPwrseqMailboxPhase::Idle => {
-            SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol)
+            SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol {
+                reason: DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE,
+            })
         }
         SdioPwrseqMailboxPhase::WaitSend => {
             if sdio_wifi_pwrseq_mailbox_read(mailbox_vaddr, PI4_WIFI_PWRSEQ_MAILBOX_STATUS1)
@@ -5765,9 +5723,14 @@ fn sdio_wifi_pwrseq_mailbox_turn(
             {
                 return SdioPwrseqMailboxTurn::Pending;
             }
-            let Some(value) = sdio_wifi_pwrseq_mailbox_response(request_vaddr, op) else {
-                *cursor = SdioPwrseqMailboxCursor::idle();
-                return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol);
+            let value = match sdio_wifi_pwrseq_mailbox_response(request_vaddr, op) {
+                Ok(value) => value,
+                Err(reason) => {
+                    *cursor = SdioPwrseqMailboxCursor::idle();
+                    return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol {
+                        reason,
+                    });
+                }
             };
             *cursor = SdioPwrseqMailboxCursor::idle();
             SdioPwrseqMailboxTurn::Complete(value)
@@ -5798,7 +5761,9 @@ fn sdio_wifi_pwrseq_mailbox_turn(
     }
     if cursor.op != op {
         *cursor = SdioPwrseqMailboxCursor::idle();
-        return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol);
+        return SdioPwrseqMailboxTurn::Fault(SdioPwrseqMailboxFault::Protocol {
+            reason: DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CURSOR,
+        });
     }
     *cursor = SdioPwrseqMailboxCursor::idle();
     match op {
@@ -30010,7 +29975,10 @@ const fn sdio_pwrseq_mailbox_fault_result(fault: SdioPwrseqMailboxFault) -> u32 
         SdioPwrseqMailboxFault::Resource => 1,
         SdioPwrseqMailboxFault::Timer => 2,
         SdioPwrseqMailboxFault::Timeout => 3,
-        SdioPwrseqMailboxFault::Protocol => 4,
+        SdioPwrseqMailboxFault::Protocol { reason } => {
+            DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS
+                | (reason << DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_REASON_SHIFT)
+        }
     }
 }
 
@@ -41544,8 +41512,16 @@ mod tests {
             3
         );
         assert_eq!(
-            sdio_pwrseq_mailbox_fault_result(SdioPwrseqMailboxFault::Protocol),
-            4
+            sdio_pwrseq_mailbox_fault_result(SdioPwrseqMailboxFault::Protocol {
+                reason: DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS
+                    | DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN
+                    | pi4_driver_abi::DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE,
+            }),
+            DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS
+                | ((DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS
+                    | DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN
+                    | pi4_driver_abi::DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE)
+                    << DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_REASON_SHIFT)
         );
     }
 
@@ -41619,122 +41595,28 @@ mod tests {
     }
 
     #[test]
-    fn sdio_wifi_pwrseq_set_response_matches_linux_property_contract() {
+    fn sdio_wifi_pwrseq_response_matches_linux_property_contract() {
         assert_eq!(PI4_WIFI_PWRSEQ_MAILBOX_REQUEST_SIZE, 0);
-        assert!(sdio_wifi_pwrseq_response_header_valid(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-            8,
-            8,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
-            0,
-            0,
-        ));
-        assert!(sdio_wifi_pwrseq_response_header_valid(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-            24,
-            24,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 24,
-            0,
-            0,
-        ));
-        assert!(!sdio_wifi_pwrseq_response_header_valid(
-            0,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-            24,
-            24,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
-            0,
-            0,
-        ));
-        assert!(!sdio_wifi_pwrseq_response_header_valid(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-            24,
-            24,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
-            0,
-            0,
-        ));
-        assert!(!sdio_wifi_pwrseq_response_header_valid(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-            8,
-            24,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
-            0,
-            0,
-        ));
-        assert!(!sdio_wifi_pwrseq_response_header_valid(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_CONFIG,
-            24,
-            24,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 25,
-            0,
-            0,
-        ));
-        assert!(!sdio_wifi_pwrseq_response_header_valid(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-            8,
-            8,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 8,
-            PI4_WIFI_PWRSEQ_GPIO_WL_ON,
-            0,
-        ));
-        assert!(!sdio_wifi_pwrseq_response_header_valid(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-            8,
-            8,
-            8,
-            0,
-            0,
-        ));
-        assert!(!sdio_wifi_pwrseq_response_header_valid(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-            PI4_WIFI_PWRSEQ_TAG_SET_GPIO_STATE,
-            8,
-            8,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE,
-            0,
-            1,
-        ));
-    }
-
-    #[test]
-    fn sdio_wifi_pwrseq_get_config_requires_exact_firmware_reply_shape() {
-        assert!(sdio_wifi_pwrseq_get_response_header_complete(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
-            PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
-            20,
-            20,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 20,
-            0,
-            0,
-        ));
-        assert!(!sdio_wifi_pwrseq_get_response_header_complete(
-            PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
-            PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
-            PI4_WIFI_PWRSEQ_TAG_GET_GPIO_CONFIG,
-            20,
-            20,
-            PI4_WIFI_PWRSEQ_MAILBOX_VALUE_RESPONSE | 20,
-            0,
-            1,
-        ));
+        assert_eq!(
+            sdio_wifi_pwrseq_linux_response_fault(PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS, 0,),
+            0
+        );
+        assert_eq!(
+            sdio_wifi_pwrseq_linux_response_fault(0, 0),
+            DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS
+        );
+        assert_eq!(
+            sdio_wifi_pwrseq_linux_response_fault(
+                PI4_WIFI_PWRSEQ_MAILBOX_RESPONSE_SUCCESS,
+                PI4_WIFI_PWRSEQ_GPIO_WL_ON,
+            ),
+            DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN
+        );
+        assert_eq!(
+            sdio_wifi_pwrseq_linux_response_fault(0, PI4_WIFI_PWRSEQ_GPIO_WL_ON),
+            DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS
+                | DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN
+        );
     }
 
     #[test]

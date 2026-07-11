@@ -111,7 +111,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_GET_CONFIG_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED,
-    DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG, DRIVER_RUNTIME_SDIO_RESP_NONE,
+    DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG, DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS,
+    DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CURSOR, DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS,
+    DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN, DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE,
+    DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_REASON_SHIFT, DRIVER_RUNTIME_SDIO_RESP_NONE,
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
 };
 
@@ -3080,6 +3083,68 @@ fn sdio_engine_init_completion_status(
         }
         _ => driver_task_resource_completion_status(completion, ready),
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn sdio_pwrseq_protocol_reason_bits(
+    completion: Option<DriverTaskCompletionRecord>,
+) -> Option<u32> {
+    let Some(completion) = completion else {
+        return None;
+    };
+    if completion.code != DriverTaskCompletionCode::Fault.as_u16()
+        || !matches!(
+            completion.detail,
+            DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_GET_CONFIG_FAILED
+                | DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED
+                | DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED
+                | DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED
+        )
+        || completion.result & 0xff != DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS
+    {
+        return None;
+    }
+    Some(completion.result >> DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_REASON_SHIFT)
+}
+
+#[cfg(feature = "kernel")]
+fn emit_sdio_pwrseq_protocol_status(completion: Option<DriverTaskCompletionRecord>) {
+    use core::fmt::Write;
+
+    let Some(completion) = completion else {
+        return;
+    };
+    let Some(reason) = sdio_pwrseq_protocol_reason_bits(Some(completion)) else {
+        return;
+    };
+    let mut line = heapless::String::<384>::new();
+    let _ = write!(
+        line,
+        "SDIO_DRIVER_TASK_PWRSEQ_PROTOCOL detail=0x{:04x} result=0x{:08x} global_status={} gpio_token={} cursor={} phase={} source=linked-runtime",
+        completion.detail,
+        completion.result,
+        if reason & DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS == 0 {
+            "ok"
+        } else {
+            "bad"
+        },
+        if reason & DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN == 0 {
+            "ok"
+        } else {
+            "bad"
+        },
+        if reason & DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CURSOR == 0 {
+            "ok"
+        } else {
+            "bad"
+        },
+        if reason & DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE == 0 {
+            "ok"
+        } else {
+            "bad"
+        },
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -14682,6 +14747,7 @@ fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
         completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
     });
     let status = sdio_engine_init_completion_status(completion, initialized);
+    emit_sdio_pwrseq_protocol_status(completion);
     emit_sdio_driver_task_replay_status("engine-init", status);
     crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
@@ -28884,6 +28950,38 @@ mod tests {
         assert!(!sdio_engine_init_completion_pending(Some(
             DriverTaskCompletionRecord::progress(2, 1)
         )));
+        let protocol_reason = DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GLOBAL_STATUS
+            | DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_GPIO_TOKEN;
+        assert_eq!(
+            sdio_pwrseq_protocol_reason_bits(Some(DriverTaskCompletionRecord {
+                sequence: 2,
+                code: DriverTaskCompletionCode::Fault.as_u16(),
+                detail: DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED,
+                result: DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS
+                    | (protocol_reason << DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_REASON_SHIFT),
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            })),
+            Some(protocol_reason)
+        );
+        assert_eq!(
+            sdio_pwrseq_protocol_reason_bits(Some(DriverTaskCompletionRecord {
+                sequence: 2,
+                code: DriverTaskCompletionCode::Fault.as_u16(),
+                detail: DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED,
+                result: DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS
+                    | (protocol_reason << DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_REASON_SHIFT),
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            })),
+            None
+        );
     }
 
     #[cfg(feature = "kernel")]
