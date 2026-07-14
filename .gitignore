@@ -1,10 +1,11 @@
 # Author: Lukas Bower
+# Purpose: Exclude generated build outputs and local development state.
+# Copyright 2026 Lukas Bower
 /target
 /target.pre-clean
 /.target_check
 /out
 /out.pre-clean
-Cargo.lock
 .DS_Store
 /.vscode
 /logs

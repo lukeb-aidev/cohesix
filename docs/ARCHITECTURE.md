@@ -21,7 +21,7 @@ Non-goals:
 - In-VM UI stacks or alternate local-shell grammars; local diagnostics seat reuses the existing root-console parser and command set.
 
 ## 2. System Boundaries and TCB
-- VM boundary: seL4 kernel plus the CPIO userspace payload (`root-task`, worker binaries, and manifest-declared isolated driver runtime images when the selected profile includes them). This is the trusted computing base.
+- VM boundary: seL4 kernel plus the boot `rootserver` and the CPIO userspace payload (worker binaries and manifest-declared isolated driver runtime images when the selected profile includes them). In the primary `scripts/cohesix-build-run.sh` QEMU path, a boot-minimized rootserver is embedded into the staged elfloader and the unchanged target ELF is also staged for diagnostics and external QEMU loading; neither copy is inside the payload CPIO. That CPIO inventory covers only files inside the userspace payload. This is the trusted computing base. The legacy minimal `scripts/qemu-run.sh` harness has its own profile-gated packaging path and is not the canonical full-system payload gate.
 - The root task owns capability setup, the event pump, console surfaces, logging, and the in-VM NineDoor bridge. It retains capability authority and revocation for hardware, while Pi 4 physical driver progress is routed through root-created driver-task service TCBs and fixed-layout command/completion rings.
 - Host tooling (`cohsh`, `coh`, `swarmui`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`) is outside the TCB and interacts only through Secure9P or the console.
 - The only in-VM TCP listener is the root-task console; all other TCP services remain host-only.

@@ -1,0 +1,12 @@
+# Author: Lukas Bower
+# Purpose: Define the cfg-aware Rust source risk-ratchet audit tool.
+# Copyright 2026 Lukas Bower
+
+[package]
+name = "rust-risk-audit"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full", "visit"] }

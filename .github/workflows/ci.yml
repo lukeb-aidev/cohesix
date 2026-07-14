@@ -38,6 +38,9 @@ jobs:
       - name: Install cargo-audit and cargo-deny
         run: cargo install --locked cargo-audit cargo-deny
 
+      - name: Verify tracked Cargo lockfile
+        run: cargo metadata --locked --no-deps
+
       - name: Generate manifest-derived policy artifacts
         run: |
           cargo run -q -p coh-rtc -- \

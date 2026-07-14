@@ -1,4 +1,6 @@
 # Author: Lukas Bower
+# Purpose: Provide the seL4 panic handler and synchronized diagnostic output.
+# Copyright 2026 Lukas Bower
 [package]
 name = "sel4-panicking"
 version = "0.7.0"
@@ -12,7 +14,7 @@ panic-handler = []
 [dependencies]
 sel4-sys = { path = "../sel4-sys" }
 heapless = { version = "0.9.1", default-features = false }
-spin = { version = "0.10.0", default-features = false, features = ["mutex", "spin_mutex"] }
+spin = { version = "0.10.1", default-features = false, features = ["mutex", "spin_mutex"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(sel4_config_printing)'] }

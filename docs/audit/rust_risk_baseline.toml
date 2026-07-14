@@ -1,9 +1,15 @@
 # Author: Lukas Bower
-# Purpose: Define ratchet baseline counts for high-risk non-test Rust patterns tracked by due-diligence gates.
+# Purpose: Define cfg-aware production Rust risk counts tracked by due-diligence gates.
 # Copyright 2026 Lukas Bower
 
 [non_test]
-unsafe = 804
-unwrap = 469
-expect = 1063
-panic = 147
+unsafe = 731
+unwrap = 38
+expect = 239
+panic = 96
+
+[metadata]
+scanner = "rust-risk-audit/v1"
+historical_baseline_commit = "cf8f9ee30"
+historical_unsafe = 692
+accepted_unsafe_delta = 39

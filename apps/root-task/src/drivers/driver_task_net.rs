@@ -34575,6 +34575,8 @@ mod tests {
             frame,
         );
 
+        // SAFETY: The serialized test owns the published GENET compatibility
+        // ring and supplies a command whose context key matches that ring.
         let completion =
             unsafe { runtime_ring_service(DriverTaskHotPath::GenetNic.as_u32() as usize, command) };
         crate::hal::driver_task::publish_driver_task_ring(contract, 0);
@@ -34606,6 +34608,8 @@ mod tests {
         );
         command.aux0 = DRIVER_RUNTIME_NET_INIT_AUX;
 
+        // SAFETY: The serialized test owns the CYW43 compatibility ring and
+        // supplies a bounded net-init command with the matching context key.
         let completion = unsafe {
             runtime_ring_service(DriverTaskHotPath::Cyw43Wifi.as_u32() as usize, command)
         };
@@ -34631,6 +34635,8 @@ mod tests {
         );
         command.sequence = 23;
 
+        // SAFETY: The serialized test owns the CYW43 compatibility ring and
+        // supplies the fixed engine-init command expected by this fallback.
         let completion = unsafe {
             runtime_ring_service(DriverTaskHotPath::Cyw43Wifi.as_u32() as usize, command)
         };

@@ -12,6 +12,8 @@ source "${script_dir}/test_plan_common.sh"
 tp_init
 tp_require_stage_done 3
 tp_stage_begin 4 "rest-multiplexer"
+tp_resolve_python_311
+python_bin="${TP_PYTHON_RESOLVED}"
 
 qemu_pid=0
 gateway_pid=0
@@ -45,7 +47,7 @@ trap stage4_cleanup EXIT
 
 stage4_resolve_manifest_auth_token() {
   local manifest_path="$1"
-  python3 - "${manifest_path}" <<'PY'
+  "${python_bin}" - "${manifest_path}" <<'PY'
 import pathlib
 import sys
 
@@ -74,7 +76,7 @@ PY
 stage4_check_port_open() {
   local host="$1"
   local port="$2"
-  python3 - "${host}" "${port}" <<'PY'
+  "${python_bin}" - "${host}" "${port}" <<'PY'
 import socket
 import sys
 
@@ -90,7 +92,7 @@ PY
 
 stage4_find_free_port() {
   local host="$1"
-  python3 - "${host}" <<'PY'
+  "${python_bin}" - "${host}" <<'PY'
 import socket
 import sys
 
@@ -134,7 +136,7 @@ stage4_check_auth_ready() {
   local host="$1"
   local port="$2"
   local token="$3"
-  python3 - "${host}" "${port}" "${token}" <<'PY'
+  "${python_bin}" - "${host}" "${port}" "${token}" <<'PY'
 import socket
 import sys
 
@@ -368,7 +370,6 @@ if [[ "${TP_SKIP_PYTHON:-0}" == "1" ]]; then
     "TP_SKIP_PYTHON=1" \
     "REST smoke via cohesix-py was not executed; Python REST parity is unproven."
 else
-  python_bin="${TP_PYTHON_BIN:-python3}"
   tp_run_shell "python-rest-smoke" \
     "COHESIX_GATEWAY_URL=\"${gateway_url}\" HIVE_GATEWAY_REQUEST_AUTH_TOKEN=\"${gateway_auth_token}\" \"${python_bin}\" - <<'PY'
 import os

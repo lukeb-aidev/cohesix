@@ -229,6 +229,32 @@ tp_run_cmd() {
   return 1
 }
 
+tp_resolve_python_311() {
+  local requested="${TP_PYTHON_BIN:-python3}"
+  local command_path
+  if ! command_path="$(command -v "${requested}")"; then
+    tp_log "FAIL  Python interpreter not found: ${requested}"
+    return 1
+  fi
+
+  if ! TP_PYTHON_RESOLVED="$(
+    "${command_path}" -c \
+      'import os, sys; print(os.path.realpath(sys.executable))'
+  )"; then
+    tp_log "FAIL  unable to resolve Python interpreter: ${command_path}"
+    return 1
+  fi
+  if [[ "${TP_PYTHON_RESOLVED}" != /* || ! -x "${TP_PYTHON_RESOLVED}" ]]; then
+    tp_log "FAIL  resolved Python interpreter is not an absolute executable: ${TP_PYTHON_RESOLVED}"
+    return 1
+  fi
+
+  tp_run_cmd \
+    "${TP_PYTHON_RESOLVED} version >= 3.11" \
+    "${TP_PYTHON_RESOLVED}" \
+    -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'
+}
+
 tp_run_shell() {
   local name="$1"
   shift

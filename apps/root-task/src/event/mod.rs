@@ -244,9 +244,9 @@ const fn local_seat_usb_service_pending_state(
     keyboard_ready: bool,
     first_report_ready: bool,
     first_byte_ready: bool,
-    recovery_aux_pending: bool,
-    no_reply_streak: u64,
+    recovery: (bool, u64),
 ) -> bool {
+    let (recovery_aux_pending, no_reply_streak) = recovery;
     (polling_enabled && !command_ready)
         || enumeration_pending
         || (keyboard_ready && !first_report_ready)
@@ -3280,8 +3280,10 @@ where
             crate::local_seat::linked_local_seat_usb_keyboard_ready(),
             crate::local_seat::linked_local_seat_usb_first_report_ready(),
             crate::local_seat::linked_local_seat_usb_first_byte_ready(),
-            trace.recovery_aux_pending,
-            trace.driver_task_no_reply_streak,
+            (
+                trace.recovery_aux_pending,
+                trace.driver_task_no_reply_streak,
+            ),
         )
     }
 
@@ -3314,8 +3316,10 @@ where
             false,
             true,
             crate::local_seat::linked_local_seat_usb_first_byte_ready(),
-            trace.recovery_aux_pending,
-            trace.driver_task_no_reply_streak,
+            (
+                trace.recovery_aux_pending,
+                trace.driver_task_no_reply_streak,
+            ),
         )
     }
 
@@ -3924,6 +3928,8 @@ where
         source: ConsoleInputSource,
         expected_net_conn_id: Option<u64>,
     ) -> bool {
+        #[cfg(not(feature = "net-console"))]
+        let _ = expected_net_conn_id;
         if source.is_physical_console() {
             self.emit_serial_line(line);
             return true;
@@ -22183,22 +22189,58 @@ mod tests {
     #[test]
     fn usb_pending_enumeration_counts_as_service_and_input_pressure() {
         assert!(local_seat_usb_service_pending_state(
-            true, false, false, false, false, false, false, 0
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+            (false, 0)
         ));
         assert!(local_seat_usb_service_pending_state(
-            false, true, true, false, false, false, false, 0
+            false,
+            true,
+            true,
+            false,
+            false,
+            false,
+            (false, 0)
         ));
         assert!(local_seat_usb_service_pending_state(
-            false, true, false, true, false, false, false, 0
+            false,
+            true,
+            false,
+            true,
+            false,
+            false,
+            (false, 0)
         ));
         assert!(!local_seat_usb_service_pending_state(
-            false, true, false, false, false, false, true, 8
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            (true, 8)
         ));
         assert!(local_seat_usb_service_pending_state(
-            false, true, false, false, true, true, true, 0
+            false,
+            true,
+            false,
+            false,
+            true,
+            true,
+            (true, 0)
         ));
         assert!(local_seat_usb_service_pending_state(
-            false, true, false, false, true, true, false, 1
+            false,
+            true,
+            false,
+            false,
+            true,
+            true,
+            (false, 1)
         ));
 
         assert!(local_seat_usb_input_pending_state(

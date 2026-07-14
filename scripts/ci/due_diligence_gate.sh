@@ -85,77 +85,8 @@ check_required_audit_assets() {
 }
 
 check_rust_risk_ratchet() {
-  python3 <<'PY'
-import pathlib
-import subprocess
-import sys
-import tomllib
-
-baseline_path = pathlib.Path("docs/audit/rust_risk_baseline.toml")
-if not baseline_path.is_file():
-    print(f"missing {baseline_path}", file=sys.stderr)
-    sys.exit(1)
-
-with baseline_path.open("rb") as handle:
-    baseline_doc = tomllib.load(handle)
-
-baseline = baseline_doc.get("non_test")
-if not isinstance(baseline, dict):
-    print("rust_risk_baseline.toml missing [non_test] table", file=sys.stderr)
-    sys.exit(1)
-
-patterns = {
-    "unsafe": r"\bunsafe\b",
-    "unwrap": r"\.unwrap\(",
-    "expect": r"\.expect\(",
-    "panic": r"\bpanic!\(",
-}
-
-glob_filters = [
-    "-g", "*.rs",
-    "-g", "!**/tests/**",
-    "-g", "!**/test/**",
-    "-g", "!**/*_test.rs",
-]
-
-def count_matches(pattern: str) -> int:
-    cmd = ["rg", "-n", pattern, "apps", "crates", *glob_filters]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    if proc.returncode == 1:
-        return 0
-    if proc.returncode != 0:
-        print(f"rg failed for pattern {pattern!r}: {proc.stderr.strip()}", file=sys.stderr)
-        sys.exit(1)
-    return len([line for line in proc.stdout.splitlines() if line.strip()])
-
-errors = []
-counts = {}
-for key, pattern in patterns.items():
-    baseline_value = baseline.get(key)
-    if not isinstance(baseline_value, int):
-        errors.append(f"baseline missing integer for [non_test].{key}")
-        continue
-    current_value = count_matches(pattern)
-    counts[key] = current_value
-    if current_value > baseline_value:
-        errors.append(
-            f"non-test {key} count increased: baseline={baseline_value} current={current_value}"
-        )
-
-print("rust-risk-ratchet counts:")
-for key in sorted(patterns.keys()):
-    baseline_value = baseline.get(key, "UNKNOWN")
-    current_value = counts.get(key, "UNKNOWN")
-    print(f"  - {key}: baseline={baseline_value} current={current_value}")
-
-if errors:
-    print("rust-risk-ratchet failed:", file=sys.stderr)
-    for error in errors:
-        print(f"  - {error}", file=sys.stderr)
-    sys.exit(1)
-
-print("rust-risk-ratchet passed")
-PY
+  cargo run --quiet --locked -p rust-risk-audit -- \
+    --baseline docs/audit/rust_risk_baseline.toml
 }
 
 scan_hardcoded_secrets() {
@@ -503,6 +434,7 @@ PY
 }
 
 run_step "required-audit-assets" check_required_audit_assets
+run_step "cargo-lockfile" cargo metadata --locked --no-deps
 run_step "cargo-fmt-check" cargo fmt --all -- --check
 run_step "cargo-clippy-workspace" env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings
 run_step "cargo-check-workspace" env CARGO_INCREMENTAL=0 cargo check --workspace

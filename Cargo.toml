@@ -2,8 +2,6 @@
 # Purpose: Define the Cohesix workspace members and shared dependencies.
 # Copyright 2026 Lukas Bower
 # SPDX-License-Identifier: Apache-2.0
-# Purpose: Define Cohesix workspace members and shared dependency versions.
-# Author: Lukas Bower
 [workspace]
 members = [
     "apps/cohesix-proto",
@@ -42,6 +40,7 @@ members = [
     "crates/sel4-sys",
     "crates/net-constants",
     "tools/coh-rtc",
+    "tools/rust-risk-audit",
     "tools/security-nist",
     "tests",
 ]
@@ -67,7 +66,7 @@ cohsh-core = { path = "crates/cohsh-core" }
 secure9p-codec = { path = "crates/secure9p-codec" }
 secure9p-core = { path = "crates/secure9p-core" }
 secure9p-transport = { path = "crates/secure9p-transport" }
-anyhow = "1.0"
+anyhow = "1.0.103"
 thiserror = { version = "2.0", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }

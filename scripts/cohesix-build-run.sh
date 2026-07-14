@@ -841,8 +841,7 @@ main() {
 
     describe_file "Built root-task" "$SEL4_ARTIFACT_DIR/root-task"
 
-    COMPONENT_BINS=(
-        root-task
+    ROOTFS_COMPONENT_BINS=(
         nine-door
         worker-heart
         worker-gpu
@@ -881,7 +880,7 @@ main() {
         "$ELFLOADER_STAGE_PATH"
     describe_file "Sanitised elfloader" "$ELFLOADER_STAGE_PATH"
 
-    for bin in "${COMPONENT_BINS[@]}"; do
+    for bin in "${ROOTFS_COMPONENT_BINS[@]}"; do
         SRC="$SEL4_ARTIFACT_DIR/$bin"
         [[ -f "$SRC" ]] || fail "Expected binary not found: $SRC"
         install -m 0755 "$SRC" "$ROOTFS_DIR/$bin"
@@ -912,7 +911,7 @@ main() {
 
     install -m 0755 "$KERNEL_PATH" "$KERNEL_STAGE_PATH"
     rm -f "$ROOTSERVER_STAGE_PATH"
-    install -m 0755 "$ROOTFS_DIR/root-task" "$ROOTSERVER_STAGE_PATH"
+    install -m 0755 "$SEL4_ARTIFACT_DIR/root-task" "$ROOTSERVER_STAGE_PATH"
     log "Packaged component binary: $ROOTSERVER_STAGE_PATH"
     if [[ -f "$ROOTSERVER_STAGE_PATH" ]]; then
         python3 - "$ROOTSERVER_STAGE_PATH" <<'PY'
@@ -937,26 +936,40 @@ PY
     fi
 
     MANIFEST_INPUTS=()
-    for bin in "${COMPONENT_BINS[@]}"; do
+    for bin in "${ROOTFS_COMPONENT_BINS[@]}"; do
         MANIFEST_INPUTS+=("cohesix/bin/$bin")
     done
 
-    python3 - "$STAGING_DIR" "$PROFILE" "$RESOLVED_TARGET" "${MANIFEST_INPUTS[@]}" <<'PY'
+    python3 - "$STAGING_DIR" "$PROFILE" "$RESOLVED_TARGET" "$SEL4_ARTIFACT_DIR" "${MANIFEST_INPUTS[@]}" <<'PY'
 import hashlib
 import json
 import pathlib
 import sys
 
-if len(sys.argv) < 5:
-    raise SystemExit("manifest generation requires staging dir, profile, target, and at least one binary")
+if len(sys.argv) < 6:
+    raise SystemExit(
+        "manifest generation requires staging dir, profile, target, "
+        "artifact dir, and at least one binary"
+    )
 
 staging = pathlib.Path(sys.argv[1])
 profile = sys.argv[2]
 target = sys.argv[3]
+artifact_dir = pathlib.Path(sys.argv[4])
+rootserver = staging / "rootserver"
+root_task = artifact_dir / "root-task"
+if rootserver.read_bytes() != root_task.read_bytes():
+    raise SystemExit("staged rootserver differs from the target root-task artifact")
+if (staging / "cohesix" / "bin" / "root-task").exists():
+    raise SystemExit("root-task must not be duplicated inside the CPIO payload")
+
 entries = []
-for rel_path in sys.argv[4:]:
+for rel_path in sys.argv[5:]:
     path = staging / rel_path
     data = path.read_bytes()
+    target_path = artifact_dir / path.name
+    if data != target_path.read_bytes():
+        raise SystemExit(f"packaged component differs from target artifact: {path.name}")
     entries.append({
         "name": path.name,
         "path": rel_path,
@@ -971,6 +984,10 @@ manifest = {
 manifest_path = staging / "cohesix" / "manifest.json"
 manifest_path.parent.mkdir(parents=True, exist_ok=True)
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+print(
+    "[cohesix-build] Payload inventory verified: "
+    f"rootserver=separate components={len(entries)}"
+)
 PY
 
     log "Manifest written to $STAGING_DIR/cohesix/manifest.json"
@@ -985,11 +1002,11 @@ PY
 
     describe_file "Payload CPIO" "$CPIO_PATH"
 
-    if [[ -f scripts/ci/size_guard.sh ]]; then
-        scripts/ci/size_guard.sh "$CPIO_PATH"
-    else
-        log "Size guard script not found; skipping payload size check"
+    local size_guard_path="$PROJECT_ROOT/scripts/ci/size_guard.sh"
+    if [[ ! -x "$size_guard_path" ]]; then
+        fail "Mandatory payload size guard is missing or not executable: $size_guard_path"
     fi
+    "$size_guard_path" "$CPIO_PATH"
 
     KERNEL_LOAD_ADDR=0x70000000
     ROOTSERVER_LOAD_ADDR=0x80000000

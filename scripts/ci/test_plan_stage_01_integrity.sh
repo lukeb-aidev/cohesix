@@ -12,6 +12,7 @@ source "${script_dir}/test_plan_common.sh"
 tp_init
 tp_stage_begin 1 "integrity"
 
+tp_run_cmd "cargo-lockfile" cargo metadata --locked --no-deps
 tp_run_cmd "test-plan-hash-check" "${TEST_PLAN_ROOT}/scripts/ci/check_test_plan.sh"
 if [[ "${TP_SKIP_GENERATED_CHECK:-0}" == "1" ]]; then
   tp_mark_incomplete \

@@ -9,12 +9,15 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 doc_path="${repo_root}/docs/TEST_PLAN.md"
 runner_path="${repo_root}/scripts/ci/test_plan_run.sh"
 common_path="${repo_root}/scripts/ci/test_plan_common.sh"
+stage_01_path="${repo_root}/scripts/ci/test_plan_stage_01_integrity.sh"
 stage_02_path="${repo_root}/scripts/ci/test_plan_stage_02_host_fast.sh"
 stage_03_path="${repo_root}/scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh"
+stage_04_path="${repo_root}/scripts/ci/test_plan_stage_04_rest_multiplexer.sh"
 stage_05_path="${repo_root}/scripts/ci/test_plan_stage_05_due_diligence.sh"
 due_diligence_path="${repo_root}/scripts/ci/due_diligence_gate.sh"
+qemu_build_path="${repo_root}/scripts/cohesix-build-run.sh"
 
-python3 - "$repo_root" "$doc_path" "$runner_path" "$common_path" "$stage_02_path" "$stage_03_path" "$stage_05_path" "$due_diligence_path" <<'PY'
+python3 - "$repo_root" "$doc_path" "$runner_path" "$common_path" "$stage_01_path" "$stage_02_path" "$stage_03_path" "$stage_04_path" "$stage_05_path" "$due_diligence_path" "$qemu_build_path" <<'PY'
 import hashlib
 import pathlib
 import re
@@ -24,17 +27,23 @@ root = pathlib.Path(sys.argv[1])
 doc = pathlib.Path(sys.argv[2])
 runner = pathlib.Path(sys.argv[3])
 common = pathlib.Path(sys.argv[4])
-stage_02 = pathlib.Path(sys.argv[5])
-stage_03 = pathlib.Path(sys.argv[6])
-stage_05 = pathlib.Path(sys.argv[7])
-due_diligence = pathlib.Path(sys.argv[8])
+stage_01 = pathlib.Path(sys.argv[5])
+stage_02 = pathlib.Path(sys.argv[6])
+stage_03 = pathlib.Path(sys.argv[7])
+stage_04 = pathlib.Path(sys.argv[8])
+stage_05 = pathlib.Path(sys.argv[9])
+due_diligence = pathlib.Path(sys.argv[10])
+qemu_build = pathlib.Path(sys.argv[11])
 text = doc.read_text()
 runner_text = runner.read_text()
 common_text = common.read_text()
+stage_01_text = stage_01.read_text()
 stage_02_text = stage_02.read_text()
 stage_03_text = stage_03.read_text()
+stage_04_text = stage_04.read_text()
 stage_05_text = stage_05.read_text()
 due_diligence_text = due_diligence.read_text()
+qemu_build_text = qemu_build.read_text()
 pattern = re.compile(r'^- `([^`]+)` — `sha256:([0-9a-f]{64})`$', re.M)
 entries = pattern.findall(text)
 if not entries:
@@ -70,6 +79,7 @@ required_snippets = [
     "scripts/cohsh/run_regression_batch.sh",
     "scripts/cohsh/REST_regression_batch.sh",
     "scripts/ci/due_diligence_gate.sh",
+    "cargo metadata --locked --no-deps",
     "--iteration",
     "TEST_PLAN_ITERATION",
     "stage_01.inputs.sha256",
@@ -206,6 +216,8 @@ required_common_snippets = [
     "tp_assert_stage_fingerprint_fresh",
     "TEST_PLAN_ITERATION",
     "stage_%02d.iteration",
+    "tp_resolve_python_311",
+    "TP_PYTHON_RESOLVED",
 ]
 for snippet in required_common_snippets:
     if snippet not in common_text:
@@ -215,12 +227,23 @@ for snippet in required_common_snippets:
         )
         errors += 1
 
+required_stage_01_commands = [
+    "cargo metadata --locked --no-deps",
+]
+for command in required_stage_01_commands:
+    if command not in stage_01_text:
+        print(
+            f"missing required stage 01 command in {stage_01.relative_to(root)}: {command}",
+            file=sys.stderr,
+        )
+        errors += 1
+
 required_stage_02_commands = [
     "cargo check -p swarmui --bin swarmui",
-    "python3 scripts/ci/check_swarmui_dependencies.py",
+    "scripts/ci/check_swarmui_dependencies.py",
     "cargo test -p host-ticket-agent",
     "cargo test -p tests",
-    "python3 scripts/ci/check_driver_test_coverage.py",
+    "scripts/ci/check_driver_test_coverage.py",
     "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::rtl8139",
     "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::virtio",
     "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci",
@@ -243,6 +266,10 @@ required_stage_02_commands = [
     "CARGO_INCREMENTAL=0 cargo test --workspace --exclude swarmui",
     "pytest tests/test_pi4_trace_normalize.py",
     "pytest tests/test_pi4_gate_proof.py",
+    "tp_resolve_python_311",
+    "TP_PYTHON_RESOLVED",
+    "sys._base_executable",
+    "-m venv --clear",
 ]
 for command in required_stage_02_commands:
     if command not in stage_02_text:
@@ -265,6 +292,22 @@ for snippet in required_stage_03_snippets:
         )
         errors += 1
 
+required_stage_04_snippets = [
+    "tp_resolve_python_311",
+    "TP_PYTHON_RESOLVED",
+    '"${python_bin}" - "${manifest_path}"',
+    '"${python_bin}" - "${host}" "${port}"',
+    '"${python_bin}" - "${host}" "${port}" "${token}"',
+    '\\"${python_bin}\\" - <<\'PY\'',
+]
+for snippet in required_stage_04_snippets:
+    if snippet not in stage_04_text:
+        print(
+            f"missing exact Python contract in {stage_04.relative_to(root)}: {snippet}",
+            file=sys.stderr,
+        )
+        errors += 1
+
 required_stage_05_snippets = [
     "TP_STAGE5_REUSE_REGRESSION",
     "DD_REUSE_REGRESSION_BATCH_FROM",
@@ -278,7 +321,35 @@ for snippet in required_stage_05_snippets:
         )
         errors += 1
 
+required_qemu_payload_snippets = [
+    'size_guard_path="$PROJECT_ROOT/scripts/ci/size_guard.sh"',
+    'if [[ ! -x "$size_guard_path" ]]; then',
+    'fail "Mandatory payload size guard is missing or not executable: $size_guard_path"',
+    '"$size_guard_path" "$CPIO_PATH"',
+]
+for snippet in required_qemu_payload_snippets:
+    if snippet not in qemu_build_text:
+        print(
+            f"missing fail-closed payload guard in {qemu_build.relative_to(root)}: {snippet}",
+            file=sys.stderr,
+        )
+        errors += 1
+if "skipping payload size check" in qemu_build_text:
+    print(
+        f"fail-open payload guard remains in {qemu_build.relative_to(root)}",
+        file=sys.stderr,
+    )
+    errors += 1
+
+if "cargo metadata --locked --no-deps" not in due_diligence_text:
+    print(
+        f"missing lockfile gate in {due_diligence.relative_to(root)}",
+        file=sys.stderr,
+    )
+    errors += 1
+
 required_due_diligence_commands = [
+    "cargo run --quiet --locked -p rust-risk-audit",
     "env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings",
     "env CARGO_INCREMENTAL=0 cargo check --workspace",
     "env CARGO_INCREMENTAL=0 cargo test --workspace",

@@ -36,7 +36,7 @@ Cohesix is a research operating system for secure edge orchestration. It asks ho
 
 The system is intentionally narrow:
 - upstream seL4 on QEMU `aarch64/virt` and the Raspberry Pi 4 U-Boot profile family;
-- a static CPIO userspace containing the root task, worker roles, and profile-selected manifest-declared isolated driver runtime images;
+- a boot rootserver plus static CPIO payloads containing worker roles and profile-selected manifest-declared isolated driver runtime images, without a duplicate root task in the primary QEMU payload;
 - Secure9P-style namespaces for `/queen`, `/shard/<label>/worker/<id>`, `/log`, `/proc`, and host-projected `/gpu` state;
 - console-backed VM access, with no separate in-VM 9P/TCP listener or ad-hoc RPC channel;
 - host-side CUDA, NVML, sidecars, model registries, and UI tooling.

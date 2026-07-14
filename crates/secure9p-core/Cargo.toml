@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Define the Secure9P core crate for session state helpers and access policy hooks.
+# Copyright 2026 Lukas Bower
 [package]
 name = "secure9p-core"
 version = "0.1.0"
@@ -11,4 +12,4 @@ publish = false
 cohesix-ticket = { path = "../cohesix-ticket" }
 secure9p-codec = { path = "../secure9p-codec" }
 thiserror = { workspace = true, default-features = false }
-spin = { version = "0.10.0", default-features = false, features = ["mutex", "spin_mutex"] }
+spin = { version = "0.10.1", default-features = false, features = ["mutex", "spin_mutex"] }

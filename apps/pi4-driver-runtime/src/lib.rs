@@ -12024,6 +12024,8 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
         // Keep CYW43 runnable so a lost/coalesced reverse notification cannot
         // hide an already-published completion, while yielding to the
         // higher-priority SDIO owner on the same generated core.
+        // SAFETY: Yield carries no pointer or capability payload and only
+        // reschedules the current admitted linked-runtime TCB.
         unsafe {
             sel4_sys::seL4_Yield();
         }
@@ -31584,6 +31586,8 @@ pub fn runtime_main(task_key: usize) -> ! {
             // A late owner completion cannot restore authority after bounded
             // escalation. Leave both the immutable child claim and the parent
             // action fenced until root suspends and cold-restarts the pair.
+            // SAFETY: Yield carries no pointer or capability payload and only
+            // reschedules the current admitted linked-runtime TCB.
             unsafe {
                 sel4_sys::seL4_Yield();
             }
@@ -31600,6 +31604,8 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // or publishing another command. This closes both
                 // lost-notification and signal-before-sequence-commit races
                 // while preserving strict single-slot ownership.
+                // SAFETY: Yield carries no pointer or capability payload and
+                // only reschedules the current admitted linked-runtime TCB.
                 unsafe {
                     sel4_sys::seL4_Yield();
                 }

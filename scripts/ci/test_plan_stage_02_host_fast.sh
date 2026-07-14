@@ -14,6 +14,8 @@ tp_require_stage_done 1
 tp_stage_begin 2 "host-fast"
 export CARGO_INCREMENTAL=0
 tp_log "INFO  CARGO_INCREMENTAL=0 for deterministic macOS host-fast cargo commands"
+tp_resolve_python_311
+python_bin="${TP_PYTHON_RESOLVED}"
 
 host_matrix=(
   "cargo test -p coh --features mock"
@@ -27,7 +29,7 @@ host_matrix=(
   "cargo test -p cohsh"
   "cargo test -p secure9p-core --test session_limits"
   "CARGO_INCREMENTAL=0 cargo check -p swarmui --bin swarmui"
-  "python3 scripts/ci/check_swarmui_dependencies.py"
+  "\"${python_bin}\" scripts/ci/check_swarmui_dependencies.py"
   "CARGO_INCREMENTAL=0 cargo test -p swarmui --test dependency_policy"
   "CARGO_INCREMENTAL=0 cargo test -p swarmui --test transcript"
   "CARGO_INCREMENTAL=0 cargo test -p swarmui --test console_parity"
@@ -53,7 +55,7 @@ host_matrix=(
   "cargo run -p coh --features mock -- doctor --mock"
   "cargo test -p hive-gateway"
   "cargo test -p tests"
-  "python3 scripts/ci/check_driver_test_coverage.py"
+  "\"${python_bin}\" scripts/ci/check_driver_test_coverage.py"
   "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::rtl8139"
   "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::virtio"
   "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci"
@@ -95,14 +97,23 @@ if [[ "${TP_SKIP_PYTHON:-0}" == "1" ]]; then
     "TP_SKIP_PYTHON=1" \
     "Python client tests and examples were not executed; host tool parity and release-bundle correctness are unproven."
 else
-  python_bin="${TP_PYTHON_BIN:-python3}"
   if ! "${python_bin}" -c "import pytest" >/dev/null 2>&1; then
     venv_dir="${TEST_PLAN_STATE_DIR}/.venv"
     tp_log "INFO  pytest not available via ${python_bin}; provisioning ${venv_dir}"
-    if [[ ! -x "${venv_dir}/bin/python3" ]]; then
-      tp_run_shell "python-venv-create" "python3 -m venv \"${venv_dir}\""
+    venv_python="${venv_dir}/bin/python3"
+    if [[ -x "${venv_python}" ]] && ! "${venv_python}" -c \
+      'import os, sys; expected = os.path.realpath(sys.argv[1]); actual = os.path.realpath(sys._base_executable); raise SystemExit(0 if sys.version_info >= (3, 11) and actual == expected else 1)' \
+      "${python_bin}"; then
+      tp_log "INFO  existing Python venv does not match ${python_bin}; recreating ${venv_dir}"
+      tp_run_cmd "python-venv-recreate" "${python_bin}" -m venv --clear "${venv_dir}"
+    elif [[ ! -x "${venv_python}" ]]; then
+      tp_run_cmd "python-venv-create" "${python_bin}" -m venv "${venv_dir}"
     fi
-    python_bin="${venv_dir}/bin/python3"
+    python_bin="${venv_python}"
+    tp_run_cmd \
+      "${python_bin} version >= 3.11" \
+      "${python_bin}" \
+      -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)'
     if ! "${python_bin}" -c "import pytest" >/dev/null 2>&1; then
       tp_run_shell "python-venv-install-pytest" "\"${python_bin}\" -m pip install pytest"
     fi

@@ -2402,16 +2402,16 @@ impl LocalSeatRuntime {
     ) {
         if command_ready {
             self.mirror_prompt(prompt);
-            return;
-        }
-        #[cfg(all(
-            feature = "kernel",
-            feature = "usb",
-            target_arch = "aarch64",
-            target_os = "none"
-        ))]
-        {
-            self.defer_linked_hdmi_prompt_until_keyboard_ready(prompt);
+        } else {
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
+            {
+                self.defer_linked_hdmi_prompt_until_keyboard_ready(prompt);
+            }
         }
     }
 
@@ -9346,12 +9346,14 @@ mod tests {
             let pre_first_single_no_event = 1
                 | (u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE)
                     << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT);
-            assert!(local_seat_keyboard_pre_first_report_full_queue_stalled(
+            assert!(!local_seat_keyboard_pre_first_report_full_queue_stalled(
                 pre_first_single_no_event
             ));
-            assert!(local_seat_keyboard_pre_first_report_no_event_queue_stalled(
-                pre_first_single_no_event
-            ));
+            assert!(
+                !local_seat_keyboard_pre_first_report_no_event_queue_stalled(
+                    pre_first_single_no_event
+                )
+            );
             assert!(
                 !local_seat_keyboard_pre_first_report_steady_full_queue_stalled(
                     pre_first_single_no_event
@@ -9471,12 +9473,14 @@ mod tests {
 
     #[test]
     fn runtime_keyboard_recovery_aux_waits_for_root_queue_drain_unless_runtime_is_stale() {
-        assert!(LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD >= 32);
-        assert!(LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD <= 64);
-        assert!(
-            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
-                >= LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_IDLE_RECOVERY_NO_REPLY_THRESHOLD * 4
-        );
+        const {
+            assert!(LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD >= 32);
+            assert!(LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD <= 64);
+            assert!(
+                LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+                    >= LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_IDLE_RECOVERY_NO_REPLY_THRESHOLD * 4
+            );
+        }
         assert!(!local_seat_keyboard_recovery_aux_allowed(
             false,
             LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD,

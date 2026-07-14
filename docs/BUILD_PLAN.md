@@ -7820,6 +7820,34 @@ Deliverables: documented and verified domain-schedule posture for Cohesix seL4 1
 ```
 
 ```
+Title/ID: m26d-repository-gate-closure
+Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / repository-wide regression gate closure
+Goal: Restore every mandatory repository-wide source, dependency, packaging, and staged-regression gate exposed while preparing the refreshed QEMU and Pi 4 evidence, without changing operator-visible semantics or hardware authority.
+Inputs: Cargo.toml, Cargo.lock, deny.toml, apps/root-task/src, scripts/cohesix-build-run.sh, scripts/ci/test_plan_*.sh, scripts/ci/due_diligence_gate.sh, .github/workflows/ci.yml, README.md, docs/TEST_PLAN.md, docs/audit risk registers, current M26b/M26d source and build evidence.
+Changes:
+  - Cargo.toml + Cargo.lock + CI — update vulnerable or yanked transitive dependency selections to supported compatible versions without widening VM dependency closure, track the lockfile, and reject stale resolution before build/test commands.
+  - apps/root-task/src — correct deterministic test-contract drift and strict lint failures exposed by the canonical Pi 4 Stage 02 feature set.
+  - scripts/cohesix-build-run.sh and focused tests/docs — keep the QEMU rootfs below the 4 MiB guard while preserving all manifest-declared runtime artifact names, bytes, and isolated-runtime lookup semantics.
+  - scripts/ci, tools/rust-risk-audit, README.md, and canonical docs — make Python selection exact and recoverable, count cfg-test Rust separately from production risk, record the real linked-runtime unsafe delta, and align as-built packaging explanations with the canonical QEMU path.
+Commands:
+  - cargo metadata --locked --no-deps
+  - cargo fmt --all -- --check
+  - cargo clippy --workspace --all-targets -- -D warnings
+  - cargo check --workspace
+  - cargo test --workspace -- --test-threads=1
+  - cargo test -p rust-risk-audit
+  - cargo audit
+  - cargo deny check advisories
+  - scripts/check-generated.sh
+  - scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-repository-gates-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --stage 1 --state-dir out/test-plan/m26d-repository-gates-pi4
+  - scripts/ci/test_plan_run.sh --target pi4 --stage 2 --state-dir out/test-plan/m26d-repository-gates-pi4
+Checks: mandatory lint, workspace, dependency, generated-artifact, QEMU packaging, cfg-aware risk-ratchet, and offline staged-regression gates pass with no newly ignored advisory, forged marker, skipped stage, rootfs-size exception, operator grammar drift, or loss of manifest-declared driver-runtime artifact identity; accepted production unsafe growth is explicit and expiry-bounded; live Pi stages remain separately hardware-gated.
+Deliverables: reviewable dependency resolution and risk register, deterministic root-task/Python regression coverage, sub-4-MiB QEMU payload, and clean QEMU plus offline Pi target-qualified gate evidence.
+```
+
+```
 Title/ID: m26d-full-regression-refresh
 Goal: Prove the seL4 15 baseline refresh preserves operator-visible behavior and accepted benchmark envelopes across QEMU and Pi 4.
 Inputs: refreshed generated artifacts, seL4 15 build trees, docs/TEST_PLAN.md, scripts/ci/test_plan_run.sh, m26d benchmark ledger.

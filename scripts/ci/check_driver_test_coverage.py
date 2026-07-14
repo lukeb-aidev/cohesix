@@ -212,7 +212,8 @@ def main() -> int:
         errors,
         "scripts/ci/test_plan_stage_02_host_fast.sh",
         [
-            "python3 scripts/ci/check_driver_test_coverage.py",
+            'python_bin="${TP_PYTHON_RESOLVED}"',
+            '\\"${python_bin}\\" scripts/ci/check_driver_test_coverage.py',
             "driver-tests-qemu --lib drivers::rtl8139",
             "driver-tests-qemu --lib drivers::virtio",
             "driver-tests-qemu --lib hal::pci",
