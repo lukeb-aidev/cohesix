@@ -3199,6 +3199,37 @@ def test_gate_summary_keeps_wifi_blackbox_fault_over_later_prompt_replay() -> No
     assert gates.wifi_phase == "cyw43-firmware-chunk"
 
 
+def test_gate_summary_keeps_primary_gate_six_fault_over_preserved_recovery() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-firmware blocker=failed",
+            "wifi: gate 5 name=backplane-window status=inferred "
+            "evidence=programmed=n/a next=firmware-upload",
+            "wifi: gate 6 name=firmware-upload status=fail "
+            "evidence=uploaded=no verified=no fault_detail=0x5103 "
+            "next=function2-ready",
+            "wifi: gate 9 name=dhcp-bound status=blocked "
+            "dependency=not-reached-due-to-gate-6",
+            "wifi: cyw43 fault stage=cyw43-firmware-chunk op=2 "
+            "detail=0x5103 reason=",
+            "wifi: recovery fault stage=cyw43-transport-init op=1 "
+            "detail=0x5313 reason=cyw43-transport-f1-block-size "
+            "causal_preserved=yes",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-command driver-task runtime init failed",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE"] == 5
+    assert record["WIFI_BLOCKER"] == "cyw43-sdio-descriptor-transfer-failed"
+    assert record["WIFI_EXACT"] == "cyw43-sdio-descriptor-transfer-failed"
+    assert record["WIFI_PHASE"] == "cyw43-firmware-chunk"
+    assert record["WIFI_BLOCKER_LINE"] == 5
+
+
 def test_gate_summary_fails_closed_on_cyw43_firmware_upload_pass_with_fault() -> None:
     events = normalizer.parse_events(
         [

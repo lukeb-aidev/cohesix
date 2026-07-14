@@ -7022,6 +7022,63 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     return gate, blocker
 
 
+def summarize_terminal_wifi_diag_failure(
+    events: Iterable[TraceEvent],
+) -> tuple[int, str, str, int] | None:
+    """Return an explicit WiFi failure preserved across secondary recovery.
+
+    Passive recovery telemetry can describe a secondary failure after the
+    linked runtime has already preserved its causal first fault. The serial
+    `wifi diag` gate table is authoritative when recovery explicitly labels its
+    later fault `causal_preserved=yes`. Unrelated precise runtime evidence keeps
+    the normal priority rules.
+    """
+
+    terminal: tuple[int, str, str, int] | None = None
+    causal_preserved = False
+    for event in events:
+        raw = event.raw.lower()
+        diag_gate = startup_diag_gate(raw, "wifi")
+        if diag_gate is None:
+            if terminal is not None and raw.startswith("wifi: cyw43 fault"):
+                exact = normalize_wifi_exact(event.fields.get("detail", ""))
+                if exact == terminal[1]:
+                    terminal = (
+                        terminal[0],
+                        terminal[1],
+                        event.fields.get("stage") or terminal[2],
+                        event.line,
+                    )
+            if (
+                terminal is not None
+                and raw.startswith("wifi: recovery fault")
+                and event.fields.get("causal_preserved", "").lower() == "yes"
+            ):
+                causal_preserved = True
+            continue
+        status = event.fields.get("status", "").lower()
+        if status == "fail":
+            exact = normalize_wifi_exact(event.fields.get("fault_detail", ""))
+            if exact == "none":
+                exact = normalize_wifi_blocker(
+                    event.fields.get("blocker")
+                    or event.fields.get("name")
+                    or "wifi-startup-gate"
+                )
+            phase = event.fields.get("name") or f"wifi-gate-{diag_gate}"
+            terminal = (max(0, diag_gate - 1), exact, phase, event.line)
+            causal_preserved = False
+            continue
+        if (
+            terminal is not None
+            and status == "pass"
+            and diag_gate >= terminal[0] + 1
+        ):
+            terminal = None
+            causal_preserved = False
+    return terminal if causal_preserved else None
+
+
 def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     """Return the exact failure and phase carried by a Wi-Fi event."""
 
@@ -12126,6 +12183,14 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         # was reached, so the last unrecovered hardware RELEASE fault wins.
         wifi_blocker, wifi_phase, wifi_blocker_line = terminal_release_fault
         wifi_gate = 7 if wifi_blocker.startswith("cyw43-post-release-") else 6
+        wifi_exact = wifi_blocker
+    terminal_diag_failure = summarize_terminal_wifi_diag_failure(event_list)
+    if terminal_diag_failure is not None:
+        # The explicit dependency-aware device verdict outranks secondary
+        # generation-recovery failures and later diagnostic command errors.
+        wifi_gate, wifi_blocker, wifi_phase, wifi_blocker_line = (
+            terminal_diag_failure
+        )
         wifi_exact = wifi_blocker
     if wifi_gate >= 10 and not cohsh_tcp_auth_proof:
         wifi_gate = 9

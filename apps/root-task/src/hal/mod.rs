@@ -1562,9 +1562,9 @@ const PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES: &[usize] = &[];
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_GENET_MMIO_BASES: &[usize] = &[0xFD58_0000, 0x7D58_0000, 0xFE58_0000];
 #[cfg(feature = "kernel")]
-const PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES: &[usize] = &[0xFE30_0000, 0x7E30_0000];
+const PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES: &[usize] = &[0xFE30_0000];
 #[cfg(feature = "kernel")]
-const PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES: &[usize] = &[0xFE00_B000, 0x7E00_B000];
+const PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES: &[usize] = &[0xFE00_B000];
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_NO_MMIO_BASES: &[usize] = &[];
 #[cfg(feature = "kernel")]
@@ -3865,6 +3865,21 @@ impl<'a> KernelHal<'a> {
         let child_cnode = self.env.alloc_cnode(child_depth).map_err(HalError::Sel4)?;
         let tcb = self.env.alloc_tcb().map_err(HalError::Sel4)?;
         let command_endpoint = self.env.alloc_endpoint().map_err(HalError::Sel4)?;
+        // Recovery keeps one private root cap that is never published as a
+        // steady producer. The normal SDIO handoff still deletes its ordinary
+        // root send cap; this copy is admitted only while both linked peers are
+        // suspended by the HAL pair-restart supervisor.
+        let recovery_endpoint = if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+            || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
+        {
+            Some(
+                self.env
+                    .copy_cap_to_new_slot(command_endpoint, sel4_sys::seL4_CapRights_All)
+                    .map_err(HalError::Sel4)?,
+            )
+        } else {
+            None
+        };
         let notification = self.env.alloc_notification().map_err(HalError::Sel4)?;
         let vspace = self.env.alloc_vspace_root().map_err(HalError::Sel4)?;
         self.env
@@ -4058,6 +4073,15 @@ impl<'a> KernelHal<'a> {
             &mut tracker,
             runtime_init_descriptor.as_mut(),
         )?;
+        let restart_sdhci_root_ptr = if contract == SDIO_HOST_DRIVER_TASK_CONTRACT {
+            let frame = self
+                .env
+                .map_device(PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES[0])
+                .map_err(HalError::Sel4)?;
+            frame.ptr().as_ptr() as usize
+        } else {
+            0
+        };
         let runtime_irq = match runtime_init_descriptor.as_mut() {
             Some(builder) => self.install_generated_runtime_irq(
                 contract,
@@ -4074,6 +4098,16 @@ impl<'a> KernelHal<'a> {
             }
             _ => None,
         };
+        if let Some(descriptor) = runtime_init_descriptor {
+            if (contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+                || contract == SDIO_HOST_DRIVER_TASK_CONTRACT)
+                && !driver_task::retain_driver_runtime_restart_descriptor(contract, descriptor)
+            {
+                return Err(HalError::Unsupported(
+                    "driver-runtime-restart-descriptor-retain",
+                ));
+            }
+        }
 
         let guard_bits = sel4::word_bits().saturating_sub(child_depth as seL4_Word);
         let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
@@ -4103,6 +4137,25 @@ impl<'a> KernelHal<'a> {
 
         let _notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
+        if let Some(recovery_endpoint) = recovery_endpoint {
+            let irq_handler = runtime_irq
+                .binding
+                .map(|binding| binding.kernel.handler_slot as usize)
+                .unwrap_or(0);
+            if !driver_task::publish_cyw43_sdio_restart_context(
+                contract,
+                runtime_load.entry,
+                stack_top,
+                task_key,
+                recovery_endpoint as usize,
+                command_endpoint as usize,
+                notification as usize,
+                irq_handler,
+                restart_sdhci_root_ptr,
+            ) {
+                return Err(HalError::Unsupported("driver-runtime-restart-context"));
+            }
+        }
         sel4::write_tcb_registers(
             tcb,
             runtime_load.entry,
@@ -4815,13 +4868,19 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pi4_runtime_mmio_candidates_keep_cyw43_behind_sdio_runtime() {
+    fn pi4_runtime_mmio_candidates_keep_cyw43_behind_cpu_physical_sdio_runtime() {
         let cyw43 =
             super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::Cyw43Wifi);
         let sdio =
             super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::SdioHost);
         assert!(cyw43.is_empty());
-        assert_eq!(sdio, super::PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES);
+        assert_eq!(sdio, &[0xFE30_0000]);
+        assert_eq!(
+            super::PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES,
+            &[0xFE00_B000]
+        );
+        assert!(!sdio.contains(&0x7E30_0000));
+        assert!(!super::PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES.contains(&0x7E00_B000));
     }
 
     #[cfg(feature = "kernel")]

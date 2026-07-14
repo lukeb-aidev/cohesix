@@ -880,11 +880,14 @@ Device-visible address policy is not generic:
 
 ### IRQ Ordering
 
-The seL4 interrupt pattern is derive IRQHandler, bind notification, wait/poll
-notification, clear the device source, then acknowledge the IRQHandler. Cohesix
-keeps that sequence in HAL helpers because acknowledging a level-triggered line
-before clearing the device source can immediately redeliver the interrupt or
-leave the line stuck.
+The ordinary seL4 interrupt pattern is derive IRQHandler, bind notification,
+wait/poll notification, clear the device source, then acknowledge the
+IRQHandler. Cohesix keeps that sequence in HAL helpers because acknowledging a
+level-triggered line before clearing the device source can immediately
+redeliver the interrupt or leave the line stuck. The linked Pi 4 SDIO path is
+the explicit controller-specific exception below: it masks `CARD_INT` in both
+host enable registers before acknowledging the seL4 IRQ, then requires the
+CYW43 runtime to clear the dongle source before host rearm.
 
 - Use `IrqTrigger::Level` for Pi 4 SDIO and PCIe INTx-style lines unless source
   authority proves an edge-triggered line.
@@ -897,12 +900,15 @@ leave the line stuck.
   device interrupt.
 - SDHCI command/data wait paths must not clear `CARD_INT` as a side effect of
   command completion, data-ready, or transfer-finish waits. `CARD_INT` belongs
-  to the isolated SDIO/CYW43 notification-DPC path. The SDIO runtime masks
-  SDHCI `CARD_INT` signalling, W1C-clears only the captured host `CARD_INT`
-  latch, publishes the bounded event, and acknowledges the seL4 IRQ before
-  waking CYW43. The CYW43 runtime then captures and clears the dongle-side
-  source, drains bounded SDPCM work, and signals SDIO to re-read the host latch
-  and re-enable `CARD_INT` only after the event ring is empty.
+  to the isolated SDIO/CYW43 notification-DPC path. Matching Raspberry Pi
+  Linux `mmc-bcm2835`, the SDIO runtime removes `CARD_INT` from both
+  `INT_ENABLE` and `SIGNAL_ENABLE`, does not W1C the host `CARD_INT` status,
+  publishes the bounded event, and acknowledges the seL4 IRQ before waking
+  CYW43. The CYW43 runtime then captures and W1C-clears the dongle-side source
+  and drains bounded SDPCM work. Only after that source is cleared and the
+  event ring is empty may SDIO re-enable `CARD_INT` in both enable registers;
+  a still-asserted level then produces another delivery instead of being
+  erased by a host-status write.
 - Pi 4 USB/VL805 is event-ring polled with PCI INTx/MSI/MSI-X delivery
   masked. The cold-boot command proof publishes `CONFIG.MaxSlots`, `DCBAAP`,
   `CRCR`, `ERSTSZ`, `ERSTBA`, the initial `ERDP` without `EHB`, scratchpad
@@ -1007,6 +1013,24 @@ until host-EAPOL security completes. Pi 4 image builds must force a fresh
 when tracked local changes are present, so serial evidence can distinguish a
 new hardware run from a stale image marker.
 
+The `NetStack` owns one long-lived association supervisor for the selected WiFi
+credentials. It retains the chosen authentication mode across connection
+generations, so open, firmware-supplicant, and host-EAPOL retries cannot pivot
+silently. A failed or disconnected attempt backs off for 1, 2, 4, 8, 16, then
+30 seconds, and continues at 30 seconds without an attempt limit while the AP
+is unavailable. Each retry creates one immutable, generation-bound Linux
+`join` transaction and claims the runtime turn before generic pre-poll can
+steal it. Linux event semantics are explicit: successful `SET_SSID` is the
+association result for open and host-supplicant modes; firmware WPA additionally
+requires `PSK_SUP` status 6, in either arrival order, and any other `PSK_SUP`
+status fails that attempt. A LINK-up event is carrier telemetry and cannot
+substitute for `SET_SSID`; `DEAUTH`, `DEAUTH_IND`, `DISASSOC_IND`, or LINK-down
+reopen association, while a `DISASSOC` request event alone is diagnostic.
+Host-EAPOL uses its existing terminal `required` result as the retry edge rather
+than adding a competing timeout. Each attempt has one non-sliding 24.576-second
+ceiling. DHCP, static-address restoration, and ordinary data remain closed until
+association, link, and the selected authentication proof all agree.
+
 Empty first-read RX-source telemetry stays inside the isolated runtime boundary.
 When CYW43 is using the SDIO bus-link, it samples CCCR `IENx`, CCCR `IORx`, and
 the CYW43 SDIO-core interrupt status through bounded SDIO-owner commands on the
@@ -1052,48 +1076,52 @@ controls that require it; when used, it can consume immediately readable frames,
 but it does not issue the RX abort/RF_TERM/`SMB_NAK` retransmit sequence before
 the control write. That preserves nonmatching frames for the later control or
 data poll instead of treating the drain as association or EAPOL proof.
-Root-side station setup splits every matched CYW43 control into a
-`CONTROL_FRAME` TX turn plus bounded parent-side `CONTROL_POLL` turns. The
-first Linux-order startup alignment negotiation, `bus:txglomalign=8`, stays a
-plain-header, 36-byte logical payload and keeps the explicit pre-TX drain bit;
-it now uses that same split path so HAL can retain the exact TX descriptor and
-root can match the later CDC command/ioctl id without entering a runtime-private
-reply loop.
+Root-side station setup sends ordinary matched CYW43 controls through the
+retained `CONTROL_EXCHANGE` operation. The runtime stores the immutable
+generation, BCDC command/id/flags, payload offset/length, and full payload
+digest, then advances exactly one pre-TX-drain, credit, TX, or reply action per
+outer service turn. TX is issued exactly once. An interleaved event or data
+frame returns `FrameReady` detail `0x5802`; root routes that frame and, on a
+later outer turn, resubmits the byte-identical descriptor and payload to resume
+the same cursor without another TX. The first Linux-order startup alignment
+negotiation, `bus:txglomalign=8`, therefore stays a plain-header, 36-byte
+logical payload with explicit pre-TX drain while using the same serialized
+DPC/FIFO owner as later controls.
 If the firmware returns an exact matched CDC `BCME_BADARG` or
 `BCME_UNSUPPORTED` for that value, root retries the same iovar with value `4`.
 If value `4` is also rejected with one of those exact firmware statuses, root
 records `optional-skip` and continues to the next Linux-order control; transport
 faults, no-reply, malformed replies, and unrelated firmware status still fail
-closed. The runtime-private `CONTROL_EXCHANGE` opcode remains ABI-decodable for
-older proof artifacts, but root does not select it for station setup.
-Host-EAPOL extends the split model by tracking the active CYW43 prompt poll,
-recovering the live descriptor from the ring if the in-memory tracker is stale,
-and resuming the same control/data descriptor and flags before alternating polls
-or submitting post-association rescue work. Split control-reply polling now
-checks the runtime frame channel before CDC parsing: event-channel frames are
-decoded as Broadcom events, association/link events are retained in a single
-pending host-EAPOL slot, and host-EAPOL arming or later service slices fold that
-pending event into `event_rx`, `associated`, `link_up`, and `assoc_event`
-without treating it as a CDC reply. Valid CDC replies that arrive while root is
-waiting for another `(cmd,id)` are not discarded. Root copies those replies into
-a bounded pending-control queue keyed by exact CDC command and ioctl id, and the
-next matching exchange restages the copied frame into the driver-task ring before
-validating length/status and returning the response body. Commandless/no-id
-nonzero statuses during the `wsec_key` PTK/GTK window are traced as stale
-nonmatching key-install status and root keeps polling for the matched ioctl
-reply. This preserves Linux's concurrent control/data receive tolerance without
-weakening the `wsec_key` PTK/GTK gate. The live Pi 4 key frontier can deliver
-M4-adjacent RX/credit/control-idle evidence before the matched key completion,
-so pairwise PTK and initial GTK installs both use the long bounded
-16,384-poll/5,000 ms matched-reply window. If stale/nonmatching evidence is the
-terminal proof for a host-EAPOL `wsec_key` install that already used the
-extended SDPCM header and explicit pre-TX drain, root retains that one
-outstanding request and continues bounded receive-only reply windows for the
-same CDC command and ioctl id. It does not retransmit the key body or allocate
-a new id. The continuation gate accepts either the preserved split reason or
-the encoded `0x430*` control-exchange timeout reason, so a terminal generic
-`cyw43-control-exchange` fault with nonmatching-reply evidence still reaches the
-bounded same-id receive path. Matched nonzero firmware status remains fatal.
+closed. PTK/GTK `wsec_key` installation uses the same retained
+`CONTROL_EXCHANGE` owner with pre-TX drain. Root keeps the immutable descriptor,
+BCDC id, and key payload across event-pump turns; interleaved EVENT/DATA frames
+are routed before the byte-identical operation resumes, and logical carrier
+epoch changes drain or fence the live cursor without retransmitting the key.
+Only an exact matched reply or a runtime fault that explicitly proves cursor
+reset permits root to drop op11 ownership. Prompt-resume exhaustion,
+strict-invalid admission, identity rejection, device-unavailable admission, or
+any unexpected completion can leave an older runtime cursor live; root latches
+the CYW43/SDIO pair restart before returning. An incremental `wsec_key` owner
+keeps the exact descriptor, BCDC id, and key bytes in its locked session until
+the next outer turn consumes that fence, after which full-context recovery
+scrubs the old session before any new control TX.
+Host-EAPOL still tracks the active CYW43 prompt operation and recovers its live
+descriptor from the ring if the in-memory tracker is stale. Non-key receive
+filter controls that have not yet migrated to op11 retain bounded split
+control-reply polling. That polling checks the runtime frame channel before CDC
+parsing: event-channel frames are decoded as Broadcom events, and valid CDC
+replies that arrive while root is waiting for another `(cmd,id)` are retained in
+a bounded queue keyed by the exact command and ioctl id.
+
+Key installation does not use that split continuation lane. Runtime op11 owns
+the one `wsec_key` TX and its reply cursor through a virtual-counter deadline.
+EVENT/DATA frames return as detail `0x5802`, are applied in wire order, and then
+the identical key descriptor resumes. The runtime consumes CONTROL frames and
+accepts only the matching command/id/zero-status reply; stale or commandless
+status never commits a key. A post-TX timeout, firmware reject, malformed reply,
+or generation fence is terminal for that key attempt, while a logical carrier
+epoch change drains the already-issued cursor before rejecting its result. No
+path retransmits the key body or allocates a replacement id for that attempt.
 progress. Those lines emit `CYW43_DRIVER_TASK_EVENT_RX` and remain linked
 runtime evidence; they do not release DHCP/data without EAPOL secure proof.
 Isolated runtime RX polls now request
@@ -1447,10 +1475,14 @@ context and the retry/poll window.
   transport length, and exact pad in `CYW43_DRIVER_TASK_STREAM_TAIL_PAD`, and
   advances accounting by logical byte count. Multi-block CMD53
   turns must set `SDHCI_TRNS_MULTI`; block-mode count zero is illegal except for
-  512-byte byte-mode CMD53. The isolated runtime decodes SDIO R5 out-of-range as
-  `0x0800` (`resp0=0x1800` in current Pi 4 traces) and tolerates that bit only
-  on Function 1 backplane writes; Function 2 and other CMD53 response faults
-  still fail closed. A transfer fault such as `0x5103` may replay the retained
+  512-byte byte-mode CMD53. The isolated runtime applies Linux's non-SPI R5
+  handling to every CMD52/CMD53: any COM_CRC, ILLEGAL_COMMAND, ERROR,
+  FUNCTION_NUMBER, or OUT_OF_RANGE status fails the transfer. In particular,
+  `resp0=0x1800` is current-state `0x1000` plus terminal ERROR `0x0800`,
+  including on Function 1 backplane writes; OUT_OF_RANGE is the distinct
+  `0x0100` bit. Current-state bits alone are not an R5 error, and CMD52/CMD53
+  are rejected before issue unless they request the
+  required short response. A transfer fault such as `0x5103` may replay the retained
   SDIO owner state only on the same negotiated Linux-normal lane; it never changes
   card width, host clock, high-speed timing, or selects a byte-mode rescue profile.
   Retained-stage replay keeps a runtime-local flush
@@ -1502,10 +1534,13 @@ context and the retry/poll window.
   connect-time station policy, PAE multicast admission, and only then primary
   join submission. Host-EAPOL proof is required before data release. Station
   setup uses matched CDC command plus ioctl id for key/security controls, not
-  fire-and-forget control frames. Startup `bus:txglomalign`, PTK/GTK `wsec_key`,
-  and all other matched station controls use split `CONTROL_FRAME` plus
-  parent-side `CONTROL_POLL` so root can classify stale/nonmatching replies
-  before accepting or failing the operation.
+  fire-and-forget control frames. Startup `bus:txglomalign` and ordinary
+  station controls use retained `CONTROL_EXCHANGE`; root routes any `0x5802`
+  interleaved frame and resumes only the byte-identical generation-bound
+  transaction. PTK/GTK `wsec_key` uses that retained operation with pre-TX
+  drain and commits prepared key state only after its exact command/id returns
+  zero status. Carrier-epoch change, generation loss, and pre- or post-TX
+  terminal faults fence the transaction; none authorizes a second key TX.
   Reads such as `cur_etheraddr` must return the CDC response body.
   Primary-BSS commands use plain iovar names; do not invent BSSCFG wrappers on
   this path.
@@ -1541,17 +1576,28 @@ context and the retry/poll window.
   data edge. This is the serialized-runtime equivalent of Linux clearing one
   captured ISR word while dispatching both command and data handlers from the
   retained snapshot; no phase may W1C another phase's only edge. After the
-  entry ready interrupt is consumed, PIO drains every complete block advertised
-  by `PRESENT_STATE` without reading or acknowledging `INT_STATUS` inside that
-  drain. A ready edge that relatches remains pending for the next outer service
-  episode after `PRESENT_STATE` deasserts. Every PIO
+  first ready interrupt is mandatory even if an idle pre-request
+  `PRESENT_STATE` sample already reads ready. That interrupt is consumed only
+  as a wakeup; the owner then re-samples `PRESENT_STATE`, and only that fresh
+  request-owned state can authorize a complete BUFFER block. PIO drains every
+  complete block advertised by `PRESENT_STATE` without
+  reading or acknowledging `INT_STATUS` inside that drain. A stale or early
+  ready edge therefore transfers zero bytes, while an edge that relatches
+  remains pending for the next outer service episode after `PRESENT_STATE`
+  deasserts. Every PIO
   descriptor attempt has one aggregate virtual-counter deadline across
   inhibit, command, FIFO, finish, and settle. A failed attempt receives a new
   bounded containment deadline because the transfer deadline may already be
   exhausted. The owner does not publish completion until command/data inhibit
   is clear. Only an entry-inhibit failure proves non-issue and permits one
-  identical Function 1 CMD53 replay with another fresh deadline; later-stage
-  Function 1 failures and every Function 2 failure surface without replay.
+  identical Function 1 CMD53 replay with another fresh deadline; the stream
+  layer applies the same completion-aware issue-stage check and cannot replay
+  an issued-unknown write merely because its detail is descriptor-transfer
+  failure. Later-stage Function 1 failures and every Function 2 failure surface
+  without replay. A transfer that reports success while command/data inhibit
+  remains asserted is classified separately as stage 6
+  `post-issue-quiesce`; it is issued-unknown, receives containment, and can
+  never enter the entry-stage same-command retry rule.
   Failed containment masks CARD_INT, poisons the owner generation, and rejects
   every operation except the exact generation reset. Card commands and host
   configuration obey the same containment rule. Data-path settle failure
@@ -1564,10 +1610,56 @@ context and the retry/poll window.
   periodically re-doorbells the idempotent sequence-stamped owner command, and
   never blocks forever on one reverse notification. An exact completion drains
   the coalesced local notification before releasing the producer slot. A child
-  timeout is issued-unknown and therefore quarantines that slot for the rest of
-  the runtime generation instead of permitting concurrent ring reuse. A later
-  engine-init cannot clear this quarantine; only a fresh runtime boot resets
-  the process-local producer state.
+  timeout is issued-unknown and therefore quarantines that slot instead of
+  permitting concurrent ring reuse. The main-loop reaper polls only the
+  retained sequence and may re-signal that same immutable owner request; it
+  never republishes the command. Only a stable sequence-matching terminal
+  completion proves that the old owner has stopped. The reaper discards that
+  late action/payload, retains the DPC event, requires full generation
+  recovery, and releases the child slot last. Until that proof, engine-init and
+  every fresh child command remain blocked.
+  If terminal owner proof does not arrive within the virtual-counter grace,
+  CYW43 publishes the sticky `cyw43-sdio-pair-restart-required` phase. An
+  until-cold-entry latch then rejects every new child claim and republishes the
+  phase instead of reaping or exposing a racing late completion, so no later
+  progress record can erase the supervisor request before root observes it.
+  Root's HAL supervisor then treats CYW43 and SDIO as one restart unit: suspend
+  both TCBs; mask `CARD_INT` in Linux `mmc-bcm2835` order (`INT_ENABLE`, delayed,
+  then `SIGNAL_ENABLE`, delayed) with at least 6 us after each write; temporarily
+  unbind and drain both notification objects; acknowledge the retained SDIO IRQ
+  handler; clear both shared pages, sequence domains, and DPC epoch; and restart
+  SDIO before CYW43. The endpoint copies and root SDHCI mapping retained for
+  this path are recovery-only HAL authority and are never steady producers or
+  drivers. Each runtime scrubs its process-local cursors and retained control
+  bytes before descriptor intake. Root replays the sealed descriptors and both
+  engine-init turns under one aggregate 3 s counter-backed envelope shared by
+  both receive-ready waits, both descriptor replays, both engine replays, and
+  final producer handoff; no subphase starts a fresh deadline, and every replay
+  send/yield attempt checks that same envelope. Root re-delegates the SDIO
+  ring, and leaves a sticky context-replay gate. Only the explicit WiFi recovery
+  state machine may then restore firmware and control policy; ordinary join,
+  data, and control submissions remain closed until that replay succeeds. No
+  late completion or DPC action from the old pair epoch is applied. A fresh
+  pending pair restart supersedes required or active context replay; replay
+  entry rejects pending/in-progress restart state so issued-unknown ownership
+  cannot wedge behind a stale replay gate.
+  Recovery MMIO and ring clearing are permitted only after seL4 confirms both
+  runtime TCB suspensions. If either suspension fails, root fences both normal
+  endpoints and keeps restart pending but does not mask SDHCI, touch
+  notifications/IRQ state, or reuse either shared ring against a possibly-live
+  owner.
+  Like Linux `sdio_io_rw_ext_helper()`, the CYW43 client splits block-mode
+  requests by the host's declared `max_blk_count`. The captured
+  `mmc-bcm2835` host declares 65,535 blocks and its PIO path services complete
+  multiblock requests; Linux selecting DMA for a request is an implementation
+  choice, not a one-block wire contract. Cohesix likewise retains multiblock
+  PIO in 64-byte Function 1 blocks. Each CMD53 is bounded by the SDIO 9-bit
+  count, the generated 8192-byte shared arena, and the current 4096-byte
+  firmware staging chunk. A successful child completion advances the
+  backplane and payload cursors by the exact admitted multiblock length. Only a
+  final sub-block or backplane-window remainder uses byte mode. A fault never
+  changes width, clock, or request shape, so this bounded request split is not
+  a legacy fallback.
   Coalesced completion/DPC work becomes an internal deferred bit. The CYW43
   runtime retains a private DPC cursor containing the event sequence, semantic
   phase, backplane-window phase, exact child sequence, deadline, interrupt and
@@ -1593,9 +1685,12 @@ context and the retry/poll window.
   `RX_POLL`, and background polling consume only the DPC-owned strict FIFO;
   an empty FIFO returns typed idle. Pre-control-TX drains, SDPCM credit waits,
   and Ethernet credit service inspect DPC-published state without borrowing
-  Function 2, and synchronous `CONTROL_EXCHANGE` fails closed. Physical RX,
-  interrupt W1C, hostmail, flow-control updates, and retransmit recovery have
-  exactly one owner: the persistent DPC cursor.
+  Function 2. Retained `CONTROL_EXCHANGE` is a scheduled cursor over that same
+  DPC FIFO: it performs at most one bounded action per service turn, returns an
+  interleaved frame to root without losing cursor identity, and requires an
+  identical resume before continuing. It never enters the retired monolithic
+  physical-RX loop. Physical RX, interrupt W1C, hostmail, flow-control updates,
+  and retransmit recovery have exactly one owner: the persistent DPC cursor.
   Host tests use that same queue-only root-poll path. Low-level Function 2 and
   DPC parser tests call their internal owner helpers directly; no production or
   test routing enum can select a legacy physical root-poll model.
@@ -1626,19 +1721,47 @@ context and the retry/poll window.
   and Function 2 retain their existing CMD53 owners. An
   initial ChipCommon word failure terminates attach with the exact SDIO-owner
   detail/result/frame; it never reconfigures the host or reruns
-  CMD0/CMD5/CMD3/CMD7 against the selected card. The SDIO owner implements the
-  BCM2711 Linux iProc register contract beneath this strict lane: byte and
-  halfword accesses are 32-bit read/extract or read/modify/write operations,
-  BLOCK_SIZE plus BLOCK_COUNT and TRANSFER_MODE plus COMMAND are shadowed and
-  each committed as one 32-bit word when COMMAND is issued, and every write at
-  400 kHz or below receives a virtual-counter-backed four-SD-clock gap. The
-  same Linux platform data declares `SDHCI_QUIRK_NO_HISPD_BIT`: card-side
-  `CCCR_SPEED.EHS` and the negotiated fast clock remain authoritative, while
-  SDHCI `HOST_CONTROL.HISPD` stays clear. Diagnostics label the expected host
-  register state `4bit+iproc-no-hispd`; any `*hispd-unexpected` label is a
+  CMD0/CMD5/CMD3/CMD7 against the selected card. The controller oracle is the
+  Raspberry Pi downstream `drivers/mmc/host/bcm2835-mmc.c` at the installed
+  kernel package source commit
+  `89050b1059997d38d55462b323b099a6436dc10d`, not `sdhci-iproc`. Repository
+  fixtures
+  `resources/fixtures/pi4-linux-capture/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z/commands/mmc-udev.txt`
+  and
+  `resources/fixtures/pi4-linux-capture/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z/commands/sdio-udev.txt`
+  identify `fe300000.mmcnr` / `mmc1` as the `mmc-bcm2835`-bound parent of the
+  card and every CYW43 SDIO function.
+
+  The SDIO owner implements that captured `mmc-bcm2835` register contract:
+  byte and halfword accesses use 32-bit read/extract or read/modify/write
+  operations. Only `TRANSFER_MODE` is retained in the controller shadow;
+  writing `COMMAND` merges its halfword with that shadow and commits one
+  32-bit word. `BLOCK_SIZE` and `BLOCK_COUNT` are immediate 32-bit RMW writes,
+  not a second shadow pair. Each normal register write waits
+  `((2 * 1_000_000) / max(clock_hz, 400_000)) + 1` microseconds, which is 6 us
+  at 400 kHz and 1 us at 50 MHz. PIO writes to `SDHCI_BUFFER` use the raw
+  32-bit FIFO helper and do not take that inter-register delay. The captured
+  `RESET_ALL` path issues the reset with current timing, then immediately
+  clears active/requested clock caches and the transfer-mode shadow; later
+  writes therefore use the 400 kHz floor until `set_ios` reprograms the host.
+  The captured
+  driver always clears SDHCI `HOST_CONTROL.HISPD`; card-side
+  `CCCR_SPEED.EHS` and the negotiated fast clock remain authoritative.
+  Diagnostics label the expected host register state
+  `4bit+bcm2835-no-hispd`; any `*hispd-unexpected` label is a
   platform-contract fault.
-  Narrow MMIO and immediate paired-halfword commits are not valid Pi 4 SDHCI
-  operations. An IOCTRL write is followed by a mandatory CMD52 read of the same
+  Host configuration also follows `bcm2835_mmc_set_ios()` ordering exactly: a
+  changed requested clock is applied first, `HOST_CONTROL` is written with the
+  selected width and HISPD clear, `HOST_CONTROL2` drive-type bits are cleared,
+  `CLOCK_CONTROL.CARD_EN` is dropped explicitly, the requested clock is applied
+  again, and `HOST_CONTROL` is repeated. Reset, internal-clock-stable, and
+  inhibit waits use virtual-counter windows of 100 ms, 20 ms, and 10 ms;
+  recovery has its own 220 ms envelope. The WiFi power-sequence owner budget is
+  2,372,000 us, covering four independent 500 ms mailbox operations, GPIO
+  settles, three reset windows, two clock windows, and the inhibit window.
+  Narrow MMIO operations are not valid on this Pi 4 host, and
+  `TRANSFER_MODE` must remain shadowed until the combined `COMMAND` commit. An
+  IOCTRL write is followed by a mandatory CMD52 read of the same
   low-byte address to flush the backplane transaction; the read need not equal
   the write because
   core-specific and read-only wrapper bits may remain visible. RESETCTRL clear
@@ -1751,7 +1874,11 @@ context and the retry/poll window.
   a stable malformed completion releases known-terminal child ownership and
   quarantines the generation. A child deadline is issued-unknown, retains the
   event and CARD_INT mask, poisons the current generation, and forbids event
-  advancement, rearm, resubmission, or ring reuse.
+  advancement, rearm, command republication, or ring reuse. A bounded
+  main-loop reaper may only observe or re-signal the immutable retained
+  sequence. Once it sees a stable exact terminal completion, it discards the
+  late result, leaves the event retained, and releases the slot into mandatory
+  generation recovery; it never applies the old DPC action.
   A header-valid 12-byte empty CONTROL/EVENT startup status is consumed as an
   ordered status frame. An all-zero confirming first-read is quiescence, and a
   zero-cause CARD_INT/flow/mailbox tail reaches post-status rearm; neither case
@@ -1821,16 +1948,19 @@ context and the retry/poll window.
   exact zero-status firmware completions are committed in PTK-then-GTK order.
   Timeout, carrier-epoch loss, or transport failure aborts the pending install
   instead of leaving a multi-turn false-installed state.
-  Those `wsec_key` installs use the split `CONTROL_FRAME`/`CONTROL_POLL` path
-  with the host-EAPOL key reply window and always request the runtime pre-TX
-  drain. PTK and initial GTK both use the long bounded key window because the
-  firmware can trail M4-adjacent control/data evidence before returning the
-  matched `wsec_key` completion. The production boot path keeps each pairwise,
-  embedded GTK, and later group-GTK install as an incremental transaction
-  across event-pump turns: it submits exactly one
-  `CONTROL_FRAME` with one ioctl id, performs exactly one receive-only
-  `CONTROL_POLL` operation per outer service slice, retains the original id through
-  bounded late-reply windows, and enforces one aggregate transaction deadline.
+  Those `wsec_key` installs use retained `CONTROL_EXCHANGE` with runtime pre-TX
+  drain. PTK and initial GTK preserve their bounded key-install deadline because
+  the firmware can trail M4-adjacent control/data evidence before returning the
+  matched completion. The production boot path keeps each pairwise, embedded
+  GTK, and later group-GTK install as an incremental transaction across
+  event-pump turns: it submits one immutable op11 descriptor with one ioctl id,
+  advances one retained cursor action per outer service slice, routes detail
+  `0x5802` EVENT/DATA frames, and never retransmits the request.
+  Every CYW43 outer or inner pre-poll burst, and every later host-EAPOL/event
+  slice, is followed immediately by a connection-epoch sync. If a preserved
+  disconnect event advanced the epoch, that turn ends before any smoltcp
+  drain, DHCP action, or TCP action; the next turn begins from flushed
+  neighbor/DHCP/TCP state.
   Only an exact command/id/zero-status reply whose declared response length fits
   the received payload commits the prepared key. Broadcom carrier-loss events
   received on either the event or data channel advance the connection epoch
@@ -1858,10 +1988,15 @@ context and the retry/poll window.
   install and Group-M2 GTK commit occur only on a later slice after credit-drain
   and carrier-epoch proof. Post-secure filter restoration
   (`mcast_list`, `allmulti=0`, `promisc=0`) returns to Linux station mode and is
-  a best-effort data-reception repair:
-  root attempts all three controls and reports `repair-deferred` when one times
-  out or returns a transport fault, but it does not hold DHCP/data closed after
-  association, link-up, M3/M4, and PTK/GTK `wsec_key` proof are present.
+  a best-effort data-reception repair only while control ownership remains
+  proven. Matched optional firmware rejection reports `repair-pending`, and a
+  proven-terminal repair failure reports `repair-deferred`, without holding
+  DHCP/data closed after association, link-up, M3/M4, and PTK/GTK `wsec_key`
+  proof. A no-reply or other issued-unknown repair instead stops before the
+  next filter command, reports `pair-restart-required`, immediately closes the
+  root-visible carrier/security/data gates, and leaves the sticky linked-pair
+  restart for the next outer service turn. Best-effort policy never permits a
+  possibly-live control cursor to be ignored or replayed.
   Cohesix then attempts Broadcom SCB authorization and records
   `status=authorized` when the
   firmware returns the matched zero-status completion, or `status=deferred` when
@@ -2020,22 +2155,25 @@ context and the retry/poll window.
 - After real post-release HT and live Function 2 readiness are proved, the Pi 4
   firmware channel arms the Linux-shaped Function 2 interrupt path
   (`HOSTINTMASK`, `CCCR.IENx`, and SDHCI `CARD_INT`) through the generated
-  reciprocal notification topology. The isolated SDIO runtime owns host-latch
-  mask/W1C plus seL4 ack; the isolated CYW43 runtime owns dongle-source capture,
-  W1C, SDPCM drain, and the rearm request. HAL only admits the generated IRQ,
-  notification caps, mappings, and bounded event ring. The SDPCM
+  reciprocal notification topology. The isolated SDIO runtime owns the
+  `CARD_INT` mask in both enable registers plus seL4 acknowledgement, and never
+  W1C-clears host `CARD_INT`. The isolated CYW43 runtime owns dongle-source
+  capture, W1C, SDPCM drain, and the rearm request after source clear. HAL only
+  admits the generated IRQ, notification caps, mappings, and bounded event
+  ring. The SDPCM
   `FUNCTIONINTMASK` readback is diagnostic on this Pi 4 path; a zero value is
   not interrupt-programming drift when `CCCR.IENx` is armed and the SDIO-core
   frame-indication path is live. IRQ 158 is the Wi-Fi SDIO interrupt; IRQ 27
   remains the seL4 timer and is never Wi-Fi progress evidence.
 - A polled Function 2 control reply may leave SDHCI `CARD_INT` visible after
   the dongle-side `SDIO_INT_STATUS` source has already been read and cleared.
-  That is a stale host interrupt latch for the SDIO runtime to mask, W1C-clear,
-  publish, and acknowledge, not a terminal
+  That is a level-host indication for the SDIO runtime to mask in both enable
+  registers and acknowledge without a host W1C, not a terminal
   `wifi-sdio-polled-reply-source-still-visible` blocker. The later CYW43 DPC
   source sample may be zero because the polled path already consumed it; a
   dongle-source read failure is a CYW43 service/recovery fault and must not
-  reverse the host-latch-before-dongle-service IRQ ordering.
+  bypass source-clear and empty-ring proof before both host enable registers
+  are rearmed.
 - SDIO IRQ logs must separate host interrupt delivery from dongle source proof.
   A seL4 IRQ 158 notification or SDHCI `CARD_INT` latch with
   `SDIO_INT_STATUS=0` is logged as host-latch/no-dongle-source evidence with
@@ -2155,11 +2293,10 @@ context and the retry/poll window.
   `wifi: next_action=inspect-sdio-owner-terminal-transfer-no-retry`, and an
   exhausted retained-stage replay reports `0x5329` as `firmware-retry-exhausted`
   while preserving the SDHCI transfer result plus the actual same-lane transfer
-  shape (`linux-normal-block` or `linux-byte-remainder`). The R5 `0x0800`
-  out-of-range bit is no longer
-  misclassified as a hard firmware-upload rejection for Function 1 backplane
-  writes; if it appears on Function 2 or non-backplane CMD53 turns it remains a
-  fault. The retained-stage flush cursor is internal to
+  shape (`linux-normal-block` or `linux-byte-remainder`). Every nonzero R5 error
+  status is a hard CMD52/CMD53 rejection, including ERROR `0x0800` on Function 1
+  backplane writes; diagnostics retain the raw response so the independent
+  current-state field is not mistaken for an error. The retained-stage flush cursor is internal to
   the CYW43 runtime and is not DHCP, Function 2, or remote-`cohsh` proof. A
   `0x530a` `cyw43-descriptor-invalid` failure
   is earlier than SDIO owner execution: serial evidence must include the
@@ -2992,7 +3129,7 @@ Required Cohesix shape:
   applies `SLEEPCSR.KSO`, Function 0 `CARDCTRL.WLANRESET`, ChipCommon
   `PMUCONTROL.RES_RELOAD`, Function 0 `IOEx.F2=0`, and the
   paired card/host download lane. Card `CCCR_IF` and SDHCI `HOST_CONTROL`
-  width/iProc-no-HISPD state are read back before a lane transition is accepted,
+  width/bcm2835-no-HISPD state are read back before a lane transition is accepted,
   and release always restores the four-bit/negotiated-fast-clock pair even when successful
   upload slices reset the retry cursor. Each read or write is strict and has a
   dedicated fault; there is no root-owned or best-effort legacy fallback.
@@ -3030,18 +3167,15 @@ Required Cohesix shape:
   fallback.
   CM3-only SOCSRAM remap writes are not part of this path.
 - Station control uses matched CDC exchanges for writes and read iovars. The
-  first startup `bus:txglomalign=8` write, its value-`4` fallback, and all later
-  station exchanges use split isolated runtime sequences: a bounded
-  `DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME` TX turn followed by bounded
-  `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL` turns that decode the CDC header in
-  root. When the pre-TX drain flag is set, the runtime returns exactly one
-  preexisting DPC FIFO head as `FrameReady` without touching Function 2 or
-  advancing the SDPCM sequence. Root routes DATA/EVENT in wire order, consumes
-  stale pre-request CONTROL without admitting it as the new ioctl reply, and
-  resubmits the identical descriptor, payload, command, and BCDC id. Only an
-  empty FIFO admits the actual TX. Trace order is
-  `pre-tx-drain-frame*`, `pre-tx-drain-ready`, `tx-complete`, then the matched
-  or optional reply. Exact `BCME_BADARG` and `BCME_UNSUPPORTED` statuses on the txglomalign
+  first startup `bus:txglomalign=8` write, its value-`4` fallback, and ordinary
+  later station exchanges use retained
+  `DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE`. The runtime stores an immutable
+  generation/BCDC/payload identity and advances one pre-TX-drain, credit, TX,
+  or reply action per service turn. Root routes a returned DATA/EVENT frame in
+  wire order and resubmits the byte-identical descriptor and payload on a later
+  outer turn; detail `0x5802` proves the cursor remains live, and TX cannot run
+  twice. Stale pre-request CONTROL is consumed without admitting it as the new
+  ioctl reply. Exact `BCME_BADARG` and `BCME_UNSUPPORTED` statuses on the txglomalign
   negotiation are reported to root as optional negotiation rejects; other
   commandless nonzero CDC statuses (`cmd=0`, `id=0`, `status!=0`) remain
   fail-fast instead of generic idle-loop timeouts. A control-plane command is
@@ -3049,19 +3183,16 @@ Required Cohesix shape:
   observe the expected CDC command/ioctl id and zero firmware status, or
   preserve a precise control fault. Zero-response writes,
   including host-EAPOL multicast, `allmulti`, and `WLC_SET_PROMISC` admission,
-  still require that matched CDC completion and must not use a runtime-private
-  combined exchange that hides nonmatching replies from root. Host-EAPOL RX
-  admission writes use a bounded extended split-control reply window so delayed
-  matched zero-response completions are not misclassified as control-plane idle
-  loops. Split `CONTROL_POLL` turns retain the old-good hintless first-read
-  cadence through polls 1, 4, 16, 64, 256, 1024, and 4096 for these admission
-  windows. PTK/GTK `wsec_key` installs use the same split-control matching
-  discipline with the long bounded key-install reply window: commandless
-  (`cmd=0`, `id=0`) BADARG/UNSUPPORTED-style statuses are nonmatching stale
-  evidence for that key install, not the completion of the expected ioctl. A
-  host-EAPOL `wsec_key` terminal stale/nonmatching timeout continues polling
-  receive-only for the original BCDC ioctl id under the key-specific bounded
-  window budget. No key-install request is retransmitted. After PTK/GTK and
+  still require that matched CDC completion. The retained operation surfaces
+  interleaved frames to root instead of hiding them in a monolithic receive
+  loop. PTK/GTK `wsec_key` installs also use retained `CONTROL_EXCHANGE`, with
+  pre-TX drain and one immutable generation/command/id/payload identity across
+  outer turns. Commandless (`cmd=0`, `id=0`) BADARG/UNSUPPORTED-style statuses
+  are not accepted as the expected ioctl completion; the live op11 cursor keeps
+  ownership while interleaved EVENT/DATA work is routed. Only the exact
+  command/id/zero-status reply commits the key. A terminal pre- or post-TX
+  fault, logical carrier-epoch invalidation, or pair-generation loss cannot
+  authorize a second key-install TX. After PTK/GTK and
   `wsec` are proven, Cohesix mirrors
   Linux's `BRCMF_C_SET_SCB_AUTHORIZE` port-authorized command with the AP/BSSID
   MAC. A matched zero-status reply records `authorized`; nonmatching, no-reply,
@@ -3074,16 +3205,15 @@ Required Cohesix shape:
   the line records the full request digest, `cmd`, ioctl id, runtime flags, BCDC flags, header mode,
   iovar name, and value. Larger iovar bodies use header/name-only digesting so
   Wi-Fi key material is not exposed. The CYW43 runtime also publishes
-  `cyw43-control-tx-begin` and `cyw43-control-tx-done` for `CONTROL_FRAME`;
-  the split `txglomalign` path emits its TX completion and later matched
-  `CONTROL_POLL` result or a `CYW43_DRIVER_TASK_COMMAND_FAULT` carrying the
-  exact firmware status, followed by `CYW43_DRIVER_TASK_TXGLOMALIGN` and
-  `DRIVER_TASK_RESOURCE_INIT` lines that mark `ready`, `optional-badarg`,
-  `optional-unsupported`, or `optional-skip`.
-  Parent
-  polling emits sparse `CYW43_DRIVER_TASK_CONTROL_SPLIT` lines for TX
-  completion, first-read/idle poll completions, response readiness, and terminal
-  failures. These split lines carry the completion sequence, expected command,
+  `cyw43-control-tx-begin` and `cyw43-control-tx-done`; ordinary controls run
+  under the retained exchange. The `txglomalign` result is followed by
+  `CYW43_DRIVER_TASK_TXGLOMALIGN` and `DRIVER_TASK_RESOURCE_INIT` lines that
+  mark `ready`, `optional-badarg`, `optional-unsupported`, or `optional-skip`.
+  The retained key path emits op11 cursor/interleaved/terminal completions or a
+  `CYW43_DRIVER_TASK_COMMAND_FAULT` carrying the exact firmware status. The
+  existing `CYW43_DRIVER_TASK_CONTROL_SPLIT` trace prefix remains a diagnostic
+  compatibility label for sparse cursor progress; it does not imply a split
+  key TX/poll owner. These lines carry the completion sequence, expected command,
   ioctl id, header mode, expected response length, iovar name, and
   nonmatching/malformed frame counts. `CYW43_DRIVER_TASK_CONTROL_REPLY` lines
   expose malformed, nonmatching, and matched CDC reply headers (`cmd`, ioctl id,
@@ -3099,8 +3229,8 @@ Required Cohesix shape:
   `arg=0xa1000030` has `cmd53_count=48`, `desc_blkcnt=0`, and `host_blkcnt=1`,
   so `blkcnt=1` must not be interpreted as a block-mode transfer. Nonterminal poll
   samples and nonmatching replies are context;
-  they become exact blockers only when the same attempt ends in a terminal split
-  timeout/failure. Terminal split timeouts still emit
+  they become exact blockers only when the same attempt ends in a terminal
+  timeout/failure. Terminal control timeouts still emit
   `CYW43_DRIVER_TASK_COMMAND_FAULT` with the existing `0x430*` control-timeout
   result encoding so `scripts/pi4_trace_normalize.py` can report exact blockers
   such as `cyw43-control-rx-firstread-empty` or

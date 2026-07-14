@@ -11834,6 +11834,7 @@ where
             3 => "data-wait",
             4 => "data-end",
             5 => "response",
+            6 => "post-issue-quiesce",
             _ => "unknown",
         }
     }
@@ -15651,6 +15652,10 @@ mod tests {
             "data-wait"
         );
         assert_eq!(TestPump::wifi_sdio_transfer_failure_r5(data_wait), 0);
+        assert_eq!(
+            TestPump::wifi_sdio_transfer_failure_stage((6 << 24) | 0x2),
+            "post-issue-quiesce"
+        );
     }
 
     #[cfg(feature = "kernel")]

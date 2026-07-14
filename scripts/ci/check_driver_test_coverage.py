@@ -303,7 +303,7 @@ def main() -> int:
             "genet_service_reports_budget_exhaustion_before_dataplane_work",
             "cyw43_data_tx_is_credit_gated_and_preserves_sequence_on_no_credit",
             "cyw43_control_tx_is_credit_gated_and_preserves_sequence_on_no_credit",
-            "cyw43_rx_glom_and_deferred_queue_caps_match_old_good_envelope",
+            "cyw43_rx_glom_and_deferred_queue_caps_match_pi4_stability_envelope",
             "cyw43_glom_rx_deaggregates_first_frame_and_queues_followup",
             "cyw43_rx_queue_removes_matching_channel_without_reordering_data",
             "usb_keyboard_payload_decoder_matches_former_hid_broad_layouts",

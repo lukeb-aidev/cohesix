@@ -89,6 +89,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_CHECK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_MISSING,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_READY,
@@ -393,8 +394,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
-    DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX, DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG,
+    DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
+    DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -2147,6 +2149,19 @@ const DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 512;
 pub(crate) const DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32_768;
 const DRIVER_TASK_CYW43_SDIO_OWNER_WAIT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize =
     DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT;
+// Pair restart is a recovery-only supervisor path. The SDIO power sequence has
+// a documented 2.372 s worst-case hardware envelope, so use a 3 s CNTVCT-backed
+// deadline. The protocol-turn cap is fallback containment only when the target
+// counter is unavailable; it is not accepted as physical elapsed-time proof.
+const CYW43_SDIO_PAIR_RESTART_ENVELOPE_US: u64 = 3_000_000;
+const CYW43_SDIO_PAIR_RESTART_PROTOCOL_TURN_CAP: usize = 32_768;
+const CYW43_SDIO_PAIR_RESTART_RECV_READY_POLL_CAP: usize = 100_000;
+const CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP: usize = 4;
+const CYW43_SDIO_PAIR_RESTART_MMIO_GAP_US: u64 = 6;
+const CYW43_SDIO_PAIR_RESTART_MMIO_DELAY_POLL_CAP: usize = 1_000_000;
+const SDHCI_INTERRUPT_ENABLE_OFFSET: usize = 0x34;
+const SDHCI_SIGNAL_ENABLE_OFFSET: usize = 0x38;
+const SDHCI_INTERRUPT_CARD_INT: u32 = 1 << 8;
 const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 0;
 const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
 const SDIO_RING_PRODUCER_ROOT_BOOTSTRAP: usize = 0;
@@ -2274,6 +2289,15 @@ fn driver_task_ring_invalidate_completion_record(ring_root_ptr: usize) {
 #[cfg(feature = "kernel")]
 struct DriverTaskCommandSlot {
     tcb: AtomicUsize,
+    restart_entry: AtomicUsize,
+    restart_stack_top: AtomicUsize,
+    restart_task_key: AtomicUsize,
+    restart_endpoint: AtomicUsize,
+    restart_normal_endpoint: AtomicUsize,
+    restart_notification: AtomicUsize,
+    restart_notification_bound: AtomicU32,
+    restart_irq_handler: AtomicUsize,
+    restart_sdhci_root_ptr: AtomicUsize,
     steady_priority: AtomicUsize,
     steady_priority_active: AtomicUsize,
     endpoint: AtomicUsize,
@@ -2485,6 +2509,15 @@ impl DriverTaskCommandSlot {
     const fn new() -> Self {
         Self {
             tcb: AtomicUsize::new(0),
+            restart_entry: AtomicUsize::new(0),
+            restart_stack_top: AtomicUsize::new(0),
+            restart_task_key: AtomicUsize::new(0),
+            restart_endpoint: AtomicUsize::new(0),
+            restart_normal_endpoint: AtomicUsize::new(0),
+            restart_notification: AtomicUsize::new(0),
+            restart_notification_bound: AtomicU32::new(0),
+            restart_irq_handler: AtomicUsize::new(0),
+            restart_sdhci_root_ptr: AtomicUsize::new(0),
             steady_priority: AtomicUsize::new(0),
             steady_priority_active: AtomicUsize::new(0),
             endpoint: AtomicUsize::new(0),
@@ -2673,6 +2706,141 @@ fn driver_task_ring_progress_matches_request(
     progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
         && progress.sequence == request
         && progress.aux0 == aux0
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_sdio_pair_restart_progress(progress: DriverTaskRingProgressRecord) -> bool {
+    // The owner may escalate after the foreground sequence has already been
+    // abandoned. Match the authenticated ABI marker/phase/route, not the old
+    // sequence, so an active CYW43 ring cannot hide the restart request.
+    progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+        && progress.phase == DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED
+        && progress.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+}
+
+/// Return whether the linked runtime has requested a root-authoritative pair restart.
+///
+/// This probes the live progress record even while the immutable parent ring
+/// request remains active, then latches the request. Join/service state machines
+/// must consult it before short-circuiting on an active fingerprint.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn cyw43_sdio_pair_restart_required() -> bool {
+    if CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) != 0 {
+        return true;
+    }
+    let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_CYW43455) else {
+        return false;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return false;
+    }
+    let progress = driver_task_ring_read_progress_record(ring_root_ptr);
+    if !cyw43_sdio_pair_restart_progress(progress) {
+        return false;
+    }
+    record_driver_task_ring_progress(slot, progress);
+    CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
+    true
+}
+
+/// Latch a root-authoritative CYW43/SDIO pair restart for the next safe turn.
+///
+/// This has no immediate recovery side effect. Callers that discover an
+/// orphaned or issued-unknown linked-runtime request while holding another
+/// subsystem lock use this seam to preserve fail-closed ordering; the normal
+/// recovery supervisor consumes the sticky request after that lock is released.
+#[cfg(feature = "kernel")]
+pub fn request_cyw43_sdio_pair_restart() {
+    CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
+}
+
+/// Return whether a fresh pair engine still needs firmware/control context replay.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn cyw43_sdio_pair_context_replay_required() -> bool {
+    CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire) != 0
+}
+
+/// Enter the sole full-context replay scope after a successful pair restart.
+///
+/// While state is `required`, generic CYW43 submissions fail closed. The
+/// driver_task_net recovery state machine must acquire this scope before it
+/// sends the retained firmware/control sequence. A newly pending or active
+/// pair restart always takes precedence over replay of the superseded pair.
+#[cfg(feature = "kernel")]
+pub fn begin_cyw43_sdio_pair_context_replay() -> bool {
+    if !cyw43_sdio_pair_context_replay_entry_allowed(
+        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire),
+        CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire),
+        CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire),
+    ) {
+        return false;
+    }
+    if CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE
+        .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
+    if CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) != 0
+        || CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) != 0
+    {
+        let _ = CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.compare_exchange(
+            2,
+            1,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+        return false;
+    }
+    true
+}
+
+/// Finish the full-context replay scope.
+///
+/// Only a fully successful firmware/control replay clears the sticky gate. A
+/// failed replay returns it to `required`, preventing old join/service bytes
+/// from entering the engine-only generation.
+#[cfg(feature = "kernel")]
+pub fn finish_cyw43_sdio_pair_context_replay(success: bool) {
+    let next = if success && CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) == 0 {
+        0
+    } else {
+        1
+    };
+    let _ = CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.compare_exchange(
+        2,
+        next,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_sdio_pair_context_replay_entry_allowed(
+    restart_in_progress: u32,
+    restart_pending: u32,
+    context_replay_state: u32,
+) -> bool {
+    restart_in_progress == 0 && restart_pending == 0 && context_replay_state == 1
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn reset_cyw43_sdio_pair_recovery_for_test() {
+    CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+    CYW43_SDIO_PAIR_RESTART_PENDING.store(0, Ordering::Release);
+    CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_sdio_pair_submission_blocked(
+    restart_in_progress: u32,
+    restart_pending: u32,
+    context_replay_state: u32,
+) -> bool {
+    restart_in_progress == 0 && (restart_pending != 0 || context_replay_state == 1)
 }
 
 #[cfg(feature = "kernel")]
@@ -3051,6 +3219,16 @@ static DRIVER_TASK_SLOT_VIRTIO_NET: DriverTaskCommandSlot = DriverTaskCommandSlo
 static DRIVER_TASK_SLOT_SDIO_HOST: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_SLOT_PCIE_ROOT: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+static CYW43_SDIO_PAIR_RESTART_IN_PROGRESS: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_SDIO_PAIR_RESTART_EPOCH: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_SDIO_PAIR_RESTART_PENDING: AtomicU32 = AtomicU32::new(0);
+// 0=none, 1=pair engine-ready but full firmware/control replay required,
+// 2=the explicit driver_task_net recovery scope owns that replay.
+#[cfg(feature = "kernel")]
+static CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_OBSERVED_US_SERIAL: AtomicU32 = AtomicU32::new(0);
@@ -3336,6 +3514,17 @@ pub fn wait_for_driver_task_runtime_recv_ready(
     task_key: usize,
     spins: usize,
 ) -> bool {
+    let mut deadline = driver_task_deadline_from_spins(spins);
+    wait_for_driver_task_runtime_recv_ready_with_deadline(contract, task_key, spins, &mut deadline)
+}
+
+#[cfg(feature = "kernel")]
+fn wait_for_driver_task_runtime_recv_ready_with_deadline(
+    contract: DriverTaskContract,
+    task_key: usize,
+    poll_cap: usize,
+    deadline: &mut DriverTaskDeadline,
+) -> bool {
     let Some(slot) = slot_for_task_key(task_key) else {
         emit_driver_task_runtime_entry_status(
             contract,
@@ -3370,8 +3559,7 @@ pub fn wait_for_driver_task_runtime_recv_ready(
     }
     let expected_aux0 = (task_key & u32::MAX as usize) as u32;
     let mut spin = 0usize;
-    let mut deadline = driver_task_deadline_from_spins(spins);
-    while spin < spins && !driver_task_deadline_expired(&mut deadline) {
+    while spin < poll_cap && !driver_task_deadline_expired(deadline) {
         let progress = driver_task_ring_read_progress_record(ring_root_ptr);
         record_driver_task_ring_progress(slot, progress);
         if driver_task_runtime_progress_is_admission_ready(progress, expected_aux0) {
@@ -3527,6 +3715,22 @@ fn driver_task_spins_to_cycles_at_hz(spins: usize, freq_hz: u64) -> u64 {
 }
 
 #[cfg(feature = "kernel")]
+const fn driver_task_micros_to_cycles_at_hz(micros: u64, freq_hz: u64) -> u64 {
+    if micros == 0 || freq_hz == 0 {
+        return 0;
+    }
+    let numerator = (micros as u128).saturating_mul(freq_hz as u128);
+    let cycles = numerator.saturating_add(999_999).saturating_div(1_000_000);
+    if cycles > u64::MAX as u128 {
+        u64::MAX
+    } else if cycles == 0 {
+        1
+    } else {
+        cycles as u64
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_deadline_from_spins(spins: usize) -> DriverTaskDeadline {
     match (driver_task_counter_ticks(), driver_task_counter_frequency()) {
         (Some(start), Some(freq_hz)) if start != 0 && freq_hz != 0 => {
@@ -3539,6 +3743,49 @@ fn driver_task_deadline_from_spins(spins: usize) -> DriverTaskDeadline {
         }
         _ => DriverTaskDeadline::Iterations { remaining: spins },
     }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_deadline_from_micros(micros: u64, fallback_iterations: usize) -> DriverTaskDeadline {
+    match (driver_task_counter_ticks(), driver_task_counter_frequency()) {
+        (Some(start), Some(freq_hz)) if freq_hz != 0 => {
+            let cycles = driver_task_micros_to_cycles_at_hz(micros, freq_hz);
+            if cycles == 0 {
+                DriverTaskDeadline::Iterations { remaining: 0 }
+            } else {
+                DriverTaskDeadline::Counter { start, cycles }
+            }
+        }
+        _ => DriverTaskDeadline::Iterations {
+            remaining: fallback_iterations,
+        },
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_counter_delay_micros(micros: u64) -> bool {
+    let Some(start) = driver_task_counter_ticks() else {
+        return false;
+    };
+    let Some(freq_hz) = driver_task_counter_frequency() else {
+        return false;
+    };
+    let cycles = driver_task_micros_to_cycles_at_hz(micros, freq_hz);
+    if cycles == 0 {
+        return false;
+    }
+    let mut polls = 0usize;
+    while polls < CYW43_SDIO_PAIR_RESTART_MMIO_DELAY_POLL_CAP {
+        let Some(current) = driver_task_counter_ticks() else {
+            return false;
+        };
+        if current.wrapping_sub(start) >= cycles {
+            return true;
+        }
+        polls = polls.saturating_add(1);
+        core::hint::spin_loop();
+    }
+    false
 }
 
 #[cfg(feature = "kernel")]
@@ -3558,6 +3805,11 @@ fn driver_task_deadline_expired(deadline: &mut DriverTaskDeadline) -> bool {
     }
 }
 
+#[cfg(feature = "kernel")]
+fn driver_task_ring_deadline_allows_attempt(deadline: Option<&mut DriverTaskDeadline>) -> bool {
+    deadline.is_none_or(|deadline| !driver_task_deadline_expired(deadline))
+}
+
 /// Publish the TCB cap and steady priority backing one driver task.
 #[cfg(feature = "kernel")]
 pub fn publish_driver_task_scheduler(
@@ -3575,6 +3827,54 @@ pub fn publish_driver_task_scheduler(
     slot.steady_priority
         .store(usize::from(steady_priority), Ordering::Release);
     slot.steady_priority_active.store(0, Ordering::Release);
+}
+
+/// Retain the manifest-derived context required for a fenced CYW43/SDIO pair restart.
+///
+/// The endpoint cap is recovery-only: normal SDIO handoff still removes root's
+/// published producer cap, and this retained cap is exposed only while both
+/// linked runtime TCBs are suspended under the pair-restart gate.
+#[cfg(feature = "kernel")]
+pub fn publish_cyw43_sdio_restart_context(
+    contract: DriverTaskContract,
+    entry: usize,
+    stack_top: usize,
+    task_key: usize,
+    recovery_endpoint: usize,
+    normal_endpoint: usize,
+    notification: usize,
+    irq_handler: usize,
+    sdhci_root_ptr: usize,
+) -> bool {
+    if (contract != CYW43_WIFI_DRIVER_TASK_CONTRACT && contract != SDIO_HOST_DRIVER_TASK_CONTRACT)
+        || entry == 0
+        || stack_top == 0
+        || recovery_endpoint == 0
+        || normal_endpoint == 0
+        || notification == 0
+        || driver_task_contract_key(contract) != Some(task_key)
+        || (contract == SDIO_HOST_DRIVER_TASK_CONTRACT && sdhci_root_ptr == 0)
+    {
+        return false;
+    }
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.restart_entry.store(entry, Ordering::Release);
+    slot.restart_stack_top.store(stack_top, Ordering::Release);
+    slot.restart_task_key.store(task_key, Ordering::Release);
+    slot.restart_endpoint
+        .store(recovery_endpoint, Ordering::Release);
+    slot.restart_normal_endpoint
+        .store(normal_endpoint, Ordering::Release);
+    slot.restart_notification
+        .store(notification, Ordering::Release);
+    slot.restart_notification_bound.store(1, Ordering::Release);
+    slot.restart_irq_handler
+        .store(irq_handler, Ordering::Release);
+    slot.restart_sdhci_root_ptr
+        .store(sdhci_root_ptr, Ordering::Release);
+    true
 }
 
 /// Mark that one driver task has left bootstrap priority and is in steady state.
@@ -3908,6 +4208,11 @@ fn begin_sdio_producer_handoff(slot: &DriverTaskCommandSlot) -> bool {
     true
 }
 
+#[cfg(feature = "kernel")]
+const fn sdio_handoff_must_delete_endpoint(endpoint: usize, recovery_endpoint: usize) -> bool {
+    endpoint != 0 && endpoint != recovery_endpoint
+}
+
 /// Irreversibly delegate the shared SDIO command ring to the CYW43 runtime.
 ///
 /// Root may use this ring only for descriptor replay and SDIO engine bootstrap.
@@ -3974,22 +4279,27 @@ pub fn handoff_sdio_command_ring_to_cyw43(
             "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=root-endpoint-missing",
         );
     }
-    let delete_err = crate::sel4::cnode_delete(
-        sel4_sys::seL4_CapInitThreadCNode,
-        endpoint as sel4_sys::seL4_CPtr,
-        crate::sel4::word_bits() as u8,
-    );
-    if delete_err != sel4_sys::seL4_NoError {
-        return rollback(
-            "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=root-endpoint-delete-failed",
+    let recovery_endpoint = slot.restart_endpoint.load(Ordering::Acquire);
+    if sdio_handoff_must_delete_endpoint(endpoint, recovery_endpoint) {
+        let delete_err = crate::sel4::cnode_delete(
+            sel4_sys::seL4_CapInitThreadCNode,
+            endpoint as sel4_sys::seL4_CPtr,
+            crate::sel4::word_bits() as u8,
         );
+        if delete_err != sel4_sys::seL4_NoError {
+            return rollback(
+                "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio status=reject reason=root-endpoint-delete-failed",
+            );
+        }
     }
     slot.endpoint.store(0, Ordering::Release);
     slot.ring_producer
         .store(SDIO_RING_PRODUCER_CYW43_RUNTIME, Ordering::Release);
-    crate::bootstrap::log::force_uart_line(
-        "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio from=root-bootstrap to=cyw43-runtime root_endpoint=deleted root_submit=disabled sequence_domain=delegated status=ready",
-    );
+    crate::bootstrap::log::force_uart_line(if endpoint == recovery_endpoint {
+        "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio from=root-recovery to=cyw43-runtime root_endpoint=hidden-recovery-cap-retained root_submit=disabled sequence_domain=fresh status=ready"
+    } else {
+        "DRIVER_TASK_BUS_LINK_HANDOFF channel=cyw43-sdio from=root-bootstrap to=cyw43-runtime root_endpoint=deleted root_submit=disabled sequence_domain=delegated status=ready"
+    });
     true
 }
 
@@ -4013,6 +4323,15 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
         index = index.saturating_add(1);
     }
     slot.tcb.store(0, Ordering::Release);
+    slot.restart_entry.store(0, Ordering::Release);
+    slot.restart_stack_top.store(0, Ordering::Release);
+    slot.restart_task_key.store(0, Ordering::Release);
+    slot.restart_endpoint.store(0, Ordering::Release);
+    slot.restart_normal_endpoint.store(0, Ordering::Release);
+    slot.restart_notification.store(0, Ordering::Release);
+    slot.restart_notification_bound.store(0, Ordering::Release);
+    slot.restart_irq_handler.store(0, Ordering::Release);
+    slot.restart_sdhci_root_ptr.store(0, Ordering::Release);
     slot.steady_priority.store(0, Ordering::Release);
     slot.steady_priority_active.store(0, Ordering::Release);
     slot.active.store(0, Ordering::Release);
@@ -5039,6 +5358,650 @@ pub fn record_deferred_runtime_init_descriptor(
         None,
     );
     true
+}
+
+/// Retain a sealed, manifest-derived descriptor for root-authoritative runtime recovery.
+#[cfg(feature = "kernel")]
+pub fn retain_driver_runtime_restart_descriptor(
+    contract: DriverTaskContract,
+    descriptor: DriverRuntimeInitDescriptor,
+) -> bool {
+    let Some(hot_path) = DriverTaskHotPath::from_u32(descriptor.hot_path) else {
+        return false;
+    };
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    if hot_path.contract() != contract
+        || descriptor.role_bit != hot_path.role_bit() as u32
+        || !descriptor.valid()
+        || !descriptor.sealed_identity_valid_for_task(task_key as u32)
+    {
+        return false;
+    }
+    deferred_runtime_init_slot(hot_path).retain(descriptor);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn retained_driver_runtime_restart_descriptor(
+    hot_path: DriverTaskHotPath,
+) -> Option<DriverRuntimeInitDescriptor> {
+    let slot = deferred_runtime_init_slot(hot_path);
+    if slot.retained.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    Some(slot.load())
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioPairRestartPhase {
+    Start,
+    BothSuspended,
+    CardIntMasked,
+    NotificationsDrained,
+    IrqAcknowledged,
+    RingsReset,
+    SdioReady,
+    Cyw43Ready,
+    Delegated,
+}
+
+#[cfg(feature = "kernel")]
+const CYW43_SDIO_PAIR_RESTART_PHASE_ORDER: [Cyw43SdioPairRestartPhase; 9] = [
+    Cyw43SdioPairRestartPhase::Start,
+    Cyw43SdioPairRestartPhase::BothSuspended,
+    Cyw43SdioPairRestartPhase::CardIntMasked,
+    Cyw43SdioPairRestartPhase::NotificationsDrained,
+    Cyw43SdioPairRestartPhase::IrqAcknowledged,
+    Cyw43SdioPairRestartPhase::RingsReset,
+    Cyw43SdioPairRestartPhase::SdioReady,
+    Cyw43SdioPairRestartPhase::Cyw43Ready,
+    Cyw43SdioPairRestartPhase::Delegated,
+];
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioCardIntMaskStep {
+    WriteSignalEnable,
+    DelayTwoSdClocks,
+    WriteInterruptEnable,
+    DelayWriteCommit,
+}
+
+#[cfg(feature = "kernel")]
+const CYW43_SDIO_CARD_INT_MASK_STEPS: [Cyw43SdioCardIntMaskStep; 4] = [
+    Cyw43SdioCardIntMaskStep::WriteInterruptEnable,
+    Cyw43SdioCardIntMaskStep::DelayTwoSdClocks,
+    Cyw43SdioCardIntMaskStep::WriteSignalEnable,
+    Cyw43SdioCardIntMaskStep::DelayWriteCommit,
+];
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+struct Cyw43SdioRuntimeRestartContext {
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    task_key: usize,
+    tcb: usize,
+    entry: usize,
+    stack_top: usize,
+    recovery_endpoint: usize,
+    normal_endpoint: usize,
+    notification: usize,
+    irq_handler: usize,
+    ring_root_ptr: usize,
+    sdhci_root_ptr: usize,
+    descriptor: DriverRuntimeInitDescriptor,
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_runtime_restart_context(
+    hot_path: DriverTaskHotPath,
+) -> Option<Cyw43SdioRuntimeRestartContext> {
+    if !matches!(
+        hot_path,
+        DriverTaskHotPath::Cyw43Wifi | DriverTaskHotPath::SdioHost
+    ) {
+        return None;
+    }
+    let contract = hot_path.contract();
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let descriptor = retained_driver_runtime_restart_descriptor(hot_path)?;
+    let context = Cyw43SdioRuntimeRestartContext {
+        contract,
+        hot_path,
+        task_key,
+        tcb: slot.tcb.load(Ordering::Acquire),
+        entry: slot.restart_entry.load(Ordering::Acquire),
+        stack_top: slot.restart_stack_top.load(Ordering::Acquire),
+        recovery_endpoint: slot.restart_endpoint.load(Ordering::Acquire),
+        normal_endpoint: slot.restart_normal_endpoint.load(Ordering::Acquire),
+        notification: slot.restart_notification.load(Ordering::Acquire),
+        irq_handler: slot.restart_irq_handler.load(Ordering::Acquire),
+        ring_root_ptr: slot.ring_root_ptr.load(Ordering::Acquire),
+        sdhci_root_ptr: slot.restart_sdhci_root_ptr.load(Ordering::Acquire),
+        descriptor,
+    };
+    if context.tcb == 0
+        || context.entry == 0
+        || context.stack_top == 0
+        || context.recovery_endpoint == 0
+        || context.normal_endpoint == 0
+        || context.notification == 0
+        || context.ring_root_ptr == 0
+        || slot.restart_task_key.load(Ordering::Acquire) != task_key
+        || !descriptor.valid()
+        || !descriptor.sealed_identity_valid_for_task(task_key as u32)
+        || (hot_path == DriverTaskHotPath::SdioHost && context.sdhci_root_ptr == 0)
+    {
+        return None;
+    }
+    Some(context)
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_sdio_pair_restart_status(phase: Cyw43SdioPairRestartPhase, status: &'static str) {
+    let mut line = heapless::String::<224>::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "CYW43_SDIO_PAIR_RESTART phase={:?} status={} epoch={} root_authority=recovery-only",
+            phase,
+            status,
+            CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire),
+        ),
+    );
+    crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn mask_cyw43_sdio_card_interrupt(sdhci_root_ptr: usize) -> bool {
+    if sdhci_root_ptr == 0 {
+        return false;
+    }
+    let interrupt_enable = (sdhci_root_ptr + SDHCI_INTERRUPT_ENABLE_OFFSET) as *mut u32;
+    let signal_enable = (sdhci_root_ptr + SDHCI_SIGNAL_ENABLE_OFFSET) as *mut u32;
+    for step in CYW43_SDIO_CARD_INT_MASK_STEPS {
+        match step {
+            Cyw43SdioCardIntMaskStep::WriteSignalEnable => {
+                // SAFETY: HAL retained this device mapping solely for the
+                // pair-restart fence. Both runtime TCBs are suspended. This
+                // manifest-admitted register write masks delivery only and
+                // cannot acknowledge device status.
+                unsafe {
+                    let signal = core::ptr::read_volatile(signal_enable);
+                    core::ptr::write_volatile(signal_enable, signal & !SDHCI_INTERRUPT_CARD_INT);
+                    #[cfg(target_arch = "aarch64")]
+                    core::arch::asm!("dsb osh", options(nostack, preserves_flags));
+                }
+            }
+            Cyw43SdioCardIntMaskStep::WriteInterruptEnable => {
+                // SAFETY: Same suspended, HAL-admitted recovery-only MMIO
+                // invariant as the SIGNAL_ENABLE write above.
+                unsafe {
+                    let interrupt = core::ptr::read_volatile(interrupt_enable);
+                    core::ptr::write_volatile(
+                        interrupt_enable,
+                        interrupt & !SDHCI_INTERRUPT_CARD_INT,
+                    );
+                    #[cfg(target_arch = "aarch64")]
+                    core::arch::asm!("dsb osh", options(nostack, preserves_flags));
+                }
+            }
+            Cyw43SdioCardIntMaskStep::DelayTwoSdClocks
+            | Cyw43SdioCardIntMaskStep::DelayWriteCommit => {
+                if !driver_task_counter_delay_micros(CYW43_SDIO_PAIR_RESTART_MMIO_GAP_US) {
+                    return false;
+                }
+            }
+        }
+    }
+    // SAFETY: Same two admitted readback registers, after the timer-backed
+    // post-write gaps required by the pinned bcm2835 controller behavior.
+    unsafe {
+        #[cfg(target_arch = "aarch64")]
+        core::arch::asm!("dsb osh", "isb", options(nostack, preserves_flags));
+        core::ptr::read_volatile(signal_enable) & SDHCI_INTERRUPT_CARD_INT == 0
+            && core::ptr::read_volatile(interrupt_enable) & SDHCI_INTERRUPT_CARD_INT == 0
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn drain_cyw43_sdio_restart_notification(notification: usize) {
+    let mut polls = 0usize;
+    while polls < CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP {
+        let mut badge = 0;
+        let _ = crate::sel4::poll(notification as sel4_sys::seL4_CPtr, &mut badge);
+        polls = polls.saturating_add(1);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn unbind_cyw43_sdio_restart_notifications(
+    cyw43: Cyw43SdioRuntimeRestartContext,
+    sdio: Cyw43SdioRuntimeRestartContext,
+) -> bool {
+    let unbind = |context: Cyw43SdioRuntimeRestartContext| {
+        let Some(slot) = slot_for_task_key(context.task_key) else {
+            return false;
+        };
+        if slot.restart_notification_bound.load(Ordering::Acquire) == 0 {
+            return true;
+        }
+        if crate::sel4::unbind_tcb_notification(context.tcb as sel4_sys::seL4_CPtr).is_err() {
+            return false;
+        }
+        slot.restart_notification_bound.store(0, Ordering::Release);
+        true
+    };
+    if !unbind(cyw43) {
+        return false;
+    }
+    if !unbind(sdio) {
+        let _ = rebind_cyw43_sdio_restart_notification(cyw43);
+        return false;
+    }
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn rebind_cyw43_sdio_restart_notification(context: Cyw43SdioRuntimeRestartContext) -> bool {
+    let Some(slot) = slot_for_task_key(context.task_key) else {
+        return false;
+    };
+    if slot.restart_notification_bound.load(Ordering::Acquire) != 0 {
+        return true;
+    }
+    if crate::sel4::bind_tcb_notification(
+        context.tcb as sel4_sys::seL4_CPtr,
+        context.notification as sel4_sys::seL4_CPtr,
+    )
+    .is_err()
+    {
+        return false;
+    }
+    slot.restart_notification_bound.store(1, Ordering::Release);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn rebind_cyw43_sdio_restart_notifications(
+    cyw43: Cyw43SdioRuntimeRestartContext,
+    sdio: Cyw43SdioRuntimeRestartContext,
+) -> bool {
+    let sdio_bound = rebind_cyw43_sdio_restart_notification(sdio);
+    let cyw43_bound = rebind_cyw43_sdio_restart_notification(cyw43);
+    sdio_bound && cyw43_bound
+}
+
+#[cfg(feature = "kernel")]
+fn acknowledge_cyw43_sdio_restart_irq(irq_handler: usize) -> bool {
+    irq_handler == 0
+        || crate::sel4::irq_handler_ack(irq_handler as sel4_sys::seL4_CPtr)
+            == sel4_sys::seL4_NoError
+}
+
+#[cfg(feature = "kernel")]
+const fn next_cyw43_sdio_pair_restart_epoch(current: u32) -> u32 {
+    let next = current.wrapping_add(1);
+    if next == 0 {
+        1
+    } else {
+        next
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn advance_cyw43_sdio_pair_restart_epoch() -> u32 {
+    let mut current = CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire);
+    loop {
+        let next = next_cyw43_sdio_pair_restart_epoch(current);
+        match CYW43_SDIO_PAIR_RESTART_EPOCH.compare_exchange_weak(
+            current,
+            next,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return next,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn reset_cyw43_sdio_restart_ring(slot: &DriverTaskCommandSlot) -> bool {
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 || slot.root_ring_writers.load(Ordering::Acquire) != 0 {
+        return false;
+    }
+    let words = DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>();
+    // SAFETY: HAL owns this page-aligned root mapping. Both linked TCBs are
+    // suspended, CARD_INT is masked, notifications are drained, and no root
+    // writer is active. Volatile zeroing therefore starts a new sequence/DPC
+    // epoch without racing any producer.
+    unsafe {
+        let ptr = ring_root_ptr as *mut u32;
+        let mut index = 0usize;
+        while index < words {
+            core::ptr::write_volatile(ptr.add(index), 0);
+            index = index.saturating_add(1);
+        }
+    }
+    driver_task_ring_clean_root_range(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES);
+    slot.request_seq.store(0, Ordering::Release);
+    slot.active.store(0, Ordering::Release);
+    slot.active_command_fingerprint.store(0, Ordering::Release);
+    slot.timeout_resumes.store(0, Ordering::Release);
+    slot.last_progress_magic.store(0, Ordering::Release);
+    slot.last_progress_sequence.store(0, Ordering::Release);
+    slot.last_progress_phase.store(0, Ordering::Release);
+    slot.last_progress_aux0.store(0, Ordering::Release);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn prepare_cyw43_sdio_restart_slot(context: Cyw43SdioRuntimeRestartContext) -> bool {
+    let Some(slot) = slot_for_task_key(context.task_key) else {
+        return false;
+    };
+    if !reset_cyw43_sdio_restart_ring(slot) {
+        return false;
+    }
+    slot.endpoint
+        .store(context.recovery_endpoint, Ordering::Release);
+    if context.hot_path == DriverTaskHotPath::SdioHost {
+        slot.ring_producer
+            .store(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP, Ordering::Release);
+    }
+    let descriptor_slot = deferred_runtime_init_slot(context.hot_path);
+    descriptor_slot.initialized.store(0, Ordering::Release);
+    descriptor_slot.pending.store(1, Ordering::Release);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn replay_cyw43_sdio_restart_descriptor(
+    context: Cyw43SdioRuntimeRestartContext,
+    deadline: &mut DriverTaskDeadline,
+) -> bool {
+    let Some(frame) = describe_driver_runtime_init_descriptor(&context.descriptor) else {
+        return false;
+    };
+    let Some(bytes) = driver_runtime_init_descriptor_bytes(&context.descriptor) else {
+        return false;
+    };
+    let staging_segments = [DriverTaskStagingSegment::ring_frame(bytes, 0)];
+    let command = runtime_init_command(
+        context.hot_path,
+        DriverTaskBudgetGrant::from_contract(context.contract),
+        frame,
+    );
+    let mut turn = 0usize;
+    while turn < CYW43_SDIO_PAIR_RESTART_PROTOCOL_TURN_CAP
+        && !driver_task_deadline_expired(deadline)
+    {
+        let completion = run_driver_task_ring_command_nonblocking_staged_with_deadline(
+            context.contract,
+            command,
+            &staging_segments,
+            deadline,
+        );
+        if completion.is_some_and(|completion| {
+            completion.code == DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == context.hot_path.as_u32()
+        }) {
+            if !record_driver_runtime_descriptor_seal(
+                context.contract,
+                context.hot_path,
+                &context.descriptor,
+            ) {
+                return false;
+            }
+            let slot = deferred_runtime_init_slot(context.hot_path);
+            slot.initialized.store(1, Ordering::Release);
+            slot.pending.store(0, Ordering::Release);
+            return true;
+        }
+        if completion.is_some() {
+            return false;
+        }
+        turn = turn.saturating_add(1);
+    }
+    false
+}
+
+#[cfg(feature = "kernel")]
+fn replay_cyw43_sdio_restart_engine(
+    context: Cyw43SdioRuntimeRestartContext,
+    deadline: &mut DriverTaskDeadline,
+) -> Option<DriverTaskCompletionRecord> {
+    let command = runtime_engine_init_command(
+        context.hot_path,
+        DriverTaskBudgetGrant::from_contract(context.contract),
+    );
+    let mut turn = 0usize;
+    while turn < CYW43_SDIO_PAIR_RESTART_PROTOCOL_TURN_CAP
+        && !driver_task_deadline_expired(deadline)
+    {
+        let completion = run_driver_task_ring_command_nonblocking_with_deadline(
+            context.contract,
+            command,
+            deadline,
+        );
+        if completion.is_some_and(|completion| {
+            completion.code == DriverTaskCompletionCode::Progress.as_u16()
+                && completion.detail == DriverTaskFaultCode::None.as_u16()
+                && completion.result == 1
+        }) {
+            return completion;
+        }
+        if completion.is_some() {
+            return None;
+        }
+        turn = turn.saturating_add(1);
+    }
+    None
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_sdio_pair_recovery_mmio_allowed(
+    cyw43_suspended: bool,
+    sdio_suspended: bool,
+) -> bool {
+    cyw43_suspended && sdio_suspended
+}
+
+#[cfg(feature = "kernel")]
+fn suspend_cyw43_sdio_pair(
+    cyw43: Cyw43SdioRuntimeRestartContext,
+    sdio: Cyw43SdioRuntimeRestartContext,
+) -> bool {
+    // Attempt both suspensions even if the first fails. Recovery MMIO is legal
+    // only after seL4 has confirmed that neither runtime can still own SDHCI.
+    let cyw43_suspended = crate::sel4::suspend_tcb(cyw43.tcb as sel4_sys::seL4_CPtr).is_ok();
+    let sdio_suspended = crate::sel4::suspend_tcb(sdio.tcb as sel4_sys::seL4_CPtr).is_ok();
+    cyw43_sdio_pair_recovery_mmio_allowed(cyw43_suspended, sdio_suspended)
+}
+
+#[cfg(feature = "kernel")]
+fn fence_cyw43_sdio_pair_after_restart_failure(
+    cyw43: Cyw43SdioRuntimeRestartContext,
+    sdio: Cyw43SdioRuntimeRestartContext,
+) -> bool {
+    // Fence every root submission first. If either seL4 suspension fails, the
+    // possibly-live child remains the sole hardware authority and root must not
+    // touch MMIO, notifications, IRQ state, or either shared ring.
+    if let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_CYW43455) {
+        slot.endpoint.store(0, Ordering::Release);
+    }
+    if let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_SDIO_HOST) {
+        slot.endpoint.store(0, Ordering::Release);
+        slot.ring_producer
+            .store(SDIO_RING_PRODUCER_TRANSITION, Ordering::Release);
+    }
+    CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
+    if !suspend_cyw43_sdio_pair(cyw43, sdio) {
+        return false;
+    }
+    let _ = mask_cyw43_sdio_card_interrupt(sdio.sdhci_root_ptr);
+    if unbind_cyw43_sdio_restart_notifications(cyw43, sdio) {
+        drain_cyw43_sdio_restart_notification(cyw43.notification);
+        drain_cyw43_sdio_restart_notification(sdio.notification);
+        let _ = acknowledge_cyw43_sdio_restart_irq(cyw43.irq_handler);
+        let _ = acknowledge_cyw43_sdio_restart_irq(sdio.irq_handler);
+        drain_cyw43_sdio_restart_notification(cyw43.notification);
+        drain_cyw43_sdio_restart_notification(sdio.notification);
+        let _ = rebind_cyw43_sdio_restart_notifications(cyw43, sdio);
+    }
+    true
+}
+
+/// Restart the linked CYW43 and SDIO runtimes as one fenced generation.
+///
+/// This is the sole root-authoritative recovery path for an issued-unknown
+/// child turn. It is deliberately recovery-only: both TCBs are suspended before
+/// root masks CARD_INT or reuses either ring, notifications are drained and the
+/// retained IRQ handler is acknowledged before resume, and SDIO is completely
+/// re-admitted before CYW43. A `true` result means descriptor and engine replay,
+/// producer handoff, and a fresh pair epoch all completed. A `false` result
+/// always fences root submission. When both seL4 suspensions succeed it also
+/// leaves both TCBs suspended and performs the recovery hardware fence; if
+/// either suspension fails, it performs no recovery MMIO or ring mutation.
+#[cfg(feature = "kernel")]
+pub fn restart_cyw43_sdio_pair() -> bool {
+    if CYW43_SDIO_PAIR_RESTART_IN_PROGRESS
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
+        return false;
+    }
+    CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
+    // One elapsed-time envelope covers both runtime receive handshakes, both
+    // descriptor replays, both engine replays, and final producer handoff.
+    // No subphase may create a fresh recovery deadline.
+    let mut deadline = driver_task_deadline_from_micros(
+        CYW43_SDIO_PAIR_RESTART_ENVELOPE_US,
+        CYW43_SDIO_PAIR_RESTART_PROTOCOL_TURN_CAP,
+    );
+    let Some(cyw43) = cyw43_sdio_runtime_restart_context(DriverTaskHotPath::Cyw43Wifi) else {
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Start, "context-missing");
+        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+        return false;
+    };
+    let Some(sdio) = cyw43_sdio_runtime_restart_context(DriverTaskHotPath::SdioHost) else {
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Start, "context-missing");
+        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+        return false;
+    };
+    let result = (|| {
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Start, "begin");
+        suspend_cyw43_sdio_pair(cyw43, sdio).then_some(())?;
+        (!driver_task_deadline_expired(&mut deadline)).then_some(())?;
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::BothSuspended, "ready");
+        mask_cyw43_sdio_card_interrupt(sdio.sdhci_root_ptr).then_some(())?;
+        (!driver_task_deadline_expired(&mut deadline)).then_some(())?;
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::CardIntMasked, "ready");
+        unbind_cyw43_sdio_restart_notifications(cyw43, sdio).then_some(())?;
+        drain_cyw43_sdio_restart_notification(cyw43.notification);
+        drain_cyw43_sdio_restart_notification(sdio.notification);
+        emit_cyw43_sdio_pair_restart_status(
+            Cyw43SdioPairRestartPhase::NotificationsDrained,
+            "ready",
+        );
+        let irq_acknowledged = acknowledge_cyw43_sdio_restart_irq(cyw43.irq_handler)
+            && acknowledge_cyw43_sdio_restart_irq(sdio.irq_handler);
+        drain_cyw43_sdio_restart_notification(cyw43.notification);
+        drain_cyw43_sdio_restart_notification(sdio.notification);
+        let notifications_rebound = rebind_cyw43_sdio_restart_notifications(cyw43, sdio);
+        (irq_acknowledged && notifications_rebound).then_some(())?;
+        (!driver_task_deadline_expired(&mut deadline)).then_some(())?;
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::IrqAcknowledged, "ready");
+
+        DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK.fetch_and(
+            !(DriverTaskHotPath::Cyw43Wifi.owner_state_bit()
+                | DriverTaskHotPath::SdioHost.owner_state_bit()),
+            Ordering::AcqRel,
+        );
+        prepare_cyw43_sdio_restart_slot(sdio).then_some(())?;
+        prepare_cyw43_sdio_restart_slot(cyw43).then_some(())?;
+        (!driver_task_deadline_expired(&mut deadline)).then_some(())?;
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::RingsReset, "ready");
+
+        let restart_flag = usize::try_from(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG).ok()?;
+        crate::sel4::write_tcb_registers(
+            sdio.tcb as sel4_sys::seL4_CPtr,
+            sdio.entry,
+            sdio.stack_top,
+            (sdio.task_key | restart_flag) as sel4_sys::seL4_Word,
+            false,
+        )
+        .ok()?;
+        crate::sel4::write_tcb_registers(
+            cyw43.tcb as sel4_sys::seL4_CPtr,
+            cyw43.entry,
+            cyw43.stack_top,
+            (cyw43.task_key | restart_flag) as sel4_sys::seL4_Word,
+            false,
+        )
+        .ok()?;
+        (!driver_task_deadline_expired(&mut deadline)).then_some(())?;
+
+        crate::sel4::resume_tcb(sdio.tcb as sel4_sys::seL4_CPtr).ok()?;
+        wait_for_driver_task_runtime_recv_ready_with_deadline(
+            sdio.contract,
+            sdio.task_key,
+            CYW43_SDIO_PAIR_RESTART_RECV_READY_POLL_CAP,
+            &mut deadline,
+        )
+        .then_some(())?;
+        replay_cyw43_sdio_restart_descriptor(sdio, &mut deadline).then_some(())?;
+        replay_cyw43_sdio_restart_engine(sdio, &mut deadline)?;
+        (!driver_task_deadline_expired(&mut deadline)).then_some(())?;
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::SdioReady, "ready");
+
+        crate::sel4::resume_tcb(cyw43.tcb as sel4_sys::seL4_CPtr).ok()?;
+        wait_for_driver_task_runtime_recv_ready_with_deadline(
+            cyw43.contract,
+            cyw43.task_key,
+            CYW43_SDIO_PAIR_RESTART_RECV_READY_POLL_CAP,
+            &mut deadline,
+        )
+        .then_some(())?;
+        replay_cyw43_sdio_restart_descriptor(cyw43, &mut deadline).then_some(())?;
+        let cyw43_engine_completion = replay_cyw43_sdio_restart_engine(cyw43, &mut deadline)?;
+        (!driver_task_deadline_expired(&mut deadline)).then_some(())?;
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Cyw43Ready, "ready");
+        handoff_sdio_command_ring_to_cyw43(cyw43_engine_completion).then_some(())?;
+        (!driver_task_deadline_expired(&mut deadline)).then_some(())?;
+        let cyw43_slot = slot_for_task_key(cyw43.task_key)?;
+        cyw43_slot
+            .endpoint
+            .store(cyw43.normal_endpoint, Ordering::Release);
+        let _ = advance_cyw43_sdio_pair_restart_epoch();
+        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Delegated, "ready");
+        Some(())
+    })()
+    .is_some();
+    if result {
+        CYW43_SDIO_PAIR_RESTART_PENDING.store(0, Ordering::Release);
+        CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(1, Ordering::Release);
+    } else {
+        let fully_suspended = fence_cyw43_sdio_pair_after_restart_failure(cyw43, sdio);
+        emit_cyw43_sdio_pair_restart_status(
+            Cyw43SdioPairRestartPhase::Start,
+            if fully_suspended {
+                "failed-fenced"
+            } else {
+                "failed-suspend-unproven-no-mmio-root-fenced"
+            },
+        );
+    }
+    CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+    result
 }
 
 /// Replay a shell-deferred runtime-init descriptor before steady service.
@@ -7098,6 +8061,21 @@ pub fn run_driver_task_ring_command_nonblocking(
     )
 }
 
+#[cfg(feature = "kernel")]
+fn run_driver_task_ring_command_nonblocking_with_deadline(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    deadline: &mut DriverTaskDeadline,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode_and_staging_deadline(
+        contract,
+        command,
+        DriverTaskRingCommandMode::NonBlocking,
+        &[],
+        Some(deadline),
+    )
+}
+
 /// Execute a nonblocking command with atomic staged-byte publication.
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_command_nonblocking_staged(
@@ -7110,6 +8088,22 @@ pub fn run_driver_task_ring_command_nonblocking_staged(
         command,
         DriverTaskRingCommandMode::NonBlocking,
         staging_segments,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_ring_command_nonblocking_staged_with_deadline(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+    deadline: &mut DriverTaskDeadline,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode_and_staging_deadline(
+        contract,
+        command,
+        DriverTaskRingCommandMode::NonBlocking,
+        staging_segments,
+        Some(deadline),
     )
 }
 
@@ -7158,10 +8152,45 @@ fn run_driver_task_ring_command_with_mode(
 #[cfg(feature = "kernel")]
 fn run_driver_task_ring_command_with_mode_and_staging(
     contract: DriverTaskContract,
-    mut command: DriverTaskCommandRecord,
+    command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
     staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode_and_staging_deadline(
+        contract,
+        command,
+        mode,
+        staging_segments,
+        None,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_ring_command_with_mode_and_staging_deadline(
+    contract: DriverTaskContract,
+    mut command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+    mut recovery_deadline: Option<&mut DriverTaskDeadline>,
+) -> Option<DriverTaskCompletionRecord> {
+    if !driver_task_ring_deadline_allows_attempt(recovery_deadline.as_deref_mut()) {
+        return None;
+    }
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && cyw43_sdio_pair_submission_blocked(
+            CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire),
+            CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire),
+            CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire),
+        )
+    {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "pair-context-recovery-required",
+        );
+        return None;
+    }
     let Some(task_key) = driver_task_contract_key(contract) else {
         emit_driver_task_ring_resource_submit_status(
             contract,
@@ -7361,6 +8390,9 @@ fn run_driver_task_ring_command_with_mode_and_staging(
             let mut send_attempts = 0usize;
             let mut yield_count = 0usize;
             for attempt in 0..attempts {
+                if !driver_task_ring_deadline_allows_attempt(recovery_deadline.as_deref_mut()) {
+                    break;
+                }
                 send_attempts = send_attempts.saturating_add(1);
                 crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
                 yield_count = yield_count.saturating_add(1);
@@ -7397,6 +8429,21 @@ fn run_driver_task_ring_command_with_mode_and_staging(
                 driver_task_ring_timeout_trace_enabled(trace_call, contract, command);
             let progress = driver_task_ring_read_progress_record(ring_root_ptr);
             timeout_progress = progress;
+            if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+                && cyw43_sdio_pair_restart_progress(progress)
+            {
+                // The runtime no longer has a provable owner for the in-flight
+                // child turn. Do not run generic timeout cleanup or consume a
+                // late completion. Publish the supervisor request, release the
+                // root writer/priority guards, and let the caller (or the next
+                // CYW43 submission) enter the fenced pair restart.
+                record_driver_task_ring_progress(slot, progress);
+                CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
+                cache_counter_batch.flush(slot);
+                drop(_priority_restore);
+                drop(_root_producer_guard);
+                return None;
+            }
             progress_advanced = driver_task_ring_progress_advanced_for_request(
                 slot,
                 progress,
@@ -9083,6 +10130,7 @@ pub const PI4_DRIVER_TASK_HOT_PATHS: [DriverTaskHotPath; 7] = [
 #[cfg(feature = "kernel")]
 struct DeferredRuntimeInitSlot {
     descriptor: UnsafeCell<DriverRuntimeInitDescriptor>,
+    retained: AtomicU32,
     pending: AtomicU32,
     initialized: AtomicU32,
 }
@@ -9098,6 +10146,7 @@ impl DeferredRuntimeInitSlot {
     const fn new() -> Self {
         Self {
             descriptor: UnsafeCell::new(DriverRuntimeInitDescriptor::empty()),
+            retained: AtomicU32::new(0),
             pending: AtomicU32::new(0),
             initialized: AtomicU32::new(0),
         }
@@ -9109,6 +10158,7 @@ impl DeferredRuntimeInitSlot {
         unsafe {
             core::ptr::write_volatile(self.descriptor.get(), descriptor);
         }
+        self.retained.store(1, Ordering::Release);
         self.initialized.store(0, Ordering::Release);
         self.pending.store(1, Ordering::Release);
     }
@@ -9117,6 +10167,15 @@ impl DeferredRuntimeInitSlot {
         // SAFETY: The pending bit is acquired before callers load the
         // descriptor, and root is the sole writer.
         unsafe { core::ptr::read_volatile(self.descriptor.get()) }
+    }
+
+    fn retain(&self, descriptor: DriverRuntimeInitDescriptor) {
+        // SAFETY: Root is the sole writer and publishes `retained` only after
+        // the complete manifest-derived descriptor is visible.
+        unsafe {
+            core::ptr::write_volatile(self.descriptor.get(), descriptor);
+        }
+        self.retained.store(1, Ordering::Release);
     }
 }
 
@@ -10486,6 +11545,139 @@ mod tests {
         assert_eq!(driver_task_spins_to_cycles_at_hz(0, 54_000_000), 0);
         assert_eq!(driver_task_spins_to_cycles_at_hz(1, 54_000_000), 1);
         assert_eq!(driver_task_spins_to_cycles_at_hz(1, 0), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_deadlines_are_counter_backed_and_cover_hardware_envelope() {
+        assert_eq!(
+            driver_task_micros_to_cycles_at_hz(CYW43_SDIO_PAIR_RESTART_ENVELOPE_US, 54_000_000,),
+            162_000_000,
+        );
+        assert_eq!(
+            driver_task_micros_to_cycles_at_hz(CYW43_SDIO_PAIR_RESTART_MMIO_GAP_US, 54_000_000,),
+            324,
+        );
+        assert!(CYW43_SDIO_PAIR_RESTART_ENVELOPE_US >= 2_372_000);
+        assert_eq!(next_cyw43_sdio_pair_restart_epoch(0), 1);
+        assert_eq!(next_cyw43_sdio_pair_restart_epoch(41), 42);
+        assert_eq!(next_cyw43_sdio_pair_restart_epoch(u32::MAX), 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_uses_one_aggregate_fallback_deadline_across_all_wait_phases() {
+        let phases = [
+            "sdio-recv-ready",
+            "sdio-descriptor",
+            "sdio-engine",
+            "cyw43-recv-ready",
+            "cyw43-descriptor",
+            "cyw43-engine",
+        ];
+        let mut deadline = DriverTaskDeadline::Iterations {
+            remaining: phases.len(),
+        };
+        for phase in phases {
+            assert!(
+                !driver_task_deadline_expired(&mut deadline),
+                "aggregate deadline expired before {phase}"
+            );
+        }
+        assert!(driver_task_deadline_expired(&mut deadline));
+
+        let mut command_loop_deadline = DriverTaskDeadline::Iterations { remaining: 2 };
+        assert!(driver_task_ring_deadline_allows_attempt(Some(
+            &mut command_loop_deadline
+        )));
+        assert!(driver_task_ring_deadline_allows_attempt(Some(
+            &mut command_loop_deadline
+        )));
+        assert!(!driver_task_ring_deadline_allows_attempt(Some(
+            &mut command_loop_deadline
+        )));
+        assert!(driver_task_ring_deadline_allows_attempt(None));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_recovery_mmio_requires_both_tcb_suspends() {
+        assert!(cyw43_sdio_pair_recovery_mmio_allowed(true, true));
+        assert!(!cyw43_sdio_pair_recovery_mmio_allowed(true, false));
+        assert!(!cyw43_sdio_pair_recovery_mmio_allowed(false, true));
+        assert!(!cyw43_sdio_pair_recovery_mmio_allowed(false, false));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_masks_card_int_in_linux_order_with_delayed_writes() {
+        assert_eq!(
+            CYW43_SDIO_CARD_INT_MASK_STEPS,
+            [
+                Cyw43SdioCardIntMaskStep::WriteInterruptEnable,
+                Cyw43SdioCardIntMaskStep::DelayTwoSdClocks,
+                Cyw43SdioCardIntMaskStep::WriteSignalEnable,
+                Cyw43SdioCardIntMaskStep::DelayWriteCommit,
+            ]
+        );
+        assert!(CYW43_SDIO_PAIR_RESTART_MMIO_GAP_US >= 6);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_phase_order_fences_before_ring_reuse_and_resumes_sdio_first() {
+        assert_eq!(
+            CYW43_SDIO_PAIR_RESTART_PHASE_ORDER,
+            [
+                Cyw43SdioPairRestartPhase::Start,
+                Cyw43SdioPairRestartPhase::BothSuspended,
+                Cyw43SdioPairRestartPhase::CardIntMasked,
+                Cyw43SdioPairRestartPhase::NotificationsDrained,
+                Cyw43SdioPairRestartPhase::IrqAcknowledged,
+                Cyw43SdioPairRestartPhase::RingsReset,
+                Cyw43SdioPairRestartPhase::SdioReady,
+                Cyw43SdioPairRestartPhase::Cyw43Ready,
+                Cyw43SdioPairRestartPhase::Delegated,
+            ]
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_marker_is_actionable_across_parent_sequence_change() {
+        assert!(cyw43_sdio_pair_restart_progress(
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 0x8000_0042,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
+                aux0: DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+            }
+        ));
+        assert!(cyw43_sdio_pair_restart_progress(
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: 17,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
+                aux0: DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+            }
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_context_gate_blocks_old_actions_until_explicit_replay() {
+        assert!(cyw43_sdio_pair_submission_blocked(0, 1, 0));
+        assert!(cyw43_sdio_pair_submission_blocked(0, 0, 1));
+        assert!(!cyw43_sdio_pair_submission_blocked(0, 0, 2));
+        assert!(!cyw43_sdio_pair_submission_blocked(1, 1, 1));
+        assert!(!cyw43_sdio_pair_submission_blocked(0, 0, 0));
+        assert!(cyw43_sdio_pair_context_replay_entry_allowed(0, 0, 1));
+        assert!(!cyw43_sdio_pair_context_replay_entry_allowed(1, 0, 1));
+        assert!(!cyw43_sdio_pair_context_replay_entry_allowed(0, 1, 1));
+        assert!(!cyw43_sdio_pair_context_replay_entry_allowed(0, 0, 0));
+        assert!(!cyw43_sdio_pair_context_replay_entry_allowed(0, 0, 2));
+        assert!(sdio_handoff_must_delete_endpoint(11, 12));
+        assert!(!sdio_handoff_must_delete_endpoint(12, 12));
     }
 
     #[cfg(feature = "kernel")]

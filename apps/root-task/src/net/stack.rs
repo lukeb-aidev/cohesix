@@ -202,6 +202,10 @@ fn wifi_connection_generation_for<D: NetDevice>() -> u32 {
     }
 }
 
+const fn cyw43_pre_poll_generation_fence_required(cached: u32, observed: u32) -> bool {
+    cached != observed
+}
+
 #[cfg(not(feature = "kernel"))]
 fn wifi_connection_generation_for<D: NetDevice>() -> u32 {
     let _ = core::marker::PhantomData::<D>;
@@ -1347,6 +1351,8 @@ pub struct NetStack<D: NetDevice> {
     interface_policy: NetInterfacePolicy,
     wifi_credentials: Option<WifiCredentials>,
     wifi_connection_generation: u32,
+    #[cfg(feature = "kernel")]
+    wifi_association_supervisor: crate::drivers::driver_task_net::Cyw43AssociationSupervisor,
     wifi_static_address_pending: bool,
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
@@ -3148,6 +3154,15 @@ impl<D: NetDevice> NetStack<D> {
         let sockets = SocketSet::new(unsafe { &mut SOCKET_STORAGE[..] });
         log_bootinfo_mark("net.init.socketset", &attempt)?;
         let wifi_connection_generation = wifi_connection_generation_for::<D>();
+        #[cfg(feature = "kernel")]
+        let wifi_association_supervisor =
+            crate::drivers::driver_task_net::Cyw43AssociationSupervisor::new(
+                D::driver_task_contract()
+                    == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                console_config.wifi_credentials,
+                wifi_connection_generation,
+                init_now_ms,
+            );
 
         let mut stack = Box::new(Self {
             clock,
@@ -3168,6 +3183,8 @@ impl<D: NetDevice> NetStack<D> {
             interface_policy: console_config.policy.interface,
             wifi_credentials: console_config.wifi_credentials,
             wifi_connection_generation,
+            #[cfg(feature = "kernel")]
+            wifi_association_supervisor,
             wifi_static_address_pending: false,
             ip,
             gateway,
@@ -3408,11 +3425,14 @@ impl<D: NetDevice> NetStack<D> {
 
     fn sync_wifi_connection_generation(&mut self, now_ms: u64) -> bool {
         let generation = wifi_connection_generation_for::<D>();
-        if generation == self.wifi_connection_generation {
+        if !cyw43_pre_poll_generation_fence_required(self.wifi_connection_generation, generation) {
             return false;
         }
         let previous_generation = self.wifi_connection_generation;
         self.wifi_connection_generation = generation;
+        #[cfg(feature = "kernel")]
+        self.wifi_association_supervisor
+            .sync_generation(self.wifi_credentials, generation, now_ms);
 
         self.device.set_assigned_ipv4(Ipv4Address::UNSPECIFIED);
         if matches!(self.mode, NetMode::Dhcp) {
@@ -3521,8 +3541,8 @@ impl<D: NetDevice> NetStack<D> {
         true
     }
 
-    fn begin_poll_turn(&mut self, now_ms: u64) -> Instant {
-        let _ = self.sync_wifi_connection_generation(now_ms);
+    fn begin_poll_turn(&mut self, now_ms: u64) -> (Instant, bool) {
+        let wifi_generation_changed = self.sync_wifi_connection_generation(now_ms);
         let _ = self.restore_static_wifi_generation_address_if_ready();
         if !self.service_logged {
             info!("[net-console] service loop running");
@@ -3569,7 +3589,7 @@ impl<D: NetDevice> NetStack<D> {
             self.device.debug_snapshot();
         }
 
-        timestamp
+        (timestamp, wifi_generation_changed)
     }
 
     fn finish_poll_turn(&mut self, now_ms: u64, activity: bool) {
@@ -3918,7 +3938,14 @@ impl<D: NetDevice> NetStack<D> {
         if Self::charge_tcp_budget(budget).is_err() {
             return false;
         }
-        let timestamp = self.begin_poll_turn(now_ms);
+        let (timestamp, wifi_generation_changed) = self.begin_poll_turn(now_ms);
+        if wifi_generation_changed {
+            // An outer CYW43 pre-poll can observe disconnect before this
+            // flush turn starts. Never drain its preserved frames or touch a
+            // TCP socket under the invalidated generation.
+            self.finish_poll_turn(now_ms, true);
+            return true;
+        }
         if !self.validate_console_socket(now_ms) {
             self.finish_poll_turn(now_ms, false);
             return true;
@@ -4012,7 +4039,14 @@ impl<D: NetDevice> NetStack<D> {
 
     /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
     pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
-        let timestamp = self.begin_poll_turn(now_ms);
+        let (timestamp, wifi_generation_changed) = self.begin_poll_turn(now_ms);
+        if wifi_generation_changed {
+            // The caller may have serviced a linked-runtime burst before
+            // entering the stack. End the turn immediately after generation
+            // state is reset and before smoltcp, DHCP, or TCP work.
+            self.finish_poll_turn(now_ms, true);
+            return true;
+        }
 
         if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
             self.finish_poll_turn(now_ms, false);
@@ -4020,6 +4054,12 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         let mut activity = self.sync_interface_hardware_addr(now_ms);
+        if self.wifi_association_claims_runtime_turn(now_ms) {
+            activity |= self.service_wifi_host_eapol_slice_with_limit(now_ms, 1);
+            activity |= self.sync_interface_hardware_addr(now_ms);
+            self.finish_poll_turn(now_ms, activity);
+            return activity;
+        }
         if self.stage_policy.tx_only && !self.tx_only_sent {
             activity |= self.send_udp_beacon();
             if activity {
@@ -4041,6 +4081,14 @@ impl<D: NetDevice> NetStack<D> {
             let cyw43_pre_poll_activity =
                 self.service_cyw43_data_pre_poll_burst(D::driver_task_contract());
             activity |= cyw43_pre_poll_activity;
+            if self.sync_wifi_connection_generation(now_ms) {
+                // The pre-poll burst can preserve a disconnect event and
+                // advance the CYW43 epoch. End this turn before smoltcp, DHCP,
+                // or TCP can consume queued bytes under the old generation.
+                activity = true;
+                self.finish_poll_turn(now_ms, activity);
+                return activity;
+            }
             if cyw43_pre_poll_activity {
                 activity |= self.poll_smoltcp_once(timestamp, now_ms, "cyw43-pre-poll-drain");
             }
@@ -4092,12 +4140,34 @@ impl<D: NetDevice> NetStack<D> {
     ) -> Result<bool, DriverServiceBudgetError> {
         budget.charge_ops(1)?;
 
+        if self.wifi_association_claims_runtime_turn(now_ms) {
+            Self::charge_wifi_host_eapol_budget(budget)?;
+            let (_, wifi_generation_changed) = self.begin_poll_turn(now_ms);
+            if wifi_generation_changed {
+                self.finish_poll_turn(now_ms, true);
+                return Ok(true);
+            }
+            if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
+                self.finish_poll_turn(now_ms, false);
+                return Ok(true);
+            }
+            let mut activity = self.sync_interface_hardware_addr(now_ms);
+            activity |= self.service_wifi_host_eapol_slice_with_limit(now_ms, 1);
+            activity |= self.sync_interface_hardware_addr(now_ms);
+            self.finish_poll_turn(now_ms, activity);
+            return Ok(activity);
+        }
+
         if self.stage_policy.tx_only && !self.tx_only_sent {
             budget.charge_ops(2)?;
             budget.charge_frames(1)?;
             budget.charge_bytes(256)?;
 
-            let timestamp = self.begin_poll_turn(now_ms);
+            let (timestamp, wifi_generation_changed) = self.begin_poll_turn(now_ms);
+            if wifi_generation_changed {
+                self.finish_poll_turn(now_ms, true);
+                return Ok(true);
+            }
             if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
                 self.finish_poll_turn(now_ms, false);
                 return Ok(true);
@@ -4115,7 +4185,11 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         if wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
-            let timestamp = self.begin_poll_turn(now_ms);
+            let (timestamp, wifi_generation_changed) = self.begin_poll_turn(now_ms);
+            if wifi_generation_changed {
+                self.finish_poll_turn(now_ms, true);
+                return Ok(true);
+            }
             if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
                 self.finish_poll_turn(now_ms, false);
                 return Ok(true);
@@ -4129,6 +4203,13 @@ impl<D: NetDevice> NetStack<D> {
             activity |= self.sync_interface_hardware_addr(now_ms);
             activity |=
                 self.service_cyw43_data_pre_poll_burst_budgeted(D::driver_task_contract(), budget);
+            if self.sync_wifi_connection_generation(now_ms) {
+                // Do not let an inner pre-poll disconnect cross into the DHCP
+                // service below during the same budgeted turn.
+                activity = true;
+                self.finish_poll_turn(now_ms, activity);
+                return Ok(activity);
+            }
             activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
             if !wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
                 if self.budgeted_dhcp_service_required() {
@@ -4199,7 +4280,13 @@ impl<D: NetDevice> NetStack<D> {
             Self::charge_tcp_budget(budget)?;
         }
 
-        let timestamp = self.begin_poll_turn(now_ms);
+        let (timestamp, wifi_generation_changed) = self.begin_poll_turn(now_ms);
+        if wifi_generation_changed {
+            // Keep the recovery-selected Interface phase and do not enter any
+            // budgeted smoltcp/DHCP/TCP phase with old-generation frames.
+            self.finish_poll_turn(now_ms, true);
+            return Ok(true);
+        }
         if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
             self.finish_poll_turn(now_ms, false);
             self.budgeted_phase = if cyw43_dhcp_preempts_phase {
@@ -4215,6 +4302,14 @@ impl<D: NetDevice> NetStack<D> {
             let pre_poll_activity =
                 self.service_cyw43_data_pre_poll_burst_budgeted(D::driver_task_contract(), budget);
             let mut activity = pre_poll_activity;
+            if self.sync_wifi_connection_generation(now_ms) {
+                // sync_wifi_connection_generation resets the phase to
+                // Interface. Return before drain/smoltcp and before the normal
+                // phase advance can overwrite that recovery fence.
+                activity = true;
+                self.finish_poll_turn(now_ms, activity);
+                return Ok(activity);
+            }
             activity |=
                 self.drain_cyw43_pre_poll_activity(timestamp, now_ms, budget, pre_poll_activity);
             activity
@@ -4227,6 +4322,7 @@ impl<D: NetDevice> NetStack<D> {
         if host_eapol_blocked {
             Self::charge_wifi_host_eapol_budget(budget)?;
         }
+        let generation_before_host_eapol = self.wifi_connection_generation;
         activity |= self.service_wifi_host_eapol_slice_with_limit(
             now_ms,
             if host_eapol_blocked {
@@ -4235,6 +4331,16 @@ impl<D: NetDevice> NetStack<D> {
                 1
             },
         );
+        if cyw43_pre_poll_generation_fence_required(
+            generation_before_host_eapol,
+            self.wifi_connection_generation,
+        ) {
+            // Host-EAPOL/event service can observe carrier loss after the
+            // pre-poll fence above. Preserve sync's Interface phase and end
+            // this turn before the scheduled smoltcp/DHCP/TCP phase.
+            self.finish_poll_turn(now_ms, true);
+            return Ok(true);
+        }
         activity |= self.sync_interface_hardware_addr(now_ms);
         activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
         if self.wifi_rx_admission_blocked {
@@ -4386,17 +4492,46 @@ impl<D: NetDevice> NetStack<D> {
             {
                 return false;
             }
-            let Some(credentials) = self.wifi_credentials else {
-                return false;
-            };
-            return crate::drivers::driver_task_net::service_cyw43_host_eapol_slice(
-                credentials,
-                poll_limit,
-                now_ms,
-            );
+            let association = self
+                .wifi_association_supervisor
+                .service(self.wifi_credentials, now_ms);
+            let mut activity = association.activity;
+            if !association.claimed_runtime_turn && association.host_eapol_allowed {
+                if let Some(credentials) = self.wifi_credentials {
+                    activity |= crate::drivers::driver_task_net::service_cyw43_host_eapol_slice(
+                        credentials,
+                        poll_limit,
+                        now_ms,
+                    );
+                }
+            }
+            // Association recovery and carrier-loss events can advance the
+            // CYW43 connection generation inside this service call.  Fence
+            // DHCP, neighbor, and TCP state before the caller can finish the
+            // same smoltcp turn with old-generation network state.
+            activity |= self.sync_wifi_connection_generation(now_ms);
+            return activity;
         }
         #[cfg(not(feature = "kernel"))]
         {
+            false
+        }
+    }
+
+    fn wifi_association_claims_runtime_turn(&self, now_ms: u64) -> bool {
+        #[cfg(feature = "kernel")]
+        {
+            if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+            {
+                return false;
+            }
+            return self
+                .wifi_association_supervisor
+                .claims_runtime_turn(self.wifi_credentials, now_ms);
+        }
+        #[cfg(not(feature = "kernel"))]
+        {
+            let _ = now_ms;
             false
         }
     }
@@ -7197,6 +7332,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         hot_path.as_u32() as usize,
                         crate::drivers::driver_task_net::runtime_ring_service,
                     );
+                    if self.wifi_association_claims_runtime_turn(now_ms) {
+                        return self.poll_with_time(now_ms);
+                    }
                     if wifi_host_eapol_blocks_driver_task_pre_poll(
                         self.device.bringup_status_label(),
                     ) {
@@ -7253,6 +7391,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         hot_path.as_u32() as usize,
                         crate::drivers::driver_task_net::runtime_ring_service,
                     );
+                    if self.wifi_association_claims_runtime_turn(now_ms) {
+                        return self.poll_budgeted_with_time(now_ms, budget);
+                    }
                     if wifi_host_eapol_blocks_driver_task_pre_poll(
                         self.device.bringup_status_label(),
                     ) {
@@ -8217,6 +8358,13 @@ mod tests {
             Some(WifiCredentials::new("cohesix", "passphrase").expect("valid WiFi credentials"));
         assert_eq!(configured_active_driver_label(&config), "cyw43");
         assert_eq!(config.backend.label(), "bcmgenet-v5");
+    }
+
+    #[test]
+    fn cyw43_pre_poll_generation_change_requires_same_turn_fence() {
+        assert!(!cyw43_pre_poll_generation_fence_required(7, 7));
+        assert!(cyw43_pre_poll_generation_fence_required(7, 8));
+        assert!(cyw43_pre_poll_generation_fence_required(u32::MAX, 0));
     }
 
     #[test]

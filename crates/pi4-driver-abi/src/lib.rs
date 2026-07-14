@@ -238,6 +238,12 @@ pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN: u16 = 1 << 3;
 pub const DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN: u16 = 1 << 4;
 /// CYW43 positive detail: a control Function 2 TX retry recovered a transfer fault.
 pub const DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_TX_F2_RETRY_RECOVERED: u16 = 0x5801;
+/// CYW43 positive detail: an event/data frame interrupted a retained control exchange.
+///
+/// The exchange remains active in the isolated runtime. Root must route the
+/// frame and resubmit the identical BCDC command identity; the runtime must not
+/// transmit the request a second time.
+pub const DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME: u16 = 0x5802;
 /// CYW43 RX idle detail: no detailed RX result was reported.
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NONE: u16 = 0;
 /// CYW43 RX idle detail: firmware/channel state is not ready for RX.
@@ -424,6 +430,8 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
 pub const DRIVER_RUNTIME_RING_PROGRESS_BYTES: u16 = 16;
 /// Runtime progress-marker magic.
 pub const DRIVER_RUNTIME_RING_PROGRESS_MAGIC: u32 = 0x4452_5047;
+/// Root-to-runtime entry marker requesting a cold local-state reset before receive admission.
+pub const DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG: u32 = 1 << 31;
 /// Runtime has observed the staged command.
 pub const DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED: u32 = 1;
 /// Runtime has validated the command role and is entering dispatch.
@@ -1291,6 +1299,8 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN: u32 = 142;
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT: u32 = 143;
 /// CYW43 runtime received the linked SDIO owner completion.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY: u32 = 144;
+/// CYW43 exhausted the issued-unknown reap deadline and requires a fenced pair restart.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED: u32 = 446;
 /// CYW43 runtime proved card selection/adoption.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY: u32 = 112;
 /// CYW43 runtime is programming Function 1 block size.
@@ -3950,6 +3960,20 @@ mod tests {
         assert_eq!(
             driver_runtime_cyw43_armcr4_reset_result_readback(result),
             None
+        );
+    }
+
+    #[test]
+    fn pair_restart_marker_is_out_of_band_and_phase_is_distinct() {
+        assert_eq!(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG, 1 << 31);
+        assert_eq!(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG & 0xff, 0);
+        assert_ne!(
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
         );
     }
 }
