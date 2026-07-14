@@ -1,420 +1,99 @@
-<!-- Copyright 2026 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Document the Cohesix host-only REST gateway API. -->
+<!-- Purpose: Provide a concise operator reference for the Cohesix host-only REST gateway. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Host REST API (Hive Gateway)
 
-The **hive-gateway** is a host-only REST projection of Cohesix console/file semantics. It **does not introduce new control-plane behavior**. Every request is translated into existing `LS`, `CAT`, and `ECHO` flows with manifest-derived bounds enforced at the gateway and again inside the VM.
+# Cohesix Host REST API
 
-**Key properties**
-- **Authority lives in the VM**: the gateway is a stateless proxy for `LS`/`CAT`/`ECHO` semantics.
-- **Bounded**: payload sizes and `/proc` read limits are validated against manifest-derived limits.
-- **Edge auth enforced for writes**: mutating routes require `Authorization: Bearer <token>` (or `x-cohesix-auth`).
-- **Safe exposure defaults**: binds are loopback-only unless explicitly overridden.
+`hive-gateway` is a host-only HTTP projection of existing Cohesix console and
+file operations. It is not an in-target server and does not create a separate
+authority path.
 
-## Auth + role configuration
-The gateway uses the fixed role/ticket configured in its environment (or CLI flags). Set these in `/etc/cohesix/hive-gateway.env` when running under systemd:
-```
-COH_TCP_HOST=127.0.0.1
-COH_TCP_PORT=31337
-COH_AUTH_TOKEN=<tcp-console-auth-token>
-HIVE_GATEWAY_REQUEST_AUTH_TOKEN=<rest-request-auth-token>
-COH_ROLE=queen
-COH_TICKET=
-HIVE_GATEWAY_BIND=127.0.0.1:8080
-# Optional risk override for non-loopback binds:
-# HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND=1
-```
+This page is an operator quick reference. It deliberately does not reproduce
+the OpenAPI document.
+
+## Canonical Sources
+
+| Concern | Source |
+| --- | --- |
+| Machine-readable HTTP schema | [`resources/openapi/hive-gateway.yaml`](../resources/openapi/hive-gateway.yaml), also served at `/v1/openapi.yaml` |
+| Authentication, compatibility, retry, and deployment rules | [API_GUIDELINES.md](API_GUIDELINES.md) |
+| Target paths, payloads, and console semantics | [INTERFACES.md](INTERFACES.md) |
+| Gateway startup and composition | [HOST_TOOLS.md](HOST_TOOLS.md) |
+
+## Endpoint Summary
+
+| Method | Endpoint | Operation | Request auth |
+| --- | --- | --- | --- |
+| `GET` | `/v1/meta/bounds` | Gateway-compiled bounds and manifest fingerprint | No |
+| `GET` | `/v1/meta/status` | Connection, broker, queue, and cache state | No |
+| `GET` | `/v1/fs/ls?path=...` | `LS` | No |
+| `GET` | `/v1/fs/cat?path=...&max_bytes=...` | Bounded `CAT` | No |
+| `GET` | `/v1/fs/tail?path=...&max_bytes=...` | Bounded `TAIL`; optional `lines=1..256` | No |
+| `POST` | `/v1/fs/echo` | One bounded `ECHO` append | Yes |
+| `GET` | `/v1/openapi.yaml` | Embedded OpenAPI 3.1 document | No |
+| `GET` | `/docs` | Swagger UI backed by the embedded document | No |
+
+Both `CAT` and `TAIL` require `max_bytes`. Only `TAIL` accepts the optional
+`lines` query. The gateway validates those bounds before contacting the target.
+
+## Authentication and Exposure
+
+The gateway holds one upstream target-console session with a configured role
+and optional capability ticket. All HTTP callers inherit that upstream
+authority. The request-auth token on `POST /v1/fs/echo` authenticates the HTTP
+write only; it is not a target identity or capability ticket.
+
+The default bind is loopback. The gateway does not terminate TLS. Keep it on
+loopback or place it behind an authenticated tunnel, VPN, or TLS reverse proxy.
+The built-in Swagger UI loads public CDN assets; use `/v1/openapi.yaml` directly
+in air-gapped environments.
 
 ## Examples
-**1) Inspect manifest bounds**
-```
-curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
+
+Read gateway status and a bounded target file:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  http://127.0.0.1:8080/v1/meta/status
+
+curl --fail-with-body --silent --show-error --get \
+  --data-urlencode 'path=/proc/schedule/queue' \
+  --data-urlencode 'max_bytes=256' \
+  http://127.0.0.1:8080/v1/fs/cat
 ```
 
-**1b) Inspect gateway broker and control-write backpressure counters**
-```
-curl -sS http://127.0.0.1:8080/v1/meta/status | jq '.broker'
-```
-The broker object includes waiters, pool/backpressure counters, cache counters,
-relay counters, and control-write retry counters such as
-`control_write_retryable_errors`, `control_write_retry_sleep_ms`, and
-`control_write_retry_exhaustions`.
+Tail a bounded number of log lines:
 
-**2) Append a schedule entry**
+```bash
+curl --fail-with-body --silent --show-error --get \
+  --data-urlencode 'path=/log/queen.log' \
+  --data-urlencode 'max_bytes=512' \
+  --data-urlencode 'lines=64' \
+  http://127.0.0.1:8080/v1/fs/tail
 ```
-curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
-  -H 'Content-Type: application/json' \
+
+For an intentional write, provide the request-auth token through the
+environment rather than a command-line literal:
+
+```bash
+: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?request-auth token is required}"
+
+curl --fail-with-body --silent --show-error \
+  -X POST http://127.0.0.1:8080/v1/fs/echo \
   -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
-  -d '{"path":"/queen/schedule/ctl","line":"{\"id\":\"job-1\",\"role\":\"worker-gpu\",\"priority\":2,\"ticks\":3,\"budget_ms\":120}"}'
-```
-
-**3) Read schedule queue**
-```
-curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/queue&max_bytes=256'
-```
-
-**4) Tail queen log**
-```
-curl -sS 'http://127.0.0.1:8080/v1/fs/tail?path=/log/queen.log&max_bytes=512&lines=64'
-```
-
-**5) Apply policy revision**
-```
-curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
-  -d '{"path":"/policy/ctl","line":"{\"op\":\"apply\",\"id\":\"rev-22\",\"sha256\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"}"}'
+  --data-binary '{"path":"/queen/schedule/ctl","line":"{\"id\":\"api-check-1\",\"role\":\"worker-gpu\",\"priority\":2,\"ticks\":3,\"budget_ms\":120}"}'
 ```
 
-**6) Publish a GPU bridge snapshot (via host tool)**
-```
-./bin/gpu-bridge-host --publish --rest-url http://127.0.0.1:8080
-```
+## Response Handling
 
-**7) Read host provider status**
-```
-curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/host/systemd/status&max_bytes=256'
-```
+Filesystem responses preserve target `OK` or `ERR` status and terminal `END`
+semantics in JSON. A target refusal can therefore arrive with HTTP `200`.
+Clients must inspect both the HTTP status and the JSON `status` field. Do not
+blindly retry writes after an ambiguous transport failure; verify read-only
+state first.
 
-## Swagger UI
-The gateway serves Swagger UI at:
-```
-http://127.0.0.1:8080/docs
-```
-The UI loads assets from the public `swagger-ui` CDN; for air-gapped environments, use the OpenAPI spec directly.
-
-## OpenAPI 3.1 spec
-```yaml
-openapi: 3.1.0
-info:
-  title: Cohesix Hive Gateway
-  version: 0.1.0
-  description: |-
-    Host-only REST gateway that projects Cohesix console/file semantics into a
-    JSON API. Responses mirror OK/ERR/END semantics and enforce manifest bounds.
-servers:
-  - url: http://127.0.0.1:8080
-paths:
-  /v1/meta/bounds:
-    get:
-      summary: Manifest-derived bounds and paths.
-      responses:
-        "200":
-          description: Boundaries derived from the active manifest.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/BoundsResponse"
-  /v1/fs/ls:
-    get:
-      summary: List directory entries (LS).
-      parameters:
-        - in: query
-          name: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: List operation response.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GatewayResponse"
-        "400":
-          description: Invalid request.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GatewayResponse"
-  /v1/fs/cat:
-    get:
-      summary: Read file contents (CAT).
-      parameters:
-        - in: query
-          name: path
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: max_bytes
-          required: true
-          schema:
-            type: integer
-            minimum: 1
-        - in: query
-          name: lines
-          required: false
-          description: Optional tail line count. Values must be between 1 and 256.
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 256
-      responses:
-        "200":
-          description: Read operation response.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GatewayResponse"
-        "400":
-          description: Invalid request.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GatewayResponse"
-  /v1/fs/tail:
-    get:
-      summary: Tail file contents (TAIL).
-      parameters:
-        - in: query
-          name: path
-          required: true
-          schema:
-            type: string
-        - in: query
-          name: max_bytes
-          required: true
-          schema:
-            type: integer
-            minimum: 1
-      responses:
-        "200":
-          description: Tail operation response.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GatewayResponse"
-        "400":
-          description: Invalid request.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GatewayResponse"
-  /v1/fs/echo:
-    post:
-      summary: Append a single line (ECHO).
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/EchoRequest"
-      responses:
-        "200":
-          description: Echo operation response.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GatewayResponse"
-        "400":
-          description: Invalid request.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GatewayResponse"
-  /v1/openapi.yaml:
-    get:
-      summary: OpenAPI 3.1 specification.
-      responses:
-        "200":
-          description: OpenAPI specification (YAML).
-          content:
-            application/yaml:
-              schema:
-                type: string
-  /docs:
-    get:
-      summary: Swagger UI.
-      responses:
-        "200":
-          description: Swagger UI HTML.
-          content:
-            text/html:
-              schema:
-                type: string
-components:
-  schemas:
-    GatewayResponse:
-      type: object
-      required:
-        - status
-        - verb
-        - path
-        - end
-      properties:
-        status:
-          type: string
-          enum: ["OK", "ERR"]
-        verb:
-          type: string
-        path:
-          type: string
-        end:
-          type: boolean
-        lines:
-          type: array
-          items:
-            type: string
-        bytes:
-          type: integer
-          minimum: 0
-        error:
-          type: string
-    EchoRequest:
-      type: object
-      required:
-        - path
-      properties:
-        path:
-          type: string
-        line:
-          type: string
-    BoundsResponse:
-      type: object
-      required:
-        - manifest_sha256
-        - secure9p
-        - console
-        - paths
-        - control_plane
-        - policy
-        - observability
-      properties:
-        manifest_sha256:
-          type: string
-        secure9p:
-          type: object
-          required: [msize, walk_depth]
-          properties:
-            msize:
-              type: integer
-            walk_depth:
-              type: integer
-        console:
-          type: object
-          required:
-            - max_line_len
-            - max_path_len
-            - max_json_len
-            - max_id_len
-            - max_echo_len
-            - max_ticket_len
-          properties:
-            max_line_len:
-              type: integer
-            max_path_len:
-              type: integer
-            max_json_len:
-              type: integer
-            max_id_len:
-              type: integer
-            max_echo_len:
-              type: integer
-            max_ticket_len:
-              type: integer
-        paths:
-          type: object
-          required:
-            - queen_ctl
-            - queen_lifecycle_ctl
-            - queen_schedule_ctl
-            - queen_lease_ctl
-            - queen_export_ctl
-            - policy_ctl
-            - log
-          properties:
-            queen_ctl:
-              type: string
-            queen_lifecycle_ctl:
-              type: string
-            queen_schedule_ctl:
-              type: string
-            queen_lease_ctl:
-              type: string
-            queen_export_ctl:
-              type: string
-            policy_ctl:
-              type: string
-            log:
-              type: string
-        control_plane:
-          type: object
-          required: [schedule, lease, export]
-          properties:
-            schedule:
-              type: object
-              required: [enable, queue_max_entries, ctl_max_bytes]
-              properties:
-                enable:
-                  type: boolean
-                queue_max_entries:
-                  type: integer
-                ctl_max_bytes:
-                  type: integer
-            lease:
-              type: object
-              required: [enable, active_max_entries, preemptions_max_entries, ctl_max_bytes]
-              properties:
-                enable:
-                  type: boolean
-                active_max_entries:
-                  type: integer
-                preemptions_max_entries:
-                  type: integer
-                ctl_max_bytes:
-                  type: integer
-            export:
-              type: object
-              required: [enable, ctl_max_bytes]
-              properties:
-                enable:
-                  type: boolean
-                ctl_max_bytes:
-                  type: integer
-        policy:
-          type: object
-          required: [enable, queue_max_entries, queue_max_bytes, ctl_max_bytes]
-          properties:
-            enable:
-              type: boolean
-            queue_max_entries:
-              type: integer
-            queue_max_bytes:
-              type: integer
-            ctl_max_bytes:
-              type: integer
-        observability:
-          type: object
-          required: [proc_schedule, proc_lease]
-          properties:
-            proc_schedule:
-              type: object
-              required: [summary, queue, summary_bytes, queue_bytes]
-              properties:
-                summary:
-                  type: boolean
-                queue:
-                  type: boolean
-                summary_bytes:
-                  type: integer
-                queue_bytes:
-                  type: integer
-            proc_lease:
-              type: object
-              required: [summary, active, preemptions, summary_bytes, active_bytes, preemptions_bytes]
-              properties:
-                summary:
-                  type: boolean
-                active:
-                  type: boolean
-                preemptions:
-                  type: boolean
-                summary_bytes:
-                  type: integer
-                active_bytes:
-                  type: integer
-                preemptions_bytes:
-                  type: integer
-```
+Use [FAILURE_MODES.md](FAILURE_MODES.md) for recovery and
+[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md) for an end-to-end validated
+startup path.

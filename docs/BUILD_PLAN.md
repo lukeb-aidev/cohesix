@@ -1,23 +1,33 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Track Cohesix milestones, deliverables, and completion criteria for ARM64 Pure Rust userspace builds. -->
+<!-- Purpose: Define Cohesix milestone scope, status, deliverables, and acceptance criteria. -->
 <!-- Author: Lukas Bower -->
+
 # Cohesix Build Plan (ARM64, Pure Rust Userspace)
-Cohesix targets physical ARM64 hardware with an official Raspberry Pi 4 bring-up path aligned to upstream seL4 guidance (`U-Boot + binary image`). QEMU `aarch64/virt` remains the reference setup for bring-up, CI, and deterministic regression testing.
 
-**Host:** macOS 26 on Apple Silicon (M4)
-**Target:** QEMU aarch64 `virt` (GICv3)
-**Kernel:** Upstream seL4 (external build)
-**Userspace:** Pure Rust crates (`root-task`, `nine-door`, `worker-heart`, `worker-gpu` host implementation with current VM stub, `gpu-bridge-host` host tool)
+This document is the normative authorization and status ledger for Cohesix
+work. It records both active tasks and retained historical completion context;
+historical measurements are not current product claims unless the active
+milestone and [BENCHMARKS.md](BENCHMARKS.md) qualify them. Runtime contracts
+belong in [ARCHITECTURE.md](ARCHITECTURE.md),
+[INTERFACES.md](INTERFACES.md), and the other focused documents linked from
+`README.md`. Generated values remain authoritative in the selected manifest,
+resolved output, and `coh-rtc` artifacts.
 
-Physical ARM64 hardware remains the deployment target; for Raspberry Pi 4, Milestone 26 onward follows the upstream seL4 U-Boot handoff model while preserving QEMU `aarch64/virt` semantics as the reference development and CI profile.
+- **Primary host:** macOS 26 on Apple Silicon.
+- **Reference target:** QEMU `aarch64/virt` with GICv3.
+- **Physical target:** Raspberry Pi 4 using Pi firmware, U-Boot, and the seL4
+  binary-image handoff.
+- **Kernel:** upstream seL4 from the selected external build directory.
+- **Userspace:** pure-Rust `root-task` and NineDoor adapters, implemented
+  `worker-heart`, `worker-gpu`, and `worker-lora` target loops,
+  manifest-declared Pi 4 driver runtimes, and host-side operator and bridge
+  tools.
 
-The milestones below build cumulatively; do not advance until the specified checks pass and documentation is updated. Each step
-is grounded in the architectural intent outlined in `docs/ARCHITECTURE.md`, the repository conventions from `docs/REPO_LAYOUT.md`,
-and the interface contracts codified in `docs/INTERFACES.md`. Treat those documents as non-negotiable source material when
-preparing and executing tasks.
-
-Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
+Milestones build cumulatively. Work may advance only when the active task,
+checks, evidence, and documentation agree. Cohesix uses a Queen/Worker control
+model over bounded namespace and console operations; it does not introduce an
+ad-hoc host RPC authority path.
 
 Current terminology: a **shard** is a manifest-derived worker namespace bucket, and the canonical worker telemetry path is `/shard/<label>/worker/<id>/telemetry`. Older milestone records may mention the legacy `/worker/<id>/telemetry` alias; that alias is valid only when `sharding.legacy_worker_alias = true`.
 
@@ -5723,7 +5733,14 @@ Deliverables:
 ## Milestone 25h — Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) <a id="25h"></a>
 [Milestones](#Milestones)
 
-**Why now (fleet reality):** `docs/BENCHMARKS.md` validates a 1500 hard cap, with aggressive-profile reliability pressure around `~1000-1200` workers per hive due to gateway backpressure. The practical scale path is federation of many bounded hives, not active/active writes to one logical hive. `docs/FAILOVER.md` already codifies single-writer active/standby and host-orchestrated cutover; this milestone extends that model for interoperable multi-hive operations.
+**Why now (historical planning context):** At Milestone 25h planning time, an
+earlier local benchmark snapshot was interpreted as a 1500-worker hard cap,
+with gateway pressure observed around 1000-1200 workers per hive. That snapshot
+is not a current qualified capacity claim; [BENCHMARKS.md](BENCHMARKS.md) owns
+the active evidence and acceptance rules. The architectural conclusion remains:
+scale across independently bounded hives instead of introducing active/active
+writes to one logical hive. [FAILOVER.md](FAILOVER.md) defines the single-writer
+active/standby and host-orchestrated cutover model extended by this milestone.
 
 ## Goal
 Deliver a deterministic multi-hive interoperability layer that:
@@ -6371,7 +6388,7 @@ Deliverables:
 ## Milestone 26b — Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency <a id="26b"></a>
 [Milestones](#Milestones)
 
-**Status:** Reopened — the prior bounded DHCP, USB/local-seat, QEMU compatibility, and production wired/GENET evidence remains accepted. Milestone 26d Wi-Fi boot investigation exposed one pre-existing 26b defect: `m26b-wifi-driver-task` and `m26b-sdio-host-driver-task-graduation` still use poll/yield service instead of the generated, notification-driven CYW43/SDIO DPC boundary required by their original root-no-wait contract. Reopened scope is limited to reciprocal generated notification/IRQ topology, bounded pointer-free DPC event-ring metadata, isolated-runtime IRQ/DPC service, and repeatable Wi-Fi TCP/cohsh proof. It adds no operator protocol, namespace, system authority, production-Wi-Fi parity claim, or unrelated 26d system-model change.
+**Status:** Reopened — the prior bounded DHCP, USB/local-seat, QEMU compatibility, and production wired/GENET evidence remains accepted. Milestone 26d Wi-Fi boot investigation exposed one pre-existing 26b defect: `m26b-wifi-driver-task` and `m26b-sdio-host-driver-task-graduation` used poll/yield service instead of the notification-driven CYW43/SDIO DPC boundary required by their original root-no-wait contract. The reciprocal generated notification/IRQ topology, bounded pointer-free DPC event ring, and isolated-runtime IRQ/DPC service have since landed under `m26b-wifi-sdio-notification-dpc-closure`. Milestone 26b remains reopened until repeated current-image Wi-Fi DHCP, raw TCP/`cohsh`, ordered RX, clean DPC counters, and unchanged operator-input gates close the functional proof requirement. This scope adds no operator protocol, namespace, system authority, production-Wi-Fi parity claim, or unrelated 26d system-model change.
 
 **Why now (operator continuity):**  
 Milestone 26b depends on completed 26a driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi and selected-network performance must improve by moving SDIO/firmware/RX/TX or GENET RX/TX progress onto bounded manifest-declared isolated driver runtimes, not by extending the root event-loop turn.
@@ -6946,7 +6963,30 @@ Deliverables:
 **Why now (reviewer trust):**
 Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-up evidence, and isolated runtime benchmark closure, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window after isolated runtime benchmark closure and before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
-**Current planning status:** Complete. QEMU closure remains anchored by `out/test-plan/m26c-qemu` and Stage 05 due-diligence root `out/audit/gate/20260628T015332Z`. Pi 4 closure is anchored by the final wired GENET boot in `/Users/lukasbower/pi4-serial-20260629-135454.log`, paired USB-Ethernet capture `/Users/lukasbower/tcpdump-usb-eth-20260629-135504.pcap`, runtime/DMA proof bundle `out/test-plan/m26c-pi4-live/pi4-runtime-dma-proof-genet-latest.env`, direct TCP proof `out/test-plan/m26c-pi4-live/cohsh-tcp-proof-genet-latest.txt`, target-qualified Stage 03/04/05 refresh logs and markers in `out/test-plan/m26c-pi4-live`, and Stage 05 due-diligence root `out/audit/gate/20260629T061204Z`. The Pi proof is wired GENET at `192.168.10.50` with `PI4_RUNTIME_DMA_PROOF=fresh-pi`, `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`, `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, DHCP-bound TCP `cohsh`, REST/gateway validation, and no substitution of QEMU or stale board evidence for Pi closure.
+**Current planning status:** Complete. The documentation-only task
+`m26c-readme-linked-doc-suite-remediation` completed on 15 July 2026. It
+removed duplicated contracts, corrected stale as-built claims, assigned clear
+document ownership, and revalidated the complete tracked Mermaid inventory.
+Local links, generated mirrors, the Test Plan contract, the workspace build,
+and all 75 Mermaid blocks passed their final checks. The only non-Markdown
+change corrects the embedded OpenAPI description of `TAIL lines` to match the
+existing gateway handler. No handler, protocol, endpoint, namespace, authority,
+release snapshot, generated behavior, or hardware-acceptance state changed.
+
+The original QEMU and Pi 4 closure remains accepted. QEMU closure is anchored
+by `out/test-plan/m26c-qemu` and Stage 05 due-diligence root
+`out/audit/gate/20260628T015332Z`. Pi 4 closure is anchored by the final wired
+GENET boot in `/Users/lukasbower/pi4-serial-20260629-135454.log`, paired
+USB-Ethernet capture `/Users/lukasbower/tcpdump-usb-eth-20260629-135504.pcap`,
+runtime/DMA proof bundle
+`out/test-plan/m26c-pi4-live/pi4-runtime-dma-proof-genet-latest.env`, direct TCP
+proof `out/test-plan/m26c-pi4-live/cohsh-tcp-proof-genet-latest.txt`, and Stage
+05 due-diligence root `out/audit/gate/20260629T061204Z`. That accepted proof is
+wired GENET at `192.168.10.50` with `PI4_RUNTIME_DMA_PROOF=fresh-pi`,
+`PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`,
+`TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`,
+`TIMER_EL0_COUNTER=vct`, DHCP-bound TCP `cohsh`, and REST/gateway validation.
+It does not substitute for current-image Milestone 26d Pi 4 revalidation.
 
 **Non-negotiable constraints:**
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, console grammar, Secure9P, or release-behavior drift may hide under a "refactor", "cleanup", or "humanizing" label.
@@ -7247,6 +7287,39 @@ Checks:
   - Any docs/script drift is corrected or explicitly deferred with scope-safe rationale before humanizing edits are accepted.
 Deliverables:
   - Auditable docs-as-built report and drift ledger proving documentation truth before presentation cleanup.
+
+Title/ID: m26c-readme-linked-doc-suite-remediation
+Milestone: Milestone 26c — Regression-Gated Refactor + Surface Audit / documentation-closure defects discovered during Milestone 26d
+Goal: Rewrite the human-authored documents linked directly from `README.md` into one concise, production-grade, as-built suite without changing system behavior or generated truth.
+Inputs: README.md, its directly linked human-authored Markdown documents, AGENTS.md, docs/BUILD_PLAN.md, docs/HOST_API.md, resources/openapi/hive-gateway.yaml, docs/audit/M26C_MARKDOWN_INVENTORY.csv, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md, docs/audit/M26C_DOC_DRIFT_LEDGER.md, docs/audit/M26C_MERMAID_INVENTORY.csv, configs/root_task*.toml, configs/generated/root_task_resolved.json, docs/snippets/*.md, current CLI help, source/tests, current target-qualified evidence, and the Milestone 26d Pi 4 proof boundary.
+Changes:
+  - README.md — present current scope, evidence status, supported targets, safe getting-started paths, and a categorized documentation map without release or hardware overclaiming.
+  - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURE9P.md + docs/ROLES_AND_SCHEDULING.md + docs/DRIVERS.md — establish non-overlapping ownership for architecture, external contracts, protocol invariants, role/scheduling policy, and physical-driver methodology.
+  - docs/USERLAND_AND_CLI.md + docs/HOST_TOOLS.md + docs/API_GUIDELINES.md + docs/PYTHON_SUPPORT.md + docs/FAILURE_MODES.md + docs/OPERATOR_WALKTHROUGH.md — establish one operator journey, one tool catalogue, and cross-referenced API, Python, and recovery guidance grounded in current command help and fixtures.
+  - resources/openapi/hive-gateway.yaml + docs/HOST_API.md — correct the machine-readable placement of the existing optional `TAIL lines` query and replace the stale duplicated schema mirror with a concise link-backed operator reference, without changing gateway behavior.
+  - docs/USE_CASES.md + docs/HARDWARE_BRINGUP.md + docs/BOOT_REFERENCE.md + docs/GPU_NODES.md + docs/BENCHMARKS.md — separate implemented capability, current proof, historical evidence, candidate deployment patterns, and planned work; keep flash, current-image boot, transport, and benchmark proof lanes distinct.
+  - docs/BUILD_PLAN.md — record this restoration-only scope and return 26c to `Complete` only after every check below passes.
+  - Canonical Mermaid blocks — retain only diagrams that materially clarify an as-built boundary or sequence; validate both syntax and semantic ownership against code, manifests, and current evidence.
+  - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md + docs/audit/M26C_DOC_DRIFT_LEDGER.md + docs/audit/M26C_MERMAID_INVENTORY.csv + docs/audit/M26C_MERMAID_GITHUB_RENDER_AUDIT.md + docs/audit/M26C_AGENT_HANDOFFS.md + docs/audit/M26C_SIMPLICITY_SCORECARD.md — refresh the live audit records with source anchors, before/after size and ownership evidence, lane handoffs, and the final Mermaid inventory/render result.
+Commands:
+  - git ls-files '*.md' | sort > out/audit/m26c-doc-remediation-markdown.txt
+  - scripts/ci/mermaid_inventory.py --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out docs/audit/M26C_MERMAID_INVENTORY.csv
+  - scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt
+  - scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out out/audit/m26c-doc-remediation-mermaid-rendered
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+  - scripts/ci/test_plan_run.sh --list
+  - cargo check --workspace
+  - cargo test -p hive-gateway
+  - git diff --check
+Checks:
+  - Every directly linked canonical document has one stated purpose, an explicit as-built or planning boundary, retained 2026 Lukas Bower metadata, and useful cross-references instead of copied contracts.
+  - Selected-profile manifests, resolved output, generated snippets, current source/tests, and target-qualified evidence remain authoritative; generated snippets are linked or reproduced only through their generator and are not hand-edited.
+  - Current QEMU evidence, accepted historical Pi 4 evidence, current-image Pi 4 revalidation, Wi-Fi research status, host-only integrations, and future milestones are never presented as interchangeable proof.
+  - All local links and referenced anchors resolve, code fences are balanced, Markdown is structurally consistent, and every active Mermaid block passes the GitHub compatibility checker plus an available CLI render pass.
+  - No runtime command, endpoint implementation, namespace, ACK/ERR/END behavior, authority path, release snapshot, or hardware acceptance state changes under the documentation rewrite; the OpenAPI correction describes existing handler behavior.
+Deliverables:
+  - A reviewable README-linked documentation suite with clear information ownership, materially less repetition, complete GitHub-compatible diagrams, and validation evidence.
 
 Title/ID: m26c-runtime-boundary-and-semantic-parity-audit
 Goal: Document the intentional host `std` / VM `no_std` runtime split and prove overlapping NineDoor semantics remain aligned without runtime convergence.
@@ -7652,7 +7725,11 @@ Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM
 - QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
 
 ### Prerequisite
-- Milestone **26c** completed (target-qualified test-plan runner, docs-as-built audit, refactor map, risk-ratchet baseline, and no-std boundary evidence available).
+- The original Milestone **26c** runtime/refactor closure is accepted
+  (target-qualified test-plan runner, docs-as-built audit, refactor map,
+  risk-ratchet baseline, and no-std boundary evidence available). Its later
+  documentation-only remediation may run concurrently and does not invalidate
+  those accepted prerequisite artifacts.
 - Reopened Milestones **26a** and **26b** completed or explicitly scoped where their driver-task and benchmark artifacts are inputs to the kernel refresh; no isolated runtime performance assumption may be rewritten under the kernel-refresh label.
 
 ### Goal

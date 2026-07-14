@@ -4,7 +4,7 @@
 
 # M26C Simplicity Scorecard
 
-Status: `COMPLETE / BROADER-CLEANUP-DEFERRED`
+Status: `COMPLETE / DOC-SUITE-PASS / BROADER-CLEANUP-DEFERRED`
 
 This scorecard records cleanup backed by 26c characterization and staged-run
 evidence. Broader host, root-task, and Pi 4 cleanup waves remain deferred
@@ -19,3 +19,12 @@ outside 26c until their own preserved-contract evidence is present.
 | Host tools | Refactor candidates not characterized | Collapse duplication only with tests | Pending accepted wave | Deferred |
 | Root-task adapters | Large boundary-sensitive modules | Split only after parity/no-std gates | Pending accepted wave | Deferred |
 | HAL/network/local-seat | Complex Pi proof lanes | Extract only after runtime/DMA and hardware evidence | Final Pi GENET proof exists; extraction remains outside 26c | Deferred |
+| README-linked narrative suite | 11,227 lines across `README.md` and 16 focused narrative documents | Remove repetition while retaining generated mirrors, contracts, runbooks, and proof boundaries | 4,615 lines; 6,612 fewer lines (58.9% reduction) | Done |
+| Full README-linked suite | 23,246 lines including the 12,019-line historical `BUILD_PLAN.md` ledger | Improve the active entry point and contracts without rewriting historical authorization records | 16,711 lines; 6,535 fewer lines (28.1% reduction); historical plan detail retained | Done |
+| Suite diagrams | 18 diagrams across the active README-linked suite; 84 tracked blocks repository-wide | Keep one diagram only where it clarifies an owned boundary or sequence | Nine suite diagrams; 75 tracked blocks; all 75 rendered | Done |
+| Contract ownership | Architecture, interface, protocol, role, driver, host, and operator explanations overlapped | One owning document per contract with explicit source maps and cross-references | Ownership tables in `README.md`; exact compiler-generated mirrors retained only where tests require them | Done |
+
+The full-suite reduction is intentionally smaller because `BUILD_PLAN.md` is a
+normative authorization and historical status ledger. The remediation changed
+its current scope and stale product-facing wording but retained its audit
+history instead of treating it as general narrative prose.

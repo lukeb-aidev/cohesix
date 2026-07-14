@@ -8,15 +8,15 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 
 ## Summary
 
-- tracked Markdown files: 186
+- tracked Markdown files: 203
 - append-only audit evidence: 4
 - external reference mirror: 2
 - generated report: 1
 - generated snippet: 18
 - human-edited canonical source: 43
-- live audit register: 8
+- live audit register: 24
 - release snapshot: 72
-- vendored reference: 38
+- vendored reference: 39
 
 ## Disposition Rules
 
@@ -81,6 +81,22 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `docs/audit/DUE_DILIGENCE_PLAN.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/EXCEPTIONS.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/M26B_COMPLETION_EVIDENCE.md` | append-only audit evidence | audit-owner | append only with dated evidence; do not rewrite for style |
+| `docs/audit/M26C_AGENT_HANDOFFS.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_AGENT_RUNNER_HANDOFF.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_AI_FINGERPRINT_AUDIT.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_AS_BUILT_BLOCKERS.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_DOC_DRIFT_LEDGER.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_MARKDOWN_INVENTORY.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_MERMAID_GITHUB_RENDER_AUDIT.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_NINEDOOR_PARITY_MATRIX.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_POST_BEHAVIOR_BASELINE.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_REFACTOR_MAP.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_REFACTOR_OWNERSHIP.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_RUNTIME_BOUNDARY_AUDIT.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_SIMPLICITY_SCORECARD.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26C_TARGET_RUNNER_BASELINE.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26D_SEL4_15_PROVENANCE.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/PI4_ROOT_OWNED_DRIVER_INVENTORY.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/checklists/ARCHITECTURE_CHECKLIST.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md` | live audit register | audit-owner | update only with matching evidence command |
@@ -180,6 +196,7 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `seL4/seL4-manual-latest.md` | external reference mirror | kernel-reference-owner | inventory only; update through accepted seL4 reference refresh |
 | `tests/integration/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `third_party/raspberry-pi-firmware/v1.50/Readme.md` | vendored reference | external-reference-owner | inventory only; update through upstream vendor import |
+| `third_party/raspberry-pi-firmware/v1.50/firmware/cyw43455-linux-capture/README.md` | vendored reference | external-reference-owner | inventory only; update through upstream vendor import |
 | `third_party/u-boot/lib/mbedtls/external/mbedtls/3rdparty/everest/README.md` | vendored reference | external-reference-owner | inventory only; update through upstream vendor import |
 | `third_party/u-boot/lib/mbedtls/external/mbedtls/3rdparty/p256-m/README.md` | vendored reference | external-reference-owner | inventory only; update through upstream vendor import |
 | `third_party/u-boot/lib/mbedtls/external/mbedtls/3rdparty/p256-m/p256-m/README.md` | vendored reference | external-reference-owner | inventory only; update through upstream vendor import |

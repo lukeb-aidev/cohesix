@@ -1,423 +1,228 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Define Cohesix benchmark methodology, evidence lanes, report schema, and rolling performance interpretation. -->
+<!-- Purpose: Define Cohesix benchmark methodology, evidence qualification, artifact requirements, and current findings. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarking
 
-This document defines how Cohesix performance evidence is produced, read, and
-acted on. It is written for engineers who need to run benchmarks, compare
-results across milestones, and decide whether a result exposes a defect or a
-justified cost of additional system complexity.
+Cohesix benchmarks measure a bounded control plane, not an unconstrained
+throughput service. A valid result preserves the same tickets, namespace
+semantics, audit behavior, backpressure, console grammar, and target ownership
+model used in normal operation.
 
-Benchmarking Cohesix is not a single throughput race. Cohesix is a bounded
-control-plane OS with append-only authority surfaces, Secure9P semantics,
-role-scoped tickets, explicit backpressure, isolated driver runtimes, and
-operator-liveness requirements. A useful benchmark must therefore preserve the
-system contract while measuring where time, errors, queueing, and capacity are
-spent.
+This document owns benchmark methodology and qualified findings. Target boot
+and device proof belongs in [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md), staged
+acceptance in [TEST_PLAN.md](TEST_PLAN.md), and milestone authorization in
+[BUILD_PLAN.md](BUILD_PLAN.md).
 
 ## Active Scope
 
-The current benchmark lane is Milestone 26d,
-`m26d-benchmark-revalidation-and-tuning`: revalidate and, where safe, recover
-the accepted 26b REST/driver-runtime benchmark envelope on the seL4 15
-baseline. Harness changes made in this lane may improve provenance, strictness,
-classification, and reportability. They must not relax the workload contract,
-hide errors, bypass Secure9P, or turn benchmark-only shortcuts into production
-semantics.
+The active performance task is Milestone 26d,
+`m26d-benchmark-revalidation-and-tuning`. It may improve provenance,
+classification, strictness, and bounded implementation defects exposed by the
+same workload. It must not relax error accounting, change authority semantics,
+hide `buffer-full`, or convert a benchmark shortcut into production behavior.
 
-Post-26d work uses the accepted 26d evidence as the rolling comparison point.
-Later milestones decide whether they need a full same-harness benchmark,
-targeted microbenchmark, or no runtime benchmark according to
-`docs/BUILD_PLAN.md`.
+## Current Qualified State
 
-## Benchmarking Philosophy
+| Evidence | Qualification |
+| --- | --- |
+| Current QEMU Test Plan | Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. This qualifies the current QEMU regression environment, not a mixed-load numerical baseline. |
+| Focused seL4 15 QEMU read microbenchmarks | The retained M26d provenance ledger records status-suite runs and their exact artifacts. Telemetry was skipped because the selected run exposed no discoverable worker entries. These results qualify only the measured status read path. See [M26D_SEL4_15_PROVENANCE.md](audit/M26D_SEL4_15_PROVENANCE.md). |
+| Historical Pi 4 wired GENET | M26c retains a coherent GENET Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. It is accepted historical target readiness, not current-tree throughput proof. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). |
+| Current Pi 4 source | Pi-qualified offline Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. No current-tree live Pi benchmark is qualified. |
+| Current Pi 4 Wi-Fi | Rebuild, flash/readback, current-image association, EAPOL, DHCP, ARP, raw TCP, authenticated `cohsh`, and repeatability revalidation remain pending. Any older Wi-Fi performance result is diagnostic or historical. |
 
-### Preserve Semantics
+No current mixed-load `simulate` worker envelope is accepted by this document.
+The former 1500-worker result and later local 400/600/1200-worker observations
+lack a retained, current, fully qualified artifact index here. They may guide a
+new experiment but must not be quoted as the active capacity limit.
 
-Benchmarks must run through the same authority path as normal users:
-authenticated `cohsh`/TCP, `hive-gateway`, Secure9P files, append-only control
-nodes, read-only `/proc` nodes, and manifest-defined bounds. A faster result
-that drops audit lines, coalesces append-only writes without a documented
-contract, changes ACK/ERR/END behavior, or masks backpressure is invalid.
+## Qualification Rules
 
-### Compare Like With Like
+Every performance claim must identify:
 
-Every performance claim must state the workload, target, transport, seL4
-baseline, manifest, gateway settings, worker envelope, request mix, retry
-policy, error budget, and artifact path. QEMU, Pi 4 GENET, Pi 4 Wi-Fi, direct
-TCP, REST, UI, storage, and host-tool microbenchmarks are separate proof lanes.
-They can explain each other; they cannot substitute for each other.
+- milestone task and harness version or commit;
+- target and transport: QEMU, Pi GENET, Pi Wi-Fi, direct TCP, REST, or host-only;
+- selected seL4 build and manifest fingerprint;
+- workload mode, operation mix, worker range, intensity, duration, random seed,
+  target RPS, and maximum in-flight requests;
+- gateway bind, session pools, timeouts, cache settings, and auth mode;
+- retry policy and whether `buffer-full` is counted as an error;
+- overall and per-operation success, errors, latency, and throughput;
+- backpressure counter deltas;
+- exact summary, log, target-proof, and comparator artifact paths.
 
-### Measure Reliability And Latency Together
-
-Throughput without error rate is not a pass. Error rate without latency hides
-operator pain. Low latency with uncontrolled refusal can be correct under
-overload, but only when the refusal is deterministic and accounted for.
-Benchmark reports must include:
-
-- successful and failed operations;
-- overall and per-operation error rate;
-- average, p50, p90, p95, p99, min, and max latency;
-- target and observed throughput;
-- configured and observed concurrency;
-- gateway, VM, and target backpressure counters when available;
-- top failing operations and top latency contributors.
-
-### Treat Complexity Honestly
-
-The old 1500-worker QEMU benchmark was taken when Cohesix had a simpler
-surface. Since then, Cohesix has gained more namespaces, policy gates,
-telemetry/lease/schedule controls, root-task audit behavior, host projections,
-driver-runtime evidence, and seL4 15 compatibility work. Higher latency or a
-lower worker ceiling can be acceptable when the added work is real and bounded.
-It is not acceptable when the cause is stale sessions, avoidable gateway
-blocking, broken cache behavior, unbounded retries, or an unintended queue.
-
-### Action The Moved Layer
-
-A benchmark result is useful only when it identifies the layer that moved:
-client load generation, gateway queueing, gateway session pool, Secure9P
-transport, root-task authority, VM control rings, driver runtime, physical
-network, target timer, or UI/rendering. Fix defects in that layer. Do not tune
-another layer to hide the symptom.
+If any field needed to reproduce or interpret a result is missing, label the
+result **diagnostic**, not accepted.
 
 ## Evidence Lanes
 
 | Lane | Proves | Does not prove |
 | --- | --- | --- |
-| QEMU REST | Semantic capacity, gateway behavior, VM control-plane limits, same-harness regression stability. | Pi 4 physical-network latency, GENET/CYW43 driver health, HDMI/USB operator liveness. |
-| QEMU direct TCP or `cohsh` | Console transport health, ACK/ERR/END stability, baseline command latency without REST overhead. | REST gateway overhead or browser/UI behavior. |
-| Pi 4 GENET REST | Production Pi 4 throughput and latency for the wired transport, when paired with fresh serial/runtime proof. | Wi-Fi production capacity or QEMU-loopback parity. |
-| Pi 4 Wi-Fi REST | CYW43/SDIO research envelope, field diagnostics, physical-link failure modes. | Production high-concurrency capacity unless a site-specific Wi-Fi envelope is freshly accepted. |
-| Pi 4 serial/USB/HDMI proof | Operator liveness and local-seat behavior under load. | REST throughput by itself. |
-| Driver-runtime counters | Where target service turns spend time and where bounded backpressure occurs. | Fresh boot proof or user-visible throughput without a same-harness run. |
-| Gateway microbenchmarks | REST projection overhead, auth/policy additions, queue behavior, protocol adapters. | Full target throughput unless they expose a runtime-path regression that triggers a full rerun. |
-| Host-tool/UI microbenchmarks | Field-tool latency, report rendering, replay or visualization cost. | VM or hardware transport capacity. |
+| QEMU REST `simulate` | Gateway plus VM mixed-workload capacity, cardinality limits, bounded refusal, and same-harness regressions. | Pi physical-network or local-seat behavior. |
+| QEMU direct TCP or `cohsh` | Console and grammar latency without REST projection. | Gateway, browser, or hardware transport cost. |
+| REST `perf` | Sequential-versus-parallel status or telemetry read behavior. | Worker-scale mixed mutation capacity. |
+| Pi GENET | Wired target latency and throughput only when paired with fresh current-image runtime, network, raw TCP, and `cohsh` proof. | Wi-Fi capacity or QEMU parity. |
+| Pi Wi-Fi | Site-specific CYW43/SDIO behavior and failure modes with paired packet evidence. | Wired capacity or a general production envelope. |
+| Driver-runtime counters | Service-turn, deadline, ring, IRQ, and bounded-backpressure attribution. | User-visible throughput without a same-boot workload. |
+| Host microbenchmark | Gateway, parser, report, replay, or UI cost outside the VM. | VM or physical-target capacity. |
 
-## System Areas Tested
+Lanes may explain one another, but they are not interchangeable.
 
-Benchmarks should be selected according to the changed surface:
+## Canonical Tools
 
-- **Gateway and REST projection:** request admission, broker queues, session
-  pool, cache behavior, control-write retry policy, HTTP status mapping, auth
-  overhead.
-- **Secure9P and console transport:** frame bounds, tag/window behavior,
-  fid lifecycle churn, ACK/ERR/END grammar, direct TCP liveness.
-- **Root-task authority:** append-only control processing, policy gates,
-  schedule/lease/export control files, `/proc` snapshots, audit logging.
-- **Worker scale:** spawn/kill/list behavior, worker telemetry reads, worker
-  namespace listing, worker-cap refusal.
-- **Telemetry ingest:** segment creation, append bandwidth, tail/readback,
-  quota refusals, cursor behavior.
-- **Lease and schedule controls:** grant/preempt/quota/schedule pressure,
-  buffer-full accounting, deterministic refusal shape.
-- **Pi 4 runtime and networking:** GENET/CYW43/SDIO/USB/HDMI/serial service
-  turns, DMA/runtime proof, timer/counter validity, DHCP/static-IP evidence.
-- **Operator liveness:** serial first, local-seat USB keyboard second, HDMI
-  feedback third, authenticated TCP shell priority when active.
-- **Future host/UI surfaces:** gateway authority, MCP/A2A projections,
-  Live Hive render cadence, evidence-pack export, field-tool read latency.
-
-## Canonical Scripts
-
-| Script | Use |
+| Tool | Purpose |
 | --- | --- |
-| `scripts/rest_perf_harness.py` | Primary REST and direct performance harness. Use `--mode simulate` for mixed REST load and `--mode perf` for sequential-vs-parallel status/telemetry latency. |
-| `scripts/pi4_compare_driver_models.py` | Compare matched QEMU and Pi artifacts and reject workload/provenance mismatches. |
-| `scripts/pi4_trace_normalize.py` | Normalize Pi serial evidence and extract driver/runtime/counter proof fields. |
-| `scripts/pi4_gate_proof.sh` | Produce target-qualified Pi 4 proof bundles after fresh serial evidence passes normalization. |
-| `scripts/ci/test_plan_run.sh` | Target-qualified staged regression runner; use it when benchmark evidence must be tied to a full test-plan lane. |
-| `scripts/check-generated.sh` | Guard generated artifacts after manifest or generated-output changes. |
+| `scripts/rest_perf_harness.py --mode simulate` | Mixed REST load, worker cardinality, mutation/read pressure, and QEMU/Pi same-harness runs. |
+| `scripts/rest_perf_harness.py --mode perf` | Sequential-versus-parallel status and telemetry read microbenchmarks. |
+| `scripts/pi4_compare_driver_models.py` | Reject mismatched QEMU/Pi comparison metadata and compare accepted model lanes. |
+| `scripts/pi4_trace_normalize.py` | Extract current-boot Pi device, network, timer, and driver proof. |
+| `scripts/pi4_gate_proof.sh` | Produce fail-closed Pi target proof from a fresh serial capture. |
+| `scripts/ci/test_plan_run.sh` | Qualify the source and target environment around a benchmark. |
 
-## REST Harness Modes
+## Harness Artifacts
 
-### `--mode simulate`
+`simulate` writes a stable set under the chosen `--log-dir` and prefix:
 
-`simulate` drives a mixed REST workload against `hive-gateway`. It can launch a
-local QEMU plus gateway or attach to an existing gateway with `--no-qemu` and
-`--no-gateway`. It writes:
-
-- `<prefix>.log`: timestamped run log;
-- `<prefix>.summary.json`: canonical machine-readable benchmark result;
-- `<prefix>.ops.csv`: per-operation metrics for quick plotting;
-- `<prefix>.ramp.csv`: ramp-step metrics for time-series plots;
-- `<prefix>.ramp.svg`: lightweight visual smoke artifact.
-
-Use this mode for worker cardinality, high-pressure mixed operations,
-lease/schedule/telemetry pressure, and QEMU/Pi same-harness comparison.
-
-### `--mode perf`
-
-`perf` measures sequential and parallel status/telemetry reads. It is a
-microbenchmark for gateway/read-path latency, not a worker-scale proof. It is
-useful before and after gateway, auth, cache, or read-only namespace changes.
-
-## Summary JSON Is The Source Of Truth
-
-The `*.summary.json` file should contain every field needed to reproduce a
-benchmark report. CSV and SVG files are projections for convenience. A report
-or dashboard should load JSON first and derive all charts from it.
-
-The current REST harness writes a `report` object with schema
-`cohesix-benchmark-report/v1`:
-
-| Field | Meaning |
+| Artifact | Use |
 | --- | --- |
-| `report.workload` | Mode, scenario, worker range, intensity, base RPS, target RPS bounds, duration, retry policy, strictness, configured max in-flight requests. |
-| `report.throughput` | Observed total, OK, and error operations per second. |
-| `report.latency` | Overall average, min, max, p50, p90, p95, and p99 latency. |
-| `report.reliability` | Count, OK, error, error rate, error budget, pass/fail. |
-| `report.concurrency` | Configured max in-flight, observed high water, submitted/completed operations, and final in-flight count. |
-| `report.backpressure` | Gateway counter deltas: pool exhaustion, checkout retries, timeout rejections, control-write retryable errors/retries/exhaustions, retry sleep, cache hits/misses. |
-| `report.top_operations_by_p95` | Highest p95 latency contributors. |
-| `report.top_operations_by_error_rate` | Highest error-rate contributors. |
-| `report.visualization` | Stable series names and recommended chart types. |
+| `<prefix>.summary.json` | Canonical machine-readable result. |
+| `<prefix>.log` | Timestamped execution and failure detail. |
+| `<prefix>.ops.csv` | Per-operation projection for analysis. |
+| `<prefix>.ramp.csv` | Time-series ramp projection. |
+| `<prefix>.ramp.svg` | Quick visual smoke output; never the sole evidence. |
 
-The top-level legacy-compatible fields remain available: `overall`,
-`operations`, `ramp`, `gateway_status_start`, `gateway_status_end`, and
-`gateway_status_delta`.
+The summary contains `cohesix-benchmark-report/v1`. Review its workload,
+throughput, latency, reliability, concurrency, backpressure,
+`top_operations_by_p95`, and `top_operations_by_error_rate` fields. Legacy
+top-level fields are compatibility projections; derive decisions from the
+versioned report object.
 
-## Visualization Guidance
+`perf` writes a `*.perf-summary.json` artifact. Always state that it is a read
+microbenchmark and name whether status, telemetry, or both suites ran.
 
-A world-class benchmark report should show the shape of the run, not just the
-final score. Recommended charts:
+## Running a Mixed REST Benchmark
 
-1. **Worker count and target pressure over time:** `ramp.workers`,
-   `ramp.rps`, and `ramp.max_inflight_observed`.
-2. **Observed throughput vs target pressure:** `ramp.throughput_ops_s` and
-   `ramp.rps`.
-3. **Reliability envelope:** `ramp.err_rate` with a horizontal error-budget
-   line, plus final `report.reliability.error_rate`.
-4. **Latency envelope:** overall p50/p90/p95/p99 and per-operation p95 bars
-   from `operations`.
-5. **Backpressure attribution:** gateway counter deltas from
-   `report.backpressure`, grouped as queue, pool, timeout, control-write, and
-   cache counters.
-6. **Failure taxonomy:** top error strings by operation, preserving VM
-   `ERR` details and HTTP status.
-7. **Target comparison:** QEMU vs Pi GENET vs Pi Wi-Fi in separate lanes with
-   matched workload metadata visible.
-
-Do not plot a single "score" without the supporting error, latency, and
-backpressure panels. Cohesix intentionally refuses work when bounded queues or
-VM control buffers are full; that refusal is part of the contract and must be
-visible.
-
-## Current 26d Findings
-
-### Historical 1500-Worker Context
-
-The historical M25b QEMU result at 1500 workers remains useful as context, but
-it is retired as an active target. It measured an earlier, less complex
-Cohesix. The old raw artifacts under `docs/bench/` have been removed so they
-are not mistaken for current seL4 15 rolling baselines.
-
-The best historical fixed-1500 QEMU result was approximately:
-
-- `1500` workers;
-- `1m` duration;
-- `base_rps=0.1`, intensity `1`;
-- about `7356` total operations;
-- about `0.068%` errors;
-- average latency about `2.9 ms`;
-- p95 latency about `6.1 ms`.
-
-Those numbers should not be used as the pass/fail bar for the current
-seL4 15 system without accounting for the added control-plane and proof
-surfaces.
-
-### Defects Found And Fixed
-
-The seL4 15 revalidation found a real gateway-side defect class before the
-current results were accepted: stale connection/pool state and cache hits that
-could be blocked behind reconnect behavior. The safe fix was gateway-local:
-
-- shut down the stale session pool after ping failure;
-- serve valid cached `/proc` reads/lists before requiring reconnect;
-- increase the bounded `/proc` cache TTL to `2000 ms`.
-
-This changed latency and reliability without changing Secure9P semantics,
-control-file behavior, error budgets, or the benchmark workload.
-
-### Current QEMU Envelope
-
-Accepted current QEMU evidence supports these practical limits for the mixed
-REST harness:
-
-| Workload | Result | Interpretation |
-| --- | --- | --- |
-| `600` workers, intensity `10`, `base_rps=0.1`, target about `600 RPS`, `max_inflight=64`, `2m` | PASS, error rate about `0.87%`, overall p95 about `22 ms`. | Realistic high-pressure aggregate target for the current mixed workload. |
-| `400` workers, intensity `10`, `base_rps=0.2`, target about `800 RPS` | FAIL, error rate slightly above the `1%` budget. | Current quota/control pressure limit is below this target for the mixed workload. |
-| `1200` workers, intensity `4`, `base_rps=0.1`, target about `480 RPS` | PASS, error rate below `1%`, p95 about `23 ms`. | Realistic high-cardinality target for the current QEMU profile. |
-| `1300-1500+` workers under high load | Degrades through quota/control buffer pressure and worker-capacity timeouts. | 1500 workers is no longer a realistic high-load target for current Cohesix complexity. |
-
-The dominant remaining failure class is `lease_quota` on `/queen/lease/ctl`
-returning VM `buffer-full`. Other operations stayed clean in the accepted
-high-pressure run. Gateway counters showed no pool exhaustion, no checkout
-retries, and no timeout rejections, so the remaining limit is not a host
-session-pool bottleneck.
-
-### Latency Interpretation
-
-The accepted QEMU p95 latency near `22 ms` is higher than the old M25b
-loopback result, but it is consistent with a more complex control plane under
-mixed high pressure. The important distinction is cause:
-
-- gateway stale-session/cache defects were fixed;
-- retrying VM `buffer-full` quota writes was tested and rejected because it
-  worsened latency and error rate while producing no successful retries;
-- remaining `lease_quota` errors are fast deterministic refusals from bounded
-  VM pressure, not slow hidden timeouts;
-- telemetry and log-tail p95 values in the accepted run remained bounded in
-  the tens of milliseconds.
-
-Higher latency is acceptable when it comes from real audited control-plane work
-and bounded refusal. It is not acceptable when it comes from accidental retries,
-stale pools, unbounded queues, or cache misses that should have been local.
-
-## Running A Same-Harness QEMU Benchmark
-
-Build the VM first with the selected seL4 build directory. Then run the harness
-with explicit workload, retry, and artifact settings. Example high-pressure
-QEMU run:
+First establish an accepted QEMU or physical-target boot and a gateway backed
+by that target. Configure real secrets through environment variables rather
+than command arguments:
 
 ```bash
+test -n "${COH_AUTH_TOKEN:?set the target console secret}"
+test -n "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set the REST mutation token}"
+test -n "${COH_REST_URL:?set the accepted gateway URL}"
+
 python3 scripts/rest_perf_harness.py \
   --mode simulate \
-  --qemu-run /path/to/qemu/run.sh \
-  --gateway-bin target/debug/hive-gateway \
-  --auth-token bootstrap \
-  --request-auth-token stage4-rest-token \
-  --workers-min 600 --workers-max 600 \
-  --intensity-min 10 --intensity-max 10 \
+  --no-qemu \
+  --no-gateway \
+  --rest-url "$COH_REST_URL" \
+  --workers-min 100 \
+  --workers-max 100 \
+  --intensity-min 4 \
+  --intensity-max 4 \
   --duration-mins 2 \
   --base-rps 0.1 \
-  --max-inflight 64 \
+  --max-inflight 32 \
+  --seed 26 \
+  --no-transient-retries \
+  --strict-control-errors \
   --error-budget-rate 0.01 \
-  --summary-max-error-lines 2000 \
-  --log-dir logs/bench \
-  --log-prefix m26d_qemu_sel415_fixed600_i10
+  --log-dir out/bench \
+  --log-prefix candidate-fixed100-i4
 ```
 
-For a lower-worker, higher-pressure probe, keep the worker count fixed and
-raise `--base-rps`:
+The numbers above define an example workload, not an accepted Cohesix target.
+Change one dimension at a time and retain the complete report for every
+candidate envelope.
+
+For a focused read-path run:
 
 ```bash
 python3 scripts/rest_perf_harness.py \
-  --mode simulate \
-  --qemu-run /path/to/qemu/run.sh \
-  --gateway-bin target/debug/hive-gateway \
-  --auth-token bootstrap \
-  --request-auth-token stage4-rest-token \
-  --workers-min 400 --workers-max 400 \
-  --intensity-min 10 --intensity-max 10 \
-  --duration-mins 2 \
-  --base-rps 0.2 \
-  --max-inflight 64 \
-  --error-budget-rate 0.01 \
-  --summary-max-error-lines 2000 \
-  --log-dir logs/bench \
-  --log-prefix m26d_qemu_sel415_fixed400_i10_rps800
+  --mode perf \
+  --suite all \
+  --runs 5 \
+  --no-qemu \
+  --no-gateway \
+  --rest-url "$COH_REST_URL" \
+  --log-dir out/bench \
+  --log-prefix candidate-read-path
 ```
 
-## Running Pi 4 Benchmarks
+## Pi 4 Preconditions
 
-Pi 4 benchmarks require target proof in addition to REST artifacts. A Pi REST
-summary without fresh target evidence is a diagnostic run, not hardware
-acceptance.
+A Pi result is not interpretable until the same boot proves:
 
-Required proof lanes:
+- exact read-back build marker and selected Pi manifest;
+- valid virtual-counter frequency and no dummy timer;
+- isolated runtime owner-state, DMA, ring, and driver counter proof;
+- current serial prompt and input responsiveness for in-scope operator surfaces;
+- selected GENET or Wi-Fi link, address, and bidirectional packet evidence;
+- raw TCP and authenticated `cohsh` before REST;
+- boot-paired packet capture and normalized proof bundle;
+- target-qualified Test Plan state appropriate to the claim.
 
-- fresh non-empty serial log for the boot being benchmarked;
-- selected seL4 15 Pi build tree and timer/counter configuration;
-- `DRIVER_TASK_OWNER_STATE_PROOF=yes`;
-- valid `DRIVER_TASK_COUNTER_*` snapshots with invalid count zero;
-- runtime/DMA proof from `scripts/pi4_gate_proof.sh`;
-- GENET or Wi-Fi link proof, including DHCP/static-IP evidence;
-- raw direct `cohsh`/TCP liveness before REST interpretation;
-- serial, USB/local-seat, and HDMI liveness under load when those surfaces are
-  in scope.
+For Wi-Fi, additionally require the current DPC/IRQ proof, association and host
+EAPOL completion, DHCP, ARP/data progress, and accepted same-image repeatability.
+Do not substitute a historical wired boot, another Wi-Fi image, or ambient
+traffic for the benchmark boot.
 
-Use Pi Wi-Fi only for the Wi-Fi research/diagnostic lane unless a fresh
-site-specific Wi-Fi envelope is accepted. Production high-concurrency Pi
-capacity should use GENET.
+## Reading a Result
 
-## Actioning Benchmark Insights
+Review in this order:
 
-Use this decision path after every material run:
+1. **Provenance:** reject stale, mismatched, or incomplete artifacts.
+2. **Reliability:** compare total and per-operation error rate with the declared
+   budget. Preserve exact `ERR` and HTTP classifications.
+3. **Bounded refusal:** distinguish gateway pool/timeout pressure from VM
+   `buffer-full`, driver-ring pressure, and physical-link failures.
+4. **Latency:** inspect p50, p90, p95, and p99 overall and by operation. A single
+   overall percentile can hide one pathological control path.
+5. **Throughput and concurrency:** compare observed work with target pressure
+   and the maximum in-flight high-water mark.
+6. **Target health:** correlate the workload with console, driver, network, and
+   local-seat counters from the same run.
+7. **Moved layer:** name the client, gateway, Secure9P, root-task, driver
+   runtime, physical transport, or presentation layer that changed.
 
-1. **Validate provenance.** Confirm target, seL4 version, manifest, workload,
-   retry policy, duration, RPS target, max in-flight, and artifact paths.
-2. **Check reliability first.** If error rate exceeds budget, inspect the top
-   failing operations and exact error strings before reading throughput.
-3. **Classify backpressure.** Gateway pool/checkout/timeouts point to
-   `hive-gateway`; VM `buffer-full` points to bounded root-task/control-ring
-   pressure; target counters point to driver-runtime or physical-link pressure.
-4. **Read latency by operation.** Overall p95 can hide a single expensive
-   control path. Use per-operation p95 and top error-rate tables.
-5. **Separate capacity shapes.** High worker count with low pressure tests
-   namespace/cardinality. Low worker count with high pressure tests aggregate
-   control-plane throughput. Both are useful and neither replaces the other.
-6. **Fix only the moved layer.** Do not increase queues, add retries, or lower
-   workload pressure unless evidence shows that is the correct layer and the
-   system contract allows it.
-7. **Rerun the same harness.** A fix is accepted only when the same workload
-   and report fields show the movement.
+Do not reduce a run to one score. A useful report shows pressure over time,
+observed throughput, error budget, latency percentiles, backpressure deltas, and
+top failing operations.
 
-## Safe And Unsafe Performance Changes
+## Safe Interpretation and Tuning
 
-Safe changes usually have these properties:
+Acceptable tuning preserves all authority and proof semantics. Examples include
+closing stale sessions deterministically, serving valid read-only cache entries
+without blocking behind reconnect, reducing avoidable copies, or rate-limiting
+nonessential output under load.
 
-- preserve append-only control history and audit shape;
-- preserve ACK/ERR/END and HTTP error mapping;
-- improve local caching without hiding mutating state;
-- close stale sessions or stale pools deterministically;
-- add counters, provenance, or report fields without changing workload;
-- reduce nonessential output under load while preserving operator liveness.
+Do not accept a result produced by:
 
-Unsafe changes include:
+- retrying or hiding `buffer-full` without accounting for every attempt;
+- widening queues or timeouts without evidence that the bounded layer is wrong;
+- changing the operation mix while calling it the same workload;
+- dropping audit, ticket, or receipt work;
+- relaxing ACK/ERR/END or Secure9P behavior;
+- using QEMU, Wi-Fi, or host-only evidence as a proxy for another lane;
+- quoting an unarchived local run as the canonical baseline.
 
-- transparent coalescing of `/queen/lease/ctl` quota writes without a new
-  documented API/audit contract;
-- broad gateway queue or pool increases when counters show no gateway
-  starvation;
-- retrying VM `buffer-full` writes when success-after-retry remains zero;
-- changing the operation mix to make a result pass while calling it the same
-  benchmark;
-- treating Wi-Fi stress diagnostics as GENET production capacity;
-- using stale local runs as active baselines.
+## Acceptance Checklist
 
-## Artifact Retention
+A benchmark is ready for documentation only when all answers are explicit:
 
-Raw benchmark outputs belong under `logs/bench/` or `out/bench/` during
-iteration. Accepted benchmark reports should cite the exact summary JSON path,
-log path, target proof bundle, manifest/seL4 provenance, and any comparator
-output. Commit raw artifacts only when the active milestone explicitly requires
-checked-in evidence; otherwise keep the benchmark document as the reviewed
-interpretation layer and avoid carrying stale historical artifacts in
-`docs/bench/`.
+- What exact workload, target, transport, manifest, and seL4 build were used?
+- Which `*.summary.json` or `*.perf-summary.json` is canonical?
+- Did the target proof and raw console pass on the same boot?
+- What were success, error rate, latency percentiles, throughput, and observed
+  concurrency overall and per operation?
+- Which backpressure counters moved, and which layer owns them?
+- Were retries disabled or completely reported?
+- Does the comparator have matching workload and provenance?
+- Is the conclusion an accepted baseline, a diagnostic, an overload boundary,
+  or a blocker?
+- What exact engineering or operating decision follows?
 
-The old M25b raw artifacts in `docs/bench/` were removed as part of the 26d
-benchmark-methodology refresh. Their conclusions are retained above as retired
-historical context, not active pass/fail evidence.
-
-## Benchmark Report Checklist
-
-A benchmark report is ready for review only when it answers:
-
-- What exact workload was run?
-- Which proof lane does it belong to?
-- Which artifact is the canonical `*.summary.json`?
-- What was the configured and observed concurrency?
-- What were target and observed throughput?
-- What were p50, p90, p95, and p99 latency overall and by operation?
-- What was the error budget and final error rate?
-- Which operation produced the most errors?
-- Which operation produced the highest p95 latency?
-- Which backpressure counters moved?
-- Did direct TCP/raw target liveness pass before interpreting REST?
-- Are Pi serial/runtime/counter proof lanes fresh when hardware claims are
-  made?
-- Is the result a defect, expected complexity cost, or overload boundary?
-- What concrete change or limit follows from the evidence?
+Accepted reports must cite their artifact paths in this section or in a linked
+checked-in audit ledger. Raw iteration files may remain under `out/bench` or
+`logs/bench`, but an uncommitted path alone is not durable documentation.

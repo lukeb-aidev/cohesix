@@ -1,70 +1,173 @@
-<!-- Copyright © 2026 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Documents the reference Cohesix boot transcript and expected sequence. -->
+<!-- Purpose: Define current Cohesix boot stages, profile-specific markers, and evidence invariants. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Boot Reference — AArch64/virt + PL011 + virtio-net (2026-01-22)
+# Cohesix Boot Reference
 
-This document records the QEMU `aarch64/virt` bootstrap reference for the Cohesix
-root task with the PL011 serial console and virtio-net TCP console. It is a QEMU
-development/CI reference, not Raspberry Pi 4 or UEFI hardware proof; Pi 4 boot
-truth lives in `docs/HARDWARE_BRINGUP.md`.
+This reference defines the stable boot sequence and the evidence needed to
+identify a Cohesix image. It is not a frozen serial transcript: addresses,
+CSpace windows, manifest hashes, feature sets, and device messages vary with
+the selected seL4 build and manifest profile.
 
-## Reference transcript (trimmed)
+Use [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md) for build, flash, capture, and
+recovery procedures. Use [TEST_PLAN.md](TEST_PLAN.md) for acceptance criteria.
 
-A successful boot is expected to reach the root task, emit the manifest
-summary, and bring up the TCP console. The transcript below is trimmed from a
-known-good QEMU serial log. The literal hash and network line below are historical
-for the cited run; current builds must compare their own manifest summary against
-the generated `configs/generated/root_task_resolved.json` and current boot logs.
+## Boot Paths
 
+```mermaid
+flowchart TB
+  subgraph Qemu["QEMU aarch64/virt"]
+    QElf["seL4 elfloader"] --> QKernel["seL4 kernel"]
+    QKernel --> QRoot["root-task"]
+  end
+
+  subgraph Pi["Raspberry Pi 4"]
+    Firmware["Pi firmware"] --> UBoot["U-Boot"]
+    UBoot --> PElf["seL4 binary image and elfloader"]
+    PElf --> PKernel["seL4 kernel"]
+    PKernel --> PRoot["root-task"]
+  end
+
+  QRoot --> Common["allocator, manifest identity, runtime admission"]
+  PRoot --> Common
+  Common --> Console["serial prompt and optional authenticated TCP console"]
 ```
-ELF-loader started on CPU: ARM Ltd. Cortex-A57 r1p0
-ELF-loading image 'kernel' to 40000000
-ELF-loading image 'rootserver' to 40239000
-Booting all finished, dropped to user space
+
+QEMU uses the selected `aarch64/virt` seL4 artifacts and PL011 serial. The Pi 4
+baseline uses `Pi firmware -> U-Boot -> seL4 binary image -> root-task`, with
+the Pi profile's serial and manifest-declared isolated driver runtimes. UEFI is
+not the Pi 4 acceptance path.
+
+## Boot Stages
+
+| Stage | Required evidence | Interpretation |
+| --- | --- | --- |
+| Artifact selection | Selected `SEL4_BUILD_DIR`, manifest profile, root-task feature set, and build output are recorded. | Establishes which generated kernel and manifest truth applies. |
+| Loader handoff | The loader identifies the kernel and rootserver and transfers to userspace. | Proves image layout and handoff only. |
+| Root entry | `[kernel:entry] root-task entry reached` and a boot-state marker appear. | Proves the current root task began executing. |
+| Build identity | A `[BUILD]` line from the image under test is captured. | Associates later output with a specific image only when it matches staged or read-back evidence. |
+| BootInfo and allocator | Root CSpace metadata is logged, followed by allocator readiness. | Values come from the selected kernel artifacts; they are not repository-wide constants. |
+| Manifest identity | `manifest.schema`, `manifest.profile`, `manifest.sha256`, and relevant generated bounds are logged. | Must match the manifest compiled into this image. |
+| Runtime admission | Profile-selected worker and driver-runtime resources are validated and admitted or fail closed with a named blocker. | A declaration or image lookup alone is not physical-driver proof. |
+| Operator readiness | The serial prompt becomes responsive; a TCP-enabled profile may also publish listener readiness. | Serial readiness and TCP readiness are separate claims. |
+
+Ordering is significant. A later prompt or network marker cannot repair a
+missing build identity or a manifest mismatch earlier in the same boot slice.
+
+## Profile-Independent Invariants
+
+### Kernel-Derived State
+
+BootInfo values must be accepted from the selected seL4 build, not copied from
+an older transcript. In particular, the root CSpace empty window can move as
+the rootserver image and initial capabilities change. Validate that the range
+is internally consistent and anchored to current kernel output; do not require
+a literal start slot.
+
+### Manifest Identity
+
+For the committed default profile, compare the current generated manifest hash
+with the boot line:
+
+```bash
+shasum -a 256 configs/generated/root_task_resolved.json
+```
+
+Target builds must compare against the resolved manifest selected for that
+target before committed default-profile output is restored. A hash from QEMU
+must not be used to validate a Pi image, and a historical log must not be used
+to validate a rebuilt image.
+
+### Secure9P and Console Bounds
+
+Generated output and boot evidence must preserve the charter red lines,
+including `msize <= 8192`, walk depth `<= 8`, no `..`, and no fid reuse after
+clunk. The authenticated console uses the documented `AUTH`, `ATTACH`, and
+`ACK`/`ERR`/`END` grammar. There is no independent in-VM 9P/TCP listener.
+
+See [SECURE9P.md](SECURE9P.md) and
+[USERLAND_AND_CLI.md](USERLAND_AND_CLI.md) for the normative protocol shape.
+
+### Failure Is Explicit
+
+Manifest admission, HAL mapping, runtime bootstrap, local-seat initialization,
+and networking must either succeed or emit a bounded, operator-visible blocker.
+The serial shell remains the recovery surface where the active profile permits
+degradation. A fail-closed diagnostic boot is useful evidence, but it is not a
+pass for the failed device lane.
+
+## Profile-Specific Expectations
+
+### QEMU `aarch64/virt`
+
+A TCP-enabled development boot normally includes:
+
+- PL011 serial output;
+- the selected QEMU manifest summary;
+- virtio-net readiness when enabled;
+- the net-console configuration and listener;
+- a responsive `cohsh` authentication and attach sequence.
+
+The current workspace has a target-qualified QEMU Stage 01-05 pass under
+`out/test-plan/m26d-repository-gates-qemu`. This is the current-source QEMU
+regression boundary; it is not Pi hardware proof.
+
+### Raspberry Pi 4
+
+A Pi boot additionally needs:
+
+- the U-Boot-selected policy and exact image marker;
+- the Pi manifest and seL4 counter configuration;
+- manifest-declared isolated runtime resource and owner-state evidence;
+- serial prompt responsiveness independent of optional network readiness;
+- fresh device-specific diagnostics for any claimed USB, HDMI, GENET, or Wi-Fi
+  lane.
+
+Historical Milestone 26c evidence contains an accepted wired GENET boot,
+authenticated `cohsh`, runtime/DMA proof, and Pi Stage 01-05 result. That
+evidence is retained in [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md)
+and [M26C_TARGET_RUNNER_BASELINE.md](audit/M26C_TARGET_RUNNER_BASELINE.md); it
+does not prove the current source tree or a newly flashed image.
+
+For the current tree, Pi-qualified offline Stages 01-02 pass under
+`out/test-plan/m26d-repository-gates-pi4`. Current-image live Pi stages,
+including Wi-Fi association, DHCP, ARP, raw TCP, authenticated `cohsh`, and
+repeatability, remain pending after rebuild, flash, independent readback, and
+fresh capture.
+
+## Minimal Evidence Pattern
+
+The exact text may grow, but a valid boot record keeps this causal shape:
+
+```text
 [kernel:entry] root-task entry reached
-[MARK] boot_state=COLD
-[bootinfo:cspace] root=0x0002 init_bits=13 empty=[0x01ef..0x2000)
+[MARK] boot_state=<state>
+[BUILD] <image-identity>
+[bootinfo:cspace] root=<slot> init_bits=<bits> empty=[<first>..<last>)
 [boot] allocator ready
-[BUILD] 509f7639 2026-01-21T21:30:10.495334+00:00 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1]
-[cohesix:root-task] Cohesix v0 (AArch64/virt)
-[cohesix:root-task] manifest.schema=1.5
-[cohesix:root-task] manifest.profile=virt-aarch64
-[cohesix:root-task] manifest.sha256=61c0fcf26398e77b38f9ea82dc2f1a619bd3151de43f90acab748b9a7dc88435
-[cohesix:root-task] manifest.secure9p.msize=8192
-[cohesix:root-task] manifest.secure9p.walk_depth=8
-[cohesix:root-task] manifest.features.net_console=true
-[cohesix:root-task] event_pump.fds=serial,timer,ipc,net-console,ninedoor
-[console] PL011 console online
-[INFO root_task::net::stack] [net-console] config: iface_ip=10.0.2.15/24 gateway=10.0.2.2 listen_port=31337 udp_echo_port=31338 tcp_smoke_port=31339
-[INFO root_task::drivers::virtio::net] [net-console] virtio-net ready: rx_buffers=16 tx_buffers=16 mac=52-55-00-d1-55-01
+[cohesix:root-task] manifest.schema=<schema>
+[cohesix:root-task] manifest.profile=<profile>
+[cohesix:root-task] manifest.sha256=<sha256>
+...
+cohesix>
 ```
 
-## Console access
+Device, listener, and acceptance markers follow according to the selected
+profile. Never replace omitted evidence with values from this example.
 
-- Serial (PL011) is the boot log transport.
-- Interactive control uses the TCP console; connect with `cohsh` as described in
-  `docs/QUICKSTART.md` and `docs/USERLAND_AND_CLI.md`.
-- The TCP console expects `AUTH` then `ATTACH`, and replies with `OK/ERR/END`
-  lines consistent with the shared console grammar.
+## Evidence Classification
 
-## Bootstrap invariants
+Classify a boot at the strongest layer actually proven:
 
-- **CSpace window**: The init CSpace uses `initBits = 13` with the free window
-  `[0x01ef..0x2000)` anchored at the kernel-advertised empty range.
-- **Boot markers**: `[kernel:entry] root-task entry reached` and
-  `[MARK] boot_state=COLD` must precede the manifest summary and driver bring-up.
-- **Manifest summary**: `manifest.schema`, `manifest.profile`, and
-  `manifest.sha256` are logged at boot; the active run's hash must match the compiled
-  manifest in `configs/generated/root_task_resolved.json`.
-- **Secure9P bounds**: `manifest.secure9p.msize=8192` and
-  `manifest.secure9p.walk_depth=8` must remain unchanged.
-- **Console & event pump**: `event_pump.fds=serial,timer,ipc,net-console,ninedoor`
-  and the net console config line should appear on every TCP-enabled boot.
+1. image built and staged;
+2. media flashed and independently read back;
+3. the read-back image marker observed at boot;
+4. root prompt and manifest identity verified;
+5. device or network lane ready in current serial and packet evidence;
+6. raw TCP and authenticated `cohsh` ready;
+7. target-qualified Test Plan complete;
+8. same-image repeatability complete;
+9. benchmark workload and provenance accepted.
 
-## Forward requirement
-
-This configuration and the accompanying logs represent a Cohesix
-AArch64/virt + PL011 + virtio-net baseline as of **2026-01-22**. Future QEMU
-changes must preserve the invariants above or update this reference with fresh
-generated-manifest evidence.
+Success at one layer does not imply the next. This separation is mandatory for
+all QEMU and physical-target reports.

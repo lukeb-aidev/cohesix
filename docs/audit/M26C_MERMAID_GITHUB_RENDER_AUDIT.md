@@ -1,47 +1,61 @@
 <!-- Author: Lukas Bower -->
-<!-- Purpose: Record Milestone 26c Mermaid GitHub compatibility and render evidence. -->
+<!-- Purpose: Record Milestone 26c Mermaid inventory, GitHub compatibility, and render evidence. -->
 <!-- Copyright 2026 Lukas Bower -->
 
 # M26C Mermaid GitHub Render Audit
 
-Status: `PASS-ACTIVE / RELEASE-WARNINGS`
+Status: `PASS / 75-OF-75-RENDERED / RELEASE-SNAPSHOT-WARNINGS`
 
 ## Inventory
 
-- Tracked Markdown files: `186`
-- Mermaid blocks inventoried: `84`
-- Inventory source: `docs/audit/M26C_MERMAID_INVENTORY.csv`
-- Markdown list: `out/audit/m26c_markdown_inventory.txt`
+- Tracked Markdown files: `203`
+- Mermaid blocks inventoried: `75`
+- Inventory compatibility status: `43 pass`, `32 warning-render-pass`, `0 pending`
+- README-linked suite diagrams: `9`, reduced from `18`
+- Inventory: `docs/audit/M26C_MERMAID_INVENTORY.csv`
+- Markdown list: `out/audit/m26c-doc-remediation-markdown.txt`
+- Render evidence: `out/audit/m26c-doc-remediation-mermaid-rendered`
 
-## Commands
+## Validation
 
 | Command | Result |
 | --- | --- |
-| `scripts/ci/mermaid_inventory.py --markdown-list out/audit/m26c_markdown_inventory.txt --out docs/audit/M26C_MERMAID_INVENTORY.csv` | PASS, 84 blocks |
-| `scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt` | PASS for active surfaces, 32 release-snapshot warnings |
-| `scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt --out out/audit/m26c-mermaid-rendered` | PASS extraction; SVG render skipped because `mmdc` was not installed |
+| `scripts/ci/mermaid_inventory.py --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out docs/audit/M26C_MERMAID_INVENTORY.csv` | PASS; 75 blocks inventoried exactly once. |
+| `scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt` | PASS for every active surface; 32 release-snapshot warnings. |
+| `npm exec --yes --package=@mermaid-js/mermaid-cli -- scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out out/audit/m26c-doc-remediation-mermaid-rendered` | PASS with Mermaid CLI 11.16.0; 75 source blocks produced 75 SVG files. |
 
-## Canonical Fixes Applied
+GitHub renders Mermaid from fenced `mermaid` blocks. The active diagrams avoid
+custom initialization directives, raw HTML labels, external links/assets,
+theme CSS, and experimental diagram types. This matches GitHub's documented
+[diagram syntax](https://docs.github.com/en/get-started/writing-on-github/working-with-advanced-formatting/creating-diagrams)
+and the repository's stricter compatibility checker.
 
-Raw HTML line-break labels were removed from canonical Mermaid diagrams in:
+## README-Linked Suite Diagrams
 
-- `docs/HOST_TOOLS.md`
-- `docs/NETWORK_CONFIG.md`
-- `docs/USE_CASES.md`
+| File | Diagram responsibility | As-built evidence boundary |
+| --- | --- | --- |
+| `README.md` | Host, target, kernel, worker, and driver overview | Architecture, selected profiles, and current source tree |
+| `docs/ARCHITECTURE.md` | Build-host, operator-host, and target trust boundaries | Manifest compiler, root-task, host NineDoor, and target adapter sources |
+| `docs/INTERFACES.md` | TCP authentication, attach, and bounded stream sequence | Console server, event pump, and `NineDoorBridge` |
+| `docs/DRIVERS.md` | HAL admission and isolated driver-runtime service turn | HAL, driver ABI, and runtime-init descriptors |
+| `docs/HOST_TOOLS.md` | Mutually exclusive direct and gateway console ownership | Current host-tool transports and gateway topology |
+| `docs/GPU_NODES.md` | Host GPU/executor boundary and bounded VM projection | GPU bridge, worker role, and live-versus-simulation paths |
+| `docs/HARDWARE_BRINGUP.md` | Build-to-benchmark evidence ladder | Image scripts, Test Plan, and current proof policy |
+| `docs/BOOT_REFERENCE.md` | QEMU and Pi 4 boot-path convergence | Selected seL4 and Pi U-Boot handoff profiles |
+| `docs/USE_CASES.md` | Operator, namespace, worker, and external-adapter pattern | Current control-plane boundary; no deployment acceptance claim |
 
-The edited labels preserve the same as-built relationships and only remove
-GitHub-hostile HTML syntax.
+Every suite diagram was reviewed for semantic ownership as well as syntax. The
+removed diagrams duplicated schemas, lifecycle prose, or aspirational
+deployment patterns better owned by focused text and generated snippets.
+The hardware evidence ladder retains all nine independent proof states: build,
+flash, readback, boot, saved policy, device/network, console, Test Plan, and
+benchmark.
 
 ## Release Snapshot Warnings
 
-The checker reports 32 warnings under `releases/**` for release-derived copies
-of diagrams that still contain raw HTML labels. These snapshots are
-inventory-only for 26c unless the release-cut flow is run. They were not
-hand-edited for style.
-
-## Render Evidence
-
-The extraction manifest and Mermaid source files live under
-`out/audit/m26c-mermaid-rendered/`. Because `mmdc` was unavailable, SVG render
-proof remains an environment gap rather than a diagram syntax failure for active
-surfaces.
+The checker reports 32 raw-HTML-label warnings under `releases/**`. Those files
+are immutable release snapshots for this remediation. Editing them would
+require the release-cut workflow and a minor-version increment, so they remain
+inventory-only and do not weaken the active-doc PASS result. All 32 warning
+blocks nevertheless rendered successfully with the same CLI during the
+75-block render pass.

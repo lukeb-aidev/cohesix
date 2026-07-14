@@ -1,87 +1,123 @@
-<!-- Copyright © 2026 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Describe host-side GPU bridge behaviour, namespaces, and telemetry/model lifecycle semantics. -->
+<!-- Purpose: Define the as-built host GPU trust boundary, namespace projection, and model-data lifecycle. -->
 <!-- Author: Lukas Bower -->
-# GPU Nodes — Out-of-VM Acceleration Strategy
+# GPU Nodes and Host Acceleration
 
-**At a glance**
-- All GPU discovery, scheduling, and execution happen **outside** the VM on the host.
-- The VM sees GPUs only through the `/gpu/*` namespace published by `gpu-bridge-host`.
-- `worker-gpu` reads tickets and leases; it never touches device nodes or CUDA/NVML.
-- `/gpu/models` and `/gpu/telemetry/schema.json` are **absent** until a publish completes.
+Cohesix keeps GPU discovery, drivers, CUDA/NVML, model storage, and workload
+execution outside the VM trusted computing base. The VM receives only bounded,
+manifest-authorized control records and host-published descriptions.
 
-**Related docs**
-- `docs/INTERFACES.md` — canonical `/gpu/*` and `/queen/ctl` schemas.
-- `docs/ROLES_AND_SCHEDULING.md` — role-to-namespace rules.
-- `docs/HOST_TOOLS.md` — host bridge and publish workflows.
-- `docs/SECURE9P.md` — transport invariants and bounds.
+This document distinguishes the live root-task surface from host simulation.
+It does not describe a general GPU scheduler or an in-VM compute API.
 
-## 1. Rationale
-CUDA/NVML stacks are large and platform-specific. Keeping them outside the seL4 guest, whether the guest runs under QEMU or an authorized physical profile such as Pi 4 U-Boot, preserves determinism and minimises the trusted computing base (TCB). The Cohesix instance interacts with GPUs exclusively through a capability-guarded namespace mirrored by host workers.
-GPU workers (`worker-gpu`) are another worker type under the hive's Queen, not standalone services.
+## Trust Boundary
 
-### Operational dependencies (live)
-- A QEMU or hardware target must be running and the authenticated TCP console must be reachable.
-- The host GPU bridge must publish snapshots to `/gpu/bridge/ctl`.
-- If policy gating is enabled, approvals may be required for `/queen/ctl` writes.
-- Lifecycle gates can deny host publishes when the system is not `ONLINE` or `DEGRADED`.
+```mermaid
+flowchart LR
+  subgraph Host["Host operating system"]
+    Hardware["GPU hardware and drivers"]
+    Runtime["CUDA or application runtime"]
+    Registry["Model registry and artifacts"]
+    Bridge["gpu-bridge-host\ninventory and bounded publish"]
+    Executor["Deployment-specific executor\nnot provided by gpu-bridge-host"]
+    Hardware --> Runtime
+    Hardware --> Bridge
+    Registry --> Bridge
+    Registry --> Executor
+    Runtime --> Executor
+  end
 
-Quick validation:
+  Bridge -->|"authenticated snapshot publish"| Console["Cohesix console path"]
+  Console --> Root["root-task and NineDoor"]
+  Root --> GpuView["/gpu host-projected view"]
+  Worker["worker-gpu\ntickets, lease and status only"] --> GpuView
+  GpuView -->|"bounded records"| Executor
+```
+
+The boundary is strict:
+
+- no GPU device nodes, GPU MMIO, CUDA, or NVML enter the VM;
+- `gpu-bridge-host` discovers inventory and publishes a snapshot; it does not
+  execute kernels, enforce lease TTLs, schedule jobs, or reload models;
+- `worker-gpu` consumes control-plane tickets and lease/status records only;
+- a deployment-specific host executor must perform any real GPU mutation and
+  return bounded status or receipt records through an authorized host path.
+
+## As-Built Capability Matrix
+
+| Surface | As-built behavior | Important limit |
+| --- | --- | --- |
+| `gpu-bridge-host` | Discovers GPUs through compiled NVML or CUDA inventory backends, reads optional host model-registry descriptors, serializes a bounded snapshot, and publishes it over the authenticated console or REST projection. | Inventory and publication only; no hardware scheduling or execution. |
+| Live root task | Installs `/gpu/<id>/info`, `ctl`, `lease`, and `status`, plus bridge status and optional model/telemetry descriptors. | The live root-task path does **not** expose `/gpu/<id>/job`. |
+| `worker-gpu` | Represents a manifest-declared worker role and carries ticket, lease, and telemetry state without direct hardware access. | It does not read `/gpu/models/active` automatically or propagate model changes to host inference. |
+| Host NineDoor simulation | Can expose `/gpu/<id>/job` and synthesize `QUEUED`, `RUNNING`, and `OK` records for tests and demos. | Synthetic status is not live VM behavior or GPU execution proof. |
+| Model lifecycle view | Publishes host-authored model manifests, an active-model pointer, and a telemetry schema descriptor when a snapshot includes them. | Artifacts remain on the host; activation and reload remain host responsibilities. |
+
+The selected manifest and generated output remain authoritative. A path listed
+here is absent when its feature is disabled or its host publish has not
+completed.
+
+## Live Namespace
+
+| Path | Direction | Meaning |
+| --- | --- | --- |
+| `/gpu/bridge/ctl` | Host to VM, append | Single-writer snapshot channel using bounded `begin`, `b64:`, and `end` records. |
+| `/gpu/bridge/status` | VM to host, read | Publish state such as `idle`, `receiving`, `ok`, or `err`. |
+| `/gpu/<id>/info` | VM to client, read | Host-published GPU metadata. |
+| `/gpu/<id>/ctl` | Authorized append | Text control record. Acceptance records intent; it is not proof that a host-side action occurred. |
+| `/gpu/<id>/lease` | Authorized JSON append/read | `gpu-lease/v1` state records. |
+| `/gpu/<id>/status` | Authorized JSON append/read | Bounded host or worker status/breadcrumb records. |
+| `/gpu/models/available/<model_id>/manifest.toml` | VM to client, read | Host-authored descriptor for an artifact that remains outside the VM. |
+| `/gpu/models/active` | Authorized append/read | Model identifier pointer; changing it does not itself reload a runtime. |
+| `/gpu/telemetry/schema.json` | VM to client, read | Host-published telemetry schema descriptor. Telemetry records are not written below `/gpu/telemetry`. |
+
+`/gpu/models` and `/gpu/telemetry/schema.json` are absent until a successful
+publish provides them. Concurrent publishers must be serialized because the
+bridge control path is single-writer.
+
+The canonical schema and generated limits are documented in
+[INTERFACES.md](INTERFACES.md). When prose and generated output disagree, the
+generated profile is authoritative and the documentation drift must be fixed.
+
+## Publishing a Snapshot
+
+Configure a real console secret outside source control, then publish. The
+commands below use release-bundle binaries under `./bin`; source-tree users can
+run the corresponding Cargo packages. The tools resolve `COH_AUTH_TOKEN` from
+the environment, avoiding secret exposure in process arguments.
+
 ```bash
-./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN"
-./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen <<'COH'
+test -n "${COH_AUTH_TOKEN:?set COH_AUTH_TOKEN to the live console secret}"
+
+./bin/gpu-bridge-host \
+  --publish \
+  --tcp-host 127.0.0.1 \
+  --tcp-port 31337
+```
+
+Verify through the same authenticated control path:
+
+```bash
+./bin/cohsh \
+  --transport tcp \
+  --tcp-host 127.0.0.1 \
+  --tcp-port 31337 \
+  --role queen <<'COH'
 ls /gpu
 cat /gpu/bridge/status
 COH
 ```
 
-## 2. Model Lifecycle Surfaces (Milestone 6a)
-- Namespace:
-  - `/gpu/models/available/<model_id>/manifest.toml` (read-only)
-  - `/gpu/models/active` (append-only pointer; host swaps atomically)
-- Properties:
-  - Manifests live on the **host filesystem**; Cohesix only sees TOML descriptors and the active pointer.
-  - Activation is a host concern (reload/restart/hot-swap); no new verbs or control planes were added.
-  - Host-side GPU/PEFT tooling currently annotates telemetry with `model_id` / `lora_id`. `worker-gpu` consumes tickets and lease/status files; it does not upload artifacts or implement automatic model-pointer propagation inside the VM.
-  - `/gpu/models` is published into the live VM by the host GPU bridge via `/gpu/bridge/ctl`; it is absent until the publish step completes.
+Do not place a token in documentation, command arguments, scripts, process
+supervision files, or shell history. See [HOST_TOOLS.md](HOST_TOOLS.md) for
+auth resolution and live gateway operation.
 
-### Live publish sequence
-```mermaid
-sequenceDiagram
-  participant Host as gpu-bridge-host
-  participant Queen as Queen/NineDoor
-  participant VM as /gpu namespace
-  Host->>Queen: append snapshot (begin/b64/end) to /gpu/bridge/ctl
-  Queen->>VM: install /gpu/<id>/* nodes
-  Queen->>VM: install /gpu/models/* + /gpu/telemetry/schema.json
-  Note over VM: /gpu/models is absent until publish succeeds
-```
+## Lease Records
 
-## 3. Host GPU Worker Architecture
-- **Process**: Rust binary running on macOS or a Linux edge node, outside the Cohesix instance, paired with the GPU bridge host.
-- **Responsibilities**:
-  - Discover GPUs using NVML where available, with CUDA inventory fallback on Jetson and other Linux nodes.
-  - Enforce leases that cap memory (MiB), stream counts, and wall-clock TTL.
-  - Mirror GPU state into the Cohesix instance by publishing bounded snapshots to `/gpu/bridge/ctl` over the TCP console (queen role); no CUDA/NVML components enter the VM profile or hardware deployment.
-- **Safety**: Validate kernel binaries via SHA-256; ensure uploads match expected byte length before dispatch.
+The host-side lease type contains the worker identity as part of the authority
+record:
 
-## 4. Cohesix Namespace Mapping
-| Cohesix Path | Backing Action |
-|---------|----------------|
-| `/gpu/<id>/info` | Serialize GPU metadata (name, UUID, memory, SM count, driver/runtime versions). |
-| `/gpu/<id>/ctl` | Accept textual commands (`LEASE`, `RELEASE`, `PRIORITY <n>`, `RESET`) and return status lines mediated by the bridge host. |
-| `/gpu/<id>/lease` | Ticket/lease file gated by host policy; worker-gpu reads to learn active allocations and writes to request renewals. Append-only JSON lines use schema `gpu-lease/v1` (`state=ACTIVE|RELEASED`). |
-| `/gpu/<id>/status` | Read-only view of utilisation and recent job summaries sourced from the host; append-only job lifecycle entries and `gpu-breadcrumb/v1` host-run breadcrumbs are included. |
-| `/gpu/bridge/ctl` | Append-only publish channel for GPU bridge snapshots (`begin`/`b64:`/`end` lines). |
-| `/gpu/bridge/status` | Read-only publish state (`state=idle|receiving|ok|err`). |
-| `/gpu/models/*` | Host-mirrored model registry (available + active). |
-| `/gpu/telemetry/schema.json` | Telemetry schema descriptor (read-only). |
-
-Note:
-- `/gpu/models` and `/gpu/telemetry/schema.json` appear only after a host GPU bridge publish; before that `ls /gpu/models` returns `ERR` with `invalid-path`.
-- `/gpu/bridge/ctl` is single-writer; concurrent publishers must be serialized to avoid interleaved snapshot lines.
-
-## 5. Lease Model
 ```rust
 pub struct GpuLease {
     pub gpu_id: String,
@@ -89,288 +125,63 @@ pub struct GpuLease {
     pub streams: u8,
     pub ttl_s: u32,
     pub priority: u8,
+    pub worker_id: String,
 }
 ```
-- Leases are tied to a worker ticket; revocation closes associated fids.
-- Host worker enforces TTL via timers; once expired, queued jobs are drained and subsequent writes receive `Permission`.
-- `/gpu/<id>/lease` appends JSON lines with schema `gpu-lease/v1` and fields: `schema`, `state`, `gpu_id`, `worker_id`, `mem_mb`, `streams`, `ttl_s`, `priority`. The latest `state=ACTIVE` line indicates the current lease.
-- The Queen uses `/queen/ctl` to create GPU workers and manage leases within the same hive orchestration model.
 
-## 6. Job Descriptor Schema
-```json
-{
-  "job": "jid-42",
-  "kernel": "vadd",
-  "grid": [128, 1, 1],
-  "block": [256, 1, 1],
-  "bytes_hash": "sha256:...",
-  "inputs": ["/bundles/vadd.ptx"],
-  "outputs": ["/shard/<label>/worker/<id>/result"],
-  "timeout_ms": 5000,
-  "payload_b64": "..."
-}
-```
-- Host validates payload hash against staged artefacts before launch; when `payload_b64` is present the bridge decodes and hashes the inline bytes.
-- `timeout_ms` triggers job cancellation; status stream records `ERR TIMEOUT` or includes the failure in `/gpu/<id>/status`.
-- Successful submissions emit `QUEUED`, `RUNNING`, and `OK` entries in `/gpu/<id>/status` alongside worker telemetry updates.
-GPU workers do not schedule hardware directly; they receive tickets and leases from the host over Secure9P, and all scheduling policy (queueing, eviction, throttling) runs on the host side of the bridge.
-
-## 7. Simulation Path (for CI & macOS)
-- `gpu-bridge-host --mock --list` emits deterministic namespace descriptors consumed by NineDoor via `install_gpu_nodes`.
-- In `dev-virt` QEMU runs without a host bridge, the root-task seeds mock `/gpu/<id>` entries (GPU-0/GPU-1) with `info`, `lease`, and `status` to satisfy CLI demos; `/gpu/models` and `/gpu/telemetry/schema.json` appear only after a host GPU bridge publish.
-- `info` returns synthetic GPU entries, `job` triggers precomputed status sequences.
-- Enables continuous validation of control plane without real hardware.
-- CLI/GUI clients submit GPU jobs via the same verbs exposed through `cohsh` and Secure9P; no separate ad-hoc GPU control protocol exists inside the Cohesix instance.
-
-## 8. Security Notes
-- No GPU device nodes or drivers are shipped in the Cohesix instance (including the QEMU development image), and direct device access/virtio-gpu paths are explicitly out of scope; the bridge host terminates DMA and enforces isolation.
-- Tickets for `/gpu/*` paths are issued only to `WorkerGpu` roles.
-- All control traffic is logged to `/log/queen.log` with ticket IDs for audit.
-
-## LoRA Feedback Loop Walkthrough  
-**Jetson Nano → Cohesix Worker → Queen → PEFT/LoRA Farm → Queen → Worker → Jetson Nano**
-
-This walkthrough describes a **pragmatic, end-to-end LoRA optimisation loop** using Cohesix as the **secure control plane**, while keeping CUDA, TensorRT, and training stacks **outside the VM and outside the TCB**.
-
-The design assumes:
-- Many **NVIDIA Jetson Nano** devices at the edge
-- Each Jetson hosts a **Cohesix Worker VM**
-- A single **Cohesix Queen** in the cloud
-- An external **PEFT / LoRA training farm** (Kubernetes, Slurm, managed GPUs)
-
-No new IPC mechanisms are introduced. Everything flows through **Secure9P namespaces and files**.
-
----
-
-## 1. Runtime Inference on Jetson Nano (Outside Cohesix)
-
-**Where inference runs**
-- CUDA / TensorRT / PyTorch run on the **Jetson host OS**
-- Cohesix never loads CUDA, NVML, or drivers
-
-**Active model**
-- Base model + LoRA adapter
-- Loaded by the host inference process
-- Selected by Cohesix via file pointers (not APIs)
-
-**Why this matters**
-- Keeps the Cohesix TCB small
-- Allows native Jetson tooling and performance
-- Avoids re-implementing ML runtimes
-
----
-
-## 2. Telemetry Generation (Host → Worker telemetry)  
-
-During inference, the host process emits **summarised telemetry**, not raw data or gradients.
-
-Typical fields:
-- Token counts
-- Latency histograms
-- Confidence / entropy
-- Input class distribution
-- Drift indicators
-- Optional human feedback flags
-
-The host GPU bridge publishes the telemetry schema at `/gpu/telemetry/schema.json` into the VM. Telemetry records themselves are emitted by host-side tooling and forwarded into `/queen/telemetry/*` or worker telemetry streams using Secure9P; no `/gpu/telemetry/*` record files exist inside the VM today.
-
-Properties:
-- Append-only, bounded records (CBOR or JSON) emitted by host tooling.
-- Tagged with `model_id`, `lora_id`, `device_id`, `time_window`, and `schema_version` (`gpu-telemetry/v1`).
-- No streaming, no sockets, no RPC.
-
-### Telemetry Schema (Milestone 6a)
-- Descriptor path: `/gpu/telemetry/schema.json` (read-only)
-- Version: `gpu-telemetry/v1`
-- Required fields:
-  - `schema_version`, `device_id`, `model_id`, `time_window`, `token_count`, `latency_histogram`
-- Optional fields:
-  - `lora_id`, `confidence`, `entropy`, `drift`, `feedback_flags`
-- Bounds:
-- Max record size: 4096 bytes (enforced by host-side telemetry tooling)
-- Append-only writes; emitters must clamp window sizes before writing
-- Export:
-  - Records may be forwarded to `/queen/telemetry/*` and `/queen/export/lora_jobs/*` by host tools; no in-VM ML stack is introduced.
-
----
-
-## 3. Worker Collection & Thinning  
-
-Each Jetson runs a **Cohesix Worker** with a role-scoped ticket.
-
-The worker:
-- Emits bounded telemetry upstream into `/shard/<label>/worker/<id>/telemetry`
-- Carries host-provided `model_id` / `lora_id` fields when the host-side PEFT or GPU tooling includes them
-- Applies optional thinning / aggregation before forwarding to `/queen/telemetry/*`
-
-Example canonical telemetry path:
-```text
-/shard/<label>/worker/<id>/telemetry
-```
-
-Legacy aliases at `/worker/<id>/telemetry` are available only when `sharding.legacy_worker_alias = true`.
-
-This step is important on Jetson:
-- Bandwidth-aware
-- Offline-tolerant
-- Deterministic memory use
-
----
-
-## 4. Secure Uplink to the Queen  
-
-The Worker writes telemetry into the Queen namespace via Secure9P using the OS-named ingest surface:
-
-/queen/telemetry/jetson-42/
-ctl
-seg/seg-000001
-latest
-
-Transport characteristics:
-- Secure9P over authenticated transport
-- msize-bounded frames
-- Rate-limited
-- Fully auditable (append-only)
-
-If the link drops:
-- Telemetry spools locally
-- Resumes when connectivity returns
-
----
-
-## 5. Queen Aggregation & Policy Gating  
-
-The Queen:
-- Aggregates telemetry from many workers
-- Applies policy:
-  - Minimum sample size
-  - Drift thresholds
-  - Time windows
-  - Manual approval (optional)
-
-When criteria are met, the Queen **exports a LoRA training job**:
-
-/queen/export/lora_jobs/job_8932/
-telemetry.cbor
-base_model.ref
-policy.toml
-
-This directory is the **contract boundary** between Cohesix and ML tooling.
-Host operators pull this bundle via `coh peft export` before handing it to external training.
-
----
-
-## 6. External PEFT / LoRA Training (Out of Band)
-
-A LoRA farm watches `/queen/export/lora_jobs/`.
-
-This can be:
-- HuggingFace PEFT
-- QLoRA
-- Axolotl
-- Lightning / Accelerate
-- Running on Kubernetes, Slurm, or managed GPUs
-
-Cohesix does **not**:
-- Run training
-- Schedule GPUs
-- Manage ML frameworks
-
-It only:
-- Supplies telemetry
-- Tracks provenance
-- Enforces policy
-
----
-
-## 7. LoRA Artifact Import (Farm → Host Registry)
-
-The training job produces:
-- `adapter.safetensors`
-- `lora.json` (rank, alpha, target layers)
-- Validation metrics
-
-These are staged on the **host filesystem** and surfaced through the GPU model lifecycle view:
-
-/gpu/models/available/llama3-edge-v7/manifest.toml
-
-The manifest records:
-- Parent model hash
-- Telemetry window used
-- Training job ID
-- Approval status
-
----
-
-## 8. Model Distribution to Workers  
-
-Workers observe the active model pointer:
-
-/gpu/models/active -> llama3-edge-v7
-
----
-
-## 9. Jetson Hot-Swap or Restart  
-
-The host inference process:
-- Detects the model pointer change
-- Reloads the LoRA adapter (hot-swap or restart)
-- Continues inference with the new adapter
-
-Post-deployment telemetry flows immediately, closing the loop.
-
----
-
-## 10. What Cohesix Provides (and What It Doesn’t)
-
-**Cohesix provides**
-- Secure telemetry paths
-- Deterministic control plane
-- Policy enforcement
-- Provenance & audit
-- Safe model distribution
-
-**Cohesix deliberately does not**
-- Run CUDA
-- Train models
-- Stream tensors
-- Replace ML ecosystems
-
----
-
-## 11. Minimal Glue Required for Adoption  
-
-To deploy this at scale, only a few thin adapters are needed:
-
-### Host-side
-- `gpu-bridge-host`
-  - Publishes `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` via `/gpu/bridge/ctl`
-  - Watches `/gpu/models` (host registry) for active pointer changes
-  - Loads LoRA adapters via TensorRT / PyTorch
-- `host-ticket-agent`
-  - Tails `/host/tickets/spec` (`host-ticket/v1`) and executes allowlisted actions.
-  - Handles GPU lease tickets (`gpu.lease.grant|renew|release`) using existing `/queen/ctl`, `/queen/lease/ctl`, and `/gpu/<id>/lease`.
-  - Handles PEFT lifecycle tickets (`peft.import|activate|rollback`) using the same host registry and `/gpu/models/*` pointers as `coh peft`.
-  - Appends bounded lifecycle receipts to `/host/tickets/status` and `/host/tickets/deadletter` for evidence replay.
-
-### Cloud-side
-- `coh peft` (host tool)
-  - `coh peft export` pulls `/queen/export/lora_jobs/*` into host storage
-  - External PEFT job runs out-of-band (HF/Slurm/K8s)
-  - `coh peft import` stages adapters into the registry backing `/gpu/models/available/*`
-
-Everything else already exists in the protocol.
-
----
-
-## 12. Bottom Line
-
-- The Secure9P + namespace model is sufficient
-- No protocol changes are required
-- The loop scales from 1 Jetson to thousands
-- ML teams keep their existing tools
-- Cohesix stays small, auditable, and boring — on purpose
-
-That’s exactly what you want for real deployment.
-
-Future work (per `BUILD_PLAN.md` milestones): ticket arbitration across multiple workers, lease renewal/expiry enforcement, GPU worker lifecycle hooks, and CI coverage of the `/gpu/<id>/` namespace surface.
+Serialized `gpu-lease/v1` lines include `schema`, `state`, `gpu_id`,
+`worker_id`, `mem_mb`, `streams`, `ttl_s`, and `priority`. The current log shape
+records lease intent and state. A real executor must independently enforce
+memory, stream, lifetime, revocation, and device-isolation policy; the presence
+of an `ACTIVE` line is not hardware enforcement proof.
+
+## Model and Telemetry Lifecycle
+
+1. A host registry stores the model artifact and its manifest.
+2. `gpu-bridge-host` reads descriptors and publishes a bounded namespace
+   snapshot.
+3. Cohesix exposes descriptors and the active identifier under `/gpu/models`.
+4. An authorized operator or host tool may update the active identifier.
+5. A deployment-specific host process validates the artifact, applies the
+   change, and publishes a receipt or status record.
+
+Cohesix does not upload model blobs into the VM, train a model, watch the active
+pointer from `worker-gpu`, or hot-swap an inference process. Host telemetry may
+carry `model_id` and `lora_id`, but the host emitter owns validation, record
+bounds, and delivery to an accepted telemetry path.
+
+## Simulation-Only Job Flow
+
+The host `nine-door` implementation includes a `/gpu/<id>/job` file for tests.
+It validates a JSON descriptor and synthesizes a short lifecycle sequence. Use
+that surface to test clients and policy behavior only.
+
+Do not use simulation output to claim any of the following:
+
+- live root-task job support;
+- CUDA launch, completion, cancellation, or timeout behavior;
+- lease enforcement or GPU isolation;
+- model activation or inference reload;
+- physical GPU performance.
+
+A future live job or executor contract requires explicit
+[BUILD_PLAN.md](BUILD_PLAN.md) scope, generated interface changes where
+applicable, tests, and documentation in the same change.
+
+## Security and Acceptance
+
+- Validate model identifiers, snapshot sizes, JSON envelopes, hashes, and all
+  user-controlled strings before they reach an external executor.
+- Keep artifacts and secrets on the host; publish only bounded descriptors and
+  opaque identifiers.
+- Treat control-file acceptance, host-executor receipt, and observed hardware
+  state as three separate proofs.
+- Preserve role and path checks. Host projections must not become a second
+  authority channel.
+- Run repository tests for `gpu-bridge-host`, `worker-gpu`, NineDoor, and the
+  root-task surface touched by a change. Hardware claims require a separate
+  executor-specific test and benchmark lane.
+
+For worker scheduling see [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md),
+for file semantics see [SECURE9P.md](SECURE9P.md), and for deployment patterns
+see [USE_CASES.md](USE_CASES.md).

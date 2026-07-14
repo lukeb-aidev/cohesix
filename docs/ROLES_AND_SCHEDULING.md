@@ -1,116 +1,224 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Define the as-built Cohesix role, ticket, namespace, and scheduling-control model. -->
+<!-- Purpose: Define the as-built Cohesix roles, ticket authority, worker lifecycle, and scheduling layers. -->
 <!-- Author: Lukas Bower -->
-# Roles & Scheduling Policy
 
-This document summarizes the as-built role model and scheduling-control surfaces. Generated manifests and snippets remain authoritative for exact limits, paths, and gates; see
-[docs/snippets/root_task_manifest.md](snippets/root_task_manifest.md),
-[docs/snippets/observability_interfaces.md](snippets/observability_interfaces.md),
-[SECURE9P.md](SECURE9P.md), and [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md).
+# Roles, Authority, and Scheduling
 
-## Core Terms
+This document owns Cohesix role semantics, ticket authority, target-worker
+lifecycle, and scheduling layers. It does not redefine namespace schemas,
+Secure9P framing, or physical-driver scheduling. See
+[INTERFACES.md](INTERFACES.md), [SECURE9P.md](SECURE9P.md), and
+[DRIVERS.md](DRIVERS.md) for those contracts.
 
-- **Role**: the authority class attached to a session, such as Queen or WorkerGpu. A role determines which namespace paths the session can see and which control files it may use.
-- **Worker**: a bounded Cohesix task or worker-facing session managed by the Queen. Workers report through scoped telemetry paths and may receive role-specific resources such as GPU, bus, or LoRa views.
-- **Shard**: a deterministic namespace bucket under `/shard/<label>`. Cohesix places worker telemetry below a shard label derived from the worker ID so worker paths remain bounded and evenly partitioned as the hive grows. A shard label is routing metadata, not an authority grant.
-- **Ticket**: a MACed attach credential carrying role, subject identity, budget, optional mounts, and quota claims. Tickets let host tools and workers prove which bounded view they should receive without adding an RPC path.
+## Generated authority
 
-## Roles
+The selected profile manifest and generated root-task tables are authoritative
+for implemented worker roles, worker count, endpoint-cap requirements,
+notification badges, affinity, and scheduling parameters. The checked-in
+default-profile values are summarized in
+[the generated manifest snippet](snippets/root_task_manifest.md). Do not copy
+generated badge bases or quotas into client code or hand-maintained prose.
 
-| Role | Purpose | Namespace view |
+The role enum recognizes more roles than every target profile implements. A
+recognized ticket label or host namespace view is not proof that a target
+worker image is enabled.
+
+## Role support matrix
+
+The checked-in default and Pi 4 profiles currently declare the following:
+
+| Role | Ticket and host policy | Target worker in selected profiles | Authority scope |
+| --- | --- | --- | --- |
+| Queen | Implemented | Root-task authority, not a separate worker image | Hive-wide access to enabled control and observability providers. |
+| WorkerHeartbeat | Implemented | Implemented | Own telemetry and the minimal worker observability view. |
+| WorkerGpu | Implemented | Implemented | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
+| WorkerBus | Recognized | **Not implemented** | Host/sidecar policy can describe a bus scope, but the selected target profiles must reject it as target-worker authority. |
+| WorkerLora | Implemented | Implemented | Worker view plus its generated LoRa lease scope. |
+
+`worker-bus` must not be presented as an active target role until a selected
+manifest sets `implemented = true` and the required code, tests, and milestone
+evidence agree. Conversely, a worker crate existing in the repository is not
+sufficient proof of profile selection.
+
+## Namespace views
+
+Role views are capability filters over the enabled namespace, not independent
+filesystems.
+
+- Queen can access the enabled hive-wide tree and can write only the control
+  nodes permitted by its ticket and lifecycle state.
+- A heartbeat worker can see its own telemetry path and the bounded boot,
+  lifecycle, and log information allowed by the server policy.
+- GPU, bus, and LoRa roles add only the resource scope encoded for that role;
+  they do not inherit all Queen paths.
+- Host-only providers remain host-only even when their paths appear in a role
+  policy.
+
+The canonical worker telemetry path is:
+
+`/shard/<label>/worker/<id>/telemetry`
+
+The legacy `/worker/<id>/telemetry` alias exists only when
+`sharding.legacy_worker_alias` is enabled. Current checked-in profiles enable
+the alias for compatibility, but new documentation and clients should prefer
+the canonical sharded path. Exact sharding values are generated in
+[root_task_manifest.md](snippets/root_task_manifest.md).
+
+A ticket scope such as `/worker`, `/gpu`, or `/lora` is an authority prefix; it
+does not replace the canonical telemetry path template generated for the role.
+
+## Capability tickets
+
+Tickets are MAC-protected capability claims encoded as:
+
+`cohesix-ticket-<hex-payload>.<hex-mac>`
+
+The current claim structure contains:
+
+- role;
+- budget (`ticks`, `ops`, and `ttl_s`);
+- optional subject identity;
+- optional mount specification;
+- issue time;
+- optional path/verb/rate scopes; and
+- optional bandwidth and cursor quotas.
+
+The implementation lives in
+[`crates/cohesix-ticket`](../crates/cohesix-ticket/src/lib.rs). Ticket strings
+and secrets are credentials; documentation, logs, and evidence must not print
+their secret material.
+
+### Attach rules
+
+- Queen may attach without a ticket. If a Queen ticket is supplied on an
+  enforcing path, it must be valid for Queen.
+- Every worker role requires a ticket and subject identity.
+- The requested role must match the ticket role.
+- The requested worker identity must match the ticket subject when both are
+  supplied.
+- MAC, TTL, scope, quota, role, subject, and selected-manifest bounds are
+  checked before authority is granted.
+- Target worker attach additionally requires the role to be marked implemented
+  and the generated cap-backed endpoint authority to match its role and epoch.
+
+Host NineDoor verifies tickets against registered role keys. The target console
+performs transport authentication first for TCP, then validates the
+application `ATTACH` role/ticket. Transport `AUTH` proves access to the console;
+it does not grant Queen or worker namespace authority by itself.
+
+### Budgets and quotas
+
+Budget defaults are role-aware. Queen uses an unbounded default when no ticket
+overrides it; GPU and heartbeat-family workers use finite defaults from the
+ticket library or their worker record. The server clamps applicable ticket
+budgets to the worker record rather than allowing a ticket to expand authority.
+
+Generated ticket limits bound scope count, path length, per-scope rate,
+bandwidth, cursor resumes, and cursor advances. The current generated values
+are documented in [ticket_quotas.md](snippets/ticket_quotas.md) and
+[root_task_manifest.md](snippets/root_task_manifest.md).
+
+Exhaustion or expiry is a refusal, not a successful no-op. The server closes or
+revokes the affected authority and returns the protocol-specific error surface.
+
+## Worker authority lifecycle
+
+Target worker authority has two independent proofs:
+
+1. **Session authority.** A valid role, subject, ticket, lifecycle gate, and
+   namespace scope authorize an operation at the control-plane layer.
+2. **seL4 invocation authority.** For implemented target roles, generated
+   endpoint badges encode the action, role, and authority epoch. Generated
+   notification badges carry revoke, shutdown, lease-expiry, telemetry-pressure,
+   and optional IRQ events.
+
+Root-task rejects metadata-only worker authority when the profile requires
+badged endpoint caps. The decoder and checks are implemented in
+[`worker_authority.rs`](../apps/root-task/src/worker_authority.rs); exact badge
+values remain generated data.
+
+Revocation is bounded and explicit:
+
+1. Policy denial, ticket expiry, budget exhaustion, lease expiry, or a valid
+   Queen lifecycle operation selects the authority to close.
+2. The session or worker record is marked closed/revoked with a reason.
+3. Implemented target workers receive the generated lifecycle notification
+   where required by the selected profile.
+4. Subsequent endpoint, namespace, and console operations fail rather than
+   silently continuing.
+5. Logs and enabled observability providers record the transition.
+
+A generated notification record proves the configured topology. Target
+acceptance still requires evidence that the selected image created, delivered,
+and handled the notification correctly.
+
+## Scheduling layers
+
+Cohesix exposes three scheduling concepts. They must not be collapsed into one
+claim.
+
+### 1. Kernel and target-task scheduling
+
+The selected manifest defines the target worker scheduling profile. Current
+checked-in profiles select a non-MCS record with a generated priority, domain,
+and bounded service-turn budget; MCS budget/period fields are zero and consumed
+budget evidence is disabled for that profile. Affinity is also profile-generated.
+
+These values are target execution policy. Claims about applied affinity,
+priority, scheduling contexts, or consumed budget require the selected seL4
+build and target evidence, not just generated metadata.
+
+### 2. Root-task service turns
+
+The event pump gives workers, consoles, timers, and driver clients bounded
+service opportunities. A service-turn budget limits cooperative work performed
+before yielding. It does not create a new kernel scheduler and must not be used
+to claim CPU isolation or real-time latency without target evidence.
+
+Physical operator input and an authenticated TCP console follow the bounded
+priority rules in `AGENTS.md`; nonessential mirroring and verbose output may be
+reduced under load, but command acknowledgements and emergency diagnostics must
+remain live.
+
+### 3. Namespace schedule queue
+
+`/queen/schedule/ctl` is a bounded control-plane queue. Its JSONL entries and
+`/proc/schedule/*` snapshots describe requested orchestration state. They do not
+directly set seL4 TCB priorities or create scheduling contexts. Exact paths and
+record fields are in [INTERFACES.md](INTERFACES.md), with generated capacities
+in [observability_interfaces.md](snippets/observability_interfaces.md).
+
+## Lifecycle and scheduling evidence
+
+Documentation must label evidence by layer and profile:
+
+| Evidence | What it proves | What it does not prove |
 | --- | --- | --- |
-| **Queen** | Hive-wide orchestration through `cohsh` and host tools: lifecycle control, mounts/binds, logs, GPU leases, policy, audit, and replay when enabled. | Full tree: `/`, `/queen`, `/log`, `/proc`, `/shard/*/worker/*`, legacy `/worker/*` when enabled, plus manifest-gated `/gpu`, `/host`, `/policy`, `/actions`, `/audit`, `/replay`, `/updates`, and `/models`. |
-| **WorkerHeartbeat** | Minimal heartbeat worker for attach, telemetry, and lifecycle proof. | `/proc/boot`, `/proc/lifecycle/*`, `/shard/<label>/worker/<id>/telemetry`, `/log/queen.log` read-only; legacy `/worker/<id>/telemetry` when enabled. |
-| **WorkerGpu** | GPU lease-state and telemetry worker for host-published GPU nodes. | WorkerHeartbeat view plus `/gpu/<id>/*` when GPU nodes are present. CUDA/NVML remain host-side. |
-| **WorkerBus** | Field-bus worker for manifest/sidecar-provided bus adapters. | WorkerHeartbeat view plus `/bus/<adapter>/*` when MODBUS/DNP3 sidecars are enabled. |
-| **WorkerLora** | LoRa worker for manifest/sidecar-provided LoRa adapters. | WorkerHeartbeat view plus `/lora/<adapter>/*` when LoRa sidecars are enabled. |
+| Generated role table | Role selection and configured bounds | Target worker boot or invocation |
+| Endpoint/notification unit test | Encoding and validation logic | On-target capability delivery |
+| QEMU worker transcript | QEMU profile behavior | Pi 4 behavior |
+| Pi 4 boot log with matching image | Behavior for that image and boot | A newer image or another transport |
+| Schedule-queue test | Control-file parsing and bounds | Kernel scheduling or latency |
+| Counter-qualified target trace | Timing for the recorded target/profile | A general performance guarantee |
 
-Exactly one Queen role owns hive-wide orchestration. Multiple worker instances may exist across the worker roles above. Queen tickets are optional in current attach flows; worker roles require a ticket with a subject identity.
+## Source map and verification
 
-## Worker Namespaces
+- Profile inputs: [`configs/root_task.toml`](../configs/root_task.toml) and
+  [`configs/root_task_pi4_uboot_aarch64.toml`](../configs/root_task_pi4_uboot_aarch64.toml)
+- Generated worker tables:
+  [`apps/root-task/src/generated`](../apps/root-task/src/generated)
+- Ticket format: [`crates/cohesix-ticket`](../crates/cohesix-ticket)
+- Shared role/ticket parsing:
+  [`crates/cohsh-core/src/ticket.rs`](../crates/cohsh-core/src/ticket.rs)
+- Target worker authority:
+  [`apps/root-task/src/worker_authority.rs`](../apps/root-task/src/worker_authority.rs)
+- Host role enforcement:
+  [`apps/nine-door/src/host`](../apps/nine-door/src/host)
+- Target namespace adapter:
+  [`apps/root-task/src/ninedoor.rs`](../apps/root-task/src/ninedoor.rs)
+- Validation workflow: [TEST_PLAN.md](TEST_PLAN.md)
 
-The generated manifest enables sharded worker namespaces. The current shard label is derived from the top `shard_bits` of `sha256(worker_id)[0]` and formatted as two hex digits.
-
-- `sharding.enabled = true`
-- `sharding.shard_bits = 8`
-- `sharding.legacy_worker_alias = true`
-- canonical telemetry path: `/shard/<label>/worker/<id>/telemetry`
-- legacy telemetry alias: `/worker/<id>/telemetry`
-
-The checked-in manifest currently enables both canonical sharded paths and legacy `/worker` aliases. New role and namespace documentation should prefer the canonical sharded path while acknowledging generated host/UI defaults that still consume `/worker` aliases.
-
-When the legacy alias is disabled, manifests must not reference `/worker/*` in mounts or policy rules. `coh-rtc` validates the required Secure9P walk depth for the selected sharding mode.
-
-## Tickets and Attach
-
-Tickets use the `cohesix-ticket` format. Host tooling can mint tickets from role secrets in the selected config; root-task and NineDoor register the generated role secrets and validate presented tickets during attach.
-
-Attach rules:
-
-- Queen may attach without a ticket; if a Queen ticket is supplied, it is validated.
-- Worker roles require a valid ticket and a subject identity.
-- Ticket subject mismatch, expiration, invalid MAC, unsupported role, or missing worker ticket fails attach explicitly.
-- Valid tickets configure the session role, namespace view, budget state, and any ticket-scoped quotas.
-
-Default budgets are role-aware: Queen is unbounded, WorkerGpu uses the GPU default, and WorkerHeartbeat, WorkerBus, and WorkerLora use the heartbeat default. Budget fields are `ticks`, `ops`, and `ttl_s`; NineDoor tracks remaining ticks/ops and ticket TTL at session level.
-
-## Control Surfaces
-
-Role orchestration is file-oriented. Host tools and Queen sessions append bounded commands to manifest-defined files; there is no ad-hoc RPC path.
-
-Primary control files:
-
-- `/queen/ctl`
-- `/queen/lifecycle/ctl`
-- `/queen/schedule/ctl`
-- `/queen/lease/ctl`
-- `/queen/export/ctl`
-- `/policy/ctl`
-
-Primary observability files:
-
-- `/proc/schedule/summary`
-- `/proc/schedule/queue`
-- `/proc/lease/summary`
-- `/proc/lease/active`
-- `/proc/lease/preemptions`
-- `/proc/pressure/policy`
-- `/policy/rules`
-- `/policy/preflight/*`
-- `/actions/queue`
-
-These paths are manifest-gated and size-bounded. The checked-in manifest enables policy and actions, but audit and replay are disabled by default unless their generated gates are enabled.
-
-## Scheduling Model
-
-As built, Cohesix exposes a bounded schedule-control queue rather than a full general-purpose scheduler contract:
-
-- `/queen/schedule/ctl` accepts append-only JSONL schedule entries such as `id`, `role`, `priority`, `ticks`, and `budget_ms`.
-- `/proc/schedule/summary` reports queue totals and generated queue capacity.
-- `/proc/schedule/queue` reports queued entries in the generated text format.
-
-This is control-plane scheduling state, not a claim of kernel-level priority-band scheduling or end-to-end worker CPU isolation. seL4 scheduling contexts, affinity, worker service buckets, and physical-target throughput claims remain profile-qualified and must be backed by the relevant generated manifests and target evidence.
-
-`cohsh` and other host tools run outside the target. QEMU/VM sessions use the authenticated TCP console path; Pi 4 hardware uses the U-Boot profile family and platform serial/TCP-console paths where enabled. UEFI/AWS behavior is profile-scoped work only where the build plan admits it.
-
-## Revocation and Closure
-
-Revocation is enforced at the session/control-surface level today:
-
-1. NineDoor detects ticket TTL expiry, operation budget exhaustion, tick budget exhaustion, Queen kill commands, or policy denial.
-2. The affected session is marked closed or revoked with an explicit reason.
-3. Further operations fail through the existing Secure9P/console error path.
-4. Relevant events are surfaced through logs, audit/policy surfaces when enabled, and generated observability nodes.
-
-Target-specific seL4 resource teardown belongs to root-task and is profile-qualified. Do not document TCB, scheduling-context, or cap deallocation as complete for a role unless the current code, generated manifests, and target evidence prove it.
-
-## Validation
-
-Use the staged Test Plan and generated-artifact checks as the source of truth for this document:
-
-- `scripts/check-generated.sh`
-- `scripts/ci/test_plan_run.sh --list`
-- `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`
-
-Focused tests that currently cover this surface include NineDoor schedule queue tests, control-plane transcript tests, ticket-mint tests, policy/audit tests, and worker attach tests. Add target-specific checks when changing role semantics, ticket fields, namespace paths, schedule-control formats, or generated manifest gates.
+Any change to a role, ticket claim, namespace scope, endpoint badge layout,
+notification, or scheduling field must update manifest IR, generated artifacts,
+tests, and this suite in the same authorized change.

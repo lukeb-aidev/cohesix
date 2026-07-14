@@ -1,193 +1,181 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Document deterministic failure behavior and operator recovery actions. -->
+<!-- Purpose: Define evidence-led diagnosis and recovery for Cohesix operator failures. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Failure Modes
 
-This document lists deterministic failure behavior and the required operator responses. All behavior here is **as-built**: observed via `/proc` nodes, control files, and `/log/queen.log` audit lines.
+This runbook maps observable symptoms to bounded evidence and recovery. It does
+not redefine protocol errors; canonical response and path semantics are in
+[INTERFACES.md](INTERFACES.md).
 
-**Operating principles**
-- All failures are deterministic and bounded. An `ERR` implies **no side effects** unless explicitly documented.
-- `/log/queen.log` is the authoritative audit trail for control denials and lifecycle gates.
-- `/proc/*` is the authoritative read-only source for lifecycle, pressure, and queue state.
+An explicit target `ERR` has no side effects unless the interface contract says
+otherwise. A connection loss or client-side timeout is different: completion
+may be unknown, so inspect read-only state before repeating a mutation.
 
-**Quick triage checklist**
-- `cat /proc/lifecycle/state` and `cat /proc/lifecycle/reason`
-- `cat /proc/root/reachable` and `cat /proc/root/cut_reason`
-- `cat /proc/pressure/*` (busy/quota/cut/policy)
-- `tail /log/queen.log` (or `cat` for bounded inspection)
+`/log/queen.log` is a bounded live ring, not permanent storage. It retains up
+to 2048 lines, and ordinary `log`/`tail` reads expose bounded windows. Export
+evidence before relevant entries are overwritten.
 
-## Lifecycle failures
+## First response
 
-### 1) Invalid lifecycle transition
-**Signal**
-- `ERR` on `/queen/lifecycle/ctl` write.
-- `/log/queen.log` line:
-  - `lifecycle denied action=<cmd> state=<STATE> reason=invalid-transition`
+From an attached `cohsh` session, collect the paths that exist in the selected
+profile; do not use shell globs because the command grammar does not expand
+them:
 
-**Impact**
-- State **does not** change.
-- No hidden retries.
+```text
+ping
+cat /proc/lifecycle/state
+cat /proc/lifecycle/reason
+cat /proc/root/reachable
+cat /proc/root/cut_reason
+cat /proc/pressure/busy
+cat /proc/pressure/quota
+cat /proc/pressure/cut
+cat /proc/pressure/policy
+tail /log/queen.log 64
+```
 
-**Recovery**
-- Read `/proc/lifecycle/state` and choose a valid command:
-  - `cordon` only from `ONLINE` or `DEGRADED`
-  - `drain` only from `DRAINING`
-  - `quiesce` from `ONLINE`, `DEGRADED`, or `DRAINING`
-  - `resume` from any non-`ONLINE` state
-  - `reset` from any non-`BOOTING` state
+Then record:
 
-### 2) Outstanding leases block `drain`, `quiesce`, or `reset`
-**Signal**
-- `ERR` on `/queen/lifecycle/ctl` write.
-- `/log/queen.log` line:
-  - `lifecycle denied action=<cmd> state=<STATE> reason=outstanding-leases leases=<n>`
+- target/profile and active manifest hash;
+- transport topology: direct TCP, gateway, mounted filesystem, or mock;
+- exact command or HTTP request, response, and local timestamp;
+- gateway `/v1/meta/status` and `/v1/meta/bounds` when using REST;
+- whether the operation was a read or mutation.
 
-**Impact**
-- State **does not** change.
-- Work remains leased or attached.
+Optional paths can be absent by manifest design. List the parent directory
+before treating a missing path as a failure.
 
-**Recovery**
-1. Inspect active workers (for example, via `/worker` or `/shard/.../worker`).
-2. Explicitly revoke or kill workers using `/queen/ctl`.
-3. Re-issue the lifecycle command once leases are zero.
+## Authentication and authority
 
-### 3) Lifecycle gate denial
-**Signal**
-- `ERR` on a gated path (worker attach, telemetry ingest, host publishes, or GPU job writes).
-- `/log/queen.log` line:
-  - `lifecycle denied action=<gate> state=<STATE> reason=gate-denied`
+| Symptom | Evidence | Recovery |
+| --- | --- | --- |
+| Direct client reports missing or placeholder TCP token | Client startup error before `AUTH` | Supply the intended non-placeholder token through the deployment secret boundary; do not change target policy to bypass authentication. |
+| `ERR AUTH` or connection closes during authentication | TCP endpoint is reachable, but listener rejects the token; repeated failures may enter bounded cooldown | Stop repeated attempts, verify the selected target and secret source, wait for cooldown when reported, then retry once. |
+| `ERR ATTACH` | Role, ticket MAC, expiry, subject, scope, or profile policy does not match | Verify the exact role, ticket issuer, subject, validity window, and active manifest. Mint or provision a valid ticket; do not reuse a ticket for another role or subject. |
+| A previously working operation reports ticket quota/scope denial | `ERR` detail and ticket/audit counters; generated quota policy | Reduce request rate or payload, wait only when the policy permits replenishment, or obtain a correctly scoped ticket. Do not broaden scope client-side. |
+| REST write returns HTTP `401` | JSON `status=ERR`; missing or invalid gateway request-auth header | Supply the gateway request-auth token. This fixes only the HTTP edge; target authority may still refuse the write. |
+| REST caller expects its own role/ticket but sees gateway permissions | Gateway startup role/ticket and shared namespace behavior | Run a separately configured gateway when a distinct upstream identity is required. REST has no per-request delegated target identity. |
 
-**Impact**
-- No side effects occur.
-- Access is blocked deterministically until lifecycle state changes.
+Generated ticket policy and quotas are summarized in
+[snippets/cohsh_ticket_policy.md](snippets/cohsh_ticket_policy.md) and
+[snippets/ticket_quotas.md](snippets/ticket_quotas.md).
 
-**Recovery**
-- Move the node to an allowed state (typically `ONLINE` or `DEGRADED`).
-- For orderly maintenance, use `cordon` -> `drain`; `drain` moves the node to `QUIESCED` when gates allow it. Use `quiesce` directly only from an allowed active state when an immediate quiet state is required.
+## Console and transport
 
-## Policy gate failures
+| Symptom | Evidence | Recovery |
+| --- | --- | --- |
+| A direct client hangs, is reset, or reports the console is busy | Another direct `cohsh`, `coh`, SwarmUI, bridge, ticket agent, CAS upload, or Python `TcpBackend` owns the single TCP console | Stop the existing owner, or make `hive-gateway` the sole TCP owner and move concurrent clients to REST. |
+| Connection refused | No listener at the configured address/port | Verify the target is running, the network profile is ready, and the host-forwarded or physical address and port are correct. Use the serial `ping`/`netstats` path to separate target liveness from networking. |
+| Connection resets after `quit` | `OK QUIT` followed by network close | Expected for a network console session. Reconnect only when a new session is intended. |
+| `coh mount` is already active or lock acquisition fails | Existing mount process or endpoint lock | Use the existing mount or unmount it cleanly. Do not run two REST mounts for the same gateway URL. |
+| Filesystem path behaves differently from direct client | Mount was created with a different role, ticket, manifest, or endpoint | Inspect the mount process configuration. Filesystem consumers inherit the mount owner's authority. |
 
-### 1) Missing approval for gated control write
-**Signal**
-- `ERR ECHO reason=policy ... EPERM` when writing to a gated path (for example `/queen/ctl`).
-- `/log/queen.log` line indicating policy denial.
+See [HOST_TOOLS.md](HOST_TOOLS.md) for the complete composition model.
 
-**Impact**
-- The control action is refused deterministically.
+## Gateway and REST
 
-**Recovery**
-1. Read `/policy/rules` to confirm the target is gated.
-2. Queue an approval in `/actions/queue` with `id`, `target`, and `decision`.
-3. Retry the control write.
+| Symptom | Meaning | Recovery |
+| --- | --- | --- |
+| Gateway refuses non-mock startup | TCP auth or request-auth secret is missing, empty, or a rejected placeholder | Provide both secrets through the deployment secret boundary. |
+| Gateway refuses a non-loopback bind | Exposure guard is active | Prefer loopback plus a secure tunnel. Use the explicit non-loopback opt-in only behind an approved authenticated network boundary. |
+| HTTP `400` | Invalid query, path, size, or JSON request | Correct the request using `/v1/meta/bounds` and the OpenAPI schema. |
+| HTTP `429` | Bounded broker queue backpressure | Respect `Retry-After` when present, apply bounded backoff, and reduce concurrency or request volume. |
+| HTTP `503` | Upstream console/session is unavailable | Check `/v1/meta/status`, the target, console ownership, and gateway logs. Restore upstream connectivity before retrying. |
+| HTTP `504` | Broker response deadline expired | Inspect gateway and target state. For a write, verify the target's read-only status before retrying. |
+| HTTP `200` with JSON `status=ERR` | The target completed a deterministic refusal | Read `error`, correct the policy/lifecycle/schema cause, and do not treat HTTP success as operation success. |
+| `/v1/meta/bounds` hash differs from client defaults | Gateway binary and client defaults were generated from different manifests | Treat the gateway response as authoritative for gateway request bounds, identify the intended build, and compare both with `/proc/boot` or equivalent image evidence. |
 
-### 2) Replay attempt for a consumed approval
-**Signal**
-- `ERR` on a gated write even though an approval was previously queued.
-- `/log/queen.log` indicates a consumed or replayed action.
+## Lifecycle
 
-**Impact**
-- Approvals are single-use; replays are refused.
+Lifecycle writes use `/queen/lifecycle/ctl`. A refused transition leaves state
+unchanged.
 
-**Recovery**
-- Queue a fresh approval in `/actions/queue`, then retry the write.
+| Symptom | Evidence | Recovery |
+| --- | --- | --- |
+| `reason=invalid-transition` | Current `/proc/lifecycle/state` does not admit the command | Select a valid transition from the table below. |
+| `reason=outstanding-leases leases=<n>` | Active leases block `drain`, `quiesce`, or `reset` | Inspect `/proc/lease/active`, explicitly finish or revoke the work through its documented control path, then retry after the active count is zero. |
+| `reason=gate-denied` on worker attach, telemetry, GPU, or host publish | Current lifecycle closes that operation's gate | Move the node through an authorized lifecycle transition; do not bypass the gate in a bridge or client. |
 
-## Console and transport failures
+As-built command admission:
 
-### 1) Console already in use
-**Signal**
-- `cohsh` or a tool hangs on connect, or a tool reports a busy/locked console.
+| Command | Allowed state | Result |
+| --- | --- | --- |
+| `cordon` | `ONLINE`, `DEGRADED` | Enter `DRAINING`. |
+| `drain` | `DRAINING` and no blocking leases | Enter `QUIESCED`. |
+| `quiesce` | `ONLINE`, `DEGRADED`, `DRAINING` and no blocking leases | Enter `QUIESCED`. |
+| `resume` | Any state except `ONLINE` | Enter `ONLINE`. |
+| `reset` | Any state except `BOOTING`, with no blocking leases | Enter lifecycle state `BOOTING`. This is not a platform reboot. |
 
-**Impact**
-- Only one TCP console client can attach at a time.
+Use the separate authenticated `reboot` console command for a platform reboot.
 
-**Recovery**
-1. Quit the active console client (`cohsh`, `swarmui`, `hive-gateway`, `coh`, `gpu-bridge-host`, `host-sidecar-bridge`).
-2. Retry the connection.
+## Policy approvals
 
-### 2) Connection refused or wrong port
-**Signal**
-- TCP connection refused when attaching.
+| Symptom | Evidence | Recovery |
+| --- | --- | --- |
+| `ERR ECHO reason=policy ... EPERM` | `/policy/rules` contains a rule matching the exact target and no usable approval exists | Queue one `{"id":"...","target":"...","decision":"approve"}` record in `/actions/queue`, then retry the target once. |
+| A previously used approval is refused | `/actions/<id>/status` is consumed or the log reports replay | Approvals are single-use. Queue a new uniquely identified approval for the exact target. |
+| Approval exists but write still fails | Target mismatch, deny decision, role/ticket denial, lifecycle gate, or invalid payload | Compare the exact normalized target and inspect the next refusal. Approval does not bypass other checks. |
+| `/policy` or `/actions` is absent | Policy feature is disabled in the selected manifest | Do not fabricate the paths. Confirm the profile and use its as-built policy. |
 
-**Impact**
-- The VM or gateway is not running, or the host-forwarded port is incorrect.
+## Bounds, schemas, and namespace
 
-**Recovery**
-- Verify QEMU is running and the console port matches your configuration (default `127.0.0.1:31337`).
+| Symptom | Recovery |
+| --- | --- |
+| `path must be absolute`, path too long, walk too deep, or `..` rejected | Use an absolute canonical path and the limits from the live manifest. Parent traversal is never valid. |
+| Read exceeds `max_bytes` | Reduce the requested size or use a bounded tail where supported. |
+| `ECHO` line or JSON record exceeds a bound | Reduce the record within its schema; do not split a single JSONL control record across writes. |
+| Unknown JSON field or invalid enum/token | Use the strict schema in [INTERFACES.md](INTERFACES.md). Clients must not coerce or silently drop fields. |
+| `/worker/...` is absent | Use `/shard/<label>/worker/<id>`. `/worker` is a legacy alias only when enabled. |
+| `/gpu`, `/host`, `/policy`, or a `/proc` subtree is absent | Verify the active manifest and whether the responsible host publisher has completed. Absence can be a disabled feature, not a transport error. |
 
-## Worker telemetry ring pressure
-Worker telemetry paths use bounded rings under `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` only when enabled).
+## Telemetry pressure
 
-**Signals**
-- `/log/queen.log` entries such as `telemetry ring wrap` indicate worker telemetry ring wrap or overwrite behavior.
-- Tails may return fewer historical records than expected when the ring has wrapped.
+### Worker telemetry ring
 
-**Recovery**
-- Reduce worker telemetry rate, increase generated worker telemetry ring sizing, or pull/tail more frequently.
-- Ring wrap is a worker telemetry condition; it is not the same as `/queen/telemetry` ingest pressure.
+`telemetry ring wrap dropped_bytes=<n> new_base=<n>` in the retained Queen log
+means the bounded worker telemetry ring overwrote old data. Pull or tail more
+frequently, or reduce the producer rate. Changing generated ring capacity is an
+engineering/configuration change: update manifest IR, regenerate, and run the
+required test plan rather than treating it as an immediate operator command.
 
-## Queen telemetry ingest pressure
-Queen telemetry ingest refusal is deterministic and policy-driven.
+### Queen telemetry ingest
 
-**Signals**
-- `ERR` on `/queen/telemetry/<device>/seg/<id>` append when over limits.
-- `/log/queen.log` entries indicate ingest quota behavior (for example `telemetry quota reject`).
+`telemetry quota reject bytes=<n> quota=<n>` means the host append exceeded the
+configured ingest budget. Stop blind retries, inspect the current segment and
+quota state, and reduce or rotate input according to the OS-owned segment
+protocol. Segment identifiers are assigned by Cohesix; clients must use the
+acknowledged `seg_id` rather than guessing the next name.
 
-**Recovery**
-- Adjust `telemetry_ingest.*` quotas in the manifest and regenerate with `coh-rtc`.
-- Persistent VM-local spool behavior is planned for Milestone 27 and is not an as-built recovery surface until `/proc/spool/status` exists; until then, use telemetry quota/audit lines for recovery decisions.
+## Host publisher visibility
 
-## Host publish denial
-Host providers are gated by lifecycle state and policy.
+| Symptom | Evidence | Recovery |
+| --- | --- | --- |
+| `/gpu` has no published devices/models | `gpu-bridge-host --list` may show local inventory, but `/gpu/bridge/status` has no completed live snapshot | Run a one-shot or continuous `gpu-bridge-host --publish` against the intended live transport. `--list` alone does not publish. |
+| `/host` has no provider data | Parent path is enabled but selected provider nodes are empty/absent | Run `host-sidecar-bridge` with the required providers and inspect its bounded provider errors. |
+| A publisher works alone but blocks `cohsh` | Publisher uses direct TCP and retains the single console connection | Stop it or move the gateway, publisher, and shell to REST mode. |
+| In-memory mock data appeared in one Rust tool but not another | Each executable owns separate in-process mock state | Test within one process or use a live gateway/mount. Do not infer live publication from mock output. |
+| Python mock data unexpectedly persists or appears in another process | Both clients selected the same filesystem-backed mock root | Use a unique `COHESIX_MOCK_ROOT` for isolation or remove the intended test tree after the run. Shared local mock state is still not live evidence. |
 
-**Signals**
-- `ERR` on `/host/...` append when state disallows host publishes.
-- `/log/queen.log` contains a `lifecycle denied` gate line.
+## Generated drift
 
-**Recovery**
-- Move lifecycle back to `ONLINE` or `DEGRADED`.
-- If policy is enabled, ensure required approvals exist in `/actions/queue`.
+If prose, client defaults, and the target disagree:
 
-## Worker attach denial
-Worker roles cannot attach when lifecycle gates are closed.
+1. Record the target/image manifest fingerprint, selected profile, and any
+   gateway/client generated-policy fingerprints separately.
+2. Run `scripts/check-generated.sh` for committed default-profile drift.
+3. Change manifest/IR inputs, not generated Rust, snippets, scripts, or Python
+   defaults.
+4. Regenerate all required outputs and run the staged test plan.
 
-**Signals**
-- Attach fails with `ERR` and `/log/queen.log` shows `lifecycle denied action=worker-attach`.
+Generated mismatch is a build defect; it is not repaired by editing a copied
+number in this runbook.
 
-**Recovery**
-- Resume lifecycle (`resume`) once maintenance is complete.
-- Re-attach with valid worker ticket.
+## Physical hardware failures
 
-## Host bridge visibility failures
-
-### 1) `/gpu` or `/gpu/models` is empty
-**Signal**
-- `ls /gpu` returns empty or `ERR` and `/gpu/models` is missing.
-
-**Impact**
-- The host GPU bridge has not published a snapshot yet.
-
-**Recovery**
-- Run `./bin/gpu-bridge-host --publish ...` and verify `/gpu/bridge/status`.
-
-### 2) `/host` is empty
-**Signal**
-- `ls /host` returns empty or `ERR`.
-
-**Impact**
-- The host sidecar bridge is not publishing providers.
-
-**Recovery**
-- Run `./bin/host-sidecar-bridge --watch --provider ...` and re-check `/host/*`.
-
-## Bounds and path violations
-
-### 1) Path or read size exceeds bounds
-**Signal**
-- `path exceeds max length`, `path component '..' is not permitted`, or `read exceeds max bytes`.
-
-**Impact**
-- Request is refused deterministically.
-
-**Recovery**
-- Use `/v1/meta/bounds` (REST) or the manifest-derived limits to size requests within bounds.
+Serial boot evidence, Pi 4 USB/HDMI gates, GENET, CYW43/SDIO, and flash/current-
+image proof have target-specific evidence contracts. Preserve the current boot
+sample and route diagnosis through [DRIVERS.md](DRIVERS.md),
+[HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md), and
+[TEST_PLAN.md](TEST_PLAN.md). QEMU or mock success does not close physical-
+hardware acceptance.

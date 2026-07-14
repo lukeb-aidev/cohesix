@@ -1,662 +1,265 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Describe the Cohesix system architecture, component responsibilities, and boundary constraints. -->
+<!-- Purpose: Describe the as-built Cohesix system boundaries, components, and principal data flows. -->
 <!-- Author: Lukas Bower -->
 
-# Cohesix Architecture (As-Built)
+# Cohesix Architecture
 
-Cohesix is a control-plane OS for secure orchestration and telemetry of edge GPU nodes using a Queen/Worker hive model. This document describes the current as-built system for the QEMU `aarch64/virt` target, the Pi 4 U-Boot profile family (`pi4-uboot-aarch64` with legacy alias `uefi-aarch64`), and the macOS host; manifest-gated features are called out explicitly.
+This document owns the system-level view of Cohesix: trust boundaries, runtime
+components, and the principal control and data flows. Exact namespace contracts
+belong in [INTERFACES.md](INTERFACES.md), Secure9P invariants in
+[SECURE9P.md](SECURE9P.md), role policy in
+[ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md), and physical-driver rules in
+[DRIVERS.md](DRIVERS.md).
 
-## 1. Scope and Non-Goals
-Scope:
-- Host: macOS 26 on Apple Silicon for build, QEMU, and host tools.
-- Targets: QEMU `aarch64/virt` for development/CI, with the GIC version selected from the local seL4 build configuration, and Raspberry Pi 4 (`bcm2711`) via `Pi firmware -> U-Boot -> seL4 image -> root-task`; userspace is a pure Rust CPIO rootfs.
-- Control plane: Secure9P namespace plus a deterministic console grammar shared with `cohsh`/`cohsh-core`.
+## 1. Authority and evidence boundary
 
-Non-goals:
-- In-VM GPU runtimes (CUDA/NVML), POSIX emulation, or dynamic loading.
-- Control channels outside Secure9P and the console grammar (no ad-hoc RPC, no shared-memory shortcuts).
-- In-VM TCP services except the authenticated root-task console.
-- In-VM UI clients or host-side tooling; UI/CLI remain host-only and observational.
-- In-VM UI stacks or alternate local-shell grammars; local diagnostics seat reuses the existing root-console parser and command set.
+Cohesix is built from an upstream seL4 kernel and a pure-Rust `no_std` target
+userspace. The selected profile manifest, its resolved manifest, and generated
+`coh-rtc` outputs define the profile's generated interfaces, limits, and
+feature gates. The checked-in default-profile snapshot is available in
+[the generated manifest snippet](snippets/root_task_manifest.md); target builds
+must use the artifacts generated from their selected `configs/root_task*.toml`
+file.
 
-## 2. System Boundaries and TCB
-- VM boundary: seL4 kernel plus the boot `rootserver` and the CPIO userspace payload (worker binaries and manifest-declared isolated driver runtime images when the selected profile includes them). In the primary `scripts/cohesix-build-run.sh` QEMU path, a boot-minimized rootserver is embedded into the staged elfloader and the unchanged target ELF is also staged for diagnostics and external QEMU loading; neither copy is inside the payload CPIO. That CPIO inventory covers only files inside the userspace payload. This is the trusted computing base. The legacy minimal `scripts/qemu-run.sh` harness has its own profile-gated packaging path and is not the canonical full-system payload gate.
-- The root task owns capability setup, the event pump, console surfaces, logging, and the in-VM NineDoor bridge. It retains capability authority and revocation for hardware, while Pi 4 physical driver progress is routed through root-created driver-task service TCBs and fixed-layout command/completion rings.
-- Host tooling (`cohsh`, `coh`, `swarmui`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`) is outside the TCB and interacts only through Secure9P or the console.
-- The only in-VM TCP listener is the root-task console; all other TCP services remain host-only.
-- Device authority (MMIO, DMA admission/publication, cache ops, IRQ binding, and physical-address discovery) goes through the HAL; no direct device access outside HAL.
-- The HAL is capability-layered rather than board-layered: generic MMIO/DMA access lives in `DeviceHal`, PCI-backed discovery/configuration lives in `PciHal`, and the Pi 4 CYW43-over-SDIO bring-up path lives in `Cyw43Hal`. The compatibility `Hardware` façade remains for call sites that still span multiple backends, but drivers are expected to depend on the narrowest HAL layer they actually need.
-- On the physical Pi 4 profile, driver bootstrap now requires isolated child VSpaces and fixed command/completion rings. Root loads isolated `pi4-driver-*` runtime images only from the raw driver-runtime CPIO embedded into the Pi 4 root-task image by `scripts/pi4-image-build.sh`; the staged U-Boot CPIO remains an audit/packaging artifact, not a runtime fallback. QEMU and host profiles keep compatibility paths for virtual-device testing.
-- The intended isolated-image contract is represented in compiler IR under `root_task.driver_images` and generated into root-task tables. The build produces and stages profile-selected `pi4-driver-*` image artifacts with fixed-ring service engines. Root maps every bounded runtime ELF `PT_LOAD` page declared by `code-pages` plus stack/IPC/ring and declared device regions, then sends each isolated Pi 4 runtime a bounded pointer-free `pi4-driver-abi` runtime-init descriptor containing primitive MMIO/DMA/shared page metadata, semantic resource ranges, bus-address policy, optional IRQ descriptors, USB/PCIe and CYW43/SDIO bus links, and framebuffer metadata. Physical Pi one-way service turns are bounded shared-ring turns; isolated runtimes consume the shared command ring and poll the endpoint for reply-cap-bearing calls, replying only when a real reply cap is present. Runtime init is topology transport only and cannot credit owner-state by itself. Runtime code windows are generated as `code-pages=128`, which covers the current 108-page runtime ELF span. Runtime DMA/shared budgets are now bounded by the descriptor ABI and current use: USB gets 64 DMA pages, GENET gets 64 DMA pages for a 32-RX/32-TX ring shape, HDMI uses framebuffer plus shared pages without a DMA arena, CYW43 gets shared-control pages without direct SDHCI MMIO or DMA, and SDIO gets one HAL-declared SDHCI MMIO page plus shared pages. Seven isolated Pi 4 runtime specs are acceptance-eligible in the generated manifest. The serial image handles bounded mini-UART init/RX/TX, USB owns a direct-root-port xHCI boot-keyboard state machine, GENET owns MDIO/MAC plus bounded RX/TX descriptor rings, HDMI renders into the mapped framebuffer, PCIe services bounded MMIO operations, SDIO services fixed-layout CMD52/CMD53/POLL_IRQ records from its isolated runtime, and CYW43 owns the pointer-free shared-control SDPCM command surface behind the CYW43/SDIO bus-link descriptor. Fresh Pi hardware proof still has to show useful Wi-Fi/DHCP or GENET/DHCP plus USB keyboard, HDMI, serial, SDIO owner-state, and PCIe/VL805 behavior before those engines are board-proven.
-- Isolated runtimes and root-side ring clients publish bounded `DRIVER_TASK_COUNTER` snapshots for service turns, staged bytes, cache work, busy/backpressure, same-request resumes, timeouts, aborts, and RX/TX volume. Valid counters are required for Milestone 26b performance claims, but they remain diagnostic: they do not credit owner-state proof or replace a fresh same-harness Pi benchmark.
+Implementation and proof are separate states:
 
-## 2.1 SMP Execution Model (Task Isolation)
-- SMP is enabled only when the seL4 kernel is built with `SMP=ON` and `KernelMaxNumNodes >= 2`.
-- Cohesix uses **task isolation** (separate seL4 tasks) rather than shared-memory multithreading; authoritative state remains serialized.
-- For QEMU bring-up, set `COHESIX_QEMU_SMP` (or `QEMU_SMP`) to match `KernelMaxNumNodes`, or provide a full topology via `COHESIX_QEMU_SMP_TOPO`, when running `scripts/qemu-run.sh` or `scripts/cohesix-build-run.sh`.
-- QEMU SMP bring-up on macOS/TCG requires PSCI `smc`; the SMP kernel build must ingest a DTB dumped with `virtualization=on` so the elfloader emits `PSCI_METHOD_SMC` for the platform.
-- Affinity hints live in `root_task.affinity` inside `configs/root_task.toml`; all core indices must be `< max_cores`, and `max_cores` must match the kernel build’s node count when affinity is enabled. Defaults enable affinity with `authority_core=0`, `ninedoor_cores=[1]`, `provider_cores=[2, 3]`, and `worker_cores=[2, 3]` unless overridden in the manifest. Per-driver TCB pinning is explicit under `root_task.affinity.drivers` for `serial`, `usb-local-seat`, `hdmi-text`, `bcmgenet-v5`, `cyw43455`, `rtl8139`, `virtio-net`, `sdio-host`, and `pcie-root`; validation rejects driver pins to the root authority core. When enabled, root-task pins its init TCB to `authority_core`, temporarily applies the NineDoor core when attaching the bridge, applies worker-core affinity during worker spawns, and applies the per-driver core to bootstrap-created driver TCBs. Physical Pi 4 owner-state boots use that same `seL4_TCB_SetAffinity` path for manifest-declared isolated driver runtimes; boot proof must show the manifest `affinity_core` per driver plus aggregate applied affinity. The physical-Pi guard still defers early TCB-bound notification setup with `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`; the isolated runtime command ring starts through the endpoint path, while notification lifecycle proof remains red until the bind path is reproved. The `smp` debug command cycles the init TCB across the configured role cores and emits per-core scheduler dumps to prove core reachability.
+- Source, generated descriptors, and a staged image prove that a path can be
+  built; they do not prove that a particular board booted that image.
+- QEMU evidence proves the QEMU profile only.
+- The accepted Milestone 26c Pi 4 evidence is historical, target-qualified
+  evidence for that image and boot set. It does not replace current-image
+  Milestone 26d revalidation.
+- Wired GENET, CYW43 Wi-Fi, USB/local-seat, serial, HDMI, driver-runtime,
+  console, and benchmark proof remain independent ledgers.
 
-## 3. Top-Level Architecture
-- `root-task` (`apps/root-task`): seL4 bootstrap, CSpace management, event pump, console (serial + TCP), ticket issuance, log buffer (`/log/queen.log`), HAL, and the in-VM NineDoor bridge.
-- Manifest-declared isolated Pi 4 driver runtimes (`apps/pi4-driver-runtime`, staged as `pi4-driver-*` images): no-std child images for serial, USB/local-seat, HDMI, GENET, CYW43, SDIO, and PCIe service turns behind HAL-admitted descriptors and fixed rings.
-- `NineDoor` (`apps/nine-door`): Secure9P server for host builds and in-process tests. On seL4, `apps/root-task/src/ninedoor.rs` provides `NineDoorBridge`, a namespace/control shim used by the console path.
-- Secure9P core (`crates/secure9p-*`): 9P2000.L codec and session logic used by NineDoor, `cohsh`, and `coh`.
-- Worker crates (`apps/worker-heart`, `apps/worker-gpu`, `apps/worker-bus`, `apps/worker-lora`): role-specific binaries; orchestration is file-driven via `/queen/ctl` and role-scoped mounts.
-- Host tools: `cohsh` CLI (`apps/cohsh`), `coh` host bridge (`apps/coh`), `swarmui` UI (`apps/swarmui`), `hive-gateway` REST gateway, `gpu-bridge-host`, `host-sidecar-bridge`, and `cas-tool`.
-- Manifest compiler: `tools/coh-rtc` generates root-task tables, policies, and docs snippets from `configs/root_task.toml` into `apps/root-task/src/generated`, `configs/generated/`, and `docs/snippets/`.
+The active scope and current proof requirements are normative in
+[BUILD_PLAN.md](BUILD_PLAN.md). Boot-by-boot results are non-canonical evidence;
+canonical claims must point to the tracked plan, test contract, and archived
+target-qualified artifacts.
 
-## 4. Control Surfaces
-### Secure9P namespace (NineDoor)
-- Protocol: 9P2000.L only; ops include `version`, `attach`, `walk`, `open`, `read`, `write`, `clunk`, `stat`. `remove` is disabled.
-- Bounds: `msize <= 8192`, walk depth <= 8, UTF-8 only, no `..`; walks validate each component and reject invalid or oversized segments.
-- Append-only semantics apply to control and stream files (`/queen/ctl`, `/queen/lifecycle/ctl`, `/queen/schedule/ctl`, `/queen/lease/ctl`, `/queen/export/ctl`, `/policy/ctl`, `/gpu/bridge/ctl`, `/log/*`, `/queen/telemetry/*`, telemetry, policy/audit sinks).
-- The path layout and constraints are shared between the host NineDoor server and the in-VM console bridge; host-only providers may be absent in the seL4 build.
+## 2. Design boundaries
 
-### Console surfaces
-- Serial console: platform-selected `cohesix>` prompt when `serial-console` is built. QEMU/dev profiles use PL011 where configured; Pi 4 uses the mini-UART emergency path until isolated serial runtime proof moves steady serial service behind the ring-backed runtime.
-- TCP console: smoltcp-based listener when `net-console` is built; frames are length-prefixed (4-byte little-endian) and capped by Secure9P bounds (`msize <= 8192`).
-- Session guard: `AUTH <token>` handshake before any console verbs; failed auth is rate-limited.
-- Command grammar: shared with `cohsh-core`; acknowledgements (`OK` / `ERR`) precede side effects and streamed commands terminate with `END`.
-- Line bounds: 256-byte console line cap across transports.
+Cohesix is a control-plane operating system for secure orchestration and
+telemetry of edge GPU nodes. It uses a Queen/Worker model and exposes bounded,
+file-oriented control surfaces.
 
-### Host tooling
-- `cohsh` is the canonical operator client. It speaks Secure9P for in-process/host NineDoor sessions and the console grammar over TCP for QEMU/VM sessions.
-- `coh` is the host bridge for GPU leases, telemetry pulls, and PEFT lifecycle; it reuses the same console grammar and manifests.
-- `swarmui` is observational only and reuses `cohsh-core` tailers; it does not add verbs or protocols.
-- `hive-gateway` is a host-only REST projection of `LS`/`CAT`/`ECHO` with manifest-derived bounds; it uses a bounded broker dispatcher (control + telemetry queues, fair scheduling) and never introduces new control semantics.
-- `gpu-bridge-host` and `host-sidecar-bridge` publish provider data into `/gpu/*` and `/host/*` via Secure9P; they never run inside the VM.
-- `cas-tool` uploads CAS bundles via append-only `/updates/*` flows over the TCP console.
+The target trusted computing base contains:
 
-## 5. Boot and Bring-Up Flow
-1. seL4 elfloader enters the root-task entry point.
-2. Root task reconstructs canonical CSpace addressing using `seL4_CapInitThreadCNode` and `bootinfo.initThreadCNodeSizeBits`, validates the `bootinfo.empty` window, and logs copy/mint/retype tuples before consuming slots.
-3. UART boot diagnostics are emitted through the emergency path, then physical Pi 4 skips installing a steady-state root UART mapping and defers isolated mini-UART serial driver-task runtime proof until after the first prompt. Root may map the HAL-owned mini-UART frame as a diagnostic shell fallback and keep serial RX/TX on that direct MMIO path until the isolated runtime attaches; that path remains acceptance-red and does not credit serial owner-state proof. When prompt-side isolated runtime init succeeds, the steady-state event pump receives only a ring-backed serial client.
-4. HAL setup, timer initialization, and IPC endpoints are established.
-5. Manifest-generated tables (tickets, Secure9P limits, policy/audit flags) are loaded from `apps/root-task/src/generated`.
-6. Milestone 26 hardware gates execute before ticket publication:
-- no-NIC baseline (`hw.no_nic`) suppresses net-console bring-up.
-- attestation policy (`hw.attestation.*`) is evaluated and can abort boot deterministically.
-- local-seat policy (`hw.local_seat.*`) is evaluated with fail-fast/degrade semantics; the checked-in Pi 4 U-Boot profile requires local-seat runtime initialization.
-7. The log buffer (`/log/queen.log`) and NineDoorBridge are initialized.
-8. Serial console starts; TCP console is started only when networking is enabled by profile/policy.
-9. The event pump enters its cooperative loop (serial, timer, networking, IPC, NineDoorBridge), avoiding busy waits.
+- the selected upstream seL4 kernel build;
+- the Rust root task and compiler-generated policy tables;
+- manifest-declared worker images selected by the profile; and
+- manifest-declared physical-driver runtime images plus their fixed ABI.
 
-### 5.1 Profile-gated NIC matrix (Milestone 26a/26b as-built)
-- QEMU/dev-virt flow keeps existing behavior: virtio-net is default when enabled, RTL8139 remains supported, and dev defaults remain `10.0.2.15/24` with gateway `10.0.2.2`.
-- Pi 4 U-Boot flow uses manifest-authored `hw.network.mode`, `hw.network.interface`, `hw.network.static_ipv4`, and `hw.network.dhcp` bounds with `hw.network.enabled=true` and `hw.network.backend=bcmgenet-v5`. The checked-in Pi 4 U-Boot manifest defaults to DHCP with `interface=auto`, so a no-saved-policy boot selects GENET DHCP unless bounded Wi-Fi credentials or explicit Wi-Fi policy select CYW43.
-- The staged Pi 4 U-Boot boot script persists only Cohesix policy in `cohesix.env`, reloads it on each boot, then loads the staged padded `bcm2711-rpi-4-b.dtb`, mirrors `coh_net_mode`, `coh_net_interface`, `coh_static_ip`, `coh_static_prefix_len`, `coh_static_gateway`, `coh_wifi_ssid`, and `coh_wifi_psk` into `/chosen/cohesix,*`, and hands that DTB to the seL4 elfloader via the U-Boot `uImage`/`bootm` path. Root-task applies only bounded overrides and otherwise falls back to manifest defaults; saved U-Boot settings do not rewrite the build-time manifest.
-- The current runtime still exposes exactly one active control-plane interface. `mode=static` uses manifest static IPv4 unless a bounded U-Boot static override is applied, `mode=dhcp` acquires a lease through the bounded DHCPv4 client, and `mode=off` disables net-console before socket bring-up.
-- On Pi 4, `wired` selects the on-board GENETv5 path, explicit `wifi` selects the HAL-backed CYW43455 SDIO path for bounded `static` or `dhcp`, and `auto` remains DHCP-only. In the physical driver-task cutover profile, `auto` selects CYW43 when bounded credentials are present and otherwise selects GENET; once CYW43 is selected, attach/join/runtime failures are fatal driver evidence rather than an implicit wired fallback. QEMU/host compatibility profiles may still exercise the older absent-device fallback logic for virtual-device tests.
-- Legacy `uefi-aarch64` manifests are accepted only as migration alias and emit deterministic diagnostics (`manifest.profile.alias=uefi-aarch64->pi4-uboot-aarch64`).
-- Source of truth is compiler IR (`coh-rtc`) fields under `hw.network.*`; root-task does not hard-code Pi 4 network addresses.
-- GENETv5 design provenance order is Linux `bcmgenet` -> Linux `bcm2711` DT bindings -> U-Boot `bcmgenet`; references are design-only and no source code lift is permitted.
+The target does not contain CUDA, NVML, container runtimes, a POSIX emulation
+layer, or a general-purpose network-service stack. GPU access, REST projection,
+host-service integration, and other heavy ecosystems remain host-side. The
+only permitted in-target TCP listener is the authenticated root-task console.
 
-### CSpace bootstrap invariants
-- Root CNode addressing uses the kernel-advertised radix (`initThreadCNodeSizeBits`), with `seL4_CapInitThreadCNode` as the root and offsets fixed at 0.
-- Destination slots are constrained to the `bootinfo.empty` window; reserved slots remain untouched.
-- A smoke copy into the empty window validates the addressing policy before further retypes.
+### 2.1 Components
 
-## 6. Role Model and Mounts
-| Role | Namespace view (as-built) | Notes |
+| Component | Runtime | Responsibility |
 | --- | --- | --- |
-| Queen | Full tree (`/`, `/queen`, `/log`, `/proc`, `/shard/*/worker/*`, legacy `/worker/*` when enabled) plus manifest-gated `/gpu`, `/host`, `/policy`, `/actions`, `/audit`, `/replay`, `/updates`, `/models` | Queen tickets are optional; worker tickets are required. |
-| WorkerHeartbeat | `/proc/boot`, `/proc/lifecycle/*`, `/shard/<label>/worker/<id>/telemetry`, `/log/queen.log` (RO); legacy `/worker/<id>/telemetry` when enabled | Ticket must include a subject identity. |
-| WorkerGpu | WorkerHeartbeat view + `/gpu/<id>/*` when GPU nodes are present | GPU nodes are host-published; no in-VM GPU stack. |
-| WorkerBus | WorkerHeartbeat view + `/bus/<adapter>/*` when MODBUS/DNP3 sidecars are enabled | Scope is derived from ticket subject. |
-| WorkerLora | WorkerHeartbeat view + `/lora/<adapter>/*` when LoRa sidecars are enabled | Scope is derived from ticket subject. |
+| Upstream seL4 | Target kernel | Capability enforcement, address spaces, scheduling, notifications, interrupts, and kernel-generated platform truth. |
+| `root-task` | Target, `no_std` | Bootstraps CSpace/VSpaces, admits resources through HAL, runs the bounded event pump, owns operator consoles, validates tickets, and projects the in-target namespace through `NineDoorBridge`. |
+| `pi4-driver-*` | Pi 4 target, `no_std` child images | Own steady-state physical-device service behind HAL-admitted resources and the pointer-free driver-task ABI. |
+| Worker images | Target, `no_std` where selected | Execute profile-declared worker roles and interact through generated capabilities, notifications, tickets, and namespace files. |
+| Host NineDoor | Host, `std` | Implements the Secure9P server used by host builds and in-process tests. It is not the in-target console server. |
+| `cohsh`, `coh`, `swarmui`, gateway and bridges | Host | Project documented console or Secure9P semantics; they do not create a new authority path. |
+| `coh-rtc` | Build host | Validates manifest IR and generates Rust tables, resolved manifests, policy defaults, scripts, and documentation snippets. |
 
-Mount and bind semantics:
-- NineDoor maintains a per-session mount table; `bind` and `mount` are queen-only.
-- On seL4, `mount` is limited to manifest-provided namespace mounts (see generated mounts; `logs` maps to `/log` by default).
-- On the host NineDoor server, mounts map registered services into the session namespace.
-- Sharding is canonical: `/shard/<label>/worker/<id>/telemetry`; legacy `/worker/<id>/telemetry` exists only when `sharding.legacy_worker_alias = true`.
-- Role isolation is enforced before provider logic runs.
+The default and Pi 4 manifests currently mark `worker-heartbeat`, `worker-gpu`,
+and `worker-lora` as implemented target worker roles. `worker-bus` is a
+recognized ticket/namespace role but is not an implemented target worker role
+in those profiles. See [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md) for
+the support matrix.
 
-## 7. Key Invariants (Red Lines)
-- Secure9P: 9P2000.L only; `msize <= 8192`; walk depth <= 8; UTF-8 paths; no `..`; no fid reuse after `clunk`; `remove` disabled.
-- Append-only: `/queen/ctl`, `/queen/lifecycle/ctl`, `/queen/schedule/ctl`, `/queen/lease/ctl`, `/queen/export/ctl`, `/policy/ctl`, `/log/*`, telemetry, policy/audit sinks, `/gpu/bridge/ctl`, and `/queen/telemetry/*` ignore offsets and reject writes that break bounds.
-- Only TCP listener inside the VM is the authenticated root-task console.
-- Rootfs CPIO remains < 4 MiB (`scripts/ci/size_guard.sh`).
-- VM artifacts remain `no_std`; no POSIX or libc-style emulation layers.
-- All device authority goes through HAL; no ad-hoc MMIO, physical-address/DMA publication, IRQ binding, or unsafe device access outside HAL.
-- Physical hardware drivers must use manifest-declared isolated driver runtimes; root-task may admit resources, publish descriptors, submit bounded service turns, observe counters, and revoke authority, but it must not regain steady device ownership.
-- GPU access is host-only; worker-gpu is file-driven and lease-bound.
-
-## 8. Data Flows
-- **Orchestration:** Queen appends JSON lines to `/queen/ctl`; NineDoor validates and the root task updates worker state, bind tables, and audits to `/log/queen.log`.
-- **Lifecycle:** Queen appends to `/queen/lifecycle/ctl`; `/proc/lifecycle/*` exposes state, reason, and since-ms.
-- **Scheduling/Leases/Export:** Queen appends JSONL to `/queen/schedule/ctl`, `/queen/lease/ctl`, and `/queen/export/ctl`; `/proc/schedule/*` and `/proc/lease/*` expose bounded read-only snapshots.
-- **Telemetry (worker):** Workers append newline-delimited records to `/shard/<label>/worker/<id>/telemetry`; ring sizes and schema selection are manifest-driven (`telemetry.ring_bytes_per_worker`, `telemetry.frame_schema`).
-- **Telemetry ingest (host push):** Host tools append bounded envelopes to `/queen/telemetry/<device_id>/`; quotas and eviction are manifest-driven (`telemetry_ingest.*`). Large artifacts use bounded reference manifests (`coh-ref-c/v1`) instead of generic file transfer, and `/proc/ingest/*` reports ingest health.
-- **Logging:** All roles read `/log/queen.log`; only queen/host tools append.
-- **Observability:** `/proc/boot` exposes manifest fingerprints, Milestone 26 hardware gates, and attestation evidence hashes; `/proc/tests/*` carries regression scripts; `/proc/9p/*`, `/proc/root/*`, `/proc/pressure/*`, `/proc/ingest/*`, `/proc/schedule/*`, and `/proc/lease/*` surface bounded stats when enabled.
-- **Driver performance evidence:** isolated runtimes and root-side ring clients emit bounded `DRIVER_TASK_COUNTER` snapshots for activity, timeout, cache, backpressure, and RX/TX triage. These counters are required for performance claims but are not owner-state proof.
-- **GPU:** Host GPU bridge publishes `/gpu/<id>/*`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` via `/gpu/bridge/ctl`; worker-gpu reads `info/status` and appends to `job/ctl` within ticket scope.
-- **Host sidecars:** `/host/*` is present only when enabled in the manifest; providers are published by `host-sidecar-bridge`.
-- **Policy/Audit/Replay:** `/policy`, `/actions`, `/audit`, `/replay` appear only when enabled in the manifest; `/policy/ctl` drives apply/rollback and `/actions/queue` carries approvals/denials; writes are append-only and audited.
-- **CAS / Models:** `/updates/*` and `/models/*` are available when CAS and model registry gates are enabled (`cas.enable`, `ecosystem.models.enable`).
-
-### Host ticket control plane (Milestones 25g + 25h)
-- Queen writes append-only request JSONL to `/host/tickets/spec`.
-- `host-ticket-agent` is host-only. It tails spec, performs allowlisted adapters, and appends lifecycle receipts to `/host/tickets/status` for `claimed|running|succeeded` and `/host/tickets/deadletter` for `failed|expired`.
-- Federation relay is host-only and manifest-gated: `host-ticket-agent --relay` forwards allowlisted intents to peer hives using REST `/v1/fs/echo`, keeps bounded restart-safe WAL state, and exposes relay status counters through the gateway.
-- Federated envelope fields are additive in both spec and result lines: `source_hive`, `target_hive`, `relay_hop`, and `relay_correlation_id`.
-- Idempotency is keyed by `id + idempotency_key` for local flow and `id + idempotency_key + source_hive + target_hive` for federated flow.
-- No new VM-side RPC/protocol is introduced; all interactions stay inside existing Secure9P files and console grammar.
-- GPU/PEFT adapters reuse `/queen/ctl`, `/queen/lease/ctl`, `/gpu/*`, and `/gpu/models/*`; systemd/docker/K8s adapters remain host-side and publish bounded verification lines back into `/host/*`.
-
-## 9. Security Posture
-- Capability tickets are MACed (`blake3::keyed_hash`) and bound to role, budget, subject, and mount scope.
-- Role isolation is enforced at attach and on every path operation; NineDoor normalizes and validates paths before providers run.
-- The console grammar and Secure9P semantics are shared via `cohsh-core` to keep ACK/ERR/END lines deterministic across transports.
-- DMA cache maintenance follows manifest policy (`cache.*`) and is audited; misconfiguration is rejected by `coh-rtc`.
-- Heavy ecosystems (CUDA/NVML, host sidecars, policy engines) remain host-side and do not expand the VM TCB.
-
-## 10. Operational Workflows
-- **Bring-up:** Use the platform serial path for bootinfo and capability checks: PL011 on QEMU/dev profiles where configured, and the mini-UART emergency/isolated runtime path on Pi 4. Use `cohsh --transport tcp` for authenticated remote workflows when networking is enabled.
-- **Queen control:** `cohsh` appends to `/queen/ctl` and `/queen/lifecycle/ctl`, then tails `/log/queen.log` or worker telemetry files.
-- **GPU publish + leases:** Use `gpu-bridge-host --publish` (or `coh peft import --publish`) to refresh `/gpu/*`, then `coh gpu lease/run` for host-side GPU workflows.
-- **REST access:** `hive-gateway` exposes a host-only HTTP projection of `LS`/`CAT`/`ECHO` for automation; bounds and semantics match the console/file grammar.
-- **Self-test:** `coh> test` executes the preinstalled `/proc/tests/*.coh` scripts; it is the canonical regression gate for console and Secure9P behavior.
-- **Regression pack:** `scripts/cohsh/run_regression_batch.sh` runs the full `.coh` suite across base and gated manifests using QEMU by default, or against a live Pi 4 TCP console with `COHSH_BATCH_TARGET=pi4 COHSH_TCP_HOST=<pi4-ip>`.
-
-## 11. Diagrams
-### Concept architecture
-This view shows the logical solution boundaries first; component-level and service-turn diagrams follow.
-
-```mermaid
-flowchart TB
-  subgraph Host["Host and operators (outside VM TCB)"]
-    Operator["operator / automation"]
-    HostTools["cohsh, coh, swarmui, hive-gateway"]
-    HostProviders["gpu-bridge-host, host-sidecar-bridge, host-ticket-agent"]
-    HostEcosystem["host GPU, sidecars, and model registry"]
-  end
-
-  subgraph Target["Cohesix target TCB"]
-    Kernel["seL4 kernel\ncaps, VSpaces, endpoints, scheduling"]
-    Root["root-task authority plane\nCSpace, HAL admission, policy, recovery"]
-    Console["authenticated console grammar\nACK / ERR / END"]
-    Namespace["Secure9P namespace\nrole-scoped files and tickets"]
-    Workers["queen and workers\nheart, gpu, bus, lora"]
-    Drivers["manifest-declared isolated driver runtimes\nserial, USB, HDMI, GENET, CYW43, SDIO, PCIe"]
-    Evidence["evidence and observability\nlogs, proc views, driver counters"]
-  end
-
-  subgraph Board["Profile-gated board resources"]
-    Hardware["Pi 4 MMIO, DMA, IRQ, framebuffer"]
-  end
-
-  Operator --> HostTools
-  HostTools -->|"console transport"| Console
-  HostTools -->|"Secure9P client"| Namespace
-  HostProviders -->|"bounded provider writes"| Namespace
-  HostProviders --> HostEcosystem
-
-  Console --> Root
-  Namespace --> Root
-  Root -->|"seL4 invocations"| Kernel
-  Kernel -->|"capability effects"| Root
-  Root -->|"role policy and mounts"| Namespace
-  Namespace --> Workers
-  Workers -->|"telemetry and control files"| Namespace
-  Root -->|"HAL-admitted descriptors"| Drivers
-  Drivers -->|"bounded service turns"| Hardware
-  Drivers -->|"completions and DRIVER_TASK_COUNTER"| Evidence
-  Root --> Evidence
-  Evidence -->|"operator proof"| HostTools
-```
-
-### Boundary and components
-```mermaid
-flowchart LR
-  subgraph Host["Host (outside VM/TCB)"]
-    Cohsh["cohsh (CLI)"]
-    GPUB["gpu-bridge-host"]
-    HS["host-sidecar-bridge"]
-  end
-
-  subgraph VM["Cohesix target (seL4 VM)"]
-    subgraph K["seL4 kernel"]
-      SEL4["seL4"]
-    end
-    subgraph U["Userspace (CPIO rootfs)"]
-      RT["root-task\n(event pump + console + HAL)"]
-      DRT["manifest-declared isolated Pi 4 driver runtimes\n(serial, USB, HDMI, GENET, CYW43, SDIO, PCIe)"]
-      ND["NineDoor\n(Secure9P namespace; bridge in seL4 build)"]
-      WH["worker-heart"]
-      WG["worker-gpu"]
-      WB["worker-bus"]
-      WL["worker-lora"]
-    end
-  end
-
-  subgraph NS["Secure9P namespace (role-scoped)"]
-    QCTL["/queen/ctl"]
-    LOG["/log/queen.log"]
-    PROC["/proc/*"]
-    TEL["/shard/{label}/worker/{id}/telemetry"]
-    GPU["/gpu/{id}/* (when enabled)"]
-    HOST["/host/* (when enabled)"]
-  end
-
-  subgraph HW["Pi 4 hardware (profile-gated)"]
-    DEV["HAL-declared MMIO, DMA, IRQ, framebuffer resources"]
-  end
-
-  SEL4 --> RT
-  SEL4 --> DRT
-  RT -->|"HAL admission + runtime-init descriptor"| DRT
-  DRT -->|"bounded completions + DRIVER_TASK_COUNTER"| RT
-  DRT -->|"driver-owned service turns"| DEV
-  RT --> ND
-  WH --> ND
-  WG --> ND
-  WB --> ND
-  WL --> ND
-  ND --> QCTL
-  ND --> LOG
-  ND --> PROC
-  ND --> TEL
-  ND --> GPU
-  ND --> HOST
-
-  Cohsh -->|"TCP console"| RT
-  Cohsh -->|"Secure9P client"| ND
-  GPUB -->|"console/REST publish to /gpu/bridge/ctl"| RT
-  HS -->|"console/REST publish to /host/*"| RT
-```
-
-### Linked driver runtime service turn
-```mermaid
-sequenceDiagram
-  autonumber
-  participant Root as root-task / HAL
-  participant Ring as fixed command/completion ring
-  participant Runtime as isolated Pi 4 driver runtime
-  participant Device as HAL-declared resources
-  participant Evidence as proof log / normalizer
-
-  Root->>Runtime: runtime-init descriptor with primitive records
-  Root->>Ring: publish bounded service turn
-  Runtime->>Ring: consume command after sequence publication
-  Runtime->>Device: MMIO/DMA/IRQ/cache work inside descriptor bounds
-  Runtime-->>Ring: bounded completion or timeout/fault
-  Runtime-->>Evidence: DRIVER_TASK_COUNTER snapshot
-  Root-->>Evidence: owner-state proof only after ring-backed device progress
-```
-
-### TCP console attach + tail
-```mermaid
-sequenceDiagram
-  autonumber
-  participant Operator
-  participant Cohsh as cohsh
-  participant TCP as root-task TCP console
-  participant ND as NineDoorBridge
-  participant Log as /log/queen.log
-
-  Operator->>Cohsh: run cohsh --transport tcp
-  Cohsh->>TCP: AUTH token
-  TCP-->>Cohsh: OK AUTH (or ERR AUTH)
-
-  Cohsh->>TCP: ATTACH queen ticket
-  TCP->>ND: validate role + ticket
-  ND-->>TCP: accept/deny
-  TCP-->>Cohsh: OK ATTACH role=queen (or ERR ATTACH)
-
-  Cohsh->>TCP: TAIL /log/queen.log
-  TCP->>ND: open + snapshot
-  TCP-->>Cohsh: OK TAIL path=/log/queen.log
-  loop stream
-    TCP-->>Cohsh: log line
-  end
-  TCP-->>Cohsh: END
-```
-
-### Live GPU publish + PEFT refresh (Milestone 24b)
-The live publish path keeps `/gpu/models/*` and `/gpu/telemetry/schema.json` out of the VM until the host bridge pushes a bounded snapshot. PEFT import optionally refreshes the live model registry immediately after updating the host registry.
+### 2.2 System boundary
 
 ```mermaid
 flowchart LR
-  subgraph Host["Host"]
-    GBH["gpu-bridge-host"]
-    COH["coh peft import"]
-    REG["host model registry"]
+  subgraph BuildHost[Build host]
+    Manifest[Selected profile manifest]
+    Compiler[coh-rtc]
+    Generated[Resolved manifest and generated artifacts]
+    Manifest --> Compiler --> Generated
   end
-  subgraph VM["VM"]
-    ND["NineDoor /gpu/bridge/ctl"]
-    GPU["/gpu/{id}/*"]
-    MODELS["/gpu/models/*"]
-    SCHEMA["/gpu/telemetry/schema.json"]
+
+  subgraph OperatorHost[Operator and integration host]
+    HostClients[cohsh coh SwarmUI gateway and host bridges]
+    HostNineDoor[Host NineDoor server]
+    HostClients -->|mock or test in-process Secure9P| HostNineDoor
   end
-  REG -->|writes| COH
-  COH -->|"--publish/--refresh-gpu-models"| GBH
-  GBH -->|"bounded snapshot"| ND
-  ND --> GPU
-  ND --> MODELS
-  ND --> SCHEMA
+
+  subgraph Target[seL4 target]
+    Serial[Serial console]
+    Tcp[TCP console]
+    EventPump[Root-task event pump]
+    Bridge[NineDoorBridge namespace adapter]
+    Workers[Implemented worker tasks]
+    Hal[HAL admission and driver clients]
+    Drivers[Isolated physical-driver runtimes]
+
+    Serial -->|console lines| EventPump
+    Tcp -->|authenticated framed console lines| EventPump
+    EventPump --> Bridge
+    EventPump --> Workers
+    EventPump --> Hal
+    Hal -->|bounded ABI service turns| Drivers
+  end
+
+  Generated -->|profile truth| EventPump
+  Generated -->|resource descriptors| Hal
+  HostClients -->|target TCP console grammar| Tcp
+  HostNineDoor -.->|shared contracts, separate state| Bridge
 ```
 
-### Live Hive telemetry path (Milestone 24b)
-Live Hive renders only what the backend tailers ingest. Polling bounds and line caps live in `cohsh-core`, not in the UI.
+The dotted relationship is semantic parity, not a transport connection. Host
+NineDoor and target `NineDoorBridge` are separate adapters with separate
+state. There is no in-target 9P-over-TCP listener.
 
-```mermaid
-flowchart LR
-  W["worker telemetry file\n/shard/{label}/worker/{id}/telemetry"] --> TAIL["cohsh-core tailer"]
-  TAIL --> BUF["bounded line buffers"]
-  BUF --> UI["SwarmUI Live Hive overlays + detail panel"]
-  UI -->|"read-only"| PROC["/proc/root/*, /proc/pressure/*, /proc/9p/session/active"]
-```
+## 3. Target execution model
 
-## 12. References
-- `AGENTS.md`
-- `README.md`
-- `docs/BUILD_PLAN.md`
-- `docs/INTERFACES.md`
-- `docs/DRIVERS.md`
-- `docs/BENCHMARKS.md`
-- `docs/SECURE9P.md`
-- `docs/TEST_PLAN.md`
-- `docs/USERLAND_AND_CLI.md`
-- `docs/ROLES_AND_SCHEDULING.md`
-- `docs/REPO_LAYOUT.md`
-- `docs/GPU_NODES.md`
-- `docs/HOST_TOOLS.md`
-- `configs/root_task.toml`
-- `configs/generated/root_task_resolved.json`
-- `apps/root-task`
-- `apps/nine-door`
-- `apps/cohsh`
-- `apps/coh`
-- `apps/swarmui`
-- `tools/coh-rtc`
-- `scripts/cohsh/run_regression_batch.sh`
-- `tests/integration`
+### 3.1 Root-task authority
 
-### Manifest snapshot (generated)
-The following block is generated by `coh-rtc` and mirrored from `docs/snippets/root_task_manifest.md`. Do not edit by hand.
-<!-- Author: Lukas Bower -->
-<!-- Purpose: Generated manifest snippet consumed by docs/ARCHITECTURE.md. -->
-<!-- Copyright 2026 Lukas Bower -->
+The root task is the target authority process. It constructs seL4 objects,
+validates generated descriptors, creates child address spaces, installs
+capabilities, and schedules bounded service work. It may retain emergency
+serial diagnostics, but it must not become the steady-state owner of a physical
+device that the selected manifest assigns to an isolated driver runtime.
 
-### Root-task manifest schema (generated)
-- `meta.author`: `Lukas Bower`
-- `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.5`
-- `root_task.affinity.enabled`: `true`
-- `root_task.affinity.max_cores`: `4`
-- `root_task.affinity.authority_core`: `0`
-- `root_task.affinity.ninedoor_cores`: `[1]`
-- `root_task.affinity.provider_cores`: `[2, 3]`
-- `root_task.affinity.worker_cores`: `[2, 3]`
-- `root_task.affinity.drivers.serial`: `1`
-- `root_task.affinity.drivers.usb-local-seat`: `1`
-- `root_task.affinity.drivers.hdmi-text`: `2`
-- `root_task.affinity.drivers.bcmgenet-v5`: `3`
-- `root_task.affinity.drivers.cyw43455`: `3`
-- `root_task.affinity.drivers.rtl8139`: `2`
-- `root_task.affinity.drivers.virtio-net`: `3`
-- `root_task.affinity.drivers.sdio-host`: `3`
-- `root_task.affinity.drivers.pcie-root`: `2`
-- `root_task.driver_images.required`: `true`
-- `root_task.driver_images.images`: `7`
-- `root_task.driver_images.pi4-serial-runtime`: contract=`serial` hot_path=`serial-console` artifact=`cohesix/bin/pi4-driver-serial` root_context_required=`false` hardware_state_migrated=`true`
-- `root_task.driver_images.pi4-usb-runtime`: contract=`usb-local-seat` hot_path=`usb-keyboard` artifact=`cohesix/bin/pi4-driver-usb` root_context_required=`false` hardware_state_migrated=`true`
-- `root_task.driver_images.pi4-hdmi-runtime`: contract=`hdmi-text` hot_path=`hdmi-text` artifact=`cohesix/bin/pi4-driver-hdmi` root_context_required=`false` hardware_state_migrated=`true`
-- `root_task.driver_images.pi4-genet-runtime`: contract=`bcmgenet-v5` hot_path=`genet-nic` artifact=`cohesix/bin/pi4-driver-genet` root_context_required=`false` hardware_state_migrated=`true`
-- `root_task.driver_images.pi4-cyw43-runtime`: contract=`cyw43455` hot_path=`cyw43-wifi` artifact=`cohesix/bin/pi4-driver-cyw43` root_context_required=`false` hardware_state_migrated=`true`
-- `root_task.driver_images.pi4-sdio-runtime`: contract=`sdio-host` hot_path=`sdio-host` artifact=`cohesix/bin/pi4-driver-sdio` root_context_required=`false` hardware_state_migrated=`true`
-- `root_task.driver_images.pi4-pcie-runtime`: contract=`pcie-root` hot_path=`pcie-root` artifact=`cohesix/bin/pi4-driver-pcie` root_context_required=`false` hardware_state_migrated=`true`
-- `profile.name`: `virt-aarch64`
-- `profile.kernel`: `true`
-- `event_pump.tick_ms`: `5`
-- `secure9p.msize`: `8192`
-- `secure9p.walk_depth`: `8`
-- `secure9p.tags_per_session`: `16`
-- `secure9p.batch_frames`: `1`
-- `secure9p.short_write.policy`: `reject`
-- `ticket_limits.max_scopes`: `8`
-- `ticket_limits.max_scope_path_len`: `128`
-- `ticket_limits.max_scope_rate_per_s`: `64`
-- `ticket_limits.bandwidth_bytes`: `131072`
-- `ticket_limits.cursor_resumes`: `16`
-- `ticket_limits.cursor_advances`: `256`
-- `cas.enable`: `true`
-- `cas.store.chunk_bytes`: `128`
-- `cas.delta.enable`: `true`
-- `cas.signing.required`: `true`
-- `cas.signing.key_path`: `resources/fixtures/cas_signing_key.hex`
-- `telemetry.ring_bytes_per_worker`: `1024`
-- `telemetry.frame_schema`: `legacy-plaintext`
-- `telemetry.cursor.retain_on_boot`: `false`
-- `telemetry_ingest.max_segments_per_device`: `4`
-- `telemetry_ingest.max_bytes_per_segment`: `131072`
-- `telemetry_ingest.max_total_bytes_per_device`: `524288`
-- `telemetry_ingest.max_reference_entries_per_segment`: `1024`
-- `telemetry_ingest.max_reference_manifest_bytes_per_segment`: `131072`
-- `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
-- `telemetry_ingest.eviction_policy`: `evict-oldest`
-- `lifecycle.initial_state`: `BOOTING`
-- `lifecycle.auto_transitions`: `BOOTING->ONLINE`
-- `control_plane.schedule.enable`: `true`
-- `control_plane.schedule.queue_max_entries`: `256`
-- `control_plane.schedule.ctl_max_bytes`: `8192`
-- `control_plane.lease.enable`: `true`
-- `control_plane.lease.active_max_entries`: `256`
-- `control_plane.lease.preemptions_max_entries`: `256`
-- `control_plane.lease.ctl_max_bytes`: `8192`
-- `control_plane.export.enable`: `true`
-- `control_plane.export.ctl_max_bytes`: `2048`
-- `observability.proc_9p.sessions`: `true`
-- `observability.proc_9p.outstanding`: `true`
-- `observability.proc_9p.short_writes`: `true`
-- `observability.proc_9p.sessions_bytes`: `8192`
-- `observability.proc_9p.outstanding_bytes`: `128`
-- `observability.proc_9p.short_writes_bytes`: `128`
-- `observability.proc_9p_session.active`: `true`
-- `observability.proc_9p_session.state`: `true`
-- `observability.proc_9p_session.since_ms`: `true`
-- `observability.proc_9p_session.owner`: `true`
-- `observability.proc_9p_session.active_bytes`: `128`
-- `observability.proc_9p_session.state_bytes`: `64`
-- `observability.proc_9p_session.since_ms_bytes`: `64`
-- `observability.proc_9p_session.owner_bytes`: `96`
-- `observability.proc_ingest.p50_ms`: `true`
-- `observability.proc_ingest.p95_ms`: `true`
-- `observability.proc_ingest.backpressure`: `true`
-- `observability.proc_ingest.dropped`: `true`
-- `observability.proc_ingest.queued`: `true`
-- `observability.proc_ingest.watch`: `true`
-- `observability.proc_ingest.p50_ms_bytes`: `64`
-- `observability.proc_ingest.p95_ms_bytes`: `64`
-- `observability.proc_ingest.backpressure_bytes`: `64`
-- `observability.proc_ingest.dropped_bytes`: `64`
-- `observability.proc_ingest.queued_bytes`: `64`
-- `observability.proc_ingest.watch_max_entries`: `16`
-- `observability.proc_ingest.watch_line_bytes`: `192`
-- `observability.proc_ingest.watch_min_interval_ms`: `50`
-- `observability.proc_ingest.latency_samples`: `32`
-- `observability.proc_ingest.latency_tolerance_ms`: `5`
-- `observability.proc_ingest.counter_tolerance`: `1`
-- `observability.proc_root.reachable`: `true`
-- `observability.proc_root.last_seen_ms`: `true`
-- `observability.proc_root.cut_reason`: `true`
-- `observability.proc_root.reachable_bytes`: `32`
-- `observability.proc_root.last_seen_ms_bytes`: `64`
-- `observability.proc_root.cut_reason_bytes`: `64`
-- `observability.proc_pressure.busy`: `true`
-- `observability.proc_pressure.quota`: `true`
-- `observability.proc_pressure.cut`: `true`
-- `observability.proc_pressure.policy`: `true`
-- `observability.proc_pressure.busy_bytes`: `64`
-- `observability.proc_pressure.quota_bytes`: `64`
-- `observability.proc_pressure.cut_bytes`: `64`
-- `observability.proc_pressure.policy_bytes`: `64`
-- `observability.proc_schedule.summary`: `true`
-- `observability.proc_schedule.queue`: `true`
-- `observability.proc_schedule.summary_bytes`: `128`
-- `observability.proc_schedule.queue_bytes`: `256`
-- `observability.proc_lease.summary`: `true`
-- `observability.proc_lease.active`: `true`
-- `observability.proc_lease.preemptions`: `true`
-- `observability.proc_lease.summary_bytes`: `160`
-- `observability.proc_lease.active_bytes`: `256`
-- `observability.proc_lease.preemptions_bytes`: `256`
-- `ui_providers.proc_9p.sessions`: `true`
-- `ui_providers.proc_9p.outstanding`: `true`
-- `ui_providers.proc_9p.short_writes`: `true`
-- `ui_providers.proc_ingest.p50_ms`: `true`
-- `ui_providers.proc_ingest.p95_ms`: `true`
-- `ui_providers.proc_ingest.backpressure`: `true`
-- `ui_providers.policy_preflight.req`: `false`
-- `ui_providers.policy_preflight.diff`: `false`
-- `ui_providers.updates.manifest`: `true`
-- `ui_providers.updates.status`: `true`
-- `client_policies.cohsh.pool.control_sessions`: `2`
-- `client_policies.cohsh.pool.telemetry_sessions`: `24`
-- `client_policies.cohsh.tail.poll_ms_default`: `1000`
-- `client_policies.cohsh.tail.poll_ms_min`: `250`
-- `client_policies.cohsh.tail.poll_ms_max`: `10000`
-- `client_policies.cohsh.host_telemetry.nvidia_poll_ms`: `1000`
-- `client_policies.cohsh.host_telemetry.systemd_poll_ms`: `2000`
-- `client_policies.cohsh.host_telemetry.docker_poll_ms`: `2000`
-- `client_policies.cohsh.host_telemetry.k8s_poll_ms`: `5000`
-- `client_policies.coh.mount.root`: `/`
-- `client_policies.coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
-- `client_policies.coh.telemetry.root`: `/queen/telemetry`
-- `client_policies.coh.telemetry.max_devices`: `32`
-- `client_policies.coh.telemetry.max_segments_per_device`: `4`
-- `client_policies.coh.telemetry.max_bytes_per_segment`: `131072`
-- `client_policies.coh.telemetry.max_total_bytes_per_device`: `524288`
-- `client_policies.retry.max_attempts`: `3`
-- `client_policies.retry.backoff_ms`: `200`
-- `client_policies.retry.ceiling_ms`: `2000`
-- `client_policies.retry.timeout_ms`: `5000`
-- `client_policies.heartbeat.interval_ms`: `15000`
-- `client_paths.queen_ctl`: `/queen/ctl`
-- `client_paths.queen_lifecycle_ctl`: `/queen/lifecycle/ctl`
-- `client_paths.queen_schedule_ctl`: `/queen/schedule/ctl`
-- `client_paths.queen_lease_ctl`: `/queen/lease/ctl`
-- `client_paths.queen_export_ctl`: `/queen/export/ctl`
-- `client_paths.policy_ctl`: `/policy/ctl`
-- `client_paths.log`: `/log/queen.log`
-- `swarmui.ticket_scope`: `per-ticket`
-- `swarmui.cache.enabled`: `false`
-- `swarmui.cache.max_bytes`: `262144`
-- `swarmui.cache.ttl_s`: `3600`
-- `swarmui.hive.frame_cap_fps`: `30`
-- `swarmui.hive.step_ms`: `16`
-- `swarmui.hive.lod_zoom_out`: `0.7`
-- `swarmui.hive.lod_zoom_in`: `1.25`
-- `swarmui.hive.lod_event_budget`: `512`
-- `swarmui.hive.snapshot_max_events`: `4096`
-- `swarmui.hive.overlay_lines`: `3`
-- `swarmui.hive.detail_lines`: `50`
-- `swarmui.hive.line_cap_bytes`: `160`
-- `swarmui.hive.per_worker_bytes`: `2048`
-- `swarmui.paths.telemetry_root`: `/worker`
-- `swarmui.paths.proc_ingest_root`: `/proc/ingest`
-- `swarmui.paths.worker_root`: `/worker`
-- `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
-- `cache.kernel_ops`: `true`
-- `cache.dma_clean`: `true`
-- `cache.dma_invalidate`: `true`
-- `cache.unify_instructions`: `false`
-- `features.net_console`: `true`
-- `features.serial_console`: `true`
-- `features.std_console`: `false`
-- `features.std_host_tools`: `false`
-- `hw.secure_boot`: `false`
-- `hw.no_nic`: `false`
-- `hw.network.enabled`: `false`
-- `hw.network.backend`: `auto`
-- `hw.network.mode`: `off`
-- `hw.network.interface`: `wired`
-- `hw.network.static_ipv4.ip`: `(unset)`
-- `hw.network.static_ipv4.prefix_len`: `0`
-- `hw.network.static_ipv4.gateway`: `(unset)`
-- `hw.network.dhcp.discover_timeout_ms`: `1000`
-- `hw.network.dhcp.request_timeout_ms`: `1000`
-- `hw.network.dhcp.max_retries`: `4`
-- `hw.attestation.enabled`: `false`
-- `hw.attestation.policy`: `tpm-or-dice`
-- `hw.attestation.evidence_max_bytes`: `256`
-- `hw.local_seat.enabled`: `false`
-- `hw.local_seat.required`: `false`
-- `hw.local_seat.keyboard_device`: `usb-kbd0`
-- `hw.local_seat.display_device`: `hdmi0`
-- `hw.local_seat.line_bytes`: `160`
-- `hw.local_seat.buffer_lines`: `128`
-- `hw.devices`: `0` entries
-- `hw.devices[]`: `(none)`
-- `namespaces.role_isolation`: `true`
-- `sharding.enabled`: `true`
-- `sharding.shard_bits`: `8`
-- `sharding.legacy_worker_alias`: `true`
-- `tickets`: 5 entries
-- `manifest.sha256`: `3a8690c01e1c9c165b91d3c366fbe7dcb9667602461f82e51df6ca5e2ba45d77`
+The event pump services operator input, timers, networking, worker events, and
+driver completions without unbounded queues or busy-wait ownership loops.
+Operator priority and bounded degradation rules are defined by `AGENTS.md` and
+the console implementation.
 
-### Namespace mounts (generated)
-- service `logs` → `/log`
+### 3.2 Workers
 
-### Sharded worker namespace (generated)
-- `sharding.enabled`: `true`
-- `sharding.shard_bits`: `8`
-- `sharding.legacy_worker_alias`: `true`
-- shard labels: `00..ff` (count: 256)
-- canonical worker path: `/shard/<label>/worker/<id>/telemetry`
-- legacy alias: `/worker/<id>/telemetry`
+Queen is the orchestration authority exposed through the root-task and
+NineDoor control surfaces; it is not a separate host RPC service. Target worker
+authority is profile-generated. The current profiles require cap-backed worker
+endpoint badges and notification-backed lifecycle events, and select a
+profile-qualified scheduling record. Exact values come from the selected
+manifest rather than this overview.
 
-### Sidecars section (generated)
-- `sidecars.modbus.enable`: `false`
-- `sidecars.modbus.mount_at`: `/bus`
-- `sidecars.modbus.adapters`: `(none)`
-- `sidecars.dnp3.enable`: `false`
-- `sidecars.dnp3.mount_at`: `/bus`
-- `sidecars.dnp3.adapters`: `(none)`
-- `sidecars.lora.enable`: `false`
-- `sidecars.lora.mount_at`: `/lora`
-- `sidecars.lora.adapters`: `(none)`
+Workers coordinate through scoped namespace files and generated events. They
+do not receive implicit access to root-task memory, physical devices, or host
+services. GPU workers consume lease and telemetry files; CUDA and NVML remain
+outside the target.
 
-### Ecosystem section (generated)
-- `ecosystem.host.enable`: `true`
-- `ecosystem.host.mount_at`: `/host`
-- `ecosystem.host.providers`: `systemd`, `k8s`, `docker`, `nvidia`
-- `ecosystem.host.tickets.enable`: `true`
-- `ecosystem.host.tickets.request_schema`: `host-ticket/v1`
-- `ecosystem.host.tickets.result_schema`: `host-ticket-result/v1`
-- `ecosystem.host.tickets.max_line_bytes`: `2048`
-- `ecosystem.host.tickets.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
-- `ecosystem.host.tickets.lifecycle`: `queued`, `claimed`, `running`, `succeeded`, `failed`, `expired`
-- `ecosystem.host.federation.enable`: `true`
-- `ecosystem.host.federation.local_hive`: `hive-a`
-- `ecosystem.host.federation.relay_queue_max_entries`: `256`
-- `ecosystem.host.federation.relay_queue_max_bytes`: `32768`
-- `ecosystem.host.federation.wal_max_entries`: `1024`
-- `ecosystem.host.federation.wal_max_bytes`: `524288`
-- `ecosystem.host.federation.relay_timeout_ms`: `2000`
-- `ecosystem.host.federation.peers`: `hive-b` -> `http://127.0.0.1:8081` (`auth_ref=COHESIX_RELAY_HIVE_B_TOKEN`)
-- `ecosystem.host.federation.peers`: `hive-c` -> `http://127.0.0.1:8082` (`auth_ref=COHESIX_RELAY_HIVE_C_TOKEN`)
-- `ecosystem.host.federation.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
-- `/host` namespace mounted at `/host` when enabled.
-- `ecosystem.audit.enable`: `false`
-- `ecosystem.audit.journal_max_bytes`: `8192`
-- `ecosystem.audit.decisions_max_bytes`: `4096`
-- `ecosystem.audit.replay_enable`: `false`
-- `ecosystem.audit.replay_max_entries`: `64`
-- `ecosystem.audit.replay_ctl_max_bytes`: `1024`
-- `ecosystem.audit.replay_status_max_bytes`: `1024`
-- `ecosystem.policy.enable`: `true`
-- `ecosystem.policy.queue_max_entries`: `256`
-- `ecosystem.policy.queue_max_bytes`: `8192`
-- `ecosystem.policy.ctl_max_bytes`: `2048`
-- `ecosystem.policy.status_max_bytes`: `512`
-- `ecosystem.policy.rules`: `queen-ctl` → `/queen/ctl`
-- `ecosystem.policy.rules`: `systemd-restart` → `/host/systemd/*/restart`
-- `ecosystem.models.enable`: `false`
-- Nodes appear only when enabled.
+### 3.3 Physical drivers
 
-_Generated from `configs/root_task.toml` (sha256: `3a8690c01e1c9c165b91d3c366fbe7dcb9667602461f82e51df6ca5e2ba45d77`)._
+Physical resources enter the system through HAL. HAL validates the generated
+driver-image record, maps only declared pages, creates the driver child, and
+publishes a bounded runtime-init descriptor. Commands and completions use fixed
+shared rings and declared endpoint or notification capabilities. Details,
+device status, and proof requirements are in [DRIVERS.md](DRIVERS.md).
+
+## 4. Control-plane paths
+
+Cohesix has two distinct operator protocol families:
+
+1. **Host/in-process Secure9P.** A client negotiates the bounded 9P2000.L
+   subset with the host NineDoor server. This path is used by host builds and
+   tests.
+2. **Target console grammar.** Serial carries console lines directly. TCP adds
+   a four-byte little-endian length frame and transport authentication before
+   the same bounded command grammar. Application `ATTACH` then selects a role
+   and optional capability ticket.
+
+Both adapters project overlapping namespace semantics, but they are not the
+same wire protocol. Exact framing, operations, acknowledgements, and error
+surfaces are defined in [INTERFACES.md](INTERFACES.md).
+
+Host REST, UI, GPU, sidecar, and federation tools are projections over these
+documented interfaces. They may validate, batch, or render data, but they may
+not introduce authority unavailable through the underlying ticketed namespace
+or console operation.
+
+## 5. Boot flow
+
+The target boot sequence is profile-qualified:
+
+1. Firmware and bootloader load the selected seL4 image. Pi 4 acceptance uses
+   the firmware to U-Boot to seL4 binary-image handoff; it does not depend on
+   UEFI.
+2. seL4 supplies boot information and generated kernel metadata to root-task.
+3. Root-task validates kernel/profile invariants, establishes CSpace/VSpaces,
+   installs the timer backend, and loads generated policy.
+4. HAL admits manifest-declared physical resources and starts selected driver
+   runtimes. Owner-state is credited only after runtime identity, resources,
+   and service progress are proved; staging a child image is insufficient.
+5. Hardware and policy gates run and record their state. Emergency serial and
+   root diagnostics may become available while hardware acceptance remains red;
+   a diagnostic prompt is not a device-acceptance result.
+6. The root-task namespace bridge, log ring, and profile-enabled operator
+   surfaces are initialized subject to their individual readiness gates.
+7. The bounded event pump enters steady service.
+
+Pi 4 saved boot policy is loaded by the staged U-Boot script and passed through
+bounded `/chosen/cohesix,*` properties. Saved policy may select or configure an
+allowed network path, but it does not rewrite the compiled manifest. The
+as-built boot and recovery procedures live in
+[BOOT_REFERENCE.md](BOOT_REFERENCE.md) and
+[HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md).
+
+## 6. Principal data flows
+
+### 6.1 Worker lifecycle and telemetry
+
+An authorized Queen operation appends a bounded control record. Root-task or
+host NineDoor validates the role, ticket, lifecycle gate, and generated limits.
+For implemented target workers, root-task also requires the generated endpoint
+authority and lifecycle notification contract. Worker telemetry is appended to
+the canonical sharded path:
+
+`/shard/<label>/worker/<id>/telemetry`
+
+The legacy `/worker/<id>/telemetry` alias exists only when the selected
+manifest enables it. Exact role views and scheduling semantics are in
+[ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md).
+
+### 6.2 GPU control
+
+Host `gpu-bridge-host` owns hardware discovery and CUDA/NVML interaction. It
+publishes bounded GPU namespace state through the documented bridge surface.
+Target GPU workers consume lease, status, and telemetry files. Host NineDoor
+simulation may additionally expose a job node; that host-only surface is not a
+live target claim. Model and GPU schema details are in
+[GPU_NODES.md](GPU_NODES.md).
+
+### 6.3 Observability
+
+Logs, pressure, session, scheduling, lease, and ingest state are exposed through
+bounded namespace nodes. The selected manifest gates each generated provider.
+Exact paths and formats are linked from [INTERFACES.md](INTERFACES.md); UI and
+gateway consumers do not own those schemas.
+
+## 7. Security invariants
+
+- All target physical-device authority passes through HAL.
+- All target steady physical drivers are manifest-declared isolated runtimes.
+- Target code remains `no_std`; host capabilities do not leak into target
+  closure profiles.
+- Capabilities, tickets, generated bounds, and lifecycle gates are checked
+  before side effects.
+- Secure9P, console grammar, and the driver-task ABI remain separate bounded
+  interfaces.
+- The target has no TCP listener except the authenticated console.
+- Heavy GPU and host-service ecosystems remain outside the target TCB.
+- Rootfs CPIO remains below the limit enforced by `scripts/ci/size_guard.sh`.
+- Timer and cache behavior follow the selected seL4 build's generated truth.
+
+## 8. Source map
+
+- Scope and milestones: [BUILD_PLAN.md](BUILD_PLAN.md)
+- Default generated profile summary:
+  [snippets/root_task_manifest.md](snippets/root_task_manifest.md)
+- Manifest inputs: [`configs/root_task.toml`](../configs/root_task.toml) and
+  [`configs/root_task_pi4_uboot_aarch64.toml`](../configs/root_task_pi4_uboot_aarch64.toml)
+- Root-task: [`apps/root-task`](../apps/root-task)
+- Host NineDoor: [`apps/nine-door`](../apps/nine-door)
+- Physical-driver runtime: [`apps/pi4-driver-runtime`](../apps/pi4-driver-runtime)
+- Driver ABI: [`crates/pi4-driver-abi`](../crates/pi4-driver-abi)
+- Manifest compiler: [`tools/coh-rtc`](../tools/coh-rtc)
+- Validation plan: [TEST_PLAN.md](TEST_PLAN.md)

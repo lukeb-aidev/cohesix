@@ -4,7 +4,7 @@
 
 # M26C Agent Handoffs
 
-Status: `COMPLETE / QEMU-PASS / PI4-GENET-STAGE-01-05-PASS`
+Status: `COMPLETE / QEMU-PASS / PI4-GENET-STAGE-01-05-PASS / DOC-SUITE-PASS`
 
 Milestone 26c requires multi-agent execution. This index records the lanes used
 for the current run and whether their evidence is sufficient to advance the
@@ -24,6 +24,16 @@ milestone gate.
 | Pi latest evidence refresh | parent run | Fresh newest-log Pi 4 evidence after user reported Genet boot | `scripts/pi4_trace_normalize.py`, `scripts/pi4_gate_proof.sh`, `tests/test_pi4_trace_normalize.py`, `tests/test_pi4_gate_proof.py` | PASS-PI4-GENET | Newest non-empty serial is `/Users/lukasbower/pi4-serial-20260629-135454.log`; final closure uses the later wired GENET slice, paired USB-Ethernet pcap `/Users/lukasbower/tcpdump-usb-eth-20260629-135504.pcap`, runtime/DMA proof `out/test-plan/m26c-pi4-live/pi4-runtime-dma-proof-genet-latest.env`, and `192.168.10.50` TCP/REST proof. |
 | Pi final closure reviewer | `019f11af-71f4-7853-a9ff-5a81e62a8d01` | Final BUILD_PLAN/audit reconciliation for Pi 4 M26c completion | none by agent | PASS-RECONCILED | Confirmed completion edits should wait for Stage 05 marker, then cite serial, pcap, runtime/DMA proof, TCP proof, Stage 03/04 logs, and Stage 05 due-diligence root. |
 
+## README-Linked Documentation Remediation
+
+| Lane | Agent task | Documents | Status | Handoff |
+| --- | --- | --- | --- | --- |
+| Core contracts | `/root/audit_core_contracts` | `ARCHITECTURE`, `INTERFACES`, `SECURE9P`, `ROLES_AND_SCHEDULING`, `DRIVERS` | PASS | Separated trust boundaries, external interfaces, protocol invariants, scheduling policy, and driver methodology; retained exact generated mirrors and passed focused `coh-rtc` guards. |
+| Operator and host | `/root/audit_operator_host`; `/root/audit_operator_host/verify_operator_docs` | `USERLAND_AND_CLI`, `HOST_TOOLS`, `API_GUIDELINES`, `PYTHON_SUPPORT`, `FAILURE_MODES`, `OPERATOR_WALKTHROUGH` | PASS | Independently corrected gateway-versus-target bounds, scheduled provider coverage, filesystem-backed Python mock behavior, and local-Queen REST authority. |
+| Platform and product | `/root/audit_platform_product` | `USE_CASES`, `HARDWARE_BRINGUP`, `BOOT_REFERENCE`, `GPU_NODES`, `BENCHMARKS` | PASS | Separated current QEMU evidence, historical GENET proof, current Pi revalidation, live GPU projection, simulation, and benchmark methodology. |
+| Integration | `/root` | `README.md`, `BUILD_PLAN.md`, audit registers, and suite-wide validation | PASS | Resolved 266 local links, rendered 75 of 75 Mermaid blocks, passed generated guards, Test Plan checks, Markdown linting, and `cargo check --workspace`; corrected the OpenAPI description without changing runtime or release behavior. |
+| Final semantic review | `/root/audit_core_contracts` plus evidence and operator reviewers | Cross-document status, inventories, OpenAPI, and diagram semantics | PASS after remediation | Found and closed stale Markdown inventory, unfinalized Mermaid status, hardware-proof diagram, OpenAPI placement, and 26b DPC-status defects before handoff. |
+
 ## Planner Decision
 
 QEMU Phase 2 behavior-changing work is implemented and the QEMU post-behavior
@@ -37,8 +47,8 @@ is deferred outside the milestone.
 
 - `scripts/ci/check_test_plan.sh` - PASS.
 - `scripts/ci/test_plan_run.sh --list` - PASS.
-- `scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt` - PASS with 32 release-snapshot warnings.
-- `scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt --out out/audit/m26c-mermaid-rendered` - PASS extraction; `mmdc` unavailable.
+- `scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt` - PASS with 32 release-snapshot warnings.
+- `npm exec --yes --package=@mermaid-js/mermaid-cli -- scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out out/audit/m26c-doc-remediation-mermaid-rendered` - PASS with Mermaid CLI 11.16.0; 75 source blocks produced 75 SVG files.
 - `cargo test -p secure9p-codec` - PASS.
 - `cargo test -p coh-rtc --lib dma` - PASS.
 - `scripts/check-generated.sh` - PASS.

@@ -87,14 +87,6 @@ paths:
           schema:
             type: integer
             minimum: 1
-        - in: query
-          name: lines
-          required: false
-          description: Optional tail line count. Values must be between 1 and 256.
-          schema:
-            type: integer
-            minimum: 1
-            maximum: 256
       responses:
         "200":
           description: Read operation response.
@@ -141,6 +133,14 @@ paths:
           schema:
             type: integer
             minimum: 1
+        - in: query
+          name: lines
+          required: false
+          description: Optional tail line count. Values must be between 1 and 256.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 256
       responses:
         "200":
           description: Tail operation response.

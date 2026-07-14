@@ -1,211 +1,215 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Community-facing guidelines for Cohesix REST and Python APIs (Milestone 24c). -->
+<!-- Purpose: Define the as-built Cohesix REST projection, authentication, and compatibility rules. -->
 <!-- Author: Lukas Bower -->
-# API Guidelines (Milestone 24c)
+# Cohesix API Guidelines
 
-This document is the adoption guide for Cohesix APIs introduced in Milestone 24c. It explains what the APIs are, how they map to use cases, and how developers can validate **connectivity** to the APIs in real environments.
+`hive-gateway` is a host-only HTTP projection of the existing Cohesix console
+and file operations. It does not add an in-target HTTP server, a new control
+protocol, or per-request target identities.
 
-**At a glance**
-- Host-only APIs that **project existing console and file semantics**.
-- OpenAPI 3.1 spec lives in `docs/HOST_API.md` and is served at `/v1/openapi.yaml`.
-- Python client is non-authoritative and supports TCP, filesystem, REST, and mock backends.
-- Host tool usage, interdependencies, and mount details live in `docs/HOST_TOOLS.md`.
+The machine-readable contract is
+[`resources/openapi/hive-gateway.yaml`](../resources/openapi/hive-gateway.yaml).
+The gateway embeds that file and serves it at `/v1/openapi.yaml`. Detailed path
+and payload semantics remain canonical in [INTERFACES.md](INTERFACES.md);
+[HOST_API.md](HOST_API.md) is the narrative HTTP reference and must agree with
+the embedded OpenAPI document.
 
-**Related operator docs**
-- `docs/HOST_TOOLS.md` — host tool semantics, policy gates, and mounts.
-- `docs/OPERATOR_WALKTHROUGH.md` — operator lifecycle and recovery flow.
+## Design contract
 
-## Principles (Non-Negotiable)
-- **Authority lives in the VM**. The REST gateway is a bounded host-side projection of `LS`, `CAT`, `TAIL`, and `ECHO`, plus metadata endpoints; broker queues and small caches are not new authority.
-- **Bounds are mandatory**. All clients must respect manifest-derived limits. Discover them via `/v1/meta/bounds`.
-- **Single-line JSONL**. Control surfaces accept one JSON object per line.
-- **No new semantics**. Clients may not introduce new verbs or change error behavior.
-- **Host-only**. No in-VM HTTP servers or extra listeners.
+- Authority remains in the target. HTTP operations project `LS`, `CAT`, `TAIL`,
+  and `ECHO`; metadata endpoints describe the gateway and active bounds.
+- `hive-gateway` is the sole target TCP-console client in gateway mode. Multiple
+  HTTP clients may use the gateway concurrently.
+- The gateway attaches upstream with one configured role and optional
+  capability ticket. Every HTTP request inherits that upstream authority.
+- Request authentication at the HTTP edge is separate from TCP authentication,
+  role attachment, capability tickets, policy approvals, and lifecycle gates.
+- Paths, payloads, reads, queues, and retries remain bounded. Clients must not
+  infer support for a namespace that the selected manifest does not expose.
+- Successful and refused target operations preserve the console `OK`/`ERR`
+  model. HTTP status alone is not enough to determine target success.
 
-## Compatibility and Scope (Milestone 24c)
-- This document describes the **Milestone 24c** REST surface and its canonical control/observability paths.
-- Namespaces are manifest-gated; missing paths usually indicate a disabled feature gate rather than a client bug.
-- All control writes are append-only; retries must send a full JSON line, not partial fragments.
+## Deployment topology
 
-## Auth and Role Context
-- The REST gateway attaches to the console using `COH_AUTH_TOKEN` and the role in `COH_ROLE` (typically `queen`).
-- REST clients inherit the gateway role’s namespace. There is no per-request ticket in the REST surface.
-- REST multiplexer deployments assume a queen-role gateway; worker-role attach remains console/9P-only.
-- Policy gates still apply to REST writes; approvals must be queued in `/actions/queue` when required.
+The default bind is loopback-only (`127.0.0.1:8080`). Non-mock startup requires
+a non-placeholder TCP console token and a non-placeholder gateway request-auth
+token. A non-loopback bind requires explicit opt-in and an external secure
+transport boundary such as an authenticated tunnel, VPN, or TLS reverse proxy.
 
-## API Surface Map
-| Surface | Endpoint or Path | Semantics |
-| --- | --- | --- |
-| REST | `/v1/fs/ls` | `LS` projection |
-| REST | `/v1/fs/cat` | `CAT` projection |
-| REST | `/v1/fs/tail` | `TAIL` projection |
-| REST | `/v1/fs/echo` | `ECHO` projection |
-| REST | `/v1/meta/bounds` | Manifest-derived bounds |
-| REST | `/v1/meta/status` | Gateway broker/health status |
-| REST | `/v1/openapi.yaml` | OpenAPI 3.1 spec |
-| REST | `/docs` | Swagger UI |
+The gateway does not terminate TLS. Do not expose it directly to an untrusted
+network.
 
-**Authoritative control files (JSONL, append-only)**
-- `/queen/lease/ctl`
-- `/queen/schedule/ctl`
-- `/queen/export/ctl`
-- `/policy/ctl`
+For startup and end-to-end validation, use
+[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md). For tool composition, use
+[HOST_TOOLS.md](HOST_TOOLS.md).
 
-**Read-only observability nodes**
-- `/proc/schedule/summary`
-- `/proc/schedule/queue`
-- `/proc/lease/summary`
-- `/proc/lease/active`
-- `/proc/lease/preemptions`
+## Authentication model
 
-Schemas and bounds are defined in `docs/INTERFACES.md`.
+### Upstream console authority
 
-## Policy and Approval Flow (REST or Console)
-Policy gating is manifest-enabled. When active, `/policy` and `/actions` appear and gated paths require approvals.
+The gateway connects to the target using:
 
-- `/policy/rules` lists gate targets derived from the manifest.
-- `/actions/queue` is the approval/denial log (`id`, `target`, `decision`).
-- If a write targets `/queen/ctl` (or other gated paths), the request returns
-  `ERR ECHO reason=policy ... EPERM` until a matching approval exists.
-- Approvals are consumed deterministically on success; `/policy/preflight/*` and `/proc/pressure/policy`
-  provide observability into queued/consumed approvals and pressure.
+- TCP endpoint: `COH_TCP_HOST` and `COH_TCP_PORT`, or CLI equivalents;
+- console authentication: `COH_AUTH_TOKEN` or `COHSH_AUTH_TOKEN`;
+- role: `COH_ROLE` or `--role`;
+- optional capability ticket: `COH_TICKET` or `--ticket`.
 
-## Use-Case Alignment (from `docs/USE_CASES.md`)
-| Use case | API capability |
-| --- | --- |
-| Fleet policy GitOps boundary appliance | `/policy/ctl` apply and rollback |
-| Vendor remote maintenance without VPN sprawl | lease windows and preemption via `/queen/lease/ctl` |
-| GPU lease broker for multi-tenant edge | lease quotas and read-only `/proc/lease/*` |
-| Edge data diode telemetry gateway | export windows via `/queen/export/ctl` |
-| Kubernetes coexistence | declarative queue via `/queen/schedule/ctl` |
-| Audit-first infrastructure | bounded `/proc` observability |
+This attachment determines the namespace and operations available to every
+REST caller. REST has no endpoint for supplying a different role or ticket per
+request.
 
-## Choose Your Transport
-- **REST gateway**: simplest for HTTP clients and OpenAPI tooling. When using it as a multiplexer, run `hive-gateway` as the sole console client and point host tools at it with `--rest-url` (or `COH_REST_URL`).
-- **TCP console**: direct `cohsh`-compatible console semantics.
-- **Filesystem (Secure9P mount)**: file-shaped integration without HTTP.
-- **Mock backend**: deterministic development and CI without a VM.
+### HTTP request authentication
 
-Notes:
-- The TCP console is single-client. If a tool already holds it, other TCP clients will block or fail.
-- The REST gateway itself uses the console, so do not run it concurrently with `cohsh` or `swarmui` in console mode. Use `SWARMUI_TRANSPORT=rest` instead.
-- `coh mount --rest-url` is exclusive: only one REST mount per gateway URL.
+The gateway request-auth token resolves from `--request-auth-token`,
+`HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, or
+`COHSH_REST_AUTH_TOKEN`. `POST /v1/fs/echo` accepts either:
 
-## Golden Path (REST Adoption)
-These steps both **adopt** the API and **validate connectivity**.
-
-1. Boot the Queen VM and start the gateway.
-```bash
-./qemu/run.sh
-COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
-  HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
-  COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
-  ./bin/hive-gateway
-```
-If you built from source, run `target/release/hive-gateway` (or `cargo run -p hive-gateway`) instead of `./bin/hive-gateway`.
-
-2. Confirm the gateway is reachable and returns bounds.
-```bash
-curl -sS http://127.0.0.1:8080/v1/meta/bounds
+```http
+Authorization: Bearer <token>
 ```
 
-3. Confirm the gateway can list the namespace.
-```bash
-curl -sS 'http://127.0.0.1:8080/v1/fs/ls?path=/'
+or:
+
+```http
+x-cohesix-auth: <token>
 ```
 
-4. Confirm a read-only `/proc` path exists in your build.
+The as-built GET endpoints do not require this token. Keep the gateway on
+loopback or place it behind an authenticated boundary because those reads may
+expose operational state. A valid request-auth token only admits the HTTP
+write; the target can still refuse the operation for role, ticket, policy,
+lifecycle, bounds, or schema reasons.
+
+## Endpoint reference
+
+| Method | Endpoint | Projection | Request auth |
+| --- | --- | --- | --- |
+| `GET` | `/v1/meta/bounds` | Gateway-compiled manifest fingerprint, protocol bounds, paths, and feature metadata | No |
+| `GET` | `/v1/meta/status` | Gateway connection, broker, queue, and cache status | No |
+| `GET` | `/v1/fs/ls?path=...` | `LS` | No |
+| `GET` | `/v1/fs/cat?path=...&max_bytes=...` | `CAT` | No |
+| `GET` | `/v1/fs/tail?path=...&max_bytes=...` | `TAIL`; optional `lines=1..256` | No |
+| `POST` | `/v1/fs/echo` | One bounded `ECHO` append | Yes |
+| `GET` | `/v1/openapi.yaml` | Embedded OpenAPI 3.1 document | No |
+| `GET` | `/docs` | Swagger UI loading the embedded document | No |
+
+`/docs` loads Swagger UI assets from a public CDN. In an air-gapped deployment,
+consume `/v1/openapi.yaml` directly or provide locally managed UI assets outside
+the gateway.
+
+### Read examples
+
 ```bash
-curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lifecycle/state&max_bytes=128'
+curl --fail-with-body --silent --show-error \
+  http://127.0.0.1:8080/v1/meta/bounds
+
+curl --fail-with-body --silent --show-error --get \
+  --data-urlencode 'path=/proc/lifecycle/state' \
+  --data-urlencode 'max_bytes=128' \
+  http://127.0.0.1:8080/v1/fs/cat
 ```
 
-5. Optional write-path check (test VM only).
+### Write example
+
+The following queues one scheduler record and is appropriate only where that
+mutation is intended:
+
 ```bash
-curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?request-auth token is required}"
+
+curl --fail-with-body --silent --show-error \
+  -X POST http://127.0.0.1:8080/v1/fs/echo \
   -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
   -H 'Content-Type: application/json' \
-  -d '{"path":"/queen/schedule/ctl","line":"{\"id\":\"conn-check\",\"role\":\"worker-gpu\",\"priority\":1,\"ticks\":1,\"budget_ms\":10}"}'
-```
-Use this only in disposable environments, then confirm visibility via `/proc/schedule/queue`.
-
-**Connection success signals**
-- JSON response contains `status: "OK"` and `end: true`.
-- `/v1/meta/bounds` includes `manifest_sha256`.
-- `ls` returns a non-empty `lines` array (typically includes `proc`, `queen`, `worker`, `log`, `gpu`, `host`).
-
-## OpenAPI and Swagger Guidance
-The OpenAPI spec is a public contract. It must remain a strict projection of file semantics.
-
-- **Source of truth**: `docs/HOST_API.md`.
-- **Access points**: `/v1/openapi.yaml` and `/docs`.
-- **No new verbs**: operations must map 1:1 to `LS`, `CAT`, and `ECHO`.
-- **Bounds first**: clients must read `/v1/meta/bounds` and size requests accordingly.
-- **Air-gapped use**: download the YAML spec instead of relying on Swagger UI CDN assets.
-
-## Python API Support Guidelines
-The Python client is a thin wrapper over existing semantics. It must remain non-authoritative.
-
-- **Backends**: `TcpBackend`, `FilesystemBackend`, `RestBackend`, and `MockBackend`.
-- **Bounds**: enforce manifest-derived limits from `docs/USERLAND_AND_CLI.md`.
-- **No new semantics**: do not introduce verbs not supported by console or Secure9P.
-- **Examples**: keep `tools/cohesix-py/examples/` aligned with new control grammar.
-- **Docs**: update `docs/PYTHON_SUPPORT.md` when REST or backend behavior changes.
-
-## Python Connection Checks (Expanded)
-These checks validate connectivity only. They do not test API code.
-
-**Install the client**
-```bash
-python3 -m pip install -e tools/cohesix-py
+  --data-binary '{"path":"/queen/schedule/ctl","line":"{\"id\":\"api-check-1\",\"role\":\"worker-gpu\",\"priority\":2,\"ticks\":3,\"budget_ms\":120}"}'
 ```
 
-**REST backend connectivity**
-```bash
-python3 - <<'PY'
-from cohesix.backends import RestBackend
+Control records are single-line JSON where the target interface requires JSONL.
+The JSON schema, identifier rules, and queue bounds are defined in
+[INTERFACES.md](INTERFACES.md), not by the HTTP wrapper.
 
-backend = RestBackend("http://127.0.0.1:8080")
-print(backend.list_dir("/"))
-print(backend.read_file("/proc/lifecycle/state", 128).decode("utf-8").strip())
-PY
+## Response contract
+
+Filesystem endpoints return a `GatewayResponse` object:
+
+```json
+{
+  "status": "OK",
+  "verb": "CAT",
+  "path": "/proc/lifecycle/state",
+  "end": true,
+  "lines": ["state=ONLINE"],
+  "bytes": 12
+}
 ```
 
-**TCP console connectivity**
-```bash
-python3 - <<'PY'
-import os
-from cohesix.backends import TcpBackend
+On failure, `status` is `ERR`, `end` remains `true`, `lines` is empty, and
+`error` contains the bounded failure text. A target-level `ERR`, including a policy
+refusal, is returned with HTTP `200` so the console refusal is preserved.
+Clients must therefore check both the HTTP status and the JSON `status` field.
 
-backend = TcpBackend("127.0.0.1", 31337, os.environ["COH_AUTH_TOKEN"], "queen", None)
-print(backend.list_dir("/"))
-PY
-```
+| HTTP status | Meaning |
+| --- | --- |
+| `200` | Gateway completed the request; inspect JSON `status` for `OK` or target `ERR`. |
+| `400` | Invalid path, bound, query, or request payload. |
+| `401` | Missing or invalid request-auth token on `POST /v1/fs/echo`. |
+| `429` | Bounded gateway broker queue is under backpressure. |
+| `503` | Upstream transport or gateway session is unavailable. |
+| `504` | Bounded broker response deadline expired. |
 
-**Filesystem backend connectivity**
-```bash
-./bin/coh --host 127.0.0.1 --port 31337 mount --at /tmp/coh-mount
-python3 - <<'PY'
-from cohesix.backends import FilesystemBackend
+## Bounds and namespace discovery
 
-backend = FilesystemBackend("/tmp/coh-mount")
-print(backend.list_dir("/"))
-PY
-```
+REST clients should read `/v1/meta/bounds` when they connect and retain the
+returned `manifest_sha256` with any evidence they produce. The gateway builds
+this response from its compiled generated policy; it does not query the target
+for a live manifest. Use the returned limits for requests sent through that
+gateway, and compare the fingerprint with `/proc/boot` or equivalent image
+build evidence before claiming that both sides use the same manifest.
 
-If `/proc/lifecycle/state` is unavailable, use a read-only path that exists in your build, such as `/proc/schedule/summary` or `/proc/lease/summary` for Milestone 24c.
+Do not treat a successful `GET /v1/meta/bounds` as target-manifest proof or as
+proof that every optional path exists. List the relevant parent and check the
+profile-specific path. The canonical worker namespace begins at `/shard`;
+`/worker` is only a generated legacy alias when enabled.
 
-## Troubleshooting
-- `ERR AUTH` or `ERR ATTACH` means the auth token, role, or ticket does not match the Queen.
-- Connection refused usually means the VM or gateway is not running.
-- `ERR ECHO reason=policy ... EPERM` means policy gating requires an approval in `/actions/queue`.
-- Gateway running but empty `/gpu` or `/host` paths means the host bridges are not publishing.
-- `path exceeds max length` or `path component '..' is not permitted` means you violated manifest bounds.
-- `read exceeds max bytes` means `max_bytes` is too large for the path or for its manifest limit.
+## Retries and idempotency
 
-## References
-- `docs/BUILD_PLAN.md` — Milestone 24c scope and DoD.
-- `docs/USE_CASES.md` — API-to-use-case alignment.
-- `docs/INTERFACES.md` — canonical schemas and path definitions.
-- `docs/HOST_API.md` — OpenAPI 3.1 spec and REST examples.
-- `docs/PYTHON_SUPPORT.md` — Python client usage and backends.
+- Read requests may retry bounded transient `429`, `503`, or `504` responses
+  with backoff.
+- Do not blindly retry an append after a connection loss or client-side timeout;
+  verify the target's read-only status first because the caller may not have
+  received the completion.
+- A returned target `ERR` has no side effects unless the interface contract says
+  otherwise. Retry only after correcting the reported cause.
+- Control records should carry stable application identifiers where their
+  schema provides one. Duplicate identifiers and consumed approvals are
+  intentionally rejected.
+- Respect `Retry-After` when present and keep retry attempts within the
+  generated client policy.
+
+See [FAILURE_MODES.md](FAILURE_MODES.md) for symptom-specific recovery.
+
+## Compatibility rules
+
+The `/v1` surface is a projection, so compatibility includes both HTTP and target
+contracts:
+
+1. Do not add HTTP operations that cannot be expressed by the documented
+   console/file semantics.
+2. Update the OpenAPI source, gateway tests, client tests, and narrative docs in
+   the same change when an endpoint or response changes.
+3. Treat console grammar, NineDoor error semantics, control JSONL, `/proc`
+   formats, and generated bounds as upstream compatibility constraints.
+4. Reject unknown control fields and out-of-bound data rather than coercing it.
+5. Preserve `OK`, `ERR`, and `END` meaning across REST, CLI, Python, and UI
+   clients.
+6. Never represent HTTP request authentication as a capability ticket or
+   delegated target identity.
+
+## Client guidance
+
+- Shell users: [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md)
+- Rust host tools: [HOST_TOOLS.md](HOST_TOOLS.md)
+- Python: [PYTHON_SUPPORT.md](PYTHON_SUPPORT.md)
+- Interface schemas: [INTERFACES.md](INTERFACES.md)
+- Security model: [SECURITY.md](SECURITY.md)
