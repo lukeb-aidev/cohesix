@@ -3,13 +3,67 @@
 # Copyright 2026 Lukas Bower
 
 [non_test]
-unsafe = 731
+unsafe = 691
 unwrap = 38
-expect = 239
+expect = 240
+panic = 96
+
+[linked_runtime_hal]
+unsafe = 144
+unwrap = 0
+expect = 2
+panic = 0
+
+[outside_linked_runtime_hal]
+unsafe = 547
+unwrap = 38
+expect = 238
 panic = 96
 
 [metadata]
-scanner = "rust-risk-audit/v1"
+scanner = "rust-risk-audit/v4"
+source_scope = "repository-authored Rust under apps/, crates/, and tools/; package integration tests and the tests-only workspace package excluded; exact hash-pinned OUT_DIR generators, Cargo build scripts, build-script inputs and shared helper tooling, rustc wrapper, and external non-Rust trees contracted separately"
 historical_baseline_commit = "cf8f9ee30"
-historical_unsafe = 692
-accepted_unsafe_delta = 39
+historical_unsafe = 693
+historical_unwrap = 38
+historical_expect = 240
+historical_panic = 96
+accepted_unsafe_delta = 0
+linked_runtime_hal_historical_unsafe = 146
+linked_runtime_hal_historical_unwrap = 0
+linked_runtime_hal_historical_expect = 2
+linked_runtime_hal_historical_panic = 0
+outside_linked_runtime_hal_historical_unsafe = 547
+outside_linked_runtime_hal_historical_unwrap = 38
+outside_linked_runtime_hal_historical_expect = 238
+outside_linked_runtime_hal_historical_panic = 96
+linked_runtime_hal_paths = [
+  "apps/pi4-driver-runtime/src",
+  "apps/root-task/src/hal",
+  "apps/root-task/src/drivers/driver_task_net.rs",
+  "crates/pi4-driver-abi/src",
+]
+external_non_rust_trees = ["crates/sel4-sys/upstream"]
+out_dir_generator_contracts = [
+  "crates/sel4-sys/src/lib.rs:bindings.rs:crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
+  "crates/sel4-sys/src/lib.rs:sel4_config_consts.rs:crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
+  "apps/root-task/src/lib.rs:built_info.rs:apps/root-task/build.rs:25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/pi4_wifi.rs:pi4_wifi_firmware.rs:apps/root-task/build.rs:25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/driver_task.rs:pi4_driver_runtime_payload.rs:apps/root-task/build.rs:25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+]
+build_script_contracts = [
+  "apps/pi4-driver-runtime/build.rs:f424066cecefb6ec3c2a974f47bde52785451b77d48ab0dd31fefc46ac8afec9:aa98e6fd87c6a6a72ccc01ff5332d068dc42cb30e6d95c0147ed27d7180a7975",
+  "apps/root-task/build.rs:25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/swarmui/build.rs:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a",
+  "crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
+]
+build_script_input_contracts = [
+  "apps/root-task/build_support.rs:ce5f4df7aea162b6b9d5371c03012bc3f18cc638f5d1393f2f294e05c922d2b7:60908d93a4131cdb388fdd5d1d857abdf00e66d1ede30be26ab40c4755fbde6b",
+]
+current_only_build_tool_contracts = [
+  "crates/cargo-build-directive/Cargo.toml:b3e346271ee20abb30f92811adcc0c3eb63fce5aeef5edf88cb4bb06a5529fd4:absent@cf8f9ee30",
+  "crates/cargo-build-directive/src/lib.rs:ea0670945ce32ef358861e79275560c968856896ffddc93022fdecedf5c05388:absent@cf8f9ee30",
+]
+rustc_wrapper_contracts = [
+  "scripts/rustc-wrapper.sh:7e0b859852b0bab86736fd0a14f1706fa0681dd912469cc82d18f3dff5243de4:7e0b859852b0bab86736fd0a14f1706fa0681dd912469cc82d18f3dff5243de4",
+]

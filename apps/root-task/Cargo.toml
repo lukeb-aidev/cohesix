@@ -336,5 +336,6 @@ name = "worker_authority"
 path = "tests/worker_authority.rs"
 
 [build-dependencies]
+cargo-build-directive = { workspace = true }
 regex = "1.10"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

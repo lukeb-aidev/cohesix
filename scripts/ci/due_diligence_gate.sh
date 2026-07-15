@@ -33,7 +33,6 @@ dd_regression_auth_timeout="${DD_REGRESSION_AUTH_TIMEOUT:-120}"
 dd_regression_quit_timeout="${DD_REGRESSION_QUIT_TIMEOUT:-60}"
 dd_reuse_regression_batch_from="${DD_REUSE_REGRESSION_BATCH_FROM:-}"
 dd_regression_groups="${DD_REGRESSION_GROUPS:-${COHSH_BATCH_GROUPS:-all}}"
-mkdir -p "$log_root"
 
 declare -a failures=()
 declare -a incomplete_steps=()
@@ -85,7 +84,8 @@ check_required_audit_assets() {
 }
 
 check_rust_risk_ratchet() {
-  cargo run --quiet --locked -p rust-risk-audit -- \
+  scripts/ci/rust_risk_gate.sh \
+    --root "$repo_root" \
     --baseline docs/audit/rust_risk_baseline.toml
 }
 
@@ -291,54 +291,316 @@ PY
 }
 
 check_exceptions_register() {
-  python3 <<'PY'
+  local findings_path="${1:-docs/audit/findings.csv}"
+  local exceptions_path="${2:-docs/audit/EXCEPTIONS.md}"
+  python3 - "$findings_path" "$exceptions_path" <<'PY'
+import csv
 from datetime import date
 import pathlib
+import re
 import sys
 
-path = pathlib.Path("docs/audit/EXCEPTIONS.md")
-if not path.is_file():
-    print("missing docs/audit/EXCEPTIONS.md", file=sys.stderr)
+findings_path = pathlib.Path(sys.argv[1])
+exceptions_path = pathlib.Path(sys.argv[2])
+if not findings_path.is_file():
+    print(f"missing {findings_path}", file=sys.stderr)
+    sys.exit(1)
+if not exceptions_path.is_file():
+    print(f"missing {exceptions_path}", file=sys.stderr)
     sys.exit(1)
 
-lines = path.read_text().splitlines()
+with findings_path.open(newline="") as handle:
+    findings_lines = [
+        line
+        for line in handle
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+if not findings_lines:
+    print("findings register is empty", file=sys.stderr)
+    sys.exit(1)
+
+reader = csv.DictReader(findings_lines)
+if reader.fieldnames is None:
+    print("unable to parse findings header", file=sys.stderr)
+    sys.exit(1)
+if (
+    any(not field for field in reader.fieldnames)
+    or len(reader.fieldnames) != len(set(reader.fieldnames))
+):
+    print("findings header contains empty or duplicate columns", file=sys.stderr)
+    sys.exit(1)
+required_finding_columns = {
+    "finding_id",
+    "severity",
+    "commit_sha",
+    "closed_date",
+    "closure_evidence",
+}
+allowed_finding_columns = {
+    "finding_id",
+    "severity",
+    "disposition",
+    "status",
+    "title",
+    "component",
+    "file",
+    "line",
+    "first_observed_date",
+    "last_observed_date",
+    "evidence",
+    "owner",
+    "target_date",
+    "reviewer",
+    "commit_sha",
+    "closed_date",
+    "closure_evidence",
+    "root_cause",
+    "preventive_action",
+    "risk_owner",
+    "risk_expiration",
+}
+missing_finding_columns = sorted(required_finding_columns.difference(reader.fieldnames))
+if missing_finding_columns:
+    print(
+        "findings header missing required columns: "
+        + ", ".join(missing_finding_columns),
+        file=sys.stderr,
+    )
+    sys.exit(1)
+unknown_finding_columns = sorted(set(reader.fieldnames).difference(allowed_finding_columns))
+if unknown_finding_columns:
+    print(
+        "findings header contains unknown columns: "
+        + ", ".join(unknown_finding_columns),
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if "disposition" in reader.fieldnames and "status" in reader.fieldnames:
+    print(
+        "findings header cannot contain both disposition and legacy status columns",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if "disposition" in reader.fieldnames:
+    disposition_field = "disposition"
+elif "status" in reader.fieldnames:
+    disposition_field = "status"
+else:
+    print("findings header missing disposition/status column", file=sys.stderr)
+    sys.exit(1)
+
+errors = []
+findings = {}
+allowed_finding_dispositions = {
+    "OPEN",
+    "IN_REMEDIATION",
+    "PENDING_VERIFY",
+    "CLOSED_VERIFIED",
+    "ACCEPTED_RISK",
+}
+allowed_finding_severities = {"P0", "P1", "P2", "P3"}
+for line_number, row in enumerate(reader, start=2):
+    if None in row or any(value is None for value in row.values()):
+        errors.append(
+            f"findings register line {line_number} does not match the "
+            f"{len(reader.fieldnames)}-column header"
+        )
+        continue
+    finding_id = row.get("finding_id", "").strip().strip("`")
+    disposition = row.get(disposition_field, "").strip().upper()
+    severity = row.get("severity", "").strip().upper()
+    if not finding_id:
+        errors.append("findings register contains an empty finding_id")
+        continue
+    if finding_id in findings:
+        errors.append(f"{finding_id}: duplicate finding_id")
+        continue
+    if disposition not in allowed_finding_dispositions:
+        errors.append(
+            f"{finding_id}: unknown disposition '{disposition or '<empty>'}'"
+        )
+    if severity not in allowed_finding_severities:
+        errors.append(f"{finding_id}: unknown severity '{severity or '<empty>'}'")
+    if disposition == "CLOSED_VERIFIED" and severity in {"P0", "P1", "P2"}:
+        commit_sha = row.get("commit_sha", "").strip()
+        closed_date = row.get("closed_date", "").strip()
+        closure_evidence = row.get("closure_evidence", "").strip()
+        if re.fullmatch(r"[0-9a-fA-F]{40}", commit_sha) is None:
+            errors.append(
+                f"{finding_id}: CLOSED_VERIFIED requires a full 40-hex commit_sha"
+            )
+        try:
+            date.fromisoformat(closed_date)
+        except ValueError:
+            errors.append(
+                f"{finding_id}: CLOSED_VERIFIED requires a valid closed_date"
+            )
+        if not closure_evidence:
+            errors.append(
+                f"{finding_id}: CLOSED_VERIFIED requires closure_evidence"
+            )
+    findings[finding_id] = {
+        "disposition": disposition,
+        "severity": severity,
+    }
+
+lines = exceptions_path.read_text().splitlines()
 table_rows = []
-for line in lines:
+for line_number, line in enumerate(lines, start=1):
     stripped = line.strip()
-    if stripped.startswith("|") and stripped.endswith("|"):
-        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
-        if len(cells) == 11:
-            table_rows.append(cells)
+    if not stripped.startswith("|"):
+        continue
+    if not stripped.endswith("|"):
+        errors.append(
+            f"exceptions register line {line_number} expected 11 cells, "
+            "but the row has no closing pipe"
+        )
+        continue
+    cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+    if len(cells) != 11:
+        errors.append(
+            f"exceptions register line {line_number} expected 11 cells, "
+            f"found {len(cells)}"
+        )
+        continue
+    table_rows.append(cells)
 
 if not table_rows:
     print("exceptions register table not found", file=sys.stderr)
     sys.exit(1)
 
+expected_exception_header = [
+    "Exception ID",
+    "Related Finding",
+    "Severity",
+    "Scope",
+    "Rationale",
+    "Compensating Controls",
+    "Risk Owner",
+    "Approved By",
+    "Decision Date",
+    "Expiration Date",
+    "Status",
+]
+header_count = 0
+separator_count = 0
+data_rows = []
+for cells in table_rows:
+    if cells == expected_exception_header:
+        header_count += 1
+    elif all(re.fullmatch(r":?-{3,}:?", cell) is not None for cell in cells):
+        separator_count += 1
+    else:
+        data_rows.append(cells)
+if header_count != 1:
+    errors.append(
+        f"exceptions register requires exactly one canonical header, found {header_count}"
+    )
+if separator_count != 1:
+    errors.append(
+        f"exceptions register requires exactly one separator row, found {separator_count}"
+    )
+table_rows = data_rows
+
 today = date.today()
-errors = []
+active_exception_findings = set()
+exception_ids = set()
+allowed_statuses = {"PROPOSED", "APPROVED_ACTIVE", "EXPIRED", "REVOKED", "CLOSED"}
 for cells in table_rows:
     first = cells[0]
-    if first == "Exception ID":
-        continue
-    if set(first.replace("-", "").strip()) == set():
-        continue
 
     exception_id = first.strip("`")
+    related_finding = cells[1].strip("`")
+    severity = cells[2].strip("`").upper()
+    scope = cells[3].strip("`").strip()
+    rationale = cells[4].strip("`").strip()
+    controls = cells[5].strip("`").strip()
+    risk_owner = cells[6].strip("`").strip()
+    approved_by = cells[7].strip("`").strip()
+    decision = cells[8].strip("`").strip()
     expiration = cells[9].strip("`")
-    status = cells[10].strip("`")
+    status = cells[10].strip("`").upper()
 
-    if status == "EXPIRED":
-        errors.append(f"{exception_id}: status is EXPIRED")
+    if exception_id == "None" and related_finding == "N/A":
+        continue
+    if not exception_id:
+        errors.append("exceptions register contains an empty exception ID")
+        continue
+    if exception_id in exception_ids:
+        errors.append(f"{exception_id}: duplicate exception ID")
+        continue
+    exception_ids.add(exception_id)
+
+    finding = findings.get(related_finding)
+    if finding is None:
+        errors.append(
+            f"{exception_id}: related finding {related_finding or '<missing>'} does not exist"
+        )
+    elif severity != finding["severity"]:
+        errors.append(
+            f"{exception_id}: severity {severity or '<empty>'} does not match "
+            f"{related_finding} severity {finding['severity'] or '<empty>'}"
+        )
+
+    for label, value in [
+        ("scope", scope),
+        ("rationale", rationale),
+        ("compensating controls", controls),
+        ("risk owner", risk_owner),
+        ("approved by", approved_by),
+        ("decision date", decision),
+        ("expiration date", expiration),
+    ]:
+        if not value or value.upper() == "N/A":
+            errors.append(f"{exception_id}: missing {label}")
+
+    try:
+        decision_date = date.fromisoformat(decision)
+    except ValueError:
+        decision_date = None
+        errors.append(f"{exception_id}: invalid decision date '{decision}'")
+    try:
+        expiry_date = date.fromisoformat(expiration)
+    except ValueError:
+        expiry_date = None
+        errors.append(f"{exception_id}: invalid expiration date '{expiration}'")
+    if decision_date is not None and expiry_date is not None and expiry_date < decision_date:
+        errors.append(f"{exception_id}: expiration date precedes decision date")
+
+    if status not in allowed_statuses:
+        errors.append(f"{exception_id}: unknown status '{status or '<empty>'}'")
         continue
 
     if status == "APPROVED_ACTIVE":
-        try:
-            expiry_date = date.fromisoformat(expiration)
-        except ValueError:
-            errors.append(f"{exception_id}: invalid expiration date '{expiration}'")
-            continue
-        if expiry_date < today:
+        if related_finding in active_exception_findings:
+            errors.append(
+                f"{exception_id}: duplicate APPROVED_ACTIVE exception for {related_finding}"
+            )
+        else:
+            active_exception_findings.add(related_finding)
+        if severity in {"P0", "P1"}:
+            errors.append(f"{exception_id}: {severity} findings cannot be accepted as residual risk")
+        if finding is not None and finding["disposition"] != "ACCEPTED_RISK":
+            errors.append(
+                f"{exception_id}: APPROVED_ACTIVE requires {related_finding} "
+                f"to be ACCEPTED_RISK, found {finding['disposition'] or '<empty>'}"
+            )
+        if expiry_date is not None and expiry_date < today:
             errors.append(f"{exception_id}: expired on {expiry_date.isoformat()}")
+    elif status == "EXPIRED":
+        errors.append(f"{exception_id}: status is EXPIRED")
+    elif status == "CLOSED":
+        if finding is not None and finding["disposition"] != "CLOSED_VERIFIED":
+            errors.append(
+                f"{exception_id}: CLOSED requires {related_finding} "
+                f"to be CLOSED_VERIFIED, found {finding['disposition'] or '<empty>'}"
+            )
+
+for finding_id, finding in findings.items():
+    if finding["disposition"] == "ACCEPTED_RISK" and finding_id not in active_exception_findings:
+        errors.append(
+            f"{finding_id}: ACCEPTED_RISK requires a matching APPROVED_ACTIVE exception"
+        )
 
 if errors:
     print("exceptions register validation failed:", file=sys.stderr)
@@ -433,6 +695,17 @@ print(f"reused QEMU regression batch: {root} groups={len(expected)} scripts=18")
 PY
 }
 
+if [[ $# -gt 0 ]]; then
+  if [[ "$1" == "--check-exceptions-register" && $# -eq 3 ]]; then
+    check_exceptions_register "$2" "$3"
+    exit $?
+  fi
+  printf "usage: %s [--check-exceptions-register <findings.csv> <EXCEPTIONS.md>]\n" "$0" >&2
+  exit 2
+fi
+
+mkdir -p "$log_root"
+
 run_step "required-audit-assets" check_required_audit_assets
 run_step "cargo-lockfile" cargo metadata --locked --no-deps
 run_step "cargo-fmt-check" cargo fmt --all -- --check
@@ -441,6 +714,7 @@ run_step "cargo-check-workspace" env CARGO_INCREMENTAL=0 cargo check --workspace
 run_step "secure9p-codec-tests" cargo test -p secure9p-codec
 run_step "integration-tests" cargo test -p tests
 run_step "workspace-tests" env CARGO_INCREMENTAL=0 cargo test --workspace
+run_step "rust-risk-bootstrap-tests" python3 scripts/ci/test_rust_risk_gate.py
 if [[ "${DD_SKIP_CARGO_AUDIT:-0}" == "1" ]]; then
   mark_incomplete_step "cargo-audit" "DD_SKIP_CARGO_AUDIT=1"
 else

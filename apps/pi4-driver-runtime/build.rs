@@ -7,6 +7,8 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use cargo_build_directive::emit_cargo_directive;
+
 const CONFIG_CANDIDATES: &[&str] = &[
     "CMakeCache.txt",
     ".config",
@@ -57,7 +59,7 @@ fn probe_config_flag(build_dir: &Path, key: &str) -> Option<bool> {
     CONFIG_CANDIDATES.iter().find_map(|candidate| {
         let path = build_dir.join(candidate);
         let contents = fs::read_to_string(&path).ok()?;
-        println!("cargo:rerun-if-changed={}", path.display());
+        emit_cargo_directive(format!("cargo:rerun-if-changed={}", path.display()));
         probe_config_contents(&contents, key)
     })
 }
@@ -158,7 +160,7 @@ fn find_timer_clock_hz(build_dir: &Path) -> Option<u64> {
         .iter()
         .find_map(|candidate| {
             let path = build_dir.join(candidate);
-            println!("cargo:rerun-if-changed={}", path.display());
+            emit_cargo_directive(format!("cargo:rerun-if-changed={}", path.display()));
             let contents = fs::read_to_string(path).ok()?;
             parse_timer_clock_hz(&contents)
         })

@@ -7994,7 +7994,7 @@ Commands:
   - cargo check --workspace
   - cargo test --workspace -- --test-threads=1
   - cargo test -p rust-risk-audit
-  - cargo run --quiet --locked -p rust-risk-audit -- --baseline docs/audit/rust_risk_baseline.toml
+  - scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml
   - cargo audit
   - cargo deny check advisories
   - scripts/check-generated.sh
@@ -8004,6 +8004,47 @@ Commands:
   - scripts/ci/test_plan_run.sh --target pi4 --stage 2 --state-dir out/test-plan/m26d-repository-gates-pi4
 Checks: mandatory lint, workspace, dependency, generated-artifact, QEMU packaging, cfg-aware risk-ratchet, and offline staged-regression gates pass with no newly ignored advisory, forged marker, skipped stage, rootfs-size exception, operator grammar drift, or loss of manifest-declared driver-runtime artifact identity; accepted production unsafe growth is explicit and expiry-bounded; live Pi stages remain separately hardware-gated; every retained workflow parses cleanly, references only tracked commands, preserves required event coverage, and has no redundant or no-op job.
 Deliverables: reviewable dependency resolution and risk register, deterministic root-task/Python regression coverage, sub-4-MiB QEMU payload, clean QEMU plus offline Pi target-qualified gate evidence, and one coherent GitHub Actions surface with obsolete workflow files removed.
+```
+
+```
+Title/ID: m26d-linked-runtime-unsafe-exception-remediation
+Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / repository-wide regression gate closure; reopened Milestone 26b / m26b-wifi-sdio-notification-dpc-closure defect remediation
+Goal: Remove the accepted linked-runtime Rust unsafe delta by enforcing shared-state exclusivity and concentrating fixed mapped-memory and seL4 operations behind bounded reviewed abstractions without changing the CYW43/SDIO protocol or hardware authority.
+Inputs: Cargo.toml, Cargo.lock, rust-toolchain.toml, apps/pi4-driver-runtime/src/lib.rs, apps/pi4-driver-runtime/build.rs, apps/root-task/build.rs, apps/root-task/src/hal, apps/root-task/src/drivers/driver_task_net.rs, crates/pi4-driver-abi/src, crates/cargo-build-directive, crates/sel4-sys/build.rs, tools/rust-risk-audit, scripts/ci/rust_risk_gate.sh, scripts/ci/test_rust_risk_gate.py, scripts/ci/due_diligence_gate.sh, scripts/ci/test_due_diligence_lifecycle.py, docs/audit/rust_risk_baseline.toml, docs/audit/findings.csv, docs/audit/EXCEPTIONS.md, docs/audit/BLOCKERS.md, docs/audit/CONTROL_TRACEABILITY.md, docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md, the `cf8f9ee30` Milestone 26c baseline, and current repository-gate evidence.
+Changes:
+  - apps/pi4-driver-runtime/src/lib.rs — replace convention-only shared mutation with mechanically enforced exclusivity, keep volatile and syscall operations inside narrow fixed-resource helpers, and preserve sequence-last publication, reciprocal notification, DPC, MMIO, and bounded-yield behavior.
+  - apps/root-task/src/hal/driver_task.rs — consume completion and DPC commit words with acquire-before-body ordering, stable commit rechecks, and focused access-order tests.
+  - crates/cargo-build-directive + the three consuming build scripts — centralize control-character rejection for dynamic Cargo directives and tested Rust-string-literal escaping; bind the helper source, manifest, dependency wiring, and historical absence into the exact scanner contract.
+  - tools/rust-risk-audit + docs/audit/rust_risk_baseline.toml + scripts/ci/rust_risk_gate.sh + scripts/ci/test_rust_risk_gate.py — retain the global production ratchet and add linked-runtime/HAL plus outside-component budgets replayed from exact commit `cf8f9ee30` only after every scanner-input path matches its raw `HEAD` blob and mode and the attested path set has no additions or omissions; count qualified/UFCS, raw-identifier, macro-indirected, and conditional unsafe-attribute syntax across repository-authored `apps/`, `crates/`, and `tools/` production sources; pin exact active and historical tuples; execute the scanner directly on the host after a hash-checked build in a fresh private target directory and Cargo home that re-extracts checksum-verified registry archives; resolve exact release `1.93.1` tools from the canonical OS-account Rustup home by named-toolchain lookup so directory overrides cannot supersede the pin; reject component relocation, baseline inflation, broad test-path hiding, workspace/package/Cargo target/dependency escapes, nested-package test relabeling, local proc-macro synthesis, source redirects, symlink/non-Rust includes, shadowable generated includes, unreviewed generated Rust, uncontracted build scripts/compiler wrappers or inputs, repository-controlled `cfg(test)` injection, Cargo runner/compiler/Rustup selectors, external Cargo configuration, inherited or redirected Git repository binding, replacement refs, clean filters, ignored extra sources, caller-supplied scanner artifacts, malformed metadata, and duplicate TOML keys.
+  - scripts/ci/due_diligence_gate.sh + scripts/ci/test_due_diligence_lifecycle.py — enforce a one-to-one finding/exception lifecycle, exact CSV/table schemas and arity, known severities/states, non-expired complete policy metadata, and cover fail-closed mismatches with focused fixtures.
+  - docs/audit/findings.csv + docs/audit/EXCEPTIONS.md + docs/audit/BLOCKERS.md + docs/audit/CONTROL_TRACEABILITY.md + docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md — reconcile superseded `DD-2026-0016`/`DD-2026-0017` lifecycle drift and close `DD-2026-0018`/`EX-2026-0018` only after current global, linked-runtime/HAL, and outside-component counts are at or below their replay-derived budgets, focused concurrency/bounds/order tests pass, and clean detached-worktree evidence is bound to the immutable remediation commit.
+Commands:
+  - cargo test -p pi4-driver-runtime -- --test-threads=1
+  - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
+  - cargo test -p root-task --lib --features driver-tests-pi4 -- --test-threads=1
+  - cargo test -p pi4-driver-abi
+  - cargo test -p cargo-build-directive
+  - cargo test -p rust-risk-audit
+  - scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml
+  - scripts/ci/rust_risk_gate.sh --root <cf8f9ee30-scanner-input-worktree> --historical-replay
+  - python3 scripts/ci/test_due_diligence_lifecycle.py
+  - python3 scripts/ci/test_rust_risk_gate.py
+  - bash scripts/ci/due_diligence_gate.sh --check-exceptions-register docs/audit/findings.csv docs/audit/EXCEPTIONS.md
+  - cargo fmt --all -- --check
+  - cargo clippy --workspace --all-targets -- -D warnings
+  - cargo check --workspace
+  - cargo test --workspace -- --test-threads=1
+  - cargo audit
+  - cargo deny check advisories
+  - scripts/ci/check_test_plan.sh
+  - go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+  - scripts/check-generated.sh
+  - scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-unsafe-remediation-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --stage 1 --state-dir out/test-plan/m26d-unsafe-remediation-pi4
+  - scripts/ci/test_plan_run.sh --target pi4 --stage 2 --state-dir out/test-plan/m26d-unsafe-remediation-pi4
+Checks: scanner v4 replays exact commit `cf8f9ee30` only after raw scanner-input attestation, yielding global `unsafe=693`, `unwrap=38`, `expect=240`, `panic=96`, linked-runtime/HAL `unsafe=146`, `unwrap=0`, `expect=2`, `panic=0`, and outside-component `unsafe=547`, `unwrap=38`, `expect=238`, `panic=96`; immutable remediation-commit ceilings are global `unsafe=691`, `unwrap=38`, `expect=240`, `panic=96`, linked-runtime/HAL `unsafe=144`, `unwrap=0`, `expect=2`, `panic=0`, and outside-component `unsafe=547`, `unwrap=38`, `expect=238`, `panic=96`; every dynamic generated-Rust include has one source/output/generator/hash contract; no active P2 exception remains; shared-state concurrency, mapped-range bounds/alignment, sequence-last publication/consumption, DPC ownership, reciprocal notification, and exception-lifecycle tests pass; offline evidence is not represented as live Pi Wi-Fi proof.
+Deliverables: mechanically enforced linked-runtime state ownership, concentrated and documented hardware/ABI boundaries, global/component/outside risk-ratchet evidence, reconciled and closed P2 finding/exception records, and refreshed repository-wide offline gates.
 ```
 
 ```

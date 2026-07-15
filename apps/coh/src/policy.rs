@@ -13,8 +13,8 @@ use sha2::{Digest, Sha256};
 
 #[allow(clippy::all)]
 mod generated {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
+    ::core::include!(::core::concat!(
+        ::core::env!("CARGO_MANIFEST_DIR"),
         "/src/generated/policy.rs"
     ));
 }

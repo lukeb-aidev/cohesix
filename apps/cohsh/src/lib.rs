@@ -27,8 +27,8 @@ pub mod trace;
 
 #[allow(clippy::all, dead_code)]
 mod generated_client {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
+    ::core::include!(::core::concat!(
+        ::core::env!("CARGO_MANIFEST_DIR"),
         "/src/generated/client.rs"
     ));
 }

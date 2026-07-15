@@ -7,6 +7,8 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use cargo_build_directive::emit_cargo_directive;
+
 const CONFIG_CANDIDATES: &[&str] = &[
     ".config",
     "kernel/.config",
@@ -122,16 +124,22 @@ fn emit_link_flags(build_dir: &Path) {
         );
     }
 
-    println!("cargo:rerun-if-changed={}", libsel4_archive.display());
-    println!("cargo:rustc-link-search=native={}", libsel4_dir.display());
+    emit_cargo_directive(format!(
+        "cargo:rerun-if-changed={}",
+        libsel4_archive.display()
+    ));
+    emit_cargo_directive(format!(
+        "cargo:rustc-link-search=native={}",
+        libsel4_dir.display()
+    ));
     println!("cargo:rustc-link-lib=static=sel4");
 
     let support_lib_dir = build_dir.join("lib");
     if support_lib_dir.is_dir() {
-        println!(
+        emit_cargo_directive(format!(
             "cargo:rustc-link-search=native={}",
             support_lib_dir.display()
-        );
+        ));
     }
 }
 
@@ -139,7 +147,7 @@ fn load_config_files(root: &Path) -> Vec<(PathBuf, String)> {
     let mut sources = Vec::new();
     for relative in CONFIG_CANDIDATES {
         let candidate = root.join(relative);
-        println!("cargo:rerun-if-changed={}", candidate.display());
+        emit_cargo_directive(format!("cargo:rerun-if-changed={}", candidate.display()));
         if let Ok(contents) = fs::read_to_string(&candidate) {
             sources.push((candidate, contents));
         }
@@ -410,10 +418,9 @@ fn resolve_platform(
     if !platforms.is_empty() {
         if platforms.len() == 1 {
             let platform = platforms[0].clone();
-            println!(
-                "cargo:warning=Unable to derive seL4 platform from configuration; defaulting to vendored {}",
-                platform
-            );
+            emit_cargo_directive(format!(
+                "cargo:warning=Unable to derive seL4 platform from configuration; defaulting to vendored {platform}"
+            ));
             return Ok(platform);
         }
 

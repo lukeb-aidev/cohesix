@@ -133,7 +133,10 @@ fn usb_runtime_keyboard_ready_seen() -> bool {
     false
 }
 
-include!(concat!(env!("OUT_DIR"), "/pi4_wifi_firmware.rs"));
+::core::include!(::core::concat!(
+    ::core::env!("OUT_DIR"),
+    "/pi4_wifi_firmware.rs"
+));
 
 const MAILBOX_PAGE_PADDR_CANDIDATES: [usize; 2] = [0xFE00_B000, 0x7E00_B000];
 const GPIO_PAGE_PADDR_CANDIDATES: [usize; 2] = [0xFE20_0000, 0x7E20_0000];

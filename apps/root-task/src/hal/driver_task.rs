@@ -9,8 +9,6 @@
 //! dedicated seL4 driver-task model. Drivers must declare the contract they
 //! consume before runtime code may service them.
 
-#[cfg(feature = "kernel")]
-use core::cell::UnsafeCell;
 #[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
 use core::sync::atomic::AtomicU64;
 #[cfg(feature = "kernel")]
@@ -1732,7 +1730,10 @@ static DRIVER_RUNTIME_PAYLOAD_LEN: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(feature = "kernel")]
 mod embedded_runtime_payload {
-    include!(concat!(env!("OUT_DIR"), "/pi4_driver_runtime_payload.rs"));
+    ::core::include!(::core::concat!(
+        ::core::env!("OUT_DIR"),
+        "/pi4_driver_runtime_payload.rs"
+    ));
 }
 #[cfg(feature = "kernel")]
 static HDMI_RUNTIME_FRAMEBUFFER_PADDR: AtomicUsize = AtomicUsize::new(0);
@@ -2284,6 +2285,209 @@ fn driver_task_ring_invalidate_completion_record(ring_root_ptr: usize) {
         ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET,
         core::mem::size_of::<DriverTaskCompletionRecord>(),
     );
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_read_sequence_committed<T>(
+    mut read_sequence: impl FnMut() -> Option<u32>,
+    mut read_body: impl FnMut() -> Option<T>,
+    mut acquire: impl FnMut(),
+) -> Option<(u32, T)> {
+    let first_sequence = read_sequence()?;
+    acquire();
+    let body = read_body()?;
+    acquire();
+    let second_sequence = read_sequence()?;
+    (first_sequence == second_sequence).then_some((second_sequence, body))
+}
+
+#[cfg(feature = "kernel")]
+struct DriverTaskRingView {
+    window: super::MappedRegisterWindow,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskRingView {
+    fn new(ring_root_ptr: usize) -> Option<Self> {
+        match super::MappedRegisterWindow::new(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES) {
+            Ok(window) => Some(Self { window }),
+            Err(_) => None,
+        }
+    }
+
+    fn read_u32(&self, offset: usize) -> Option<u32> {
+        match self.window.read_u32(offset) {
+            Ok(value) => Some(value),
+            Err(_) => None,
+        }
+    }
+
+    fn read_u16(&self, offset: usize) -> Option<u16> {
+        if offset & 1 != 0 {
+            return None;
+        }
+        let aligned = offset & !3;
+        let shift = ((offset & 2) * 8) as u32;
+        self.read_u32(aligned)
+            .map(|word| ((word >> shift) & u32::from(u16::MAX)) as u16)
+    }
+
+    fn read_frame(&self, offset: usize) -> Option<DriverFrameDescriptor> {
+        Some(DriverFrameDescriptor {
+            offset: self.read_u32(offset)?,
+            len: self.read_u16(offset.checked_add(core::mem::size_of::<u32>())?)?,
+            flags: self.read_u16(
+                offset.checked_add(core::mem::size_of::<u32>() + core::mem::size_of::<u16>())?,
+            )?,
+        })
+    }
+
+    fn read_command(&self) -> Option<DriverTaskCommandRecord> {
+        let budget_offset = core::mem::offset_of!(DriverTaskCommandRecord, budget);
+        Some(DriverTaskCommandRecord {
+            sequence: self.read_u32(core::mem::offset_of!(DriverTaskCommandRecord, sequence))?,
+            opcode: self.read_u16(core::mem::offset_of!(DriverTaskCommandRecord, opcode))?,
+            flags: self.read_u16(core::mem::offset_of!(DriverTaskCommandRecord, flags))?,
+            arg0: self.read_u32(core::mem::offset_of!(DriverTaskCommandRecord, arg0))?,
+            arg1: self.read_u32(core::mem::offset_of!(DriverTaskCommandRecord, arg1))?,
+            aux0: self.read_u32(core::mem::offset_of!(DriverTaskCommandRecord, aux0))?,
+            aux1: self.read_u32(core::mem::offset_of!(DriverTaskCommandRecord, aux1))?,
+            budget: DriverTaskBudgetGrant {
+                max_ops: self.read_u16(
+                    budget_offset + core::mem::offset_of!(DriverTaskBudgetGrant, max_ops),
+                )?,
+                max_frames: self.read_u16(
+                    budget_offset + core::mem::offset_of!(DriverTaskBudgetGrant, max_frames),
+                )?,
+                max_bytes: self.read_u32(
+                    budget_offset + core::mem::offset_of!(DriverTaskBudgetGrant, max_bytes),
+                )?,
+            },
+            frame: self.read_frame(core::mem::offset_of!(DriverTaskCommandRecord, frame))?,
+        })
+    }
+
+    fn read_completion(&self) -> Option<DriverTaskCompletionRecord> {
+        let base = DRIVER_TASK_RING_COMPLETION_OFFSET;
+        let sequence_offset = base + core::mem::offset_of!(DriverTaskCompletionRecord, sequence);
+        let (sequence, (code, detail, result, frame)) = driver_task_read_sequence_committed(
+            || self.read_u32(sequence_offset),
+            || {
+                Some((
+                    self.read_u16(base + core::mem::offset_of!(DriverTaskCompletionRecord, code))?,
+                    self.read_u16(
+                        base + core::mem::offset_of!(DriverTaskCompletionRecord, detail),
+                    )?,
+                    self.read_u32(
+                        base + core::mem::offset_of!(DriverTaskCompletionRecord, result),
+                    )?,
+                    self.read_frame(
+                        base + core::mem::offset_of!(DriverTaskCompletionRecord, frame),
+                    )?,
+                ))
+            },
+            driver_task_shared_load_barrier,
+        )?;
+        if sequence == 0 {
+            return None;
+        }
+        Some(DriverTaskCompletionRecord {
+            sequence,
+            code,
+            detail,
+            result,
+            frame,
+        })
+    }
+
+    fn read_dpc_ring(&self) -> Option<DriverRuntimeDpcEventRing> {
+        let base = usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        let version_len =
+            self.read_u32(base + core::mem::offset_of!(DriverRuntimeDpcEventRing, version))?;
+        let mut ring = DriverRuntimeDpcEventRing::empty(
+            self.read_u32(base + core::mem::offset_of!(DriverRuntimeDpcEventRing, epoch))?,
+        );
+        ring.magic =
+            self.read_u32(base + core::mem::offset_of!(DriverRuntimeDpcEventRing, magic))?;
+        ring.version = (version_len & u32::from(u16::MAX)) as u16;
+        ring.len = (version_len >> 16) as u16;
+        let producer_offset = base + core::mem::offset_of!(DriverRuntimeDpcEventRing, producer);
+        let (producer, ()) = driver_task_read_sequence_committed(
+            || self.read_u32(producer_offset),
+            || {
+                ring.consumer = self
+                    .read_u32(base + core::mem::offset_of!(DriverRuntimeDpcEventRing, consumer))?;
+                ring.flags =
+                    self.read_u32(base + core::mem::offset_of!(DriverRuntimeDpcEventRing, flags))?;
+                ring.overruns = self
+                    .read_u32(base + core::mem::offset_of!(DriverRuntimeDpcEventRing, overruns))?;
+                ring.ack_failures = self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeDpcEventRing, ack_failures),
+                )?;
+                let entries_base = base + core::mem::offset_of!(DriverRuntimeDpcEventRing, entries);
+                for (index, entry) in ring.entries.iter_mut().enumerate() {
+                    let entry_base = entries_base.checked_add(index.checked_mul(
+                        core::mem::size_of::<pi4_driver_abi::DriverRuntimeDpcEventEntry>(),
+                    )?)?;
+                    let sequence_offset = entry_base
+                        + core::mem::offset_of!(
+                            pi4_driver_abi::DriverRuntimeDpcEventEntry,
+                            sequence
+                        );
+                    let (sequence, (host_int_status, signal_status, reason_flags)) =
+                        driver_task_read_sequence_committed(
+                            || self.read_u32(sequence_offset),
+                            || {
+                                Some((
+                                    self.read_u32(
+                                        entry_base
+                                            + core::mem::offset_of!(
+                                                pi4_driver_abi::DriverRuntimeDpcEventEntry,
+                                                host_int_status
+                                            ),
+                                    )?,
+                                    self.read_u32(
+                                        entry_base
+                                            + core::mem::offset_of!(
+                                                pi4_driver_abi::DriverRuntimeDpcEventEntry,
+                                                signal_status
+                                            ),
+                                    )?,
+                                    self.read_u32(
+                                        entry_base
+                                            + core::mem::offset_of!(
+                                                pi4_driver_abi::DriverRuntimeDpcEventEntry,
+                                                reason
+                                            ),
+                                    )?,
+                                ))
+                            },
+                            driver_task_shared_load_barrier,
+                        )?;
+                    entry.sequence = sequence;
+                    entry.host_int_status = host_int_status;
+                    entry.signal_status = signal_status;
+                    entry.reason = (reason_flags & u32::from(u16::MAX)) as u16;
+                    entry.flags = (reason_flags >> 16) as u16;
+                }
+                Some(())
+            },
+            driver_task_shared_load_barrier,
+        )?;
+        ring.producer = producer;
+        Some(ring)
+    }
+
+    fn zero(&self) -> bool {
+        let mut offset = 0usize;
+        while offset < DRIVER_TASK_RING_PAGE_BYTES {
+            if self.window.write_u32(offset, 0).is_err() {
+                return false;
+            }
+            offset = offset.saturating_add(core::mem::size_of::<u32>());
+        }
+        true
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -4077,18 +4281,13 @@ pub(crate) fn driver_task_sdio_dpc_ring_snapshot() -> Option<DriverTaskSdioDpcRi
     if ring_root_ptr == 0 {
         return None;
     }
-    let dpc_ptr = (ring_root_ptr + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET))
-        as *const DriverRuntimeDpcEventRing;
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    let dpc_ptr = ring_root_ptr + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
     let dpc_len = core::mem::size_of::<DriverRuntimeDpcEventRing>();
-    driver_task_ring_invalidate_root_range(dpc_ptr as usize, dpc_len);
-    // SAFETY: HAL admitted and retained this root mapping for the fixed owner
-    // command page. The generated event offset and ABI-sized record fit within
-    // that page. This path performs volatile reads only and never mutates owner
-    // or client ring state.
-    let first = unsafe { core::ptr::read_volatile(dpc_ptr) };
-    driver_task_ring_invalidate_root_range(dpc_ptr as usize, dpc_len);
-    // SAFETY: Same admitted, read-only diagnostic mapping as the first sample.
-    let second = unsafe { core::ptr::read_volatile(dpc_ptr) };
+    driver_task_ring_invalidate_root_range(dpc_ptr, dpc_len);
+    let first = ring.read_dpc_ring()?;
+    driver_task_ring_invalidate_root_range(dpc_ptr, dpc_len);
+    let second = ring.read_dpc_ring()?;
     driver_task_shared_load_barrier();
     stable_sdio_dpc_ring_snapshot(first, second)
 }
@@ -4134,31 +4333,17 @@ fn driver_task_committed_engine_init_turn(
         core::mem::size_of::<DriverTaskCommandRecord>(),
     );
     driver_task_ring_invalidate_completion_record(ring_root_ptr);
-    // SAFETY: The root mapping is published by HAL and both fixed records fit
-    // in the first owner-ring page. Handoff reads only after the active root
-    // turn and every root writer have drained.
-    let command =
-        unsafe { core::ptr::read_volatile(ring_root_ptr as *const DriverTaskCommandRecord) };
-    // SAFETY: Same validated owner-ring page and fixed completion offset.
-    let first_completion = unsafe {
-        core::ptr::read_volatile(
-            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET)
-                as *const DriverTaskCompletionRecord,
-        )
-    };
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    let command = ring.read_command()?;
+    let first_completion = ring.read_completion()?;
     if first_completion.sequence != request as u32 {
         return None;
     }
     driver_task_ring_invalidate_completion_record(ring_root_ptr);
-    // SAFETY: The matching sequence is sampled again after invalidation so a
-    // sequence-last producer commit cannot be accepted with a torn body.
-    let completion = unsafe {
-        core::ptr::read_volatile(
-            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET)
-                as *const DriverTaskCompletionRecord,
-        )
-    };
-    if !driver_task_engine_init_turn_matches(hot_path, request as u32, command, completion) {
+    let completion = ring.read_completion()?;
+    if first_completion != completion
+        || !driver_task_engine_init_turn_matches(hot_path, request as u32, command, completion)
+    {
         return None;
     }
     Some((request as u32, command, completion))
@@ -5518,38 +5703,59 @@ fn emit_cyw43_sdio_pair_restart_status(phase: Cyw43SdioPairRestartPhase, status:
 }
 
 #[cfg(feature = "kernel")]
-fn mask_cyw43_sdio_card_interrupt(sdhci_root_ptr: usize) -> bool {
-    if sdhci_root_ptr == 0 {
-        return false;
+fn cyw43_sdio_restart_mmio_barrier(instruction_sync: bool) {
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: This helper issues only architectural ordering instructions. It
+    // neither dereferences memory nor changes capability state; callers use it
+    // after bounded HAL MMIO-window accesses in the suspended pair restart.
+    unsafe {
+        if instruction_sync {
+            core::arch::asm!("dsb osh", "isb", options(nostack, preserves_flags));
+        } else {
+            core::arch::asm!("dsb osh", options(nostack, preserves_flags));
+        }
     }
-    let interrupt_enable = (sdhci_root_ptr + SDHCI_INTERRUPT_ENABLE_OFFSET) as *mut u32;
-    let signal_enable = (sdhci_root_ptr + SDHCI_SIGNAL_ENABLE_OFFSET) as *mut u32;
+    #[cfg(not(target_arch = "aarch64"))]
+    let _ = instruction_sync;
+}
+
+#[cfg(feature = "kernel")]
+fn mask_cyw43_sdio_card_interrupt(sdhci_root_ptr: usize) -> bool {
+    let Ok(window) = super::MappedRegisterWindow::new(sdhci_root_ptr, DRIVER_TASK_RING_PAGE_BYTES)
+    else {
+        return false;
+    };
     for step in CYW43_SDIO_CARD_INT_MASK_STEPS {
         match step {
             Cyw43SdioCardIntMaskStep::WriteSignalEnable => {
-                // SAFETY: HAL retained this device mapping solely for the
-                // pair-restart fence. Both runtime TCBs are suspended. This
-                // manifest-admitted register write masks delivery only and
-                // cannot acknowledge device status.
-                unsafe {
-                    let signal = core::ptr::read_volatile(signal_enable);
-                    core::ptr::write_volatile(signal_enable, signal & !SDHCI_INTERRUPT_CARD_INT);
-                    #[cfg(target_arch = "aarch64")]
-                    core::arch::asm!("dsb osh", options(nostack, preserves_flags));
+                let Ok(signal) = window.read_u32(SDHCI_SIGNAL_ENABLE_OFFSET) else {
+                    return false;
+                };
+                if window
+                    .write_u32(
+                        SDHCI_SIGNAL_ENABLE_OFFSET,
+                        signal & !SDHCI_INTERRUPT_CARD_INT,
+                    )
+                    .is_err()
+                {
+                    return false;
                 }
+                cyw43_sdio_restart_mmio_barrier(false);
             }
             Cyw43SdioCardIntMaskStep::WriteInterruptEnable => {
-                // SAFETY: Same suspended, HAL-admitted recovery-only MMIO
-                // invariant as the SIGNAL_ENABLE write above.
-                unsafe {
-                    let interrupt = core::ptr::read_volatile(interrupt_enable);
-                    core::ptr::write_volatile(
-                        interrupt_enable,
+                let Ok(interrupt) = window.read_u32(SDHCI_INTERRUPT_ENABLE_OFFSET) else {
+                    return false;
+                };
+                if window
+                    .write_u32(
+                        SDHCI_INTERRUPT_ENABLE_OFFSET,
                         interrupt & !SDHCI_INTERRUPT_CARD_INT,
-                    );
-                    #[cfg(target_arch = "aarch64")]
-                    core::arch::asm!("dsb osh", options(nostack, preserves_flags));
+                    )
+                    .is_err()
+                {
+                    return false;
                 }
+                cyw43_sdio_restart_mmio_barrier(false);
             }
             Cyw43SdioCardIntMaskStep::DelayTwoSdClocks
             | Cyw43SdioCardIntMaskStep::DelayWriteCommit => {
@@ -5559,14 +5765,16 @@ fn mask_cyw43_sdio_card_interrupt(sdhci_root_ptr: usize) -> bool {
             }
         }
     }
-    // SAFETY: Same two admitted readback registers, after the timer-backed
-    // post-write gaps required by the pinned bcm2835 controller behavior.
-    unsafe {
-        #[cfg(target_arch = "aarch64")]
-        core::arch::asm!("dsb osh", "isb", options(nostack, preserves_flags));
-        core::ptr::read_volatile(signal_enable) & SDHCI_INTERRUPT_CARD_INT == 0
-            && core::ptr::read_volatile(interrupt_enable) & SDHCI_INTERRUPT_CARD_INT == 0
-    }
+    cyw43_sdio_restart_mmio_barrier(true);
+    matches!(
+        (
+            window.read_u32(SDHCI_SIGNAL_ENABLE_OFFSET),
+            window.read_u32(SDHCI_INTERRUPT_ENABLE_OFFSET),
+        ),
+        (Ok(signal), Ok(interrupt))
+            if signal & SDHCI_INTERRUPT_CARD_INT == 0
+                && interrupt & SDHCI_INTERRUPT_CARD_INT == 0
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -5677,18 +5885,11 @@ fn reset_cyw43_sdio_restart_ring(slot: &DriverTaskCommandSlot) -> bool {
     if ring_root_ptr == 0 || slot.root_ring_writers.load(Ordering::Acquire) != 0 {
         return false;
     }
-    let words = DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>();
-    // SAFETY: HAL owns this page-aligned root mapping. Both linked TCBs are
-    // suspended, CARD_INT is masked, notifications are drained, and no root
-    // writer is active. Volatile zeroing therefore starts a new sequence/DPC
-    // epoch without racing any producer.
-    unsafe {
-        let ptr = ring_root_ptr as *mut u32;
-        let mut index = 0usize;
-        while index < words {
-            core::ptr::write_volatile(ptr.add(index), 0);
-            index = index.saturating_add(1);
-        }
+    let Some(ring) = DriverTaskRingView::new(ring_root_ptr) else {
+        return false;
+    };
+    if !ring.zero() {
+        return false;
     }
     driver_task_ring_clean_root_range(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES);
     slot.request_seq.store(0, Ordering::Release);
@@ -10129,23 +10330,17 @@ pub const PI4_DRIVER_TASK_HOT_PATHS: [DriverTaskHotPath; 7] = [
 
 #[cfg(feature = "kernel")]
 struct DeferredRuntimeInitSlot {
-    descriptor: UnsafeCell<DriverRuntimeInitDescriptor>,
+    descriptor: spin::Mutex<DriverRuntimeInitDescriptor>,
     retained: AtomicU32,
     pending: AtomicU32,
     initialized: AtomicU32,
 }
 
 #[cfg(feature = "kernel")]
-// SAFETY: Root is the only writer for deferred runtime-init descriptors, and it
-// serializes commands per contract through the ring `active` gate. Driver tasks
-// only see a copied descriptor after root stages it into the command ring.
-unsafe impl Sync for DeferredRuntimeInitSlot {}
-
-#[cfg(feature = "kernel")]
 impl DeferredRuntimeInitSlot {
     const fn new() -> Self {
         Self {
-            descriptor: UnsafeCell::new(DriverRuntimeInitDescriptor::empty()),
+            descriptor: spin::Mutex::new(DriverRuntimeInitDescriptor::empty()),
             retained: AtomicU32::new(0),
             pending: AtomicU32::new(0),
             initialized: AtomicU32::new(0),
@@ -10153,28 +10348,18 @@ impl DeferredRuntimeInitSlot {
     }
 
     fn store(&self, descriptor: DriverRuntimeInitDescriptor) {
-        // SAFETY: See the `Sync` invariant; the descriptor is primitive-only
-        // and copied before the pending bit is published.
-        unsafe {
-            core::ptr::write_volatile(self.descriptor.get(), descriptor);
-        }
+        *self.descriptor.lock() = descriptor;
         self.retained.store(1, Ordering::Release);
         self.initialized.store(0, Ordering::Release);
         self.pending.store(1, Ordering::Release);
     }
 
     fn load(&self) -> DriverRuntimeInitDescriptor {
-        // SAFETY: The pending bit is acquired before callers load the
-        // descriptor, and root is the sole writer.
-        unsafe { core::ptr::read_volatile(self.descriptor.get()) }
+        *self.descriptor.lock()
     }
 
     fn retain(&self, descriptor: DriverRuntimeInitDescriptor) {
-        // SAFETY: Root is the sole writer and publishes `retained` only after
-        // the complete manifest-derived descriptor is visible.
-        unsafe {
-            core::ptr::write_volatile(self.descriptor.get(), descriptor);
-        }
+        *self.descriptor.lock() = descriptor;
         self.retained.store(1, Ordering::Release);
     }
 }
@@ -11518,6 +11703,186 @@ mod tests {
     #[cfg(feature = "kernel")]
     use core::sync::atomic::Ordering;
 
+    #[cfg(feature = "kernel")]
+    #[repr(align(4096))]
+    struct AlignedDriverTaskRing([u32; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sequence_committed_reader_acquires_body_and_rechecks_commit_word() {
+        let trace = std::cell::RefCell::new(Vec::new());
+        let read_count = std::cell::Cell::new(0usize);
+        let committed = driver_task_read_sequence_committed(
+            || {
+                trace.borrow_mut().push("sequence");
+                read_count.set(read_count.get().saturating_add(1));
+                Some(17)
+            },
+            || {
+                trace.borrow_mut().push("body");
+                Some(0x1234_5678)
+            },
+            || trace.borrow_mut().push("acquire"),
+        );
+
+        assert_eq!(committed, Some((17, 0x1234_5678)));
+        assert_eq!(read_count.get(), 2);
+        assert_eq!(
+            trace.into_inner(),
+            vec!["sequence", "acquire", "body", "acquire", "sequence"]
+        );
+
+        let read_count = std::cell::Cell::new(0usize);
+        assert_eq!(
+            driver_task_read_sequence_committed(
+                || {
+                    let count = read_count.get();
+                    read_count.set(count.saturating_add(1));
+                    Some(if count == 0 { 17 } else { 18 })
+                },
+                || Some(()),
+                || {},
+            ),
+            None
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn checked_ring_view_decodes_records_and_zeros_exact_page() {
+        let mut storage = Box::new(AlignedDriverTaskRing(
+            [0xfeed_beef; DRIVER_TASK_RING_PAGE_BYTES / 4],
+        ));
+        let ring = DriverTaskRingView::new(storage.0.as_mut_ptr() as usize)
+            .expect("aligned test ring is admitted");
+
+        let command = DriverTaskCommandRecord::pi4_hot_path(
+            17,
+            DriverTaskHotPath::SdioHost,
+            DriverTaskBudgetGrant {
+                max_ops: 3,
+                max_frames: 2,
+                max_bytes: 256,
+            },
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 32,
+                flags: 5,
+            },
+        );
+        ring.window
+            .write_u32(0, command.sequence)
+            .expect("command sequence fits");
+        ring.window
+            .write_u32(
+                4,
+                u32::from(command.opcode) | (u32::from(command.flags) << 16),
+            )
+            .expect("command opcode fits");
+        for (offset, value) in [
+            (8, command.arg0),
+            (12, command.arg1),
+            (16, command.aux0),
+            (20, command.aux1),
+            (
+                24,
+                u32::from(command.budget.max_ops) | (u32::from(command.budget.max_frames) << 16),
+            ),
+            (28, command.budget.max_bytes),
+            (32, command.frame.offset),
+            (
+                36,
+                u32::from(command.frame.len) | (u32::from(command.frame.flags) << 16),
+            ),
+        ] {
+            ring.window
+                .write_u32(offset, value)
+                .expect("command field fits");
+        }
+        assert_eq!(ring.read_command(), Some(command));
+
+        let completion = DriverTaskCompletionRecord::progress(17, 0x1234_5678);
+        for (offset, value) in [
+            (DRIVER_TASK_RING_COMPLETION_OFFSET, completion.sequence),
+            (
+                DRIVER_TASK_RING_COMPLETION_OFFSET + 4,
+                u32::from(completion.code) | (u32::from(completion.detail) << 16),
+            ),
+            (DRIVER_TASK_RING_COMPLETION_OFFSET + 8, completion.result),
+            (
+                DRIVER_TASK_RING_COMPLETION_OFFSET + 12,
+                completion.frame.offset,
+            ),
+            (
+                DRIVER_TASK_RING_COMPLETION_OFFSET + 16,
+                u32::from(completion.frame.len) | (u32::from(completion.frame.flags) << 16),
+            ),
+        ] {
+            ring.window
+                .write_u32(offset, value)
+                .expect("completion field fits");
+        }
+        assert_eq!(ring.read_completion(), Some(completion));
+
+        let dpc = DriverRuntimeDpcEventRing::empty(9);
+        let dpc_base = usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        for (offset, value) in [
+            (
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, magic),
+                dpc.magic,
+            ),
+            (
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, version),
+                u32::from(dpc.version) | (u32::from(dpc.len) << 16),
+            ),
+            (
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, epoch),
+                dpc.epoch,
+            ),
+            (
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, producer),
+                dpc.producer,
+            ),
+            (
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, consumer),
+                dpc.consumer,
+            ),
+            (
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, flags),
+                dpc.flags,
+            ),
+            (
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, overruns),
+                dpc.overruns,
+            ),
+            (
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, ack_failures),
+                dpc.ack_failures,
+            ),
+        ] {
+            ring.window
+                .write_u32(dpc_base + offset, value)
+                .expect("DPC header fits");
+        }
+        let entries_base = dpc_base + core::mem::offset_of!(DriverRuntimeDpcEventRing, entries);
+        for index in 0..DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH {
+            let entry_base = entries_base
+                + index * core::mem::size_of::<pi4_driver_abi::DriverRuntimeDpcEventEntry>();
+            for word in 0..4 {
+                ring.window
+                    .write_u32(entry_base + word * 4, 0)
+                    .expect("DPC entry fits");
+            }
+        }
+        assert_eq!(ring.read_dpc_ring(), Some(dpc));
+        assert!(ring.read_u32(DRIVER_TASK_RING_PAGE_BYTES).is_none());
+
+        assert!(ring.zero());
+        for offset in (0..DRIVER_TASK_RING_PAGE_BYTES).step_by(4) {
+            assert_eq!(ring.read_u32(offset), Some(0));
+        }
+    }
+
     #[test]
     fn builtin_driver_task_contracts_are_valid_and_dedicated() {
         for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
@@ -11940,7 +12305,9 @@ mod tests {
     #[test]
     fn sdio_handoff_requires_matching_drained_root_completion() {
         let slot = DriverTaskCommandSlot::new();
-        let mut ring_page = [0u8; DRIVER_TASK_RING_PAGE_BYTES];
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
         let mut command = runtime_engine_init_command(
             DriverTaskHotPath::SdioHost,
             DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
@@ -11952,19 +12319,21 @@ mod tests {
         // records at their ABI offsets.
         unsafe {
             core::ptr::write_volatile(
-                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                ring_page.0.as_mut_ptr() as *mut DriverTaskCommandRecord,
                 command,
             );
             core::ptr::write_volatile(
                 ring_page
+                    .0
                     .as_mut_ptr()
+                    .cast::<u8>()
                     .add(DRIVER_TASK_RING_COMPLETION_OFFSET)
                     as *mut DriverTaskCompletionRecord,
                 completion,
             );
         }
         slot.ring_root_ptr
-            .store(ring_page.as_mut_ptr() as usize, Ordering::Release);
+            .store(ring_page.0.as_mut_ptr() as usize, Ordering::Release);
         slot.request_seq.store(9, Ordering::Release);
         assert!(sdio_root_command_completion_drained(&slot));
 
@@ -11976,7 +12345,7 @@ mod tests {
         // SAFETY: Same test-owned fixed command record as above.
         unsafe {
             core::ptr::write_volatile(
-                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                ring_page.0.as_mut_ptr() as *mut DriverTaskCommandRecord,
                 command,
             );
         }
@@ -11987,7 +12356,9 @@ mod tests {
     #[test]
     fn cyw43_handoff_uses_committed_engine_turn_after_progress_returns_idle() {
         let slot = DriverTaskCommandSlot::new();
-        let mut ring_page = [0u8; DRIVER_TASK_RING_PAGE_BYTES];
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
         let mut command = runtime_engine_init_command(
             DriverTaskHotPath::Cyw43Wifi,
             DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
@@ -11999,19 +12370,21 @@ mod tests {
         // records at their ABI offsets.
         unsafe {
             core::ptr::write_volatile(
-                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                ring_page.0.as_mut_ptr() as *mut DriverTaskCommandRecord,
                 command,
             );
             core::ptr::write_volatile(
                 ring_page
+                    .0
                     .as_mut_ptr()
+                    .cast::<u8>()
                     .add(DRIVER_TASK_RING_COMPLETION_OFFSET)
                     as *mut DriverTaskCompletionRecord,
                 completion,
             );
         }
         slot.ring_root_ptr
-            .store(ring_page.as_mut_ptr() as usize, Ordering::Release);
+            .store(ring_page.0.as_mut_ptr() as usize, Ordering::Release);
         slot.request_seq.store(2, Ordering::Release);
         slot.last_progress_magic
             .store(DRIVER_RUNTIME_RING_PROGRESS_MAGIC, Ordering::Release);
@@ -12036,7 +12409,7 @@ mod tests {
         // SAFETY: Same test-owned fixed command record as above.
         unsafe {
             core::ptr::write_volatile(
-                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                ring_page.0.as_mut_ptr() as *mut DriverTaskCommandRecord,
                 command,
             );
         }
@@ -12047,7 +12420,7 @@ mod tests {
         // SAFETY: Same test-owned fixed command record as above.
         unsafe {
             core::ptr::write_volatile(
-                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                ring_page.0.as_mut_ptr() as *mut DriverTaskCommandRecord,
                 command,
             );
         }
@@ -12057,7 +12430,7 @@ mod tests {
         // SAFETY: Same test-owned fixed command record as above.
         unsafe {
             core::ptr::write_volatile(
-                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                ring_page.0.as_mut_ptr() as *mut DriverTaskCommandRecord,
                 command,
             );
         }

@@ -349,7 +349,8 @@ if "cargo metadata --locked --no-deps" not in due_diligence_text:
     errors += 1
 
 required_due_diligence_commands = [
-    "cargo run --quiet --locked -p rust-risk-audit",
+    "scripts/ci/rust_risk_gate.sh",
+    "python3 scripts/ci/test_rust_risk_gate.py",
     "env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings",
     "env CARGO_INCREMENTAL=0 cargo check --workspace",
     "env CARGO_INCREMENTAL=0 cargo test --workspace",

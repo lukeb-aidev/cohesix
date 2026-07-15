@@ -26,7 +26,7 @@
 use core::arch::asm;
 use core::{
     cell::UnsafeCell,
-    sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, Ordering},
+    sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
 use font8x8::legacy::BASIC_LEGACY;
@@ -1692,70 +1692,127 @@ const fn xhci_poll_only_interrupter_imod() -> u32 {
 }
 
 struct RuntimeDescriptorSlot {
-    descriptor: UnsafeCell<DriverRuntimeInitDescriptor>,
+    descriptor: RuntimeStateSlot<DriverRuntimeInitDescriptor>,
 }
-
-// SAFETY: Each isolated runtime image is single-TCB by construction. Root
-// submits one synchronous ring command at a time, and the runtime copies the
-// descriptor before publishing completion.
-unsafe impl Sync for RuntimeDescriptorSlot {}
 
 impl RuntimeDescriptorSlot {
     const fn new() -> Self {
         Self {
-            descriptor: UnsafeCell::new(DriverRuntimeInitDescriptor::empty()),
+            descriptor: RuntimeStateSlot::new(DriverRuntimeInitDescriptor::empty()),
         }
     }
 
     fn store(&self, descriptor: DriverRuntimeInitDescriptor) {
-        // SAFETY: See the `Sync` invariant above; there is exactly one runtime
-        // TCB mutating this cell and root does not map this static.
-        unsafe {
-            core::ptr::write_volatile(self.descriptor.get(), descriptor);
-        }
+        self.descriptor.with_mut(|stored| *stored = descriptor);
     }
 
     fn load(&self) -> DriverRuntimeInitDescriptor {
-        // SAFETY: See the `Sync` invariant above; volatile keeps command-turn
-        // state visible to tests and target code without inventing references.
-        unsafe { core::ptr::read_volatile(self.descriptor.get()) }
+        self.descriptor.with_ref(|stored| *stored)
     }
 
     fn with_ref<R>(&self, f: impl FnOnce(&DriverRuntimeInitDescriptor) -> R) -> R {
-        // SAFETY: See the `Sync` invariant above; linked runtimes are
-        // single-TCB loops, so borrowing the stored descriptor for one service
-        // turn cannot race a concurrent writer. Keeping this by reference
-        // avoids copying the full runtime descriptor through the tiny driver
-        // runtime stack during engine init.
-        unsafe { f(&*self.descriptor.get()) }
+        self.descriptor.with_ref(f)
     }
 }
 
 struct RuntimeStateSlot<T> {
+    borrow_state: AtomicUsize,
     state: UnsafeCell<T>,
 }
 
-// SAFETY: Linked driver runtimes are single-TCB service loops. Host tests
-// serialize access through `test_guard`, and target code never shares these
-// cells with root.
-unsafe impl<T> Sync for RuntimeStateSlot<T> {}
+const RUNTIME_STATE_WRITE_LOCK: usize = 1usize << (usize::BITS - 1);
+const RUNTIME_STATE_READER_MASK: usize = RUNTIME_STATE_WRITE_LOCK - 1;
+
+// SAFETY: `RuntimeStateSlot` admits shared references only while its atomic
+// reader count is nonzero and admits one mutable reference only while the
+// writer bit is held with no readers. `T: Send + Sync` permits those guarded
+// transfers between callers; release/acquire ordering publishes mutations.
+unsafe impl<T: Send + Sync> Sync for RuntimeStateSlot<T> {}
+
+#[derive(Clone, Copy)]
+enum RuntimeStateGuardKind {
+    Read,
+    Write,
+}
+
+struct RuntimeStateGuard<'a, T> {
+    slot: &'a RuntimeStateSlot<T>,
+    kind: RuntimeStateGuardKind,
+}
+
+impl<T> Drop for RuntimeStateGuard<'_, T> {
+    fn drop(&mut self) {
+        match self.kind {
+            RuntimeStateGuardKind::Read => {
+                self.slot.borrow_state.fetch_sub(1, Ordering::Release);
+            }
+            RuntimeStateGuardKind::Write => {
+                self.slot.borrow_state.store(0, Ordering::Release);
+            }
+        }
+    }
+}
 
 impl<T> RuntimeStateSlot<T> {
     const fn new(state: T) -> Self {
         Self {
+            borrow_state: AtomicUsize::new(0),
             state: UnsafeCell::new(state),
         }
     }
 
+    fn read_lock(&self) -> RuntimeStateGuard<'_, T> {
+        loop {
+            let observed = self.borrow_state.load(Ordering::Relaxed);
+            if observed & RUNTIME_STATE_WRITE_LOCK != 0
+                || observed & RUNTIME_STATE_READER_MASK == RUNTIME_STATE_READER_MASK
+            {
+                core::hint::spin_loop();
+                continue;
+            }
+            if self
+                .borrow_state
+                .compare_exchange_weak(observed, observed + 1, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                return RuntimeStateGuard {
+                    slot: self,
+                    kind: RuntimeStateGuardKind::Read,
+                };
+            }
+        }
+    }
+
+    fn write_lock(&self) -> RuntimeStateGuard<'_, T> {
+        while self
+            .borrow_state
+            .compare_exchange_weak(
+                0,
+                RUNTIME_STATE_WRITE_LOCK,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            )
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+        RuntimeStateGuard {
+            slot: self,
+            kind: RuntimeStateGuardKind::Write,
+        }
+    }
+
     fn with_ref<R>(&self, f: impl FnOnce(&T) -> R) -> R {
-        // SAFETY: See the `Sync` invariant; there is one runtime service turn
-        // at a time and no references escape this closure.
+        let _guard = self.read_lock();
+        // SAFETY: The guard excludes writers, and the shared reference cannot
+        // escape `f`'s call. Other concurrent readers are permitted by `T: Sync`.
         unsafe { f(&*self.state.get()) }
     }
 
     fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
-        // SAFETY: See the `Sync` invariant; there is one runtime service turn
-        // at a time and no references escape this closure.
+        let _guard = self.write_lock();
+        // SAFETY: The guard holds exclusive access and the mutable reference
+        // cannot escape `f`'s call.
         unsafe { f(&mut *self.state.get()) }
     }
 }
@@ -2583,23 +2640,22 @@ struct Cyw43ControlExchangeCursor {
     reply_deadline: RuntimeDeadline,
 }
 
-struct Cyw43ControlRequestSlot {
-    bytes: UnsafeCell<[u8; DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize]>,
-    len: AtomicU32,
+struct Cyw43ControlRequest {
+    bytes: [u8; DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize],
+    len: usize,
 }
 
-// SAFETY: Each linked runtime image has one service TCB. The cursor stores the
-// bytes before publishing its active phase, and only that TCB reads or clears
-// the retained request until the exchange reaches a terminal state.
-unsafe impl Sync for Cyw43ControlRequestSlot {}
+struct Cyw43ControlRequestSlot {
+    request: RuntimeStateSlot<Cyw43ControlRequest>,
+}
 
 impl Cyw43ControlRequestSlot {
     const fn new() -> Self {
         Self {
-            bytes: UnsafeCell::new(
-                [0; DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize],
-            ),
-            len: AtomicU32::new(0),
+            request: RuntimeStateSlot::new(Cyw43ControlRequest {
+                bytes: [0; DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize],
+                len: 0,
+            }),
         }
     }
 
@@ -2609,77 +2665,69 @@ impl Cyw43ControlRequestSlot {
             return false;
         }
         let base = usize::from(desc.payload_offset);
-        let mut index = 0usize;
-        while index < len {
-            // SAFETY: `len` was bounded to this static array, and the linked
-            // runtime is its sole writer. No reference escapes this operation.
-            unsafe {
-                core::ptr::write_volatile(
-                    core::ptr::addr_of_mut!((*self.bytes.get())[index]),
-                    read_runtime_payload_byte(base + index),
-                );
+        self.request.with_mut(|request| {
+            let mut index = 0usize;
+            while index < len {
+                request.bytes[index] = read_runtime_payload_byte(base + index);
+                index = index.saturating_add(1);
             }
-            index = index.saturating_add(1);
-        }
-        self.len.store(desc.payload_len.into(), Ordering::Release);
+            request.len = len;
+        });
         true
     }
 
     fn matches(&self, desc: DriverRuntimeCyw43CommandDescriptor) -> bool {
-        if self.len.load(Ordering::Acquire) != u32::from(desc.payload_len) {
-            return false;
-        }
         let base = usize::from(desc.payload_offset);
-        let mut index = 0usize;
-        while index < usize::from(desc.payload_len) {
-            // SAFETY: The acquired length bounds this read and the single runtime
-            // TCB cannot mutate the slot while comparing a retained command.
-            let retained = unsafe {
-                core::ptr::read_volatile(core::ptr::addr_of!((*self.bytes.get())[index]))
-            };
-            if retained != read_runtime_payload_byte(base + index) {
+        self.request.with_ref(|request| {
+            if request.len != usize::from(desc.payload_len) {
                 return false;
             }
-            index = index.saturating_add(1);
-        }
-        true
+            let mut index = 0usize;
+            while index < request.len {
+                if request.bytes[index] != read_runtime_payload_byte(base + index) {
+                    return false;
+                }
+                index = index.saturating_add(1);
+            }
+            true
+        })
     }
 
     fn restore(&self, offset: u16, len: u16) -> bool {
-        if len == 0 || self.len.load(Ordering::Acquire) != u32::from(len) {
+        if len == 0 {
             return false;
         }
         let base = usize::from(offset);
-        let mut index = 0usize;
-        while index < usize::from(len) {
-            // SAFETY: The acquired retained length bounds this read; the single
-            // runtime TCB owns both the slot and destination payload window.
-            let byte = unsafe {
-                core::ptr::read_volatile(core::ptr::addr_of!((*self.bytes.get())[index]))
-            };
-            write_runtime_payload_byte(base + index, byte);
-            index = index.saturating_add(1);
-        }
-        true
+        self.request.with_ref(|request| {
+            if request.len != usize::from(len) {
+                return false;
+            }
+            let mut index = 0usize;
+            while index < request.len {
+                write_runtime_payload_byte(base + index, request.bytes[index]);
+                index = index.saturating_add(1);
+            }
+            true
+        })
     }
 
     fn clear(&self) {
-        let len = self.len.load(Ordering::Acquire) as usize;
-        let mut index = 0usize;
-        while index < len.min(DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize) {
-            // SAFETY: The acquired length bounds this static slot and the single
-            // runtime TCB is the sole writer during terminal cleanup.
-            unsafe {
-                core::ptr::write_volatile(core::ptr::addr_of_mut!((*self.bytes.get())[index]), 0);
+        self.request.with_mut(|request| {
+            let len = request
+                .len
+                .min(DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize);
+            let mut index = 0usize;
+            while index < len {
+                request.bytes[index] = 0;
+                index = index.saturating_add(1);
             }
-            index = index.saturating_add(1);
-        }
-        self.len.store(0, Ordering::Release);
+            request.len = 0;
+        });
     }
 
     #[cfg(test)]
     fn retained_len(&self) -> usize {
-        self.len.load(Ordering::Acquire) as usize
+        self.request.with_ref(|request| request.len)
     }
 
     #[cfg(test)]
@@ -2687,9 +2735,7 @@ impl Cyw43ControlRequestSlot {
         if index >= DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize {
             return 0;
         }
-        // SAFETY: The test guard serializes access and `index` is bounded to
-        // the static retained-request array.
-        unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*self.bytes.get())[index])) }
+        self.request.with_ref(|request| request.bytes[index])
     }
 }
 
@@ -4879,6 +4925,25 @@ fn dpc_event_ring_publish(
     DpcRingPublishResult::Published(sequence)
 }
 
+fn dpc_event_ring_publish_sequence_last(
+    sequence: u32,
+    event: DriverRuntimeDpcEventEntry,
+    mut write_sequence: impl FnMut(u32) -> bool,
+    mut write_body: impl FnMut(DriverRuntimeDpcEventEntry) -> bool,
+    mut release: impl FnMut(),
+    mut write_producer: impl FnMut(u32) -> bool,
+) -> bool {
+    if !write_sequence(0) || !write_body(event) {
+        return false;
+    }
+    release();
+    if !write_sequence(sequence) {
+        return false;
+    }
+    release();
+    write_producer(sequence)
+}
+
 fn dpc_event_ring_peek(ring: &DriverRuntimeDpcEventRing, epoch: u32) -> DpcRingConsumeResult {
     if !ring.valid() || ring.epoch != epoch {
         return DpcRingConsumeResult::BadEpoch;
@@ -4963,22 +5028,348 @@ fn sdio_dpc_capture_disposition(
 }
 
 #[cfg(target_os = "none")]
+#[derive(Clone, Copy)]
+enum RuntimeRingWindowKind {
+    Local,
+    SdioOwner,
+}
+
+#[cfg(target_os = "none")]
+#[derive(Clone, Copy)]
+enum RuntimeVolatileWidth {
+    U8,
+    U16,
+    U32,
+}
+
+#[cfg(target_os = "none")]
+impl RuntimeVolatileWidth {
+    const fn bytes(self) -> usize {
+        match self {
+            Self::U8 => core::mem::size_of::<u8>(),
+            Self::U16 => core::mem::size_of::<u16>(),
+            Self::U32 => core::mem::size_of::<u32>(),
+        }
+    }
+}
+
+#[cfg(target_os = "none")]
+fn runtime_volatile_read(
+    kind: RuntimeRingWindowKind,
+    offset: usize,
+    width: RuntimeVolatileWidth,
+) -> Option<u32> {
+    let (base, len) = match kind {
+        RuntimeRingWindowKind::Local => (DRIVER_TASK_RING_VADDR, DRIVER_TASK_RING_PAGE_BYTES),
+        RuntimeRingWindowKind::SdioOwner => (
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            DRIVER_TASK_RING_PAGE_BYTES + CYW43_SDIO_BUS_LINK_DATA_BYTES,
+        ),
+    };
+    let bytes = width.bytes();
+    let end = offset.checked_add(bytes)?;
+    let address = base.checked_add(offset)?;
+    if base == 0 || end > len || address & (bytes - 1) != 0 {
+        return None;
+    }
+    // SAFETY: The caller supplies one of the fixed HAL-admitted runtime
+    // mappings. Checked arithmetic, range validation, and natural alignment
+    // keep this single volatile primitive access inside that mapping.
+    unsafe {
+        Some(match width {
+            RuntimeVolatileWidth::U8 => u32::from(core::ptr::read_volatile(address as *const u8)),
+            RuntimeVolatileWidth::U16 => u32::from(u16::from_le(core::ptr::read_volatile(
+                address as *const u16,
+            ))),
+            RuntimeVolatileWidth::U32 => {
+                u32::from_le(core::ptr::read_volatile(address as *const u32))
+            }
+        })
+    }
+}
+
+#[cfg(target_os = "none")]
+fn runtime_volatile_write(
+    kind: RuntimeRingWindowKind,
+    offset: usize,
+    width: RuntimeVolatileWidth,
+    value: u32,
+) -> bool {
+    let (base, len) = match kind {
+        RuntimeRingWindowKind::Local => (DRIVER_TASK_RING_VADDR, DRIVER_TASK_RING_PAGE_BYTES),
+        RuntimeRingWindowKind::SdioOwner => (
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            DRIVER_TASK_RING_PAGE_BYTES + CYW43_SDIO_BUS_LINK_DATA_BYTES,
+        ),
+    };
+    let bytes = width.bytes();
+    let Some(end) = offset.checked_add(bytes) else {
+        return false;
+    };
+    let Some(address) = base.checked_add(offset) else {
+        return false;
+    };
+    if base == 0 || end > len || address & (bytes - 1) != 0 {
+        return false;
+    }
+    // SAFETY: The caller supplies one of the fixed HAL-admitted runtime
+    // mappings. Checked arithmetic, range validation, and natural alignment
+    // keep this single volatile primitive access inside that mapping.
+    unsafe {
+        match width {
+            RuntimeVolatileWidth::U8 => {
+                core::ptr::write_volatile(address as *mut u8, value as u8);
+            }
+            RuntimeVolatileWidth::U16 => {
+                core::ptr::write_volatile(address as *mut u16, (value as u16).to_le());
+            }
+            RuntimeVolatileWidth::U32 => {
+                core::ptr::write_volatile(address as *mut u32, value.to_le());
+            }
+        }
+    }
+    true
+}
+
+#[cfg(target_os = "none")]
+#[derive(Clone, Copy)]
+struct RuntimeRingWindow {
+    kind: RuntimeRingWindowKind,
+    start: usize,
+    len: usize,
+}
+
+#[cfg(target_os = "none")]
+impl RuntimeRingWindow {
+    const fn local() -> Self {
+        Self {
+            kind: RuntimeRingWindowKind::Local,
+            start: 0,
+            len: DRIVER_TASK_RING_PAGE_BYTES,
+        }
+    }
+
+    fn sdio_owner() -> Option<Self> {
+        RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+            let link = descriptor_notification_dpc_link(descriptor)?;
+            (descriptor.hot_path == HOT_PATH_CYW43_WIFI
+                && link.owner_hot_path == HOT_PATH_SDIO_HOST
+                && usize::from(link.event_offset).checked_add(usize::from(link.event_len))?
+                    <= DRIVER_TASK_RING_PAGE_BYTES)
+                .then_some(Self {
+                    kind: RuntimeRingWindowKind::SdioOwner,
+                    start: 0,
+                    len: DRIVER_TASK_RING_PAGE_BYTES + CYW43_SDIO_BUS_LINK_DATA_BYTES,
+                })
+        })
+    }
+
+    fn dpc_at(base: usize) -> Option<Self> {
+        let offset = usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        let len = core::mem::size_of::<DriverRuntimeDpcEventRing>();
+        if base == DRIVER_TASK_RING_VADDR.checked_add(offset)? {
+            let link_valid = RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+                descriptor_notification_dpc_link(descriptor).is_some_and(|link| {
+                    descriptor.hot_path == HOT_PATH_SDIO_HOST
+                        && usize::from(link.event_offset) == offset
+                        && usize::from(link.event_len) == len
+                })
+            });
+            return link_valid.then_some(Self {
+                kind: RuntimeRingWindowKind::Local,
+                start: offset,
+                len,
+            });
+        }
+        if base == DRIVER_TASK_SDIO_BUS_RING_VADDR.checked_add(offset)? {
+            let owner = Self::sdio_owner()?;
+            return Some(Self {
+                kind: owner.kind,
+                start: offset,
+                len,
+            });
+        }
+        None
+    }
+
+    fn primitive_offset(self, offset: usize, width: RuntimeVolatileWidth) -> Option<usize> {
+        let end = offset.checked_add(width.bytes())?;
+        if end > self.len {
+            return None;
+        }
+        self.start.checked_add(offset)
+    }
+
+    fn read_u8(self, offset: usize) -> Option<u8> {
+        let absolute = self.primitive_offset(offset, RuntimeVolatileWidth::U8)?;
+        runtime_volatile_read(self.kind, absolute, RuntimeVolatileWidth::U8)
+            .map(|value| value as u8)
+    }
+
+    fn write_u8(self, offset: usize, value: u8) -> bool {
+        let Some(absolute) = self.primitive_offset(offset, RuntimeVolatileWidth::U8) else {
+            return false;
+        };
+        runtime_volatile_write(
+            self.kind,
+            absolute,
+            RuntimeVolatileWidth::U8,
+            u32::from(value),
+        )
+    }
+
+    fn read_u16(self, offset: usize) -> Option<u16> {
+        let absolute = self.primitive_offset(offset, RuntimeVolatileWidth::U16)?;
+        runtime_volatile_read(self.kind, absolute, RuntimeVolatileWidth::U16)
+            .map(|value| value as u16)
+    }
+
+    fn write_u16(self, offset: usize, value: u16) -> bool {
+        let Some(absolute) = self.primitive_offset(offset, RuntimeVolatileWidth::U16) else {
+            return false;
+        };
+        runtime_volatile_write(
+            self.kind,
+            absolute,
+            RuntimeVolatileWidth::U16,
+            u32::from(value),
+        )
+    }
+
+    fn read_u32(self, offset: usize) -> Option<u32> {
+        let absolute = self.primitive_offset(offset, RuntimeVolatileWidth::U32)?;
+        runtime_volatile_read(self.kind, absolute, RuntimeVolatileWidth::U32)
+    }
+
+    fn write_u32(self, offset: usize, value: u32) -> bool {
+        let Some(absolute) = self.primitive_offset(offset, RuntimeVolatileWidth::U32) else {
+            return false;
+        };
+        runtime_volatile_write(self.kind, absolute, RuntimeVolatileWidth::U32, value)
+    }
+}
+
+#[cfg(target_os = "none")]
+fn dpc_event_ring_decode(window: RuntimeRingWindow) -> Option<DriverRuntimeDpcEventRing> {
+    let mut ring = DriverRuntimeDpcEventRing::empty(
+        window.read_u32(core::mem::offset_of!(DriverRuntimeDpcEventRing, epoch))?,
+    );
+    ring.magic = window.read_u32(core::mem::offset_of!(DriverRuntimeDpcEventRing, magic))?;
+    ring.version = window.read_u16(core::mem::offset_of!(DriverRuntimeDpcEventRing, version))?;
+    ring.len = window.read_u16(core::mem::offset_of!(DriverRuntimeDpcEventRing, len))?;
+    ring.producer = window.read_u32(core::mem::offset_of!(DriverRuntimeDpcEventRing, producer))?;
+    ring.consumer = window.read_u32(core::mem::offset_of!(DriverRuntimeDpcEventRing, consumer))?;
+    ring.flags = window.read_u32(core::mem::offset_of!(DriverRuntimeDpcEventRing, flags))?;
+    ring.overruns = window.read_u32(core::mem::offset_of!(DriverRuntimeDpcEventRing, overruns))?;
+    ring.ack_failures = window.read_u32(core::mem::offset_of!(
+        DriverRuntimeDpcEventRing,
+        ack_failures
+    ))?;
+    // The producer is the ring-level commit word. The SDIO owner publishes it
+    // only after the selected entry's sequence and body are globally visible.
+    // Acquire before observing any entry so body loads cannot move ahead of
+    // that publication boundary.
+    driver_task_shared_load_barrier();
+    let entries_offset = core::mem::offset_of!(DriverRuntimeDpcEventRing, entries);
+    for (index, entry) in ring.entries.iter_mut().enumerate() {
+        let offset = entries_offset
+            .checked_add(index.checked_mul(core::mem::size_of::<DriverRuntimeDpcEventEntry>())?)?;
+        entry.sequence = window
+            .read_u32(offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, sequence))?;
+        // Each entry sequence is its slot-level commit word. An acquire here
+        // pairs with the publisher's sequence-last release, preventing a valid
+        // sequence from being combined with a stale or partially written body.
+        driver_task_shared_load_barrier();
+        entry.host_int_status = window.read_u32(
+            offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, host_int_status),
+        )?;
+        entry.signal_status = window
+            .read_u32(offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, signal_status))?;
+        entry.reason =
+            window.read_u16(offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, reason))?;
+        entry.flags =
+            window.read_u16(offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, flags))?;
+    }
+    Some(ring)
+}
+
+#[cfg(target_os = "none")]
+fn dpc_event_ring_encode(window: RuntimeRingWindow, ring: DriverRuntimeDpcEventRing) -> bool {
+    let header_written = window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, magic),
+        ring.magic,
+    ) && window.write_u16(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, version),
+        ring.version,
+    ) && window.write_u16(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, len),
+        ring.len,
+    ) && window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, epoch),
+        ring.epoch,
+    ) && window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, producer),
+        ring.producer,
+    ) && window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, consumer),
+        ring.consumer,
+    ) && window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, flags),
+        ring.flags,
+    ) && window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, overruns),
+        ring.overruns,
+    ) && window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, ack_failures),
+        ring.ack_failures,
+    );
+    if !header_written {
+        return false;
+    }
+    let entries_offset = core::mem::offset_of!(DriverRuntimeDpcEventRing, entries);
+    ring.entries.iter().enumerate().all(|(index, entry)| {
+        let Some(offset) = index
+            .checked_mul(core::mem::size_of::<DriverRuntimeDpcEventEntry>())
+            .and_then(|entry_offset| entries_offset.checked_add(entry_offset))
+        else {
+            return false;
+        };
+        window.write_u32(
+            offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, sequence),
+            entry.sequence,
+        ) && window.write_u32(
+            offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, host_int_status),
+            entry.host_int_status,
+        ) && window.write_u32(
+            offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, signal_status),
+            entry.signal_status,
+        ) && window.write_u16(
+            offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, reason),
+            entry.reason,
+        ) && window.write_u16(
+            offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, flags),
+            entry.flags,
+        )
+    })
+}
+
+#[cfg(target_os = "none")]
 fn dpc_event_ring_read_at(base: usize) -> DriverRuntimeDpcEventRing {
     driver_task_shared_invalidate_range(base, core::mem::size_of::<DriverRuntimeDpcEventRing>());
-    // SAFETY: `base` is one of the fixed HAL-mapped owner-ring addresses and
-    // callers admit the generated event offset before reaching this helper.
-    let ring = unsafe { core::ptr::read_volatile(base as *const DriverRuntimeDpcEventRing) };
-    driver_task_shared_load_barrier();
+    let ring = RuntimeRingWindow::dpc_at(base)
+        .and_then(dpc_event_ring_decode)
+        .unwrap_or_else(|| DriverRuntimeDpcEventRing::empty(0));
     ring
 }
 
 #[cfg(target_os = "none")]
 fn dpc_event_ring_initialize_at(base: usize, epoch: u32) {
     let ring = DriverRuntimeDpcEventRing::empty(epoch);
-    // SAFETY: SDIO is the sole initializer and producer for its local owner
-    // ring. Engine initialization completes before CYW43 is admitted.
-    unsafe {
-        core::ptr::write_volatile(base as *mut DriverRuntimeDpcEventRing, ring);
+    let Some(window) = RuntimeRingWindow::dpc_at(base) else {
+        return;
+    };
+    if !dpc_event_ring_encode(window, ring) {
+        return;
     }
     driver_task_shared_clean_range(base, core::mem::size_of::<DriverRuntimeDpcEventRing>());
 }
@@ -4989,10 +5380,11 @@ fn dpc_event_ring_reset_generation_at(base: usize, current: u32, requested: u32)
     if !dpc_event_ring_reset_generation(&mut ring, current, requested) {
         return false;
     }
-    // SAFETY: SDIO owns generation rollover while CARD_INT remains masked and
-    // CYW43 waits synchronously for the exact reset completion.
-    unsafe {
-        core::ptr::write_volatile(base as *mut DriverRuntimeDpcEventRing, ring);
+    let Some(window) = RuntimeRingWindow::dpc_at(base) else {
+        return false;
+    };
+    if !dpc_event_ring_encode(window, ring) {
+        return false;
     }
     driver_task_shared_clean_range(base, core::mem::size_of::<DriverRuntimeDpcEventRing>());
     true
@@ -5016,51 +5408,70 @@ fn dpc_event_ring_publish_at(
         reason,
         flags,
     );
-    let ring = base as *mut DriverRuntimeDpcEventRing;
-    // SAFETY: SDIO is the single producer. Only producer-owned fields and the
-    // selected entry are written; CYW43's consumer word is never overwritten.
-    unsafe {
-        match result {
-            DpcRingPublishResult::Published(sequence) => {
-                let slot = sequence.wrapping_sub(1) as usize % DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH;
-                let event = snapshot.entries[slot];
-                core::ptr::write_volatile(
-                    core::ptr::addr_of_mut!((*ring).entries[slot].sequence),
-                    0,
-                );
-                core::ptr::write_volatile(
-                    core::ptr::addr_of_mut!((*ring).entries[slot].host_int_status),
-                    event.host_int_status,
-                );
-                core::ptr::write_volatile(
-                    core::ptr::addr_of_mut!((*ring).entries[slot].signal_status),
-                    event.signal_status,
-                );
-                core::ptr::write_volatile(
-                    core::ptr::addr_of_mut!((*ring).entries[slot].reason),
-                    event.reason,
-                );
-                core::ptr::write_volatile(
-                    core::ptr::addr_of_mut!((*ring).entries[slot].flags),
-                    event.flags,
-                );
-                driver_task_shared_store_barrier();
-                core::ptr::write_volatile(
-                    core::ptr::addr_of_mut!((*ring).entries[slot].sequence),
-                    sequence,
-                );
-                driver_task_shared_store_barrier();
-                core::ptr::write_volatile(core::ptr::addr_of_mut!((*ring).producer), sequence);
+    let Some(window) = RuntimeRingWindow::dpc_at(base) else {
+        return DpcRingPublishResult::BadEpoch;
+    };
+    match result {
+        DpcRingPublishResult::Published(sequence) => {
+            let slot = sequence.wrapping_sub(1) as usize % DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH;
+            let event = snapshot.entries[slot];
+            let Some(entry_offset) = slot
+                .checked_mul(core::mem::size_of::<DriverRuntimeDpcEventEntry>())
+                .and_then(|offset| {
+                    core::mem::offset_of!(DriverRuntimeDpcEventRing, entries).checked_add(offset)
+                })
+            else {
+                return DpcRingPublishResult::BadEpoch;
+            };
+            if !dpc_event_ring_publish_sequence_last(
+                sequence,
+                event,
+                |value| {
+                    window.write_u32(
+                        entry_offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, sequence),
+                        value,
+                    )
+                },
+                |event| {
+                    window.write_u32(
+                        entry_offset
+                            + core::mem::offset_of!(DriverRuntimeDpcEventEntry, host_int_status),
+                        event.host_int_status,
+                    ) && window.write_u32(
+                        entry_offset
+                            + core::mem::offset_of!(DriverRuntimeDpcEventEntry, signal_status),
+                        event.signal_status,
+                    ) && window.write_u16(
+                        entry_offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, reason),
+                        event.reason,
+                    ) && window.write_u16(
+                        entry_offset + core::mem::offset_of!(DriverRuntimeDpcEventEntry, flags),
+                        event.flags,
+                    )
+                },
+                driver_task_shared_store_barrier,
+                |value| {
+                    window.write_u32(
+                        core::mem::offset_of!(DriverRuntimeDpcEventRing, producer),
+                        value,
+                    )
+                },
+            ) {
+                return DpcRingPublishResult::BadEpoch;
             }
-            DpcRingPublishResult::Full => {
-                core::ptr::write_volatile(core::ptr::addr_of_mut!((*ring).flags), snapshot.flags);
-                core::ptr::write_volatile(
-                    core::ptr::addr_of_mut!((*ring).overruns),
-                    snapshot.overruns,
-                );
-            }
-            DpcRingPublishResult::BadEpoch => {}
         }
+        DpcRingPublishResult::Full => {
+            if !window.write_u32(
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, flags),
+                snapshot.flags,
+            ) || !window.write_u32(
+                core::mem::offset_of!(DriverRuntimeDpcEventRing, overruns),
+                snapshot.overruns,
+            ) {
+                return DpcRingPublishResult::BadEpoch;
+            }
+        }
+        DpcRingPublishResult::BadEpoch => {}
     }
     driver_task_shared_clean_range(base, core::mem::size_of::<DriverRuntimeDpcEventRing>());
     result
@@ -5078,11 +5489,14 @@ fn dpc_event_ring_advance_at(base: usize, epoch: u32, sequence: u32) -> bool {
     if !dpc_event_ring_advance(&mut ring, epoch, sequence) {
         return false;
     }
-    // SAFETY: CYW43 is the single consumer and only publishes its consumer
-    // sequence after the corresponding DPC work reaches a rearm-safe point.
-    unsafe {
-        let ring_ptr = base as *mut DriverRuntimeDpcEventRing;
-        core::ptr::write_volatile(core::ptr::addr_of_mut!((*ring_ptr).consumer), sequence);
+    let Some(window) = RuntimeRingWindow::dpc_at(base) else {
+        return false;
+    };
+    if !window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, consumer),
+        sequence,
+    ) {
+        return false;
     }
     driver_task_shared_clean_range(
         base + core::mem::offset_of!(DriverRuntimeDpcEventRing, consumer),
@@ -5110,15 +5524,17 @@ fn dpc_event_ring_set_owner_health_at(
         poisoned,
         ack_failed,
     );
-    let ring = base as *mut DriverRuntimeDpcEventRing;
-    // SAFETY: SDIO is the sole owner of ring health flags and the failed-ack
-    // counter. CYW43 writes only the consumer sequence in this shared record.
-    unsafe {
-        core::ptr::write_volatile(core::ptr::addr_of_mut!((*ring).flags), snapshot.flags);
-        core::ptr::write_volatile(
-            core::ptr::addr_of_mut!((*ring).ack_failures),
-            snapshot.ack_failures,
-        );
+    let Some(window) = RuntimeRingWindow::dpc_at(base) else {
+        return false;
+    };
+    if !window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, flags),
+        snapshot.flags,
+    ) || !window.write_u32(
+        core::mem::offset_of!(DriverRuntimeDpcEventRing, ack_failures),
+        snapshot.ack_failures,
+    ) {
+        return false;
     }
     driver_task_shared_clean_range(
         base + core::mem::offset_of!(DriverRuntimeDpcEventRing, flags),
@@ -6814,7 +7230,9 @@ fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor) -> bool {
                 Cyw43DpcIoPhase::WindowHigh => (SBSDIO_FUNC1_SBADDRHIGH, high),
                 Cyw43DpcIoPhase::Idle | Cyw43DpcIoPhase::Transfer => return false,
             };
-            write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value);
+            if !write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value) {
+                return false;
+            }
             driver_task_shared_store_barrier();
             driver_task_shared_clean_range(
                 DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
@@ -6856,7 +7274,9 @@ fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor) -> bool {
                     return false;
                 };
                 let value = cursor.io_value.to_le_bytes()[index];
-                write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value);
+                if !write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value) {
+                    return false;
+                }
                 driver_task_shared_store_barrier();
                 driver_task_shared_clean_range(
                     DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
@@ -6871,7 +7291,12 @@ fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor) -> bool {
                 cursor.io_addr,
             ),
             Cyw43DpcIoKind::Cmd52Write => {
-                write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, cursor.io_value as u8);
+                if !write_sdio_bus_payload_byte(
+                    CYW43_SDIO_BUS_LINK_DATA_OFFSET,
+                    cursor.io_value as u8,
+                ) {
+                    return false;
+                }
                 driver_task_shared_store_barrier();
                 driver_task_shared_clean_range(
                     DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
@@ -10918,7 +11343,9 @@ fn cyw43_configure_sdio_host_via_bus_link(target_hz: u32, flags: u16) -> bool {
     if !desc.valid() {
         return false;
     }
-    sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc);
+    if !sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc) {
+        return false;
+    }
     let command = DriverTaskCommandRecord {
         sequence,
         opcode: OPCODE_SERVICE,
@@ -10971,7 +11398,9 @@ fn cyw43_reset_sdio_generation_via_bus_link(
     if !desc.valid() {
         return None;
     }
-    sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc);
+    if !sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc) {
+        return None;
+    }
     let command = DriverTaskCommandRecord {
         sequence,
         opcode: OPCODE_SERVICE,
@@ -11026,7 +11455,9 @@ fn cyw43_commit_sdio_generation_via_bus_link(
     if !desc.valid() {
         return None;
     }
-    sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc);
+    if !sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc) {
+        return None;
+    }
     let command = DriverTaskCommandRecord {
         sequence,
         opcode: OPCODE_SERVICE,
@@ -11081,7 +11512,9 @@ fn cyw43_activate_sdio_dpc_via_bus_link(
     if !desc.valid() {
         return None;
     }
-    sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc);
+    if !sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc) {
+        return None;
+    }
     let command = DriverTaskCommandRecord {
         sequence,
         opcode: OPCODE_SERVICE,
@@ -11342,13 +11775,10 @@ fn cyw43_sdio_bus_link_command_result(command: DriverTaskCommandRecord) -> u32 {
             | ((command.arg0 & 0xff) << 16)
             | u32::from(command.frame.len);
     }
-    // SAFETY: CYW43 writes this fixed SDIO-owner descriptor immediately before
-    // publishing the nested bus-link command; the command frame is checked above.
-    let desc = unsafe {
-        core::ptr::read_volatile(
-            (DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
-                as *const DriverRuntimeSdioCommandDescriptor,
-        )
+    let Some(desc) = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET) else {
+        return (u32::from(command.opcode) << 24)
+            | ((command.arg0 & 0xff) << 16)
+            | u32::from(command.frame.len);
     };
     (u32::from(desc.op) << 24)
         | (u32::from(desc.function) << 20)
@@ -11363,13 +11793,8 @@ fn cyw43_sdio_bus_link_child_wait_timeout_us(command: DriverTaskCommandRecord) -
     {
         return cyw43_sdio_child_wait_timeout_us(0, SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US);
     }
-    // SAFETY: The command frame identifies the fixed descriptor that CYW43
-    // published in the shared SDIO owner ring before entering the child wait.
-    let desc = unsafe {
-        core::ptr::read_volatile(
-            (DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
-                as *const DriverRuntimeSdioCommandDescriptor,
-        )
+    let Some(desc) = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET) else {
+        return cyw43_sdio_child_wait_timeout_us(0, SDIO_OWNER_DESCRIPTOR_DEFAULT_TIMEOUT_US);
     };
     if desc.valid() {
         cyw43_sdio_child_wait_timeout_us(desc.op, desc.timeout_us)
@@ -11456,7 +11881,9 @@ fn sdio_bus_link_descriptor_command(
     if !desc.valid() {
         return None;
     }
-    sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc);
+    if !sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc) {
+        return None;
+    }
     Some(DriverTaskCommandRecord {
         sequence,
         opcode: OPCODE_SERVICE,
@@ -11505,7 +11932,9 @@ fn sdio_bus_link_cmd52_descriptor_command(
     if !desc.valid() {
         return None;
     }
-    sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc);
+    if !sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc) {
+        return None;
+    }
     Some(DriverTaskCommandRecord {
         sequence,
         opcode: OPCODE_SERVICE,
@@ -11551,7 +11980,9 @@ fn sdio_bus_link_card_command_descriptor_command(
     if !desc.valid() {
         return None;
     }
-    sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc);
+    if !sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc) {
+        return None;
+    }
     Some(DriverTaskCommandRecord {
         sequence,
         opcode: OPCODE_SERVICE,
@@ -12024,11 +12455,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
         // Keep CYW43 runnable so a lost/coalesced reverse notification cannot
         // hide an already-published completion, while yielding to the
         // higher-priority SDIO owner on the same generated core.
-        // SAFETY: Yield carries no pointer or capability payload and only
-        // reschedules the current admitted linked-runtime TCB.
-        unsafe {
-            sel4_sys::seL4_Yield();
-        }
+        runtime_yield_current_tcb();
     }
 }
 
@@ -12056,20 +12483,95 @@ fn cyw43_copy_sdio_fault_telemetry(frame: DriverFrameDescriptor) -> Option<Drive
 }
 
 #[cfg(target_os = "none")]
-fn sdio_bus_link_write_descriptor(offset: usize, desc: DriverRuntimeSdioCommandDescriptor) {
-    // SAFETY: The descriptor offset is page-local, aligned, and reserved for
-    // CYW43-to-SDIO bus-link commands in the mapped SDIO owner ring.
-    unsafe {
-        core::ptr::write_volatile(
-            (DRIVER_TASK_SDIO_BUS_RING_VADDR + offset) as *mut DriverRuntimeSdioCommandDescriptor,
-            desc,
-        );
+fn sdio_bus_link_read_descriptor(offset: usize) -> Option<DriverRuntimeSdioCommandDescriptor> {
+    if offset != CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET {
+        return None;
+    }
+    let window = RuntimeRingWindow::sdio_owner()?;
+    Some(DriverRuntimeSdioCommandDescriptor {
+        op: window
+            .read_u16(offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, op))?,
+        function: window.read_u8(
+            offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, function),
+        )?,
+        response_kind: window.read_u8(
+            offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, response_kind),
+        )?,
+        addr: window
+            .read_u32(offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, addr))?,
+        data_offset: window.read_u16(
+            offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, data_offset),
+        )?,
+        len: window
+            .read_u16(offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, len))?,
+        block_size: window.read_u16(
+            offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, block_size),
+        )?,
+        block_count: window.read_u16(
+            offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, block_count),
+        )?,
+        flags: window
+            .read_u16(offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, flags))?,
+        reserved: window.read_u16(
+            offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, reserved),
+        )?,
+        timeout_us: window.read_u32(
+            offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, timeout_us),
+        )?,
+    })
+}
+
+#[cfg(target_os = "none")]
+fn sdio_bus_link_write_descriptor(offset: usize, desc: DriverRuntimeSdioCommandDescriptor) -> bool {
+    if offset != CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET {
+        return false;
+    }
+    let Some(window) = RuntimeRingWindow::sdio_owner() else {
+        return false;
+    };
+    let written = window.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, op),
+        desc.op,
+    ) && window.write_u8(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, function),
+        desc.function,
+    ) && window.write_u8(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, response_kind),
+        desc.response_kind,
+    ) && window.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, addr),
+        desc.addr,
+    ) && window.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, data_offset),
+        desc.data_offset,
+    ) && window.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, len),
+        desc.len,
+    ) && window.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, block_size),
+        desc.block_size,
+    ) && window.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, block_count),
+        desc.block_count,
+    ) && window.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, flags),
+        desc.flags,
+    ) && window.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, reserved),
+        desc.reserved,
+    ) && window.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioCommandDescriptor, timeout_us),
+        desc.timeout_us,
+    );
+    if !written {
+        return false;
     }
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(
         DRIVER_TASK_SDIO_BUS_RING_VADDR + offset,
         core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>(),
     );
+    true
 }
 
 #[cfg(target_os = "none")]
@@ -12080,21 +12582,13 @@ fn sdio_bus_link_payload_bounds(offset: usize, len: usize) -> bool {
 }
 
 #[cfg(target_os = "none")]
-fn read_sdio_bus_payload_byte(offset: usize) -> u8 {
-    // SAFETY: Root maps the SDIO owner ring at `DRIVER_TASK_SDIO_BUS_RING_VADDR`
-    // and the two-page owner shared data window immediately after it. Callers
-    // validate `offset` against that fixed bus-link arena before reading.
-    unsafe { core::ptr::read_volatile((DRIVER_TASK_SDIO_BUS_RING_VADDR + offset) as *const u8) }
+fn read_sdio_bus_payload_byte(offset: usize) -> Option<u8> {
+    RuntimeRingWindow::sdio_owner()?.read_u8(offset)
 }
 
 #[cfg(target_os = "none")]
-fn write_sdio_bus_payload_byte(offset: usize, value: u8) {
-    // SAFETY: Root maps the SDIO owner ring at `DRIVER_TASK_SDIO_BUS_RING_VADDR`
-    // and the two-page owner shared data window immediately after it. Callers
-    // validate `offset` against that fixed bus-link arena before writing.
-    unsafe {
-        core::ptr::write_volatile((DRIVER_TASK_SDIO_BUS_RING_VADDR + offset) as *mut u8, value);
-    }
+fn write_sdio_bus_payload_byte(offset: usize, value: u8) -> bool {
+    RuntimeRingWindow::sdio_owner().is_some_and(|window| window.write_u8(offset, value))
 }
 
 #[cfg(target_os = "none")]
@@ -12109,11 +12603,14 @@ fn sdio_bus_link_copy_to_owner_payload(
     {
         return None;
     }
+    let window = RuntimeRingWindow::sdio_owner()?;
     for index in 0..len {
-        write_sdio_bus_payload_byte(
+        if !window.write_u8(
             dst_offset + index,
             read_runtime_payload_byte(frame.offset as usize + index),
-        );
+        ) {
+            return None;
+        }
     }
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(DRIVER_TASK_SDIO_BUS_RING_VADDR + dst_offset, len);
@@ -12138,11 +12635,12 @@ fn sdio_bus_link_copy_from_owner_payload(
     {
         return None;
     }
+    let window = RuntimeRingWindow::sdio_owner()?;
     driver_task_shared_invalidate_range(DRIVER_TASK_SDIO_BUS_RING_VADDR + src_offset, len);
     for index in 0..len {
         write_runtime_payload_byte(
             frame.offset as usize + index,
-            read_sdio_bus_payload_byte(src_offset + index),
+            window.read_u8(src_offset + index)?,
         );
     }
     Some(())
@@ -14472,7 +14970,7 @@ fn cyw43_sdio_cmd52_read_via_bus_link(function: u8, addr: u32) -> Option<u8> {
         1,
     );
     driver_task_shared_load_barrier();
-    Some(read_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET))
+    read_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET)
 }
 
 #[cfg(target_os = "none")]
@@ -14480,7 +14978,9 @@ fn cyw43_sdio_cmd52_write_via_bus_link(function: u8, addr: u32, value: u8) -> bo
     if !sdio_bus_link_payload_bounds(CYW43_SDIO_BUS_LINK_DATA_OFFSET, 1) {
         return false;
     }
-    write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value);
+    if !write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value) {
+        return false;
+    }
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(
         DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
@@ -22307,8 +22807,7 @@ fn read_frame_prefix<const N: usize>(frame: DriverFrameDescriptor) -> [u8; N] {
 
 #[cfg(target_os = "none")]
 fn read_ring_byte(offset: usize) -> u8 {
-    // SAFETY: Callers validate frame descriptors before reading payload bytes.
-    unsafe { core::ptr::read_volatile((DRIVER_TASK_RING_VADDR + offset) as *const u8) }
+    RuntimeRingWindow::local().read_u8(offset).unwrap_or(0)
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -23006,10 +23505,7 @@ fn read_ring_byte(_offset: usize) -> u8 {
 
 #[cfg(target_os = "none")]
 fn write_ring_byte(offset: usize, value: u8) {
-    // SAFETY: Callers write only into the fixed shared ring payload region.
-    unsafe {
-        core::ptr::write_volatile((DRIVER_TASK_RING_VADDR + offset) as *mut u8, value);
-    }
+    let _ = RuntimeRingWindow::local().write_u8(offset, value);
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -23545,6 +24041,16 @@ const fn runtime_counter_deadline_expired(start: u64, cycles: u64, current: u64)
 
 fn runtime_poll_pause() {
     core::hint::spin_loop();
+}
+
+#[cfg(target_os = "none")]
+fn runtime_yield_current_tcb() {
+    // SAFETY: Yield carries no pointer or capability payload. Every caller is
+    // already executing as the admitted linked-runtime TCB, so this operation
+    // only returns its current scheduling quantum to seL4.
+    unsafe {
+        sel4_sys::seL4_Yield();
+    }
 }
 
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
@@ -31586,11 +32092,7 @@ pub fn runtime_main(task_key: usize) -> ! {
             // A late owner completion cannot restore authority after bounded
             // escalation. Leave both the immutable child claim and the parent
             // action fenced until root suspends and cold-restarts the pair.
-            // SAFETY: Yield carries no pointer or capability payload and only
-            // reschedules the current admitted linked-runtime TCB.
-            unsafe {
-                sel4_sys::seL4_Yield();
-            }
+            runtime_yield_current_tcb();
             continue;
         }
         if notification_route == RuntimeNotificationRoute::Cyw43Client
@@ -31604,11 +32106,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // or publishing another command. This closes both
                 // lost-notification and signal-before-sequence-commit races
                 // while preserving strict single-slot ownership.
-                // SAFETY: Yield carries no pointer or capability payload and
-                // only reschedules the current admitted linked-runtime TCB.
-                unsafe {
-                    sel4_sys::seL4_Yield();
-                }
+                runtime_yield_current_tcb();
                 continue;
             }
         }
@@ -31671,11 +32169,9 @@ pub fn runtime_main(task_key: usize) -> ! {
                     if dpc_cursor_active {
                         let _ = cyw43_runtime_service_dpc_event();
                     }
-                    // SAFETY: One bounded arbitration turn completed; yield so
+                    // One bounded arbitration turn completed; yield so
                     // CNTVCT-based settle deadlines advance without spinning.
-                    unsafe {
-                        sel4_sys::seL4_Yield();
-                    }
+                    runtime_yield_current_tcb();
                     continue;
                 }
                 Cyw43DpcPendingCommandRoute::FailQuarantined => {
@@ -31700,11 +32196,9 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // every turn: an event that arrives after an earlier event
                 // completed must still win over foreground SDPCM TX.
                 let _ = cyw43_runtime_service_dpc_event();
-                // SAFETY: One bounded DPC quantum completed. Yield before its
-                // retained cursor continuation or the foreground command.
-                unsafe {
-                    sel4_sys::seL4_Yield();
-                }
+                // One bounded DPC quantum completed. Yield before its retained
+                // cursor continuation or the foreground command.
+                runtime_yield_current_tcb();
                 continue;
             }
         }
@@ -31724,12 +32218,10 @@ pub fn runtime_main(task_key: usize) -> ! {
             // command remains retained until the cursor reaches terminal.
             let _ = cyw43_runtime_service_dpc_event();
             if CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.event_sequence != 0) {
-                // SAFETY: One bounded cursor quantum completed. Yield before
-                // the next scheduled quantum so recovery settle intervals are
-                // time-based rather than a tight local polling loop.
-                unsafe {
-                    sel4_sys::seL4_Yield();
-                }
+                // One bounded cursor quantum completed. Yield before the next
+                // scheduled quantum so recovery settle intervals are time-based
+                // rather than a tight local polling loop.
+                runtime_yield_current_tcb();
             }
             continue;
         }
@@ -31751,11 +32243,9 @@ pub fn runtime_main(task_key: usize) -> ! {
                     && CYW43_DPC_DEFERRED.load(Ordering::Acquire)
                     && !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
                 {
-                    // SAFETY: Preserve one scheduled quantum per turn while
-                    // retained recovery work waits on CNTVCT deadlines.
-                    unsafe {
-                        sel4_sys::seL4_Yield();
-                    }
+                    // Preserve one scheduled quantum per turn while retained
+                    // recovery work waits on CNTVCT deadlines.
+                    runtime_yield_current_tcb();
                     continue;
                 }
                 match wait_runtime_command_or_notification(last_sequence) {
@@ -31773,11 +32263,9 @@ pub fn runtime_main(task_key: usize) -> ! {
                             && CYW43_RUNTIME_STATE
                                 .with_ref(|state| state.dpc_cursor.event_sequence != 0)
                         {
-                            // SAFETY: Notification service consumed one bounded
-                            // cursor turn; yield before any retained continuation.
-                            unsafe {
-                                sel4_sys::seL4_Yield();
-                            }
+                            // Notification service consumed one bounded cursor
+                            // turn; yield before any retained continuation.
+                            runtime_yield_current_tcb();
                         }
                         continue;
                     }
@@ -31785,12 +32273,10 @@ pub fn runtime_main(task_key: usize) -> ! {
                 }
             }
             if pending_intake.is_none() {
-                // SAFETY: Legacy or MCS fallback remains cooperatively polled.
+                // Legacy or MCS fallback remains cooperatively polled.
                 // Notification blocking is admitted only by the exact generated
                 // reciprocal CYW43/SDIO topology.
-                unsafe {
-                    sel4_sys::seL4_Yield();
-                }
+                runtime_yield_current_tcb();
                 continue;
             }
         }
@@ -31821,12 +32307,10 @@ pub fn runtime_main(task_key: usize) -> ! {
             // completion sequence or peer notification is published until the
             // hardware sequence reaches a terminal state.
             pending_intake = Some(intake);
-            // SAFETY: One bounded physical action or one deadline sample was
-            // completed. Yield before the next phase so fixed settle intervals
-            // advance without monopolising the linked-runtime core.
-            unsafe {
-                sel4_sys::seL4_Yield();
-            }
+            // One bounded physical action or one deadline sample was completed.
+            // Yield before the next phase so fixed settle intervals advance
+            // without monopolising the linked-runtime core.
+            runtime_yield_current_tcb();
             continue;
         };
         driver_task_shared_store_barrier();
@@ -32163,6 +32647,91 @@ mod tests {
         test_state_guard()
     }
 
+    #[test]
+    fn runtime_state_slot_allows_nested_reads_and_serializes_writers() {
+        let slot = std::sync::Arc::new(RuntimeStateSlot::new(0usize));
+        slot.with_ref(|outer| {
+            slot.with_ref(|inner| assert_eq!((*outer, *inner), (0, 0)));
+        });
+
+        let mut workers = Vec::new();
+        for _ in 0..4 {
+            let slot = std::sync::Arc::clone(&slot);
+            workers.push(std::thread::spawn(move || {
+                for _ in 0..1_000 {
+                    slot.with_mut(|value| *value = value.saturating_add(1));
+                }
+            }));
+        }
+        for _ in 0..4 {
+            let slot = std::sync::Arc::clone(&slot);
+            workers.push(std::thread::spawn(move || {
+                for _ in 0..1_000 {
+                    slot.with_ref(|value| std::hint::black_box(*value));
+                }
+            }));
+        }
+        for worker in workers {
+            worker.join().expect("runtime-state worker completes");
+        }
+        assert_eq!(slot.with_ref(|value| *value), 4_000);
+        assert_eq!(slot.borrow_state.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn runtime_state_slot_nested_reader_progresses_while_writer_waits() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let slot = std::sync::Arc::new(RuntimeStateSlot::new(7usize));
+        let (reader_ready_tx, reader_ready_rx) = mpsc::channel();
+        let (nested_start_tx, nested_start_rx) = mpsc::channel();
+        let (nested_done_tx, nested_done_rx) = mpsc::channel();
+        let reader_slot = std::sync::Arc::clone(&slot);
+        let reader = std::thread::spawn(move || {
+            reader_slot.with_ref(|outer| {
+                reader_ready_tx
+                    .send(())
+                    .expect("outer reader reports acquisition");
+                nested_start_rx
+                    .recv()
+                    .expect("nested reader receives start signal");
+                reader_slot.with_ref(|inner| assert_eq!((*outer, *inner), (7, 7)));
+                nested_done_tx
+                    .send(())
+                    .expect("nested reader reports completion");
+            });
+        });
+        reader_ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("outer reader acquires state");
+
+        let (writer_start_tx, writer_start_rx) = mpsc::channel();
+        let writer_slot = std::sync::Arc::clone(&slot);
+        let writer = std::thread::spawn(move || {
+            writer_start_tx
+                .send(())
+                .expect("writer reports lock attempt");
+            writer_slot.with_mut(|value| *value = 9);
+        });
+        writer_start_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("writer reaches the lock attempt while the outer reader is held");
+        nested_start_tx
+            .send(())
+            .expect("nested reader start signal is delivered");
+        nested_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("waiting writer does not deadlock a nested reader");
+
+        reader.join().expect("reader completes");
+        writer
+            .join()
+            .expect("writer completes after readers release");
+        assert_eq!(slot.with_ref(|value| *value), 9);
+        assert_eq!(slot.borrow_state.load(Ordering::Acquire), 0);
+    }
+
     fn reset_runtime_for_test() {
         reset_test_ring();
         RUNTIME_DESCRIPTOR.store(DriverRuntimeInitDescriptor::empty());
@@ -32311,6 +32880,54 @@ mod tests {
             assert!(!state.dpc_link_ready);
             assert_eq!(state.irq_handler_slot, 0);
         });
+    }
+
+    #[test]
+    fn dpc_publication_orders_body_before_sequence_and_producer() {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        enum PublicationStep {
+            Sequence(u32),
+            Body(DriverRuntimeDpcEventEntry),
+            Release,
+            Producer(u32),
+        }
+
+        let event = DriverRuntimeDpcEventEntry {
+            sequence: 17,
+            host_int_status: SDHCI_INT_CARD_INT,
+            signal_status: DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            reason: DPC_REASON_SDIO_CARD_INTERRUPT,
+            flags: DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+        };
+        let trace = std::cell::RefCell::new(Vec::new());
+        assert!(dpc_event_ring_publish_sequence_last(
+            event.sequence,
+            event,
+            |sequence| {
+                trace.borrow_mut().push(PublicationStep::Sequence(sequence));
+                true
+            },
+            |body| {
+                trace.borrow_mut().push(PublicationStep::Body(body));
+                true
+            },
+            || trace.borrow_mut().push(PublicationStep::Release),
+            |producer| {
+                trace.borrow_mut().push(PublicationStep::Producer(producer));
+                true
+            },
+        ));
+        assert_eq!(
+            trace.into_inner(),
+            vec![
+                PublicationStep::Sequence(0),
+                PublicationStep::Body(event),
+                PublicationStep::Release,
+                PublicationStep::Sequence(event.sequence),
+                PublicationStep::Release,
+                PublicationStep::Producer(event.sequence),
+            ]
+        );
     }
 
     #[test]

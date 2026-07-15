@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
+use cargo_build_directive::{emit_cargo_directive, rust_string_literal};
 use chrono::Utc;
 use regex::Regex;
 
@@ -135,7 +136,7 @@ fn main() {
 
     let explicit_linker_script = env::var("SEL4_LD").ok();
     if let Some(ref ld) = explicit_linker_script {
-        println!("cargo:rustc-link-arg-bin=root-task=-T{ld}");
+        emit_cargo_directive(format!("cargo:rustc-link-arg-bin=root-task=-T{ld}"));
         println!("cargo:rustc-link-arg-bin=root-task=-gc-sections");
         println!("cargo:rustc-link-arg-bin=root-task=-no-pie");
     }
@@ -186,6 +187,7 @@ fn main() {
 
 fn emit_built_info() -> io::Result<()> {
     emit_git_rerun_triggers()?;
+    println!("cargo:rerun-if-env-changed=COHESIX_BUILD_STAMP");
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
     let git = git_stdout(["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "nogit".to_owned());
     let git_dirty_suffix = if git_has_tracked_changes() {
@@ -194,11 +196,11 @@ fn emit_built_info() -> io::Result<()> {
         ""
     };
     let timestamp = env::var("COHESIX_BUILD_STAMP").unwrap_or_else(|_| Utc::now().to_rfc3339());
-    let contents = format!(
-        "pub const GIT_HASH:&str=\"{}\";\npub const BUILD_TS:&str=\"{}\";\n",
-        format_args!("{}{}", git.trim(), git_dirty_suffix),
-        timestamp
-    );
+    let git_hash = format!("{}{}", git.trim(), git_dirty_suffix);
+    let git_hash = rust_string_literal(&git_hash);
+    let timestamp = rust_string_literal(&timestamp);
+    let contents =
+        format!("pub const GIT_HASH:&str={git_hash};\npub const BUILD_TS:&str={timestamp};\n");
     fs::write(out_dir.join("built_info.rs"), contents)?;
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())
@@ -242,7 +244,7 @@ fn resolve_git_dir(repo_root: &Path, dot_git: &Path) -> Option<PathBuf> {
 
 fn emit_rerun_if_path_exists(path: &Path) {
     if path.exists() {
-        println!("cargo:rerun-if-changed={}", path.display());
+        emit_cargo_directive(format!("cargo:rerun-if-changed={}", path.display()));
     }
 }
 
@@ -275,13 +277,17 @@ fn validate_generated_manifest() -> io::Result<()> {
     let cli_script = repo_root.join("scripts/cohsh/boot_v0.coh");
     let doc_snippet = repo_root.join("docs/snippets/root_task_manifest.md");
 
-    println!("cargo:rerun-if-changed={}", manifest_path.display());
-    println!("cargo:rerun-if-changed={}", generated_mod.display());
-    println!("cargo:rerun-if-changed={}", generated_bootstrap.display());
-    println!("cargo:rerun-if-changed={}", manifest_out.display());
-    println!("cargo:rerun-if-changed={}", manifest_hash.display());
-    println!("cargo:rerun-if-changed={}", cli_script.display());
-    println!("cargo:rerun-if-changed={}", doc_snippet.display());
+    for path in [
+        &manifest_path,
+        &generated_mod,
+        &generated_bootstrap,
+        &manifest_out,
+        &manifest_hash,
+        &cli_script,
+        &doc_snippet,
+    ] {
+        emit_cargo_directive(format!("cargo:rerun-if-changed={}", path.display()));
+    }
 
     let manifest_meta = manifest_path.metadata().map_err(|err| {
         io::Error::other(format!(
@@ -366,24 +372,24 @@ fn emit_pi4_wifi_firmware() -> io::Result<()> {
 
     match firmware {
         Some(bundle) => {
-            println!("cargo:rerun-if-changed={}", bundle.firmware.display());
-            println!("cargo:rerun-if-changed={}", bundle.nvram.display());
-            println!("cargo:rerun-if-changed={}", bundle.clm_blob.display());
+            for path in [&bundle.firmware, &bundle.nvram, &bundle.clm_blob] {
+                emit_cargo_directive(format!("cargo:rerun-if-changed={}", path.display()));
+            }
+            let firmware = rust_string_literal(&bundle.firmware.to_string_lossy());
+            let nvram = rust_string_literal(&bundle.nvram.to_string_lossy());
+            let clm_blob = rust_string_literal(&bundle.clm_blob.to_string_lossy());
+            let firmware_sha256 = rust_string_literal(bundle.firmware_sha256);
+            let nvram_sha256 = rust_string_literal(bundle.nvram_sha256);
+            let clm_blob_sha256 = rust_string_literal(bundle.clm_blob_sha256);
+            let board_type = rust_string_literal(bundle.board_type);
             contents.push_str(&format!(
-                "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = include_bytes!(r#\"{}\"#);\n\
-pub(crate) static PI4_WIFI_NVRAM: &[u8] = include_bytes!(r#\"{}\"#);\n\
-pub(crate) static PI4_WIFI_CLM_BLOB: &[u8] = include_bytes!(r#\"{}\"#);\n\
-pub(crate) const PI4_WIFI_FIRMWARE_SHA256: &str = {:?};\n\
-pub(crate) const PI4_WIFI_NVRAM_SHA256: &str = {:?};\n\
-pub(crate) const PI4_WIFI_CLM_BLOB_SHA256: &str = {:?};\n\
-pub(crate) const PI4_WIFI_BOARD_TYPE: &str = {:?};\n",
-                bundle.firmware.display(),
-                bundle.nvram.display(),
-                bundle.clm_blob.display(),
-                bundle.firmware_sha256,
-                bundle.nvram_sha256,
-                bundle.clm_blob_sha256,
-                bundle.board_type,
+                "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = include_bytes!({firmware});\n\
+pub(crate) static PI4_WIFI_NVRAM: &[u8] = include_bytes!({nvram});\n\
+pub(crate) static PI4_WIFI_CLM_BLOB: &[u8] = include_bytes!({clm_blob});\n\
+pub(crate) const PI4_WIFI_FIRMWARE_SHA256: &str = {firmware_sha256};\n\
+pub(crate) const PI4_WIFI_NVRAM_SHA256: &str = {nvram_sha256};\n\
+pub(crate) const PI4_WIFI_CLM_BLOB_SHA256: &str = {clm_blob_sha256};\n\
+pub(crate) const PI4_WIFI_BOARD_TYPE: &str = {board_type};\n",
             ));
         }
         None if env::var_os("CARGO_FEATURE_RELEASE_PI4").is_some() => {
@@ -393,10 +399,10 @@ pub(crate) const PI4_WIFI_BOARD_TYPE: &str = {:?};\n",
             )));
         }
         None => {
-            println!(
+            emit_cargo_directive(format!(
                 "cargo:warning=Pi 4 WiFi firmware bundle not found in {}; generated CYW43455 assets are empty",
-                pi4_wifi_default_search_dirs(repo_root),
-            );
+                pi4_wifi_default_search_dirs(repo_root)
+            ));
             contents.push_str(
                 "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = &[];\n\
 pub(crate) static PI4_WIFI_NVRAM: &[u8] = &[];\n\
@@ -501,10 +507,10 @@ fn emit_pi4_driver_runtime_payload() -> io::Result<()> {
                 repo_root.join(configured)
             };
             validate_pi4_driver_runtime_payload(&payload)?;
-            println!("cargo:rerun-if-changed={}", payload.display());
+            emit_cargo_directive(format!("cargo:rerun-if-changed={}", payload.display()));
+            let payload = rust_string_literal(&payload.to_string_lossy());
             contents.push_str(&format!(
-                "pub(crate) static EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD: &[u8] = include_bytes!(r#\"{}\"#);\n",
-                payload.display(),
+                "pub(crate) static EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD: &[u8] = include_bytes!({payload});\n",
             ));
         }
         _ => {
@@ -570,7 +576,7 @@ fn find_pi4_wifi_firmware(repo_root: &Path) -> Result<Option<Pi4WifiFirmwareSear
     let mut invalid = Vec::new();
     for bundle in PI4_WIFI_KNOWN_BUNDLES {
         let firmware_dir = repo_root.join(bundle.dir);
-        println!("cargo:rerun-if-changed={}", firmware_dir.display());
+        emit_cargo_directive(format!("cargo:rerun-if-changed={}", firmware_dir.display()));
         if !firmware_dir.is_dir() {
             continue;
         }
@@ -780,7 +786,7 @@ fn file_matches(path: &Path) -> bool {
 }
 
 fn stage_and_emit_linker_script(script: &Path) -> Result<(), String> {
-    println!("cargo:rerun-if-changed={}", script.display());
+    emit_cargo_directive(format!("cargo:rerun-if-changed={}", script.display()));
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR must be set by cargo"));
     let staged = out_dir.join(script.file_name().unwrap_or_else(|| OsStr::new("sel4.ld")));
@@ -810,8 +816,11 @@ fn stage_and_emit_linker_script(script: &Path) -> Result<(), String> {
         )
     })?;
 
-    println!("cargo:rustc-env=SEL4_LD={}", staged.display());
-    println!("cargo:rustc-link-arg-bin=root-task=-T{}", staged.display());
+    emit_cargo_directive(format!("cargo:rustc-env=SEL4_LD={}", staged.display()));
+    emit_cargo_directive(format!(
+        "cargo:rustc-link-arg-bin=root-task=-T{}",
+        staged.display()
+    ));
     println!("cargo:rustc-link-arg-bin=root-task=-gc-sections");
     println!("cargo:rustc-link-arg-bin=root-task=-no-pie");
     Ok(())
@@ -899,7 +908,7 @@ fn emit_timer_build_metadata(build_root: &Path) -> Result<u64, String> {
             }
         },
     )?;
-    println!("cargo:rerun-if-changed={}", header.display());
+    emit_cargo_directive(format!("cargo:rerun-if-changed={}", header.display()));
     let contents = fs::read_to_string(&header)
         .map_err(|err| format!("failed to read {}: {}", header.display(), err))?;
     let timer_clock_hz = parse_timer_clock_hz(&contents)
@@ -979,7 +988,7 @@ fn probe_any_config_flag(root: &Path, flags: &[&str]) -> Option<bool> {
 fn probe_config_flag(root: &Path, flag: &str) -> Option<bool> {
     for relative in CONFIG_CANDIDATES {
         let candidate = root.join(relative);
-        println!("cargo:rerun-if-changed={}", candidate.display());
+        emit_cargo_directive(format!("cargo:rerun-if-changed={}", candidate.display()));
         let Ok(contents) = fs::read_to_string(&candidate) else {
             continue;
         };

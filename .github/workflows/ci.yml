@@ -83,7 +83,9 @@ jobs:
         run: cargo check --locked --workspace
 
       - name: Rust risk ratchet
-        run: cargo run --quiet --locked -p rust-risk-audit -- --baseline docs/audit/rust_risk_baseline.toml
+        run: |
+          python3 scripts/ci/test_rust_risk_gate.py
+          scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml
 
   workspace-tests:
     name: workspace-tests

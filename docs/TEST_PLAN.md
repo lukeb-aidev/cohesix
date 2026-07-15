@@ -814,7 +814,8 @@ Run Sections 3–5 using the extracted bundle in a clean temp directory (not the
 ### 8) Final release gate (must pass)
 - `scripts/ci/test_plan_stage_05_due_diligence.sh`
 - `scripts/ci/due_diligence_gate.sh`
-- `cargo run --quiet --locked -p rust-risk-audit -- --baseline docs/audit/rust_risk_baseline.toml` (cfg-aware production-source ratchet; inline `#[cfg(test)]` items do not consume production risk budget)
+- `scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml` (cfg-aware production-source ratchet with direct host execution; inline `#[cfg(test)]` items do not consume production risk budget)
+- `python3 scripts/ci/test_rust_risk_gate.py` (hostile compiler/runner/toolchain/config selectors must fail closed, the named pinned toolchain must override directory selection, and registry sources must be re-extracted in a private Cargo home)
 - `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings`
 - `CARGO_INCREMENTAL=0 cargo check --workspace`
 - `CARGO_INCREMENTAL=0 cargo test --workspace`

@@ -428,6 +428,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo-build-directive"
+version = "0.1.0"
+
+[[package]]
 name = "cargo-platform"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3259,6 +3263,7 @@ version = "0.1.0"
 name = "pi4-driver-runtime"
 version = "0.1.0"
 dependencies = [
+ "cargo-build-directive",
  "font8x8",
  "pi4-driver-abi",
  "sel4-sys",
@@ -3729,6 +3734,7 @@ dependencies = [
  "aes",
  "anyhow",
  "base64 0.22.1",
+ "cargo-build-directive",
  "chrono",
  "cohesix-cas",
  "cohesix-net-constants",
@@ -3763,7 +3769,11 @@ dependencies = [
 name = "rust-risk-audit"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
+ "serde",
+ "sha2",
  "syn 2.0.114",
+ "toml 0.8.2",
 ]
 
 [[package]]
@@ -3962,6 +3972,7 @@ name = "sel4-sys"
 version = "0.0.28"
 dependencies = [
  "bindgen",
+ "cargo-build-directive",
  "log",
 ]
 

@@ -1,0 +1,11 @@
+# Author: Lukas Bower
+# Purpose: Configure the shared fail-closed Cargo build-directive helper crate.
+# Copyright 2026 Lukas Bower
+
+[package]
+name = "cargo-build-directive"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]

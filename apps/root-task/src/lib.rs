@@ -72,7 +72,7 @@ pub mod kernel;
 
 #[cfg(feature = "kernel")]
 pub mod built_info {
-    include!(concat!(env!("OUT_DIR"), "/built_info.rs"));
+    ::core::include!(::core::concat!(::core::env!("OUT_DIR"), "/built_info.rs"));
 }
 
 #[cfg(all(feature = "kernel", target_os = "none"))]

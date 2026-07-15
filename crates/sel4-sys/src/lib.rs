@@ -14,8 +14,11 @@
 mod imp {
     use core::arch::asm;
 
-    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
-    include!(concat!(env!("OUT_DIR"), "/sel4_config_consts.rs"));
+    ::core::include!(::core::concat!(::core::env!("OUT_DIR"), "/bindings.rs"));
+    ::core::include!(::core::concat!(
+        ::core::env!("OUT_DIR"),
+        "/sel4_config_consts.rs"
+    ));
 
     extern "C" {
         #[cfg(not(sel4_sys_bindings_have_debug_cap_identify))]
