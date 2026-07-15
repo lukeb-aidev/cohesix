@@ -2754,7 +2754,6 @@ dependencies = [
  "thiserror 2.0.17",
  "trace-model",
  "worker-gpu",
- "worker-lora",
 ]
 
 [[package]]
@@ -3758,7 +3757,6 @@ dependencies = [
  "static_assertions",
  "tempfile",
  "trace-model",
- "worker-lora",
 ]
 
 [[package]]
@@ -6160,9 +6158,6 @@ dependencies = [
 name = "worker-lora"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "cohesix-ticket",
- "secure9p-codec",
  "worker-heart",
 ]
 

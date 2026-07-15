@@ -38,8 +38,8 @@ where models train or GPU kernels execute.
 
 - **Queen** and **Worker** name Cohesix roles; `queen` is also their command-line
   role label.
-- **LoRA** means low-rank adaptation, an AI model-tuning technique. **LoRa**
-  means a low-power radio technology. They are unrelated.
+- Use **LoRA** in prose. Lowercase `lora` in paths, file names, configuration
+  keys, and source identifiers is the ASCII form of that same AI term.
 - **NineDoor** is the host 9P server. **NineDoorBridge** is the target namespace
   adapter. Neither name is shorthand for the other.
 - **Host**, **target**, **QEMU**, **mock**, and **hardware** describe different
@@ -542,10 +542,10 @@ the Secure9P session rules.
 
 ### Field bus / sidecar
 
-A host-facing integration for systems such as MODBUS, DNP3, or LoRa. Cohesix
-projects bounded control, telemetry, link, spool, or radio paths while the
-heavy protocol stack and physical access remain outside the target authority
-boundary selected by the profile.
+A host-facing integration for systems such as MODBUS or DNP3. Cohesix projects
+bounded control, telemetry, link, and spool paths while the heavy protocol
+stack and physical access remain outside the target authority boundary selected
+by the profile.
 
 ### Firmware
 
@@ -787,8 +787,9 @@ remain host-side, and their receipt is distinct from target acceptance.
 ### Lease
 
 A time-bounded allocation or claim on a resource. Queen lifecycle files can
-record general leases, GPU nodes record GPU leases, and LoRa roles have scoped
-leases; each contract owns its fields and enforcement boundary.
+record general leases, and GPU nodes record GPU leases; each contract owns its
+fields and enforcement boundary. WorkerLora does not introduce a separate LoRA
+lease or lease namespace.
 
 ### Lifecycle gate
 
@@ -810,17 +811,13 @@ operator path; local-seat readiness requires its own current-image evidence.
 
 ### LoRA
 
-Low-rank adaptation, a parameter-efficient technique for adapting an AI model.
-Cohesix host tools can coordinate PEFT/LoRA artifacts, activation pointers, and
-receipts, but training and model reload stay host-side. LoRA is unrelated to
-the LoRa radio role.
-
-### LoRa
-
-A low-power, long-range radio technology. The implemented `worker-lora` role
-is scoped to generated `/lora` radio lease and telemetry/control surfaces. Its
-name is retained for compatibility; it must not be described as an AI LoRA
-training Worker.
+**LoRA (low-rank adaptation)** is a parameter-efficient technique for adapting
+an AI model without retraining all of its weights. In Cohesix, `worker-lora` is
+a ticket-scoped, receipt-only control-plane Worker for LoRA adapter and model
+lifecycle coordination. Lowercase `lora` in paths, files such as `lora.json`,
+configuration keys, and source identifiers is the ASCII form of this AI term.
+Training, evaluation, artifact import, inference, and model reload remain
+host-side.
 
 ## M
 
@@ -1471,9 +1468,11 @@ and telemetry state while all GPU hardware access remains host-side.
 
 ### WorkerLora / `worker-lora`
 
-See [LoRa](#lora-1). This implemented role is the LoRa **radio** Worker with a
-generated `/lora` scope, despite the ambiguous ASCII role label. It is not an
-AI LoRA training or adapter Worker.
+See [LoRA](#lora). This implemented control-plane Worker observes its generated
+ticket, endpoint, and lifecycle state and emits bounded LoRA adapter/model
+receipts and telemetry through its own Worker view. It has no separate root
+namespace or file-backed LoRA lease. It does not train or execute models, access
+GPU hardware, import artifacts, or reload a host model.
 
 ### WorkerBus / `worker-bus`
 

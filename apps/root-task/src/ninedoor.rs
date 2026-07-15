@@ -35,7 +35,6 @@ use secure9p_codec::ErrorCode;
 use sha2::{Digest, Sha256};
 use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError, SpoolFrame};
 use signature::Verifier;
-use worker_lora::{DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, TamperReason};
 
 const LOG_PATH: &str = "/log/queen.log";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
@@ -46,7 +45,6 @@ const QUEEN_LEASE_CTL_PATH: &str = "/queen/lease/ctl";
 const QUEEN_EXPORT_ROOT_PATH: &str = "/queen/export";
 const QUEEN_EXPORT_CTL_PATH: &str = "/queen/export/ctl";
 const BUS_ROOT_PATH: &str = "/bus";
-const LORA_ROOT_PATH: &str = "/lora";
 const PROC_BOOT_PATH: &str = "/proc/boot";
 const PROC_TESTS_PATH: &str = "/proc/tests";
 const PROC_TESTS_QUICK_PATH: &str = "/proc/tests/selftest_quick.coh";
@@ -2282,10 +2280,7 @@ impl NineDoorBridge {
         self.session_role = parse_session_role(role);
         self.session_ticket = ticket.map(String::from);
         self.session_scope = None;
-        if matches!(
-            self.session_role,
-            Some(SessionRoleLabel::WorkerBus | SessionRoleLabel::WorkerLora)
-        ) {
+        if matches!(self.session_role, Some(SessionRoleLabel::WorkerBus)) {
             if let Some(ticket) = ticket {
                 if let Ok(claims) = TicketToken::decode_unverified(ticket) {
                     self.session_scope = claims.subject;
@@ -2320,7 +2315,6 @@ impl NineDoorBridge {
     fn sidecar_role(&self) -> Option<SidecarKind> {
         match self.session_role {
             Some(SessionRoleLabel::WorkerBus) => Some(SidecarKind::Bus),
-            Some(SessionRoleLabel::WorkerLora) => Some(SidecarKind::Lora),
             _ => None,
         }
     }
@@ -4752,14 +4746,12 @@ fn validate_model_id(value: &str) -> Result<(), NineDoorBridgeError> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SidecarKind {
     Bus,
-    Lora,
 }
 
 impl SidecarKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Bus => "bus",
-            Self::Lora => "lora",
         }
     }
 }
@@ -4774,15 +4766,13 @@ enum SidecarAccess {
 #[derive(Debug)]
 struct SidecarState {
     bus: SidecarBusState,
-    lora: SidecarLoraState,
 }
 
 impl SidecarState {
     fn new() -> Self {
         let config = generated::sidecar_config();
         let bus = SidecarBusState::new(config.modbus, config.dnp3);
-        let lora = SidecarLoraState::new(config.lora);
-        Self { bus, lora }
+        Self { bus }
     }
 
     fn push_root_entries(
@@ -4791,7 +4781,6 @@ impl SidecarState {
     ) -> Result<(), NineDoorBridgeError> {
         let mut seen: Vec<String> = Vec::new();
         self.bus.push_root_entries(output, &mut seen)?;
-        self.lora.push_root_entries(output, &mut seen)?;
         Ok(())
     }
 
@@ -4799,23 +4788,18 @@ impl SidecarState {
         if self.bus.matches_path(path) {
             return Some(SidecarKind::Bus);
         }
-        if self.lora.matches_path(path) {
-            return Some(SidecarKind::Lora);
-        }
         None
     }
 
     fn allowed_prefix(&self, kind: SidecarKind, scope: Option<&str>, path: &[&str]) -> bool {
         match kind {
             SidecarKind::Bus => self.bus.allowed_prefix(scope, path),
-            SidecarKind::Lora => self.lora.allowed_prefix(scope, path),
         }
     }
 
     fn allowed_path(&self, kind: SidecarKind, scope: Option<&str>, path: &[&str]) -> bool {
         match kind {
             SidecarKind::Bus => self.bus.allowed_path(scope, path),
-            SidecarKind::Lora => self.lora.allowed_path(scope, path),
         }
     }
 
@@ -4824,21 +4808,15 @@ impl SidecarState {
         path: &[&str],
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Option<Result<(), NineDoorBridgeError>> {
-        if let Some(result) = self.bus.list_into(path, output) {
-            return Some(result);
-        }
-        self.lora.list_into(path, output)
+        self.bus.list_into(path, output)
     }
 
     fn read(&self, path: &[&str]) -> Option<Vec<u8>> {
-        self.bus.read(path).or_else(|| self.lora.read(path))
+        self.bus.read(path)
     }
 
     fn write(&mut self, path: &[&str], payload: &[u8]) -> Result<Option<u32>, NineDoorBridgeError> {
         if let Some(count) = self.bus.write(path, payload, SIDECAR_LOG_MAX_BYTES)? {
-            return Ok(Some(count));
-        }
-        if let Some(count) = self.lora.write(path, payload, SIDECAR_LOG_MAX_BYTES)? {
             return Ok(Some(count));
         }
         Ok(None)
@@ -5096,237 +5074,6 @@ impl SidecarBusState {
         self.adapters
             .iter_mut()
             .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SidecarLoraFile {
-    Ctl,
-    Telemetry,
-    Tamper,
-}
-
-#[derive(Debug)]
-struct SidecarLoraAdapterState {
-    mount_root: Vec<String>,
-    mount_label: String,
-    scope: String,
-    guard: DutyCycleGuard,
-    tamper: TamperLog,
-    telemetry: Vec<u8>,
-    ctl: Vec<u8>,
-}
-
-impl SidecarLoraAdapterState {
-    fn match_file(&self, path: &[&str]) -> Option<SidecarLoraFile> {
-        if path.len() != self.mount_root.len().saturating_add(1) {
-            return None;
-        }
-        if !segments_start_with(path, &self.mount_root) {
-            return None;
-        }
-        match path.last()? {
-            &"ctl" => Some(SidecarLoraFile::Ctl),
-            &"telemetry" => Some(SidecarLoraFile::Telemetry),
-            &"tamper" => Some(SidecarLoraFile::Tamper),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct SidecarLoraState {
-    adapters: Vec<SidecarLoraAdapterState>,
-    clock_ms: u64,
-}
-
-impl SidecarLoraState {
-    fn new(config: generated::SidecarLoraConfig) -> Self {
-        if !config.enable {
-            return Self {
-                adapters: Vec::new(),
-                clock_ms: 0,
-            };
-        }
-        let mut adapters = Vec::new();
-        for adapter in config.adapters.iter().copied() {
-            let mount_root = sidecar_mount_root(config.mount_at, adapter.mount);
-            let duty_cycle = DutyCycleConfig {
-                duty_cycle_percent: adapter.duty_cycle_percent,
-                window_ms: adapter.window_ms,
-                max_payload_bytes: adapter.max_payload_bytes,
-            };
-            adapters.push(SidecarLoraAdapterState {
-                mount_root,
-                mount_label: adapter.mount.to_owned(),
-                scope: adapter.scope.to_owned(),
-                guard: DutyCycleGuard::new(duty_cycle),
-                tamper: TamperLog::new(adapter.tamper_log_max_entries as usize),
-                telemetry: Vec::new(),
-                ctl: Vec::new(),
-            });
-        }
-        Self {
-            adapters,
-            clock_ms: 0,
-        }
-    }
-
-    fn push_root_entries(
-        &self,
-        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-        seen: &mut Vec<String>,
-    ) -> Result<(), NineDoorBridgeError> {
-        for adapter in &self.adapters {
-            if let Some(label) = adapter.mount_root.first() {
-                if !seen.iter().any(|entry| entry == label) {
-                    push_list_entry(output, label.as_str())?;
-                    seen.push(label.clone());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn matches_path(&self, path: &[&str]) -> bool {
-        self.adapters
-            .iter()
-            .any(|adapter| segments_match_prefix(path, &adapter.mount_root))
-    }
-
-    fn allowed_prefix(&self, scope: Option<&str>, path: &[&str]) -> bool {
-        let Some(scope) = scope else {
-            return false;
-        };
-        self.adapters.iter().any(|adapter| {
-            adapter.scope == scope && segments_match_prefix(path, &adapter.mount_root)
-        })
-    }
-
-    fn allowed_path(&self, scope: Option<&str>, path: &[&str]) -> bool {
-        let Some(scope) = scope else {
-            return false;
-        };
-        self.adapters
-            .iter()
-            .any(|adapter| adapter.scope == scope && segments_start_with(path, &adapter.mount_root))
-    }
-
-    fn list_into(
-        &self,
-        path: &[&str],
-        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-    ) -> Option<Result<(), NineDoorBridgeError>> {
-        if self.adapters.is_empty() {
-            return None;
-        }
-        let mut matched_root = false;
-        for adapter in &self.adapters {
-            let root_len = adapter.mount_root.len().saturating_sub(1);
-            let root = &adapter.mount_root[..root_len];
-            if segments_equal(path, root) {
-                if !matched_root {
-                    output.clear();
-                }
-                matched_root = true;
-                if push_list_entry(output, adapter.mount_label.as_str()).is_err() {
-                    return Some(Err(NineDoorBridgeError::BufferFull));
-                }
-            }
-        }
-        if matched_root {
-            return Some(Ok(()));
-        }
-        for adapter in &self.adapters {
-            if segments_equal(path, &adapter.mount_root) {
-                output.clear();
-                return Some(list_from_slice_into(
-                    &["ctl", "telemetry", "tamper"],
-                    output,
-                ));
-            }
-        }
-        None
-    }
-
-    fn read(&self, path: &[&str]) -> Option<Vec<u8>> {
-        let (adapter, file) = self.adapter_for_path(path)?;
-        match file {
-            SidecarLoraFile::Ctl => Some(adapter.ctl.clone()),
-            SidecarLoraFile::Telemetry => Some(adapter.telemetry.clone()),
-            SidecarLoraFile::Tamper => Some(render_tamper_log(
-                adapter.tamper.snapshot(),
-                SIDECAR_LOG_MAX_BYTES,
-            )),
-        }
-    }
-
-    fn write(
-        &mut self,
-        path: &[&str],
-        data: &[u8],
-        max_bytes: usize,
-    ) -> Result<Option<u32>, NineDoorBridgeError> {
-        let Some((index, file)) = self.adapter_index_for_path(path) else {
-            return Ok(None);
-        };
-        match file {
-            SidecarLoraFile::Ctl => {
-                let count = {
-                    let adapter = &mut self.adapters[index];
-                    append_sidecar_bounded(&mut adapter.ctl, data, max_bytes)?
-                };
-                let now_ms = self.next_clock();
-                let adapter = &mut self.adapters[index];
-                match adapter.guard.attempt(now_ms, data.len() as u32) {
-                    Ok(()) => {
-                        append_sidecar_bounded(&mut adapter.telemetry, data, max_bytes)?;
-                        Ok(Some(count))
-                    }
-                    Err(reason) => {
-                        adapter.tamper.push(TamperEntry {
-                            timestamp_ms: now_ms,
-                            reason,
-                            payload_bytes: data.len() as u32,
-                        });
-                        Err(NineDoorBridgeError::InvalidPayload)
-                    }
-                }
-            }
-            SidecarLoraFile::Telemetry | SidecarLoraFile::Tamper => {
-                Err(NineDoorBridgeError::Permission)
-            }
-        }
-    }
-
-    fn adapter_for_path(
-        &self,
-        path: &[&str],
-    ) -> Option<(&SidecarLoraAdapterState, SidecarLoraFile)> {
-        self.adapters
-            .iter()
-            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
-    }
-
-    fn adapter_index_for_path(&self, path: &[&str]) -> Option<(usize, SidecarLoraFile)> {
-        self.adapters
-            .iter()
-            .enumerate()
-            .find_map(|(idx, adapter)| adapter.match_file(path).map(|file| (idx, file)))
-    }
-
-    fn adapter_for_path_mut(
-        &mut self,
-        path: &[&str],
-    ) -> Option<(&mut SidecarLoraAdapterState, SidecarLoraFile)> {
-        self.adapters
-            .iter_mut()
-            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
-    }
-
-    fn next_clock(&mut self) -> u64 {
-        self.clock_ms = self.clock_ms.saturating_add(1);
-        self.clock_ms
     }
 }
 
@@ -8469,24 +8216,6 @@ fn render_spool_status(spool: &OfflineSpool, max_bytes: usize) -> Vec<u8> {
     out.into_bytes()
 }
 
-fn render_tamper_log(entries: Vec<TamperEntry>, max_bytes: usize) -> Vec<u8> {
-    let mut out = String::new();
-    for entry in entries {
-        let reason = match entry.reason {
-            TamperReason::PayloadOversize => "payload-oversize",
-            TamperReason::DutyCycleExceeded => "duty-cycle",
-        };
-        let line = format!(
-            "tamper ts_ms={} reason={} bytes={}\n",
-            entry.timestamp_ms, reason, entry.payload_bytes
-        );
-        if !push_bounded_line(&mut out, &line, max_bytes) {
-            break;
-        }
-    }
-    out.into_bytes()
-}
-
 fn append_log_bytes(
     log: &mut Vec<u8>,
     payload: &str,
@@ -8855,19 +8584,17 @@ mod tests {
         fn denied(&mut self, _message: &str) {}
     }
 
-    fn install_test_lora_adapter(bridge: &mut NineDoorBridge, scope: &str, mount: &str) {
-        bridge.sidecars.lora.adapters.push(SidecarLoraAdapterState {
-            mount_root: sidecar_mount_root("/lora", mount),
+    fn install_test_bus_adapter(bridge: &mut NineDoorBridge, scope: &str, mount: &str) {
+        bridge.sidecars.bus.adapters.push(SidecarBusAdapterState {
+            mount_root: sidecar_mount_root("/bus", mount),
             mount_label: mount.to_owned(),
             scope: scope.to_owned(),
-            guard: DutyCycleGuard::new(DutyCycleConfig {
-                duty_cycle_percent: 100,
-                window_ms: 1_000,
-                max_payload_bytes: 64,
-            }),
-            tamper: TamperLog::new(8),
+            spool: OfflineSpool::new(SpoolConfig::new(8, 1_024)),
+            link_state: LinkState::Offline,
             telemetry: Vec::new(),
             ctl: Vec::new(),
+            link: Vec::new(),
+            replay: Vec::new(),
         });
     }
 
@@ -9120,16 +8847,16 @@ mod tests {
     }
 
     #[test]
-    fn denied_cross_sidecar_write_appends_audit_log_line() {
+    fn denied_cross_scope_bus_write_appends_audit_log_line() {
         let mut bridge = NineDoorBridge::new();
-        install_test_lora_adapter(&mut bridge, "lora-main", "lora-main");
+        install_test_bus_adapter(&mut bridge, "bus-main", "bus-main");
         bridge.attached = true;
         bridge.session_role = Some(SessionRoleLabel::WorkerBus);
-        bridge.session_scope = Some("unit-test-sidecar-deny".to_owned());
+        bridge.session_scope = Some("other-bus".to_owned());
 
         let err = bridge
-            .echo("/lora/lora-main/ctl", "denied")
-            .expect_err("worker-bus must not write lora ctl");
+            .echo("/bus/bus-main/ctl", "denied")
+            .expect_err("worker-bus must not write another bus scope");
         assert!(matches!(err, NineDoorBridgeError::Permission));
 
         let mut cursor = log_buffer::tail_cursor(log_buffer::LOG_SNAPSHOT_LINES);
@@ -9141,7 +8868,7 @@ mod tests {
         assert!(
             lines.iter().any(|line| {
                 line.as_str()
-                    .contains("sidecar-deny kind=lora scope=unit-test-sidecar-deny")
+                    .contains("sidecar-deny kind=bus scope=other-bus")
             }),
             "denied sidecar write did not append audit log line: {lines:?}"
         );
@@ -9274,6 +9001,10 @@ mod tests {
             };
             assert_eq!(line.as_str(), *entry);
         }
+        assert!(
+            !output.iter().any(|line| line.as_str() == "lora"),
+            "AI LoRA receipts must not create a root radio namespace"
+        );
     }
 
     #[test]

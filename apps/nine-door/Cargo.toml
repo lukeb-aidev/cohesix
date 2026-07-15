@@ -29,7 +29,6 @@ signature = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true }
 worker-gpu = { path = "../worker-gpu" }
-worker-lora = { path = "../worker-lora" }
 gpu-bridge-host = { path = "../gpu-bridge-host", default-features = false }
 sidecar-bus = { path = "../sidecar-bus", default-features = false }
 trace-model = { path = "../../crates/trace-model" }

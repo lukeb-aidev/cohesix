@@ -10,7 +10,7 @@ use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
 use chrono::Utc;
@@ -19,8 +19,9 @@ use regex::Regex;
 #[path = "build_support.rs"]
 mod build_support;
 
-use build_support::parse_timer_clock_hz;
-use build_support::{classify_linker_script, LinkerScriptKind};
+use build_support::{
+    classify_linker_script, generated_artifact_is_stale, parse_timer_clock_hz, LinkerScriptKind,
+};
 
 const IPC_GUARD_SOURCE: &str = "apps/root-task/src";
 const IPC_GUARD_ALLOW: &str = "sel4.rs";
@@ -288,6 +289,7 @@ fn validate_generated_manifest() -> io::Result<()> {
         ))
     })?;
     let manifest_mtime = manifest_meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+    let manifest_has_tracked_changes = tracked_path_has_changes(repo_root, &manifest_path);
 
     let required = [
         generated_mod,
@@ -306,7 +308,7 @@ fn validate_generated_manifest() -> io::Result<()> {
             ))
         })?;
         let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        if modified < manifest_mtime {
+        if generated_artifact_is_stale(manifest_has_tracked_changes, manifest_mtime, modified) {
             return Err(io::Error::other(format!(
                 "generated artefact {} is stale relative to configs/root_task.toml; rerun coh-rtc",
                 path.display()
@@ -314,6 +316,24 @@ fn validate_generated_manifest() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+fn tracked_path_has_changes(repo_root: &Path, path: &Path) -> bool {
+    let Ok(relative_path) = path.strip_prefix(repo_root) else {
+        return false;
+    };
+    let Ok(status) = Command::new("git")
+        .current_dir(repo_root)
+        .args(["diff", "--quiet", "HEAD", "--"])
+        .arg(relative_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+    else {
+        return false;
+    };
+
+    status.code() == Some(1)
 }
 
 fn emit_pi4_wifi_firmware() -> io::Result<()> {

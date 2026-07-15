@@ -27,7 +27,7 @@ EXPECT SUBSTR entries=2
 cat /bus/modbus-main/spool
 EXPECT OK
 EXPECT SUBSTR entries=0
-echo denied > /lora/lora-main/ctl
+echo denied > /queen/ctl
 EXPECT ERR
 EXPECT SUBSTR EPERM
 quit

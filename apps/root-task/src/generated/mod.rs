@@ -652,29 +652,9 @@ pub struct SidecarBusConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct SidecarLoraAdapter {
-    pub id: &'static str,
-    pub mount: &'static str,
-    pub scope: &'static str,
-    pub region: &'static str,
-    pub duty_cycle_percent: u8,
-    pub window_ms: u64,
-    pub max_payload_bytes: u32,
-    pub tamper_log_max_entries: u16,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct SidecarLoraConfig {
-    pub enable: bool,
-    pub mount_at: &'static str,
-    pub adapters: &'static [SidecarLoraAdapter],
-}
-
-#[derive(Clone, Copy, Debug)]
 pub struct SidecarConfig {
     pub modbus: SidecarBusConfig,
     pub dnp3: SidecarBusConfig,
-    pub lora: SidecarLoraConfig,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -709,9 +689,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.5";
+pub const MANIFEST_SCHEMA: &str = "1.6";
 pub const MANIFEST_SHA256: &str =
-    "726441bd837cd419d81451de3e13b84ac152a9090bb47a0a66b233fc8307f315";
+    "763ef148ed19f1250afdcc2e99611be1668369c6b7c375593af99e3420716f41";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

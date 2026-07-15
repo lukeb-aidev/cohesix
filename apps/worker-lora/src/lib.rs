@@ -1,27 +1,17 @@
 // Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Provide LoRA host helpers and a receipt-only no_std VM loop.
+// Purpose: Provide the receipt-only no_std VM loop for AI LoRA lifecycle control.
 // Author: Lukas Bower
 #![cfg_attr(target_os = "none", no_std)]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! LoRA worker library for host tooling and no_std VM receipt loops.
+//! Receipt-only LoRA worker primitives for bounded model-adapter lifecycle control.
 
 extern crate alloc;
 
-mod common;
-
-pub use common::*;
-
 /// No_std LoRA VM receipt-loop helpers.
 pub mod vm;
-
-#[cfg(not(target_os = "none"))]
-mod host;
-
-#[cfg(not(target_os = "none"))]
-pub use host::*;
 
 #[cfg(target_os = "none")]
 mod kernel {

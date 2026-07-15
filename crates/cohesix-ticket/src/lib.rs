@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Define capability ticket claims and validation for Cohesix roles.
 // Author: Lukas Bower
@@ -43,7 +43,7 @@ pub enum Role {
     WorkerGpu,
     /// Field bus worker role.
     WorkerBus,
-    /// LoRa worker role.
+    /// AI LoRA model-adapter control worker role.
     WorkerLora,
 }
 

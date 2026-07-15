@@ -1523,56 +1523,130 @@ Deliverables:
 ## Milestone 18 — Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern) <a id="18"></a> 
 [Milestones](#Milestones)
 
-**Why now (context):** Remaining edge use cases (Edge §§1–4,8,9; Science §§13–14) depend on deterministic adapters for industrial buses and constrained links. Implementing them as sidecars preserves the lean `no_std` core while meeting operational demands.
+**Status:** Complete. The bounded `m18-remove-hallucinated-lora-radio` defect
+correction, discovered during the Milestone 26c documentation audit, closed on
+2026-07-15. The implemented MODBUS and DNP3 sidecar contract remains complete.
+Historical references that attached a radio subsystem to lowercase `lora`
+identifiers are invalid: Cohesix does not implement or target that subsystem.
+`LoRA`, `worker-lora`, and lowercase `lora` identifiers refer only to the AI
+adapter/model lifecycle.
+
+```text
+Title/ID: m18-remove-hallucinated-lora-radio
+Milestone: Milestone 18 — Field Bus & Low-Bandwidth Sidecars / reopened defect discovered by Milestone 26c README-linked documentation remediation
+Goal: Remove the fabricated radio subsystem attached to lora identifiers while preserving the implemented MODBUS/DNP3 sidecars and AI LoRA receipt-only Worker.
+Inputs: tools/coh-rtc/src/{ir.rs,codegen}, configs/root_task*.toml, apps/{sidecar-bus,worker-lora,nine-door,root-task}, scripts/cohsh/sidecar_integration.coh, README.md, docs/{GLOSSARY,INTERFACES,SECURITY,ROLES_AND_SCHEDULING,USE_CASES}.md, generated artifacts, current tests, immutable release snapshots.
+Changes:
+  - tools/coh-rtc, source manifests, and generated artifacts — remove sidecars.lora, the /lora radio namespace, regional-band, transmit, duty-cycle, payload, and radio-tamper schema and outputs; retain AI LoRA worker-role and PEFT schema.
+  - apps/sidecar-bus, apps/worker-lora, apps/nine-door, and apps/root-task — remove radio-only APIs and namespace handlers; keep WorkerLora as a bounded AI lifecycle-receipt Worker with no training, inference, model loading, or GPU access in the VM.
+  - scripts/cohsh and tests — remove radio assertions and add regressions that reject the retired manifest surface and preserve AI LoRA receipt behavior.
+  - README.md and canonical docs — define LoRA once as low-rank adaptation, remove all current radio claims, and cross-reference the Queen export and host PEFT lifecycle contracts.
+  - releases/ — leave published snapshots immutable; record the false historical radio claims as superseded current-documentation errata and exclude them from current as-built truth.
+Commands:
+  - cargo fmt --all -- --check
+  - cargo test -p coh-rtc
+  - cargo test -p worker-lora
+  - cargo test -p sidecar-bus --features modbus,dnp3
+  - cargo test -p nine-door
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib ninedoor::tests
+  - cargo test -p cohsh --test script_catalog
+  - cargo check -p worker-lora --target aarch64-unknown-none
+  - cargo clippy --workspace --all-targets -- -D warnings
+  - cargo check --workspace
+  - cargo test --workspace -- --test-threads=1
+  - SEL4_BUILD_DIR=seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu
+  - SEL4_BUILD_DIR=seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
+  - scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-kernel-source-dir "$HOME/seL4_15"
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+  - scripts/ci/test_plan_run.sh --list
+  - cargo audit
+  - cargo deny check advisories
+Checks:
+  - Current source, manifests, generated artifacts, tests, scripts, and canonical docs contain no radio-specific region, transmission, duty-cycle, or radio-tamper behavior or claim under lora identifiers.
+  - sidecars.lora is rejected as an unknown manifest field; MODBUS/DNP3 sidecars still pass their existing bounded-spool and authority tests.
+  - WorkerLora remains an implemented receipt-only AI LoRA control-plane role, and /queen/export/lora_jobs plus host PEFT policy remain unchanged.
+  - Generated-artifact drift, focused tests, workspace checks, local links, Markdown structure, and GitHub Mermaid validation pass.
+Deliverables: Corrected compiler/runtime/docs suite, regenerated default-profile artifacts, regression evidence, and a release erratum without mutating historical release bundles.
+```
+
+**Closure evidence (2026-07-15):** The task commands pass. Compiler schema v1.6
+rejects `sidecars.lora`; the canonical resolved-manifest SHA-256 is
+`763ef148ed19f1250afdcc2e99611be1668369c6b7c375593af99e3420716f41`.
+The QEMU package and stage-only Pi build regenerated their rootservers and
+elfloader images; the retired radio paths and identifiers are absent from those
+artifacts. Current source and canonical documentation scans contain only the AI
+LoRA meaning, intentional negative tests, and this correction record.
+Historical release snapshots remain unchanged and are explicitly superseded by
+`docs/audit/M26C_DOC_DRIFT_LEDGER.md` entry `M26C-DOC-019`.
+
+**Separate repository gate:** This correction does not close the active
+Milestone 26d Pi packaging-size blocker. The regenerated
+`seL4/build_UBOOT/elfloader/archive.archive.o.cpio` is 5,001,728 bytes against
+the mandatory 4 MiB limit; the preceding checked-in artifact was 5,005,824
+bytes. The correction therefore reduced the archive by 4 KiB and did not
+introduce the breach, but `scripts/ci/size_guard.sh` remains red until the
+Milestone 26d repository-gate task restores that independent invariant.
+
+**Why now (context):** Remaining edge use cases depend on deterministic
+adapters for industrial buses. Implementing them as sidecars preserves the
+lean `no_std` core while meeting operational demands.
 
 **Goal**
-Deliver a library of host/worker sidecars (outside the VM where possible) that bridge MODBUS/DNP3, LoRa, and sensor buses into NineDoor namespaces, driven by compiler-declared mounts and capability policies.
+Deliver host-side adapters that bridge MODBUS and DNP3 into NineDoor namespaces,
+driven by compiler-declared mounts and capability policies.
 
 **Deliverables**
 - Host-side sidecar framework (`apps/sidecar-bus`) offering async runtimes on macOS/Linux with feature gates to keep VM artefacts `no_std`. Sidecars communicate via Secure9P transports or serial overlays without embedding TCP servers in the VM.
-- Worker templates (`apps/worker-bus`, `apps/worker-lora`) that run inside the VM, remain `no_std`, and expose control/telemetry files (`/bus/*`, `/lora/*`) generated from manifest entries.
-- Scheduling integration for LoRa duty-cycle management and tamper logging, aligned with `docs/USE_CASES.md` defense and science requirements.
-- Compiler IR v1.5 fields `sidecars.modbus`, `sidecars.dnp3`, `sidecars.lora` describing mounts, baud/link settings, and capability scopes; validation ensures resources stay within event-pump budget.
+- A recognized `worker-bus` template and generated `/bus/*` control/telemetry
+  contract. Current selected profiles still mark the target Worker role as not
+  implemented; the host-side provider remains the as-built integration path.
+- Compiler schema v1.6 fields `sidecars.modbus` and `sidecars.dnp3` describing
+  mounts, baud/link settings, and capability scopes; validation keeps resources
+  within the event-pump budget.
 - Documentation updates (`docs/ARCHITECTURE.md §12`, `docs/INTERFACES.md`) illustrating the sidecar pattern, security boundaries, and testing strategy.
 - `scripts/cohsh/sidecar_integration.coh` integrated into the regression pack DoD.
 
-**Status:** Complete — sidecar framework, worker templates, CLI regression coverage, and docs are aligned; Milestone 17 boundary remains `3e6faa33410af58ed8d1942ce58ab701a276b882`.
+**Historical completion boundary:** The MODBUS/DNP3 host-side framework,
+compiler-declared `/bus` contract, CLI regression coverage, and documentation
+remain accepted; Milestone 17 boundary remains
+`3e6faa33410af58ed8d1942ce58ab701a276b882`. The invalid radio-specific `lora`
+surface described above has been removed, so this milestone is closed again.
 
 **Use-case alignment**
-- Industrial IoT gateways (Edge §1) gain MODBUS/CAN integration without bloating the VM.
+- Industrial IoT gateways (Edge §1) gain MODBUS integration without bloating the VM.
 - Energy substations (Edge §2) receive DNP3 scheduling and signed config updates.
-- Defense ISR kits (Edge §8) use LoRa scheduler + tamper logging, while environmental stations (Science §13) benefit from low-power telemetry scheduling.
 
 **Commands**
-- `cargo test -p worker-bus -p worker-lora`
+- `cargo test -p worker-bus`
 - `cargo test -p sidecar-bus --features modbus,dnp3`
 - `cohsh --script scripts/cohsh/sidecar_integration.coh`
 
 **Checks (DoD)**
 - Sidecars operate within declared capability scopes; attempts to access undeclared mounts are rejected and logged.
-- LoRa scheduler enforces duty-cycle constraints under stress tests.
 - Offline telemetry spooling validated for MODBUS/DNP3 adapters with manifest-driven limits.
 - For this milestone, run the full Regression Pack both under QEMU and (where applicable) on the target hardware profile, and treat any divergence between the two as a bug unless explicitly documented.
-- Sidecar mounts MUST NOT introduce new `/bus` or `/lora` names that collide with legacy namespaces; compiler must hash-prefix automatically if conflicts appear.
-- Abuse case: unauthorized write into sidecar mount returns ERR and audit; duty-cycle violation attempt throttled and logged.
+- Sidecar mounts MUST NOT introduce new `/bus` names that collide with legacy namespaces; compiler must hash-prefix automatically if conflicts appear.
+- Abuse case: unauthorized write into a sidecar mount returns `ERR` and an
+  audit record.
 
 **Compiler touchpoints**
-- IR v1.5 ensures mounts/roles/quotas for sidecars, generating documentation tables and manifest fragments consumed by host tooling.
+- IR v1.6 ensures mounts, roles, and quotas for sidecars, generating documentation tables and manifest fragments consumed by host tooling.
 - Validation prevents enabling sidecars without corresponding host dependencies or event-pump capacity.
 
 **Task Breakdown**
 ```
 Title/ID: m19-sidecar-framework
-Goal: Build host sidecar framework and in-VM worker templates for bus/LoRa.
-Inputs: apps/sidecar-bus/, apps/worker-bus/, apps/worker-lora/, configs/root_task.toml sidecars.*.
+Goal: Build the host sidecar framework and bounded bus template.
+Inputs: apps/sidecar-bus/, apps/worker-bus/, configs/root_task.toml sidecars.modbus and sidecars.dnp3.
 Changes:
   - apps/sidecar-bus/src/lib.rs — capability-scoped adapters with feature gates for modbus/dnp3.
-  - apps/worker-lora/src/lib.rs — duty-cycle scheduler and tamper logging.
 Commands:
   - cargo test -p sidecar-bus --features modbus,dnp3
-  - cargo test -p worker-bus -p worker-lora
+  - cargo test -p worker-bus
 Checks:
-  - Unauthorized mount access returns ERR; duty-cycle enforcement verified in tests.
+  - Unauthorized mount access returns ERR; bounded spool behavior is verified in tests.
 Deliverables:
   - Sidecar patterns documented in docs/ARCHITECTURE.md and docs/INTERFACES.md.
 
@@ -6963,15 +7037,13 @@ Deliverables:
 **Why now (reviewer trust):**
 Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-up evidence, and isolated runtime benchmark closure, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window after isolated runtime benchmark closure and before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
-**Current planning status:** Reopened for a documentation-closure defect. The
-documentation-only task `m26c-readme-linked-doc-suite-remediation` completed its
-preservation follow-up on 15 July 2026, but reader review then found that the
-earlier consolidation had removed the only broad newcomer glossary. This
-follow-up is limited to recovering useful historical definitions, reconciling
-them with current as-built terminology, adding one canonical glossary, linking
-it from the README, and refreshing documentation audit evidence. It may not
-change a handler, protocol, endpoint, namespace, authority path, generated
-behavior, release snapshot, or hardware-acceptance state.
+**Current planning status:** Complete. The documentation-only task
+`m26c-readme-linked-doc-suite-remediation`, including its preservation and
+newcomer-glossary follow-ups, completed on 15 July 2026. The later correction
+that removed fabricated LoRa-radio semantics was authorized and closed
+separately under Milestone 18; it does not leave Milestone 26c open. Historical
+release snapshots remain immutable, and their superseded wording is recorded
+in `docs/audit/M26C_DOC_DRIFT_LEDGER.md`.
 
 The original QEMU and Pi 4 closure remains accepted. QEMU closure is anchored
 by `out/test-plan/m26c-qemu` and Stage 05 due-diligence root
@@ -7320,7 +7392,7 @@ Checks:
   - Every directly linked canonical document has one stated purpose, an explicit as-built or planning boundary, retained 2026 Lukas Bower metadata, and useful cross-references instead of copied contracts.
   - Every transitive onboarding, contribution, security, and toolchain guide reached from the suite is current, secret-safe, reproducible, and consistent with the charter.
   - Durable public namespace, record, derivation, evidence-pack, driver-profile, and simulation contracts remain documented even when generated mirrors and historical debug prose are removed.
-  - Every Cohesix-specific term used by the README documentation map is defined for a newcomer or points to a more specific canonical definition; collision-prone terms such as LoRA/LoRa, NineDoor/NineDoorBridge, host/target, mock/QEMU/hardware, and source/resolved manifest are explicitly distinguished.
+  - Every Cohesix-specific term used by the README documentation map is defined for a newcomer or points to a more specific canonical definition; collision-prone terms such as LoRA prose versus lowercase `lora` identifiers, NineDoor/NineDoorBridge, host/target, mock/QEMU/hardware, and source/resolved manifest are explicitly distinguished.
   - Selected-profile manifests, resolved output, generated snippets, current source/tests, and target-qualified evidence remain authoritative; generated snippets are linked or reproduced only through their generator and are not hand-edited.
   - Current QEMU evidence, accepted historical Pi 4 evidence, current-image Pi 4 revalidation, Wi-Fi research status, host-only integrations, and future milestones are never presented as interchangeable proof.
   - All local links and referenced anchors resolve, code fences are balanced, Markdown is structurally consistent, and every active Mermaid block passes the GitHub compatibility checker plus an available CLI render pass.
@@ -7907,20 +7979,22 @@ Deliverables: documented and verified domain-schedule posture for Cohesix seL4 1
 Title/ID: m26d-repository-gate-closure
 Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / repository-wide regression gate closure
 Goal: Restore every mandatory repository-wide source, dependency, packaging, and staged-regression gate exposed while preparing the refreshed QEMU and Pi 4 evidence, without changing operator-visible semantics or hardware authority.
-Inputs: Cargo.toml, Cargo.lock, deny.toml, apps/root-task/src, scripts/cohesix-build-run.sh, scripts/ci/test_plan_*.sh, scripts/ci/due_diligence_gate.sh, .github/workflows/*.yml, README.md, docs/TEST_PLAN.md, docs/audit risk registers, current M26b/M26d source and build evidence.
+Inputs: Cargo.toml, Cargo.lock, deny.toml, apps/root-task/build.rs, apps/root-task/build_support.rs, apps/root-task/src, scripts/cohesix-build-run.sh, scripts/ci/test_plan_*.sh, scripts/ci/due_diligence_gate.sh, .github/workflows/*.yml, README.md, docs/TEST_PLAN.md, docs/audit risk registers, current M26b/M26d source and build evidence.
 Changes:
   - Cargo.toml + Cargo.lock + CI — update vulnerable or yanked transitive dependency selections to supported compatible versions without widening VM dependency closure, track the lockfile, and reject stale resolution before build/test commands.
-  - apps/root-task/src — correct deterministic test-contract drift and strict lint failures exposed by the canonical Pi 4 Stage 02 feature set.
+  - apps/root-task/build.rs + apps/root-task/build_support.rs + apps/root-task/src — correct fresh-checkout generated-artifact validation, deterministic test-contract drift, and strict lint failures exposed by the canonical Pi 4 Stage 02 feature set.
   - scripts/cohesix-build-run.sh and focused tests/docs — keep the QEMU rootfs below the 4 MiB guard while preserving all manifest-declared runtime artifact names, bytes, and isolated-runtime lookup semantics.
   - scripts/ci, tools/rust-risk-audit, README.md, and canonical docs — make Python selection exact and recoverable, count cfg-test Rust separately from production risk, record the real linked-runtime unsafe delta, and align as-built packaging explanations with the canonical QEMU path.
   - .github/workflows/*.yml — audit every trigger and job, consolidate required pull-request, main-branch, manual, and scheduled checks into the smallest auditable workflow set, retire stubs and jobs that invoke removed tooling, preserve mandatory Rust, generated-artifact, staged-plan, VM-boundary, and dependency gates, and use least-privilege permissions with deterministic toolchain/action pins and retained failure evidence.
 Commands:
+  - go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
   - cargo metadata --locked --no-deps
   - cargo fmt --all -- --check
   - cargo clippy --workspace --all-targets -- -D warnings
   - cargo check --workspace
   - cargo test --workspace -- --test-threads=1
   - cargo test -p rust-risk-audit
+  - cargo run --quiet --locked -p rust-risk-audit -- --baseline docs/audit/rust_risk_baseline.toml
   - cargo audit
   - cargo deny check advisories
   - scripts/check-generated.sh
@@ -9494,7 +9568,7 @@ Define and prove the production coexistence contract:
 Implementation requirements:
 - Extend `coh-rtc` with `providers.*` IR for:
   - provider id, version, enablement profile, action names, target selectors, dry-run/live mode, idempotency requirements, writer-epoch requirements, policy approval requirements, receipt schema, redaction rules, and evidence refs.
-  - initial families: `systemd`, `docker`, `k8s`, `nvidia`, `gpu.lease`, `peft`, `model_registry`, `siem`, `prometheus`, `otel`, `modbus`, `dnp3`, `lora`, `can`, `iec104`, `dicom`, and `ccsds`.
+  - initial families: `systemd`, `docker`, `k8s`, `nvidia`, `gpu.lease`, `peft`, `model_registry`, `siem`, `prometheus`, `otel`, `modbus`, `dnp3`, `can`, `iec104`, `dicom`, and `ccsds`.
   - optional future families may be reserved but must generate unavailable status until an implementation and tests exist.
 - Generate or check the registry for:
   - `host-ticket-agent` validators/executors,
@@ -9526,7 +9600,7 @@ Implementation requirements:
   - PEFT/model registry import/activate/rollback receipts,
   - SIEM export,
   - Prometheus/OpenTelemetry read-only export,
-  - MODBUS/DNP3/LoRa read-only sidecar parity from Milestone 18,
+  - MODBUS/DNP3 read-only sidecar parity from Milestone 18,
   - CAN/IEC-104/DICOM/CCSDS explicitly staged as read-only or not-enabled until their bridge contracts land.
 - Unsupported providers must produce deterministic `not_enabled` or `not_implemented` diagnostics; silent omission is not acceptable for documented use cases.
 
@@ -9576,7 +9650,7 @@ Implementation requirements:
 **Purpose:** Keep industrial/health/science integrations as host-side bridges with explicit safety posture.
 
 Implementation requirements:
-- MODBUS, DNP3, LoRa, CAN, IEC-104, DICOM, and CCSDS adapters are host-side sidecars only.
+- MODBUS, DNP3, CAN, IEC-104, DICOM, and CCSDS adapters are host-side sidecars only.
 - Read-only inventory/status/event capture must land before write/control actions.
 - Any write-capable action requires a separate provider action, explicit policy approval, target grammar, safety interlock description, dry-run fixture, live-safe refusal case, and evidence-pack reconstruction.
 - DICOM and other sensitive-domain adapters must default to metadata and evidence refs only; raw PHI or large payload publication is disabled unless a later profile explicitly approves the redaction and retention model.
@@ -9718,7 +9792,7 @@ Title/ID: m28b1-industry-sidecar-contracts
 Goal: Stage OT, healthcare, and science sidecars as host-only, read-only-first provider families.
 Inputs: apps/host-sidecar-bridge, tools/coh-rtc, docs/USE_CASES.md, docs/SECURITY.md.
 Changes:
-  - apps/host-sidecar-bridge/src/providers/ — read-only contracts for MODBUS, DNP3, LoRa, CAN, IEC-104, DICOM metadata, and CCSDS telemetry.
+  - apps/host-sidecar-bridge/src/providers/ — read-only contracts for MODBUS, DNP3, CAN, IEC-104, DICOM metadata, and CCSDS telemetry.
   - tools/coh-rtc/src/ir.rs — provider gating and write-action refusal defaults for safety-critical sidecars.
   - docs/SECURITY.md + docs/INTERFACES.md — read-only-first and sensitive-data redaction posture.
 Commands: cargo test -p host-sidecar-bridge && cargo test -p coh-rtc

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide host-side field bus sidecar primitives with bounded spooling.
 // Author: Lukas Bower
@@ -6,7 +6,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-//! Host-side sidecar framework for MODBUS, DNP3, and LoRa adapters.
+//! Host-side sidecar framework for MODBUS and DNP3 adapters.
 //!
 //! The core primitives remain `no_std + alloc` friendly so VM builds stay
 //! lean. Async runtimes and protocol stacks live behind feature gates.
@@ -272,101 +272,6 @@ pub type ModbusAdapter = BusAdapter;
 #[cfg(feature = "dnp3")]
 /// DNP3 adapter alias for the shared bus adapter implementation.
 pub type Dnp3Adapter = BusAdapter;
-
-#[cfg(feature = "lora")]
-/// LoRa sidecar configuration payload.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoraConfig {
-    /// Adapter identifier.
-    pub id: String,
-    /// Mount label under `/lora`.
-    pub mount: String,
-    /// Capability scope required for the adapter.
-    pub scope: String,
-    /// Region identifier (e.g., us915).
-    pub region: String,
-    /// Maximum payload size accepted by the bridge.
-    pub max_payload_bytes: usize,
-    /// Offline spool bounds.
-    pub spool: SpoolConfig,
-}
-
-#[cfg(feature = "lora")]
-impl LoraConfig {
-    /// Create a LoRa configuration payload.
-    pub fn new(
-        id: impl Into<String>,
-        mount: impl Into<String>,
-        scope: impl Into<String>,
-        region: impl Into<String>,
-        max_payload_bytes: usize,
-        spool: SpoolConfig,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            mount: mount.into(),
-            scope: scope.into(),
-            region: region.into(),
-            max_payload_bytes,
-            spool,
-        }
-    }
-}
-
-#[cfg(feature = "lora")]
-/// LoRa sidecar bridge with bounded offline spooling.
-#[derive(Debug, Clone)]
-pub struct LoraBridge {
-    config: LoraConfig,
-    spool: OfflineSpool,
-    state: LinkState,
-}
-
-#[cfg(feature = "lora")]
-impl LoraBridge {
-    /// Construct a LoRa bridge in offline mode.
-    pub fn new(config: LoraConfig) -> Self {
-        let spool = OfflineSpool::new(config.spool);
-        Self {
-            config,
-            spool,
-            state: LinkState::Offline,
-        }
-    }
-
-    /// Return the bridge configuration.
-    #[must_use]
-    pub fn config(&self) -> &LoraConfig {
-        &self.config
-    }
-
-    /// Update the link state.
-    pub fn set_state(&mut self, state: LinkState) {
-        self.state = state;
-    }
-
-    /// Enqueue a payload; rejects oversize payloads deterministically.
-    pub fn enqueue(&mut self, payload: &[u8]) -> Result<SpoolResult, SpoolError> {
-        if payload.len() > self.config.max_payload_bytes {
-            return Err(SpoolError::Oversize {
-                requested: payload.len(),
-                max_bytes: self.config.max_payload_bytes,
-            });
-        }
-        match self.state {
-            LinkState::Online => Ok(SpoolResult::Delivered),
-            LinkState::Offline => {
-                let frame = self.spool.push(payload)?;
-                Ok(SpoolResult::Queued { seq: frame.seq })
-            }
-        }
-    }
-
-    /// Drain buffered frames in deterministic order.
-    pub fn drain_spool(&mut self) -> Vec<SpoolFrame> {
-        self.spool.drain()
-    }
-}
 
 #[cfg(feature = "tokio")]
 /// Tokio runtime helpers for async sidecar loops.

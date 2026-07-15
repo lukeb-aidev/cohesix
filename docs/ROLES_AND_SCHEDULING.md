@@ -34,7 +34,7 @@ The checked-in default and Pi 4 profiles currently declare the following:
 | WorkerHeartbeat | Implemented | Implemented | Own telemetry and the minimal worker observability view. |
 | WorkerGpu | Implemented | Implemented | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
 | WorkerBus | Recognized | **Not implemented** | Host/sidecar policy can describe a bus scope, but the selected target profiles must reject it as target-worker authority. |
-| WorkerLora | Implemented | Implemented | Worker view plus its generated LoRa lease scope. |
+| WorkerLora | Implemented | Implemented | Own Worker view plus bounded AI LoRA lifecycle receipts delivered through generated Worker endpoint badges. It has no separate root namespace or file-backed LoRA lease. |
 
 `worker-bus` must not be presented as an active target role until a selected
 manifest sets `implemented = true` and the required code, tests, and milestone
@@ -50,8 +50,9 @@ filesystems.
   nodes permitted by its ticket and lifecycle state.
 - A heartbeat worker can see its own telemetry path and the bounded boot,
   lifecycle, and log information allowed by the server policy.
-- GPU, bus, and LoRa roles add only the resource scope encoded for that role;
-  they do not inherit all Queen paths.
+- GPU and bus roles add only the resource scope encoded for that role. LoRA
+  remains within its own Worker view and generated receipt endpoints. None of
+  these roles inherits Queen paths.
 - Host-only providers remain host-only even when their paths appear in a role
   policy.
 
@@ -84,8 +85,10 @@ uses `/worker/<id>/telemetry`, not `/shard/00/...`. This vector is suitable for
 checking clients that construct canonical paths locally; clients must still
 discover the active profile instead of assuming eight shard bits.
 
-A ticket scope such as `/worker`, `/gpu`, or `/lora` is an authority prefix; it
+A ticket scope such as `/worker`, `/gpu`, or `/bus` is an authority prefix; it
 does not replace the canonical telemetry path template generated for the role.
+WorkerLora uses `/worker` because it is an AI worker role, not a device or
+radio authority.
 
 ## Capability tickets
 

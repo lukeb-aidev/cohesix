@@ -6,6 +6,20 @@
 
 use std::fs;
 use std::path::{Component, Path};
+use std::time::SystemTime;
+
+/// Return whether a generated artifact is stale after the source manifest was
+/// changed in the current checkout.
+///
+/// Fresh checkouts do not preserve commit-time ordering between tracked files,
+/// so timestamps are meaningful only when Git reports a local manifest change.
+pub fn generated_artifact_is_stale(
+    manifest_has_tracked_changes: bool,
+    manifest_mtime: SystemTime,
+    artifact_mtime: SystemTime,
+) -> bool {
+    manifest_has_tracked_changes && artifact_mtime < manifest_mtime
+}
 
 /// Classification of seL4 linker scripts discovered in the SDK tree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,5 +268,32 @@ mod tests {
             parse_timer_clock_hz("#define TIMER_CLOCK_HZ 62500000\n"),
             Some(62_500_000)
         );
+    }
+
+    #[test]
+    fn clean_checkout_ignores_artifact_write_order() {
+        assert!(!generated_artifact_is_stale(
+            false,
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(2),
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1),
+        ));
+    }
+
+    #[test]
+    fn changed_manifest_rejects_older_artifact() {
+        assert!(generated_artifact_is_stale(
+            true,
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(2),
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1),
+        ));
+    }
+
+    #[test]
+    fn changed_manifest_accepts_regenerated_artifact() {
+        assert!(!generated_artifact_is_stale(
+            true,
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1),
+            SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(2),
+        ));
     }
 }

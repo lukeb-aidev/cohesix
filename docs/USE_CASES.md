@@ -34,7 +34,7 @@ Examples here are therefore conditional on the selected profile.
 | --- | --- |
 | Operator control | Authenticated console grammar projected by `cohsh`, `coh`, the REST gateway, and other host tools. There is no independent in-VM 9P/TCP listener. |
 | Authority | Role-scoped tickets, manifest-defined namespaces, bounded file operations, and explicit policy gates. |
-| Orchestration | Queen control files plus profile-declared worker roles and telemetry paths. The default profile implements heartbeat, GPU, and LoRa radio roles; it declares `worker-bus` with `implemented=false`. Another profile may differ. |
+| Orchestration | Queen control files plus profile-declared worker roles and telemetry paths. The default profile implements heartbeat, GPU, and AI LoRA lifecycle-receipt roles; it declares `worker-bus` with `implemented=false`. Another profile may differ. |
 | Observability | Bounded `/proc`, `/log`, worker telemetry, driver counters, and host-projected status. Retention and durability depend on the selected profile and host integration. |
 | Host integration | REST, Python, GPU inventory, model-registry descriptors, and host-side adapters project existing Cohesix semantics; they do not create new VM authority. |
 | Heavy runtimes | CUDA, NVML, Kubernetes, systemd, Docker, model training, field protocols, and application data planes remain outside the VM trusted computing base. |
@@ -179,9 +179,8 @@ A private training pool can export a bounded job package, train an adapter on
 the host, import size-checked and hashed adapter metadata into a host registry,
 and request activation through the Queen. The Worker LoRA VM loop records
 control receipts; it never performs training. The selected profile must declare
-the role and generated authority. Do not confuse this low-rank-adaptation flow
-with the separately gated LoRa radio sidecar namespace, which has different
-records and deployment responsibilities.
+the role and generated authority. Lowercase `lora` in paths, files, and source
+identifiers is the ASCII form of this same low-rank-adaptation lifecycle.
 
 Model training, data governance, evaluation, artifact scanning, and runtime
 reload remain host-side acceptance responsibilities. Use the generated PEFT

@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Regression manifest enabling host/policy/audit/replay surfaces."
 
 [root_task]
-schema = "1.5"
+schema = "1.6"
 
 [profile]
 name = "virt-aarch64"
@@ -80,9 +80,9 @@ shutdown_policy = "deferred"
 [[worker_runtime.roles]]
 role = "worker-lora"
 implemented = true
-ticket_scope = "/lora"
+ticket_scope = "/worker"
 telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
-lease_path_template = "/lora/<scope>/lease"
+lease_path_template = ""
 shutdown_policy = "notification"
 
 [worker_runtime.endpoint_caps]
@@ -327,20 +327,6 @@ spool = { max_entries = 8, max_bytes = 512 }
 [sidecars.dnp3]
 enable = false
 mount_at = "/bus"
-
-[sidecars.lora]
-enable = true
-mount_at = "/lora"
-
-[[sidecars.lora.adapters]]
-id = "lora-main"
-mount = "lora-main"
-scope = "lora-main"
-region = "us915"
-duty_cycle_percent = 1
-window_ms = 1000
-max_payload_bytes = 64
-tamper_log_max_entries = 8
 
 [ecosystem.host]
 enable = true

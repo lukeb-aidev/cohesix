@@ -332,18 +332,17 @@ training handoff below `/queen/export/lora_jobs/<job_id>/`:
 
 The host publisher chooses `<job_id>`; clients do not append to these files.
 The target adapter currently exposes the gated export root and its control
-file, but it does not populate job directories or accept a job upload. LoRA
-here means a low-rank model adapter and is unrelated to the LoRa radio sidecar
-namespace described below. The host `coh peft export` flow may copy an installed
-handoff to external training infrastructure, but the target does not train or
-import a model by exposing the directory.
+file, but it does not populate job directories or accept a job upload. The host
+`coh peft export` flow may copy an installed handoff to external training
+infrastructure, but the target does not train or import a model by exposing the
+directory.
 
 ## Manifest-gated namespace families
 
 | Family | Representative paths | Ownership |
 | --- | --- | --- |
 | GPU bridge and nodes | `/gpu/bridge/*`, `/gpu/<id>/*`, `/gpu/models/*`, `/gpu/telemetry/schema.json` | Host bridge owns GPU hardware and publication; target consumes only bounded files. See [GPU_NODES.md](GPU_NODES.md). |
-| Sidecar buses | `/bus/<adapter>/*`, `/lora/<adapter>/*` | Host sidecar providers; adapter labels and gates are generated. Exact nodes are catalogued below. |
+| Sidecar buses | `/bus/<adapter>/*` | Host sidecar providers; adapter labels and gates are generated. Exact nodes are catalogued below. |
 | Host services | `/host/systemd/*`, `/host/k8s/*`, `/host/docker/*`, `/host/nvidia/*`, `/host/tickets/*` | Target and host adapters expose selected bounded projections; host agents execute actions and federation. This document owns the schemas; [HOST_TOOLS.md](HOST_TOOLS.md) owns tool operation. |
 | Content-addressed updates | `/updates/<epoch>/*`, `/models/<sha256>/*` | CAS provider, gated by generated policy. |
 | Policy and actions | `/policy/*`, `/actions/*` | Generated rules plus bounded policy/action queues. |
@@ -367,12 +366,12 @@ The bridge validates decoded size and SHA-256 before publishing nodes.
 Lease and status breadcrumb formats are generated in
 [gpu_breadcrumbs.md](snippets/gpu_breadcrumbs.md).
 
-## Sidecar bus and LoRa radio providers
+## Sidecar bus providers
 
-Sidecar mounts exist only when the selected `sidecars.*` gate is enabled. The
-compiler resolves adapter labels, including collision handling; clients must
-discover those labels rather than derive them. MODBUS and DNP3 adapters share
-the `/bus/<adapter>` file contract:
+Sidecar mounts exist only when the selected MODBUS or DNP3 `sidecars.*` gate is
+enabled. The compiler resolves adapter labels, including collision handling;
+clients must discover those labels rather than derive them. Both provider types
+share the `/bus/<adapter>` file contract:
 
 | Path | Mode | Contract |
 | --- | --- | --- |
@@ -382,17 +381,13 @@ the `/bus/<adapter>` file contract:
 | `replay` | Control | A write requests a bounded spool drain and records `replay entries=<n> bytes=<n>`. |
 | `spool` | Read-only | Aggregate entry/byte bounds followed by retained frame summaries. |
 
-LoRa radio adapters use `/lora/<adapter>`:
-
-| Path | Mode | Contract |
-| --- | --- | --- |
-| `ctl` | Control | Bounded transmit attempt subject to the generated duty-cycle and payload limits. |
-| `telemetry` | Read-only | Mirror of accepted payloads. |
-| `tamper` | Read-only | Bounded `payload-oversize` and `duty-cycle` refusal records. |
-
 Adapter-scoped role/ticket checks precede every side effect. A denial is not a
-successful transmit or replay and is recorded through the existing Queen log
-or audit surface; these providers do not create a second RPC protocol.
+successful control operation or replay and is recorded through the existing
+Queen log or audit surface; these providers do not create a second RPC
+protocol. AI LoRA lifecycle interfaces are the
+[Queen LoRA export](#queen-lora-export) above and the host-side PEFT workflows
+owned by [GPU_NODES.md](GPU_NODES.md); lowercase `lora` identifiers denote that
+AI lifecycle, not a sidecar bus family.
 
 ## UI provider projections
 

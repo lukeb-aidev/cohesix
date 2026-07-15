@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Core NineDoor Secure9P server state machine and namespace plumbing.
 // Author: Lukas Bower
@@ -984,7 +984,7 @@ impl ServerCore {
         match role {
             Role::Queen => {
                 let budget = budget_override.unwrap_or_else(BudgetSpec::unbounded);
-                state.configure_role(role, identity, None, None, None, budget, now);
+                state.configure_role(role, identity, None, None, budget, now);
             }
             Role::WorkerHeartbeat => {
                 let worker_id = identity.clone().ok_or_else(|| {
@@ -1004,7 +1004,7 @@ impl ServerCore {
                         let budget = budget_override
                             .map(|override_budget| clamp_budget(record.budget(), override_budget))
                             .unwrap_or_else(|| record.budget());
-                        state.configure_role(role, Some(worker_id), None, None, None, budget, now);
+                        state.configure_role(role, Some(worker_id), None, None, budget, now);
                     }
                     WorkerKind::Gpu(_) => {
                         return Err(NineDoorError::protocol(
@@ -1037,7 +1037,6 @@ impl ServerCore {
                             Some(worker_id),
                             Some(gpu.lease.gpu_id.clone()),
                             None,
-                            None,
                             budget,
                             now,
                         );
@@ -1064,23 +1063,17 @@ impl ServerCore {
                     ));
                 }
                 let budget = budget_override.unwrap_or_else(BudgetSpec::default_heartbeat);
-                state.configure_role(role, None, None, Some(scope), None, budget, now);
+                state.configure_role(role, None, None, Some(scope), budget, now);
             }
             Role::WorkerLora => {
-                let scope = identity.clone().ok_or_else(|| {
+                let worker_id = identity.clone().ok_or_else(|| {
                     NineDoorError::protocol(
                         ErrorCode::Invalid,
                         "worker-lora attach requires identity",
                     )
                 })?;
-                if !self.control.lora_scope_exists(&scope) {
-                    return Err(NineDoorError::protocol(
-                        ErrorCode::NotFound,
-                        format!("lora scope {scope} not found"),
-                    ));
-                }
                 let budget = budget_override.unwrap_or_else(BudgetSpec::default_heartbeat);
-                state.configure_role(role, None, None, None, Some(scope), budget, now);
+                state.configure_role(role, Some(worker_id), None, None, budget, now);
             }
         }
         state.set_ticket(ticket_payload);
@@ -1113,12 +1106,9 @@ impl ServerCore {
         let gpu_scope = gpu_scope_owned.as_deref();
         let bus_scope_owned = state.bus_scope().map(|scope| scope.to_owned());
         let bus_scope = bus_scope_owned.as_deref();
-        let lora_scope_owned = state.lora_scope().map(|scope| scope.to_owned());
-        let lora_scope = lora_scope_owned.as_deref();
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
         let sidecar_bus_scopes = self.control.sidecar_bus_scopes().to_vec();
-        let sidecar_lora_scopes = self.control.sidecar_lora_scopes().to_vec();
         if wnames.is_empty() {
             if newfid == fid {
                 if state
@@ -1159,13 +1149,11 @@ impl ServerCore {
             worker_id,
             gpu_scope,
             bus_scope,
-            lora_scope,
             host_mount,
             &sidecar_bus_scopes,
-            &sidecar_lora_scopes,
             &full_resolved,
         ) {
-            self.maybe_log_sidecar_denial(&full_resolved, bus_scope, lora_scope, &err)?;
+            self.maybe_log_sidecar_denial(&full_resolved, bus_scope, &err)?;
             return Err(err);
         }
         if let Some(info) = self.control.namespace().ui_provider_info(&full_resolved) {
@@ -1194,13 +1182,11 @@ impl ServerCore {
                 worker_id,
                 gpu_scope,
                 bus_scope,
-                lora_scope,
                 host_mount,
                 &sidecar_bus_scopes,
-                &sidecar_lora_scopes,
                 &resolved,
             ) {
-                self.maybe_log_sidecar_denial(&resolved, bus_scope, lora_scope, &err)?;
+                self.maybe_log_sidecar_denial(&resolved, bus_scope, &err)?;
                 return Err(err);
             }
             if let Some(info) = self.control.namespace().ui_provider_info(&resolved) {
@@ -1258,12 +1244,9 @@ impl ServerCore {
         let gpu_scope = gpu_scope_owned.as_deref();
         let bus_scope_owned = state.bus_scope().map(|scope| scope.to_owned());
         let bus_scope = bus_scope_owned.as_deref();
-        let lora_scope_owned = state.lora_scope().map(|scope| scope.to_owned());
-        let lora_scope = lora_scope_owned.as_deref();
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
         let sidecar_bus_scopes = self.control.sidecar_bus_scopes().to_vec();
-        let sidecar_lora_scopes = self.control.sidecar_lora_scopes().to_vec();
         let ticket = state.ticket().map(str::to_owned);
         let iounit = state.negotiated_msize();
         let entry = state.fid(fid).ok_or_else(|| {
@@ -1312,14 +1295,12 @@ impl ServerCore {
             worker_id,
             gpu_scope,
             bus_scope,
-            lora_scope,
             host_mount,
             &sidecar_bus_scopes,
-            &sidecar_lora_scopes,
             &entry.canonical_path,
             mode,
         ) {
-            self.maybe_log_sidecar_denial(&entry.canonical_path, bus_scope, lora_scope, &err)?;
+            self.maybe_log_sidecar_denial(&entry.canonical_path, bus_scope, &err)?;
             return Err(err);
         }
         if mode.allows_read() {
@@ -1425,12 +1406,9 @@ impl ServerCore {
         let gpu_scope = gpu_scope_owned.as_deref();
         let bus_scope_owned = state.bus_scope().map(|scope| scope.to_owned());
         let bus_scope = bus_scope_owned.as_deref();
-        let lora_scope_owned = state.lora_scope().map(|scope| scope.to_owned());
-        let lora_scope = lora_scope_owned.as_deref();
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
         let sidecar_bus_scopes = self.control.sidecar_bus_scopes().to_vec();
-        let sidecar_lora_scopes = self.control.sidecar_lora_scopes().to_vec();
         let shards = *self.control.namespace().shard_layout();
         if let Err(err) = AccessPolicy::ensure_read(
             &shards,
@@ -1438,13 +1416,11 @@ impl ServerCore {
             state.worker_id(),
             gpu_scope,
             bus_scope,
-            lora_scope,
             host_mount,
             &sidecar_bus_scopes,
-            &sidecar_lora_scopes,
             &path,
         ) {
-            self.maybe_log_sidecar_denial(&path, bus_scope, lora_scope, &err)?;
+            self.maybe_log_sidecar_denial(&path, bus_scope, &err)?;
             return Err(err);
         }
         self.enforce_ticket_scope(state, &path, TicketVerb::Read, false, true)?;
@@ -1483,12 +1459,9 @@ impl ServerCore {
         let gpu_scope = gpu_scope_owned.as_deref();
         let bus_scope_owned = state.bus_scope().map(|scope| scope.to_owned());
         let bus_scope = bus_scope_owned.as_deref();
-        let lora_scope_owned = state.lora_scope().map(|scope| scope.to_owned());
-        let lora_scope = lora_scope_owned.as_deref();
         let host_mount_owned = self.control.host_mount_path().map(|path| path.to_vec());
         let host_mount = host_mount_owned.as_deref();
         let sidecar_bus_scopes = self.control.sidecar_bus_scopes().to_vec();
-        let sidecar_lora_scopes = self.control.sidecar_lora_scopes().to_vec();
         let ticket = state.ticket().map(str::to_owned);
         let path = {
             let entry = state.fid(fid).ok_or_else(|| {
@@ -1587,13 +1560,11 @@ impl ServerCore {
             worker_id,
             gpu_scope,
             bus_scope,
-            lora_scope,
             host_mount,
             &sidecar_bus_scopes,
-            &sidecar_lora_scopes,
             &path,
         ) {
-            self.maybe_log_sidecar_denial(&path, bus_scope, lora_scope, &err)?;
+            self.maybe_log_sidecar_denial(&path, bus_scope, &err)?;
             return Err(err);
         }
         self.enforce_ticket_write_limits(state, &path, requested_bytes)?;
@@ -1778,10 +1749,8 @@ impl ServerCore {
                             worker_id,
                             gpu_scope,
                             bus_scope,
-                            lora_scope,
                             host_mount,
                             &sidecar_bus_scopes,
-                            &sidecar_lora_scopes,
                             target,
                             mount,
                         )?;
@@ -1918,7 +1887,6 @@ impl ServerCore {
         &mut self,
         path: &[String],
         bus_scope: Option<&str>,
-        lora_scope: Option<&str>,
         err: &NineDoorError,
     ) -> Result<(), NineDoorError> {
         let NineDoorError::Protocol { code, .. } = err else {
@@ -1932,7 +1900,6 @@ impl ServerCore {
         };
         let scope = match kind {
             SidecarKind::Bus => bus_scope,
-            SidecarKind::Lora => lora_scope,
         }
         .unwrap_or("none");
         let message = format!("sidecar-deny kind={} scope={}", kind.as_str(), scope);
@@ -2353,16 +2320,8 @@ impl ControlPlane {
         self.namespace.sidecar_bus_scopes()
     }
 
-    fn sidecar_lora_scopes(&self) -> &[SidecarScope] {
-        self.namespace.sidecar_lora_scopes()
-    }
-
     fn bus_scope_exists(&self, scope: &str) -> bool {
         self.namespace.bus_scope_exists(scope)
-    }
-
-    fn lora_scope_exists(&self, scope: &str) -> bool {
-        self.namespace.lora_scope_exists(scope)
     }
 
     fn policy_enabled(&self) -> bool {
@@ -3831,7 +3790,6 @@ struct SessionState {
     worker_id: Option<String>,
     gpu_scope: Option<String>,
     bus_scope: Option<String>,
-    lora_scope: Option<String>,
     ticket: Option<String>,
     budget: BudgetState,
     mounts: MountTable,
@@ -3852,7 +3810,6 @@ impl SessionState {
             worker_id: None,
             gpu_scope: None,
             bus_scope: None,
-            lora_scope: None,
             ticket: None,
             budget: BudgetState::new(BudgetSpec::unbounded(), now),
             mounts: MountTable::default(),
@@ -3928,14 +3885,12 @@ impl SessionState {
         self.fids.remove(fid)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn configure_role(
         &mut self,
         role: Role,
         identity: Option<String>,
         gpu_scope: Option<String>,
         bus_scope: Option<String>,
-        lora_scope: Option<String>,
         budget: BudgetSpec,
         now: Instant,
     ) {
@@ -3943,7 +3898,6 @@ impl SessionState {
         self.worker_id = identity;
         self.gpu_scope = gpu_scope;
         self.bus_scope = bus_scope;
-        self.lora_scope = lora_scope;
         self.budget = BudgetState::new(budget, now);
     }
 
@@ -3965,10 +3919,6 @@ impl SessionState {
 
     fn bus_scope(&self) -> Option<&str> {
         self.bus_scope.as_deref()
-    }
-
-    fn lora_scope(&self) -> Option<&str> {
-        self.lora_scope.as_deref()
     }
 
     fn ticket(&self) -> Option<&str> {
@@ -4023,10 +3973,8 @@ impl SessionState {
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
         bus_scope: Option<&str>,
-        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
         sidecar_bus_scopes: &[SidecarScope],
-        sidecar_lora_scopes: &[SidecarScope],
         target: &[String],
         mount: &[String],
     ) -> Result<(), NineDoorError> {
@@ -4036,10 +3984,8 @@ impl SessionState {
             worker_id,
             gpu_scope,
             bus_scope,
-            lora_scope,
             host_mount,
             sidecar_bus_scopes,
-            sidecar_lora_scopes,
             target,
         )?;
         self.mounts.bind(target.to_vec(), mount.to_vec())
@@ -4187,10 +4133,8 @@ impl AccessPolicy {
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
         bus_scope: Option<&str>,
-        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
         sidecar_bus_scopes: &[SidecarScope],
-        sidecar_lora_scopes: &[SidecarScope],
         path: &[String],
         mode: OpenMode,
     ) -> Result<(), NineDoorError> {
@@ -4200,10 +4144,8 @@ impl AccessPolicy {
             worker_id,
             gpu_scope,
             bus_scope,
-            lora_scope,
             host_mount,
             sidecar_bus_scopes,
-            sidecar_lora_scopes,
             path,
         )?;
         if mode.allows_write() {
@@ -4213,10 +4155,8 @@ impl AccessPolicy {
                 worker_id,
                 gpu_scope,
                 bus_scope,
-                lora_scope,
                 host_mount,
                 sidecar_bus_scopes,
-                sidecar_lora_scopes,
                 path,
             )?;
         }
@@ -4227,10 +4167,8 @@ impl AccessPolicy {
                 worker_id,
                 gpu_scope,
                 bus_scope,
-                lora_scope,
                 host_mount,
                 sidecar_bus_scopes,
-                sidecar_lora_scopes,
                 path,
             )?;
         }
@@ -4244,10 +4182,8 @@ impl AccessPolicy {
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
         bus_scope: Option<&str>,
-        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
         sidecar_bus_scopes: &[SidecarScope],
-        sidecar_lora_scopes: &[SidecarScope],
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
@@ -4283,8 +4219,7 @@ impl AccessPolicy {
             }
             Some(Role::WorkerLora) => {
                 if host_allowed_path(host_mount, path)
-                    || worker_common_path(path)
-                    || sidecar_allowed_path(sidecar_lora_scopes, lora_scope, path)
+                    || worker_allowed_path(shards, worker_id, path)
                 {
                     Ok(())
                 } else {
@@ -4305,10 +4240,8 @@ impl AccessPolicy {
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
         bus_scope: Option<&str>,
-        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
         sidecar_bus_scopes: &[SidecarScope],
-        sidecar_lora_scopes: &[SidecarScope],
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
@@ -4345,7 +4278,7 @@ impl AccessPolicy {
             Some(Role::WorkerLora) => {
                 if host_allowed_path(host_mount, path) {
                     Err(Self::permission_denied(path))
-                } else if sidecar_allowed_path(sidecar_lora_scopes, lora_scope, path) {
+                } else if worker_allowed_write(shards, worker_id, path) {
                     Ok(())
                 } else {
                     Err(Self::permission_denied(path))
@@ -4365,10 +4298,8 @@ impl AccessPolicy {
         worker_id: Option<&str>,
         gpu_scope: Option<&str>,
         bus_scope: Option<&str>,
-        lora_scope: Option<&str>,
         host_mount: Option<&[String]>,
         sidecar_bus_scopes: &[SidecarScope],
-        sidecar_lora_scopes: &[SidecarScope],
         path: &[String],
     ) -> Result<(), NineDoorError> {
         match role {
@@ -4404,8 +4335,7 @@ impl AccessPolicy {
             }
             Some(Role::WorkerLora) => {
                 if host_allowed_prefix(host_mount, path)
-                    || worker_common_prefix(path)
-                    || sidecar_allowed_prefix(sidecar_lora_scopes, lora_scope, path)
+                    || worker_allowed_prefix(shards, worker_id, path)
                 {
                     Ok(())
                 } else {
@@ -4975,6 +4905,63 @@ mod tests {
                 code: ErrorCode::Invalid,
                 ref message,
             } if message.contains("requires identity")
+        ));
+    }
+
+    #[test]
+    fn lora_worker_attach_uses_worker_namespace_without_sidecar_authority() {
+        let server = NineDoor::new();
+        server.register_ticket_secret(Role::WorkerLora, "lora-worker-secret");
+        let issuer = TicketIssuer::new("lora-worker-secret");
+        let claims = TicketClaims::new(
+            Role::WorkerLora,
+            BudgetSpec::default_heartbeat(),
+            Some("adapter-receipts-1".to_owned()),
+            MountSpec::empty(),
+            unix_time_ms(),
+        );
+        let token = issuer
+            .issue(claims)
+            .expect("issue LoRA worker ticket")
+            .encode()
+            .expect("encode LoRA worker ticket");
+        let mut worker = server.connect().expect("connect LoRA worker");
+        worker.version(MAX_MSIZE).expect("negotiate msize");
+        worker
+            .attach_with_identity(
+                1,
+                Role::WorkerLora,
+                Some("adapter-receipts-1"),
+                Some(token.as_str()),
+            )
+            .expect("attach receipt-only LoRA worker");
+
+        let queen_path = vec!["queen".to_owned(), "export".to_owned()];
+        let err = worker
+            .walk(1, 2, &queen_path)
+            .expect_err("LoRA worker must not gain Queen export authority");
+        assert!(matches!(
+            err,
+            NineDoorError::Protocol {
+                code: ErrorCode::Permission,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn ai_lora_receipts_do_not_publish_a_root_lora_namespace() {
+        let server = NineDoor::new();
+        let mut queen = attach_queen(&server);
+        let err = queen
+            .walk(1, 2, &["lora".to_owned()])
+            .expect_err("retired radio namespace must remain absent");
+        assert!(matches!(
+            err,
+            NineDoorError::Protocol {
+                code: ErrorCode::NotFound,
+                ..
+            }
         ));
     }
 

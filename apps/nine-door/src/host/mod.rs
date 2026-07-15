@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Public NineDoor Secure9P server interface and in-process transport helpers.
 // Author: Lukas Bower
@@ -48,7 +48,7 @@ pub use self::cas::CasConfig;
 use self::core::{role_to_uname, ServerCore};
 pub use self::namespace::{
     HostNamespaceConfig, HostProvider, HostTicketPolicy, ShardLayout, SidecarBusAdapterConfig,
-    SidecarBusConfig, SidecarLoraAdapterConfig, SidecarLoraConfig, SidecarNamespaceConfig,
+    SidecarBusConfig, SidecarNamespaceConfig,
 };
 pub use self::observe::{
     ObserveConfig, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig,

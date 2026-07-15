@@ -9,8 +9,3 @@ publish = false
 
 [dependencies]
 worker-heart = { path = "../worker-heart" }
-
-[target.'cfg(not(target_os = "none"))'.dependencies]
-anyhow = { workspace = true }
-cohesix-ticket = { workspace = true }
-secure9p-codec = { workspace = true }

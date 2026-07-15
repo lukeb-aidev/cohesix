@@ -17,12 +17,12 @@ use super::{
     PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig,
     ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig,
     Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig,
-    SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig,
-    StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema,
-    TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec,
-    UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig,
-    WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerRoleRuntime, WorkerRuntimeConfig,
-    WorkerSchedulingConfig, WorkerSchedulingProfile,
+    SidecarConfig, SidecarLink, SpoolConfig, StaticIpv4Config, TelemetryConfig,
+    TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig,
+    TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig,
+    UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig,
+    WorkerNotificationConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig,
+    WorkerSchedulingProfile,
 };
 use cohesix_ticket::{Role, TicketKey};
 
@@ -31,7 +31,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "3bc7df9c56393cd026ff7624cd203c02bb9dea9e2facf6683863fba26426a7d1";
+    "eaaa999db798a49da686c9c2ea37d3ec43827c83eb2a76cf61263d843e36f5d0";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -125,9 +125,9 @@ pub const WORKER_RUNTIME_ROLES: [WorkerRoleRuntime; 4] = [
     WorkerRoleRuntime {
         role: Role::WorkerLora,
         implemented: true,
-        ticket_scope: "/lora",
+        ticket_scope: "/worker",
         telemetry_path_template: "/shard/<label>/worker/<id>/telemetry",
-        lease_path_template: "/lora/<scope>/lease",
+        lease_path_template: "",
         shutdown_policy: "notification",
     },
 ];
@@ -698,8 +698,6 @@ pub const MODBUS_ADAPTERS: [SidecarBusAdapter; 0] = [];
 
 pub const DNP3_ADAPTERS: [SidecarBusAdapter; 0] = [];
 
-pub const LORA_ADAPTERS: [SidecarLoraAdapter; 0] = [];
-
 pub const SIDECAR_CONFIG: SidecarConfig = SidecarConfig {
     modbus: SidecarBusConfig {
         enable: false,
@@ -710,11 +708,6 @@ pub const SIDECAR_CONFIG: SidecarConfig = SidecarConfig {
         enable: false,
         mount_at: "/bus",
         adapters: &DNP3_ADAPTERS,
-    },
-    lora: SidecarLoraConfig {
-        enable: false,
-        mount_at: "/lora",
-        adapters: &LORA_ADAPTERS,
     },
 };
 
@@ -755,9 +748,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 42] = [
-    "manifest.schema=1.5",
+    "manifest.schema=1.6",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=726441bd837cd419d81451de3e13b84ac152a9090bb47a0a66b233fc8307f315",
+    "manifest.sha256=763ef148ed19f1250afdcc2e99611be1668369c6b7c375593af99e3420716f41",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

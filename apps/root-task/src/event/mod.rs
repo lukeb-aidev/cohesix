@@ -14433,7 +14433,7 @@ where
                 if self.ensure_worker_session(verb_label) {
                     let path_str = path.as_str();
                     let worker_restricted = matches!(self.session, Some(SessionRole::Worker))
-                        && !(path_str.starts_with("/bus/") || path_str.starts_with("/lora/"));
+                        && !path_str.starts_with("/bus/");
                     if worker_restricted {
                         self.metrics.denied_commands += 1;
                         self.audit.denied("echo denied");

@@ -1476,8 +1476,6 @@ impl DocFragments {
             &mut bus_used,
             &mut sidecar_md,
         );
-        let mut lora_used = sidecar_reserved_names();
-        render_sidecar_lora_section(&manifest.sidecars.lora, &mut lora_used, &mut sidecar_md);
 
         let mut ecosystem_md = String::new();
         writeln!(ecosystem_md, "### Ecosystem section (generated)").ok();
@@ -2706,35 +2704,6 @@ fn render_sidecar_bus_section(
     }
 }
 
-fn render_sidecar_lora_section(
-    config: &crate::ir::SidecarLoraConfig,
-    used: &mut std::collections::BTreeSet<String>,
-    output: &mut String,
-) {
-    writeln!(output, "- `sidecars.lora.enable`: `{}`", config.enable).ok();
-    writeln!(output, "- `sidecars.lora.mount_at`: `{}`", config.mount_at).ok();
-    if config.adapters.is_empty() {
-        writeln!(output, "- `sidecars.lora.adapters`: `(none)`").ok();
-    } else {
-        for adapter in &config.adapters {
-            let resolved = resolve_sidecar_mount("lora", &adapter.id, &adapter.mount, used);
-            writeln!(
-                output,
-                "- `sidecars.lora.adapters`: id=`{}` mount=`{}` scope=`{}` region=`{}` duty_cycle_percent=`{}` window_ms=`{}` max_payload_bytes=`{}` tamper_log_max_entries=`{}`",
-                adapter.id,
-                resolved,
-                adapter.scope,
-                adapter.region,
-                adapter.duty_cycle_percent,
-                adapter.window_ms,
-                adapter.max_payload_bytes,
-                adapter.tamper_log_max_entries
-            )
-            .ok();
-        }
-    }
-}
-
 fn format_sidecar_link(link: crate::ir::SidecarLink) -> &'static str {
     match link {
         crate::ir::SidecarLink::Serial => "serial",
@@ -2786,7 +2755,7 @@ fn hashed_sidecar_label(kind: &str, adapter_id: &str, mount: &str) -> String {
 fn sidecar_reserved_names() -> std::collections::BTreeSet<String> {
     [
         "proc", "log", "queen", "worker", "shard", "gpu", "host", "policy", "actions", "audit",
-        "replay", "updates", "models", "trace", "kmesg", "bus", "lora",
+        "replay", "updates", "models", "trace", "kmesg", "bus",
     ]
     .iter()
     .map(|entry| entry.to_string())

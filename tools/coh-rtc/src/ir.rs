@@ -11,7 +11,7 @@ use std::fs;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: &str = "1.5";
+const SCHEMA_VERSION: &str = "1.6";
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
 const MAX_WALK_DEPTH: usize = 8;
@@ -33,7 +33,6 @@ const MAX_SIDECAR_SCOPE_LEN: usize = 64;
 const MAX_SIDECAR_ID_LEN: usize = 64;
 const MAX_SIDECAR_MOUNT_LEN: usize = 64;
 const MAX_SPOOL_ENTRIES: u16 = 256;
-const LORA_TAMPER_ENTRY_BYTES: u32 = 128;
 const MAX_ROOT_CUT_REASON_LEN: usize = "network_unreachable".len();
 const MAX_SESSION_STATE_LEN: usize = "DRAINING".len();
 const MAX_SESSION_OWNER_LEN: usize = 64;
@@ -785,7 +784,6 @@ impl Manifest {
     fn validate_sidecars(&self) -> Result<()> {
         self.validate_sidecar_bus("sidecars.modbus", &self.sidecars.modbus)?;
         self.validate_sidecar_bus("sidecars.dnp3", &self.sidecars.dnp3)?;
-        self.validate_sidecar_lora(&self.sidecars.lora)?;
         self.validate_sidecar_scopes()?;
         self.validate_sidecar_budget()?;
         Ok(())
@@ -804,51 +802,6 @@ impl Manifest {
             self.validate_sidecar_adapter(label, adapter)?;
             if !scopes.insert(adapter.scope.as_str()) {
                 bail!("{label}.adapters scope '{}' is duplicated", adapter.scope);
-            }
-        }
-        Ok(())
-    }
-
-    fn validate_sidecar_lora(&self, config: &SidecarLoraConfig) -> Result<()> {
-        if !config.enable {
-            return Ok(());
-        }
-        self.validate_sidecar_mount_at("sidecars.lora.mount_at", &config.mount_at)?;
-        if config.adapters.is_empty() {
-            bail!("sidecars.lora.enable requires at least one adapter");
-        }
-        let mut scopes = BTreeSet::new();
-        for adapter in &config.adapters {
-            self.validate_sidecar_id("sidecars.lora.adapters[].id", &adapter.id)?;
-            self.validate_sidecar_mount("sidecars.lora.adapters[].mount", &adapter.mount)?;
-            self.validate_sidecar_scope("sidecars.lora.adapters[].scope", &adapter.scope)?;
-            if adapter.region.trim().is_empty() {
-                bail!("sidecars.lora.adapters[].region must not be empty");
-            }
-            if adapter.duty_cycle_percent == 0 || adapter.duty_cycle_percent > 100 {
-                bail!("sidecars.lora.adapters[].duty_cycle_percent must be 1..=100");
-            }
-            if adapter.window_ms == 0 {
-                bail!("sidecars.lora.adapters[].window_ms must be >= 1");
-            }
-            if adapter.max_payload_bytes == 0 {
-                bail!("sidecars.lora.adapters[].max_payload_bytes must be >= 1");
-            }
-            if adapter.max_payload_bytes > self.secure9p.msize {
-                bail!(
-                    "sidecars.lora.adapters[].max_payload_bytes {} exceeds secure9p.msize {}",
-                    adapter.max_payload_bytes,
-                    self.secure9p.msize
-                );
-            }
-            if adapter.tamper_log_max_entries == 0 {
-                bail!("sidecars.lora.adapters[].tamper_log_max_entries must be >= 1");
-            }
-            if !scopes.insert(adapter.scope.as_str()) {
-                bail!(
-                    "sidecars.lora.adapters scope '{}' is duplicated",
-                    adapter.scope
-                );
             }
         }
         Ok(())
@@ -1001,12 +954,6 @@ impl Manifest {
                 bytes = bytes.saturating_add(adapter.spool.max_bytes);
             }
         }
-        if self.sidecars.lora.enable {
-            for adapter in &self.sidecars.lora.adapters {
-                let entries = u32::from(adapter.tamper_log_max_entries);
-                bytes = bytes.saturating_add(entries.saturating_mul(LORA_TAMPER_ENTRY_BYTES));
-            }
-        }
         if bytes > EVENT_PUMP_SIDECAR_BUDGET_BYTES {
             bail!(
                 "sidecar budgets {} bytes exceed event-pump budget {} bytes",
@@ -1028,13 +975,6 @@ impl Manifest {
         }
         if self.sidecars.dnp3.enable {
             for adapter in &self.sidecars.dnp3.adapters {
-                if !scopes.insert(adapter.scope.as_str()) {
-                    bail!("sidecar scope '{}' is duplicated", adapter.scope);
-                }
-            }
-        }
-        if self.sidecars.lora.enable {
-            for adapter in &self.sidecars.lora.adapters {
                 if !scopes.insert(adapter.scope.as_str()) {
                     bail!("sidecar scope '{}' is duplicated", adapter.scope);
                 }
@@ -4349,9 +4289,9 @@ fn default_worker_roles() -> Vec<WorkerRoleRuntime> {
         WorkerRoleRuntime {
             role: Role::WorkerLora,
             implemented: true,
-            ticket_scope: "/lora".to_owned(),
+            ticket_scope: "/worker".to_owned(),
             telemetry_path_template: "/shard/<label>/worker/<id>/telemetry".to_owned(),
-            lease_path_template: "/lora/<scope>/lease".to_owned(),
+            lease_path_template: String::new(),
             shutdown_policy: "notification".to_owned(),
         },
     ]
@@ -4444,7 +4384,6 @@ pub struct Ecosystem {
 pub struct Sidecars {
     pub modbus: SidecarBusConfig,
     pub dnp3: SidecarBusConfig,
-    pub lora: SidecarLoraConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4500,39 +4439,6 @@ impl Default for SpoolConfig {
             max_bytes: 4096,
         }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, default)]
-pub struct SidecarLoraConfig {
-    pub enable: bool,
-    #[serde(default = "default_lora_mount")]
-    pub mount_at: String,
-    #[serde(default)]
-    pub adapters: Vec<SidecarLoraAdapter>,
-}
-
-impl Default for SidecarLoraConfig {
-    fn default() -> Self {
-        Self {
-            enable: false,
-            mount_at: default_lora_mount(),
-            adapters: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SidecarLoraAdapter {
-    pub id: String,
-    pub mount: String,
-    pub scope: String,
-    pub region: String,
-    pub duty_cycle_percent: u8,
-    pub window_ms: u64,
-    pub max_payload_bytes: u32,
-    pub tamper_log_max_entries: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -5733,10 +5639,6 @@ fn default_coh_breadcrumb_schema() -> String {
 
 fn default_bus_mount() -> String {
     "/bus".to_owned()
-}
-
-fn default_lora_mount() -> String {
-    "/lora".to_owned()
 }
 
 fn default_coh_peft_export_root() -> String {

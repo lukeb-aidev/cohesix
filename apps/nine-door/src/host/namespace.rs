@@ -15,7 +15,6 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError};
 use trace_model::TraceLevel;
-use worker_lora::{DutyCycleConfig, DutyCycleGuard, TamperEntry, TamperLog, TamperReason};
 
 use super::cas::{
     parse_sha256, validate_epoch, CasConfig, CasStore, ModelFileKind, UpdateStatusPayloads,
@@ -779,70 +778,11 @@ impl SidecarBusConfig {
     }
 }
 
-/// Configuration for a single LoRa sidecar adapter.
-#[derive(Debug, Clone)]
-pub struct SidecarLoraAdapterConfig {
-    mount: String,
-    scope: String,
-    duty_cycle: DutyCycleConfig,
-    tamper_log_max_entries: usize,
-}
-
-impl SidecarLoraAdapterConfig {
-    /// Construct a LoRa adapter configuration.
-    pub fn new(
-        mount: impl Into<String>,
-        scope: impl Into<String>,
-        duty_cycle: DutyCycleConfig,
-        tamper_log_max_entries: usize,
-    ) -> Self {
-        Self {
-            mount: mount.into(),
-            scope: scope.into(),
-            duty_cycle,
-            tamper_log_max_entries,
-        }
-    }
-}
-
-/// Configuration describing a LoRa sidecar namespace.
-#[derive(Debug, Clone)]
-pub struct SidecarLoraConfig {
-    enabled: bool,
-    mount_path: Vec<String>,
-    adapters: Vec<SidecarLoraAdapterConfig>,
-}
-
-impl SidecarLoraConfig {
-    /// Construct a disabled LoRa sidecar configuration.
-    pub fn disabled() -> Self {
-        Self {
-            enabled: false,
-            mount_path: vec!["lora".to_owned()],
-            adapters: Vec::new(),
-        }
-    }
-
-    /// Construct an enabled LoRa sidecar configuration.
-    pub fn enabled(
-        mount_at: &str,
-        adapters: &[SidecarLoraAdapterConfig],
-    ) -> Result<Self, NineDoorError> {
-        let mount_path = parse_sidecar_mount("lora", mount_at)?;
-        Ok(Self {
-            enabled: true,
-            mount_path,
-            adapters: adapters.to_vec(),
-        })
-    }
-}
-
-/// Namespace configuration for bus and LoRa sidecars.
+/// Namespace configuration for manifest-declared field-bus sidecars.
 #[derive(Debug, Clone)]
 pub struct SidecarNamespaceConfig {
     modbus: SidecarBusConfig,
     dnp3: SidecarBusConfig,
-    lora: SidecarLoraConfig,
 }
 
 impl SidecarNamespaceConfig {
@@ -851,7 +791,6 @@ impl SidecarNamespaceConfig {
         Self {
             modbus: SidecarBusConfig::disabled(),
             dnp3: SidecarBusConfig::disabled(),
-            lora: SidecarLoraConfig::disabled(),
         }
     }
 }
@@ -977,9 +916,7 @@ pub struct Namespace {
     host: HostNamespaceConfig,
     sidecar_modbus: SidecarBusState,
     sidecar_dnp3: SidecarBusState,
-    sidecar_lora: SidecarLoraState,
     sidecar_bus_scopes: Vec<SidecarScope>,
-    sidecar_lora_scopes: Vec<SidecarScope>,
     policy: PolicyNamespaceConfig,
     audit: AuditNamespaceConfig,
     replay: ReplayNamespaceConfig,
@@ -1058,11 +995,9 @@ impl Namespace {
     ) -> Self {
         let sidecar_modbus = SidecarBusState::new(sidecars.modbus);
         let sidecar_dnp3 = SidecarBusState::new(sidecars.dnp3);
-        let sidecar_lora = SidecarLoraState::new(sidecars.lora);
         let mut sidecar_bus_scopes = Vec::new();
         sidecar_bus_scopes.extend(sidecar_modbus.scopes());
         sidecar_bus_scopes.extend(sidecar_dnp3.scopes());
-        let sidecar_lora_scopes = sidecar_lora.scopes();
         let mut namespace = Self {
             root: Node::directory(Vec::new()),
             trace: TraceFs::new(),
@@ -1076,9 +1011,7 @@ impl Namespace {
             host,
             sidecar_modbus,
             sidecar_dnp3,
-            sidecar_lora,
             sidecar_bus_scopes,
-            sidecar_lora_scopes,
             policy,
             audit,
             replay,
@@ -1172,21 +1105,9 @@ impl Namespace {
         &self.sidecar_bus_scopes
     }
 
-    /// Return the configured LoRa sidecar scopes.
-    pub(crate) fn sidecar_lora_scopes(&self) -> &[SidecarScope] {
-        &self.sidecar_lora_scopes
-    }
-
     /// Return true if a bus scope is declared.
     pub(crate) fn bus_scope_exists(&self, scope: &str) -> bool {
         self.sidecar_bus_scopes
-            .iter()
-            .any(|entry| entry.scope() == scope)
-    }
-
-    /// Return true if a LoRa scope is declared.
-    pub(crate) fn lora_scope_exists(&self, scope: &str) -> bool {
-        self.sidecar_lora_scopes
             .iter()
             .any(|entry| entry.scope() == scope)
     }
@@ -1195,9 +1116,6 @@ impl Namespace {
     pub(crate) fn sidecar_kind_for_path(&self, path: &[String]) -> Option<SidecarKind> {
         if self.sidecar_modbus.matches_path(path) || self.sidecar_dnp3.matches_path(path) {
             return Some(SidecarKind::Bus);
-        }
-        if self.sidecar_lora.matches_path(path) {
-            return Some(SidecarKind::Lora);
         }
         None
     }
@@ -1466,9 +1384,6 @@ impl Namespace {
         if let Some(data) = self.sidecar_dnp3.read(path, offset, count) {
             return Ok(Some(data));
         }
-        if let Some(data) = self.sidecar_lora.read(path, offset, count) {
-            return Ok(Some(data));
-        }
         Ok(None)
     }
 
@@ -1486,9 +1401,6 @@ impl Namespace {
             return Ok(Some(count));
         }
         if let Some(count) = self.sidecar_dnp3.write(path, offset, data, max_log_bytes)? {
-            return Ok(Some(count));
-        }
-        if let Some(count) = self.sidecar_lora.write(path, offset, data, max_log_bytes)? {
             return Ok(Some(count));
         }
         Ok(None)
@@ -1960,8 +1872,7 @@ impl Namespace {
         self.ensure_trace_events(&trace_path, "events")
             .expect("create /trace/events");
         self.ensure_kernel_messages().expect("create /kmesg");
-        self.bootstrap_sidecars()
-            .expect("create /bus and /lora namespaces");
+        self.bootstrap_sidecars().expect("create /bus namespaces");
         if self.host.enabled {
             self.bootstrap_host().expect("create /host namespace");
         }
@@ -2088,10 +1999,8 @@ impl Namespace {
     fn bootstrap_sidecars(&mut self) -> Result<(), NineDoorError> {
         let modbus = self.sidecar_modbus.clone();
         let dnp3 = self.sidecar_dnp3.clone();
-        let lora = self.sidecar_lora.clone();
         modbus.bootstrap(self)?;
         dnp3.bootstrap(self)?;
-        lora.bootstrap(self)?;
         Ok(())
     }
 
@@ -3130,14 +3039,12 @@ impl Namespace {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SidecarKind {
     Bus,
-    Lora,
 }
 
 impl SidecarKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Bus => "bus",
-            Self::Lora => "lora",
         }
     }
 }
@@ -3371,219 +3278,6 @@ impl SidecarBusState {
                 "sidecar spool is read-only",
             )),
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SidecarLoraFile {
-    Ctl,
-    Telemetry,
-    Tamper,
-}
-
-#[derive(Debug, Clone)]
-struct SidecarLoraAdapterState {
-    mount_root: Vec<String>,
-    mount_label: String,
-    scope: String,
-    guard: DutyCycleGuard,
-    tamper: TamperLog,
-    telemetry: Vec<u8>,
-    ctl: Vec<u8>,
-}
-
-impl SidecarLoraAdapterState {
-    fn match_file(&self, path: &[String]) -> Option<SidecarLoraFile> {
-        let rel = path.strip_prefix(self.mount_root.as_slice())?;
-        match rel {
-            [leaf] if leaf == "ctl" => Some(SidecarLoraFile::Ctl),
-            [leaf] if leaf == "telemetry" => Some(SidecarLoraFile::Telemetry),
-            [leaf] if leaf == "tamper" => Some(SidecarLoraFile::Tamper),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct SidecarLoraState {
-    enabled: bool,
-    mount_path: Vec<String>,
-    adapters: Vec<SidecarLoraAdapterState>,
-    clock_ms: u64,
-}
-
-impl SidecarLoraState {
-    fn new(config: SidecarLoraConfig) -> Self {
-        if !config.enabled {
-            return Self {
-                enabled: false,
-                mount_path: config.mount_path,
-                adapters: Vec::new(),
-                clock_ms: 0,
-            };
-        }
-        let mut adapters = Vec::new();
-        for adapter in config.adapters {
-            let mut mount_root = config.mount_path.clone();
-            mount_root.push(adapter.mount.clone());
-            adapters.push(SidecarLoraAdapterState {
-                mount_root,
-                mount_label: adapter.mount.clone(),
-                scope: adapter.scope.clone(),
-                guard: DutyCycleGuard::new(adapter.duty_cycle),
-                tamper: TamperLog::new(adapter.tamper_log_max_entries),
-                telemetry: Vec::new(),
-                ctl: Vec::new(),
-            });
-        }
-        Self {
-            enabled: true,
-            mount_path: config.mount_path,
-            adapters,
-            clock_ms: 0,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn enabled(&self) -> bool {
-        self.enabled
-    }
-
-    fn scopes(&self) -> Vec<SidecarScope> {
-        self.adapters
-            .iter()
-            .map(|adapter| SidecarScope {
-                scope: adapter.scope.clone(),
-                mount_root: adapter.mount_root.clone(),
-            })
-            .collect()
-    }
-
-    fn matches_path(&self, path: &[String]) -> bool {
-        if !self.enabled {
-            return false;
-        }
-        self.adapters.iter().any(|adapter| {
-            path.starts_with(&adapter.mount_root) || adapter.mount_root.starts_with(path)
-        })
-    }
-
-    fn adapter_for_path(
-        &self,
-        path: &[String],
-    ) -> Option<(&SidecarLoraAdapterState, SidecarLoraFile)> {
-        self.adapters
-            .iter()
-            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
-    }
-
-    fn adapter_index_for_path(&self, path: &[String]) -> Option<(usize, SidecarLoraFile)> {
-        self.adapters
-            .iter()
-            .enumerate()
-            .find_map(|(idx, adapter)| adapter.match_file(path).map(|file| (idx, file)))
-    }
-
-    #[allow(dead_code)]
-    fn adapter_for_path_mut(
-        &mut self,
-        path: &[String],
-    ) -> Option<(&mut SidecarLoraAdapterState, SidecarLoraFile)> {
-        self.adapters
-            .iter_mut()
-            .find_map(|adapter| adapter.match_file(path).map(|file| (adapter, file)))
-    }
-
-    fn bootstrap(&self, namespace: &mut Namespace) -> Result<(), NineDoorError> {
-        if !self.enabled {
-            return Ok(());
-        }
-        namespace.ensure_dir_path(&self.mount_path)?;
-        for adapter in &self.adapters {
-            let mut adapter_path = self.mount_path.clone();
-            adapter_path.push(adapter.mount_label.clone());
-            namespace.ensure_dir_path(&adapter_path)?;
-            namespace.ensure_append_only_file(&adapter_path, "ctl", b"")?;
-            namespace.ensure_append_only_file(&adapter_path, "telemetry", b"")?;
-            namespace.ensure_read_only_file(&adapter_path, "tamper", b"")?;
-        }
-        Ok(())
-    }
-
-    fn read(&self, path: &[String], offset: u64, count: u32) -> Option<Vec<u8>> {
-        let (adapter, file) = self.adapter_for_path(path)?;
-        match file {
-            SidecarLoraFile::Ctl => Some(read_slice(&adapter.ctl, offset, count)),
-            SidecarLoraFile::Telemetry => Some(read_slice(&adapter.telemetry, offset, count)),
-            SidecarLoraFile::Tamper => {
-                let data = render_tamper_log(adapter.tamper.snapshot());
-                Some(read_slice(&data, offset, count))
-            }
-        }
-    }
-
-    fn write(
-        &mut self,
-        path: &[String],
-        offset: u64,
-        data: &[u8],
-        max_log_bytes: usize,
-    ) -> Result<Option<u32>, NineDoorError> {
-        let (index, file) = match self.adapter_index_for_path(path) {
-            Some(found) => found,
-            None => return Ok(None),
-        };
-        if offset != u64::MAX {
-            return Err(NineDoorError::protocol(
-                ErrorCode::Invalid,
-                "sidecar writes must use append-only offsets",
-            ));
-        }
-        match file {
-            SidecarLoraFile::Ctl => {
-                let count = {
-                    let adapter = &mut self.adapters[index];
-                    append_bounded(&mut adapter.ctl, data, max_log_bytes)?
-                };
-                let now_ms = self.next_clock();
-                let adapter = &mut self.adapters[index];
-                match adapter.guard.attempt(now_ms, data.len() as u32) {
-                    Ok(()) => {
-                        append_bounded(&mut adapter.telemetry, data, max_log_bytes)?;
-                        Ok(Some(count))
-                    }
-                    Err(reason) => {
-                        adapter.tamper.push(TamperEntry {
-                            timestamp_ms: now_ms,
-                            reason,
-                            payload_bytes: data.len() as u32,
-                        });
-                        let (code, message) = match reason {
-                            TamperReason::PayloadOversize => {
-                                (ErrorCode::TooBig, "lora payload exceeds max bytes")
-                            }
-                            TamperReason::DutyCycleExceeded => {
-                                (ErrorCode::Busy, "lora duty cycle exceeded")
-                            }
-                        };
-                        Err(NineDoorError::protocol(code, message))
-                    }
-                }
-            }
-            SidecarLoraFile::Telemetry => Err(NineDoorError::protocol(
-                ErrorCode::Permission,
-                "lora telemetry is read-only",
-            )),
-            SidecarLoraFile::Tamper => Err(NineDoorError::protocol(
-                ErrorCode::Permission,
-                "lora tamper log is read-only",
-            )),
-        }
-    }
-
-    fn next_clock(&mut self) -> u64 {
-        self.clock_ms = self.clock_ms.saturating_add(1);
-        self.clock_ms
     }
 }
 
@@ -3996,21 +3690,6 @@ fn render_spool_status(spool: &OfflineSpool) -> Vec<u8> {
             frame.seq,
             frame.payload.len(),
             payload
-        ));
-    }
-    out.into_bytes()
-}
-
-fn render_tamper_log(entries: Vec<TamperEntry>) -> Vec<u8> {
-    let mut out = String::new();
-    for entry in entries {
-        let reason = match entry.reason {
-            TamperReason::PayloadOversize => "payload-oversize",
-            TamperReason::DutyCycleExceeded => "duty-cycle",
-        };
-        out.push_str(&format!(
-            "tamper ts_ms={} reason={} bytes={}\n",
-            entry.timestamp_ms, reason, entry.payload_bytes
         ));
     }
     out.into_bytes()

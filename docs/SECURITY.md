@@ -211,9 +211,7 @@ fails deterministically and emits an audit record.
 Sidecar mounts and providers are manifest-gated. Namespace collisions receive
 deterministic hash-prefixed labels; role and path scopes are checked on each
 operation. Offline spool and replay are bounded by selected manifest limits and
-must not exceed Secure9P `msize`. LoRa radio duty-cycle controls reject
-over-budget frames and record bounded audit evidence. Sidecars do not add
-in-VM listeners.
+must not exceed Secure9P `msize`. Sidecars do not add in-VM listeners.
 
 Host actions under `/host/tickets/*` are requests, not implicit target access to
 the host. The host ticket agent validates schema, action allowlist, arguments,

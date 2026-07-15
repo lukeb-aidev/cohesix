@@ -745,32 +745,9 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
-    writeln!(mod_contents, "pub struct SidecarLoraAdapter {{")?;
-    writeln!(mod_contents, "    pub id: &'static str,")?;
-    writeln!(mod_contents, "    pub mount: &'static str,")?;
-    writeln!(mod_contents, "    pub scope: &'static str,")?;
-    writeln!(mod_contents, "    pub region: &'static str,")?;
-    writeln!(mod_contents, "    pub duty_cycle_percent: u8,")?;
-    writeln!(mod_contents, "    pub window_ms: u64,")?;
-    writeln!(mod_contents, "    pub max_payload_bytes: u32,")?;
-    writeln!(mod_contents, "    pub tamper_log_max_entries: u16,")?;
-    writeln!(mod_contents, "}}")?;
-    writeln!(mod_contents)?;
-    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
-    writeln!(mod_contents, "pub struct SidecarLoraConfig {{")?;
-    writeln!(mod_contents, "    pub enable: bool,")?;
-    writeln!(mod_contents, "    pub mount_at: &'static str,")?;
-    writeln!(
-        mod_contents,
-        "    pub adapters: &'static [SidecarLoraAdapter],"
-    )?;
-    writeln!(mod_contents, "}}")?;
-    writeln!(mod_contents)?;
-    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct SidecarConfig {{")?;
     writeln!(mod_contents, "    pub modbus: SidecarBusConfig,")?;
     writeln!(mod_contents, "    pub dnp3: SidecarBusConfig,")?;
-    writeln!(mod_contents, "    pub lora: SidecarLoraConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -1213,7 +1190,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile}};"
     )?;
     writeln!(
         bootstrap_contents,
@@ -1928,7 +1905,6 @@ pub fn emit_rust(
     )?;
 
     let (modbus_adapters, dnp3_adapters) = resolve_bus_adapters(manifest)?;
-    let lora_adapters = resolve_lora_adapters(manifest)?;
 
     writeln!(
         bootstrap_contents,
@@ -1972,34 +1948,11 @@ pub fn emit_rust(
 
     writeln!(
         bootstrap_contents,
-        "pub const LORA_ADAPTERS: [SidecarLoraAdapter; {}] = [",
-        lora_adapters.len()
-    )?;
-    for adapter in &lora_adapters {
-        writeln!(
-            bootstrap_contents,
-            "    SidecarLoraAdapter {{ id: \"{}\", mount: \"{}\", scope: \"{}\", region: \"{}\", duty_cycle_percent: {}, window_ms: {}, max_payload_bytes: {}, tamper_log_max_entries: {} }},",
-            escape_literal(adapter.id),
-            escape_literal(&adapter.mount),
-            escape_literal(adapter.scope),
-            escape_literal(adapter.region),
-            adapter.duty_cycle_percent,
-            adapter.window_ms,
-            adapter.max_payload_bytes,
-            adapter.tamper_log_max_entries
-        )?;
-    }
-    writeln!(bootstrap_contents, "];\n")?;
-
-    writeln!(
-        bootstrap_contents,
-        "pub const SIDECAR_CONFIG: SidecarConfig = SidecarConfig {{ modbus: SidecarBusConfig {{ enable: {}, mount_at: \"{}\", adapters: &MODBUS_ADAPTERS }}, dnp3: SidecarBusConfig {{ enable: {}, mount_at: \"{}\", adapters: &DNP3_ADAPTERS }}, lora: SidecarLoraConfig {{ enable: {}, mount_at: \"{}\", adapters: &LORA_ADAPTERS }} }};\n",
+        "pub const SIDECAR_CONFIG: SidecarConfig = SidecarConfig {{ modbus: SidecarBusConfig {{ enable: {}, mount_at: \"{}\", adapters: &MODBUS_ADAPTERS }}, dnp3: SidecarBusConfig {{ enable: {}, mount_at: \"{}\", adapters: &DNP3_ADAPTERS }} }};\n",
         manifest.sidecars.modbus.enable,
         escape_literal(&manifest.sidecars.modbus.mount_at),
         manifest.sidecars.dnp3.enable,
-        escape_literal(&manifest.sidecars.dnp3.mount_at),
-        manifest.sidecars.lora.enable,
-        escape_literal(&manifest.sidecars.lora.mount_at)
+        escape_literal(&manifest.sidecars.dnp3.mount_at)
     )?;
     writeln!(
         bootstrap_contents,
@@ -2237,17 +2190,6 @@ struct ResolvedSidecarBusAdapter<'a> {
     spool: &'a crate::ir::SpoolConfig,
 }
 
-struct ResolvedSidecarLoraAdapter<'a> {
-    id: &'a str,
-    mount: String,
-    scope: &'a str,
-    region: &'a str,
-    duty_cycle_percent: u8,
-    window_ms: u64,
-    max_payload_bytes: u32,
-    tamper_log_max_entries: u16,
-}
-
 fn resolve_bus_adapters(
     manifest: &Manifest,
 ) -> Result<(
@@ -2258,11 +2200,6 @@ fn resolve_bus_adapters(
     let modbus = resolve_sidecar_bus("modbus", &manifest.sidecars.modbus, &mut used)?;
     let dnp3 = resolve_sidecar_bus("dnp3", &manifest.sidecars.dnp3, &mut used)?;
     Ok((modbus, dnp3))
-}
-
-fn resolve_lora_adapters(manifest: &Manifest) -> Result<Vec<ResolvedSidecarLoraAdapter<'_>>> {
-    let mut used = sidecar_reserved_names();
-    resolve_sidecar_lora(&manifest.sidecars.lora, &mut used)
 }
 
 fn resolve_sidecar_bus<'a>(
@@ -2283,30 +2220,6 @@ fn resolve_sidecar_bus<'a>(
             link: adapter.link,
             baud: adapter.baud,
             spool: &adapter.spool,
-        });
-    }
-    Ok(resolved)
-}
-
-fn resolve_sidecar_lora<'a>(
-    config: &'a crate::ir::SidecarLoraConfig,
-    used: &mut BTreeSet<String>,
-) -> Result<Vec<ResolvedSidecarLoraAdapter<'a>>> {
-    if !config.enable {
-        return Ok(Vec::new());
-    }
-    let mut resolved = Vec::new();
-    for adapter in &config.adapters {
-        let mount = resolve_sidecar_mount("lora", &adapter.id, &adapter.mount, used)?;
-        resolved.push(ResolvedSidecarLoraAdapter {
-            id: adapter.id.as_str(),
-            mount,
-            scope: adapter.scope.as_str(),
-            region: adapter.region.as_str(),
-            duty_cycle_percent: adapter.duty_cycle_percent,
-            window_ms: adapter.window_ms,
-            max_payload_bytes: adapter.max_payload_bytes,
-            tamper_log_max_entries: adapter.tamper_log_max_entries,
         });
     }
     Ok(resolved)
@@ -2348,7 +2261,7 @@ fn hashed_sidecar_label(kind: &str, adapter_id: &str, mount: &str) -> String {
 fn sidecar_reserved_names() -> BTreeSet<String> {
     [
         "proc", "log", "queen", "worker", "shard", "gpu", "host", "policy", "actions", "audit",
-        "replay", "updates", "models", "trace", "kmesg", "bus", "lora",
+        "replay", "updates", "models", "trace", "kmesg", "bus",
     ]
     .iter()
     .map(|entry| entry.to_string())

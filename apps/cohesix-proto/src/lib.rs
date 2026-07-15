@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the cohesix-proto library and public module surface.
 // Author: Lukas Bower
@@ -17,7 +17,7 @@ pub enum Role {
     GpuWorker,
     /// Field bus worker role.
     BusWorker,
-    /// LoRa worker role.
+    /// AI LoRA model-adapter control worker role.
     LoraWorker,
 }
 

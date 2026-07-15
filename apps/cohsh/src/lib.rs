@@ -1458,7 +1458,7 @@ pub enum RoleArg {
     WorkerGpu,
     /// Worker bus role.
     WorkerBus,
-    /// Worker LoRa role.
+    /// Worker role for AI LoRA model-adapter lifecycle control.
     WorkerLora,
 }
 
