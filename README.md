@@ -19,7 +19,7 @@
 
 Cohesix is a research operating system for edge AI, built around a simple idea: an AI fleet should have air-traffic control, not a pile of tools holding unrestricted credentials.
 
-Each Cohesix hive has a Queen with orchestration authority and specialized Workers scoped to heartbeat telemetry, GPU lease/status records, and LoRA lifecycle receipts, each limited by role-specific capabilities and tickets.
+Each Cohesix hive has a "Queen" with orchestration authority and specialized Workers scoped to heartbeat telemetry, GPU lease/status records, and LoRa radio state, each limited by role-specific capabilities and tickets.
 
 Models, agents, CUDA/NVML, training, and inference stay on the host. Cohesix is the compact trust layer beneath them: approved host tools reduce intent to bounded, policy-checked requests with visible state and evidence.
 
@@ -209,6 +209,7 @@ Each document owns one part of the public contract. Generated values remain in
 
 | Document | Owns |
 | --- | --- |
+| [Glossary](docs/GLOSSARY.md) | Plain-language definitions of Cohesix concepts, terminology, and evidence boundaries |
 | [Architecture](docs/ARCHITECTURE.md) | Trust boundaries, components, and major data flows |
 | [Interfaces](docs/INTERFACES.md) | Namespaces, payloads, console behavior, and compatibility |
 | [Secure9P](docs/SECURE9P.md) | 9P layering, bounds, session invariants, and policy hooks |
@@ -243,7 +244,8 @@ Each document owns one part of the public contract. Generated values remain in
 
 ## Help and contributing
 
-- Start with the [operator walkthrough](docs/OPERATOR_WALKTHROUGH.md); use
+- New to Cohesix? Start with the [glossary](docs/GLOSSARY.md), then follow the
+  [operator walkthrough](docs/OPERATOR_WALKTHROUGH.md); use
   [failure modes](docs/FAILURE_MODES.md) for diagnosis and recovery.
 - Contributions must follow [`AGENTS.md`](AGENTS.md),
   [Contributing](CONTRIBUTING.md), and the active task in the

@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Run required x86 host Rust validation checks for Cohesix on GitHub Actions.
+# Purpose: Run Cohesix source, test-plan, VM-boundary, and dependency gates on GitHub Actions.
 # Copyright 2026 Lukas Bower
 
 name: Cohesix CI
@@ -11,63 +11,214 @@ on:
   pull_request:
     branches:
       - main
+  merge_group:
+    types:
+      - checks_requested
+  workflow_dispatch:
+  schedule:
+    # Avoid the top of the hour, when GitHub schedules are most heavily loaded.
+    - cron: '17 8 * * 1'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: '1'
 
 jobs:
   ci:
     name: ci
-    runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    if: github.event_name != 'schedule'
+    runs-on: macos-26
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain 1.93.1
-        uses: dtolnay/rust-toolchain@1.93.1
+        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
+        with:
+          toolchain: 1.93.1
+          components: clippy, rustfmt
+          targets: aarch64-unknown-none
 
       - name: Cache Rust build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-1.93.1-${{ hashFiles('Cargo.lock') }}
 
-      - name: Install cargo-audit and cargo-deny
-        run: cargo install --locked cargo-audit cargo-deny
-
-      - name: Verify tracked Cargo lockfile
-        run: cargo metadata --locked --no-deps
-
-      - name: Generate manifest-derived policy artifacts
+      - name: Verify repository policy and pinned inputs
         run: |
-          cargo run -q -p coh-rtc -- \
-            configs/root_task.toml \
-            --out apps/root-task/src/generated \
-            --manifest out/manifests/root_task_resolved.json
+          test -s AGENTS.md
+          test -s docs/BUILD_PLAN.md
+          cargo metadata --locked --no-deps
+          scripts/ci/test_plan_run.sh --list
 
       - name: Rust fmt check (workspace)
         run: cargo fmt --all -- --check
 
-      - name: Rust clippy (workspace, host-safe set)
-        run: cargo clippy --workspace --all-targets --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task -- -D warnings
+      - name: Rust clippy (workspace)
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
-      - name: Rust check (workspace, host-safe set)
-        run: cargo check --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task
+      - name: Rust check (workspace)
+        run: cargo check --locked --workspace
 
-      - name: Rust test (secure9p-codec)
-        run: cargo test -p secure9p-codec --quiet
+  workspace-tests:
+    name: workspace-tests
+    needs:
+      - ci
+    if: ${{ !cancelled() && github.event_name != 'schedule' }}
+    runs-on: macos-26
+    timeout-minutes: 90
 
-      - name: Rust test (integration crate)
-        run: cargo test -p tests --quiet
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
 
-      - name: Rust test (workspace, host-safe set)
-        run: cargo test --workspace --exclude swarmui --exclude coh --exclude host-ticket-agent --exclude root-task --quiet
+      - name: Install Rust toolchain 1.93.1
+        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
+        with:
+          toolchain: 1.93.1
+          targets: aarch64-unknown-none
+
+      - name: Restore Rust build artifacts
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-1.93.1-${{ hashFiles('Cargo.lock') }}
+
+      - name: Rust test (workspace)
+        run: cargo test --locked --workspace -- --test-threads=1
+
+  staged-host-gates:
+    name: staged-host-gates
+    needs:
+      - ci
+    if: ${{ !cancelled() && github.event_name != 'schedule' }}
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain 1.93.1
+        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
+        with:
+          toolchain: 1.93.1
+          targets: aarch64-unknown-none
+
+      - name: Restore Rust build artifacts
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: rust-${{ runner.os }}-${{ runner.arch }}-1.93.1-${{ hashFiles('Cargo.lock') }}
+
+      - name: Prepare retained evidence paths
+        run: |
+          mkdir -p out/ci/dependency-trees out/ci/runner out/test-plan/github-actions-qemu
+          uname -a > out/ci/runner/uname.txt
+          sw_vers > out/ci/runner/macos.txt
+          rustc --version --verbose > out/ci/runner/rustc.txt
+          python3 --version > out/ci/runner/python.txt 2>&1
+
+      - name: List staged Test Plan
+        run: scripts/ci/test_plan_run.sh --list
+
+      - name: Run staged integrity gate
+        run: scripts/ci/test_plan_run.sh --target qemu --stage 1 --state-dir out/test-plan/github-actions-qemu
+
+      - name: Run staged host and VM-boundary gates
+        run: scripts/ci/test_plan_run.sh --target qemu --stage 2 --state-dir out/test-plan/github-actions-qemu
+
+      - name: Record VM dependency boundaries
+        run: |
+          cargo tree --locked -p root-task --target aarch64-unknown-none -e normal --no-default-features --features release-qemu > out/ci/dependency-trees/root-task-qemu.txt
+          cargo tree --locked -p root-task --target aarch64-unknown-none -e normal --no-default-features --features release-pi4 > out/ci/dependency-trees/root-task-pi4.txt
+          cargo tree --locked -p pi4-driver-runtime --target aarch64-unknown-none -e normal > out/ci/dependency-trees/pi4-driver-runtime.txt
+
+      - name: Upload staged gate evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: staged-host-gates-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            out/ci/dependency-trees/
+            out/ci/runner/
+            out/test-plan/github-actions-qemu/
+          if-no-files-found: error
+          retention-days: 14
+
+  dependency-audit:
+    name: dependency-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_AUDIT_VERSION: 0.22.2
+      CARGO_DENY_VERSION: 0.20.2
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain 1.93.1
+        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
+        with:
+          toolchain: 1.93.1
+
+      - name: Prepare dependency audit evidence
+        run: |
+          mkdir -p out/ci/dependency-audit
+          : > out/ci/dependency-audit/cargo-audit.log
+          : > out/ci/dependency-audit/cargo-deny.log
+
+      - name: Install pinned dependency audit tools
+        run: |
+          cargo install --locked --force --version "${CARGO_AUDIT_VERSION}" cargo-audit
+          cargo install --locked --force --version "${CARGO_DENY_VERSION}" cargo-deny
+          cargo audit --version
+          cargo deny --version
 
       - name: Cargo audit
-        run: cargo audit
+        run: cargo audit 2>&1 | tee out/ci/dependency-audit/cargo-audit.log
 
       - name: Cargo deny advisories
-        run: cargo deny check advisories
+        if: ${{ always() }}
+        run: cargo deny check advisories 2>&1 | tee out/ci/dependency-audit/cargo-deny.log
+
+      - name: Upload dependency audit evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dependency-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: out/ci/dependency-audit/
+          if-no-files-found: error
+          retention-days: 30

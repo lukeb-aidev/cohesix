@@ -78,6 +78,29 @@ The staged runner owns target qualification. `--target qemu|pi4` writes `TEST_PL
 
 Unsupported target/stage combinations fail before the stage starts. A Pi 4 Stage 03 run must not default to loopback unless `TP_PI4_ALLOW_LOOPBACK=1` documents an intentional local tunnel. A Pi 4 Stage 04 run without an existing gateway URL is **FAIL**, because the stage's self-contained local-QEMU fallback would be QEMU evidence, not Pi 4 evidence.
 
+## GitHub Actions Gate Mapping
+
+`.github/workflows/ci.yml` is the sole repository-authored GitHub Actions
+workflow. Pull requests, merge-queue candidates, and pushes to `main` run the
+following independent checks on the pinned `macos-26` ARM64 runner; manual
+dispatch runs the same set:
+
+- `ci` preserves the established required-check name and runs locked metadata,
+  staged-runner inventory, workspace formatting, full-target clippy, and the
+  full workspace check.
+- `workspace-tests` runs the canonical full workspace test command with one
+  deterministic test thread.
+- `staged-host-gates` runs target-qualified Stages 01 and 02 in one shared QEMU
+  state directory, records QEMU and Pi 4 root-task plus Pi 4 driver-runtime
+  dependency trees, and retains the narrow evidence bundle for 14 days.
+- `dependency-audit` runs independently on pinned Ubuntu 24.04 with exact
+  `cargo-audit` and `cargo-deny` versions. It also runs on the weekly schedule
+  and retains both reports for 30 days, including failure reports.
+
+GitHub Actions Stages 01 and 02 are merge gates, not a claim of full Test Plan
+PASS. Stages 03-05, QEMU boot/transport evidence, and fresh Pi 4 hardware proof
+remain required whenever the active milestone calls for them.
+
 ## Purpose
 Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.
 
