@@ -1,6 +1,6 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Introduce Cohesix, its verified scope, and the canonical documentation suite. -->
+<!-- Purpose: Introduce Cohesix, explain its design, and direct readers to verified usage and documentation. -->
 <!-- Author: Lukas Bower -->
 
 <table width="100%" cellpadding="0" cellspacing="0">
@@ -17,130 +17,142 @@
 
 # Cohesix
 
-Cohesix is a pre-production control-plane operating system for secure edge
-orchestration and telemetry. It combines upstream
-[seL4](https://sel4.systems/), a pure-Rust userspace, capability-scoped
-namespaces, and a Queen/Worker execution model. GPU frameworks, container
-runtimes, model registries, and other large ecosystems stay on the host.
+Cohesix is a pre-production control-plane operating system for security-sensitive
+edge orchestration and telemetry. It turns operations such as submitting work to
+a bounded schedule queue, recording GPU lease state, applying policy, or
+requesting recovery into role-scoped actions with observable state and replayable
+evidence.
 
-Versioned open-source bundles and their release-specific instructions are in
-[releases/](releases/). The documentation linked from this page describes the
-current source tree and can be newer than a release snapshot.
+The target stays deliberately small: upstream seL4, pure-Rust userspace,
+profile-selected workers, and isolated hardware-driver runtimes. CUDA, NVML,
+container runtimes, model registries, agent frameworks, and desktop UI remain on
+the host, outside the trusted computing base: the target software that must be
+trusted for security.
 
-## Current status
+## What makes Cohesix different?
 
-The active work is Milestone 26d, with Milestone 26b reopened for bounded Pi 4
-Wi-Fi/SDIO driver-task closure. The Milestone 26c README-linked documentation
-remediation completed on 15 July 2026. See the
-[build plan](docs/BUILD_PLAN.md) for normative task and acceptance boundaries.
+- **Authority is explicit.** Cohesix combines kernel-enforced capabilities with
+  generated role, policy, ticket, and lifecycle checks rather than relying on
+  ambient root access. Worker tickets are mandatory; Queen tickets are optional.
+- **Control is uniform.** Commands, status, telemetry, policy, and evidence use a
+  bounded file-shaped namespace—a role-visible tree of named control and state
+  paths—instead of a collection of unrelated in-VM services.
+- **Hardware is compartmentalized.** Physical Pi 4 devices run in
+  manifest-declared Rust driver runtimes admitted through HAL; the root task does
+  not own their steady-state drivers.
+- **Automation remains accountable.** External software can propose work through
+  existing host clients, while target-side role, ticket, lifecycle, and bounds
+  checks decide whether it runs and retain evidence of the outcome.
 
-| Surface | Current state | Evidence boundary |
+Cohesix is useful where “who was allowed to do what, under which policy, and how
+can we prove the result?” matters as much as raw orchestration. It is not a
+general-purpose desktop/server OS, Linux distribution, POSIX environment, or
+in-VM GPU stack.
+
+## Why seL4, Plan 9, and 9P?
+
+These names describe different layers; no prior Plan 9 or seL4 experience is
+required to operate Cohesix.
+
+| Term | Plain-language meaning | Why Cohesix uses it |
 | --- | --- | --- |
-| QEMU `aarch64/virt` | Reference development and regression target on seL4 15.0.0 | Current target-qualified repository run passes Stages 1–5; QEMU evidence is not physical-hardware proof. |
-| Raspberry Pi 4 boot | Pi firmware → U-Boot → seL4 binary image → root task | Implemented and previously board-proven; current-tree live revalidation remains part of Milestone 26d. |
-| Pi 4 wired networking | GENETv5 isolated runtime and DHCP/TCP path | Accepted wired evidence exists from Milestone 26c; a new image must still prove its own boot and network state. |
-| Pi 4 Wi-Fi | CYW43455 plus SDIO linked runtimes are implemented and target-tested | Reopened 26b work has no current-image association, DHCP, TCP, or repeatability claim yet. |
-| Host tools | macOS 26 on Apple Silicon is the primary development host; scoped Linux release and host-tool flows are supported | Host success does not prove VM or Pi hardware behavior. |
-| AWS/UEFI | Planned profile | Milestone 30 is pending; AWS is not a current Cohesix VM target. |
+| **[seL4](https://sel4.systems/About/)** | A microkernel: the small, privileged core controlling memory, execution, interrupts, and communication. A *capability* is a kernel-enforced permission to use a specific object in specific ways. | Keeps the privileged kernel small and makes access to target resources explicit. |
+| **[Plan 9](https://9p.io/sys/doc/9.html)** | A Bell Labs research OS where services, devices, status, and stored data can all appear in a file hierarchy assembled for each process. | Provides the design inspiration for one understandable namespace spanning control, status, telemetry, policy, and evidence. Cohesix is not Plan 9 and does not provide a POSIX façade. |
+| **[9P](https://9p.io/sys/doc/names.html)** | The protocol Plan 9 uses to access those file hierarchies. A client connects, follows a path, opens a node, and reads or writes bytes. | Host NineDoor implements a bounded 9P2000.L subset called Secure9P, so path, role, ticket, and size limits are visible and testable. |
+| **NineDoor** | Cohesix's namespace server and related adapters. | Host NineDoor speaks Secure9P. The target uses a separate `NineDoorBridge` behind its authenticated console; it is not an in-VM 9P-over-TCP server. |
 
-Flash success, current-image boot, saved policy, device readiness, raw TCP,
-authenticated `cohsh`, and benchmark results are separate proof states. The
-[hardware runbook](docs/HARDWARE_BRINGUP.md) defines the required evidence for
-each state.
+The layers solve complementary problems. seL4 answers **who may use a kernel
+resource**; the ticketed namespace answers **which named control or state
+surface that role may use**. A typical control flow is: write a bounded command,
+receive an acknowledgement (`OK`) or refusal (`ERR`), then read state or tail
+events for completion. This reduces protocol sprawl and makes policy, limits,
+and evidence easier to inspect.
 
-## System model
+seL4's machine-checked proofs apply to the kernel and their documented
+assumptions; they do not mean that Cohesix as a whole is formally verified.
 
-Cohesix deliberately exposes a narrow control plane:
-
-- `root-task` owns initial seL4 authority, HAL admission, scheduling,
-  recovery, and the serial/TCP console dispatchers.
-- NineDoor adapters present bounded file namespaces for control, telemetry,
-  logs, policy, and host projections. Host NineDoor speaks Secure9P; the target
-  console projects overlapping operations through a separate adapter.
-- Queen is the privileged orchestration role. Implemented worker images cover
-  heartbeat, GPU control receipts, and LoRA control receipts; generated
-  profile data decides which roles are admitted.
-- Physical Pi 4 devices are serviced by manifest-declared, isolated `no_std`
-  driver runtimes through a fixed, pointer-free command/completion ABI.
-- Host clients project the same documented file and console semantics. They do
-  not create a second authority path into the VM.
+## Architecture at a glance
 
 ```mermaid
 flowchart LR
-  subgraph Host[Host]
+  subgraph Host[Operator host]
     Operator[Operator or automation]
-    Clients[cohsh, coh, Python, SwarmUI]
+    Direct["One direct owner\ncohsh, coh, SwarmUI, or bridge"]
+    Shared["Concurrent clients\ncohsh, coh, Python, SwarmUI, bridges"]
     Gateway[hive-gateway]
-    Publishers[GPU and sidecar publishers]
-    Operator --> Clients
-    Clients -->|multiplexed REST| Gateway
-    Publishers --> Gateway
+    Operator --> Direct
+    Operator --> Shared
+    Shared -->|bounded REST projection| Gateway
   end
 
   subgraph Target[Cohesix target]
     Console[Authenticated TCP console]
     Root[root-task authority]
-    NineDoor[NineDoor namespace]
-    Queen[Queen role]
-    Workers[Worker images]
+    Namespace[NineDoorBridge namespace]
+    Queen["Queen role\nin root-task"]
+    Workers[Worker roles]
     Drivers[Isolated driver runtimes]
-    Root -->|hosts| NineDoor
-    Root -->|provides control authority| Queen
-    Root -->|starts and supervises| Workers
-    Queen -->|bounded file operations| NineDoor
-    Workers -->|bounded file operations| NineDoor
+    Kernel[seL4 capabilities and scheduling]
+    Console --> Root
+    Root --> Namespace
+    Root --> Queen
+    Root --> Workers
+    Queen -->|bounded file operations| Namespace
+    Workers -->|bounded file operations| Namespace
     Root -->|HAL admission and fixed ABI| Drivers
+    Root --> Kernel
+    Drivers --> Kernel
   end
 
-  Kernel[seL4 capabilities and scheduling]
   Hardware[Profile-admitted hardware]
 
-  Clients -->|direct single-client console| Console
-  Gateway -->|sole upstream console session| Console
-  Console --> Root
-  Root --> Kernel
-  Drivers --> Kernel
+  Direct -->|sole direct console session| Console
+  Gateway -->|sole gateway console session| Console
   Drivers --> Hardware
 ```
 
-The TCP console uses the documented `AUTH`/`ATTACH` and `ACK`/`ERR`/`END`
-grammar. It is not an in-VM 9P-over-TCP server. See
-[Architecture](docs/ARCHITECTURE.md),
-[Interfaces](docs/INTERFACES.md), and
-[Secure9P](docs/SECURE9P.md) for the boundary between console transport,
-NineDoor operations, and role authority.
+The two console arrows are alternatives: one direct tool or bridge owns the
+target's single TCP session, or `hive-gateway` owns it for concurrent host
+clients. They must not compete. The console uses the documented `AUTH`/`ATTACH`
+sequence, `OK`/`ERR` responses, and `END` stream terminator—not 9P frames on the
+wire. Host tools preserve the same namespace authority without creating a
+second control path.
 
-The direct-client and gateway arrows are alternative ownership modes. A direct
-client must not compete with a running gateway for the target console.
+SwarmUI is the host-side desktop view of Cohesix telemetry and replay. It reuses
+the existing host transport semantics and adds no target authority.
 
-## Main components
+![SwarmUI replay showing Live Hive telemetry](docs/swarmui-replay.png)
 
-| Component | Responsibility | Runs in |
+## Current project status
+
+Active work is Milestone 26d, with Milestone 26b reopened for bounded Pi 4
+Wi-Fi/SDIO driver-task closure. See the [build plan](docs/BUILD_PLAN.md) for the
+normative task and acceptance boundaries.
+
+| Surface | Current state | Evidence boundary |
 | --- | --- | --- |
-| `root-task` | Bootstrap, authority, HAL admission, consoles, recovery, and target-side NineDoor adapter | seL4 userspace |
-| `worker-heart`, `worker-gpu`, `worker-lora` | Bounded worker loops for telemetry and control-plane receipts | seL4 userspace |
-| `pi4-driver-runtime` images | Profile-selected serial, HDMI, USB, PCIe, GENET, CYW43, and SDIO service engines | Pi 4 seL4 userspace |
-| `cohsh` | Canonical interactive and scripted operator shell | Host |
-| `coh` | Mount, GPU, PEFT, telemetry, fleet, and evidence workflows | Host |
-| `hive-gateway` | Loopback-first REST multiplexer holding one upstream console session | Host |
-| `gpu-bridge-host` and `host-sidecar-bridge` | Publish bounded host state into documented namespaces | Host |
-| SwarmUI | Desktop presentation and replay over existing host transport semantics | Host |
-| `coh-rtc` | Compile selected manifest input into resolved configuration, Rust tables, policies, and documentation snippets | Build host |
+| QEMU `aarch64/virt` | Reference development and regression target on seL4 15.0.0 | Current target-qualified repository evidence passes Stages 1–5; QEMU is not hardware proof. |
+| Raspberry Pi 4 boot | Pi firmware → U-Boot → seL4 binary image → root task | Implemented and previously board-proven; current-tree live revalidation remains part of Milestone 26d. |
+| Pi 4 wired networking | Isolated GENETv5 runtime with DHCP and TCP | Accepted Milestone 26c evidence exists for its recorded image; a new image must prove its own state. |
+| Pi 4 Wi-Fi | Linked CYW43455 and SDIO runtimes implemented | Reopened 26b work has no current-image association, DHCP, TCP, or repeatability claim yet. |
+| Host tools | macOS 26 on Apple Silicon is the primary development host | Host success does not prove target or Pi hardware behavior. |
+| AWS/UEFI | Planned profile | Milestone 30 is pending; AWS is not a current Cohesix VM target. |
 
-SwarmUI visualizes Live Hive telemetry without adding VM authority.
+Building, flashing, current-image boot, saved policy, device readiness, raw TCP,
+authenticated `cohsh`, and benchmark results are separate proof states. The
+[hardware runbook](docs/HARDWARE_BRINGUP.md) explains how to prove each one.
 
-![SwarmUI replay screenshot](docs/swarmui-replay.png)
+## Get started
 
-## Run a release bundle
+### Run a release bundle
 
-Each bundle under [releases/](releases/) includes a versioned `QUICKSTART.md`.
-The common QEMU flow is:
+Versioned bundles under [releases/](releases/) include release-specific
+`QUICKSTART.md` instructions. The common QEMU flow is:
 
-1. Extract the bundle for the host platform.
-2. Install its documented runtime dependencies.
-3. Start the bundled QEMU launcher in one terminal.
-4. In a second terminal, enter the Queen console token without echoing it and
-   connect directly:
+1. Extract the bundle and install its documented dependencies.
+2. Start `./qemu/run.sh` in one terminal.
+3. In another terminal, provide the deployment's TCP console authentication
+   token without echoing it and connect as Queen:
 
    ```bash
    read -r -s COHSH_AUTH_TOKEN
@@ -150,16 +162,15 @@ The common QEMU flow is:
    unset COHSH_AUTH_TOKEN
    ```
 
-Use the token configured for that bundle or deployment. Never commit it, place
-it in a command history entry, or reuse the documented test placeholder. Direct
-TCP is authenticated but not encrypted; keep it on loopback or carry it through
-an authenticated tunnel.
+Direct TCP is authenticated but not encrypted. Keep it on loopback or carry it
+through an authenticated tunnel.
 
-## Build the current source tree
+### Build the current source tree
 
-The primary development path is macOS 26 on Apple Silicon with the repository's
-external seL4 15.0.0 build outputs. QEMU, Rust, Python 3, and the selected seL4
-profile must already be available.
+The primary path is macOS 26 on Apple Silicon with the repository's external
+seL4 15.0.0 build outputs. QEMU, Rust, Python 3, and the selected seL4 profile
+must already be available. Review the profile and kernel-artifact prerequisites
+in [Hardware bring-up](docs/HARDWARE_BRINGUP.md) before running the build.
 
 ```bash
 ./toolchain/setup_macos_arm64.sh
@@ -179,8 +190,8 @@ SEL4_BUILD_DIR="$PWD/seL4/SMP_build" \
     --transport tcp
 ```
 
-Then connect from another terminal using the secret configured in the selected
-manifest:
+Then connect from another terminal using the deployment's console
+authentication token:
 
 ```bash
 read -r -s COHSH_AUTH_TOKEN
@@ -190,48 +201,56 @@ out/cohesix/host-tools/cohsh \
 unset COHSH_AUTH_TOKEN
 ```
 
-For a Raspberry Pi 4 image, follow
-[Hardware bring-up](docs/HARDWARE_BRINGUP.md). Building or flashing an image is
-not proof that the board booted that image.
+For Raspberry Pi 4, use that runbook's separate workflow. Building or flashing
+an image is not proof that the board booted that image.
 
-## Documentation suite
+## Documentation
 
-Each document owns one part of the public contract. Exact generated values
-remain in `docs/snippets/` and the selected resolved manifest. Authored prose
-links to those sources; the few compiler-verified mirrors required by drift
-guards are isolated in clearly marked generated appendices.
+Each document owns one part of the public contract. Generated values remain in
+`docs/snippets/` and the selected resolved manifest.
 
 ### Design and contracts
 
 | Document | Owns |
 | --- | --- |
-| [Architecture](docs/ARCHITECTURE.md) | System boundaries, components, trust model, and major data flows |
-| [Interfaces](docs/INTERFACES.md) | External namespaces, payloads, console behavior, and compatibility rules |
+| [Architecture](docs/ARCHITECTURE.md) | Trust boundaries, components, and major data flows |
+| [Interfaces](docs/INTERFACES.md) | Namespaces, payloads, console behavior, and compatibility |
 | [Secure9P](docs/SECURE9P.md) | 9P layering, bounds, session invariants, and policy hooks |
-| [Roles and scheduling](docs/ROLES_AND_SCHEDULING.md) | Queen/Worker roles, tickets, lifecycle authority, and scheduling policy |
-| [Drivers](docs/DRIVERS.md) | HAL and isolated-runtime rules, device status, and hardware proof method |
-| [GPU nodes](docs/GPU_NODES.md) | Host-only GPU boundary, publish lifecycle, leases, and telemetry |
+| [Roles and scheduling](docs/ROLES_AND_SCHEDULING.md) | Queen/Worker authority, lifecycle, and scheduling policy |
+| [Drivers](docs/DRIVERS.md) | HAL, isolated runtimes, device status, and proof method |
+| [GPU nodes](docs/GPU_NODES.md) | Host-only GPU boundary, leases, and telemetry |
 
 ### Operator and integration guides
 
 | Document | Owns |
 | --- | --- |
-| [Userland and CLI](docs/USERLAND_AND_CLI.md) | Root console, `cohsh`, `.coh` grammar, and command semantics |
-| [Host tools](docs/HOST_TOOLS.md) | Host executable catalogue, transport choices, and composition rules |
-| [API guidelines](docs/API_GUIDELINES.md) | REST projection, authentication boundary, compatibility, and client guidance |
-| [Python support](docs/PYTHON_SUPPORT.md) | Python installation, backends, bounded APIs, and examples |
-| [Operator walkthrough](docs/OPERATOR_WALKTHROUGH.md) | One end-to-end operating sequence from preflight through evidence capture |
-| [Failure modes](docs/FAILURE_MODES.md) | Symptoms, evidence, bounded recovery, and escalation |
+| [Userland and CLI](docs/USERLAND_AND_CLI.md) | Console, `cohsh`, `.coh` grammar, and command semantics |
+| [Host tools](docs/HOST_TOOLS.md) | Executable catalogue, transports, and composition rules |
+| [API guidelines](docs/API_GUIDELINES.md) | REST projection, authentication, and compatibility |
+| [Python support](docs/PYTHON_SUPPORT.md) | Python backends, bounded APIs, and examples |
+| [Operator walkthrough](docs/OPERATOR_WALKTHROUGH.md) | End-to-end preflight, operation, and evidence capture |
+| [Failure modes](docs/FAILURE_MODES.md) | Symptoms, evidence, recovery, and escalation |
 
 ### Targets, evidence, and planning
 
 | Document | Owns |
 | --- | --- |
-| [Hardware bring-up](docs/HARDWARE_BRINGUP.md) | QEMU/Pi profiles, image/flash/boot workflow, and current proof gates |
-| [Boot reference](docs/BOOT_REFERENCE.md) | Expected boot stages, prompts, and fail-closed invariants |
-| [Benchmarks](docs/BENCHMARKS.md) | Workloads, evidence lanes, report interpretation, and regression decisions |
-| [Use cases](docs/USE_CASES.md) | Capability-fit patterns and integration boundaries, not acceptance claims |
-| [Build plan](docs/BUILD_PLAN.md) | Normative milestone scope, task authorization, checks, and status |
+| [Hardware bring-up](docs/HARDWARE_BRINGUP.md) | Image, flash, boot, and hardware-proof workflow |
+| [Boot reference](docs/BOOT_REFERENCE.md) | Boot stages, prompts, and fail-closed invariants |
+| [Benchmarks](docs/BENCHMARKS.md) | Workloads, provenance, and regression decisions |
+| [Use cases](docs/USE_CASES.md) | Capability-fit patterns, not acceptance claims |
+| [Build plan](docs/BUILD_PLAN.md) | Normative milestone scope, task authorization, and status |
+
+## Help and contributing
+
+- Start with the [operator walkthrough](docs/OPERATOR_WALKTHROUGH.md); use
+  [failure modes](docs/FAILURE_MODES.md) for diagnosis and recovery.
+- Contributions must follow `AGENTS.md` and the active task in the
+  [build plan](docs/BUILD_PLAN.md); behavioral changes require matching tests,
+  generated artifacts, and documentation.
+- Cohesix is maintained by Lukas Bower. Use GitHub Issues for reproducible,
+  non-sensitive bugs and scoped design discussions. Never put secrets in an
+  issue, log, or command example.
 
 ## License
 

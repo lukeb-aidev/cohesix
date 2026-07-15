@@ -2,7 +2,7 @@
 # Purpose: Inventory tracked Markdown Mermaid diagrams for Milestone 26c.
 # Copyright 2026 Lukas Bower
 path,block_index,line_start,line_end,heading,diagram_type,disposition,owner,evidence_source,github_status,update_rule
-README.md,1,68,104,System model,flowchart,human-edited canonical source,docs-owner,README.md,pass,edit directly with generated/as-built evidence
+README.md,1,76,112,Architecture at a glance,flowchart,human-edited canonical source,docs-owner,README.md,pass,edit directly with generated/as-built evidence
 docs/ARCHITECTURE.md,1,79,115,2.2 System boundary,flowchart,human-edited canonical source,docs-owner,docs/ARCHITECTURE.md,pass,edit directly with generated/as-built evidence
 docs/BOOT_REFERENCE.md,1,17,34,Boot Paths,flowchart,human-edited canonical source,docs-owner,docs/BOOT_REFERENCE.md,pass,edit directly with generated/as-built evidence
 docs/DRIVERS.md,1,63,89,As-built architecture,flowchart,human-edited canonical source,docs-owner,docs/DRIVERS.md,pass,edit directly with generated/as-built evidence

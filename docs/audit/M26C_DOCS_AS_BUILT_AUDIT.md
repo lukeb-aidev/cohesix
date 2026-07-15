@@ -22,7 +22,7 @@ Status: `COMPLETE / README-LINKED-SUITE-REMEDIATED / AS-BUILT-ALIGNED`
 - `tools/coh-rtc/src/ir.rs`
 - `scripts/ci/test_plan_run.sh`
 - `scripts/ci/check_test_plan.sh`
-- `README.md` and all 17 directly linked canonical Markdown documents
+- `README.md` and the 17-document canonical suite in its Documentation section
 - `docs/HOST_API.md` and `resources/openapi/hive-gateway.yaml`
 - `docs/audit/M26C_MARKDOWN_INVENTORY.csv`
 - `docs/audit/M26C_MERMAID_INVENTORY.csv`
@@ -53,12 +53,17 @@ Status: `COMPLETE / README-LINKED-SUITE-REMEDIATED / AS-BUILT-ALIGNED`
 | Operator and host | `USERLAND_AND_CLI`, `HOST_TOOLS`, `API_GUIDELINES`, `PYTHON_SUPPORT`, `FAILURE_MODES`, `OPERATOR_WALKTHROUGH` | Current CLI help, fixtures, source, OpenAPI, and generated policy mirrors | Direct and gateway ownership, compiled gateway bounds versus target boot truth, provider scheduling, mock persistence, REST authority, and `TAIL lines` placement are stated as built. |
 | Platform and product | `USE_CASES`, `HARDWARE_BRINGUP`, `BOOT_REFERENCE`, `GPU_NODES`, `BENCHMARKS` | Current Test Plan state, historical 26c evidence, and 26d proof boundaries | Implemented capability, historical proof, current-image proof, simulation, and planned work are no longer conflated. |
 | Mermaid | Nine active suite diagrams; 75 tracked blocks | Diagram owners plus the same source and evidence used by their documents | GitHub compatibility PASS; Mermaid CLI 11.16.0 rendered 75 of 75 blocks. The 32 warnings belong only to immutable release snapshots and also rendered. |
-| Suite integrity | `README.md` plus 17 linked documents | Repository paths and GitHub heading anchors | 266 local links resolved; headers, H1 structure, fences, Markdown linting, and diff checks passed. |
+| Suite integrity | `README.md` plus its 17-document documentation suite | Repository paths and GitHub heading anchors | 266 local links resolved; headers, H1 structure, fences, Markdown linting, and diff checks passed. |
 
 This remediation changed authored documentation, audit inventories, and the
 embedded OpenAPI description. The OpenAPI edit documents existing handler
 behavior; no runtime behavior, generated artifact, release snapshot, or
 hardware acceptance changed.
+
+A follow-up landing-page refinement restored the Plan 9 lineage, introduced the
+project through its purpose and differentiators, and added plain-language
+definitions of seL4, capabilities, 9P, Secure9P, and NineDoor to `README.md`.
+It changes no interface or authority semantics.
 
 ## Required Follow-Up
 
