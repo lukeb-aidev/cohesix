@@ -32,6 +32,47 @@ hide `buffer-full`, or convert a benchmark shortcut into production behavior.
 | Current Pi 4 source | Pi-qualified offline Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. No current-tree live Pi benchmark is qualified. |
 | Current Pi 4 Wi-Fi | Rebuild, flash/readback, current-image association, EAPOL, DHCP, ARP, raw TCP, authenticated `cohsh`, and repeatability revalidation remain pending. Any older Wi-Fi performance result is diagnostic or historical. |
 
+### M26d QEMU Gateway Cache/Coalescing Revalidation (2026-07-16)
+
+This diagnostic ledger covers Milestone 26d
+`m26d-benchmark-revalidation-and-tuning` and the reopened Milestone 26b
+`m26b-rest-normalized-parity` guarantee that cache/coalescing remains a
+host-only projection with no write bypass. The candidate source commit is
+`eed905d0edfe1e65f4dc83af652626a055cfcb4e`.
+
+The retained 8-to-1000-worker baseline and final runs use the same mixed
+workload: intensity 6, 120 seconds, seed-controlled ramp, target range
+28.8-to-3600 requests/second, maximum 256 in flight, transient retries off,
+strict control errors on, and a 1% error budget.
+
+| Metric | Baseline | Final aligned | Interpretation |
+| --- | ---: | ---: | --- |
+| Successful / attempted operations | 96,458 / 104,023 | 100,437 / 108,316 | More successful work completed under the same two-minute workload. |
+| Average latency | 45.7 ms | 22.6 ms | Improved; diagnostic QEMU REST result only. |
+| p95 latency | 135.8 ms | 41.6 ms | Improved without retry masking. |
+| p99 latency | 2.407 s | 248.4 ms | Improved; the tail remains workload- and QEMU-specific. |
+| Telemetry waiter high-water | 139 | 47 | Reduced gateway contention. |
+| Gateway pool exhaustion / timeout rejection | 0 / 0 | 0 / 0 | No gateway pool or timeout failure was observed. |
+| Gateway read-cache hit rate (`proc_cache_*` counters) | 83.95% | 81.06% | Both runs exercised the cache; hit rate is descriptive, not a verdict. |
+| Overall strict-control error rate | 7.272% | 7.274% | **FAIL** against the 1% budget in both runs. |
+
+Artifacts:
+
+- Baseline: `out/bench/m26d-high-pressure-baseline_20260715T115501Z.summary.json`.
+- Final aligned: `out/bench/m26d-high-pressure-final-aligned_20260715T124018Z.summary.json`.
+- Fresh bounded smoke using the candidate source: `out/bench/hive-cache-simulate_20260715T212758Z.summary.json` (`8` workers, intensity `2`, `96/96` operations successful, no retry, no gateway pool exhaustion or timeout rejection).
+- Fresh affected-read microbenchmark: `out/bench/hive-cache-perf-status_20260715T213118Z.perf-summary.json` (`5` status runs, `108` cache hits, `12` misses, no gateway pool exhaustion or timeout rejection, measured sequential/parallel ratio `267.62x`). The first cold sequential sample dominates the average, so this ratio is not a general capacity claim.
+- Companion gates: `out/test-plan/m26d-gateway-cache-20260715` Stages 01-04 and `out/audit/gate/20260715T212429Z` due diligence.
+
+All 27 REST read operation kinds in the final aligned stress artifact completed
+90,305 attempts with zero errors. The overall stress run is nevertheless not
+an accepted capacity envelope: all 7,879 errors are explicit bounded VM
+schedule/lease `buffer-full` refusals (5,367 lease and 2,512 schedule). That
+upstream bounded-pressure debt blocks an 8-to-1000-worker acceptance claim but
+does not justify hiding retries, widening queues, or treating cache reads as
+failed. This ledger is QEMU gateway evidence only; it is not Pi 4, GENET,
+CYW43/SDIO, Wi-Fi, or repeated-boot proof.
+
 No current mixed-load `simulate` worker envelope is accepted by this document.
 The former 1500-worker result and later local 400/600/1200-worker observations
 lack a retained, current, fully qualified artifact index here. They may guide a
