@@ -1,6 +1,6 @@
 <!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Introduce Cohesix, explain its design, and direct readers to verified usage and documentation. -->
+<!-- Purpose: Introduce Cohesix, explain its AI-hive design, and direct readers to verified usage and documentation. -->
 <!-- Author: Lukas Bower -->
 
 <table width="100%" cellpadding="0" cellspacing="0">
@@ -17,17 +17,17 @@
 
 # Cohesix
 
-Cohesix is a pre-production control-plane operating system for security-sensitive
-edge orchestration and telemetry. It turns operations such as submitting work to
-a bounded schedule queue, recording GPU lease state, applying policy, or
-requesting recovery into role-scoped actions with observable state and replayable
-evidence.
+Cohesix is a pre-production research operating system for edge AI,
+built around a simple idea: an AI fleet should have air-traffic control, not
+a pile of tools holding unrestricted credentials.
 
-The target stays deliberately small: upstream seL4, pure-Rust userspace,
-profile-selected workers, and isolated hardware-driver runtimes. CUDA, NVML,
-container runtimes, model registries, agent frameworks, and desktop UI remain on
-the host, outside the trusted computing base: the target software that must be
-trusted for security.
+Each Cohesix hive has a Queen with orchestration authority and specialized
+Workers scoped to heartbeat telemetry, GPU lease/status records, and LoRA
+lifecycle receipts, each limited by role-specific capabilities and tickets.
+
+Models, agents, CUDA/NVML, training, and inference stay on the host. Cohesix is
+the compact trust layer beneath them: approved host tools reduce intent to
+bounded, policy-checked requests with visible state and evidence.
 
 ## What makes Cohesix different?
 
@@ -40,13 +40,13 @@ trusted for security.
 - **Hardware is compartmentalized.** Physical Pi 4 devices run in
   manifest-declared Rust driver runtimes admitted through HAL; the root task does
   not own their steady-state drivers.
-- **Automation remains accountable.** External software can propose work through
-  existing host clients, while target-side role, ticket, lifecycle, and bounds
-  checks decide whether it runs and retain evidence of the outcome.
+- **AI can propose; Cohesix decides.** Models, agents, and operators submit intent
+  through approved host tools, while target-side role, ticket, lifecycle, and
+  bounds checks decide what is accepted and retain evidence of the outcome.
 
-Cohesix is useful where “who was allowed to do what, under which policy, and how
-can we prove the result?” matters as much as raw orchestration. It is not a
-general-purpose desktop/server OS, Linux distribution, POSIX environment, or
+Cohesix is for AI systems where safe action matters as much as smart inference:
+what was allowed, which policy governed it, and what evidence remains. It is not
+a general-purpose desktop/server OS, Linux distribution, POSIX environment, or
 in-VM GPU stack.
 
 ## Why seL4, Plan 9, and 9P?
@@ -90,7 +90,7 @@ flowchart LR
     Root[root-task authority]
     Namespace[NineDoorBridge namespace]
     Queen["Queen role\nin root-task"]
-    Workers[Worker roles]
+    Workers[Specialized Worker roles]
     Drivers[Isolated driver runtimes]
     Kernel[seL4 capabilities and scheduling]
     Console --> Root

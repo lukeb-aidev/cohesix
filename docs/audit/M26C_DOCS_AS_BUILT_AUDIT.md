@@ -60,10 +60,10 @@ embedded OpenAPI description. The OpenAPI edit documents existing handler
 behavior; no runtime behavior, generated artifact, release snapshot, or
 hardware acceptance changed.
 
-A follow-up landing-page refinement restored the Plan 9 lineage, introduced the
-project through its purpose and differentiators, and added plain-language
-definitions of seL4, capabilities, 9P, Secure9P, and NineDoor to `README.md`.
-It changes no interface or authority semantics.
+A follow-up landing-page refinement restored the Plan 9 lineage, identified
+Cohesix as a pre-production research OS for AI infrastructure, made the
+Queen/Worker hive the introductory model, and defined seL4, capabilities, 9P,
+Secure9P, and NineDoor. It changes no interface or authority semantics.
 
 ## Required Follow-Up
 
