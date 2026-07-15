@@ -12,7 +12,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -396,6 +396,95 @@ impl BrokerTimeouts {
 struct ProcReadCache {
     entries: HashMap<String, ProcReadCacheEntry>,
     order: VecDeque<String>,
+    in_flight: HashMap<String, Arc<ProcReadFill>>,
+}
+
+#[derive(Default)]
+struct ProcReadFill {
+    result: Mutex<Option<std::result::Result<Vec<String>, String>>>,
+    ready: Condvar,
+    #[cfg(test)]
+    waiters: std::sync::atomic::AtomicUsize,
+}
+
+enum ProcReadCacheClaim {
+    Hit(Vec<String>),
+    Leader(Arc<ProcReadFill>),
+    Follower(Arc<ProcReadFill>),
+    Bypass,
+}
+
+impl ProcReadFill {
+    fn wait(&self) -> Result<Vec<String>> {
+        let mut result = match self.result.lock() {
+            Ok(result) => result,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        while result.is_none() {
+            #[cfg(test)]
+            self.waiters.fetch_add(1, Ordering::Relaxed);
+            result = match self.ready.wait(result) {
+                Ok(result) => result,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            #[cfg(test)]
+            self.waiters.fetch_sub(1, Ordering::Relaxed);
+        }
+        let Some(result) = result.as_ref() else {
+            return Err(anyhow::anyhow!("gateway cache fill ended without a result"));
+        };
+        match result {
+            Ok(lines) => Ok(lines.clone()),
+            Err(message) => Err(anyhow::anyhow!(message.clone())),
+        }
+    }
+
+    fn publish(&self, result: std::result::Result<Vec<String>, String>) {
+        let mut published = match self.result.lock() {
+            Ok(published) => published,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if published.is_none() {
+            *published = Some(result);
+        }
+        drop(published);
+        self.ready.notify_all();
+    }
+}
+
+struct ProcReadFillLeader<'a> {
+    state: &'a AppState,
+    path: &'a str,
+    fill: Arc<ProcReadFill>,
+    completed: bool,
+}
+
+impl<'a> ProcReadFillLeader<'a> {
+    fn new(state: &'a AppState, path: &'a str, fill: Arc<ProcReadFill>) -> Self {
+        Self {
+            state,
+            path,
+            fill,
+            completed: false,
+        }
+    }
+
+    fn complete(mut self, result: std::result::Result<Vec<String>, String>) {
+        self.state.read_cache_finish(self.path, &self.fill, result);
+        self.completed = true;
+    }
+}
+
+impl Drop for ProcReadFillLeader<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.state.read_cache_finish(
+                self.path,
+                &self.fill,
+                Err("gateway cache fill cancelled".to_owned()),
+            );
+        }
+    }
 }
 
 #[derive(Default)]
@@ -448,6 +537,16 @@ impl ControlWriteBackpressure {
 struct ProcReadCacheEntry {
     inserted_at: Instant,
     lines: Vec<String>,
+}
+
+fn read_cache_valid_entry(cache: &mut ProcReadCache, path: &str) -> Option<Vec<String>> {
+    let entry = cache.entries.get(path).cloned()?;
+    if entry.inserted_at.elapsed() > Duration::from_millis(DEFAULT_PROC_CACHE_TTL_MS) {
+        cache.entries.remove(path);
+        cache.order.retain(|value| value != path);
+        return None;
+    }
+    Some(entry.lines)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1516,54 +1615,42 @@ impl AppState {
 
     fn list(&self, path: &str) -> Result<Vec<String>> {
         if is_cacheable_list_path(path) {
-            if let Some(lines) = self.read_cache_get(path) {
-                return Ok(lines);
-            }
-            self.inner
-                .broker
-                .proc_cache_misses
-                .fetch_add(1, Ordering::Relaxed);
+            return self.read_through_cache(path, || self.list_uncached(path));
         }
+        self.list_uncached(path)
+    }
+
+    fn list_uncached(&self, path: &str) -> Result<Vec<String>> {
         self.ensure_connected()?;
-        let lines = match self.submit_broker(
+        match self.submit_broker(
             PoolKind::Telemetry,
             BrokerRequest::List {
                 path: path.to_owned(),
             },
         )? {
-            BrokerResponse::Lines(lines) => lines,
-            BrokerResponse::Unit => Vec::new(),
-        };
-        if is_cacheable_list_path(path) {
-            self.read_cache_insert(path, lines.clone());
+            BrokerResponse::Lines(lines) => Ok(lines),
+            BrokerResponse::Unit => Ok(Vec::new()),
         }
-        Ok(lines)
     }
 
     fn read(&self, path: &str) -> Result<Vec<String>> {
         if is_cacheable_read_path(path) {
-            if let Some(lines) = self.read_cache_get(path) {
-                return Ok(lines);
-            }
-            self.inner
-                .broker
-                .proc_cache_misses
-                .fetch_add(1, Ordering::Relaxed);
+            return self.read_through_cache(path, || self.read_uncached(path));
         }
+        self.read_uncached(path)
+    }
+
+    fn read_uncached(&self, path: &str) -> Result<Vec<String>> {
         self.ensure_connected()?;
-        let lines = match self.submit_broker(
+        match self.submit_broker(
             PoolKind::Telemetry,
             BrokerRequest::Read {
                 path: path.to_owned(),
             },
         )? {
-            BrokerResponse::Lines(lines) => lines,
-            BrokerResponse::Unit => Vec::new(),
-        };
-        if is_cacheable_read_path(path) {
-            self.read_cache_insert(path, lines.clone());
+            BrokerResponse::Lines(lines) => Ok(lines),
+            BrokerResponse::Unit => Ok(Vec::new()),
         }
-        Ok(lines)
     }
 
     fn tail(&self, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
@@ -1716,23 +1803,72 @@ impl AppState {
         self.inner.request_auth_token.as_str()
     }
 
-    fn read_cache_get(&self, path: &str) -> Option<Vec<String>> {
-        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
-        let entry = cache.entries.get(path).cloned()?;
-        if entry.inserted_at.elapsed() > Duration::from_millis(DEFAULT_PROC_CACHE_TTL_MS) {
-            cache.entries.remove(path);
-            cache.order.retain(|value| value != path);
-            return None;
+    fn read_through_cache<F>(&self, path: &str, fetch: F) -> Result<Vec<String>>
+    where
+        F: FnOnce() -> Result<Vec<String>>,
+    {
+        match self.read_cache_claim(path) {
+            ProcReadCacheClaim::Hit(lines) => Ok(lines),
+            ProcReadCacheClaim::Follower(fill) => fill.wait(),
+            ProcReadCacheClaim::Bypass => fetch(),
+            ProcReadCacheClaim::Leader(fill) => {
+                let leader = ProcReadFillLeader::new(self, path, fill);
+                match fetch() {
+                    Ok(lines) => {
+                        leader.complete(Ok(lines.clone()));
+                        Ok(lines)
+                    }
+                    Err(err) => {
+                        leader.complete(Err(err.to_string()));
+                        Err(err)
+                    }
+                }
+            }
         }
+    }
+
+    fn read_cache_claim(&self, path: &str) -> ProcReadCacheClaim {
+        let mut cache = self.proc_cache_guard();
+        if let Some(lines) = read_cache_valid_entry(&mut cache, path) {
+            self.inner
+                .broker
+                .proc_cache_hits
+                .fetch_add(1, Ordering::Relaxed);
+            return ProcReadCacheClaim::Hit(lines);
+        }
+        self.inner
+            .broker
+            .proc_cache_misses
+            .fetch_add(1, Ordering::Relaxed);
+        if let Some(fill) = cache.in_flight.get(path) {
+            return ProcReadCacheClaim::Follower(fill.clone());
+        }
+        if cache.in_flight.len() >= DEFAULT_PROC_CACHE_MAX_ENTRIES {
+            return ProcReadCacheClaim::Bypass;
+        }
+        let fill = Arc::new(ProcReadFill::default());
+        cache.in_flight.insert(path.to_owned(), fill.clone());
+        ProcReadCacheClaim::Leader(fill)
+    }
+
+    #[cfg(test)]
+    fn read_cache_get(&self, path: &str) -> Option<Vec<String>> {
+        let mut cache = self.proc_cache_guard();
+        let lines = read_cache_valid_entry(&mut cache, path)?;
         self.inner
             .broker
             .proc_cache_hits
             .fetch_add(1, Ordering::Relaxed);
-        Some(entry.lines)
+        Some(lines)
     }
 
+    #[cfg(test)]
     fn read_cache_insert(&self, path: &str, lines: Vec<String>) {
-        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        let mut cache = self.proc_cache_guard();
+        self.read_cache_insert_locked(&mut cache, path, lines);
+    }
+
+    fn read_cache_insert_locked(&self, cache: &mut ProcReadCache, path: &str, lines: Vec<String>) {
         if !cache.entries.contains_key(path)
             && cache.entries.len() >= DEFAULT_PROC_CACHE_MAX_ENTRIES
         {
@@ -1755,31 +1891,60 @@ impl AppState {
         );
     }
 
+    fn read_cache_finish(
+        &self,
+        path: &str,
+        fill: &Arc<ProcReadFill>,
+        result: std::result::Result<Vec<String>, String>,
+    ) {
+        let mut cache = self.proc_cache_guard();
+        let fill_is_current = cache
+            .in_flight
+            .get(path)
+            .is_some_and(|current| Arc::ptr_eq(current, fill));
+        if fill_is_current {
+            cache.in_flight.remove(path);
+            if let Ok(lines) = &result {
+                self.read_cache_insert_locked(&mut cache, path, lines.clone());
+            }
+        }
+        drop(cache);
+        fill.publish(result);
+    }
+
     fn read_cache_invalidate_for_write(&self, write_path: &str) {
-        let mut cache = self.inner.proc_cache.lock().expect("cache lock poisoned");
+        let mut cache = self.proc_cache_guard();
         let Some(namespaces) = cache_invalidation_namespaces(write_path) else {
             cache.entries.clear();
             cache.order.clear();
+            cache.in_flight.clear();
             return;
         };
         cache
             .entries
             .retain(|key, _| !namespaces.iter().any(|ns| cache_key_in_namespace(key, ns)));
-        let retained_order: Vec<String> = cache
-            .order
-            .iter()
-            .filter(|key| cache.entries.contains_key((*key).as_str()))
-            .cloned()
-            .collect();
-        cache.order = VecDeque::from(retained_order);
+        cache
+            .in_flight
+            .retain(|key, _| !namespaces.iter().any(|ns| cache_key_in_namespace(key, ns)));
+        let ProcReadCache { entries, order, .. } = &mut *cache;
+        order.retain(|key| entries.contains_key(key.as_str()));
+    }
+
+    fn proc_cache_guard(&self) -> MutexGuard<'_, ProcReadCache> {
+        match self.inner.proc_cache.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 
     fn control_write_backpressure_refusal(&self, path: &str) -> Option<String> {
+        control_write_backpressure_key(path)?;
         self.control_write_backpressure_guard()
             .refusal(path, Instant::now())
     }
 
     fn control_write_backpressure_record(&self, path: &str, message: &str) -> Option<String> {
+        control_write_backpressure_key(path)?;
         self.control_write_backpressure_guard().record(
             path,
             Instant::now(),
@@ -1789,6 +1954,9 @@ impl AppState {
     }
 
     fn control_write_backpressure_clear(&self, path: &str) {
+        if control_write_backpressure_key(path).is_none() {
+            return;
+        }
         self.control_write_backpressure_guard().clear(path);
     }
 
@@ -1908,15 +2076,14 @@ async fn handle_cat(state: AppState, query: CatQuery) -> impl axum::response::In
     let result = tokio::task::spawn_blocking(move || state.read(&path)).await;
     match result {
         Ok(Ok(lines)) => {
-            let bytes = lines.join("\n").len();
-            if bytes > max_bytes {
+            let Some(bytes) = bounded_joined_line_bytes(&lines, max_bytes) else {
                 return response_err(
                     verb,
                     &query.path,
                     format!("read exceeded max_bytes {max_bytes}"),
                     StatusCode::BAD_REQUEST,
                 );
-            }
+            };
             response_ok(verb, query.path, lines, Some(bytes))
         }
         Ok(Err(err)) => response_transport_err(verb, &query.path, err),
@@ -1966,15 +2133,14 @@ async fn handle_tail(state: AppState, query: TailQuery) -> impl axum::response::
     let result = tokio::task::spawn_blocking(move || state.tail(&path, lines)).await;
     match result {
         Ok(Ok(lines)) => {
-            let bytes = lines.join("\n").len();
-            if bytes > max_bytes {
+            let Some(bytes) = bounded_joined_line_bytes(&lines, max_bytes) else {
                 return response_err(
                     verb,
                     &query.path,
                     format!("tail exceeded max_bytes {max_bytes}"),
                     StatusCode::BAD_REQUEST,
                 );
-            }
+            };
             response_ok(verb, query.path, lines, Some(bytes))
         }
         Ok(Err(err)) => response_transport_err(verb, &query.path, err),
@@ -1995,6 +2161,20 @@ fn validate_tail_lines(lines: Option<u16>) -> Result<Option<u16>, String> {
         )),
         _ => Ok(lines),
     }
+}
+
+fn bounded_joined_line_bytes(lines: &[String], max_bytes: usize) -> Option<usize> {
+    let mut bytes = 0usize;
+    for (index, line) in lines.iter().enumerate() {
+        if index > 0 {
+            bytes = bytes.checked_add(1)?;
+        }
+        bytes = bytes.checked_add(line.len())?;
+        if bytes > max_bytes {
+            return None;
+        }
+    }
+    Some(bytes)
 }
 
 async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::response::IntoResponse {
@@ -2048,7 +2228,10 @@ fn is_cacheable_list_path(path: &str) -> bool {
 }
 
 fn cache_key_in_namespace(key: &str, namespace: &str) -> bool {
-    key == namespace || key.starts_with(&format!("{namespace}/"))
+    key == namespace
+        || key
+            .strip_prefix(namespace)
+            .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
 fn cache_invalidation_namespaces(write_path: &str) -> Option<&'static [&'static str]> {
@@ -2349,6 +2532,8 @@ mod tests {
     use anyhow::anyhow;
     use axum::http::header::AUTHORIZATION;
     use axum::http::{HeaderMap, HeaderValue};
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Barrier;
 
     fn test_write_command(
         kind: PoolKind,
@@ -2887,5 +3072,308 @@ mod tests {
                 .load(Ordering::Relaxed),
             0
         );
+    }
+
+    #[test]
+    fn concurrent_cache_misses_share_one_fill() {
+        const CALLERS: usize = 32;
+        let state = Arc::new(disconnected_cached_state());
+        let start = Arc::new(Barrier::new(CALLERS + 1));
+        let release_leader = Arc::new(AtomicBool::new(false));
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::with_capacity(CALLERS);
+
+        for _ in 0..CALLERS {
+            let state = state.clone();
+            let start = start.clone();
+            let release_leader = release_leader.clone();
+            let fetches = fetches.clone();
+            handles.push(thread::spawn(move || {
+                start.wait();
+                state.read_through_cache("/proc/root/reachable", || {
+                    fetches.fetch_add(1, Ordering::Relaxed);
+                    while !release_leader.load(Ordering::Acquire) {
+                        thread::yield_now();
+                    }
+                    Ok(vec!["reachable=yes".to_owned()])
+                })
+            }));
+        }
+
+        start.wait();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let all_waiting = loop {
+            let misses = state.inner.broker.proc_cache_misses.load(Ordering::Relaxed);
+            let waiters = state
+                .proc_cache_guard()
+                .in_flight
+                .get("/proc/root/reachable")
+                .map_or(0, |fill| fill.waiters.load(Ordering::Relaxed));
+            if misses == CALLERS as u64 && waiters == CALLERS - 1 {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::yield_now();
+        };
+        release_leader.store(true, Ordering::Release);
+
+        for handle in handles {
+            let lines = handle.join().expect("cache request thread must join");
+            assert_eq!(
+                lines.expect("cache request must succeed"),
+                ["reachable=yes"]
+            );
+        }
+        assert!(all_waiting, "all cache followers must wait before release");
+        assert_eq!(fetches.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            state.inner.broker.proc_cache_misses.load(Ordering::Relaxed),
+            CALLERS as u64
+        );
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn cache_fill_error_fans_out_and_next_request_retries() {
+        const CALLERS: usize = 16;
+        let state = Arc::new(disconnected_cached_state());
+        let start = Arc::new(Barrier::new(CALLERS + 1));
+        let release_leader = Arc::new(AtomicBool::new(false));
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::with_capacity(CALLERS);
+
+        for _ in 0..CALLERS {
+            let state = state.clone();
+            let start = start.clone();
+            let release_leader = release_leader.clone();
+            let fetches = fetches.clone();
+            handles.push(thread::spawn(move || {
+                start.wait();
+                state.read_through_cache("/proc/root/reachable", || {
+                    fetches.fetch_add(1, Ordering::Relaxed);
+                    while !release_leader.load(Ordering::Acquire) {
+                        thread::yield_now();
+                    }
+                    Err(anyhow!("cold read failed"))
+                })
+            }));
+        }
+
+        start.wait();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let all_waiting = loop {
+            let misses = state.inner.broker.proc_cache_misses.load(Ordering::Relaxed);
+            let waiters = state
+                .proc_cache_guard()
+                .in_flight
+                .get("/proc/root/reachable")
+                .map_or(0, |fill| fill.waiters.load(Ordering::Relaxed));
+            if misses == CALLERS as u64 && waiters == CALLERS - 1 {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            thread::yield_now();
+        };
+        release_leader.store(true, Ordering::Release);
+
+        for handle in handles {
+            let result = handle.join().expect("cache request thread must join");
+            assert_eq!(
+                result.expect_err("cache fill must fail").to_string(),
+                "cold read failed"
+            );
+        }
+        assert!(all_waiting, "all cache followers must wait before release");
+        assert_eq!(fetches.load(Ordering::Relaxed), 1);
+
+        let retried = state
+            .read_through_cache("/proc/root/reachable", || {
+                fetches.fetch_add(1, Ordering::Relaxed);
+                Ok(vec!["reachable=yes".to_owned()])
+            })
+            .expect("failed fills must remain retryable");
+        assert_eq!(retried, ["reachable=yes"]);
+        assert_eq!(fetches.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn invalidation_prevents_stale_fill_reinsertion() {
+        let state = Arc::new(disconnected_cached_state());
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (result_tx, result_rx) = mpsc::channel();
+        let leader_state = state.clone();
+        let leader = thread::spawn(move || {
+            let result = leader_state.read_through_cache("/proc/schedule/summary", || {
+                started_tx
+                    .send(())
+                    .expect("test must observe the first cache fill");
+                release_rx
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("test must release the first cache fill");
+                Ok(vec!["queue=stale".to_owned()])
+            });
+            result_tx
+                .send(result)
+                .expect("test must observe the first cache result");
+        });
+
+        started_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("first cache fill must reach the fetch boundary");
+        state.read_cache_invalidate_for_write(CLIENT_QUEEN_SCHEDULE_CTL_PATH);
+        let fresh = state
+            .read_through_cache("/proc/schedule/summary", || {
+                Ok(vec!["queue=fresh".to_owned()])
+            })
+            .expect("post-write cache fill must succeed");
+        assert_eq!(fresh, ["queue=fresh"]);
+
+        release_tx
+            .send(())
+            .expect("first cache fill must be releasable");
+        let stale = result_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("first cache fill must complete within the test bound")
+            .expect("already-started cache fill may complete");
+        leader.join().expect("first cache fill thread must join");
+        assert_eq!(stale, ["queue=stale"]);
+        assert_eq!(
+            state
+                .read_cache_get("/proc/schedule/summary")
+                .expect("fresh result must remain cached"),
+            ["queue=fresh"]
+        );
+    }
+
+    #[test]
+    fn cache_invalidation_preserves_unrelated_fills_and_bounds_tracking() {
+        let state = disconnected_cached_state();
+        state.read_cache_insert("/proc/root/reachable", vec!["reachable=yes".to_owned()]);
+        state.read_cache_insert("/host/docker/status", vec!["active=yes".to_owned()]);
+        state.read_cache_invalidate_for_write("/host/docker/status");
+        {
+            let cache = state.proc_cache_guard();
+            assert!(cache.entries.contains_key("/proc/root/reachable"));
+            assert!(!cache.entries.contains_key("/host/docker/status"));
+            assert_eq!(
+                cache.order.iter().map(String::as_str).collect::<Vec<_>>(),
+                ["/proc/root/reachable"]
+            );
+        }
+
+        let proc_fill = Arc::new(ProcReadFill::default());
+        let host_fill = Arc::new(ProcReadFill::default());
+        {
+            let mut cache = state.proc_cache_guard();
+            cache
+                .in_flight
+                .insert("/proc/root/reachable".to_owned(), proc_fill.clone());
+            cache
+                .in_flight
+                .insert("/host/docker/status".to_owned(), host_fill);
+        }
+
+        state.read_cache_invalidate_for_write("/host/docker/status");
+        {
+            let cache = state.proc_cache_guard();
+            assert_eq!(cache.in_flight.len(), 1);
+            assert!(cache
+                .in_flight
+                .get("/proc/root/reachable")
+                .is_some_and(|fill| Arc::ptr_eq(fill, &proc_fill)));
+        }
+
+        state.read_cache_invalidate_for_write("/log/queen.log");
+        assert!(state.proc_cache_guard().in_flight.is_empty());
+
+        {
+            let mut cache = state.proc_cache_guard();
+            for index in 0..DEFAULT_PROC_CACHE_MAX_ENTRIES {
+                cache.in_flight.insert(
+                    format!("/proc/bounded/{index}"),
+                    Arc::new(ProcReadFill::default()),
+                );
+            }
+        }
+        let bypass_fetches = AtomicUsize::new(0);
+        let lines = state
+            .read_through_cache("/proc/bounded/overflow", || {
+                bypass_fetches.fetch_add(1, Ordering::Relaxed);
+                Ok(vec!["bounded=yes".to_owned()])
+            })
+            .expect("bounded tracking must bypass coalescing without refusing the read");
+        assert_eq!(lines, ["bounded=yes"]);
+        assert_eq!(bypass_fetches.load(Ordering::Relaxed), 1);
+        assert!(state.read_cache_get("/proc/bounded/overflow").is_none());
+    }
+
+    #[test]
+    fn cancelled_cache_leader_does_not_strand_or_poison_future_reads() {
+        let state = Arc::new(disconnected_cached_state());
+        let fill = Arc::new(ProcReadFill::default());
+        state
+            .proc_cache_guard()
+            .in_flight
+            .insert("/proc/root/reachable".to_owned(), fill.clone());
+        let leader = ProcReadFillLeader::new(&state, "/proc/root/reachable", fill.clone());
+
+        let follower_state = state.clone();
+        let follower_fetches = Arc::new(AtomicUsize::new(0));
+        let follower_fetches_for_thread = follower_fetches.clone();
+        let (result_tx, result_rx) = mpsc::channel();
+        let follower = thread::spawn(move || {
+            let result = follower_state.read_through_cache("/proc/root/reachable", || {
+                follower_fetches_for_thread.fetch_add(1, Ordering::Relaxed);
+                Ok(vec!["unexpected-fetch=yes".to_owned()])
+            });
+            result_tx
+                .send(result)
+                .expect("test must observe the follower result");
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while fill.waiters.load(Ordering::Relaxed) != 1 {
+            assert!(
+                Instant::now() < deadline,
+                "cache follower must reach the condition wait"
+            );
+            thread::yield_now();
+        }
+        drop(leader);
+
+        let error = result_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("cancelled follower must complete within the test bound")
+            .expect_err("cancelled follower must receive an error");
+        assert_eq!(error.to_string(), "gateway cache fill cancelled");
+        follower.join().expect("cache follower thread must join");
+        assert_eq!(follower_fetches.load(Ordering::Relaxed), 0);
+        assert!(state.proc_cache_guard().in_flight.is_empty());
+
+        let lines = state
+            .read_through_cache("/proc/root/reachable", || {
+                Ok(vec!["reachable=yes".to_owned()])
+            })
+            .expect("a cancelled leader must not block a later fill");
+        assert_eq!(lines, ["reachable=yes"]);
+    }
+
+    #[test]
+    fn bounded_joined_line_bytes_matches_wire_join_semantics() {
+        let empty: Vec<String> = Vec::new();
+        assert_eq!(bounded_joined_line_bytes(&empty, 0), Some(0));
+
+        let lines = vec!["alpha".to_owned(), "βeta".to_owned(), "".to_owned()];
+        let expected = lines.join("\n").len();
+        assert_eq!(bounded_joined_line_bytes(&lines, expected), Some(expected));
+        assert_eq!(bounded_joined_line_bytes(&lines, expected - 1), None);
     }
 }
