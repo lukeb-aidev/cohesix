@@ -1,216 +1,145 @@
+<!-- Copyright 2026 Lukas Bower -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+<!-- Purpose: Explain how to propose, implement, validate, and review Cohesix contributions. -->
+<!-- Author: Lukas Bower -->
+
 # Contributing to Cohesix
 
-Thank you for your interest in contributing to **Cohesix**.
+Cohesix welcomes focused fixes, tests, documentation, and milestone-authorized
+features. It is a research operating system with strict security, scope, and
+evidence requirements; a change is complete only when code, generated
+artifacts, tests, and public documentation describe the same as-built system.
 
-Cohesix is a deliberately constrained system with a strong emphasis on **security, determinism, and auditability**. Contributions are welcome, but they must align closely with the project’s architecture, scope, and operating rules.
+Do not report a suspected vulnerability in a public issue. Follow the private
+process in [Security](docs/SECURITY.md#reporting-a-vulnerability).
 
-This document explains how to contribute effectively—and how to avoid common pitfalls.
+## 1. Establish scope before editing
 
----
+Read these sources in order:
 
-## 1. Canonical Sources (Required Reading)
+1. [`AGENTS.md`](AGENTS.md) — normative build charter and merge blockers.
+2. [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) — active milestones and task
+   authorization.
+3. The contract document for the surface being changed, starting from the
+   [README documentation map](README.md#documentation).
+4. The selected source manifest, resolved manifest, and generated outputs when
+   behavior is profile-controlled.
 
-The following files define the authoritative behavior and constraints of the system:
+Every contribution must cite the exact active milestone or submilestone and
+task title/ID that authorizes it. If no active task covers the change, update
+and review the build plan first. Do not present cleanup, preparation, or future
+work as authorization.
 
-- `AGENTS.md` — Build charter and non-negotiable rules
-- `docs/ARCHITECTURE.md`
-- `docs/BUILD_PLAN.md`
-- `docs/SECURE9P.md`
-- `docs/INTERFACES.md`
-- `docs/USERLAND_AND_CLI.md`
-- `docs/ROLES_AND_SCHEDULING.md`
+Use the task template in `AGENTS.md` without changing its fields. Keep the
+change atomic: one stated goal, its tests, any required regeneration, and the
+matching documentation.
 
-These documents are **normative**.
+## 2. Preserve Cohesix invariants
 
-If a change causes code and documentation to diverge, the change is considered incomplete. Any behavioral change must update documentation and regenerated artifacts in the same pull request.
+Before proposing a design, confirm that it preserves the charter. In
+particular:
 
----
+- VM code remains Rust and `no_std`; do not add a POSIX or libc façade.
+- The authenticated root-task console is the only permitted in-VM TCP
+  listener. Host REST, UI, proxy, and bridge tools project existing authority;
+  they do not create new target authority paths.
+- Control-plane actions use documented console grammar or Secure9P namespace
+  semantics with role- and ticket-scoped authority.
+- Physical device authority, mapping, DMA, IRQ, and resource admission remain
+  in HAL, with steady-state devices served by manifest-declared isolated driver
+  runtimes.
+- CUDA, NVML, model runtimes, training, and inference remain host-side.
+- Memory, queues, retries, timeouts, and work are explicitly bounded.
+- User-controlled frames, paths, JSON, tokens, and configuration are validated
+  and fail with typed, deterministic errors.
+- Secrets are supplied through deployment configuration or environment
+  variables; examples must not normalize placeholder credentials.
 
-## 2. Project Scope and Philosophy
+The detailed limits and breaking-change rules live in `AGENTS.md`,
+[Secure9P](docs/SECURE9P.md), and
+[Userland and CLI](docs/USERLAND_AND_CLI.md).
 
-Cohesix is:
-- a **control-plane operating system**
-- built on **upstream seL4**
-- with a **pure Rust userspace**
-- exposing a **file-shaped control plane** via Secure9P
-- designed to keep the **trusted computing base (TCB) as small as possible**
+## 3. Treat generated output as generated
 
-Cohesix is **not**:
-- a general-purpose operating system
-- a Linux or POSIX environment
-- an in-VM networking platform
-- a place to embed CUDA, ML runtimes, or large ecosystems
+The selected manifest and `coh-rtc` outputs define generated interfaces,
+defaults, bounds, namespaces, and profile behavior. Never hand-edit a generated
+file or generated block to make a check pass.
 
-Design decisions strongly favor clarity, bounded behavior, and explicit authority over flexibility or convenience.
+When a generated contract changes:
 
----
+1. Change the compiler IR and validation.
+2. Regenerate every output required by `scripts/check-generated.sh`.
+3. Update source, tests, fixtures, and human-authored documentation together.
+4. Run the drift guard and inspect the complete diff.
 
-## 3. What Contributions Are Welcome
+Host-only presentation or analysis may not need new IR, but it must remain
+faithful to the existing protocol and authority model.
 
-We are happy to review contributions that include:
+## 4. Implement and document the change
 
-- Bug fixes with deterministic reproduction steps
-- Security hardening and validation improvements
-- Test coverage (unit, integration, regression)
-- Documentation corrections that reflect *as-built* behavior
-- Features explicitly scoped to an active milestone in `BUILD_PLAN.md`
-- Host-side tools (CLI, UI, bridges) that do not expand the VM TCB
-- Performance or memory improvements with clear measurements
+- Follow idiomatic Rust, Python PEP 8 with type hints, and the repository's
+  existing patterns.
+- Add or update tests for every touched logic path, including invalid and
+  boundary inputs.
+- Keep `unsafe` use exceptional and document each block with a precise
+  `SAFETY:` invariant. Do not increase risk indicators without the exception
+  process defined in `AGENTS.md`.
+- Preserve `ACK`/`ERR`/`END`, NineDoor errors, namespace layouts, and `/proc`
+  formats unless the full breaking-change process is authorized.
+- Update public docs in the same change as public behavior. Describe what the
+  selected profiles build today, and keep planned work clearly labelled.
+- Add the required native-comment metadata to every new or modified
+  human-authored file: author, purpose, and 2026 copyright for Lukas Bower.
+- Remove only artifacts made obsolete by the scoped change. Do not fold
+  unrelated cleanup into the contribution.
 
----
+## 5. Validate locally
 
-## 4. Common Reasons Contributions Are Rejected
-
-To save time on both sides, please be aware that we generally do **not** accept:
-
-- Refactors without a concrete correctness or safety justification
-- POSIX abstractions or libc usage inside the VM
-- Dynamic loading or background daemons in the VM
-- New in-VM TCP services or ad-hoc networking
-- CUDA, NVML, or ML runtimes inside the VM
-- RPC or control paths that bypass Secure9P / NineDoor
-- Features not tied to an active milestone
-- Changes without tests or regression guards
-- Documentation describing intent rather than actual behavior
-
-These constraints are intentional and central to the project.
-
----
-
-## 5. Contribution Workflow
-
-### Step 1 — Confirm scope
-
-Before starting work, ensure that:
-
-- The change is permitted by `AGENTS.md`
-- It fits within an active milestone in `BUILD_PLAN.md`
-- The user-visible outcome can be stated clearly
-- Any new attack surface is understood
-- Regression tests can be added
-
-If these conditions are not met, the change is unlikely to be accepted.
-
----
-
-### Step 2 — Prepare the change
-
-A complete contribution typically includes:
-
-1. **Code**
-   - Rust-only userspace in the VM (`no_std` where applicable)
-   - Explicit bounds on memory and work
-   - Deterministic behavior (no hidden retries or unbounded loops)
-
-2. **Documentation**
-   - Updates to affected files under `/docs`
-   - Documentation must reflect the *current built system*
-
-3. **Tests**
-   - Unit tests for parsers and state machines
-   - Integration tests (QEMU where appropriate)
-   - CLI or `.coh` regression scripts for user-visible behavior
-
-4. **Generated artifacts**
-   - Re-run `coh-rtc`
-   - Commit regenerated outputs
-   - Ensure hashes match
-
----
-
-### Step 3 — Validate locally
-
-At a minimum, contributors should run:
+Run the repository baseline from the workspace root:
 
 ```bash
-cargo check
-cargo test
-cargo run -p coh-rtc
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo check --workspace
+cargo test --workspace
+cargo audit
+cargo deny check advisories
+scripts/check-generated.sh
+scripts/ci/check_test_plan.sh
+scripts/ci/test_plan_run.sh --list
+git diff --check
 ```
 
-Depending on the change, additional validation may be required:
-- Console changes → `.coh` regression scripts
-- Secure9P changes → negative tests or fuzzing
-- Networking changes → QEMU reproduction and logs
-- Manifest changes → regeneration and hash verification
+Then run the staged Test Plan with a unique evidence directory and every
+surface-specific gate required by the active task:
 
----
+```bash
+scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>
+```
 
-## 6. Pull Request Expectations
+Examples of additional evidence include QEMU transcripts for target behavior,
+Pi 4 serial and packet captures for hardware claims, `.coh` fixtures for
+console grammar, negative Secure9P tests for protocol changes, and release
+checks for bundle changes. Repository-only tests are not Pi 4 hardware proof.
 
-Please include the following in your pull request description:
+If a baseline command fails for a pre-existing reason, record the exact command
+and failure separately. A new failure in the changed surface blocks review.
 
-Goal:
-Current milestone:
-User-visible change:
-Attack surface impact:
-Determinism considerations:
-Regression coverage:
+## 6. Submit a reviewable change
 
-Pull requests are easiest to review when they are:
-- narrowly scoped
-- focused on a single root cause
-- supported by tests and documentation
+The pull request description should include:
 
----
+- exact milestone/submilestone and task title/ID;
+- goal and user-visible behavior;
+- files and generated artifacts changed;
+- authority, attack-surface, memory-bound, and determinism impact;
+- commands run and durable evidence paths;
+- known limitations or proof boundaries.
 
-## 7. Style and Design Constraints
+Keep commits intentional and do not include local build products, credentials,
+or unrelated worktree changes. Release-bundle source changes must follow the
+versioning rule in `AGENTS.md`.
 
-### VM / kernel side
-- Upstream seL4 only
-- Pure Rust userspace
-- No POSIX or libc layers
-- No unbounded allocation
-- Secure9P is the only control plane
-
-### Host side
-- May use `std` and host OS facilities
-- Must remain protocol-faithful
-- Must not introduce undocumented semantics
-
-### Logging and observability
-- Prefer structured, single-line audit logs
-- Avoid excessive log volume
-- Use counters instead of repetitive prints where possible
-
----
-
-## 8. Security Model
-
-Cohesix assumes:
-- untrusted or unreliable networks
-- potentially compromised hosts
-- hostile input by default
-
-As a result:
-- All input must be validated
-- Authority must be explicit and revocable
-- Actions must be auditable
-- Failure modes must be deterministic
-
-Changes should preserve or strengthen these properties.
-
----
-
-## 9. Proposing Larger Changes
-
-For non-trivial or architectural proposals:
-
-1. Open an issue or discussion
-2. Reference relevant documentation
-3. Explain:
-   - what invariant needs to change
-   - why the current design is insufficient
-   - how the TCB is affected
-4. Propose documentation changes first
-
-Large changes without prior discussion are unlikely to be merged.
-
----
-
-## 10. Final Notes
-
-Cohesix is intentionally opinionated and narrowly scoped.  
-The goal is a system that is **small, auditable, and predictable**.
-
-If that aligns with how you like to work, we’re glad you’re here.
+Use GitHub Issues for reproducible, non-sensitive defects and scoped design
+discussion. Include the smallest reproduction, selected profile, manifest
+fingerprint where relevant, and evidence that another contributor can verify.

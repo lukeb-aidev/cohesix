@@ -12,7 +12,9 @@ details live in:
 - [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md) for console and `.coh` grammar;
 - [HOST_TOOLS.md](HOST_TOOLS.md) for tool ownership and alternatives;
 - [API_GUIDELINES.md](API_GUIDELINES.md) for HTTP behavior;
-- [FAILURE_MODES.md](FAILURE_MODES.md) for diagnosis and recovery.
+- [FAILURE_MODES.md](FAILURE_MODES.md) for diagnosis and recovery; and
+- [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) for advanced evidence, mount,
+  ticket, lifecycle, and PEFT workflows after this topology is healthy.
 
 The same host workflow can target a Pi 4 Queen after hardware boot and network
 proof, but board acceptance remains governed by
@@ -266,6 +268,10 @@ gateway generated-policy fingerprint and `/proc/boot` target manifest evidence
 as separate records. An exported pack is a bounded snapshot; it is not a
 substitute for target-specific boot or hardware proof.
 
+For the normative pack inventory, redaction rules, offline timeline behavior,
+and CI/SIEM commands, continue with
+[OPERATOR_RECIPES.md#evidence-packs-ci-and-siem](OPERATOR_RECIPES.md#evidence-packs-ci-and-siem).
+
 ## 8. Optional SwarmUI session
 
 With the gateway still running:
@@ -318,7 +324,8 @@ convert a diagnostic Wi-Fi stress run into a production capacity claim; use
 1. Finish or cancel intended control work and capture final read-only state.
 2. Exit `cohsh` and SwarmUI.
 3. Stop continuous REST publishers and ticket agents.
-4. Unmount any `coh mount` filesystem with the host's normal FUSE procedure.
+4. Unmount any `coh mount` filesystem using the verified procedure in
+   [OPERATOR_RECIPES.md#mounted-namespace-with-fuse](OPERATOR_RECIPES.md#mounted-namespace-with-fuse).
 5. Stop `hive-gateway` so it releases the VM console.
 6. Stop QEMU from terminal 1.
 7. Store evidence according to the deployment retention policy; remove local

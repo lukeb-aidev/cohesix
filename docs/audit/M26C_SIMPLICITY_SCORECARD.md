@@ -19,12 +19,19 @@ outside 26c until their own preserved-contract evidence is present.
 | Host tools | Refactor candidates not characterized | Collapse duplication only with tests | Pending accepted wave | Deferred |
 | Root-task adapters | Large boundary-sensitive modules | Split only after parity/no-std gates | Pending accepted wave | Deferred |
 | HAL/network/local-seat | Complex Pi proof lanes | Extract only after runtime/DMA and hardware evidence | Final Pi GENET proof exists; extraction remains outside 26c | Deferred |
-| README-linked narrative suite | 11,227 lines across `README.md` and 16 focused narrative documents | Remove repetition while retaining generated mirrors, contracts, runbooks, proof boundaries, and enough foundational context for new readers | 4,634 lines; 6,593 fewer lines (58.7% reduction) | Done |
-| Full README-linked suite | 23,246 lines including the 12,019-line historical `BUILD_PLAN.md` ledger | Improve the active entry point and contracts without rewriting historical authorization records | 16,730 lines; 6,516 fewer lines (28.0% reduction); historical plan detail retained | Done |
-| Suite diagrams | 18 diagrams across the active README-linked suite; 84 tracked blocks repository-wide | Keep one diagram only where it clarifies an owned boundary or sequence | Nine suite diagrams; 75 tracked blocks; all 75 rendered | Done |
+| README-linked narrative suite | 11,227 lines across `README.md` and 16 focused narrative documents | Remove repetition while retaining generated mirrors, contracts, runbooks, proof boundaries, and enough foundational context for new readers | 5,492 lines; 5,735 fewer lines (51.1% reduction). The preservation review restored 858 lines of source-backed contracts after the first 4,634-line pass. | Done-preserved |
+| Full comparable suite | 23,246 lines including the 12,019-line historical `BUILD_PLAN.md` ledger | Improve the active entry point and contracts without rewriting historical authorization records | 17,594 lines; 5,652 fewer lines (24.3% reduction); historical plan detail retained. | Done-preserved |
+| Operator recipes and perimeter | Advanced operator material had no single owner; linked contribution, current-source, security, and toolchain guides contained stale or duplicated guidance | Add task-oriented depth without bloating the ordered walkthrough, and make every linked perimeter guide current | 1,312 lines across new `OPERATOR_RECIPES.md` and the four rewritten perimeter guides; each surface has one stated purpose and source-backed commands. | Done-additive |
+| Suite diagrams | 18 diagrams across the active README-linked suite; 84 tracked blocks repository-wide | Keep diagrams only where they clarify an owned boundary or sequence | Ten diagram blocks across nine suite documents; 76 tracked blocks; all 76 rendered | Done |
 | Contract ownership | Architecture, interface, protocol, role, driver, host, and operator explanations overlapped | One owning document per contract with explicit source maps and cross-references | Ownership tables in `README.md`; exact compiler-generated mirrors retained only where tests require them | Done |
 
 The full-suite reduction is intentionally smaller because `BUILD_PLAN.md` is a
 normative authorization and historical status ledger. The remediation changed
 its current scope and stale product-facing wording but retained its audit
 history instead of treating it as general narrative prose.
+
+The preservation follow-up deliberately increased the first-pass line count.
+That is not regression: the added material is the only source-backed copy of a
+public contract or a runnable task recipe. Cross-references, generated snippets,
+and the ownership map still prevent those contracts from spreading into
+multiple narrative mirrors.

@@ -176,8 +176,11 @@ Node modes have these meanings:
 - **directory:** walk/list only.
 
 Host providers and the target `NineDoorBridge` overlap but are not identical.
-Host-only GPU, operating-system, federation, or UI providers must never be used
-as evidence that the same provider exists inside the target.
+Parity must be established per path: a host-only GPU job, sidecar adapter, or
+federation relay is not target evidence. Conversely, the target adapter does
+implement selected bounded GPU publication, UI, and `/host` files, but their
+presence proves only the namespace projection; operating-system actions and
+federated delivery still execute in host agents.
 
 ## Core namespace
 
@@ -283,6 +286,15 @@ format is defined in
 [telemetry_cbor_schema.md](snippets/telemetry_cbor_schema.md). Plain-text and
 CBOR evidence must identify which selected schema produced it.
 
+The checked-in profiles currently select `legacy-plaintext`. Under that
+selection each append must be valid UTF-8 and is retained in the bounded
+append-only worker ring; the transport does not add a JSON or CBOR wrapper.
+Common heartbeat and GPU records may be JSON lines, but their application
+fields are not a replacement for the selected telemetry frame contract. A
+profile selecting `cbor-v1` uses `telemetry-frame/v1`; clients must not decode a
+legacy record as CBOR or claim the generated CBOR schema was active merely
+because the schema is available in this repository.
+
 ### Queen telemetry ingest
 
 For `/queen/telemetry/<device_id>/`:
@@ -307,13 +319,32 @@ positive `len`, and a bounded `sha256` token. Inline and reference records
 cannot be mixed in one segment. All segment, record, reference-count, reference
 byte, and eviction bounds come from the selected manifest.
 
+### Queen LoRA export
+
+When telemetry ingest is enabled, host NineDoor can install a read-only
+training handoff below `/queen/export/lora_jobs/<job_id>/`:
+
+| Path | Contract |
+| --- | --- |
+| `telemetry.cbor` | Bounded telemetry bundle selected for the external training job. |
+| `base_model.ref` | Single-line base-model identifier. |
+| `policy.toml` | Policy snapshot that governed the export. |
+
+The host publisher chooses `<job_id>`; clients do not append to these files.
+The target adapter currently exposes the gated export root and its control
+file, but it does not populate job directories or accept a job upload. LoRA
+here means a low-rank model adapter and is unrelated to the LoRa radio sidecar
+namespace described below. The host `coh peft export` flow may copy an installed
+handoff to external training infrastructure, but the target does not train or
+import a model by exposing the directory.
+
 ## Manifest-gated namespace families
 
 | Family | Representative paths | Ownership |
 | --- | --- | --- |
 | GPU bridge and nodes | `/gpu/bridge/*`, `/gpu/<id>/*`, `/gpu/models/*`, `/gpu/telemetry/schema.json` | Host bridge owns GPU hardware and publication; target consumes only bounded files. See [GPU_NODES.md](GPU_NODES.md). |
-| Sidecar buses | `/bus/<adapter>/*`, `/lora/<adapter>/*` | Host sidecar providers; adapter labels and gates are generated. |
-| Host services | `/host/systemd/*`, `/host/k8s/*`, `/host/docker/*`, `/host/nvidia/*`, `/host/tickets/*` | Host-only projections and control tickets. See [HOST_TOOLS.md](HOST_TOOLS.md). |
+| Sidecar buses | `/bus/<adapter>/*`, `/lora/<adapter>/*` | Host sidecar providers; adapter labels and gates are generated. Exact nodes are catalogued below. |
+| Host services | `/host/systemd/*`, `/host/k8s/*`, `/host/docker/*`, `/host/nvidia/*`, `/host/tickets/*` | Target and host adapters expose selected bounded projections; host agents execute actions and federation. This document owns the schemas; [HOST_TOOLS.md](HOST_TOOLS.md) owns tool operation. |
 | Content-addressed updates | `/updates/<epoch>/*`, `/models/<sha256>/*` | CAS provider, gated by generated policy. |
 | Policy and actions | `/policy/*`, `/actions/*` | Generated rules plus bounded policy/action queues. |
 | Audit and replay | `/audit/*`, `/replay/*` | Present only when audit and replay gates are enabled. |
@@ -321,7 +352,7 @@ byte, and eviction bounds come from the selected manifest.
 Disabled providers return an explicit refusal or absence according to the
 active adapter; clients must not silently create substitute paths.
 
-### GPU publication
+## GPU publication
 
 `/gpu/bridge/ctl` uses a bounded three-stage snapshot stream:
 
@@ -336,7 +367,125 @@ The bridge validates decoded size and SHA-256 before publishing nodes.
 Lease and status breadcrumb formats are generated in
 [gpu_breadcrumbs.md](snippets/gpu_breadcrumbs.md).
 
-### CAS updates
+## Sidecar bus and LoRa radio providers
+
+Sidecar mounts exist only when the selected `sidecars.*` gate is enabled. The
+compiler resolves adapter labels, including collision handling; clients must
+discover those labels rather than derive them. MODBUS and DNP3 adapters share
+the `/bus/<adapter>` file contract:
+
+| Path | Mode | Contract |
+| --- | --- | --- |
+| `ctl` | Append-only | Bounded sidecar coordination/control records. |
+| `telemetry` | Append-only | Accepted records; while the link is offline, writes are spooled for bounded replay. |
+| `link` | Control | `online` or `offline`. |
+| `replay` | Control | A write requests a bounded spool drain and records `replay entries=<n> bytes=<n>`. |
+| `spool` | Read-only | Aggregate entry/byte bounds followed by retained frame summaries. |
+
+LoRa radio adapters use `/lora/<adapter>`:
+
+| Path | Mode | Contract |
+| --- | --- | --- |
+| `ctl` | Control | Bounded transmit attempt subject to the generated duty-cycle and payload limits. |
+| `telemetry` | Read-only | Mirror of accepted payloads. |
+| `tamper` | Read-only | Bounded `payload-oversize` and `duty-cycle` refusal records. |
+
+Adapter-scoped role/ticket checks precede every side effect. A denial is not a
+successful transmit or replay and is recorded through the existing Queen log
+or audit surface; these providers do not create a second RPC protocol.
+
+## UI provider projections
+
+UI providers are optional, bounded, read-only representations of existing
+state. Each text provider has a paired `.cbor` form only where listed; the
+generated `ui_providers.*` gates and the underlying provider gate must both be
+enabled.
+
+| Family | Public nodes |
+| --- | --- |
+| 9P sessions | `/proc/9p/sessions`, `/proc/9p/outstanding`, `/proc/9p/short_writes`, and the corresponding `.cbor` nodes. |
+| Ingest | `/proc/ingest/p50_ms`, `/proc/ingest/p95_ms`, `/proc/ingest/backpressure`, and the corresponding `.cbor` nodes. |
+| Policy preflight | `/policy/preflight/req`, `/policy/preflight/req.cbor`, `/policy/preflight/diff`, and `/policy/preflight/diff.cbor`. |
+| Update state | `/updates/<epoch>/manifest.cbor`, `/updates/<epoch>/status`, and `/updates/<epoch>/status.cbor`. |
+
+The paired record fields are:
+
+| Provider | Text form | CBOR map |
+| --- | --- | --- |
+| 9P sessions | The generated `/proc/9p/*` records below. | Sessions: `total`, `worker`, `shard_bits`, `shard_count`, and `shards[] {label, count}`; outstanding: `current`, `limit`; short writes: `total`, `retries`. |
+| Ingest | The generated `/proc/ingest/*` scalar records below. | One unsigned field named `p50_ms`, `p95_ms`, or `backpressure`, matching the node. |
+| Policy request preflight | Summary counts plus `req id=<id> target=<path> decision=<approve\|deny> state=<queued\|consumed>` lines. | `total`, `queued`, `consumed`, and `actions[] {id, target, decision, state}`. |
+| Policy diff preflight | Summary counts plus `rule id=<id> target=<path> queued=<n> consumed=<n>` lines. | `rules`, `actions`, `unmatched`, and `entries[] {id, target, queued, consumed}`. |
+| Update status | Epoch/state, manifest/chunk counts, payload digest, and optional delta-base lines. | The same `epoch`, `state`, byte/count, digest, and optional `delta {base_epoch, base_sha256}` fields. |
+
+Text and CBOR variants describe the same snapshot but are separate bounded
+reads. Disabled or oversized providers fail explicitly and emit a
+`ui-provider` audit record. SwarmUI and other clients may render, cache, or
+replay these records, but they do not own their schema or mutation policy.
+
+## Host service projections
+
+The host tree appears only when `ecosystem.host.enable` is selected; individual
+provider roots follow `ecosystem.host.providers[]`. These append-only nodes are
+projections or ticketed control sinks, not direct VM access to systemd,
+Kubernetes, Docker, or NVIDIA APIs.
+
+| Path | Contract |
+| --- | --- |
+| `/host/systemd/<unit>/status` | Host-published unit state; `start`, `stop`, and `restart` siblings are Queen-only control sinks. |
+| `/host/k8s/node/<name>/status` | Host-published node state; `cordon` and `drain` siblings are Queen-only control sinks. |
+| `/host/docker/status` | Host-published engine/container summary; `restart` and `stop` are Queen-only control sinks. |
+| `/host/nvidia/gpu/<id>/status` | Host-published GPU summary; `power_cap` is a Queen-only control sink and `thermal` is host-published state. |
+| `/host/jetson`, `/host/net` | Manifest-selected provider roots. The as-built namespace currently defines no portable child-record schema for these roots. |
+
+Provider agents sanitize bounded status records. Systemd uses
+`state=<state> sub=<substate>`; Kubernetes uses
+`state=<state> role=<role> version=<version>`; Docker uses
+`version=<version> containers=<n> running=<n> paused=<n> stopped=<n>`; NVIDIA
+status uses `util_pct`, `mem_used_mb`, `mem_total_mb`, `temp_c`, and `power_w`,
+while its thermal node uses `temp_c`. Collection failure uses `state=unknown`
+or the provider's documented unknown scalar. A control-file append records a
+request; only the corresponding host-ticket result or provider observation can
+prove that the host action occurred.
+
+## Host tickets and federation
+
+When host tickets are enabled, the namespace exposes:
+
+| Path | Mode | Record |
+| --- | --- | --- |
+| `/host/tickets/spec` | Append-only JSONL | Strict request records using the generated request schema (`host-ticket/v1` in the checked-in profile). |
+| `/host/tickets/status` | Append-only JSONL | Lifecycle receipts using the generated result schema (`host-ticket-result/v1`). |
+| `/host/tickets/deadletter` | Append-only JSONL | Terminal failure or expiry receipts using the result schema. |
+| `/host/tickets/spec.snapshot` | Read-only | Bounded snapshot of `spec`. |
+| `/host/tickets/status.snapshot` | Read-only | Bounded snapshot of `status`. |
+| `/host/tickets/deadletter.snapshot` | Read-only | Bounded snapshot of `deadletter`. |
+
+A request contains the required fields `schema`, `id`, `idempotency_key`, and
+`action`; `target`, `args`, and `expires_unix_ms` are optional. A result contains
+the required fields `schema`, `id`, `idempotency_key`, `action`, and `state`,
+with optional `message`. Unknown fields are rejected. Actions and result states
+must appear in the selected manifest's allowlists; the checked-in lifecycle is
+`queued`, `claimed`, `running`, then `succeeded`, `failed`, or `expired`.
+
+```json
+{"schema":"host-ticket/v1","id":"ticket-1","idempotency_key":"restart-1","action":"systemd.restart","target":"/host/systemd/cohesix-agent.service/restart"}
+{"schema":"host-ticket-result/v1","id":"ticket-1","idempotency_key":"restart-1","action":"systemd.restart","state":"succeeded","message":"ok"}
+```
+
+`id`, `idempotency_key`, and federation identifiers are at most 128 bytes and
+use only ASCII letters, digits, `.`, `-`, `_`, and `:`. The manifest bounds the
+full JSON line; the Secure9P `msize` remains an independent upper bound.
+
+Federated requests and receipts add `source_hive`, `target_hive`, `relay_hop`,
+and `relay_correlation_id`. Source and target are pair-required, `relay_hop` is
+`1..=32` when present, and every relay revalidates its manifest-gated peer and
+action policy. The correlation key is local `id + idempotency_key`, or
+federated `id + idempotency_key + source_hive + target_hive`; it provides
+idempotency/evidence correlation, not additional authority. Relay queues, WAL,
+timeouts, peers, and credentials remain host-side and manifest-bounded.
+
+## CAS updates
 
 CAS layout, fixed chunk size, delta references, signing requirement, and
 manifest template are generated in
@@ -344,13 +493,35 @@ manifest template are generated in
 manifest/chunk nodes, and a hash or size mismatch is an error. Do not duplicate
 the generated manifest template in another canonical document.
 
-### Policy, audit, and replay
+## Policy, audit, and replay
 
-`/policy/ctl` accepts bounded policy revision `apply` and `rollback` JSONL.
-`/actions/queue` carries single-use allow/deny decisions. Audit and replay
-providers appear only when their generated gates are enabled; replay is bounded
-to retained Cohesix-issued actions and cannot create an alternate control
-protocol.
+| Path | Mode | Contract |
+| --- | --- | --- |
+| `/policy/ctl` | Control JSONL | Strict `apply` and `rollback` policy-revision records. |
+| `/policy/rules` | Read-only | Deterministic snapshot of the selected manifest rules. |
+| `/actions/queue` | Control JSONL | Single-use `id`, `target`, and `approve`/`deny` decisions. |
+| `/actions/<id>/status` | Read-only | `queued` or `consumed` decision state. |
+| `/audit/journal` | Append-only JSONL | Bounded control-action journal. |
+| `/audit/decisions` | Append-only JSONL | Policy decision records with role/ticket context. |
+| `/audit/export` | Read-only | Retained cursor bounds and replay flags. |
+| `/replay/ctl` | Control JSON | Bounded `{"from":<cursor>}` request. |
+| `/replay/status` | Read-only | `idle`, `ok`, or `err` state with deterministic sequence fingerprint. |
+
+Representative strict control records are:
+
+```json
+{"op":"apply","id":"rev-1","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+{"op":"rollback","id":"rev-1"}
+{"id":"approve-1","target":"/queen/ctl","decision":"approve"}
+{"from":42}
+```
+
+Policy nodes require `ecosystem.policy.enable`; audit nodes require
+`ecosystem.audit.enable`; replay additionally requires
+`ecosystem.audit.replay_enable`. Policy approvals are single-use. Replay is
+limited to the retained audit window and to Cohesix-issued control actions;
+out-of-window cursors, offset mismatches, or disabled gates fail without
+creating an alternate control or authority path.
 
 ## Generated schema index
 
@@ -496,6 +667,13 @@ it.
 - Target namespace adapter:
   [`apps/root-task/src/ninedoor.rs`](../apps/root-task/src/ninedoor.rs)
 - Host Secure9P server: [`apps/nine-door/src/host`](../apps/nine-door/src/host)
+- Host namespace and ticket validation:
+  [`apps/nine-door/src/host/namespace.rs`](../apps/nine-door/src/host/namespace.rs)
+- Host-ticket lifecycle and federation agent:
+  [`apps/host-ticket-agent`](../apps/host-ticket-agent)
+- Sidecar path contracts: [`apps/worker-bus`](../apps/worker-bus) and
+  [`apps/worker-lora`](../apps/worker-lora)
+- Host-only GPU job descriptor: [`apps/worker-gpu`](../apps/worker-gpu)
 - Codec operations: [`crates/secure9p-codec`](../crates/secure9p-codec)
 - Generated interface checks: `scripts/check-generated.sh`
 - Staged validation: [TEST_PLAN.md](TEST_PLAN.md)

@@ -25,6 +25,13 @@ python3 -m pip install --upgrade pip
 python3 -m pip install -e tools/cohesix-py
 ```
 
+The editable path above is for a source checkout. From a release-bundle root,
+install the bundled, non-editable package instead:
+
+```bash
+python3 -m pip install ./python/cohesix-py
+```
+
 Optional dependency groups are explicit:
 
 ```bash
@@ -54,6 +61,41 @@ independent of a Cohesix release-bundle label.
 Use REST when Python must coexist with `cohsh`, SwarmUI, or continuous
 publishers. Do not open a `TcpBackend` while another direct client owns the target
 console.
+
+### Explicit backend construction
+
+Use explicit construction when application configuration already selected one
+topology. These are the minimal constructors for all four public backends:
+
+```python
+import os
+
+from cohesix import FilesystemBackend, MockBackend, RestBackend, TcpBackend
+
+mock = MockBackend(root="out/examples/mockfs")
+mounted = FilesystemBackend("/absolute/path/to/cohesix-mount")
+rest = RestBackend(
+    base_url=os.environ["COH_REST_URL"],
+    request_auth_token=os.environ.get("HIVE_GATEWAY_REQUEST_AUTH_TOKEN"),
+)
+tcp = TcpBackend(
+    host=os.environ.get("COH_TCP_HOST", "127.0.0.1"),
+    port=int(os.environ.get("COH_TCP_PORT", "31337")),
+    auth_token=os.environ["COH_AUTH_TOKEN"],
+    role="queen",
+    ticket=os.environ.get("COH_TICKET"),
+)
+try:
+    print(tcp.list_dir("/"))
+finally:
+    tcp.close()
+```
+
+`FilesystemBackend` requires an already active `coh mount`; it neither creates
+nor owns that mount. `MockBackend` seeds a deterministic local tree and may
+reuse prior state at the selected root. The REST and TCP constructors perform
+live operations and must follow the ownership rules in
+[HOST_TOOLS.md#choose-one-live-topology](HOST_TOOLS.md#choose-one-live-topology).
 
 ## Backend selection from the environment
 
@@ -183,6 +225,38 @@ If the target is policy-gated, queue an `ApprovalRequest` for the exact target
 before the control record. Approvals do not broaden the gateway role or ticket
 and are consumed according to the target policy contract.
 
+### Typed Kubernetes intent example
+
+`K8sRbacIntent` is a less obvious typed surface: it validates a Kubernetes
+coexistence request, converts it to an allowlisted `host-ticket/v1` record, and
+appends that record to `/host/tickets/spec`. It does not call Kubernetes
+directly. The write below is real; run it only after reviewing the active host
+ticket policy and intended node:
+
+```python
+from cohesix import CohesixOrchestrator, K8sRbacIntent
+
+intent = K8sRbacIntent(
+    intent_id="maint-node-1",
+    subject="ops-user",
+    namespace="edge-a",
+    node="node-1",
+    verb="cordon",
+    reason="planned-maintenance",
+    ttl_s=900,
+)
+
+with CohesixOrchestrator.from_env() as cohesix:
+    results = cohesix.enqueue_k8s_rbac_tickets([intent])
+
+for result in results:
+    print(result.path, result.bytes_written)
+```
+
+Execution and lifecycle receipts belong to `host-ticket-agent`; request and
+result schemas are owned by
+[INTERFACES.md#host-tickets-and-federation](INTERFACES.md#host-tickets-and-federation).
+
 ## Bounds and generated defaults
 
 The package imports generated client policy from
@@ -254,3 +328,4 @@ with the repository generation workflow.
 - [HOST_TOOLS.md](HOST_TOOLS.md) — live topology and host-tool ownership.
 - [INTERFACES.md](INTERFACES.md) — control and observability schemas.
 - [OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md) — canonical live setup.
+- [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) — evidence, mount, ticket, lifecycle, and PEFT procedures.

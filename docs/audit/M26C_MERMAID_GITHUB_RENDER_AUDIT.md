@@ -4,14 +4,14 @@
 
 # M26C Mermaid GitHub Render Audit
 
-Status: `PASS / 75-OF-75-RENDERED / RELEASE-SNAPSHOT-WARNINGS`
+Status: `PASS / 76-OF-76-RENDERED / RELEASE-SNAPSHOT-WARNINGS`
 
 ## Inventory
 
-- Tracked Markdown files: `203`
-- Mermaid blocks inventoried: `75`
-- Inventory compatibility status: `43 pass`, `32 warning-render-pass`, `0 pending`
-- README-linked suite diagrams: `9`, reduced from `18`
+- Markdown files in the intended change set: `204`
+- Mermaid blocks inventoried: `76`
+- Inventory compatibility status: `44 pass`, `32 warning-render-pass`, `0 pending`
+- README-linked suite diagrams: `10` blocks across `9` documents, reduced from `18` blocks
 - Inventory: `docs/audit/M26C_MERMAID_INVENTORY.csv`
 - Markdown list: `out/audit/m26c-doc-remediation-markdown.txt`
 - Render evidence: `out/audit/m26c-doc-remediation-mermaid-rendered`
@@ -20,9 +20,9 @@ Status: `PASS / 75-OF-75-RENDERED / RELEASE-SNAPSHOT-WARNINGS`
 
 | Command | Result |
 | --- | --- |
-| `scripts/ci/mermaid_inventory.py --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out docs/audit/M26C_MERMAID_INVENTORY.csv` | PASS; 75 blocks inventoried exactly once. |
+| `scripts/ci/mermaid_inventory.py --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out docs/audit/M26C_MERMAID_INVENTORY.csv` | PASS; 76 blocks inventoried exactly once. |
 | `scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt` | PASS for every active surface; 32 release-snapshot warnings. |
-| `npm exec --yes --package=@mermaid-js/mermaid-cli -- scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out out/audit/m26c-doc-remediation-mermaid-rendered` | PASS with Mermaid CLI 11.16.0; 75 source blocks produced 75 SVG files. |
+| `npm exec --offline --package=@mermaid-js/mermaid-cli -- scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out out/audit/m26c-doc-remediation-mermaid-rendered` | PASS with Mermaid CLI 11.16.0; 76 source blocks produced 76 SVG files. |
 
 GitHub renders Mermaid from fenced `mermaid` blocks. The active diagrams avoid
 custom initialization directives, raw HTML labels, external links/assets,
@@ -42,7 +42,7 @@ and the repository's stricter compatibility checker.
 | `docs/GPU_NODES.md` | Host GPU/executor boundary and bounded VM projection | GPU bridge, worker role, and live-versus-simulation paths |
 | `docs/HARDWARE_BRINGUP.md` | Build-to-benchmark evidence ladder | Image scripts, Test Plan, and current proof policy |
 | `docs/BOOT_REFERENCE.md` | QEMU and Pi 4 boot-path convergence | Selected seL4 and Pi U-Boot handoff profiles |
-| `docs/USE_CASES.md` | Operator, namespace, worker, and external-adapter pattern | Current control-plane boundary; no deployment acceptance claim |
+| `docs/USE_CASES.md` | Control-plane boundary plus the scoped AI-agent admission and receipt sequence | Current source and host integration contracts; no deployment acceptance claim |
 
 Every suite diagram was reviewed for semantic ownership as well as syntax. The
 removed diagrams duplicated schemas, lifecycle prose, or aspirational
@@ -58,4 +58,4 @@ are immutable release snapshots for this remediation. Editing them would
 require the release-cut workflow and a minor-version increment, so they remain
 inventory-only and do not weaken the active-doc PASS result. All 32 warning
 blocks nevertheless rendered successfully with the same CLI during the
-75-block render pass.
+76-block render pass.

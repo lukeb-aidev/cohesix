@@ -22,7 +22,7 @@ Status: `COMPLETE / README-LINKED-SUITE-REMEDIATED / AS-BUILT-ALIGNED`
 - `tools/coh-rtc/src/ir.rs`
 - `scripts/ci/test_plan_run.sh`
 - `scripts/ci/check_test_plan.sh`
-- `README.md` and the 17-document canonical suite in its Documentation section
+- `README.md` and all 23 directly linked Markdown documents
 - `docs/HOST_API.md` and `resources/openapi/hive-gateway.yaml`
 - `docs/audit/M26C_MARKDOWN_INVENTORY.csv`
 - `docs/audit/M26C_MERMAID_INVENTORY.csv`
@@ -33,8 +33,8 @@ Status: `COMPLETE / README-LINKED-SUITE-REMEDIATED / AS-BUILT-ALIGNED`
 | Surface | Status | Finding | Evidence |
 | --- | --- | --- | --- |
 | Target-qualified Test Plan | Aligned-contract | Runner and docs now agree on `--target qemu` or `--target pi4`, `target.env`, and target-qualified markers. | `scripts/ci/check_test_plan.sh` PASS |
-| Markdown inventory | Aligned | All 203 tracked Markdown paths are classified once in the regenerated CSV and report. | `docs/audit/M26C_MARKDOWN_INVENTORY.csv`; `docs/audit/M26C_MARKDOWN_INVENTORY.md` |
-| Mermaid active docs | Aligned-active | Canonical diagrams no longer use raw HTML labels flagged by the checker. Inventory status is finalized as 43 `pass` and 32 release-only `warning-render-pass` rows; all 75 rendered. | `scripts/ci/check_mermaid_github.sh`; `docs/audit/M26C_MERMAID_GITHUB_RENDER_AUDIT.md` |
+| Markdown inventory | Aligned | All 204 Markdown paths in the intended change set are classified once in the regenerated CSV and report: the 203 files already tracked at validation time plus the new `docs/OPERATOR_RECIPES.md`. | `docs/audit/M26C_MARKDOWN_INVENTORY.csv`; `docs/audit/M26C_MARKDOWN_INVENTORY.md` |
+| Mermaid active docs | Aligned-active | Canonical diagrams no longer use raw HTML labels flagged by the checker. Inventory status is finalized as 44 `pass` and 32 release-only `warning-render-pass` rows; all 76 rendered. | `scripts/ci/check_mermaid_github.sh`; `docs/audit/M26C_MERMAID_GITHUB_RENDER_AUDIT.md` |
 | REST OpenAPI | Aligned | `max_bytes` remains required for `CAT` and `TAIL`; optional `lines=1..256` belongs only to `TAIL`. The duplicated narrative schema was replaced with a link-backed quick reference. | `resources/openapi/hive-gateway.yaml`; `apps/hive-gateway/src/main.rs`; `docs/HOST_API.md`; `cargo test -p hive-gateway` |
 | Reopened 26b DPC status | Aligned-current | Reciprocal notification/IRQ topology, the bounded DPC ring, and isolated-runtime service are implemented; repeated current-image Wi-Fi functional proof remains open. | `docs/BUILD_PLAN.md`; `docs/DRIVERS.md`; Pi manifest and driver-runtime source |
 | Pi DMA protection profile | Aligned-compiler | `coh-rtc` now owns `dma.protection_profile`; virt resolves to `none`, Pi-family manifests resolve to `bounded-no-iommu`, and SMMU profiles are rejected until generated DMA-domain state exists. | `cargo test -p coh-rtc --lib dma`; `scripts/check-generated.sh` |
@@ -50,10 +50,11 @@ Status: `COMPLETE / README-LINKED-SUITE-REMEDIATED / AS-BUILT-ALIGNED`
 | --- | --- | --- | --- |
 | Entry point and scope | `README.md`, `docs/BUILD_PLAN.md` | Active milestone state, selected manifests, and target-qualified evidence | Current status and proof boundaries are explicit; 26c returned to `Complete` only after the final gates passed. |
 | Core contracts | `ARCHITECTURE`, `INTERFACES`, `SECURE9P`, `ROLES_AND_SCHEDULING`, `DRIVERS` | Source, selected manifests, resolved output, and generated snippets | Transport, namespace, role, scheduling, HAL, and driver-runtime ownership are separated and cross-referenced. |
-| Operator and host | `USERLAND_AND_CLI`, `HOST_TOOLS`, `API_GUIDELINES`, `PYTHON_SUPPORT`, `FAILURE_MODES`, `OPERATOR_WALKTHROUGH` | Current CLI help, fixtures, source, OpenAPI, and generated policy mirrors | Direct and gateway ownership, compiled gateway bounds versus target boot truth, provider scheduling, mock persistence, REST authority, and `TAIL lines` placement are stated as built. |
+| Operator and host | `USERLAND_AND_CLI`, `HOST_TOOLS`, `API_GUIDELINES`, `PYTHON_SUPPORT`, `FAILURE_MODES`, `OPERATOR_WALKTHROUGH`, `OPERATOR_RECIPES` | Current CLI help, fixtures, source, OpenAPI, and generated policy mirrors | Direct and gateway ownership, evidence-pack semantics, mount lifecycle, host tickets and federation, worker self-tests, lifecycle maintenance, PEFT workflows, compiled gateway bounds versus target boot truth, provider scheduling, mock persistence, REST authority, and `TAIL lines` placement are stated as built. |
 | Platform and product | `USE_CASES`, `HARDWARE_BRINGUP`, `BOOT_REFERENCE`, `GPU_NODES`, `BENCHMARKS` | Current Test Plan state, historical 26c evidence, and 26d proof boundaries | Implemented capability, historical proof, current-image proof, simulation, and planned work are no longer conflated. |
-| Mermaid | Nine active suite diagrams; 75 tracked blocks | Diagram owners plus the same source and evidence used by their documents | GitHub compatibility PASS; Mermaid CLI 11.16.0 rendered 75 of 75 blocks. The 32 warnings belong only to immutable release snapshots and also rendered. |
-| Suite integrity | `README.md` plus its 17-document documentation suite | Repository paths and GitHub heading anchors | 266 local links resolved; headers, H1 structure, fences, Markdown linting, and diff checks passed. |
+| Onboarding and governance perimeter | `QUICKSTART`, `TOOLCHAIN_MAC_ARM64`, `SECURITY`, `CONTRIBUTING`, `AGENTS` | Current command help, selected seL4 15 outputs, charter rules, security tests, and generated limits | Fresh-source and release-snapshot workflows are separated; setup paths are parameterized; security and contribution guidance match current controls and mandatory gates. |
+| Mermaid | Ten active diagram blocks across nine suite documents; 76 tracked blocks | Diagram owners plus the same source and evidence used by their documents | GitHub compatibility PASS; Mermaid CLI 11.16.0 rendered 76 of 76 blocks. The 32 warnings belong only to immutable release snapshots and also rendered. |
+| Suite integrity | `README.md` plus all 23 directly linked Markdown documents | Repository paths and GitHub heading anchors | 502 local links resolved; required metadata, H1 structure, balanced fences, focused Markdown linting, and diff checks passed. |
 
 This remediation changed authored documentation, audit inventories, and the
 embedded OpenAPI description. The OpenAPI edit documents existing handler
@@ -64,6 +65,13 @@ A follow-up landing-page refinement restored the Plan 9 lineage, identified
 Cohesix as a pre-production research OS for AI infrastructure, made the
 Queen/Worker hive the introductory model, and defined seL4, capabilities, 9P,
 Secure9P, and NineDoor. It changes no interface or authority semantics.
+
+A preservation review then compared the concise suite with its pre-remediation
+versions and current source. It restored durable namespace, payload, shard,
+driver, simulation, evidence-pack, mount, federation, lifecycle, PEFT,
+hardware-recovery, benchmark-report, and AI-hive scenario contracts. These
+details now live with their owning documents or in task-oriented recipes rather
+than being copied through the suite.
 
 ## Required Follow-Up
 

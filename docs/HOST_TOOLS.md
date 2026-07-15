@@ -12,7 +12,9 @@ semantics. They do not create new in-target listeners or authority paths.
 This document owns the host-tool catalog and composition rules. Command grammar
 belongs in [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md), REST behavior in
 [API_GUIDELINES.md](API_GUIDELINES.md), and the runnable live sequence in
-[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md).
+[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md). Task-oriented evidence,
+mount, ticket, federation, lifecycle, and PEFT procedures live in
+[OPERATOR_RECIPES.md](OPERATOR_RECIPES.md).
 
 ## Choose one live topology
 
@@ -114,11 +116,17 @@ cargo run -p coh -- --help
 cargo run -p coh -- doctor --help
 ```
 
+The evidence-pack inventory, redaction behavior, missing-path semantics, and
+offline CI/SIEM contract are defined in
+[OPERATOR_RECIPES.md#evidence-packs-ci-and-siem](OPERATOR_RECIPES.md#evidence-packs-ci-and-siem).
+
 `coh mount` remains in the foreground. Create the mount point first, keep the
 mount process in its own terminal, and use the host's normal FUSE unmount
 procedure before terminating it. Generated policy and doctor behavior are in
 [snippets/coh_policy.md](snippets/coh_policy.md) and
-[snippets/coh_doctor_checks.md](snippets/coh_doctor_checks.md).
+[snippets/coh_doctor_checks.md](snippets/coh_doctor_checks.md). Verified macOS,
+Linux, REST, and direct-mode mount procedures are in
+[OPERATOR_RECIPES.md#mounted-namespace-with-fuse](OPERATOR_RECIPES.md#mounted-namespace-with-fuse).
 
 ### `hive-gateway`
 
@@ -189,7 +197,9 @@ cargo run -p host-ticket-agent -- --rest-url "$COH_REST_URL" --run-once
 Use a dedicated cursor and relay WAL per deployment. Do not share state files
 between concurrently running agents. Ticket schemas and status paths are
 defined with the manifest-gated namespaces in
-[INTERFACES.md](INTERFACES.md).
+[INTERFACES.md#host-tickets-and-federation](INTERFACES.md#host-tickets-and-federation).
+Runnable local and federated examples are in
+[OPERATOR_RECIPES.md#host-tickets-and-federation](OPERATOR_RECIPES.md#host-tickets-and-federation).
 
 ### `cas-tool`
 
@@ -256,4 +266,6 @@ Before adding a tool to a live topology:
 5. Check [FAILURE_MODES.md](FAILURE_MODES.md) before retrying a failed mutation.
 
 The full, ordered example is in
-[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md).
+[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md). Start there for a new live
+deployment; use [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) only after that
+topology is healthy.

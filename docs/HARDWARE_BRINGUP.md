@@ -162,12 +162,92 @@ For acceptance, remount the media and independently compare every staged
 artifact and the embedded build marker. The script's image checks do not replace
 the full readback ledger.
 
-### 4. Capture a Fresh Boot
+### 4. Set First-Boot Network Policy
+
+The staged Pi image stops at the Cohesix U-Boot menu. Continuing with option 1
+uses a saved `cohesix.env` policy when present and otherwise uses the selected
+manifest defaults. To change the network lane, choose **Configure networking**,
+then select DHCP or static IPv4 and wired GENET or CYW43 Wi-Fi. The review menu
+can boot once without writing media, or save the settings to `cohesix.env` and
+reboot.
+
+The default image is built with `--uboot-menu-input usb`. Use an HDMI display
+and USB keyboard for the guided Wi-Fi setup. U-Boot normally echoes serial
+input, so the script refuses to collect a Wi-Fi password through a serial-only
+session. While the USB Wi-Fi prompts are active, input is restricted to the USB
+keyboard and output to the video console; serial/video output is restored after
+capture. Do not type a Wi-Fi PSK into minicom, a serial automation script, or a
+command recorded in shell history.
+
+The saved file may contain only these imported fields:
+
+| Field | Meaning |
+| --- | --- |
+| `coh_net_mode` | `dhcp` or `static` |
+| `coh_net_interface` | `wired` or `wifi` |
+| `coh_static_ip`, `coh_static_prefix_len`, `coh_static_gateway` | Static IPv4 settings; unused for DHCP |
+| `coh_wifi_ssid`, `coh_wifi_psk` | Wi-Fi credentials; unused for wired boots |
+| `coh_show_logo` | U-Boot HDMI logo preference |
+
+If USB input is unavailable, mount the boot partition on a trusted workstation
+and create or update `cohesix.env` with a local editor that does not sync,
+version, or retain the secret. Never use generic `uboot.env`, commit the policy,
+print it in a transcript, or include it in an evidence pack. FAT media does not
+provide meaningful file-permission protection; treat the card as a credential.
+Unmount it cleanly before boot. Evidence should record only whether the policy
+was intentionally preserved, replaced, or reset and the non-secret summary
+that U-Boot emits.
+
+At handoff, the boot script imports only the allowlisted fields, writes the
+selected values into `/chosen/cohesix,*` properties in the staged DTB, and
+passes that DTB to seL4. Root-task validates the bounds and falls back to
+manifest defaults when the handoff is absent or invalid. The script does not
+rewrite the source manifest. The flash workflow preserves a non-empty
+`cohesix.env` only when it is found on the verified target volume; preservation
+is not proof that the selected policy booted.
+
+### 5. Capture a Fresh Boot
 
 Use one serial owner. Start serial capture and the relevant packet capture
 before powering the Pi so the files share a boot-time boundary. Pair captures
 by filename timestamp or packet time, not by a later filesystem modification
 time.
+
+Choose one UTC run identifier and reuse it for every artifact from the boot.
+The example below makes `$SERIAL_LOG`, `$PCAP`, and `$PROOF_ENV` concrete; replace
+the serial device and capture interface with the devices verified on the host.
+On macOS, identify the network interface with `networksetup -listallhardwareports`
+or `ifconfig` before capture.
+
+```bash
+RUN_ID="20260715T010203Z" # replace once; reuse for this boot only
+EVIDENCE_DIR="$PWD/out/pi4-proof/$RUN_ID"
+SERIAL_DEVICE="/dev/cu.usbserial-0001"
+CAPTURE_IFACE="en8"       # for example, the verified Pi-facing USB Ethernet NIC
+SERIAL_LOG="$EVIDENCE_DIR/pi4-serial-$RUN_ID.log"
+PCAP="$EVIDENCE_DIR/pi4-network-$RUN_ID.pcap"
+PROOF_ENV="$EVIDENCE_DIR/pi4-runtime-dma-$RUN_ID.env"
+mkdir -p "$EVIDENCE_DIR"
+```
+
+In the packet-capture terminal, start before power-on and stop with `Ctrl-C`
+only after the console proof completes:
+
+```bash
+sudo tcpdump -i "$CAPTURE_IFACE" -U -n -s 0 -w "$PCAP" \
+  'ether proto 0x888e or arp or udp port 67 or udp port 68 or tcp port 31337'
+```
+
+In the serial terminal, repeat the setup block with the same `RUN_ID` and start
+the sole serial owner before power-on:
+
+```bash
+minicom -D "$SERIAL_DEVICE" -b 115200 -o -C "$SERIAL_LOG"
+```
+
+Packet captures and serial logs can contain addresses, identifiers, console
+traffic, and credentials accidentally emitted by other software. Store and
+share them as sensitive evidence even when Cohesix itself redacts the PSK.
 
 On each requested boot, send commands conservatively and wait for the prompt
 after every command:
@@ -189,7 +269,7 @@ The serial log must contain the exact read-back build marker before any current-
 image claim is made. Preserve the U-Boot policy selection, root prompt, first
 causal blocker, and all driver owner-state/counter evidence from the same boot.
 
-### 5. Normalize Without Overclaiming
+### 6. Normalize Without Overclaiming
 
 Inspect the latest boot slice:
 
@@ -223,7 +303,7 @@ boot-paired Wi-Fi packet capture. The normalizer must prove association, host
 EAPOL completion, DHCP, ARP/data progress, healthy DPC state, `nettest`, and
 authenticated TCP bytes; an association or DHCP line alone is insufficient.
 
-### 6. Prove Raw TCP Before REST
+### 7. Prove Raw TCP Before REST
 
 On the same boot, verify the listener and complete authenticated `cohsh`
 `AUTH`, `ATTACH`, `PING`, and `NETSTATS`. Do not infer remote-shell readiness
@@ -232,7 +312,7 @@ from `tcp_ready`, DHCP, ARP, or a port probe alone.
 Only after raw TCP succeeds should a gateway, REST, UI, or benchmark lane be
 interpreted. A gateway cannot repair a target transport failure.
 
-### 7. Complete the Pi Test Plan
+### 8. Complete the Pi Test Plan
 
 Offline validation uses only the first two stages:
 
@@ -253,6 +333,53 @@ Stages 03-05 require the same accepted live target:
 A full Pi pass requires Stage 01-05 generic and `.pi4.done` markers with no
 incomplete state. Current-tree offline Stage 01-02 evidence must not be reported
 as a full Pi pass.
+
+## U-Boot Recovery and Host Smoke Testing
+
+When the Cohesix boot-options menu is visible, option 0 exits to the U-Boot
+prompt. Prefer the staged script commands because they load the saved policy,
+DTB, driver-runtime archive, and image through the same bounded path as the
+menu:
+
+```text
+=> run coh_load_saved_policy
+=> run coh_boot_sequence
+```
+
+To return to the menu instead, use `run coh_prompt_root`. If the scripted path
+cannot load its files, inspect the FAT partition with `fatls mmc 0:1`. The
+following raw sequence is a diagnostic last resort for the default staged
+filenames:
+
+```text
+=> fatload mmc 0:1 0x10000000 cohesix-image-arm-bcm2711
+=> fatload mmc 0:1 0x14000000 bcm2711-rpi-4-b.dtb
+=> fatload mmc 0:1 0x15000000 cohesix-driver-runtimes.cpio.uimg
+=> usb stop
+=> bootm 0x10000000 0x15000000 0x14000000
+```
+
+This raw sequence does not import `cohesix.env`, apply its `/chosen` properties,
+or run every script-owned USB-quiesce diagnostic. It can localize a loader
+problem, but it is not acceptance evidence. Never omit the driver-runtime
+archive from a current physical-driver boot.
+
+The repository also has a host-only U-Boot smoke harness. Point it at a
+separately built QEMU ARM64 U-Boot binary so it does not replace or confuse the
+Pi binary in `third_party/u-boot`:
+
+```bash
+QEMU_UBOOT_BIN="${QEMU_UBOOT_BIN:?set a QEMU ARM64 U-Boot binary}"
+
+./scripts/uboot/qemu-uboot-smoke.sh \
+  --u-boot-bin "$QEMU_UBOOT_BIN" \
+  --net user \
+  --out-dir out/uboot/qemu-smoke
+```
+
+The harness proves that QEMU reached a U-Boot prompt and accepted deterministic
+environment/network commands. It does not execute the staged Pi menu, load the
+Pi image, or prove firmware, SD, USB, GENET, CYW43, or seL4 behavior.
 
 ## Network and Local-Seat Claims
 

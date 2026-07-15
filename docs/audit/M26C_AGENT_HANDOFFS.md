@@ -31,8 +31,13 @@ milestone gate.
 | Core contracts | `/root/audit_core_contracts` | `ARCHITECTURE`, `INTERFACES`, `SECURE9P`, `ROLES_AND_SCHEDULING`, `DRIVERS` | PASS | Separated trust boundaries, external interfaces, protocol invariants, scheduling policy, and driver methodology; retained exact generated mirrors and passed focused `coh-rtc` guards. |
 | Operator and host | `/root/audit_operator_host`; `/root/audit_operator_host/verify_operator_docs` | `USERLAND_AND_CLI`, `HOST_TOOLS`, `API_GUIDELINES`, `PYTHON_SUPPORT`, `FAILURE_MODES`, `OPERATOR_WALKTHROUGH` | PASS | Independently corrected gateway-versus-target bounds, scheduled provider coverage, filesystem-backed Python mock behavior, and local-Queen REST authority. |
 | Platform and product | `/root/audit_platform_product` | `USE_CASES`, `HARDWARE_BRINGUP`, `BOOT_REFERENCE`, `GPU_NODES`, `BENCHMARKS` | PASS | Separated current QEMU evidence, historical GENET proof, current Pi revalidation, live GPU projection, simulation, and benchmark methodology. |
-| Integration | `/root` | `README.md`, `BUILD_PLAN.md`, audit registers, and suite-wide validation | PASS | Resolved 266 local links, rendered 75 of 75 Mermaid blocks, passed generated guards, Test Plan checks, Markdown linting, and `cargo check --workspace`; corrected the OpenAPI description without changing runtime or release behavior. |
+| Integration | `/root` | `README.md`, `BUILD_PLAN.md`, audit registers, and suite-wide validation | PASS | Resolved 502 local links across `README.md` and all 23 directly linked Markdown documents, rendered 76 of 76 Mermaid blocks, passed generated guards, Test Plan checks, metadata/H1/fence checks, and `cargo check --workspace`; corrected the OpenAPI description without changing runtime or release behavior. |
 | Final semantic review | `/root/audit_core_contracts` plus evidence and operator reviewers | Cross-document status, inventories, OpenAPI, and diagram semantics | PASS after remediation | Found and closed stale Markdown inventory, unfinalized Mermaid status, hardware-proof diagram, OpenAPI placement, and 26b DPC-status defects before handoff. |
+| Preservation remediation: core contracts | `/root/core_docs_restore` | `m26c-readme-linked-doc-suite-remediation`: `ARCHITECTURE`, `INTERFACES`, `ROLES_AND_SCHEDULING`, `DRIVERS`, `GPU_NODES` | PASS | Restored task-isolation semantics, the source-backed public namespace catalogue, shard derivation vector, HAL/MMIO/scheduling contracts, the release/test matrix, and the host-only GPU job schema. Driver coverage, generated drift, local-link, focused host-schema/GPU tests, and Mermaid compatibility checks passed. |
+| Preservation remediation: operator and integration | `/root/operator_docs_restore` | `HOST_TOOLS`, `USERLAND_AND_CLI`, `PYTHON_SUPPORT`, `OPERATOR_WALKTHROUGH`, new `OPERATOR_RECIPES` | PASS | Restored evidence-pack, FUSE, host-ticket, federation, self-test, lifecycle, and PEFT procedures. Seventy-five focused Rust tests, 23 focused Python tests, CLI help, Markdown lint, local links, and diff checks passed. |
+| Preservation remediation: platform and product | `/root/platform_docs_restore` | `HARDWARE_BRINGUP`, `BENCHMARKS`, `USE_CASES` | PASS | Restored first-boot and recovery procedures, U-Boot smoke, benchmark report/lane contracts, and six AI hive patterns. REST harness, Mermaid, CLI render, help, and diff checks passed. |
+| Preservation remediation: integrated semantic review | `/root/integrated_docs_review` | Read-only cross-suite review against current source and CLI behavior | PASS-findings-closed | Caught and closed the Quickstart anchor, per-hive manifest selection in local/federated ticket recipes, executable driver build paths, planning-status sequencing, and stale link/render totals. |
+| Preservation remediation: final validation | `/root/final_validation`; `/root` | Generated guards, Test Plan, driver coverage, focused contracts, target feature builds, workspace, and diff integrity | PASS | Two draft selectors were corrected rather than treated as evidence: the complete `secure9p-codec` suite passed 9 tests, and `root-task --test worker_authority` passed 6. All remaining listed gates passed. |
 
 ## Planner Decision
 
@@ -48,8 +53,15 @@ is deferred outside the milestone.
 - `scripts/ci/check_test_plan.sh` - PASS.
 - `scripts/ci/test_plan_run.sh --list` - PASS.
 - `scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt` - PASS with 32 release-snapshot warnings.
-- `npm exec --yes --package=@mermaid-js/mermaid-cli -- scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out out/audit/m26c-doc-remediation-mermaid-rendered` - PASS with Mermaid CLI 11.16.0; 75 source blocks produced 75 SVG files.
+- `npm exec --offline --package=@mermaid-js/mermaid-cli -- scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c-doc-remediation-markdown.txt --out out/audit/m26c-doc-remediation-mermaid-rendered` - PASS with Mermaid CLI 11.16.0; 76 source blocks produced 76 SVG files.
 - `cargo test -p secure9p-codec` - PASS.
+- `cargo test -p coh-rtc --test observability_docs --test cas_docs` - PASS, 6 tests.
+- `cargo test -p cohsh-core --test doc_snippets` - PASS, 2 tests.
+- `cargo test -p root-task --test worker_authority` - PASS, 6 tests.
+- `cargo test -p hive-gateway` - PASS, 28 tests.
+- `SEL4_BUILD_DIR="$PWD/seL4/SMP_build" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu` - PASS.
+- `SEL4_BUILD_DIR="$PWD/seL4/build_UBOOT" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4` - PASS.
+- `cargo check --workspace` - PASS.
 - `cargo test -p coh-rtc --lib dma` - PASS.
 - `scripts/check-generated.sh` - PASS.
 - `scripts/ci/test_plan_run.sh --target qemu --stage 1 --state-dir out/test-plan/m26c-runner-qemu-smoke` - PASS.

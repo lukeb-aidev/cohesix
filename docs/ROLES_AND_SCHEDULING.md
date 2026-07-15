@@ -65,6 +65,25 @@ the alias for compatibility, but new documentation and clients should prefer
 the canonical sharded path. Exact sharding values are generated in
 [root_task_manifest.md](snippets/root_task_manifest.md).
 
+### Shard derivation
+
+Host NineDoor, the target namespace adapter, and worker helpers use the same
+deterministic algorithm:
+
+1. Hash the exact UTF-8 bytes of `worker_id` with SHA-256; do not case-fold or
+   normalize the identifier.
+2. Read the first digest byte. When `shard_bits < 8`, keep its most-significant
+   `shard_bits`; when `shard_bits = 8`, keep the full byte.
+3. Format the resulting value as two lowercase hexadecimal digits.
+
+For the checked-in `shard_bits = 8` profile, `sha256("worker-7")` begins with
+`8a`, so the canonical telemetry path is
+`/shard/8a/worker/worker-7/telemetry`. When sharding is disabled or
+`shard_bits = 0`, the label helper returns `00`; a disabled layout nevertheless
+uses `/worker/<id>/telemetry`, not `/shard/00/...`. This vector is suitable for
+checking clients that construct canonical paths locally; clients must still
+discover the active profile instead of assuming eight shard bits.
+
 A ticket scope such as `/worker`, `/gpu`, or `/lora` is an authority prefix; it
 does not replace the canonical telemetry path template generated for the role.
 

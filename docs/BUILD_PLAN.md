@@ -6964,14 +6964,15 @@ Deliverables:
 Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-up evidence, and isolated runtime benchmark closure, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window after isolated runtime benchmark closure and before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
 **Current planning status:** Complete. The documentation-only task
-`m26c-readme-linked-doc-suite-remediation` completed on 15 July 2026. It
-removed duplicated contracts, corrected stale as-built claims, assigned clear
-document ownership, and revalidated the complete tracked Mermaid inventory.
-Local links, generated mirrors, the Test Plan contract, the workspace build,
-and all 75 Mermaid blocks passed their final checks. The only non-Markdown
-change corrects the embedded OpenAPI description of `TAIL lines` to match the
-existing gateway handler. No handler, protocol, endpoint, namespace, authority,
-release snapshot, generated behavior, or hardware-acceptance state changed.
+`m26c-readme-linked-doc-suite-remediation` completed its first pass on 15 July
+2026, then a preservation audit found that the reduction had removed several
+durable public contracts, practical operator recipes, and one checker-required
+driver coverage matrix. The preservation follow-up restored those
+source-backed details, corrected linked perimeter guides, and passed the final
+generated-artifact, Test Plan, driver-coverage, workspace, local-link, Markdown
+structure, and 76-of-76 Mermaid render gates. It changed no handler, protocol,
+endpoint, namespace, authority path, generated behavior, release snapshot, or
+hardware-acceptance state.
 
 The original QEMU and Pi 4 closure remains accepted. QEMU closure is anchored
 by `out/test-plan/m26c-qemu` and Stage 05 due-diligence root
@@ -7290,7 +7291,7 @@ Deliverables:
 
 Title/ID: m26c-readme-linked-doc-suite-remediation
 Milestone: Milestone 26c — Regression-Gated Refactor + Surface Audit / documentation-closure defects discovered during Milestone 26d
-Goal: Rewrite the human-authored documents linked directly from `README.md` into one concise, production-grade, as-built suite without changing system behavior or generated truth.
+Goal: Maintain the human-authored documents linked directly or transitively from `README.md` as one concise, production-grade, as-built suite without changing system behavior or generated truth.
 Inputs: README.md, its directly linked human-authored Markdown documents, AGENTS.md, docs/BUILD_PLAN.md, docs/HOST_API.md, resources/openapi/hive-gateway.yaml, docs/audit/M26C_MARKDOWN_INVENTORY.csv, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md, docs/audit/M26C_DOC_DRIFT_LEDGER.md, docs/audit/M26C_MERMAID_INVENTORY.csv, configs/root_task*.toml, configs/generated/root_task_resolved.json, docs/snippets/*.md, current CLI help, source/tests, current target-qualified evidence, and the Milestone 26d Pi 4 proof boundary.
 Changes:
   - README.md — present current scope, evidence status, supported targets, safe getting-started paths, and a categorized documentation map without release or hardware overclaiming.
@@ -7299,6 +7300,8 @@ Changes:
   - resources/openapi/hive-gateway.yaml + docs/HOST_API.md — correct the machine-readable placement of the existing optional `TAIL lines` query and replace the stale duplicated schema mirror with a concise link-backed operator reference, without changing gateway behavior.
   - docs/USE_CASES.md + docs/HARDWARE_BRINGUP.md + docs/BOOT_REFERENCE.md + docs/GPU_NODES.md + docs/BENCHMARKS.md — separate implemented capability, current proof, historical evidence, candidate deployment patterns, and planned work; keep flash, current-image boot, transport, and benchmark proof lanes distinct.
   - docs/BUILD_PLAN.md — record this restoration-only scope and return 26c to `Complete` only after every check below passes.
+  - docs/OPERATOR_RECIPES.md — when needed, own task-oriented evidence, mount, lifecycle, PEFT, and federation workflows so the canonical walkthrough remains one ordered journey.
+  - CONTRIBUTING.md + docs/QUICKSTART.md + docs/SECURITY.md + docs/TOOLCHAIN_MAC_ARM64.md — keep the transitive onboarding and project-governance perimeter consistent with current security, validation, release, and seL4 15 requirements.
   - Canonical Mermaid blocks — retain only diagrams that materially clarify an as-built boundary or sequence; validate both syntax and semantic ownership against code, manifests, and current evidence.
   - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md + docs/audit/M26C_DOC_DRIFT_LEDGER.md + docs/audit/M26C_MERMAID_INVENTORY.csv + docs/audit/M26C_MERMAID_GITHUB_RENDER_AUDIT.md + docs/audit/M26C_AGENT_HANDOFFS.md + docs/audit/M26C_SIMPLICITY_SCORECARD.md — refresh the live audit records with source anchors, before/after size and ownership evidence, lane handoffs, and the final Mermaid inventory/render result.
 Commands:
@@ -7309,11 +7312,14 @@ Commands:
   - scripts/check-generated.sh
   - scripts/ci/check_test_plan.sh
   - scripts/ci/test_plan_run.sh --list
+  - python3 scripts/ci/check_driver_test_coverage.py
   - cargo check --workspace
   - cargo test -p hive-gateway
   - git diff --check
 Checks:
   - Every directly linked canonical document has one stated purpose, an explicit as-built or planning boundary, retained 2026 Lukas Bower metadata, and useful cross-references instead of copied contracts.
+  - Every transitive onboarding, contribution, security, and toolchain guide reached from the suite is current, secret-safe, reproducible, and consistent with the charter.
+  - Durable public namespace, record, derivation, evidence-pack, driver-profile, and simulation contracts remain documented even when generated mirrors and historical debug prose are removed.
   - Selected-profile manifests, resolved output, generated snippets, current source/tests, and target-qualified evidence remain authoritative; generated snippets are linked or reproduced only through their generator and are not hand-edited.
   - Current QEMU evidence, accepted historical Pi 4 evidence, current-image Pi 4 revalidation, Wi-Fi research status, host-only integrations, and future milestones are never presented as interchangeable proof.
   - All local links and referenced anchors resolve, code fences are balanced, Markdown is structurally consistent, and every active Mermaid block passes the GitHub compatibility checker plus an available CLI render pass.

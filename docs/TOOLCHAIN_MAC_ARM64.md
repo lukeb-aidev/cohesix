@@ -1,103 +1,183 @@
-<!-- Copyright © 2026 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Documents macOS ARM64 toolchain requirements and setup steps. -->
+<!-- Purpose: Define the reproducible macOS Apple Silicon host toolchain and external seL4 build contract. -->
 <!-- Author: Lukas Bower -->
-# Toolchain Setup — macOS 26 (Apple Silicon M4)
 
-## 1. Homebrew Prerequisites
-```bash
-brew update
-brew install git cmake ninja llvm@17 python@3 qemu coreutils jq
-```
-- Use Homebrew-provided `llvm@17` for LLD; export `PATH="/opt/homebrew/opt/llvm/bin:$PATH"` when building seL4.
+# Toolchain Setup — macOS 26 on Apple Silicon
 
-## 2. Rust Toolchain
+macOS 26 on Apple Silicon is the primary Cohesix development host. This guide
+installs host dependencies and explains how the current tree consumes, but does
+not vendor, upstream seL4 build outputs.
+
+## Supported toolchain
+
+| Component | Current contract | Source of truth |
+| --- | --- | --- |
+| Rust | 1.93.1, `rustfmt`, `clippy`, `aarch64-unknown-none` | `rust-toolchain.toml` |
+| Host packages | Git, CMake, Ninja, LLVM 17, Python 3, QEMU, coreutils, `jq` | `toolchain/setup_macos_arm64.sh` |
+| Kernel baseline | Upstream seL4 15.0.0 at commit `881de507fe528490dc5e570c7810a149bad5880f` | `docs/audit/M26D_SEL4_15_PROVENANCE.md` |
+| Target artifacts | Profile-selected seL4 generated headers, configuration, kernel, and elfloader outputs | `SEL4_BUILD_DIR` / `--sel4-build` |
+
+The official kernel interface reference is the
+[seL4 Reference Manual 15.0.0](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf).
+
+## 1. Install host and Rust dependencies
+
+The repository script is the canonical setup path:
+
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.1
+./toolchain/setup_macos_arm64.sh
 source "$HOME/.cargo/env"
-rustup toolchain install 1.93.1
-rustup override set 1.93.1
-rustup component add rustfmt clippy --toolchain 1.93.1
-rustup target add aarch64-unknown-none --toolchain 1.93.1
-rustc --version
 ```
-- Incremental builds are forcibly disabled (`CARGO_INCREMENTAL=0`) for the
-  entire workspace via `.cargo/config.toml`. APFS on macOS 26 occasionally drops
-  the temporary directories that Rust's incremental engine relies on, which was
-  manifesting as `No such file or directory` errors when crates like `zerocopy`
-  or `serde` attempted to emit their rmeta artefacts under `target/debug/deps`.
-  The global toggle keeps both seL4-targeted crates (`root-task`, `nine-door`,
-  `worker-heart`, `worker-gpu`) and host-side tooling reliable, at the cost of
-  slightly longer recompiles. The workspace also routes every `rustc`
-  invocation through `scripts/rustc-wrapper.sh`, which pre-creates the dep-info
-  and artefact directories so APFS/iCloud clean-ups cannot race the compiler.
 
-## 3. QEMU Validation
+It uses Homebrew to install missing packages, installs the pinned Rust
+toolchain and components, and verifies `qemu-system-aarch64`. It does not build
+seL4 or download target artifacts.
+
+Verify the result:
+
 ```bash
-qemu-system-aarch64 --version | head -n1
+rustc --version
+rustup target list --installed | rg '^aarch64-unknown-none$'
+qemu-system-aarch64 --version | head -n 1
+cmake --version | head -n 1
+ninja --version
+python3 --version
 ```
-- Expect version ≥ 9.0 with `--machine virt,gic-version=3` support.
-- `scripts/cohesix-build-run.sh` inspects the seL4 build `.config` to decide which
-  GIC revision to request from QEMU. Ensure the kernel configuration enables
-  GICv3 when following the architecture plan; the script will fall back to
-  `gic-version=2` only when the build explicitly disables v3 support.
-- QEMU launchers auto-select `hvf` on macOS (fallback to `tcg` if unavailable).
-  Override with `COHESIX_QEMU_ACCEL` or `QEMU_ACCEL` (for example, `COHESIX_QEMU_ACCEL=tcg`).
 
-## 4. seL4 External Build (reference)
-1. Use upstream seL4 15.0.0 as the accepted kernel baseline for Milestone 26d.
-   The current local source is `/Users/lukasbower/seL4_15` at upstream commit
-   `881de507fe528490dc5e570c7810a149bad5880f`, with the Cohesix Pi 4 VL805
-   BAR0 device-untyped overlay patch recorded in `docs/audit/M26D_SEL4_15_PROVENANCE.md`.
-2. Activate the matching seL4 15 Python environment before configuring kernel
-   profiles:
-   ```bash
-   source "$HOME/seL4_15/.venv_aarch64/bin/activate"
-   ```
-3. The checked-in profile artifact trees are:
-   - `seL4/build` — QEMU `aarch64/virt`, single-core.
-   - `seL4/SMP_build` — QEMU `aarch64/virt`, four-node SMP.
-   - `seL4/build_UBOOT` — Raspberry Pi 4 `bcm2711`, U-Boot image handoff,
-     VCNT-only EL0 counter export, `TIMER_CLOCK_HZ=54000000`.
-4. Configure refreshed trees with `KERNEL_PATH=$HOME/seL4_15` and the matching
-   `KERNEL_HELPERS_PATH` / `KERNEL_CONFIG_PATH` values from that source tree.
-   One-domain profiles must not retain stale `KernelDomainSchedule` cache
-   entries after configure or build.
-5. Configure both QEMU trees with `ElfloaderRootserversLast=ON` and regenerate
-   their embedded QEMU DTB from
-   `virt,secure=off,virtualization=on,gic-version=2`. The generated DTS must
-   record PSCI `method = "smc"` so the elfloader and the Cohesix QEMU launcher
-   agree on the seL4 15 SMP boot path.
-6. Configure the Pi 4 U-Boot tree with `ElfloaderRootserversLast=ON` and
-   `IMAGE_START_ADDR=0x10000000` as well. The QEMU PSCI/DTB setting is not used
-   for Pi U-Boot, but the seL4 15 rootserver-placement guard is shared across
-   the refreshed elfloader profiles. The fixed Pi image start preserves the
-   known-working U-Boot `bootm` XIP handoff shape; a shoehorn-computed lower
-   address makes U-Boot treat the payload as a relocatable Linux `Image` and
-   reject the seL4 elfloader before seL4 starts.
-7. Store transient rebuild outputs under `out/` and replace the checked-in
-   profile artifact trees only after the generated caches point at the accepted
-   seL4 15 source and pass the profile-specific guards.
-8. For direct QEMU experiments, run the helper with explicit paths once the
-   Rust root task has been compiled:
-   ```bash
-   scripts/qemu-run.sh \
-     --elfloader out/elfloader \
-     --kernel out/kernel.elf \
-     --root-task target/aarch64-unknown-none/release/root-task \
-     --out-dir out/qemu-direct
-   ```
-9. The Cohesix build harness copies `elfloader` into its staging directory and
-   strips any baked-in kernel/root server payloads via
-   `scripts/lib/strip_elfloader_modules.py`. This guarantees that the Rust
-   `root-task` provided by the workspace becomes the first user task instead of
-   the default `sel4test` module shipped with upstream builds.
+Homebrew's LLVM 17 is available at `/opt/homebrew/opt/llvm/bin` on the standard
+Apple Silicon prefix. Add it only for commands that need that toolchain:
 
-## 5. Developer Quality-of-Life
-- Install `just` (optional) for task orchestration.
-- Use `cargo install cargo-nextest` for faster test runs.
-- Configure VS Code or Neovim with Rust Analyzer pointing at the workspace root.
+```bash
+export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+```
 
-## 6. Continuous Integration Expectations
-- CI runners must preinstall QEMU and set `RUSTFLAGS="-C target-cpu=apple-m4"` for performance parity.
-- Provide a cached seL4 build or mock out seL4 dependencies when running unit tests.
+Do not set model-specific flags such as `target-cpu=apple-m4` in shared scripts
+or CI. Host binaries and caches must remain portable across supported Apple
+Silicon machines.
+
+## 2. Prepare the external seL4 source
+
+seL4 source remains outside this repository. Parameterize its location rather
+than embedding a developer home directory:
+
+```bash
+export COHESIX_SEL4_SOURCE="${COHESIX_SEL4_SOURCE:-$HOME/seL4_15}"
+test -d "$COHESIX_SEL4_SOURCE"
+git -C "$COHESIX_SEL4_SOURCE" rev-parse HEAD
+```
+
+The accepted Milestone 26d baseline is upstream seL4 15.0.0 at the commit in
+the table above. The Pi 4 profile also uses the Cohesix VL805 high-BAR
+device-untyped overlay recorded, hashed, and bounded in
+[`docs/audit/M26D_SEL4_15_PROVENANCE.md`](audit/M26D_SEL4_15_PROVENANCE.md).
+Do not silently apply a different kernel revision or local patch set.
+
+Use the Python environment associated with that source tree when configuring
+or rebuilding kernel profiles:
+
+```bash
+source "$COHESIX_SEL4_SOURCE/.venv_aarch64/bin/activate"
+```
+
+If that environment does not exist, follow the upstream seL4 15.0.0 setup
+instructions and record the created environment in local build provenance.
+
+## 3. Select generated kernel artifacts
+
+The repository currently uses these profile-qualified output conventions:
+
+| Directory | Target profile | Important boundary |
+| --- | --- | --- |
+| `seL4/build` | QEMU `aarch64/virt`, single core | Development/reference output |
+| `seL4/SMP_build` | QEMU `aarch64/virt`, four-node SMP | Default current-source QEMU path |
+| `seL4/build_UBOOT` | Raspberry Pi 4 `bcm2711` | Pi firmware → U-Boot → seL4 binary image |
+
+These directories contain generated kernel truth, not vendored seL4 source.
+The selected directory must match the intended target and root-task ABI:
+
+```bash
+export SEL4_BUILD_DIR="$PWD/seL4/SMP_build"
+test -f "$SEL4_BUILD_DIR/kernel/autoconf/autoconf.h"
+test -d "$SEL4_BUILD_DIR/libsel4/include"
+```
+
+Root-task compilation reads generated headers and configuration from this
+directory. Do not combine a kernel or elfloader from one profile with headers,
+slot layouts, or root-task artifacts from another.
+
+QEMU launchers inspect the selected seL4 configuration and choose matching
+machine details, including the GIC revision. An explicit override is valid only
+when it agrees with that generated configuration. Pi 4 builds require the
+generated virtual-counter export and `TIMER_CLOCK_HZ=54000000`; target timeout
+logic must not substitute CPU-speed loops or physical-counter access.
+
+## 4. Build the current QEMU profile
+
+The integrated build stages the selected elfloader and kernel, regenerates
+manifest outputs, builds the Rust target and host tools, assembles the rootfs,
+and launches QEMU:
+
+```bash
+./scripts/cohesix-build-run.sh \
+  --sel4-build "$SEL4_BUILD_DIR" \
+  --out-dir out/cohesix \
+  --profile release \
+  --root-task-features cohesix-dev \
+  --cargo-target aarch64-unknown-none \
+  --transport tcp
+```
+
+Use `--no-run` to stage artifacts without claiming a boot. Use `--transport
+qemu` when `cohsh` should own QEMU without exposing the guest TCP listener.
+See [Quickstart](QUICKSTART.md) for the verified connection flow.
+
+The workspace disables incremental compilation and routes Rust invocations
+through `scripts/rustc-wrapper.sh` to avoid APFS temporary-directory races.
+Those settings live in `.cargo/config.toml`; do not duplicate them in local or
+CI commands.
+
+## 5. Validate toolchain and generated alignment
+
+Before attributing a failure to the target, record:
+
+```bash
+git rev-parse HEAD
+rustc --version --verbose
+qemu-system-aarch64 --version | head -n 1
+git -C "$COHESIX_SEL4_SOURCE" rev-parse HEAD
+shasum -a 256 "$SEL4_BUILD_DIR/kernel/autoconf/autoconf.h"
+```
+
+Run repository guards from the workspace root:
+
+```bash
+scripts/check-generated.sh
+scripts/ci/check_test_plan.sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo check --workspace
+cargo test --workspace
+```
+
+Target-specific acceptance remains in the staged Test Plan. A host build proves
+neither a QEMU boot nor Pi 4 behavior; retain the command, selected profile,
+manifest fingerprint, and evidence directory for each claim.
+
+## 6. Rebuilding seL4 profiles
+
+Kernel-profile regeneration is scoped work, not a routine cleanup step. Follow
+the active task in [Build plan](BUILD_PLAN.md) and the accepted values in the
+provenance ledger. In particular:
+
+- keep `ElfloaderRootserversLast=ON` for the accepted seL4 15 profiles;
+- keep Pi 4 `IMAGE_START_ADDR=0x10000000` for the U-Boot `bootm` XIP handoff;
+- generate QEMU DTB/PSCI settings from the selected profile rather than copying
+  values between QEMU and Pi builds;
+- store transient outputs under `out/` and replace tracked reference outputs
+  only after profile guards pass;
+- use `scripts/lib/strip_elfloader_modules.py` through the integrated harness so
+  staged elfloaders do not retain an upstream test rootserver.
+
+The detailed image, flash, boot, and current-image evidence procedure is in
+[Hardware bring-up](HARDWARE_BRINGUP.md).

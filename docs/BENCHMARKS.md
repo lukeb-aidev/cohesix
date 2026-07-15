@@ -69,6 +69,24 @@ result **diagnostic**, not accepted.
 
 Lanes may explain one another, but they are not interchangeable.
 
+## Changed Surface to Evidence Lane
+
+Choose lanes from the component that changed, not from the easiest environment
+to run. Cross-layer changes require every applicable row.
+
+| Changed surface | Minimum performance lane | Required companion proof |
+| --- | --- | --- |
+| Console parser, authentication, or `cohsh` transport | QEMU direct TCP or `cohsh`; add the physical transport lane when target code changed | Console grammar fixtures, exact auth mode, and ACK/ERR/END regression |
+| Root-task namespace, worker lifecycle, or schedule queue | QEMU REST `simulate` with a fixed manifest, seed, and operation mix | Generated-artifact guard and target-qualified Test Plan |
+| `hive-gateway`, REST client, session pool, cache, or broker | QEMU REST `simulate` plus REST `perf` for affected read paths | Gateway status delta, queue/time-out settings, and per-operation errors |
+| HAL or isolated driver runtime | Driver-runtime counters plus the affected physical Pi lane | Same-image serial, runtime/DMA proof, packet capture when networked, and driver tests |
+| GENET transport | Pi GENET only | Fresh wired boot, DHCP/static policy, bidirectional packets, raw TCP, and authenticated `cohsh` |
+| CYW43/SDIO transport | Pi Wi-Fi only | Association, host EAPOL, DHCP, ARP/data, DPC/IRQ, raw TCP, `cohsh`, and repeatability evidence |
+| Harness, report schema, parser, replay, or visualization | Host microbenchmark or fixture replay plus one unchanged-target control run | Artifact-schema tests and a before/after comparison from identical source data |
+
+A security or authority change is never accepted from a performance result
+alone. Run the functional, policy, and generated-contract gates first.
+
 ## Canonical Tools
 
 | Tool | Purpose |
@@ -92,27 +110,93 @@ Lanes may explain one another, but they are not interchangeable.
 | `<prefix>.ramp.csv` | Time-series ramp projection. |
 | `<prefix>.ramp.svg` | Quick visual smoke output; never the sole evidence. |
 
-The summary contains `cohesix-benchmark-report/v1`. Review its workload,
-throughput, latency, reliability, concurrency, backpressure,
-`top_operations_by_p95`, and `top_operations_by_error_rate` fields. Legacy
-top-level fields are compatibility projections; derive decisions from the
-versioned report object.
+The summary contains a `report` object whose `schema` is
+`cohesix-benchmark-report/v1`. Legacy top-level fields are compatibility
+projections; automation and review decisions must use the versioned object.
+
+| Report field | Contents and interpretation |
+| --- | --- |
+| `schema` | Exact report contract identifier; reject unknown major versions. |
+| `workload` | Mode, scenario, worker bounds/cap, intensity, base and target RPS, duration, configured in-flight limit, retry state, and strict-error state. These fields define comparability. |
+| `throughput` | Attempted, successful, and failed operations per second over the configured duration. Throughput without reliability is not a capacity result. |
+| `latency` | Overall average, minimum, maximum, p50, p90, p95, and p99 seconds. Use `operations` in the parent summary for per-operation latency. |
+| `reliability` | Counts, error rate, declared error budget, and pass/fail result. Exact error strings remain in the parent `overall` and `operations` objects. |
+| `concurrency` | Configured maximum, observed high-water mark, current in-flight count, and submitted/completed counts. |
+| `backpressure` | Gateway-status deltas for pool exhaustion, checkout retries, timeout refusal, control-write retry behavior, and `/proc` cache effectiveness. Zero means no observed delta, not proof that another layer had no pressure. |
+| `top_operations_by_p95` | Up to ten operation rows ranked by p95 latency, including count, success, and error totals. |
+| `top_operations_by_error_rate` | Up to ten operation rows ranked by error rate, including count, success, and error totals. |
+| `visualization` | Canonical series names and recommended chart types; guidance only, not measured data. |
 
 `perf` writes a `*.perf-summary.json` artifact. Always state that it is a read
 microbenchmark and name whether status, telemetry, or both suites ran.
 
 ## Running a Mixed REST Benchmark
 
-First establish an accepted QEMU or physical-target boot and a gateway backed
-by that target. Configure real secrets through environment variables rather
-than command arguments:
+Use a repository-local virtual environment so the interpreter is isolated and
+part of the recorded provenance. The harness itself uses the Python standard
+library:
+
+```bash
+test -x .venv/bin/python || python3 -m venv .venv
+test -x .venv/bin/python
+.venv/bin/python scripts/rest_perf_harness.py --help >/dev/null
+```
+
+Load real secrets from an approved secret manager into environment variables.
+Do not pass them as command arguments or save them in scripts, shell history,
+reports, or checked-in environment files:
 
 ```bash
 test -n "${COH_AUTH_TOKEN:?set the target console secret}"
 test -n "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set the REST mutation token}"
+```
+
+### Harness-Managed QEMU and Gateway
+
+Use one unpacked, internally matching release bundle. The harness starts its
+QEMU launcher and `hive-gateway`, validates console authentication, runs the
+workload, writes the artifacts, and stops the child processes. Do not mix a
+bundle launcher with host tools or manifests from another build.
+
+```bash
+BENCH_BUNDLE="${BENCH_BUNDLE:?set one matching unpacked release bundle}"
+test -x "$BENCH_BUNDLE/qemu/run.sh"
+test -x "$BENCH_BUNDLE/bin/hive-gateway"
+
+.venv/bin/python scripts/rest_perf_harness.py \
+  --mode simulate \
+  --bundle "$BENCH_BUNDLE" \
+  --workers-min 8 \
+  --workers-max 8 \
+  --intensity-min 2 \
+  --intensity-max 2 \
+  --duration-mins 1 \
+  --base-rps 0.1 \
+  --max-inflight 16 \
+  --seed 26 \
+  --no-transient-retries \
+  --strict-control-errors \
+  --error-budget-rate 0.01 \
+  --qemu-log out/bench/qemu-managed.log \
+  --gateway-log out/bench/gateway-managed.log \
+  --log-dir out/bench \
+  --log-prefix qemu-managed-smoke
+```
+
+This is a bounded harness smoke workload, not an accepted capacity target.
+Check that neither console port nor gateway bind is already owned before the
+run; the harness fails closed rather than competing with an existing owner.
+
+### Existing Accepted Target
+
+First establish an accepted QEMU or physical-target boot and a gateway already
+backed by that target. `--no-qemu --no-gateway` tells the harness not to launch
+or replace either owner:
+
+```bash
 test -n "${COH_REST_URL:?set the accepted gateway URL}"
 
-python3 scripts/rest_perf_harness.py \
+.venv/bin/python scripts/rest_perf_harness.py \
   --mode simulate \
   --no-qemu \
   --no-gateway \
@@ -139,7 +223,7 @@ candidate envelope.
 For a focused read-path run:
 
 ```bash
-python3 scripts/rest_perf_harness.py \
+.venv/bin/python scripts/rest_perf_harness.py \
   --mode perf \
   --suite all \
   --runs 5 \
@@ -189,6 +273,35 @@ Review in this order:
 Do not reduce a run to one score. A useful report shows pressure over time,
 observed throughput, error budget, latency percentiles, backpressure deltas, and
 top failing operations.
+
+## Visualization and Review Package
+
+Build charts from `<prefix>.summary.json`, `<prefix>.ops.csv`, and
+`<prefix>.ramp.csv`; retain the generated `<prefix>.ramp.svg` as a quick smoke
+view. A review package should contain, at minimum:
+
+1. **Pressure and throughput over time:** target RPS and observed successful and
+   failed operations per second by ramp step.
+2. **Reliability boundary:** error rate against the declared budget, annotated
+   with the first worker/intensity step that crosses it.
+3. **Latency by operation:** p50, p95, and p99 for operations with meaningful
+   sample counts; show the count beside each series.
+4. **Backpressure attribution:** gateway status deltas and observed in-flight
+   high water aligned to the same ramp steps.
+5. **Comparator:** the same charts for a provenance-compatible baseline with a
+   clear indication of missing or non-comparable lanes.
+
+Use seconds or milliseconds consistently and label the unit. Start time-series
+axes at zero unless a non-zero origin is explicitly called out. Do not use a
+dual axis that makes latency and throughput appear causally linked. Never
+silently remove failed attempts, warm-up intervals, overload steps, or empty
+worker suites. If telemetry is skipped because the target exposed no workers,
+say so in the chart and conclusion rather than plotting a zero result.
+
+The written conclusion must name the accepted envelope or first failing step,
+the error and latency contract, the counter evidence identifying the owning
+layer, and the exact engineering decision. A chart without the canonical JSON,
+workload configuration, and target proof is illustrative only.
 
 ## Safe Interpretation and Tuning
 

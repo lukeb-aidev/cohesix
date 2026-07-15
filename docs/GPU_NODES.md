@@ -11,7 +11,7 @@ manifest-authorized control records and host-published descriptions.
 This document distinguishes the live root-task surface from host simulation.
 It does not describe a general GPU scheduler or an in-VM compute API.
 
-## Trust Boundary
+## 1. Trust boundary
 
 ```mermaid
 flowchart LR
@@ -44,7 +44,7 @@ The boundary is strict:
 - a deployment-specific host executor must perform any real GPU mutation and
   return bounded status or receipt records through an authorized host path.
 
-## As-Built Capability Matrix
+## 2. As-built capability matrix
 
 | Surface | As-built behavior | Important limit |
 | --- | --- | --- |
@@ -58,7 +58,7 @@ The selected manifest and generated output remain authoritative. A path listed
 here is absent when its feature is disabled or its host publish has not
 completed.
 
-## Live Namespace
+## 3. Live namespace
 
 | Path | Direction | Meaning |
 | --- | --- | --- |
@@ -80,7 +80,7 @@ The canonical schema and generated limits are documented in
 [INTERFACES.md](INTERFACES.md). When prose and generated output disagree, the
 generated profile is authoritative and the documentation drift must be fixed.
 
-## Publishing a Snapshot
+## 4. Publishing a snapshot
 
 Configure a real console secret outside source control, then publish. The
 commands below use release-bundle binaries under `./bin`; source-tree users can
@@ -113,7 +113,51 @@ Do not place a token in documentation, command arguments, scripts, process
 supervision files, or shell history. See [HOST_TOOLS.md](HOST_TOOLS.md) for
 auth resolution and live gateway operation.
 
-## Lease Records
+## 5. Simulation-only job descriptor
+
+The host `nine-door` implementation includes `/gpu/<id>/job` only for tests,
+macOS development, and policy/client demonstrations. The live root task does
+not expose this node. Each non-empty append line is decoded as this host-only
+JSON descriptor:
+
+```json
+{
+  "job": "jid-42",
+  "kernel": "vadd",
+  "grid": [128, 1, 1],
+  "block": [256, 1, 1],
+  "bytes_hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "inputs": [],
+  "outputs": [],
+  "timeout_ms": 5000,
+  "payload_b64": ""
+}
+```
+
+| Field | Contract in the simulation |
+| --- | --- |
+| `job` | Stable job identifier accepted by the `worker-gpu` host type. |
+| `kernel` | Host enum value `vadd` or `matmul`. |
+| `grid`, `block` | Three unsigned dimensions carried in the descriptor; no CUDA launch occurs. |
+| `bytes_hash` | `sha256:` followed by 64 hexadecimal digits. |
+| `inputs`, `outputs` | String lists retained as simulated artifact references; NineDoor does not dereference them. |
+| `timeout_ms` | Unsigned simulated deadline field; it does not start a live cancellation timer. |
+| `payload_b64` | Optional Base64 bytes. When present, decoding must succeed and SHA-256 must equal `bytes_hash`. |
+
+After validation, host NineDoor appends the descriptor and synthesizes
+`QUEUED`, `RUNNING`, and `OK` status records plus matching worker telemetry.
+Those records prove parser, lease, ticket, policy, and client behavior only.
+They do not prove CUDA launch, timeout/cancellation, GPU isolation, model
+activation, or physical performance. The `JobDescriptor` source comment refers
+to this contract as [GPU Nodes §5](#5-simulation-only-job-descriptor); keep
+that section reference attached to this simulation schema rather than to the
+live namespace.
+
+A future live job or executor contract requires explicit
+[BUILD_PLAN.md](BUILD_PLAN.md) scope, generated interface changes where
+applicable, tests, and documentation in the same change.
+
+## 6. Lease records
 
 The host-side lease type contains the worker identity as part of the authority
 record:
@@ -135,7 +179,7 @@ records lease intent and state. A real executor must independently enforce
 memory, stream, lifetime, revocation, and device-isolation policy; the presence
 of an `ACTIVE` line is not hardware enforcement proof.
 
-## Model and Telemetry Lifecycle
+## 7. Model and telemetry lifecycle
 
 1. A host registry stores the model artifact and its manifest.
 2. `gpu-bridge-host` reads descriptors and publishes a bounded namespace
@@ -150,25 +194,7 @@ pointer from `worker-gpu`, or hot-swap an inference process. Host telemetry may
 carry `model_id` and `lora_id`, but the host emitter owns validation, record
 bounds, and delivery to an accepted telemetry path.
 
-## Simulation-Only Job Flow
-
-The host `nine-door` implementation includes a `/gpu/<id>/job` file for tests.
-It validates a JSON descriptor and synthesizes a short lifecycle sequence. Use
-that surface to test clients and policy behavior only.
-
-Do not use simulation output to claim any of the following:
-
-- live root-task job support;
-- CUDA launch, completion, cancellation, or timeout behavior;
-- lease enforcement or GPU isolation;
-- model activation or inference reload;
-- physical GPU performance.
-
-A future live job or executor contract requires explicit
-[BUILD_PLAN.md](BUILD_PLAN.md) scope, generated interface changes where
-applicable, tests, and documentation in the same change.
-
-## Security and Acceptance
+## 8. Security and acceptance
 
 - Validate model identifiers, snapshot sizes, JSON envelopes, hashes, and all
   user-controlled strings before they reach an external executor.

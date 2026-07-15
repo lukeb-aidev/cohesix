@@ -1,100 +1,131 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Summarize Cohesix security posture and audit expectations. -->
+<!-- Purpose: Define Cohesix vulnerability reporting, security boundaries, implemented controls, and generated profile limits. -->
 <!-- Author: Lukas Bower -->
-# Cohesix Security Addendum — Networking & Console
 
-The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 4 U-Boot chain (`Pi firmware -> U-Boot -> seL4 image -> root-task`); QEMU `aarch64/virt` serves as the development/CI harness and mirrors the same control-plane attack surface where profile-gated behavior allows.
+# Security
 
-## 1. Deterministic Memory Envelope
-- `root-task::net::NetStack` binds smoltcp to HAL-provided NICs on QEMU
-  profiles and to isolated runtime GENETv5 or CYW43455 evidence on Pi 4 profiles.
-  DMA frames are admitted through HAL-owned ranges and device mappings flow
-  through HAL coverage checks so drivers never bypass allocator accounting,
-  cache policy, or no-IOMMU quarantine rules.
-- A monotonic `NetworkClock` backed by `portable_atomic::AtomicU64` bounds timestamp arithmetic while avoiding wrap for the
-  lifetime of the Cohesix instance. Pollers advance the clock using explicit millisecond timestamps supplied by the event pump so the heapless
-  queues never rely on wall-clock drift.
-- smoltcp is compiled without default features; only the IPv4/TCP stack is enabled. Random seeds and MAC addresses are
-  deterministic to ensure reproducible boots inside QEMU and when mirrored on hardware.
-- Console buffers (`heapless::String`) cap line length at 256 bytes and reject control characters beyond backspace/delete to
-  prevent uncontrolled allocations. The serial facade uses `heapless::spsc::Queue` staging buffers sized at 512 bytes for RX and
-  1024 bytes for TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic
-  allocation.
-- The virtio-console driver mirrors device descriptor rings with bounded `heapless::spsc::Queue` structures (mirroring the RX/TX
-  staging buffers) so host tests can exercise the driver without MMIO. Pending TCP console lines are staged in a
-  `heapless::Deque` (depth 8) before the event pump forwards them into the parser, providing a deterministic envelope for
-  remote operator traffic.
-- Networking telemetry (`link_up`, `tx_drops`, `last_poll_ms`) is captured in a copyable struct so audit sinks can log
-  descriptor pressure without touching heap allocations. This telemetry is emitted whenever the event pump observes network
-  activity.
+Cohesix is a pre-production research operating system. Its design reduces and
+makes authority visible; it does not make the complete system formally verified
+or suitable for unattended production use. seL4's machine-checked proofs apply
+to the kernel under their stated assumptions, not automatically to Cohesix
+userspace, host tools, firmware, drivers, or deployment policy.
 
-## 1.1 SMP Isolation & Multithreading Rejection
-- Cohesix uses seL4 SMP scheduling to run **separate tasks** in parallel; each task remains single-threaded.
-- Authoritative state (tickets, policy, replay) is serialized through the root-task authority surface and never mutated by parallel workers.
-- Shared-memory multithreading is rejected because it introduces nondeterministic interleavings that break replay guarantees and
-  expand the audit surface for data races and timing side effects.
-- Back-pressure is explicit: overloaded tasks return deterministic `ERR ... reason=busy` instead of hidden queues or background work.
+## Reporting a vulnerability
 
-## 1.2 Milestone 26/26a/26b Pi 4 Identity + Networking Gates
-- `coh-rtc` preserves Milestone 26 no-NIC mode (`hw.no_nic=true`, `features.net_console=false`) and emits deterministic evidence (`manifest.hw.networking=disabled-m26-baseline`).
-- Milestone 26a/26b network-enabled Pi 4 mode is profile-gated and compiler-enforced:
-- `profile.name` must be `pi4-uboot-aarch64` (legacy alias `uefi-aarch64` accepted only for migration).
-- `hw.network.enabled=true` requires `hw.network.backend=bcmgenet-v5`.
-- `hw.network.mode` is bounded to `off|static|dhcp`, `hw.network.interface` is bounded to `wired|wifi|auto`, and DHCP retry/timeout fields are compiler-bounded.
-- `hw.network.static_ipv4.ip` must be non-zero IPv4 with `prefix_len` in `1..=32`; gateway is optional but if set must be non-zero IPv4 when `mode=static`.
-- `hw.devices` must declare a required `net` device before backend selection is accepted.
-- Boot logs include deterministic network evidence lines (`manifest.hw.network.enabled`, `manifest.hw.network.backend`, `manifest.hw.network.mode`, `manifest.hw.network.interface`, `manifest.hw.networking=...`) for audited before/after proofs.
-- The DHCP client path is bounded and client-only: DHCPv4 DISCOVER/OFFER/REQUEST/ACK, fixed buffers, bounded retry/timeouts, strict packet validation, and no new listeners or protocol surfaces.
-- Pi 4 boot scripts may persist only Cohesix policy fields in `cohesix.env`, reload them on boot, mirror `coh_net_mode`, `coh_net_interface`, `coh_static_ip`, `coh_static_prefix_len`, `coh_static_gateway`, `coh_wifi_ssid`, and `coh_wifi_psk` into a staged padded DTB under `/chosen/cohesix,*`, and hand that DTB to the elfloader through the U-Boot `uImage`/`bootm` path. Root-task accepts only bounded values and falls back to manifest defaults when the DTB handoff is absent or invalid; the build-time manifest is never rewritten on the SD card.
-- The runtime now routes Pi 4 `wifi` policy through isolated CYW43455 plus SDIO
-  runtime clients admitted by HAL descriptors. Explicit `wifi` accepts bounded
-  `static` or `dhcp`; SSIDs are limited to 1-32 printable ASCII bytes, and PSKs
-  are empty for open networks, 8-63 printable ASCII bytes, or exactly 64 ASCII
-  hex digits. `auto` remains DHCP-only and single-active-interface: the physical
-  driver-task profile selects CYW43 when bounded credentials are present and
-  GENET otherwise, and a selected CYW43 attach/join/runtime failure is fatal
-  driver evidence rather than an implicit wired fallback. QEMU/host
-  compatibility profiles may retain absent-device fallback coverage for
-  virtual-device tests.
-- Attestation policy is manifest-gated through `hw.attestation.*`:
-- `tpm-only` requires a TPM declaration.
-- `tpm-or-dice` and `dice-only` are encoded deterministically and bound to the manifest fingerprint.
-- Root-task evaluates attestation before ticket registration. If attestation is enabled and policy guarantees are unsatisfied, boot aborts deterministically and emits audited reason codes.
-- `/proc/boot` includes `attestation.bound_manifest_sha256` and `attestation.evidence_sha256` when attestation is enabled.
-- Local diagnostics seat policy is manifest-gated through `hw.local_seat.*` and declared keyboard/display devices.
-- `hw.local_seat.required=true` is fail-fast: missing declarations or unavailable backend aborts boot before ticket material is published.
-- `hw.local_seat.required=false` degrades to serial-only diagnostics with explicit audited boot lines.
-- GENETv5 implementation provenance is documented and constrained: Linux `bcmgenet` behavior -> Linux `bcm2711` DT bindings -> U-Boot `bcmgenet`; these references are design-only and code lift is prohibited.
-- Planned CYW43xx implementation provenance remains fixed as well: OpenBSD `bwfm` -> Zephyr/Infineon WHD HAL layering -> Linux `brcmfmac` SDIO recovery/link edge cases. No source code lift is permitted.
+Do not disclose a suspected vulnerability, exploit, secret, or sensitive log in
+a public issue or discussion.
 
-## 2. Console Hardening
-- A leaky-bucket rate limiter permits two consecutive authentication failures per 60-second window; the third failure triggers a
-  90-second cooldown and surfaces `RateLimited` to both serial and TCP clients. The event pump layers an exponential back-off
-  (250 ms × 2ⁿ) on top of the leaky bucket so automated brute force attempts stall progressively sooner.
-- All verbs (`help`, `attach`, `tail`, `log`, `spawn`, `kill`, `quit`) are parsed through a shared finite-state machine to ensure
-  consistent validation across serial and TCP inputs. Unknown verbs and overlong values emit structured log lines and are
-  ignored. The serial façade sanitises UTF-8 input before handing bytes to the parser, dropping control characters outside the
-  backspace/delete set.
-- Tickets presented during `attach` are verified against a deterministic `TicketTable` seeded during boot. Audit lines are
-  emitted for every denial and for each successful role assertion so operators can review access attempts in `/log/queen.log`.
-- Console refusals are tagged with `reason=busy|quota|cut|policy` plus a bounded `detail=` token; the same categories drive
-  `/proc/pressure/*` counters so operators can distinguish contention from policy enforcement without additional RPCs.
-- Host sidecar controls (`/host/*`) are append-only and queen-only; every write attempt (allowed or denied) emits a deterministic
-  audit line that records the ticket and path, ensuring sensitive host actions leave an immutable trace in `/log/queen.log`.
-- Host tooling mirrors these controls: `cohsh` validates worker tickets locally (64 hex or base64url) and emits connection
-  telemetry (`[cohsh][tcp] reconnect attempt …`, heartbeat latency) to stderr so operators can correlate client-side failures
-  with root-task audit trails.
-- Host control tickets (`/host/tickets/spec|status|deadletter`) are schema- and allowlist-gated (`host-ticket/v1`,
-  `host-ticket-result/v1`) with strict line-size bounds. Invalid schema/state/action lines fail deterministically before host
-  side effects are attempted.
-- `host-ticket-agent` applies at-least-once execution with idempotency keyed by `id + idempotency_key` and writes explicit
-  lifecycle receipts (`claimed`, `running`, terminal states) so incident replay can prove whether side effects were attempted.
-- Evidence exports redact sensitive JSON keys (`*token*`, `*secret*`, `*password*`, `signing_key`, `api_key`) in ticket and audit
-  captures, and audit `ticket` fields are hashed (`sha256:<hex>`). Raw bearer/request auth tokens must never be stored in ticket
-  `args`; operators should pass opaque references instead.
-- The TCP console mirrors the serial surface exactly. Line-oriented commands are terminated by `END` sentinels so scripts can
-  verify log completion without relying on socket closure.
+1. Open this repository's **Security** tab and use GitHub private vulnerability
+   reporting when it is available.
+2. Include the affected commit or release, target/profile, minimal reproduction,
+   expected security boundary, and impact. Attach only redacted evidence.
+3. If private reporting is unavailable, open a non-sensitive issue asking the
+   maintainer for a private reporting channel. Do not include vulnerability
+   details in that issue.
+
+Cohesix is maintained as a research project and does not promise a fixed
+response or remediation SLA. The maintainer will acknowledge a usable private
+report, validate scope, coordinate disclosure when practical, and record a fix
+and verification evidence if the issue is accepted.
+
+Current source receives security fixes first. Versioned release directories are
+immutable research snapshots; a backport exists only when the corresponding
+release notes explicitly identify it. Never assume that an older bundle has the
+security posture of the current tree.
+
+## Security objectives and non-goals
+
+Cohesix aims to:
+
+- keep the privileged kernel and in-VM trusted computing base small;
+- make resource and namespace authority explicit through seL4 capabilities,
+  generated manifests, roles, tickets, and lifecycle state;
+- validate hostile input before side effects;
+- bound memory, work, retries, queues, and retained evidence;
+- compartmentalize physical drivers and keep GPU ecosystems host-side;
+- leave deterministic receipts for accepted and denied control-plane actions.
+
+Cohesix does not currently provide:
+
+- a formally verified whole system;
+- a POSIX security boundary, multi-user desktop, or general-purpose server;
+- in-VM TLS, HTTP, SSH, CUDA, NVML, model execution, or package-management
+  services;
+- encryption for the direct TCP console or `hive-gateway`;
+- a Pi 4 IOMMU/SMMU boundary on BCM2711;
+- a guarantee that a compromised operator host, boot firmware, selected driver
+  firmware, or privileged build environment cannot compromise a deployment.
+
+## Trust and authority boundaries
+
+The seL4 kernel controls memory objects, execution, notifications, interrupts,
+and IPC through capabilities. Cohesix root-task remains trusted for bootstrap,
+HAL admission, manifest enforcement, namespace authority, tickets, lifecycle,
+and audit. Queen and Worker roles receive only their generated namespace and
+endpoint authority; Worker tickets are mandatory and Queen ticket requirements
+are profile-controlled.
+
+Physical devices run in manifest-declared, single-threaded Rust driver
+runtimes. HAL owns physical-address discovery, device-untyped admission, MMIO,
+IRQ, DMA, PCI, SDIO, and board-level resource assignment. Driver runtimes may
+touch only the resources delivered through their generated fixed ABI. The root
+task may admit resources, submit bounded service turns, and retain diagnostics,
+but must not own steady-state physical drivers.
+
+Host tools are outside the target TCB. They may use operating-system services,
+CUDA/NVML, model runtimes, REST, and UI frameworks, but may only project the
+documented console and Secure9P semantics. A compromised host tool with a valid
+Queen secret can exercise that secret's authority; least-privilege host process
+and secret handling remain deployment responsibilities.
+
+See [Architecture](ARCHITECTURE.md) for component boundaries,
+[Roles and scheduling](ROLES_AND_SCHEDULING.md) for role authority, and
+[Drivers](DRIVERS.md) for the physical-device proof contract.
+
+## Network and console exposure
+
+The authenticated root-task TCP console is the only in-VM TCP listener. It is a
+line-oriented console using `AUTH`, `ATTACH`, bounded commands, `OK`/`ERR`
+responses, and `END` stream terminators; it is not a 9P-over-TCP server. Worker
+attachments require a valid role ticket before namespace access.
+
+Authentication is not encryption. Bind direct console forwarding to loopback
+or carry it through an authenticated encrypted tunnel. `hive-gateway` also
+defaults to loopback, refuses non-loopback binding without explicit opt-in, and
+does not terminate TLS. A non-loopback gateway requires an external secure
+boundary such as a VPN, authenticated tunnel, or TLS reverse proxy. Use
+different secrets for target console authentication and REST request
+authentication.
+
+Only one direct owner may hold the target console session. Concurrent clients
+must share one `hive-gateway` owner rather than racing `cohsh`, SwarmUI, or
+bridges against it.
+
+Console parsing uses fixed-capacity buffers and a shared finite-state command
+parser. A leaky-bucket rate limiter allows two failed authentication attempts in
+a 60-second window; the next failure enters a 90-second cooldown. Root-task
+adds bounded exponential backoff beginning at 250 ms for repeated authentication
+failures. Denials and successful role assertions emit audit lines, while
+pressure refusals use the bounded `busy`, `quota`, `cut`, and `policy`
+categories exposed through `/proc/pressure/*`.
+
+## Input, protocol, and memory controls
+
+All user-controlled console lines, paths, 9P frames, JSON records, tickets, and
+configuration values must be validated before side effects. The public
+Secure9P red lines are 9P2000.L only, `msize <= 8192`, walk depth at most 8, no
+`..`, and no fid reuse after clunk. Short writes, tag concurrency, cursor
+advances, scope rates, and retained bytes are generated and bounded. See
+[Secure9P](SECURE9P.md) for session invariants and
+[Interfaces](INTERFACES.md) for record schemas.
+
+Network RX/TX, serial, pending console lines, driver rings, logs, telemetry,
+evidence, and retry work use fixed or manifest-bounded storage. Overload must
+surface a deterministic refusal or counter; it must not create an unbounded
+queue or silent retry loop. The event pump serializes authoritative target
+state. SMP is used for separate single-threaded tasks, not shared-memory
+multithreading of authority state.
 
 <!-- coh-rtc:ticket-quotas:start -->
 ### Ticket quota limits (generated)
@@ -108,40 +139,94 @@ The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 
 _Generated by coh-rtc (sha256: `1b869521f68c26d43c1ad278fbc557f2442e438ab12d443a142e53a33e4466fb`)._
 <!-- coh-rtc:ticket-quotas:end -->
 
-### Sidecar Isolation & Spooling
-- Sidecar mounts are manifest-gated; adapters that are not declared are unreachable, and mount labels are hash-prefixed on collision.
-- Capability scopes are enforced per adapter; unauthorized access yields deterministic `ERR` responses and appends `sidecar-deny` to `/log/queen.log`.
-- Offline spooling is bounded by manifest limits; replay drains the spool deterministically and never exceeds `secure9p.msize`.
-- LoRa duty-cycle enforcement (radio sidecar, not model LoRA) rejects oversized or over-budget payloads and records bounded tamper entries for audit review.
-- Sidecars never add in-VM TCP listeners; host-side sidecars communicate over the existing Secure9P/console boundary.
+These values are the committed default-profile snapshot. The selected source
+manifest and resolved manifest govern a target build.
 
-## 3. Event Pump & Threat Model Extensions
-- User networking in QEMU is only enabled when `scripts/qemu-run.sh --tcp-port <port>` is provided, limiting the window in which
-  the guest exposes a TCP listener. The helper script prints the forwarded port to encourage operator audit.
-- TCP handshake commands are human-readable (`ATTACH <role> <ticket?>` / `TAIL <path>`) to ease inspection. The transport
-  validates line length before passing payloads to root-task components; invalid-length frames on authenticated sessions yield
-  `ERR FRAME reason=invalid-length` and are dropped, while pre-auth violations still terminate the connection.
-- Tickets are still required for worker roles even over TCP; empty ticket submissions for worker roles fail with a transport-level
-  error before touching NineDoor state. Successful `attach` calls commit the session role into the event pump so subsequent verbs
-  cannot escalate privileges without minting a fresh ticket.
-- Root reachability is explicit: `/proc/root/reachable` and `/proc/root/cut_reason` reflect lifecycle-offline, session revocation,
-  policy denial, or network cuts so operators never infer authority from liveness alone.
-- Port forwarding via `scripts/qemu-run.sh --tcp-port <port>` prints the forwarded endpoint and encourages operators to tunnel
-  through localhost-only bindings. When the flag is omitted the listener remains inaccessible from the host, reducing the attack
-  surface during bring-up.
-- All NIC backends remain HAL-bound; smoltcp plus the authenticated TCP console are the only in-VM network entry points regardless
-  of whether RTL8139, virtio-net, or GENETv5 is selected.
-- The event pump emits audit records (`event-pump: init <subsystem>`, `net: poll link_up=<bool> tx_drops=<count>`, `attach
-  accepted`, `attach denied`) that flow to `/log/queen.log` after the console handoff (boot-critical lines still appear on the
-  serial log before the root shell starts). These records are critical for forensic review because they show which subsystems
-  were live at the time of an intrusion and whether the networking queues are under pressure.
-- The only control-plane interfaces are `cohsh` over serial/TCP and the Secure9P namespaces; any host-side WASM GUI is treated as an unprivileged client layered on top of these paths and does not expand the in-VM attack surface. One Queen orchestrating many workers keeps logging and audit scoped per hive (append-only `/log/*.log`).
+## Hardware, DMA, and firmware
 
-## 4. CAS Threat Model
-- CAS updates are file-backed only and writeable solely by the queen role; no additional network services or RPCs are introduced.
-- Chunk integrity is enforced via SHA-256; mismatches are quarantined with deterministic audit lines and no side effects.
-- Signature enforcement is manifest-gated; unsigned mode requires explicit opt-in and is documented alongside the manifest.
-- Delta manifests must reference a non-delta base epoch and are validated against base payload hashes.
+QEMU is the reference development and regression target; it is not physical
+hardware proof. On Raspberry Pi 4, selected physical devices are admitted to
+isolated driver runtimes after HAL coverage checks. BCM2711 has no supported
+IOMMU/SMMU isolation path in the current Cohesix profile, so DMA safety relies
+on HAL-owned ranges, bounded rings, cache policy, quarantine rules, and
+single-owner driver admission. Documentation must not describe that as hardware
+DMA isolation.
+
+The GENETv5 implementation uses Linux device-tree and driver behavior plus
+U-Boot bring-up as reference material. The CYW43455/SDIO implementation uses
+OpenBSD `bwfm`, Zephyr/Infineon WHD layering, and Linux `brcmfmac` edge cases as
+reference material. These are provenance references, not code sources; source
+lift is prohibited. CYW43455 and SDIO runtimes are implemented research
+surfaces, but current-image association, DHCP, TCP, and repeatability remain
+evidence-gated in the build plan.
+
+Pi firmware, U-Boot, Wi-Fi firmware/NVRAM, and the external seL4 build are
+deployment dependencies. Pin their provenance, verify staged hashes, and keep
+flash proof separate from proof that the board booted the same image. The
+hardware runbook owns the accepted evidence sequence.
+
+## Secrets and sensitive data
+
+- Do not commit deployment credentials or copy them into examples, issue text,
+  evidence, command history, or screenshots.
+- Root-task and the primary `coh`, `cohsh`, Python, and live-gateway paths reject
+  the literal placeholder `changeme`. Some ancillary compatibility binaries
+  still expose legacy placeholder defaults; that value cannot authenticate a
+  current target and must be overridden. Select real, distinct target-console
+  and gateway request secrets.
+- Pass secrets through protected deployment configuration or environment
+  variables, prefer hidden shell input, and unset them after use.
+- Host-ticket arguments must contain opaque secret references, not bearer
+  tokens or raw credentials.
+- Treat manifest ticket secrets, Wi-Fi PSKs, CAS signing material, evidence
+  packs, and raw serial logs as sensitive even when the repository contains
+  development fixtures.
+
+Boot-time `cohesix.env` may persist only documented network policy fields. It is
+not a general secret store, and writing saved policy is a separate proof state
+from successfully using that policy on the current image.
+
+## Audit, evidence, and replay
+
+Security-relevant accepts and denials write bounded audit lines to
+`/log/queen.log` and, when enabled by the selected profile, `/audit` records.
+Host ticket actions use versioned, allowlisted schemas, idempotency keys, and
+explicit lifecycle receipts so operators can distinguish requested, claimed,
+running, terminal, and dead-letter states.
+
+`coh evidence pack` records captured and missing paths instead of inventing
+data. It hashes audit `ticket` fields and recursively redacts JSON keys
+containing token, secret, password, signing-key, or API-key material. Redaction
+reduces accidental disclosure; it is not a substitute for reviewing a pack
+before sharing it. The exact pack contract and CI/SIEM recipes live in
+[Operator recipes](OPERATOR_RECIPES.md#capture-an-evidence-pack).
+
+Replay is limited to retained Cohesix control-plane records. It cannot recreate
+external host state, reverse a host side effect, or prove that an omitted event
+did not occur. Policy approvals are single-use; replaying a consumed approval
+fails deterministically and emits an audit record.
+
+## Sidecars and host actions
+
+Sidecar mounts and providers are manifest-gated. Namespace collisions receive
+deterministic hash-prefixed labels; role and path scopes are checked on each
+operation. Offline spool and replay are bounded by selected manifest limits and
+must not exceed Secure9P `msize`. LoRa radio duty-cycle controls reject
+over-budget frames and record bounded audit evidence. Sidecars do not add
+in-VM listeners.
+
+Host actions under `/host/tickets/*` are requests, not implicit target access to
+the host. The host ticket agent validates schema, action allowlist, arguments,
+idempotency, and state before a configured host adapter performs a side effect.
+Use dedicated host identities, least-privilege adapter configuration, and the
+request/result/federation contracts in [Interfaces](INTERFACES.md#host-tickets-and-federation).
+
+## Content-addressed storage
+
+CAS updates are file-backed and Queen-writable; they do not create another
+network service. Chunks are verified by SHA-256, invalid content is quarantined
+and audited, and signature requirements are selected by the manifest. A delta
+must identify and validate a non-delta base epoch before it can be accepted.
 
 <!-- coh-rtc:cas-security:start -->
 ### CAS integrity stance (generated)
@@ -153,7 +238,8 @@ _Generated by coh-rtc (sha256: `1b869521f68c26d43c1ad278fbc557f2442e438ab12d443a
 _Generated by coh-rtc (sha256: `674f8c3ed5412b48f6d8e4804d75735aa6b40237b15fa0be463f06e777132101`)._
 <!-- coh-rtc:cas-security:end -->
 
-## 5. Observability Tolerances (Generated)
+## Generated observability limits
+
 <!-- coh-rtc:observability-security:start -->
 ### Observability tolerances (generated)
 - `observability.proc_ingest.latency_samples`: `32`
@@ -164,35 +250,11 @@ _Generated by coh-rtc (sha256: `674f8c3ed5412b48f6d8e4804d75735aa6b40237b15fa0be
 _Generated by coh-rtc (sha256: `aae20e12321a8a009e32d6e163c28d7ab51ca76a211a6ef0f1dd753f88b1c6ce`)._
 <!-- coh-rtc:observability-security:end -->
 
-## 6. cohsh Pooling & Retry Policy (Generated)
-- `cohsh` preserves ACK/ERR ordering for strictly ordered flows (`attach`, `log`, `tail`, `quit`). Pooled sessions are reserved for concurrency benchmarks and telemetry batch writes, and they drain acknowledgements before returning leases to avoid cross-command reordering.
-- Retry scheduling is bounded and manifest-driven; injected short-write retries re-authenticate and re-attach before resending, preventing duplicate telemetry writes in pooled workflows.
+The generated `cohsh` pooling, retry, heartbeat, and trace limits are owned by
+[`docs/snippets/cohsh_ticket_policy.md`](snippets/cohsh_ticket_policy.md) and
+embedded in [Userland and CLI](USERLAND_AND_CLI.md); they are not a second
+security policy.
 
-<!-- Author: Lukas Bower -->
-<!-- Purpose: Generated cohsh policy snippet consumed by docs/USERLAND_AND_CLI.md. -->
-
-### cohsh client policy (generated)
-- `manifest.sha256`: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`
-- `policy.sha256`: `96262c617e5a15321d58f069f17664dfbe02ffa9e6e4df7a38169c21b4e37ee8`
-- `cohsh.pool.control_sessions`: `2`
-- `cohsh.pool.telemetry_sessions`: `4`
-- `cohsh.tail.poll_ms_default`: `1000`
-- `cohsh.tail.poll_ms_min`: `250`
-- `cohsh.tail.poll_ms_max`: `10000`
-- `cohsh.host_telemetry.nvidia_poll_ms`: `1000`
-- `cohsh.host_telemetry.systemd_poll_ms`: `2000`
-- `cohsh.host_telemetry.docker_poll_ms`: `2000`
-- `cohsh.host_telemetry.k8s_poll_ms`: `5000`
-- `retry.max_attempts`: `3`
-- `retry.backoff_ms`: `200`
-- `retry.ceiling_ms`: `2000`
-- `retry.timeout_ms`: `5000`
-- `heartbeat.interval_ms`: `15000`
-- `trace.max_bytes`: `1048576`
-
-_Generated from `configs/root_task.toml` (sha256: `3a20adc55c8f975e20e8ef031422f8a09b4a7b8e524dd052bf69296ddf7ff1af`)._
-
-## 7. Telemetry Ring Latency Metrics (Generated)
 <!-- metrics:latency:start -->
 ### Telemetry Ring Latency (generated)
 - Suite: `nine-door/telemetry_ring`
@@ -203,26 +265,18 @@ _Generated from `configs/root_task.toml` (sha256: `3a20adc55c8f975e20e8ef031422f
 _Generated from `apps/nine-door/out/metrics/telemetry_ring_latency.json`._
 <!-- metrics:latency:end -->
 
-## Appendix A: Policy approval replay limits (manifest snapshot)
-- Policy approvals are single-use: once consumed by a gated write, replaying the same approval yields `ERR EPERM` and emits a `policy-gate` audit line in `/log/queen.log`.
-- Approval queue bounds are manifest-driven (`configs/root_task.toml`):
-  - `ecosystem.policy.queue_max_entries = 32`
-  - `ecosystem.policy.queue_max_bytes = 4096`
-  - `ecosystem.policy.ctl_max_bytes = 2048`
-  - `ecosystem.policy.status_max_bytes = 512`
-- Gated control rules (manifest snapshot):
-  - `queen-ctl` → `/queen/ctl`
-  - `systemd-restart` → `/host/systemd/*/restart`
+This generated microbenchmark record is regression evidence for its named
+suite, not an end-to-end deployment latency claim. Benchmark methodology and
+publishable report requirements live in [Benchmarks](BENCHMARKS.md).
 
-## Appendix B: AuditFS & ReplayFS bounds (manifest snapshot)
-- Audit/replay surfaces are manifest-gated; when disabled the `/audit` and `/replay` trees are absent and replay attempts return deterministic `ERR` without side effects.
-- Replay only applies Cohesix-issued control-plane actions recorded in `/audit/journal` and never attempts to reconstruct external host state.
-- Replay cursor checks are bounded by the retained window and `replay_max_entries`; over-window requests update `/replay/status` to `err` and emit deterministic errors.
-- Audit/replay bounds are manifest-driven (`configs/root_task.toml`):
-  - `ecosystem.audit.enable = false`
-  - `ecosystem.audit.journal_max_bytes = 8192`
-  - `ecosystem.audit.decisions_max_bytes = 4096`
-  - `ecosystem.audit.replay_enable = false`
-  - `ecosystem.audit.replay_max_entries = 64`
-  - `ecosystem.audit.replay_ctl_max_bytes = 1024`
-  - `ecosystem.audit.replay_status_max_bytes = 1024`
+## Profile-qualified security claims
+
+The committed default manifest is not universal deployment policy. Security
+claims must identify the selected source manifest, resolved manifest hash,
+seL4 output profile, target, commit, and evidence run. Features disabled by that
+profile are absent, not protected by an undocumented fallback.
+
+Current target status and proof boundaries are maintained in
+[Hardware bring-up](HARDWARE_BRINGUP.md) and the
+[Build plan](BUILD_PLAN.md). The NIST 800-53 crosswalk is an evidence index, not
+a certification; see [NIST mapping](SECURITY_NIST_800_53.md).

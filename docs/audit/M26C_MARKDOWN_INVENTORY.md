@@ -8,12 +8,12 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 
 ## Summary
 
-- tracked Markdown files: 203
+- tracked Markdown files: 204
 - append-only audit evidence: 4
 - external reference mirror: 2
 - generated report: 1
 - generated snippet: 18
-- human-edited canonical source: 43
+- human-edited canonical source: 44
 - live audit register: 24
 - release snapshot: 72
 - vendored reference: 39
@@ -59,6 +59,7 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `docs/HOST_TOOLS.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/INTERFACES.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/NETWORK_CONFIG.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
+| `docs/OPERATOR_RECIPES.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/OPERATOR_WALKTHROUGH.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/PYTHON_SUPPORT.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/QUICKSTART.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |

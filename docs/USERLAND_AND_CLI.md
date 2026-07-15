@@ -8,7 +8,8 @@ This document is the operator-facing reference for the Cohesix root console,
 the host-side `cohsh` shell, and `.coh` scripts. Namespace schemas and payload
 formats are defined in [INTERFACES.md](INTERFACES.md); host-tool composition is
 defined in [HOST_TOOLS.md](HOST_TOOLS.md); the canonical live workflow is in
-[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md).
+[OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md); and advanced, task-oriented
+procedures are in [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md).
 
 ## Command surfaces
 
@@ -162,11 +163,11 @@ Run `help` in the shell for the exact inventory compiled into the binary.
 | `log` | Tail `/log/queen.log`. |
 | `log dump <file> [--force]` | Export the retained Queen log to a local file. |
 | `echo <text> > <path>` | Append one validated line. |
-| `spawn <role> [options]` | Build and submit a Queen worker-spawn request. |
+| `spawn <heartbeat\|gpu> <key=value>...` | Validate role-specific arguments and submit a Queen worker-spawn request. |
 | `kill <worker_id>` | Submit a Queen worker-termination request. |
 | `lifecycle <cordon\|drain\|resume\|quiesce\|reset>` | Validate and submit a lifecycle transition. `reset` changes lifecycle state; it is not a platform reboot. |
-| `telemetry push <src> --device <id>` | Upload a bounded telemetry segment or reference manifest. |
-| `test [options]` | Run the installed Cohesix self-test scripts. |
+| `telemetry push <src> --device <id>` | Upload a bounded telemetry segment or content-reference manifest. |
+| `test [--mode quick\|full\|smp] [--json] [--timeout <s>] [--no-mutate]` | Run the installed Cohesix self-test scripts. |
 | `nettest`, `netstats` | Run network diagnostics through the console grammar. |
 | `reboot` | Request an authenticated Queen platform reboot. |
 | `pool bench <options>` | Run the bounded host-side session-pool benchmark. |
@@ -187,6 +188,92 @@ duplicated here. Use [INTERFACES.md](INTERFACES.md).
 - The `qemu` transport launches the staged QEMU artifacts and is diagnostic;
   its transport implementation rejects writes. Use TCP or REST for live
   control-plane writes.
+
+### Self-test modes and report
+
+`test` always performs a preflight ping, then runs the negative script and the
+script selected by `--mode`:
+
+| Mode | Selected script | Intended scope |
+| --- | --- | --- |
+| `quick` | `/proc/tests/selftest_quick.coh` | Fast control-plane health check; this is the default. |
+| `full` | `/proc/tests/selftest_full.coh` | Broader installed regression sequence. |
+| `smp` | `/proc/tests/selftest_smp.coh` | SMP-specific installed checks. |
+
+The negative script is `/proc/tests/selftest_negative.coh`. The default timeout
+is 30 seconds and the hard maximum is 120 seconds. `--no-mutate` skips
+`spawn`, `kill`, and the associated worker telemetry tails; it does not bypass
+the negative checks or any server-side policy. The installed scripts end their
+sessions with `quit`; interactive `cohsh` attempts to restore its previous
+attachment afterward, while an outer `--script` run remains detached.
+
+`--json` emits one JSON object on one line. This example is expanded only for
+readability; `transcript_excerpt` is omitted when no bounded transcript is
+needed:
+
+```json
+{
+  "ok": true,
+  "mode": "quick",
+  "elapsed_ms": 123,
+  "checks": [
+    {
+      "name": "preflight/ping",
+      "ok": true,
+      "detail": "OK ping"
+    }
+  ],
+  "version": "1"
+}
+```
+
+Treat `version` as the report-schema version. Automation must fail the run when
+`ok` is false rather than inferring success from process output text.
+
+### Worker-spawn arguments
+
+The interactive command accepts only the currently implemented heartbeat and
+GPU spawn shapes. Arguments use `key=value`; unknown, duplicate, or missing
+keys are rejected before `/queen/ctl` is written.
+
+| Role selector | Required keys | Optional keys |
+| --- | --- | --- |
+| `heartbeat`, `worker`, `worker-heartbeat` | `ticks` | `ttl_s`, `ops` |
+| `gpu`, `worker-gpu` | `gpu_id`, `mem_mb`, `streams`, `ttl_s` | `priority`, `budget_ttl_s`, `budget_ops` |
+
+```text
+spawn heartbeat ticks=100 ttl_s=120 ops=500
+spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120 priority=1
+```
+
+These commands construct the strict records documented in
+[INTERFACES.md#worker-and-mount-control](INTERFACES.md#worker-and-mount-control).
+An accepted append is not proof that a worker later reached its ready state;
+verify the returned worker identifier and canonical sharded namespace.
+
+### Telemetry file upload
+
+`telemetry push` accepts a non-empty local file with one of these extensions:
+
+| Extension | Declared MIME type |
+| --- | --- |
+| `.txt`, `.log` | `text/plain` |
+| `.json` | `application/json` |
+| `.ndjson` | `application/x-ndjson` |
+| `.csv` | `text/csv` |
+
+For bounded UTF-8 input that fits the selected manifest's segment budget,
+`cohsh` writes `cohsh-telemetry-push/v1` inline records. Binary input, oversized
+UTF-8 envelopes, or input larger than the inline segment budget is represented
+instead by `coh-ref-c/v1` records containing sequence, offset, length, and a
+SHA-256 digest for each host-side chunk. Reference mode transfers the manifest,
+not the referenced file bytes; retain the source file under the deployment's
+content-retention policy.
+
+The acknowledgement reports `seg_id`, record count, encoded bytes, original
+source bytes, and `mode=inline|reference`. Generated limits cap the source,
+reference entry count, reference-manifest bytes, segment bytes, and per-device
+retention; see [snippets/cohsh_client.md](snippets/cohsh_client.md).
 
 ## `.coh` scripts
 
@@ -492,4 +579,5 @@ _Generated from `configs/root_task.toml` (sha256: `726441bd837cd419d81451de3e13b
 - [PYTHON_SUPPORT.md](PYTHON_SUPPORT.md) — Python client backends.
 - [FAILURE_MODES.md](FAILURE_MODES.md) — evidence-led recovery.
 - [OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md) — canonical live runbook.
+- [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md) — advanced operator workflows.
 - [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md) — role and namespace authority.

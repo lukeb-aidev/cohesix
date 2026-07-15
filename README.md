@@ -169,8 +169,10 @@ through an authenticated tunnel.
 
 The primary path is macOS 26 on Apple Silicon with the repository's external
 seL4 15.0.0 build outputs. QEMU, Rust, Python 3, and the selected seL4 profile
-must already be available. Review the profile and kernel-artifact prerequisites
-in [Hardware bring-up](docs/HARDWARE_BRINGUP.md) before running the build.
+must already be available. Follow the current-tree
+[Quickstart](docs/QUICKSTART.md); use
+[Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) for the pinned host and external
+seL4 prerequisites.
 
 ```bash
 ./toolchain/setup_macos_arm64.sh
@@ -224,11 +226,13 @@ Each document owns one part of the public contract. Generated values remain in
 
 | Document | Owns |
 | --- | --- |
+| [Quickstart](docs/QUICKSTART.md) | Shortest safe mock and current-source QEMU paths |
 | [Userland and CLI](docs/USERLAND_AND_CLI.md) | Console, `cohsh`, `.coh` grammar, and command semantics |
 | [Host tools](docs/HOST_TOOLS.md) | Executable catalogue, transports, and composition rules |
 | [API guidelines](docs/API_GUIDELINES.md) | REST projection, authentication, and compatibility |
 | [Python support](docs/PYTHON_SUPPORT.md) | Python backends, bounded APIs, and examples |
 | [Operator walkthrough](docs/OPERATOR_WALKTHROUGH.md) | End-to-end preflight, operation, and evidence capture |
+| [Operator recipes](docs/OPERATOR_RECIPES.md) | Evidence, mount, lifecycle, host-ticket, federation, and PEFT tasks |
 | [Failure modes](docs/FAILURE_MODES.md) | Symptoms, evidence, recovery, and escalation |
 
 ### Targets, evidence, and planning
@@ -240,17 +244,20 @@ Each document owns one part of the public contract. Generated values remain in
 | [Benchmarks](docs/BENCHMARKS.md) | Workloads, provenance, and regression decisions |
 | [Use cases](docs/USE_CASES.md) | Capability-fit patterns, not acceptance claims |
 | [Build plan](docs/BUILD_PLAN.md) | Normative milestone scope, task authorization, and status |
+| [Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) | Pinned macOS host tools and external seL4 artifact contract |
+| [Security](docs/SECURITY.md) | Private reporting, trust boundaries, controls, and generated limits |
 
 ## Help and contributing
 
 - Start with the [operator walkthrough](docs/OPERATOR_WALKTHROUGH.md); use
   [failure modes](docs/FAILURE_MODES.md) for diagnosis and recovery.
-- Contributions must follow `AGENTS.md` and the active task in the
-  [build plan](docs/BUILD_PLAN.md); behavioral changes require matching tests,
-  generated artifacts, and documentation.
+- Contributions must follow [`AGENTS.md`](AGENTS.md),
+  [Contributing](CONTRIBUTING.md), and the active task in the
+  [build plan](docs/BUILD_PLAN.md).
 - Cohesix is maintained by Lukas Bower. Use GitHub Issues for reproducible,
-  non-sensitive bugs and scoped design discussions. Never put secrets in an
-  issue, log, or command example.
+  non-sensitive bugs and scoped design discussions. Report vulnerabilities
+  through the private process in [Security](docs/SECURITY.md); never put secrets
+  in an issue, log, or command example.
 
 ## License
 

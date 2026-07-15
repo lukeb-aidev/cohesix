@@ -94,6 +94,24 @@ service.
 
 ## HAL contract
 
+### Capability-trait map
+
+Drivers depend on the narrowest HAL capability that admits their resource;
+model names do not confer authority.
+
+| Trait or boundary | As-built responsibility | Non-authority |
+| --- | --- | --- |
+| `DeviceHal` | Map a covered device page; allocate and guard DMA frames; report allocator/coverage state; bind and acknowledge HAL-owned IRQ notifications. | Does not grant namespace, parser, policy, or arbitrary physical-address authority. |
+| `PciHal` | Discover a HAL-owned PCI topology, map an admitted BAR, and configure an admitted PCI function. | Does not make generic PCI discovery the Pi 4 VL805 authority; that platform path remains in `hal/pi4_pcie.rs`. |
+| `Cyw43Hal` | Admit the selected firmware bundle used by the CYW43/SDIO runtime path. | Does not grant root-owned SDHCI, CMD52/CMD53, power/reset, or Wi-Fi transport service. |
+| `Hardware` | Compatibility facade combining `PciHal` and `Cyw43Hal` for legacy call sites. | New code must not use it to bypass a narrower capability trait. |
+| Driver-task ABI | Deliver sealed runtime-init resources and bounded role-specific commands after HAL admission. | A descriptor is not a new discovery or retyping API. |
+
+The trait definitions are in
+[`apps/root-task/src/hal/mod.rs`](../apps/root-task/src/hal/mod.rs). Pi 4
+device-specific admission helpers remain HAL implementations, not additional
+authority available to driver children.
+
 ### Admission
 
 HAL is the only code allowed to:
@@ -125,6 +143,25 @@ effects.
 Register width, ordering, reserved bits, and write-one-to-clear behavior are
 part of the driver contract. Diagnostics may observe a register only when the
 observation is safe and bounded.
+
+seL4 device untypeds are allocation authorities with a forward-moving
+watermark. Retyping or mapping a higher page can make an earlier page in the
+same device-untyped region unavailable until the children are revoked. HAL
+therefore must:
+
+- confirm `device_coverage(paddr, PAGE_BITS)` before mapping each page;
+- map every multi-page aperture in ascending physical-page order;
+- verify `page_get_address`/`ARMPageGetAddress` equals the requested physical
+  address before publishing the mapping;
+- use the common device VM attributes rather than call-site-selected cache or
+  access attributes; and
+- expose registers through bounded `MappedRegion`, `MappedRegisterWindow`, or
+  `MappedRegisterPages` accessors unless a narrower helper documents its safety
+  invariant.
+
+Coverage, successful retype, successful VSpace mapping, and exact physical
+address are separate checks. None may be inferred from a device model or a
+working mapping created by firmware, U-Boot, Linux, or a previous boot.
 
 ### DMA and cache maintenance
 
@@ -192,6 +229,30 @@ counter-qualified trace is required for latency or service-time claims.
 ABI records contain integers, offsets, lengths, identities, and bounded arrays,
 not process-local pointers. Both sides validate magic, version, role, identity,
 resource counts, ranges, and sequence state before use.
+
+### Scheduling contract
+
+Every hardware service path presents a validated `DriverTaskContract` before
+HAL admits a turn. The contract records:
+
+- a stable name and hardware kind;
+- service class (`RealtimeInput`, `ConsoleOutput`, `NetworkControl`,
+  `NetworkData`, `DisplayRefresh`, or `Background`);
+- authority class (`DeviceOnly`, `ConsoleTransport`,
+  `NetworkFrameTransport`, or `DisplaySink`);
+- isolation state (`DedicatedSeL4Task` or the explicitly reported,
+  non-acceptance `RootTaskCompatibility` fallback);
+- per-turn maxima for HAL operations, bytes, frames/reports/rows, and any
+  explicitly admitted bounded bootstrap spins;
+- whether waits are permitted and whether the turn is preemptible; and
+- the maximum inbound IPC/event queue depth.
+
+Zero or out-of-range budgets, unbounded waits, a non-preemptible contract,
+authority/class mismatch, or an unsupported isolation state fail validation.
+MCS scheduling-context fields are profile-qualified; on a non-MCS profile,
+priority/domain policy plus the same bounded IPC and service-turn contract
+provide the applicable scheduling controls. Neither contract declaration nor
+generated affinity proves applied target scheduling without boot evidence.
 
 ### Service turn
 
@@ -356,6 +417,45 @@ cargo test -p coh-rtc
 scripts/check-generated.sh
 scripts/ci/test_plan_run.sh --list
 ```
+
+### Release and focused-test matrix
+
+Use the release feature that matches the target and the focused driver-test
+feature that matches the implementation under review:
+
+| Lane | Contract and commands |
+| --- | --- |
+| QEMU release | `release-qemu` covers the QEMU `aarch64/virt` profile, including its virtual/network compatibility drivers. Build with `SEL4_BUILD_DIR="$PWD/seL4/SMP_build" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu`. |
+| Pi 4 release | `release-pi4` covers the Pi 4 serial, local-seat, GENET, CYW43/SDIO, PCIe/VL805, MMIO, and cache-maintained DMA closure. Build with `SEL4_BUILD_DIR="$PWD/seL4/build_UBOOT" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`. |
+| Shared isolated runtime | `cargo test -p pi4-driver-runtime --lib -- --test-threads=1` validates the pointer-free runtime implementation independently of physical acceptance. |
+| QEMU focused tests | Use `--features driver-tests-qemu` with the staged filters `drivers::rtl8139`, `drivers::virtio`, `hal::pci`, `hal::virtio_mmio`, and `hal::uart`. |
+| Pi 4 focused tests | Use `--features driver-tests-pi4` with the staged filters `hal::pi4_pcie`, `hal::pi4_wifi`, and `local_seat::`. |
+| DMA/cache tests | `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`. |
+
+The release names select compile-time closure; a successful build or focused
+test does not establish current-image hardware acceptance.
+
+Do not replace these feature bundles with an ad hoc combination. The exact
+commands and required filters are staged in [TEST_PLAN.md](TEST_PLAN.md) and
+`scripts/ci/test_plan_stage_02_host_fast.sh`. Run
+`python3 scripts/ci/check_driver_test_coverage.py` to verify that the release
+features, focused tests, source tokens, and this documentation remain aligned.
+
+### Review checklist
+
+- The exact [BUILD_PLAN.md](BUILD_PLAN.md) task authorizes the driver surface.
+- HAL owns resource admission for MMIO, IRQ, DMA, PCI, SDIO, board-level
+  power/reset, and firmware bundles; steady physical service uses the linked
+  runtime descriptor and fixed ABI.
+- A valid scheduling contract exists before polling, mapping, DMA, IRQ
+  acknowledgement, or frame movement.
+- The device source is cleared before the seL4 IRQHandler is acknowledged.
+- DMA ownership and cache transitions are explicit and use HAL-admitted ranges.
+- Hardware waits are counter-deadlined and bounded; blocker labels are exact.
+- QEMU, generated metadata, staging, flash/readback, and current-image hardware
+  evidence remain distinct.
+- Tests cover touched logic paths; hardware-only behavior has deterministic
+  capture commands and expected evidence records.
 
 Pi 4 acceptance additionally uses the image builder, trace normalizer, proof
 gate, current-image serial capture, and boot-paired network capture described in

@@ -133,7 +133,20 @@ driver completions without unbounded queues or busy-wait ownership loops.
 Operator priority and bounded degradation rules are defined by `AGENTS.md` and
 the console implementation.
 
-### 3.2 Workers
+### 3.2 Task isolation
+
+Root-task, each selected worker image, and each physical-driver runtime execute
+as separate seL4 tasks with task-local address spaces and capability spaces.
+Root-task constructs those tasks and delegates only the generated endpoint,
+notification, frame, and shared-ring capabilities required by their manifest
+records. A child therefore has no ambient access to another task's memory or
+devices: communication crosses an explicit capability or a HAL-admitted shared
+page, and revocation can remove that authority without creating an undocumented
+in-process call path. This is capability isolation, not a claim that every
+device is protected from malicious DMA; the selected DMA protection profile
+and target evidence qualify that separate guarantee.
+
+### 3.3 Workers
 
 Queen is the orchestration authority exposed through the root-task and
 NineDoor control surfaces; it is not a separate host RPC service. Target worker
@@ -147,7 +160,7 @@ do not receive implicit access to root-task memory, physical devices, or host
 services. GPU workers consume lease and telemetry files; CUDA and NVML remain
 outside the target.
 
-### 3.3 Physical drivers
+### 3.4 Physical drivers
 
 Physical resources enter the system through HAL. HAL validates the generated
 driver-image record, maps only declared pages, creates the driver child, and
