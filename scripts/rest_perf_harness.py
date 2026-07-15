@@ -63,6 +63,7 @@ DEFAULT_ROLE = "queen"
 DEFAULT_SUMMARY_MAX_ERROR_LINES = 400
 DEFAULT_READY_TIMEOUT_SECS = 180
 DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES = 16 * 1024 * 1024
+MAX_TELEMETRY_SEGMENT_ID_BYTES = 32
 BENCHMARK_MARKER_SETTLE_SECS = 1.0
 GATEWAY_STATUS_BROKER_COUNTERS = (
     "control_waiters",
@@ -1754,12 +1755,11 @@ def echo_with_policy_retry(
     path: str,
     line: str,
     state: SimState,
-) -> None:
+) -> GatewayResponse:
     if path == "/queen/ctl" and state.auto_approve:
         with state.policy_lock:
-            _echo_with_policy_retry_inner(client, path, line, state)
-        return
-    _echo_with_policy_retry_inner(client, path, line, state)
+            return _echo_with_policy_retry_inner(client, path, line, state)
+    return _echo_with_policy_retry_inner(client, path, line, state)
 
 
 def _echo_with_policy_retry_inner(
@@ -1767,7 +1767,7 @@ def _echo_with_policy_retry_inner(
     path: str,
     line: str,
     state: SimState,
-) -> None:
+) -> GatewayResponse:
     def is_policy_retryable(error: Optional[str]) -> bool:
         if not error:
             return False
@@ -1778,9 +1778,13 @@ def _echo_with_policy_retry_inner(
             or "buffer-full" in err_lower
         )
 
+    accepted_response: Optional[GatewayResponse] = None
+
     def attempt() -> None:
+        nonlocal accepted_response
         response = client.echo(path, line)
         if response.status == "OK":
+            accepted_response = response
             return
         if (
             path == "/queen/ctl"
@@ -1796,6 +1800,7 @@ def _echo_with_policy_retry_inner(
                     queue_approval(client, path, state)
                     response_retry = client.echo(path, line)
                     if response_retry.status == "OK":
+                        accepted_response = response_retry
                         return
                     response = response_retry
                     if not is_policy_retryable(response_retry.error):
@@ -1814,6 +1819,9 @@ def _echo_with_policy_retry_inner(
         timeout_s=10.0,
         label=f"echo {path}",
     )
+    if accepted_response is None:
+        raise RestError(f"ECHO {path} completed without an accepted response")
+    return accepted_response
 
 
 def spawn_worker(
@@ -2435,29 +2443,56 @@ def refresh_telemetry_segment(client: RestClient, state: SimState, device_id: st
 
 
 def create_telemetry_segment(client: RestClient, state: SimState, device_id: str) -> str:
+    ctl_path = f"/queen/telemetry/{device_id}/ctl"
     line = json.dumps(
         {"new": "segment", "mime": "text/plain"}, separators=(",", ":")
     )
-    echo_with_policy_retry(
-        client, f"/queen/telemetry/{device_id}/ctl", line, state
+    response = echo_with_policy_retry(client, ctl_path, line, state)
+    receipt_lines = (
+        response.lines
+        if response.verb == "ECHO" and response.path == ctl_path and response.end
+        else ()
     )
+    receipt = parse_telemetry_segment_id(receipt_lines)
     latest = read_latest_telemetry_segment(client, device_id)
     if latest is None:
         raise RestError(
             f"Failed to read latest segment for {device_id}: latest unavailable"
         )
-    state.telemetry_segments[device_id] = latest
-    return latest
+    selected = receipt if receipt is not None else latest
+    state.telemetry_segments[device_id] = selected
+    return selected
 
 
 def read_latest_telemetry_segment(client: RestClient, device_id: str) -> Optional[str]:
-    response = client.cat(f"/queen/telemetry/{device_id}/latest", 64)
-    if response.status != "OK" or not response.lines:
+    path = f"/queen/telemetry/{device_id}/latest"
+    response = client.cat(path, 64)
+    if (
+        response.status != "OK"
+        or response.verb != "CAT"
+        or response.path != path
+        or not response.end
+        or not response.lines
+    ):
         return None
-    segment = response.lines[0].strip()
-    if not segment:
-        return None
-    return segment
+    return parse_telemetry_segment_id(response.lines)
+
+
+def parse_telemetry_segment_id(lines: Sequence[str]) -> Optional[str]:
+    """Return the first bounded single-component telemetry segment ID."""
+    for line in lines:
+        segment = line.strip()
+        if not segment or len(segment.encode("utf-8")) > MAX_TELEMETRY_SEGMENT_ID_BYTES:
+            continue
+        if segment in {".", ".."}:
+            continue
+        if not all(
+            character.isascii() and (character.isalnum() or character in "-_")
+            for character in segment
+        ):
+            continue
+        return segment
+    return None
 
 
 def is_telemetry_segment_missing_response(response: GatewayResponse) -> bool:

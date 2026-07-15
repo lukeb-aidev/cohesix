@@ -41,8 +41,8 @@ use cohsh::{
 };
 use cohsh::{NineDoorTransport, PooledTcpTransport, TcpTransport};
 use cohsh_core::{
-    parse_role, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN,
-    MAX_TAIL_LINES, MAX_TICKET_LEN,
+    parse_ack, parse_role, AckStatus, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN,
+    MAX_LINE_LEN, MAX_PATH_LEN, MAX_TAIL_LINES, MAX_TICKET_LEN,
 };
 use nine_door::NineDoor;
 use serde::{Deserialize, Serialize};
@@ -82,8 +82,17 @@ const CACHE_INVALIDATE_HOST_NAMESPACES: &[&str] = &["/host"];
 const CACHE_INVALIDATE_GPU_NAMESPACES: &[&str] = &["/gpu"];
 const CACHE_INVALIDATE_SCHEDULE_NAMESPACES: &[&str] = &["/proc/schedule"];
 const CACHE_INVALIDATE_LEASE_NAMESPACES: &[&str] = &["/proc/lease"];
-const CACHE_INVALIDATE_TELEMETRY_NAMESPACES: &[&str] = &["/gpu"];
-const CACHE_INVALIDATE_POLICY_NAMESPACES: &[&str] = &["/proc/pressure/policy", "/queen"];
+const CACHE_INVALIDATE_LEASE_GRANT_PATHS: &[&str] =
+    &[PROC_LEASE_SUMMARY_PATH, PROC_LEASE_ACTIVE_PATH];
+const CACHE_INVALIDATE_LEASE_RENEW_PATHS: &[&str] = &[PROC_LEASE_ACTIVE_PATH];
+const CACHE_INVALIDATE_LEASE_PREEMPT_PATHS: &[&str] = &[
+    PROC_LEASE_SUMMARY_PATH,
+    PROC_LEASE_ACTIVE_PATH,
+    PROC_LEASE_PREEMPTIONS_PATH,
+];
+const CACHE_INVALIDATE_LEASE_QUOTA_PATHS: &[&str] = &[PROC_LEASE_SUMMARY_PATH];
+const CACHE_INVALIDATE_TELEMETRY_NAMESPACES: &[&str] = &["/queen/telemetry"];
+const CACHE_INVALIDATE_POLICY_NAMESPACES: &[&str] = &["/proc/pressure/policy"];
 
 const OPENAPI_YAML: &str = include_str!("../../../resources/openapi/hive-gateway.yaml");
 
@@ -399,23 +408,25 @@ struct ProcReadCache {
     in_flight: HashMap<String, Arc<ProcReadFill>>,
 }
 
+type SharedLines = Arc<[String]>;
+
 #[derive(Default)]
 struct ProcReadFill {
-    result: Mutex<Option<std::result::Result<Vec<String>, String>>>,
+    result: Mutex<Option<std::result::Result<SharedLines, String>>>,
     ready: Condvar,
     #[cfg(test)]
     waiters: std::sync::atomic::AtomicUsize,
 }
 
 enum ProcReadCacheClaim {
-    Hit(Vec<String>),
+    Hit(SharedLines),
     Leader(Arc<ProcReadFill>),
     Follower(Arc<ProcReadFill>),
     Bypass,
 }
 
 impl ProcReadFill {
-    fn wait(&self) -> Result<Vec<String>> {
+    fn wait(&self) -> Result<SharedLines> {
         let mut result = match self.result.lock() {
             Ok(result) => result,
             Err(poisoned) => poisoned.into_inner(),
@@ -434,12 +445,12 @@ impl ProcReadFill {
             return Err(anyhow::anyhow!("gateway cache fill ended without a result"));
         };
         match result {
-            Ok(lines) => Ok(lines.clone()),
+            Ok(lines) => Ok(Arc::clone(lines)),
             Err(message) => Err(anyhow::anyhow!(message.clone())),
         }
     }
 
-    fn publish(&self, result: std::result::Result<Vec<String>, String>) {
+    fn publish(&self, result: std::result::Result<SharedLines, String>) {
         let mut published = match self.result.lock() {
             Ok(published) => published,
             Err(poisoned) => poisoned.into_inner(),
@@ -469,7 +480,7 @@ impl<'a> ProcReadFillLeader<'a> {
         }
     }
 
-    fn complete(mut self, result: std::result::Result<Vec<String>, String>) {
+    fn complete(mut self, result: std::result::Result<SharedLines, String>) {
         self.state.read_cache_finish(self.path, &self.fill, result);
         self.completed = true;
     }
@@ -489,7 +500,29 @@ impl Drop for ProcReadFillLeader<'_> {
 
 #[derive(Default)]
 struct ControlWriteBackpressure {
-    entries: HashMap<&'static str, ControlWriteBackpressureEntry>,
+    entries: HashMap<ControlWriteBackpressureKey, ControlWriteBackpressureEntry>,
+    grant_generation: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ControlWriteBackpressureKey {
+    Schedule,
+    LeaseGrant,
+    LeasePreempt,
+}
+
+#[derive(Debug, Deserialize)]
+struct LeaseControlOperation {
+    op: LeaseControlOperationKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum LeaseControlOperationKind {
+    Grant,
+    Renew,
+    Preempt,
+    Quota,
 }
 
 struct ControlWriteBackpressureEntry {
@@ -500,12 +533,17 @@ struct ControlWriteBackpressureEntry {
 impl ControlWriteBackpressure {
     fn record(
         &mut self,
-        path: &str,
+        key: ControlWriteBackpressureKey,
+        grant_generation: u64,
         now: Instant,
         cooldown: Duration,
         last_error: &str,
-    ) -> Option<String> {
-        let key = control_write_backpressure_key(path)?;
+    ) -> bool {
+        if key == ControlWriteBackpressureKey::LeaseGrant
+            && grant_generation != self.grant_generation
+        {
+            return false;
+        }
         self.entries.insert(
             key,
             ControlWriteBackpressureEntry {
@@ -513,40 +551,45 @@ impl ControlWriteBackpressure {
                 last_error: last_error.to_owned(),
             },
         );
-        Some(last_error.to_owned())
+        true
     }
 
-    fn refusal(&mut self, path: &str, now: Instant) -> Option<String> {
-        let key = control_write_backpressure_key(path)?;
-        let entry = self.entries.get(key)?;
+    fn refusal(&mut self, key: ControlWriteBackpressureKey, now: Instant) -> Option<String> {
+        let entry = self.entries.get(&key)?;
         if now >= entry.until {
-            self.entries.remove(key);
+            self.entries.remove(&key);
             return None;
         }
         Some(entry.last_error.clone())
     }
 
-    fn clear(&mut self, path: &str) {
-        if let Some(key) = control_write_backpressure_key(path) {
-            self.entries.remove(key);
+    fn clear_after_success(&mut self, key: ControlWriteBackpressureKey) {
+        self.entries.remove(&key);
+        if key == ControlWriteBackpressureKey::LeasePreempt {
+            self.grant_generation = self.grant_generation.saturating_add(1);
+            self.entries
+                .remove(&ControlWriteBackpressureKey::LeaseGrant);
         }
     }
 }
 
-#[derive(Clone)]
 struct ProcReadCacheEntry {
     inserted_at: Instant,
-    lines: Vec<String>,
+    lines: SharedLines,
 }
 
-fn read_cache_valid_entry(cache: &mut ProcReadCache, path: &str) -> Option<Vec<String>> {
-    let entry = cache.entries.get(path).cloned()?;
-    if entry.inserted_at.elapsed() > Duration::from_millis(DEFAULT_PROC_CACHE_TTL_MS) {
+fn read_cache_valid_entry(cache: &mut ProcReadCache, path: &str) -> Option<SharedLines> {
+    let expired = cache.entries.get(path)?.inserted_at.elapsed()
+        > Duration::from_millis(DEFAULT_PROC_CACHE_TTL_MS);
+    if expired {
         cache.entries.remove(path);
         cache.order.retain(|value| value != path);
         return None;
     }
-    Some(entry.lines)
+    cache
+        .entries
+        .get(path)
+        .map(|entry| Arc::clone(&entry.lines))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1378,8 +1421,22 @@ fn execute_broker_request(
         }
         BrokerRequest::Write { path, payload } => {
             with_pool_once(pool, kind, move |transport, session| {
-                transport.write(session, path.as_str(), payload.as_slice())?;
-                Ok(BrokerResponse::Unit)
+                if is_telemetry_control_path(path.as_str()) {
+                    let _ = transport.drain_acknowledgements();
+                    let result = transport.write(session, path.as_str(), payload.as_slice());
+                    let acknowledgements = transport.drain_acknowledgements();
+                    result?;
+                    let lines = telemetry_segment_id_from_ack_lines(
+                        path.as_str(),
+                        acknowledgements.as_slice(),
+                    )
+                    .into_iter()
+                    .collect();
+                    Ok(BrokerResponse::Lines(lines))
+                } else {
+                    transport.write(session, path.as_str(), payload.as_slice())?;
+                    Ok(BrokerResponse::Unit)
+                }
             })
         }
     }
@@ -1667,19 +1724,27 @@ impl AppState {
         }
     }
 
-    fn write(&self, path: &str, payload: &[u8]) -> Result<()> {
+    fn write(&self, path: &str, payload: &[u8]) -> Result<Vec<String>> {
         self.ensure_connected()?;
         let write_path = path.to_owned();
-        if let Some(error) = self.control_write_backpressure_refusal(write_path.as_str()) {
-            self.inner
-                .broker
-                .control_write_retryable_errors
-                .fetch_add(1, Ordering::Relaxed);
-            self.inner
-                .broker
-                .control_write_retry_exhaustions
-                .fetch_add(1, Ordering::Relaxed);
-            return Err(anyhow::anyhow!(error));
+        let backpressure_key = control_write_backpressure_key(write_path.as_str(), payload);
+        let grant_generation = if backpressure_key.is_some() {
+            self.control_write_backpressure_grant_generation()
+        } else {
+            0
+        };
+        if let Some(key) = backpressure_key {
+            if let Some(error) = self.control_write_backpressure_refusal(key) {
+                self.inner
+                    .broker
+                    .control_write_retryable_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                self.inner
+                    .broker
+                    .control_write_retry_exhaustions
+                    .fetch_add(1, Ordering::Relaxed);
+                return Err(anyhow::anyhow!(error));
+            }
         }
         let payload = payload.to_vec();
         let retry_window = Duration::from_millis(self.inner.control_write_retry_window_ms);
@@ -1697,16 +1762,21 @@ impl AppState {
                 },
             );
             match result {
-                Ok(_) => {
+                Ok(response) => {
                     if first_retryable_error.is_some() {
                         self.inner
                             .broker
                             .control_write_success_after_retry
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    self.control_write_backpressure_clear(write_path.as_str());
-                    self.read_cache_invalidate_for_write(write_path.as_str());
-                    return Ok(());
+                    if let Some(key) = backpressure_key {
+                        self.control_write_backpressure_clear(key);
+                    }
+                    self.read_cache_invalidate_for_write(write_path.as_str(), payload.as_slice());
+                    return match response {
+                        BrokerResponse::Lines(lines) => Ok(lines),
+                        BrokerResponse::Unit => Ok(Vec::new()),
+                    };
                 }
                 Err(err) => {
                     if !retry_deadline_enabled {
@@ -1730,15 +1800,17 @@ impl AppState {
                         first_retryable_error = Some(message.clone());
                     }
                     if is_vm_control_queue_full_error(message.as_str()) {
-                        if let Some(error) = self.control_write_backpressure_record(
-                            write_path.as_str(),
-                            message.as_str(),
-                        ) {
+                        if let Some(key) = backpressure_key {
+                            self.control_write_backpressure_record(
+                                key,
+                                grant_generation,
+                                message.as_str(),
+                            );
                             self.inner
                                 .broker
                                 .control_write_retry_exhaustions
                                 .fetch_add(1, Ordering::Relaxed);
-                            return Err(anyhow::anyhow!(error));
+                            return Err(anyhow::anyhow!(message));
                         }
                     }
                     let now = Instant::now();
@@ -1808,15 +1880,19 @@ impl AppState {
         F: FnOnce() -> Result<Vec<String>>,
     {
         match self.read_cache_claim(path) {
-            ProcReadCacheClaim::Hit(lines) => Ok(lines),
-            ProcReadCacheClaim::Follower(fill) => fill.wait(),
+            ProcReadCacheClaim::Hit(lines) => Ok(lines.as_ref().to_vec()),
+            ProcReadCacheClaim::Follower(fill) => {
+                let lines = fill.wait()?;
+                Ok(lines.as_ref().to_vec())
+            }
             ProcReadCacheClaim::Bypass => fetch(),
             ProcReadCacheClaim::Leader(fill) => {
                 let leader = ProcReadFillLeader::new(self, path, fill);
                 match fetch() {
                     Ok(lines) => {
-                        leader.complete(Ok(lines.clone()));
-                        Ok(lines)
+                        let shared: SharedLines = lines.into();
+                        leader.complete(Ok(Arc::clone(&shared)));
+                        Ok(shared.as_ref().to_vec())
                     }
                     Err(err) => {
                         leader.complete(Err(err.to_string()));
@@ -1859,16 +1935,17 @@ impl AppState {
             .broker
             .proc_cache_hits
             .fetch_add(1, Ordering::Relaxed);
-        Some(lines)
+        drop(cache);
+        Some(lines.as_ref().to_vec())
     }
 
     #[cfg(test)]
     fn read_cache_insert(&self, path: &str, lines: Vec<String>) {
         let mut cache = self.proc_cache_guard();
-        self.read_cache_insert_locked(&mut cache, path, lines);
+        self.read_cache_insert_locked(&mut cache, path, lines.into());
     }
 
-    fn read_cache_insert_locked(&self, cache: &mut ProcReadCache, path: &str, lines: Vec<String>) {
+    fn read_cache_insert_locked(&self, cache: &mut ProcReadCache, path: &str, lines: SharedLines) {
         if !cache.entries.contains_key(path)
             && cache.entries.len() >= DEFAULT_PROC_CACHE_MAX_ENTRIES
         {
@@ -1895,7 +1972,7 @@ impl AppState {
         &self,
         path: &str,
         fill: &Arc<ProcReadFill>,
-        result: std::result::Result<Vec<String>, String>,
+        result: std::result::Result<SharedLines, String>,
     ) {
         let mut cache = self.proc_cache_guard();
         let fill_is_current = cache
@@ -1905,16 +1982,16 @@ impl AppState {
         if fill_is_current {
             cache.in_flight.remove(path);
             if let Ok(lines) = &result {
-                self.read_cache_insert_locked(&mut cache, path, lines.clone());
+                self.read_cache_insert_locked(&mut cache, path, Arc::clone(lines));
             }
         }
         drop(cache);
         fill.publish(result);
     }
 
-    fn read_cache_invalidate_for_write(&self, write_path: &str) {
+    fn read_cache_invalidate_for_write(&self, write_path: &str, payload: &[u8]) {
         let mut cache = self.proc_cache_guard();
-        let Some(namespaces) = cache_invalidation_namespaces(write_path) else {
+        let Some(namespaces) = cache_invalidation_namespaces(write_path, payload) else {
             cache.entries.clear();
             cache.order.clear();
             cache.in_flight.clear();
@@ -1937,27 +2014,36 @@ impl AppState {
         }
     }
 
-    fn control_write_backpressure_refusal(&self, path: &str) -> Option<String> {
-        control_write_backpressure_key(path)?;
+    fn control_write_backpressure_refusal(
+        &self,
+        key: ControlWriteBackpressureKey,
+    ) -> Option<String> {
         self.control_write_backpressure_guard()
-            .refusal(path, Instant::now())
+            .refusal(key, Instant::now())
     }
 
-    fn control_write_backpressure_record(&self, path: &str, message: &str) -> Option<String> {
-        control_write_backpressure_key(path)?;
-        self.control_write_backpressure_guard().record(
-            path,
+    fn control_write_backpressure_record(
+        &self,
+        key: ControlWriteBackpressureKey,
+        grant_generation: u64,
+        message: &str,
+    ) {
+        let _ = self.control_write_backpressure_guard().record(
+            key,
+            grant_generation,
             Instant::now(),
             Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
             message,
-        )
+        );
     }
 
-    fn control_write_backpressure_clear(&self, path: &str) {
-        if control_write_backpressure_key(path).is_none() {
-            return;
-        }
-        self.control_write_backpressure_guard().clear(path);
+    fn control_write_backpressure_clear(&self, key: ControlWriteBackpressureKey) {
+        self.control_write_backpressure_guard()
+            .clear_after_success(key);
+    }
+
+    fn control_write_backpressure_grant_generation(&self) -> u64 {
+        self.control_write_backpressure_guard().grant_generation
     }
 
     fn control_write_backpressure_guard(&self) -> MutexGuard<'_, ControlWriteBackpressure> {
@@ -2205,7 +2291,7 @@ async fn handle_echo(state: AppState, payload: EchoRequest) -> impl axum::respon
     let payload_bytes = trimmed.as_bytes().to_vec();
     let result = tokio::task::spawn_blocking(move || state.write(&path, &payload_bytes)).await;
     match result {
-        Ok(Ok(())) => response_ok(verb, payload.path, Vec::new(), Some(raw_len)),
+        Ok(Ok(lines)) => response_ok(verb, payload.path, lines, Some(raw_len)),
         Ok(Err(err)) => response_transport_err(verb, &payload.path, err),
         Err(err) => response_err(
             verb,
@@ -2234,12 +2320,21 @@ fn cache_key_in_namespace(key: &str, namespace: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-fn cache_invalidation_namespaces(write_path: &str) -> Option<&'static [&'static str]> {
+fn cache_invalidation_namespaces(
+    write_path: &str,
+    payload: &[u8],
+) -> Option<&'static [&'static str]> {
     if write_path == CLIENT_QUEEN_SCHEDULE_CTL_PATH {
         return Some(CACHE_INVALIDATE_SCHEDULE_NAMESPACES);
     }
     if write_path == CLIENT_QUEEN_LEASE_CTL_PATH {
-        return Some(CACHE_INVALIDATE_LEASE_NAMESPACES);
+        return Some(match lease_control_operation_kind(payload) {
+            Some(LeaseControlOperationKind::Grant) => CACHE_INVALIDATE_LEASE_GRANT_PATHS,
+            Some(LeaseControlOperationKind::Renew) => CACHE_INVALIDATE_LEASE_RENEW_PATHS,
+            Some(LeaseControlOperationKind::Preempt) => CACHE_INVALIDATE_LEASE_PREEMPT_PATHS,
+            Some(LeaseControlOperationKind::Quota) => CACHE_INVALIDATE_LEASE_QUOTA_PATHS,
+            None => CACHE_INVALIDATE_LEASE_NAMESPACES,
+        });
     }
     if write_path.starts_with("/queen/telemetry/") {
         return Some(CACHE_INVALIDATE_TELEMETRY_NAMESPACES);
@@ -2275,11 +2370,93 @@ fn is_batchable_telemetry_write_path(path: &str) -> bool {
     path.starts_with("/queen/telemetry/") && path.contains("/seg/")
 }
 
-fn control_write_backpressure_key(path: &str) -> Option<&'static str> {
-    match path {
-        CLIENT_QUEEN_SCHEDULE_CTL_PATH => Some(CLIENT_QUEEN_SCHEDULE_CTL_PATH),
-        CLIENT_QUEEN_LEASE_CTL_PATH => Some(CLIENT_QUEEN_LEASE_CTL_PATH),
-        _ => None,
+fn is_telemetry_control_path(path: &str) -> bool {
+    let mut segments = path.split('/');
+    matches!(
+        (
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+        ),
+        (Some(""), Some("queen"), Some("telemetry"), Some(device_id), Some("ctl"), None)
+            if !device_id.is_empty()
+    )
+}
+
+fn valid_telemetry_segment_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_ID_LEN
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn telemetry_segment_id_from_ack_lines(path: &str, lines: &[String]) -> Option<String> {
+    if !is_telemetry_control_path(path) {
+        return None;
+    }
+    for line in lines {
+        let Some(ack) = parse_ack(line) else {
+            continue;
+        };
+        if ack.status != AckStatus::Ok || ack.verb != "ECHO" {
+            continue;
+        }
+        let Some(detail) = ack.detail else {
+            continue;
+        };
+        let mut ack_path = None;
+        let mut segment_id = None;
+        for token in detail.split_whitespace() {
+            if let Some(value) = token.strip_prefix("path=") {
+                if ack_path.replace(value).is_some() {
+                    return None;
+                }
+            }
+            if let Some(value) = token.strip_prefix("seg_id=") {
+                if segment_id.replace(value).is_some() {
+                    return None;
+                }
+            }
+        }
+        if ack_path == Some(path) {
+            if let Some(value) = segment_id.filter(|value| valid_telemetry_segment_id(value)) {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
+}
+
+fn control_write_backpressure_key(
+    path: &str,
+    payload: &[u8],
+) -> Option<ControlWriteBackpressureKey> {
+    if path == CLIENT_QUEEN_SCHEDULE_CTL_PATH {
+        return Some(ControlWriteBackpressureKey::Schedule);
+    }
+    if path != CLIENT_QUEEN_LEASE_CTL_PATH {
+        return None;
+    }
+    match lease_control_operation_kind(payload)? {
+        LeaseControlOperationKind::Grant => Some(ControlWriteBackpressureKey::LeaseGrant),
+        LeaseControlOperationKind::Preempt => Some(ControlWriteBackpressureKey::LeasePreempt),
+        LeaseControlOperationKind::Renew | LeaseControlOperationKind::Quota => None,
+    }
+}
+
+fn lease_control_operation_kind(payload: &[u8]) -> Option<LeaseControlOperationKind> {
+    match serde_json::from_slice::<LeaseControlOperation>(payload) {
+        Ok(operation) => Some(operation.op),
+        // This parser only classifies cache/cooldown scope. The target remains
+        // authoritative for full validation; unknown input gets no cached
+        // refusal and uses conservative whole-lease cache invalidation.
+        Err(_classification_error) => None,
     }
 }
 
@@ -2735,30 +2912,49 @@ mod tests {
     #[test]
     fn cache_invalidation_namespaces_follow_write_scope() {
         assert_eq!(
-            cache_invalidation_namespaces("/queen/schedule/ctl"),
+            cache_invalidation_namespaces("/queen/schedule/ctl", br#"{}"#),
             Some(CACHE_INVALIDATE_SCHEDULE_NAMESPACES)
         );
         assert_eq!(
-            cache_invalidation_namespaces("/queen/lease/ctl"),
+            cache_invalidation_namespaces("/queen/lease/ctl", br#"{"op":"grant"}"#),
+            Some(CACHE_INVALIDATE_LEASE_GRANT_PATHS)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/queen/lease/ctl", br#"{"op":"renew"}"#),
+            Some(CACHE_INVALIDATE_LEASE_RENEW_PATHS)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/queen/lease/ctl", br#"{"op":"preempt"}"#),
+            Some(CACHE_INVALIDATE_LEASE_PREEMPT_PATHS)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/queen/lease/ctl", br#"{"op":"quota"}"#),
+            Some(CACHE_INVALIDATE_LEASE_QUOTA_PATHS)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/queen/lease/ctl", b"not-json"),
             Some(CACHE_INVALIDATE_LEASE_NAMESPACES)
         );
         assert_eq!(
-            cache_invalidation_namespaces("/queen/telemetry/gpu0/segment"),
+            cache_invalidation_namespaces("/queen/telemetry/gpu0/segment", br#"{"new":"segment"}"#,),
             Some(CACHE_INVALIDATE_TELEMETRY_NAMESPACES)
         );
         assert_eq!(
-            cache_invalidation_namespaces("/policy/ctl"),
+            cache_invalidation_namespaces("/policy/ctl", br#"{}"#),
             Some(CACHE_INVALIDATE_POLICY_NAMESPACES)
         );
         assert_eq!(
-            cache_invalidation_namespaces("/host/docker/status"),
+            cache_invalidation_namespaces("/host/docker/status", br#"{}"#),
             Some(CACHE_INVALIDATE_HOST_NAMESPACES)
         );
         assert_eq!(
-            cache_invalidation_namespaces("/gpu/bridge/status"),
+            cache_invalidation_namespaces("/gpu/bridge/status", br#"{}"#),
             Some(CACHE_INVALIDATE_GPU_NAMESPACES)
         );
-        assert_eq!(cache_invalidation_namespaces("/log/queen.log"), None);
+        assert_eq!(
+            cache_invalidation_namespaces("/log/queen.log", br#"{}"#),
+            None
+        );
     }
 
     #[test]
@@ -2768,14 +2964,49 @@ mod tests {
         assert!(is_retryable_control_write_path("/actions/queue"));
         assert!(!is_retryable_control_write_path("/host/docker/status"));
         assert_eq!(
-            control_write_backpressure_key(CLIENT_QUEEN_SCHEDULE_CTL_PATH),
-            Some(CLIENT_QUEEN_SCHEDULE_CTL_PATH)
+            control_write_backpressure_key(CLIENT_QUEEN_SCHEDULE_CTL_PATH, br#"{}"#),
+            Some(ControlWriteBackpressureKey::Schedule)
         );
         assert_eq!(
-            control_write_backpressure_key(CLIENT_QUEEN_LEASE_CTL_PATH),
-            Some(CLIENT_QUEEN_LEASE_CTL_PATH)
+            control_write_backpressure_key(
+                CLIENT_QUEEN_LEASE_CTL_PATH,
+                br#"{"op":"grant","id":"lease-1"}"#,
+            ),
+            Some(ControlWriteBackpressureKey::LeaseGrant)
         );
-        assert_eq!(control_write_backpressure_key(CLIENT_POLICY_CTL_PATH), None);
+        assert_eq!(
+            control_write_backpressure_key(
+                CLIENT_QUEEN_LEASE_CTL_PATH,
+                br#"{"op":"renew","id":"lease-1"}"#,
+            ),
+            None
+        );
+        assert_eq!(
+            control_write_backpressure_key(
+                CLIENT_QUEEN_LEASE_CTL_PATH,
+                br#"{"op":"preempt","id":"lease-1"}"#,
+            ),
+            Some(ControlWriteBackpressureKey::LeasePreempt)
+        );
+        assert_eq!(
+            control_write_backpressure_key(
+                CLIENT_QUEEN_LEASE_CTL_PATH,
+                br#"{"op":"quota","subject":"queen"}"#,
+            ),
+            None
+        );
+        assert_eq!(
+            control_write_backpressure_key(CLIENT_QUEEN_LEASE_CTL_PATH, br#"{"op":"unknown"}"#),
+            None
+        );
+        assert_eq!(
+            control_write_backpressure_key(CLIENT_QUEEN_LEASE_CTL_PATH, b"not-json"),
+            None
+        );
+        assert_eq!(
+            control_write_backpressure_key(CLIENT_POLICY_CTL_PATH, br#"{}"#),
+            None
+        );
 
         assert!(is_retryable_control_write_error(
             "ERR ECHO reason=quota detail=buffer-full path=/queen/schedule/ctl error=buffer full"
@@ -2816,6 +3047,143 @@ mod tests {
                 "unexpected batchable path: {path}"
             );
         }
+    }
+
+    #[test]
+    fn telemetry_segment_receipt_accepts_only_matching_bounded_ack() {
+        let path = "/queen/telemetry/bench/ctl";
+        let valid =
+            vec!["OK ECHO path=/queen/telemetry/bench/ctl bytes=41 seg_id=seg-000001".to_owned()];
+        assert_eq!(
+            telemetry_segment_id_from_ack_lines(path, valid.as_slice()).as_deref(),
+            Some("seg-000001")
+        );
+
+        for line in [
+            "ERR ECHO path=/queen/telemetry/bench/ctl seg_id=seg-000001",
+            "OK CAT path=/queen/telemetry/bench/ctl seg_id=seg-000001",
+            "OK ECHO path=/queen/telemetry/other/ctl seg_id=seg-000001",
+            "OK ECHO path=/queen/telemetry/bench/ctl",
+            "OK ECHO path=/queen/telemetry/bench/ctl seg_id=..",
+            "OK ECHO path=/queen/telemetry/bench/ctl seg_id=bad/segment",
+            "OK ECHO path=/queen/telemetry/bench/ctl seg_id=bad\0segment",
+        ] {
+            assert_eq!(
+                telemetry_segment_id_from_ack_lines(path, &[line.to_owned()]),
+                None,
+                "unexpectedly accepted receipt: {line}"
+            );
+        }
+
+        let oversized = format!("OK ECHO path={path} seg_id={}", "a".repeat(MAX_ID_LEN + 1));
+        assert_eq!(
+            telemetry_segment_id_from_ack_lines(path, &[oversized]),
+            None
+        );
+        assert_eq!(
+            telemetry_segment_id_from_ack_lines("/queen/telemetry/bench/latest", valid.as_slice()),
+            None
+        );
+    }
+
+    #[test]
+    fn telemetry_broker_discards_stale_ack_and_returns_current_receipt() {
+        struct ReceiptTransport {
+            attach_transport: NineDoorTransport,
+            acknowledgements: Vec<String>,
+        }
+
+        impl ReceiptTransport {
+            fn new() -> Self {
+                Self {
+                    attach_transport: NineDoorTransport::new(NineDoor::new()),
+                    acknowledgements: Vec::new(),
+                }
+            }
+        }
+
+        impl cohsh::Transport for ReceiptTransport {
+            fn attach(&mut self, role: Role, ticket: Option<&str>) -> Result<Session> {
+                cohsh::Transport::attach(&mut self.attach_transport, role, ticket)
+            }
+
+            fn ping(&mut self, _session: &Session) -> Result<String> {
+                Ok("pong".to_owned())
+            }
+
+            fn tail(
+                &mut self,
+                _session: &Session,
+                _path: &str,
+                _lines: Option<u16>,
+            ) -> Result<Vec<String>> {
+                Err(anyhow!("tail is not used by this test"))
+            }
+
+            fn read(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+                Err(anyhow!("read is not used by this test"))
+            }
+
+            fn list(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+                Err(anyhow!("list is not used by this test"))
+            }
+
+            fn write(&mut self, _session: &Session, path: &str, _payload: &[u8]) -> Result<()> {
+                let segment = if is_telemetry_control_path(path) {
+                    "seg-current"
+                } else {
+                    "seg-stale"
+                };
+                self.acknowledgements.push(format!(
+                    "OK ECHO path=/queen/telemetry/bench/ctl seg_id={segment}"
+                ));
+                Ok(())
+            }
+
+            fn drain_acknowledgements(&mut self) -> Vec<String> {
+                std::mem::take(&mut self.acknowledgements)
+            }
+        }
+
+        let factory: Arc<dyn TransportFactory> =
+            Arc::new(|| Ok(Box::new(ReceiptTransport::new()) as Box<dyn cohsh::Transport + Send>));
+        let pool = SessionPool::new(1, 1, factory);
+        pool.attach(Role::Queen, None)
+            .expect("receipt transport must attach");
+
+        let ordinary = execute_broker_request(
+            &pool,
+            PoolKind::Control,
+            BrokerRequest::Write {
+                path: "/queen/ctl".to_owned(),
+                payload: b"{}".to_vec(),
+            },
+        )
+        .expect("ordinary write must succeed");
+        assert!(matches!(ordinary, BrokerResponse::Unit));
+
+        let receipt = execute_broker_request(
+            &pool,
+            PoolKind::Control,
+            BrokerRequest::Write {
+                path: "/queen/telemetry/bench/ctl".to_owned(),
+                payload: br#"{"new":"segment","mime":"text/plain"}"#.to_vec(),
+            },
+        )
+        .expect("telemetry control write must succeed");
+        let BrokerResponse::Lines(lines) = receipt else {
+            panic!("telemetry control write must return receipt lines");
+        };
+        assert_eq!(lines, ["seg-current"]);
+
+        let (_, response) = response_ok(
+            "ECHO",
+            "/queen/telemetry/bench/ctl".to_owned(),
+            lines,
+            Some(41),
+        );
+        assert_eq!(response.0.lines, ["seg-current"]);
+        assert!(response.0.end);
     }
 
     #[test]
@@ -2865,34 +3233,67 @@ mod tests {
             "ERR ECHO reason=quota detail=buffer-full path=/queen/schedule/ctl error=buffer full";
 
         let recorded = backpressure.record(
-            CLIENT_QUEEN_SCHEDULE_CTL_PATH,
+            ControlWriteBackpressureKey::Schedule,
+            0,
             now,
             Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
             last_error,
         );
 
-        assert_eq!(recorded.as_deref(), Some(last_error));
-        assert!(backpressure
-            .record(
-                CLIENT_POLICY_CTL_PATH,
-                now,
-                Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
-                last_error,
-            )
-            .is_none());
+        assert!(recorded);
 
         let refusal = backpressure.refusal(
-            CLIENT_QUEEN_SCHEDULE_CTL_PATH,
+            ControlWriteBackpressureKey::Schedule,
             now + Duration::from_millis(100),
         );
         assert_eq!(refusal.as_deref(), Some(last_error));
 
         assert!(backpressure
             .refusal(
-                CLIENT_QUEEN_SCHEDULE_CTL_PATH,
+                ControlWriteBackpressureKey::Schedule,
                 now + Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS + 1),
             )
             .is_none());
+    }
+
+    #[test]
+    fn control_write_backpressure_isolates_lease_operation_classes() {
+        let mut backpressure = ControlWriteBackpressure::default();
+        let now = Instant::now();
+        let grant_error =
+            "ERR ECHO reason=quota detail=buffer-full path=/queen/lease/ctl error=buffer full";
+        backpressure.record(
+            ControlWriteBackpressureKey::LeaseGrant,
+            0,
+            now,
+            Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
+            grant_error,
+        );
+
+        assert_eq!(
+            backpressure
+                .refusal(ControlWriteBackpressureKey::LeaseGrant, now)
+                .as_deref(),
+            Some(grant_error)
+        );
+        assert!(backpressure
+            .refusal(ControlWriteBackpressureKey::LeasePreempt, now)
+            .is_none());
+
+        backpressure.record(
+            ControlWriteBackpressureKey::LeasePreempt,
+            0,
+            now,
+            Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
+            grant_error,
+        );
+        backpressure.clear_after_success(ControlWriteBackpressureKey::LeaseGrant);
+        assert!(backpressure
+            .refusal(ControlWriteBackpressureKey::LeaseGrant, now)
+            .is_none());
+        assert!(backpressure
+            .refusal(ControlWriteBackpressureKey::LeasePreempt, now)
+            .is_some());
     }
 
     #[test]
@@ -3075,6 +3476,140 @@ mod tests {
     }
 
     #[test]
+    fn cache_invalidation_preserves_static_and_unrelated_namespaces() {
+        let state = disconnected_cached_state();
+        state.read_cache_insert("/queen", vec!["ctl".to_owned(), "telemetry".to_owned()]);
+        state.read_cache_insert("/proc/pressure/policy", vec!["state=high-load".to_owned()]);
+
+        state.read_cache_invalidate_for_write(CLIENT_POLICY_CTL_PATH, br#"{}"#);
+
+        assert_eq!(
+            state.read_cache_get("/queen").as_deref(),
+            Some(["ctl".to_owned(), "telemetry".to_owned()].as_slice())
+        );
+        assert!(state.read_cache_get("/proc/pressure/policy").is_none());
+
+        state.read_cache_insert(
+            "/queen/telemetry/bench/latest",
+            vec!["seg-000001".to_owned()],
+        );
+        state.read_cache_insert("/gpu/bridge/status", vec!["ready=yes".to_owned()]);
+        state
+            .read_cache_invalidate_for_write("/queen/telemetry/bench/ctl", br#"{"new":"segment"}"#);
+
+        assert!(state
+            .read_cache_get("/queen/telemetry/bench/latest")
+            .is_none());
+        assert_eq!(
+            state.read_cache_get("/gpu/bridge/status").as_deref(),
+            Some(["ready=yes".to_owned()].as_slice())
+        );
+    }
+
+    #[test]
+    fn lease_quota_invalidation_preserves_unchanged_lease_views() {
+        let state = disconnected_cached_state();
+        state.read_cache_insert(PROC_LEASE_SUMMARY_PATH, vec!["quotas=1".to_owned()]);
+        state.read_cache_insert(PROC_LEASE_ACTIVE_PATH, vec!["id=lease-1".to_owned()]);
+        state.read_cache_insert(PROC_LEASE_PREEMPTIONS_PATH, vec!["id=lease-old".to_owned()]);
+
+        state.read_cache_invalidate_for_write(
+            CLIENT_QUEEN_LEASE_CTL_PATH,
+            br#"{"op":"quota","subject":"queen","resource":"gpu0","max_active":2,"max_preemptions":2}"#,
+        );
+
+        assert!(state.read_cache_get(PROC_LEASE_SUMMARY_PATH).is_none());
+        assert_eq!(
+            state.read_cache_get(PROC_LEASE_ACTIVE_PATH),
+            Some(vec!["id=lease-1".to_owned()])
+        );
+        assert_eq!(
+            state.read_cache_get(PROC_LEASE_PREEMPTIONS_PATH),
+            Some(vec!["id=lease-old".to_owned()])
+        );
+    }
+
+    #[test]
+    fn cache_fill_shares_immutable_lines_and_returns_independent_vectors() {
+        let state = disconnected_cached_state();
+        let path = "/proc/root/reachable";
+        let fill = Arc::new(ProcReadFill::default());
+        let shared: SharedLines = vec!["reachable=yes".to_owned()].into();
+        state
+            .proc_cache_guard()
+            .in_flight
+            .insert(path.to_owned(), Arc::clone(&fill));
+
+        state.read_cache_finish(path, &fill, Ok(Arc::clone(&shared)));
+
+        {
+            let cache = state.proc_cache_guard();
+            let cached = cache.entries.get(path).expect("completed fill must cache");
+            assert!(Arc::ptr_eq(&cached.lines, &shared));
+        }
+        {
+            let published = fill.result.lock().expect("fill result lock");
+            let published = published
+                .as_ref()
+                .expect("fill result must publish")
+                .as_ref()
+                .expect("fill result must succeed");
+            assert!(Arc::ptr_eq(published, &shared));
+        }
+
+        let mut returned = state.read_cache_get(path).expect("cache hit");
+        returned[0].push_str("-mutated");
+        assert_eq!(
+            state.read_cache_get(path).expect("second cache hit"),
+            ["reachable=yes"]
+        );
+    }
+
+    #[test]
+    fn successful_preempt_clears_grant_and_rejects_stale_grant_recording() {
+        let state = disconnected_cached_state();
+        let now = Instant::now();
+        let error =
+            "ERR ECHO reason=quota detail=buffer-full path=/queen/lease/ctl error=buffer full";
+        {
+            let mut backpressure = state.control_write_backpressure_guard();
+            for key in [
+                ControlWriteBackpressureKey::LeaseGrant,
+                ControlWriteBackpressureKey::LeasePreempt,
+            ] {
+                backpressure.record(
+                    key,
+                    0,
+                    now,
+                    Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
+                    error,
+                );
+            }
+        }
+
+        state.control_write_backpressure_clear(ControlWriteBackpressureKey::LeasePreempt);
+
+        let mut backpressure = state.control_write_backpressure_guard();
+        assert!(backpressure
+            .refusal(ControlWriteBackpressureKey::LeaseGrant, now)
+            .is_none());
+        assert!(backpressure
+            .refusal(ControlWriteBackpressureKey::LeasePreempt, now)
+            .is_none());
+        assert_eq!(backpressure.grant_generation, 1);
+        assert!(!backpressure.record(
+            ControlWriteBackpressureKey::LeaseGrant,
+            0,
+            now,
+            Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
+            error,
+        ));
+        assert!(backpressure
+            .refusal(ControlWriteBackpressureKey::LeaseGrant, now)
+            .is_none());
+    }
+
+    #[test]
     fn concurrent_cache_misses_share_one_fill() {
         const CALLERS: usize = 32;
         let state = Arc::new(disconnected_cached_state());
@@ -3228,7 +3763,7 @@ mod tests {
         started_rx
             .recv_timeout(Duration::from_secs(10))
             .expect("first cache fill must reach the fetch boundary");
-        state.read_cache_invalidate_for_write(CLIENT_QUEEN_SCHEDULE_CTL_PATH);
+        state.read_cache_invalidate_for_write(CLIENT_QUEEN_SCHEDULE_CTL_PATH, br#"{}"#);
         let fresh = state
             .read_through_cache("/proc/schedule/summary", || {
                 Ok(vec!["queue=fresh".to_owned()])
@@ -3258,7 +3793,7 @@ mod tests {
         let state = disconnected_cached_state();
         state.read_cache_insert("/proc/root/reachable", vec!["reachable=yes".to_owned()]);
         state.read_cache_insert("/host/docker/status", vec!["active=yes".to_owned()]);
-        state.read_cache_invalidate_for_write("/host/docker/status");
+        state.read_cache_invalidate_for_write("/host/docker/status", br#"{}"#);
         {
             let cache = state.proc_cache_guard();
             assert!(cache.entries.contains_key("/proc/root/reachable"));
@@ -3281,7 +3816,7 @@ mod tests {
                 .insert("/host/docker/status".to_owned(), host_fill);
         }
 
-        state.read_cache_invalidate_for_write("/host/docker/status");
+        state.read_cache_invalidate_for_write("/host/docker/status", br#"{}"#);
         {
             let cache = state.proc_cache_guard();
             assert_eq!(cache.in_flight.len(), 1);
@@ -3291,7 +3826,7 @@ mod tests {
                 .is_some_and(|fill| Arc::ptr_eq(fill, &proc_fill)));
         }
 
-        state.read_cache_invalidate_for_write("/log/queen.log");
+        state.read_cache_invalidate_for_write("/log/queen.log", br#"{}"#);
         assert!(state.proc_cache_guard().in_flight.is_empty());
 
         {

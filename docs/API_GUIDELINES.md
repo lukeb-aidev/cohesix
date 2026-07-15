@@ -149,6 +149,14 @@ On failure, `status` is `ERR`, `end` remains `true`, `lines` is empty, and
 refusal, is returned with HTTP `200` so the console refusal is preserved.
 Clients must therefore check both the HTTP status and the JSON `status` field.
 
+After a successful `ECHO /queen/telemetry/<device_id>/ctl`, `lines` may contain
+the single provider-assigned segment ID already carried by the target's
+successful `ECHO` acknowledgement. Clients must validate that receipt as one
+bounded path component and fall back to reading
+`/queen/telemetry/<device_id>/latest` when it is absent or invalid. The fallback
+is compatibility resolution, not permission to replay the segment-creation
+write.
+
 | HTTP status | Meaning |
 | --- | --- |
 | `200` | Gateway completed the request; inspect JSON `status` for `OK` or target `ERR`. |

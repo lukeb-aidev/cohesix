@@ -186,7 +186,10 @@ paths:
               $ref: "#/components/schemas/EchoRequest"
       responses:
         "200":
-          description: Echo operation response.
+          description: >
+            Echo operation response. A successful queen telemetry segment-control
+            write may return the provider-assigned segment ID as the sole `lines`
+            entry; clients must retain `/latest` as a compatibility fallback.
           content:
             application/json:
               schema:

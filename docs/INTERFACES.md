@@ -304,6 +304,11 @@ For `/queen/telemetry/<device_id>/`:
 - `latest` is a read-only pointer to the newest segment; and
 - the provider, not the client, chooses segment IDs.
 
+The successful segment-control `ECHO` acknowledgement carries the selected
+segment ID. Host REST projections may expose that existing receipt through
+their response payload; clients retain a bounded `latest` read as the
+compatibility fallback when the receipt is unavailable.
+
 The inline `cohsh-telemetry-push/v1` envelope contains:
 
 | Field | Type | Rule |

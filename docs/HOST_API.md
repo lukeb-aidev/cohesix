@@ -94,6 +94,11 @@ Clients must inspect both the HTTP status and the JSON `status` field. Do not
 blindly retry writes after an ambiguous transport failure; verify read-only
 state first.
 
+A successful queen telemetry segment-control `ECHO` may return the
+provider-assigned segment ID as the sole `lines` entry. Validate it as one
+bounded path component. When an older gateway omits the receipt, read the
+device's `latest` file; do not replay an ambiguously completed creation write.
+
 Use [FAILURE_MODES.md](FAILURE_MODES.md) for recovery and
 [OPERATOR_WALKTHROUGH.md](OPERATOR_WALKTHROUGH.md) for an end-to-end validated
 startup path.

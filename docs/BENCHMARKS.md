@@ -73,6 +73,120 @@ does not justify hiding retries, widening queues, or treating cache reads as
 failed. This ledger is QEMU gateway evidence only; it is not Pi 4, GENET,
 CYW43/SDIO, Wi-Fi, or repeated-boot proof.
 
+### M26d GICv3 High-Pressure Safe-Tuning Revalidation (2026-07-16)
+
+This follow-up is authorized by Milestone 26d
+`m26d-benchmark-revalidation-and-tuning`. It compares two baseline and two
+final two-minute runs against byte-identical seL4/root-task images. Only the
+host `hive-gateway` binary differs. The selected external seL4 15 build is
+`/Users/lukasbower/seL4/SMP_build_gic3_smp4_v15`; its generated configuration,
+device tree, and every retained QEMU log identify GICv3 and four CPUs. The QEMU
+machine is `virt,gic-version=3,virtualization=on,kernel-irqchip=off` under TCG.
+
+Both lanes use the same logical and request workload: workers ramp from 8 to
+1000, intensity is fixed at 6, duration is 120 seconds, ramp steps are 10
+seconds, seed is 2501, target load spans 28.8 to 3600 requests/second, and the
+configured in-flight limit is 256. Transient retries are off, strict control
+errors are on, the error budget remains 1%, the console is authenticated as
+queen, and REST mutation authentication is enabled on loopback. Default
+gateway pool, response-timeout, and control-write retry-window settings are
+unchanged.
+
+| Four-minute aggregate | Baseline | Final | Change |
+| --- | ---: | ---: | ---: |
+| Attempted operations | 221,719 | 224,348 | +1.19% |
+| Successful operations | 205,428 | 210,937 | +2.68% |
+| Errors | 16,291 | 13,411 | -17.68% |
+| Strict error rate | 7.3476% | 5.9778% | -1.370 percentage points |
+| Attempted throughput | 923.83/s | 934.78/s | +1.19% |
+| Successful throughput | 855.95/s | 878.90/s | +2.68% |
+| Average latency | 22.596 ms | 12.466 ms | -44.8% |
+| p50 latency | 0.218 ms | 0.214 ms | -1.8% |
+| p95 latency | 40.371 ms | 24.170 ms | -40.1% |
+| p99 latency | 508.460 ms | 104.989 ms | -79.4% |
+| Maximum latency | 2.939 s | 2.258 s | -23.2% |
+| Gateway cache hit rate | 81.15% | 90.29% | +9.14 percentage points |
+| Gateway cache misses | 31,230 | 16,293 | -47.8% |
+| Gateway control + telemetry checkouts | 63,619 | 58,280 | -8.4% |
+| Gateway pool exhaustion / checkout retry / timeout rejection | 0 / 0 / 0 | 0 / 0 / 0 | Unchanged |
+
+Counts are exact pooled totals. Aggregate percentile rows are count-weighted
+estimates from the two canonical summaries per lane because the harness does
+not retain raw samples. Both final repetitions independently improve p95 and
+p99. The meaningful residual read regression is `/proc/lease/summary` (p95
+22.467 ms to 49.458 ms): successful quota mutations must invalidate that
+count-bearing view. Quota-write latency is not directly comparable because the
+baseline mostly measured incorrect fast collateral refusals while the final
+lane executes every quota write at the target.
+
+The four bounded changes are:
+
+- expose the exact telemetry segment ID already present in the successful
+  target `ECHO` acknowledgement, while retaining a validated `/latest` read for
+  compatibility and the canonical comparator workload;
+- isolate the 250 ms cached control refusal by operation so a failed lease
+  grant or preempt cannot suppress unrelated renew or quota writes;
+- invalidate only read-cache views an accepted write can change, including
+  lease-operation-specific summary, active, and preemption paths; and
+- share immutable cache-fill results with `Arc<[String]>`, copying into caller
+  responses only after releasing cache locks.
+
+The canonical harness still performs one segment-create `ECHO` plus one
+`/latest` `CAT`. It prefers a valid receipt when another creator advances
+`latest`, and uses the validated `CAT` result only as a compatibility fallback.
+An intermediate receipt-only diagnostic changed the raw request workload and
+exposed rapid four-segment eviction churn; it is intentionally excluded from
+the qualified comparison. No segment bound, eviction rule, queue, timeout,
+retry budget, error classification, authority check, or ACK/ERR/END behavior
+was relaxed.
+
+Artifacts and identity:
+
+- Baseline summaries:
+  `out/bench/m26d-high-pressure-gicv3-baseline_20260715T220607Z.summary.json`
+  and
+  `out/bench/m26d-high-pressure-gicv3-baseline-rep2_20260715T221458Z.summary.json`.
+- Final summaries:
+  `out/bench/m26d-high-pressure-gicv3-final-current_20260715T225703Z.summary.json`
+  and
+  `out/bench/m26d-high-pressure-gicv3-final-current-rep2_20260715T225923Z.summary.json`.
+- Final QEMU logs:
+  `out/bench/m26d-high-pressure-gicv3-final-current-qemu.log` and
+  `out/bench/m26d-high-pressure-gicv3-final-current-rep2-qemu.log`.
+- Baseline gateway SHA-256:
+  `25b01a9ea2c27d6b748eaf16b6119ae8bd146f4bf85cad5863cb254c0ed3d19d`;
+  final gateway SHA-256:
+  `20ed7c0257137e2096654fe62085b1a95526dd3814aa6772ce93b777f5cf42f9`.
+- Final REST harness SHA-256:
+  `527d856d00375d052c59a7e45be73a36d20507d4c6ccd485795c280f06839cca`.
+- Shared target hashes: elfloader
+  `18073401eebcc754961ebd6163861b812ed2b4b56ddcdfc94a93aafc677e0bcc`,
+  kernel
+  `26877c4fdf79a6186ee7bfd54128dd6b81cf2b41ec160a232608c405b02478a8`,
+  rootserver
+  `60546dd33d4a7f2bdcaffdce7161c8f9c56563c098783cc1d225bb6637a32519`,
+  and 2,542,080-byte rootfs CPIO
+  `275cc3a5a5de327170c42de99e9eac2c6812c27884e291a03f0cb4fbcf4b8101`.
+  The runtime manifest reports
+  `763ef148ed19f1250afdcc2e99611be1668369c6b7c375593af99e3420716f41`.
+- Final status-read companion:
+  `out/bench/m26d-gicv3-final-read-status_20260715T223511Z.perf-summary.json`
+  (5 runs, 108 cache hits, 12 misses, no pool exhaustion, checkout retry, or
+  timeout rejection). Its first cold sequential sample dominates the reported
+  31.11x sequential/parallel ratio, so that ratio is not a general capacity
+  claim.
+- Current-tree companion gates: QEMU Stages 01-05 under
+  `out/test-plan/m26d-gicv3-safe-optimizations-20260716` and due diligence under
+  `out/audit/gate/20260715T225244Z`.
+
+This result is safely better than the paired GICv3 baseline but remains
+**diagnostic, not an accepted 1000-worker envelope**. All four runs fail the
+unchanged 1% budget. The final 13,411 errors are explicit bounded target
+schedule, lease-grant, and lease-preemption capacity refusals; quota has zero
+errors, telemetry has zero errors, and no failure was hidden or retried. This
+QEMU result also provides no current Pi 4, GENET, CYW43/SDIO, Wi-Fi, or
+repeated-boot proof.
+
 No current mixed-load `simulate` worker envelope is accepted by this document.
 The former 1500-worker result and later local 400/600/1200-worker observations
 lack a retained, current, fully qualified artifact index here. They may guide a

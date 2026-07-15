@@ -299,12 +299,13 @@ def test_telemetry_append_rotates_segment_on_quota() -> None:
         status: str,
         path: str,
         *,
+        verb: str = "ECHO",
         lines: Optional[list[str]] = None,
         error: Optional[str] = None,
     ) -> rest_perf.GatewayResponse:
         return rest_perf.GatewayResponse(
             status=status,
-            verb="ECHO",
+            verb=verb,
             path=path,
             end=True,
             lines=[] if lines is None else lines,
@@ -339,7 +340,7 @@ def test_telemetry_append_rotates_segment_on_quota() -> None:
 
         def cat(self, path: str, _max_bytes: int) -> rest_perf.GatewayResponse:
             if path == "/queen/telemetry/bench/latest":
-                return gateway_response("OK", path, lines=[self.latest])
+                return gateway_response("OK", path, verb="CAT", lines=[self.latest])
             raise AssertionError(f"unexpected cat path: {path}")
 
     state = rest_perf.SimState(
@@ -364,6 +365,138 @@ def test_telemetry_append_rotates_segment_on_quota() -> None:
         "/queen/telemetry/bench/seg/seg-000002",
     ]
     assert state.telemetry_segments["bench"] == "seg-000002"
+
+
+def test_telemetry_segment_receipt_validates_latest_with_safe_fallback() -> None:
+    class DummyClient:
+        def __init__(
+            self,
+            receipt: str,
+            latest: str = "seg-000999",
+            response_path: str | None = None,
+        ) -> None:
+            self.receipt = receipt
+            self.latest = latest
+            self.response_path = response_path
+            self.cat_calls = 0
+
+        def echo(self, path: str, _line: str) -> rest_perf.GatewayResponse:
+            return rest_perf.GatewayResponse(
+                status="OK",
+                verb="ECHO",
+                path=self.response_path or path,
+                end=True,
+                lines=[self.receipt],
+                bytes=41,
+                error=None,
+            )
+
+        def cat(self, path: str, _max_bytes: int) -> rest_perf.GatewayResponse:
+            self.cat_calls += 1
+            return rest_perf.GatewayResponse(
+                status="OK",
+                verb="CAT",
+                path=path,
+                end=True,
+                lines=[self.latest],
+                bytes=None,
+                error=None,
+            )
+
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=True,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+    )
+
+    receipt_client = DummyClient("seg-000123", latest="seg-000123")
+    segment = rest_perf.create_telemetry_segment(receipt_client, state, "bench")
+    assert segment == "seg-000123"
+    assert receipt_client.cat_calls == 1
+
+    fallback_client = DummyClient("../invalid")
+    segment = rest_perf.create_telemetry_segment(fallback_client, state, "bench")
+    assert segment == "seg-000999"
+    assert fallback_client.cat_calls == 1
+
+    mismatched_client = DummyClient(
+        "seg-000123", response_path="/queen/telemetry/other/ctl"
+    )
+    segment = rest_perf.create_telemetry_segment(mismatched_client, state, "bench")
+    assert segment == "seg-000999"
+    assert mismatched_client.cat_calls == 1
+
+    stale_client = DummyClient("seg-000123", latest="seg-000124")
+    segment = rest_perf.create_telemetry_segment(stale_client, state, "bench")
+    assert segment == "seg-000123"
+    assert stale_client.cat_calls == 1
+
+
+def test_parse_telemetry_segment_id_rejects_unsafe_components() -> None:
+    assert rest_perf.parse_telemetry_segment_id(["seg-000123"]) == "seg-000123"
+    assert rest_perf.parse_telemetry_segment_id(["bad", "seg-000124"]) == "bad"
+    for value in [
+        "",
+        ".",
+        "..",
+        "bad/segment",
+        "bad segment",
+        "bad\x00segment",
+        "a" * (rest_perf.MAX_TELEMETRY_SEGMENT_ID_BYTES + 1),
+    ]:
+        assert rest_perf.parse_telemetry_segment_id([value]) is None
+
+
+def test_latest_telemetry_segment_requires_matching_complete_cat() -> None:
+    class DummyClient:
+        def __init__(self, response: rest_perf.GatewayResponse) -> None:
+            self.response = response
+
+        def cat(self, _path: str, _max_bytes: int) -> rest_perf.GatewayResponse:
+            return self.response
+
+    path = "/queen/telemetry/bench/latest"
+
+    def response(
+        *,
+        status: str = "OK",
+        verb: str = "CAT",
+        response_path: str = path,
+        end: bool = True,
+    ) -> rest_perf.GatewayResponse:
+        return rest_perf.GatewayResponse(
+            status=status,
+            verb=verb,
+            path=response_path,
+            end=end,
+            lines=["seg-000123"],
+            bytes=None,
+            error=None,
+        )
+
+    assert (
+        rest_perf.read_latest_telemetry_segment(DummyClient(response()), "bench")
+        == "seg-000123"
+    )
+    for invalid in [
+        response(status="ERR"),
+        response(verb="LS"),
+        response(response_path="/queen/telemetry/other/latest"),
+        response(end=False),
+    ]:
+        assert (
+            rest_perf.read_latest_telemetry_segment(DummyClient(invalid), "bench")
+            is None
+        )
 
 
 def test_echo_with_policy_retry_queues_on_buffer_full() -> None:
@@ -430,13 +563,14 @@ def test_echo_with_policy_retry_queues_on_buffer_full() -> None:
         strict_control_errors=False,
     )
     client = DummyClient()
-    rest_perf._echo_with_policy_retry_inner(client, "/queen/ctl", "{}", state)
+    response = rest_perf._echo_with_policy_retry_inner(client, "/queen/ctl", "{}", state)
 
     assert [call[0] for call in client.calls[:3]] == [
         "/queen/ctl",
         "/actions/queue",
         "/queen/ctl",
     ]
+    assert response.status == "OK"
 
 
 def test_echo_with_policy_retry_waits_for_policy_consumption() -> None:
@@ -503,7 +637,7 @@ def test_echo_with_policy_retry_waits_for_policy_consumption() -> None:
         strict_control_errors=False,
     )
     client = DummyClient()
-    rest_perf._echo_with_policy_retry_inner(client, "/queen/ctl", "{}", state)
+    response = rest_perf._echo_with_policy_retry_inner(client, "/queen/ctl", "{}", state)
 
     assert [call[0] for call in client.calls] == [
         "/queen/ctl",
@@ -512,6 +646,7 @@ def test_echo_with_policy_retry_waits_for_policy_consumption() -> None:
         "/actions/queue",
         "/queen/ctl",
     ]
+    assert response.status == "OK"
 
 
 def test_run_with_retry_policy_honors_no_retry_mode() -> None:
