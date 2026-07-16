@@ -24,6 +24,9 @@ Each Cohesix hive has a primary "Queen" role with orchestration authority. The Q
 Models, agents, CUDA/NVML, training, and inference stay on the Linux or Mac OS host. Cohesix is the compact trust layer beneath them: approved host tools reduce intent to bounded, policy-checked requests with visible state and evidence.
 
 ## What makes Cohesix different?
+Cohesix does not seek to replace traditional OSes, but rather it aims to coexeist - performing a key AI governance role in an auditable fashion.
+
+To achieve this, Cohesix relies on a single protocol (9p) for **everything** - and deliberately avoids large code ecosystems (e.g. POSIX) that other OSes use extensively. This keeps Cohesix extremely lean, but quite capable and performant.
 
 - **Authority is explicit.** Cohesix combines kernel-enforced capabilities with
   generated role, policy, ticket, and lifecycle checks rather than relying on
