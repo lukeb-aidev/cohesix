@@ -199,12 +199,50 @@ checks do not replace the full readback ledger.
 
 ### 4. Set First-Boot Network Policy
 
-The staged Pi image stops at the Cohesix U-Boot menu. Continuing with option 1
-uses a saved `cohesix.env` policy when present and otherwise uses the selected
-manifest defaults. To change the network lane, choose **Configure networking**,
-then select DHCP or static IPv4 and wired GENET or CYW43 Wi-Fi. The review menu
-can boot once without writing media, or save the settings to `cohesix.env` and
-reboot.
+The staged Pi image always stops at the Cohesix U-Boot menu. Menu state is
+determined by successfully imported, coherent network overrides, not merely by
+whether a file named `cohesix.env` exists:
+
+- **Saved network settings:** option 1 is **Continue with existing config**.
+- **Manifest defaults:** option 1 is **Boot with manifest defaults**. This state
+  applies when `cohesix.env` is absent, empty, oversized, malformed, contains
+  no network override, or contains an incoherent network tuple.
+
+Policy loading is capped at 384 bytes, accepts LF or CRLF text, and imports only
+the allowlisted fields below. An invalid or partial network tuple, or a logo
+value other than `0` or `1`, is cleared in memory with a warning before the menu
+is shown, so option 1 cannot accidentally handoff a half-configured policy.
+SSID values are never printed in U-Boot summaries. Root-task remains the final
+validator for exact IPv4 octets, Wi-Fi text, and compiler-owned bounds; a
+rejected DTB handoff falls back deterministically to manifest defaults.
+
+The root menu provides these transitions:
+
+- `1` — boot with the state named on the screen.
+- `2` — configure networking through DHCP/static and wired/Wi-Fi pages.
+- `3` — toggle the HDMI logo for the current working state.
+- `4` — clear saved settings, restore the enabled-logo default, verify the
+  rewritten policy file, and redraw the manifest-default menu state.
+- `5` — save and verify the current state, then reboot.
+- `0` — exit to the U-Boot prompt.
+
+Back and discard actions return through the bounded menu dispatcher. Returning
+to the root page from an abandoned configuration reloads `cohesix.env`, so
+unsaved working values are never presented as saved settings. The review page
+can boot once without writing media, edit the working values, discard them, or
+save them. Save, clear, and reboot actions first verify file size and a private
+byte-for-byte readback; export, write, size, or readback failure leaves the user
+in the menu and does not invoke reset.
+
+When Wi-Fi credentials already exist, the Wi-Fi page offers **Keep current
+Wi-Fi credentials**, **Replace Wi-Fi credentials**, and **Back to interface
+selection**. Replacement uses temporary variables and commits them to the
+working policy only after valid local entry, so a failed retry does not destroy
+the existing credentials. Saving overwrites `cohesix.env`; a separate
+delete/reflash cycle is not needed to move to another Wi-Fi network. Option 4
+does not delete the file: it writes an allowlisted policy with empty network
+fields, which intentionally produces the manifest-default menu state on the
+next boot.
 
 The default image is built with `--uboot-menu-input usb`. Use an HDMI display
 and USB keyboard for the guided Wi-Fi setup. U-Boot normally echoes serial
@@ -229,9 +267,10 @@ and create or update `cohesix.env` with a local editor that does not sync,
 version, or retain the secret. Never use generic `uboot.env`, commit the policy,
 print it in a transcript, or include it in an evidence pack. FAT media does not
 provide meaningful file-permission protection; treat the card as a credential.
-Unmount it cleanly before boot. Evidence should record only whether the policy
-was intentionally preserved, replaced, or reset and the non-secret summary
-that U-Boot emits.
+Keep the file within the 384-byte bound and use only the fields above. Unmount
+it cleanly before boot. Evidence should record only whether the policy was
+intentionally preserved, replaced, or reset and the non-secret summary that
+U-Boot emits.
 
 At handoff, the boot script imports only the allowlisted fields, writes the
 selected values into `/chosen/cohesix,*` properties in the staged DTB, and
@@ -384,10 +423,17 @@ menu:
 => run coh_boot_sequence
 ```
 
-To return to the menu instead, use `run coh_prompt_root`. If the scripted path
-cannot load its files, inspect the FAT partition with `fatls mmc 0:1`. The
-following raw sequence is a diagnostic last resort for the default staged
-filenames:
+To reload policy from the card and return to the bounded menu instead, use:
+
+```text
+=> run coh_load_saved_policy
+=> run coh_start_menu
+```
+
+Running `coh_prompt_root` alone renders only one page and does not reload policy
+or start the dispatcher. If the scripted path cannot load its files, inspect
+the FAT partition with `fatls mmc 0:1`. The following raw sequence is a
+diagnostic last resort for the default staged filenames:
 
 ```text
 => fatload mmc 0:1 0x10000000 cohesix-image-arm-bcm2711

@@ -123,6 +123,14 @@ A Pi boot additionally needs:
 - fresh device-specific diagnostics for any claimed USB, HDMI, GENET, or Wi-Fi
   lane.
 
+Every normal cold boot and authenticated Cohesix reboot enters the interactive
+U-Boot menu. A consumed high reset marker and the software-reset bit are bounded
+diagnostics only; neither bypasses the menu. The first action continues with a
+coherent saved network policy or with generated manifest defaults. An absent,
+empty, oversized, malformed, or incoherent `cohesix.env` selects the manifest
+state. Saving or clearing policy reboots only after bounded FAT write and exact
+readback verification succeed.
+
 Historical Milestone 26c evidence contains an accepted wired GENET boot,
 authenticated `cohsh`, runtime/DMA proof, and Pi Stage 01-05 result. That
 evidence is retained in [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md)

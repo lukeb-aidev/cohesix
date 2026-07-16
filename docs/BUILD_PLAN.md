@@ -6877,7 +6877,7 @@ Commands:
   - make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
 Checks:
-  - The first wizard action continues with saved Cohesix settings when any persisted override exists, otherwise it boots manifest defaults by default.
+  - The first wizard action continues with saved Cohesix settings when a coherent persisted network override exists; a logo-only or cleared policy boots manifest defaults by default.
   - `DHCP OFF` collects bounded static IPv4 fields and mirrors them into DTB `/chosen/cohesix,static-*` properties before handoff.
   - The HDMI logo is optional: it renders when enabled and available, and boot still proceeds cleanly when it is disabled or cannot be staged.
 Deliverables:

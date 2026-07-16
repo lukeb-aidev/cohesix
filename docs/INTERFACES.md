@@ -34,6 +34,54 @@ Breaking changes require the process in `AGENTS.md`: manifest schema changes
 where applicable, regenerated artifacts, updated fixtures, tests, and canonical
 documentation in the same authorized change.
 
+## Pi 4 pre-kernel policy interface
+
+The Pi 4 U-Boot menu is a bounded pre-kernel configuration surface, not a new
+Cohesix protocol or authority path. `scripts/pi4-image-build.sh` generates the
+executable `boot.cmd`/`boot.scr.uimg` contract. Generic persistent U-Boot
+environment storage is disabled; only the FAT-side `cohesix.env` file is
+eligible for Cohesix boot-policy import.
+
+The import contract is:
+
+- maximum file size: 384 bytes;
+- text line endings: LF or CRLF;
+- allowlisted keys only: `coh_net_mode`, `coh_net_interface`,
+  `coh_static_ip`, `coh_static_prefix_len`, `coh_static_gateway`,
+  `coh_wifi_ssid`, `coh_wifi_psk`, and `coh_show_logo`;
+- coherent network tuples: `dhcp|static` plus `wired|wifi`, with static address
+  and prefix required for static mode and SSID required for Wi-Fi;
+- logo preference: absent or exactly `0|1`; any other value rejects the saved
+  policy;
+- absent, empty, oversized, malformed, or incoherent input: clear network
+  overrides and use selected-manifest defaults.
+
+File presence and saved-network state are deliberately distinct. A logo-only
+or cleared `cohesix.env` remains a valid file but produces the **Boot with
+manifest defaults** menu state. A coherent imported network tuple produces
+**Continue with existing config**. Back/discard transitions reload the file
+before returning to the root page, so working values cannot masquerade as
+persisted policy.
+
+The menu uses an iterative page dispatcher for root, address-mode, interface,
+Wi-Fi, static-address, and review pages. Existing Wi-Fi credentials can be kept
+or replaced. Secret entry is enabled only on the USB-keyboard/HDMI console;
+serial output is disabled during capture, and temporary replacement variables
+are not part of the export allowlist. SSIDs are also redacted from summaries so
+untrusted imported text cannot forge terminal or serial evidence. Save and
+clear operations export into a bounded buffer, write `cohesix.env`, verify its
+size, privately compare a readback copy, and set success only after exact
+agreement. Reset is never invoked after a failed export, write, size check,
+load, or comparison.
+
+At boot, selected non-empty overrides are projected into the staged DTB as
+`/chosen/cohesix,net-mode`, `cohesix,net-interface`,
+`cohesix,static-ipv4`, `cohesix,static-prefix-len`,
+`cohesix,static-gateway`, `cohesix,wifi-ssid`, and `cohesix,wifi-psk`.
+Root-task validates these properties and either selects the DTB-backed policy
+or reports a bounded rejection and retains the generated manifest defaults.
+The source manifest is never rewritten by U-Boot.
+
 ## Transport matrix
 
 | Surface | Wire contract | Authentication and authority | Runtime boundary |
