@@ -19,7 +19,7 @@
 
 Cohesix is a research operating system for edge AI, built around a simple idea: an AI fleet should have air-traffic control, not a pile of tools holding unrestricted credentials.
 
-Each Cohesix hive has a "Queen" with orchestration authority and specialized Workers scoped to heartbeat telemetry, GPU lease/status records, and LoRA adapter/model lifecycle receipts, each limited by role-specific capabilities and tickets.
+Each Cohesix hive has a primary "Queen" role with orchestration authority. The Queen manages specialized "Workers", scoped to heartbeat telemetry, GPU lease/status records, and LoRA adapter/model lifecycle receipts, each limited by role-specific capabilities and tickets.
 
 Models, agents, CUDA/NVML, training, and inference stay on the host. Cohesix is the compact trust layer beneath them: approved host tools reduce intent to bounded, policy-checked requests with visible state and evidence.
 
