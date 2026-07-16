@@ -17,16 +17,43 @@
 
 # Cohesix
 
-Cohesix is a research operating system for edge AI, built around a simple idea: an AI fleet should have air-traffic control, not a pile of tools holding unrestricted credentials.
+Cohesix is a research operating system for edge AI, built around a simple idea:
+an AI fleet should have air-traffic control, not a pile of tools holding
+unrestricted credentials.
 
-Each Cohesix hive has a primary "Queen" role with orchestration authority. The Queen manages specialized "Workers", scoped to heartbeat telemetry, GPU lease/status records, and LoRA adapter/model lifecycle receipts, each limited by role-specific capabilities and tickets.
+Each Cohesix hive has a Queen—the central orchestration authority—and a small
+set of narrowly focused Worker roles for heartbeat telemetry, GPU lease and
+status records, and LoRA adapter/model lifecycle receipts. These Workers are
+control-plane roles inside Cohesix, not the macOS or Linux machines in the
+fleet.
 
-Models, agents, CUDA/NVML, training, and inference stay on the Linux or Mac OS host - and interact with Cohesix via a suite of Mac OS and Linux-native tools. Cohesix is the compact trust layer beneath them: the Cohesix host tools reduce intent to bounded, policy-checked requests with visible state and evidence - and allow one Cohesix OS Queen to govern a large hive of Mac OS and Linux AI workers.
+Cohesix is designed to coordinate large, mixed-platform hives of GPU-backed AI
+systems. Linux GPU nodes and macOS or Linux operator and AI hosts keep their
+models, agents, training, inference, and hardware stacks in their native
+operating systems. The project includes the complete Cohesix control-plane
+toolkit: command-line tools, a gateway, desktop UI, GPU and service bridges, an
+automation agent, a Python SDK, and evidence tooling. These tools are part of
+Cohesix, but run beside the AI stack on the host—not inside the Cohesix OS—so
+the trusted core stays small.
 
 ## What makes Cohesix different?
-Cohesix does not seek to coexist with - not replace - traditional OSes. Cohesix is designed for AI systems where safe action matters as much as smart inference: what was allowed, which policy governed it, and what evidence remains.
 
-To achieve this, Cohesix relies on just **one protocol** (9p) as a uniform file-shaped control model. Cohesix also deliberately avoids large code ecosystems (e.g. POSIX) that other OSes use extensively. This keeps Cohesix extremely lean, but quite capable and performant.
+Cohesix complements macOS and Linux; it does not try to replace them. It adds a
+compact, auditable decision layer for systems where safe action matters as much
+as smart inference: what was allowed, which policy governed it, and what
+evidence remains.
+
+Conventional control planes often grow into a web of privileged services,
+service accounts, RPC APIs, and one-off integrations. Cohesix borrows Plan 9's
+most useful idea: present control and state as a tree of named paths. 9P does
+much of the heavy lifting, giving tools one small vocabulary—find a path, read
+state, or write a bounded request—instead of a different RPC interface and
+permission model for every feature.
+
+Host NineDoor exposes this tree through Secure9P. On a Cohesix target, approved
+host tools reach the same namespace model through the authenticated console;
+physical drivers use a separate fixed interface. The transports differ where
+they must, but the control model stays consistent.
 
 - **Authority is explicit.** Cohesix combines kernel-enforced capabilities with
   generated role, policy, ticket, and lifecycle checks rather than relying on
@@ -41,24 +68,25 @@ To achieve this, Cohesix relies on just **one protocol** (9p) as a uniform file-
   through approved host tools, while target-side role, ticket, lifecycle, and
   bounds checks decide what is accepted and retain evidence of the outcome.
 
+Cohesix is not a general-purpose desktop/server OS, Linux distribution, POSIX
+environment, or in-VM GPU stack.
 
 ## Why seL4, Plan 9, and 9P?
 
-These are the core open-source components which underpin Cohesix.
+seL4 is Cohesix's kernel foundation. Plan 9 supplies the central design idea,
+and 9P turns that idea into a practical control model. No prior experience with
+them is required to use Cohesix.
 
 | Term | Plain-language meaning | Why Cohesix uses it |
 | --- | --- | --- |
-| **[seL4](https://sel4.systems/About/)** | A microkernel: the small, privileged core controlling memory, execution, interrupts, and communication. A *capability* is a kernel-enforced permission to use a specific object in specific ways. | Keeps the privileged kernel small and makes access to target resources explicit. |
+| **[seL4](https://sel4.systems/About/)** | A formally verified microkernel: the small, privileged core controlling memory, execution, interrupts, and communication. A *capability* is a precise, kernel-enforced permission. | Keeps the privileged kernel small and makes access to target resources explicit. seL4's proofs apply under documented assumptions; they do not make Cohesix as a whole formally verified. |
 | **[Plan 9](https://9p.io/sys/doc/9.html)** | A Bell Labs research OS where services, devices, status, and stored data can all appear in a file hierarchy assembled for each process. | Provides the design inspiration for one understandable namespace spanning control, status, telemetry, policy, and evidence. Cohesix is not Plan 9 and does not provide a POSIX façade. |
-| **[9P](https://9p.io/sys/doc/names.html)** | The protocol Plan 9 uses to access those file hierarchies. A client connects, follows a path, opens a node, and reads or writes bytes. | Host NineDoor implements a bounded 9P2000.L subset called Secure9P, so path, role, ticket, and size limits are visible and testable. |
+| **[9P](https://9p.io/sys/doc/names.html)** | The compact protocol Plan 9 uses to navigate and use those file hierarchies. | Host NineDoor implements a bounded 9P2000.L subset called Secure9P. Its path, read, write, and append model avoids a separate RPC interface for every feature. |
 | **NineDoor** | Cohesix's namespace server and related adapters. | Host NineDoor speaks Secure9P. The target uses a separate `NineDoorBridge` behind its authenticated console; it is not an in-VM 9P-over-TCP server. |
 
-These component layers solve complementary problems. seL4 answers **who may use a kernel
-resource**; the Secure9p ticketed namespace answers **which named control or state
-surface that role may use**. A typical control flow is: write a bounded command,
-receive an acknowledgement (`OK`) or refusal (`ERR`), then read state or tail
-events for completion. This reduces protocol sprawl and makes policy, limits,
-and evidence easier to inspect.
+Together, seL4 answers **who may hold low-level authority**, while the namespace
+shows **which named controls and state each role may use**. Policy, state, and
+evidence stay visible instead of being scattered across opaque services.
 
 ## Architecture at a glance
 
