@@ -57,8 +57,8 @@ that bundle's `QUICKSTART.md` for boot paths.
 In terminal 1:
 
 ```bash
-SEL4_BUILD_DIR="$PWD/seL4/SMP_build" ./scripts/cohesix-build-run.sh \
-  --sel4-build "$PWD/seL4/SMP_build" \
+SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" ./scripts/cohesix-build-run.sh \
+  --sel4-build "$PWD/out/sel4/profile-v2/qemu-smp-production" \
   --out-dir out/cohesix \
   --profile release \
   --root-task-features cohesix-dev \

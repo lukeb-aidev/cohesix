@@ -139,14 +139,28 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 - `scripts/ci/test_plan_run.sh --list` (verify scripted stage inventory before execution)
 - `scripts/ci/check_test_plan.sh`
 - If IR or manifest changes: `cargo run -p coh-rtc` then `scripts/check-generated.sh`.
-- Ensure `SEL4_BUILD_DIR` points at the SMP kernel build (`$REPO/seL4/SMP_build` by default); override to `$REPO/seL4/build` when validating single-core baselines.
+- Ensure `SEL4_BUILD_DIR` points at the validated production SMP kernel build
+  (`$REPO/out/sel4/profile-v2/qemu-smp-production` by default). Preserved
+  `seL4/build` or `seL4/SMP_build` trees may be selected explicitly for
+  diagnostic comparison only and are claim-ineligible unless they pass a named
+  profile contract.
 - Default QEMU SMP topology is four single-threaded cores; set `COHESIX_QEMU_SMP=1` for single-core baselines or `COHESIX_QEMU_SMP_TOPO` for explicit topologies.
 - seL4 15 QEMU artifact trees must be configured with
   `ElfloaderRootserversLast=ON` and an embedded QEMU `virt` DTB generated with
   `virtualization=on`, so PSCI records `method = "smc"` for the Cohesix QEMU
   launcher.
+- Milestone 26d profile closure requires all five fresh
+  `out/sel4/profile-v2/*` defaults to pass the fail-closed aggregate validator
+  with source and artifacts required. QEMU build, release, regression, and
+  publication entrypoints consume and revalidate `qemu_smp_production` by
+  default. This makes it the canonical GICv3 build input; it is still not QEMU
+  boot evidence. The external `/Users/lukasbower/seL4/build_UBOOT` exact-image
+  CYW43 input remains separately coordinated and is not Pi hardware evidence.
 - macOS: FUSE mount coverage is optional unless the MacFUSE runtime is installed and approved (verify `/dev/macfuse0` exists, or `/dev/osxfuse0` on older OSXFUSE).
-- If the host lacks EL2/virtualization support or KVM cannot provide GICv2, set `COHESIX_QEMU_VIRT=off` and/or `COHESIX_QEMU_MACHINE_EXTRA=kernel-irqchip=off` when invoking the release `qemu/run.sh`.
+- If the host lacks EL2/virtualization support or KVM cannot provide the
+  selected GICv3 configuration, set `COHESIX_QEMU_VIRT=off` and/or
+  `COHESIX_QEMU_MACHINE_EXTRA=kernel-irqchip=off` when invoking the release
+  `qemu/run.sh`; the launcher must still agree with the generated GICv3 truth.
 - Before any QEMU TCP run, start tcpdump and confirm the log path (example: `logs/tcpdump-new-YYYYMMDD-HHMMSS.log`). Use the same path in TCP correlation checks.
 - Headless Linux requires `xvfb-run` (`sudo apt-get install -y xvfb` if missing).
 - Ensure `/updates` and `/host` are enabled for host tool tests:
@@ -194,6 +208,19 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p pi4-driver-abi`
 - `cargo test -p pi4-driver-runtime -- --test-threads=1`
 - `cargo check -p pi4-driver-runtime --target aarch64-unknown-none`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::tests::runtime_`
+- Focused Linux-aligned CYW43 attach/transfer checks:
+  - `cargo test -p pi4-driver-runtime --lib cyw43_backplane_alp_timing_matches_linux_wall_clock_window -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_backplane_attach_disables_extra_pullups_after_force_alp_settle -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_function_ready_deadlines_preserve_linux_default_and_f2_window -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_data_tx_never_replays_ambiguous_function2_write -- --test-threads=1`
+- Focused bootstrap/restart operator-liveness checks:
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_bootstrap_operator_turn -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_executes_one_operation_per_turn_in_canonical_order -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_every_operation_cut_uses_the_same_outer_fence -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_deadline_failure_fences_before_recovery_mmio -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_supervisor_post_up_drain_consumes_256_reciprocal_ring_turns -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib accepted_reboot_blocks_cyw43_bootstrap_until_backend_dispatch -- --test-threads=1`
 - `cargo test -p swarmui --test transcript`
 - `cargo test -p swarmui --test console_parity`
 - `cargo test -p swarmui --test security`
@@ -202,6 +229,10 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p host-ticket-agent`
 - `cargo test -p nine-door --test ui_security`
 - `cargo test -p nine-door --test session_state`
+- `pytest tests/test_sel4_profile.py`
+- `pytest tests/test_pi4_image_build.py`
+- `pytest tests/test_pi4_image_identity.py`
+- `pytest tests/test_pi4_wifi_repeatability.py`
 - `pytest tests/test_pi4_trace_normalize.py`
 - `pytest tests/test_pi4_gate_proof.py`
 - `cargo test -p nine-door --test pressure_counters`
@@ -243,7 +274,8 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::`
 - `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`
 - `cargo test -p sel4-sys --lib`
-- `SEL4_BUILD_DIR=$REPO/seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu`
+- `$REPO/out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate --profile qemu_smp_production --build-dir $REPO/out/sel4/profile-v2/qemu-smp-production --require-source --require-artifacts --for-runtime`
+- `SEL4_BUILD_DIR=$REPO/out/sel4/profile-v2/qemu-smp-production cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu`
 - `SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
 - `CARGO_INCREMENTAL=0 cargo test --workspace --exclude swarmui` (the stage
   exercises SwarmUI through the explicit binary check and focused tests above;
@@ -267,17 +299,27 @@ Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-bui
 CYW43 repeatability is a separate post-capture aggregate gate. Run
 `scripts/pi4_wifi_repeatability.py` with the staged source image, an independently
 read-back image file at a distinct path, their expected SHA-256, the exact
-embedded `[BUILD]` line, and every cold/warm serial log. The default threshold
+embedded `[BUILD]` line, the required identity-v2 sidecar plus its independently
+preserved SHA-256, the expected clean Git commit and canonical build ID, a
+capture-manifest-v2 ledger, and every cold/warm serial log. The default threshold
 is 10 passing Wi-Fi cold boots and 10 passing Wi-Fi warm boots. Every counted
-slice must carry its own exact marker, show the persistent bootstrap supervisor
-reaching `ready`, have `NET_ACTIVE=wifi`, and satisfy `boot_evidence_blockers`;
-failed slices cannot be offset by additional passes. Duplicate log paths or
-byte-identical captures are rejected across and within both classes. The gate
-recomputes both artifact hashes and verifies that the exact marker is embedded
-in each. Cold versus warm is an operator-recorded reset classification, so the
-serial logs and boot-paired pcaps must retain a per-run collection ledger. Unit
-coverage is
-`python3 -m pytest -q tests/test_pi4_wifi_repeatability.py tests/test_pi4_trace_normalize.py`.
+slice must carry its own exact sealed marker, show the persistent bootstrap
+supervisor reaching `ready` with the complete current production suffix, have
+`NET_ACTIVE=wifi`, and satisfy `boot_evidence_blockers`; failed slices cannot be
+offset by additional passes. Duplicate log paths or byte-identical captures
+are rejected across and within both classes. The v2 gate requires both images
+to be distinct paths and open files with identical raw SHA-256, correct legacy
+U-Boot structure and CRCs, exactly one canonical marker, and the same
+domain-separated normalized `image-id`. That ID covers the complete image after
+zeroing only its fixed self-reference and the two independently checked CRC
+fields. Output may not alias any evidence input. The capture manifest must bind
+each distinct raw serial boot slice to one unique run ID and one distinct,
+nonempty, independently hashed pcap, plus its recorded boot class, sealed image
+ID, clean commit, canonical build ID, and capture epoch. It must also carry the
+trusted identity-sidecar SHA-256 supplied on the command line. Cold versus warm
+is an operator-recorded reset classification, so the serial logs and boot-paired
+pcaps must retain that per-run collection ledger. Unit coverage is
+`python3 -m pytest -q tests/test_pi4_image_identity.py tests/test_pi4_wifi_repeatability.py tests/test_pi4_trace_normalize.py`.
 Synthetic tests prove the scorer and identity binding only; a `PASS` report
 requires real supplied captures and still does not replace their boot-paired
 pcaps.
@@ -377,17 +419,60 @@ aux, contract, mode, done phase, or unrelated progress retains the ordinary
 SDIO bound. Tests must prove timeout retention cannot permit a new request to
 replace the firmware-owned page.
 
+The CYW43 software-closure gate also exercises the production reciprocal
+runtime-ring integration point under the ordinary EventPump. Each outer turn
+opens one monotonic CYW43 operation permit and may execute no more than one
+child-runtime or HAL operation; a rejected second attempt must leave the
+retained ticket, deadline, payload fingerprint, generation, and cursor
+unchanged. Coverage must include deferred runtime descriptors, firmware and
+NVRAM chunks, core release, operation-11 control exchange, control/data/any
+frame polls, the exact 22-action SDIO-before-CYW43 pair restart, generation,
+association, and host-EAPOL recovery, data TX, ARP/GARP output, and the post-up
+drain. The 256-poll drain must consume exactly 256 separately opened outer
+turns. Failure-cut tests must reject stale completions, forbid same-generation
+replay after issued-unknown ownership, and resume or fail deterministically at
+every retained action. EventPump/NetStack tests must prove Wi-Fi urgency is
+retained across later turns rather than implemented as private pre-root,
+EAPOL, tail-ingest, TCP-flush, hot-dispatch, or smoltcp device bursts.
+
+Association, host-EAPOL, post-secure maintenance, data-TX, and pair-signal
+fault injection must use the real reciprocal ring/controller integration point.
+Each source must publish at most one immutable generation-bound recovery record
+and return after its current outer turn, including when its own session guard is
+held. The record distinguishes the current recovery generation from the owner
+generation of an unresolved action. Tests must prove no recovery callback
+relocks that guard, the retained supervisor is the only recovery-poison
+mutator, a recovery generation advances exactly once, duplicate current records
+coalesce without replay, a stale retained record cannot mask a later current
+fault, and a stale completion cannot fence, clear, restart, or otherwise mutate
+a replacement generation. A reciprocal-ring issued-owner-unknown key action
+must bind its exact descriptor, payload digest, ticket, and owner generation
+even when normal association policy advanced the logical epoch after initial
+bootstrap. An association-generation mismatch and a pair-restart signal while
+an op11 join cursor is retained must publish the current recovery generation
+with that cursor's original owner generation and exact immutable fingerprint;
+neither path may discard the cursor behind an empty pair-signal ticket.
+
+The supervisor-lifetime test must keep the same retained owner after initial
+network attachment and show that a later association, EAPOL, data, pair
+restart, or context-replay signal fences ordinary network work before recovery
+advances. During bootstrap/recovery, only linked-runtime serial polling and
+flushing plus already-buffered local-seat bytes are permitted; generic/current
+TCB UART fallback, USB backend polling, HDMI/echo re-entry, and network polling
+must remain absent. Reboot ACK and reset dispatch must complete before another
+Wi-Fi operation is admitted.
+
 Host tests must prove the fixed-layout pointer-free command/completion records remain primitive-only and bounded, including primitive aux fields for service-turn arguments, nonzero-progress/frame-ready-only hot-path credit, owner-state descriptor rejection when the matching runtime spec is not acceptance-eligible, owner-state acceptance requiring the explicit owner hot-path mask plus acceptance-eligible runtime images, the separate root-context diagnostic versus pointer-free selector registration classes, the common `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit forced onto transitional root-context ring commands, and the one-way command flag used by send-only bootstrap/background turns so isolated runtimes do not call `Reply` without a reply cap. Runtime-init records must carry primitive MMIO/DMA/shared physical page metadata, fixed virtual bases, semantic resource ranges for large apertures and large buffer arenas, bus-address policy, optional IRQ descriptors, optional bus-link descriptors, and framebuffer metadata without root pointers.
 
 The physical Pi profile now requires isolated child VSpaces for driver bootstrap, loads isolated `pi4-driver-*` runtime image payloads only from the raw driver-runtime CPIO embedded into the Pi 4 root-task image by `scripts/pi4-image-build.sh`, maps all bounded `PT_LOAD` pages declared by generated `code-pages`, and uses fixed command/completion rings instead of shared-root service TCBs. The staged U-Boot CPIO remains audit/packaging evidence and is not a runtime fallback on the physical Pi profile. `scripts/pi4-image-build.sh` strips the root-task ELF copy injected into the seL4 archive, and Pi packaging must still pass `scripts/ci/size_guard.sh seL4/build_UBOOT/elfloader/archive.archive.o.cpio`. Seven generated runtime specs are acceptance-eligible (`root_context_required=false`, `hardware_state_migrated=true`); `sdio-host` is generated with one HAL-declared SDHCI MMIO page, one noncontiguous HAL-declared firmware-mailbox MMIO page, one private low DMA request page, and 32 shared pages. Host coverage must prove the generated `root_task.driver_images` table covers all seven hot paths, declares at least the 16-page xHCI minimum aperture, reserves the descriptor-backed runtime budgets (`usb` 64 DMA/32 shared, `hdmi` 0 DMA/16 shared plus framebuffer, `genet` 64 DMA/32 shared, `cyw43` 0 DMA/64 shared, `sdio` 2 MMIO/1 DMA/32 shared, `pcie` 16 shared, `serial` 4 shared), and checks the separate `pi4-driver-*` runtime package for host and `aarch64-unknown-none`.
 
 QEMU packaging must pass `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none` and the 4 MiB rootfs guard with no `cohesix/bin/root-task` entry. The build embeds a boot-minimized rootserver in the staged elfloader and retains the unchanged target ELF as `out/cohesix/staging/rootserver` for diagnostics and external QEMU loading; these boot artifacts are outside the payload CPIO. The CPIO inventory manifest must match its component paths, and all seven `cohesix/bin/pi4-driver-*` payloads must be byte-identical to their target artifacts. Removing or stripping a runtime image, forging the manifest, or bypassing `scripts/ci/size_guard.sh` fails this gate.
 
-Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be inferred from adjacent evidence. `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-kernel-source-dir "$HOME/seL4_15"` writes `out/pi4-sd/pi4-runtime-dma-proof.env` with `PI4_RUNTIME_DMA_PROOF=target-build`, `PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu`, manifest hash, runtime CPIO hash, runtime uImage hash, and staged image hash; this proves source freshness and packaging only. Under Milestone 26d, the Pi build tree must also be the accepted seL4 15.0.0 `bcm2711` profile with `KernelArmExportVCNTUser=ON`, physical counter/timer-control exports off, `TIMER_CLOCK_HZ=54000000`, and no retained one-domain `KernelDomainSchedule` cache entry. `scripts/pi4_trace_normalize.py --gate-summary` emits `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER`, and `PI4_RUNTIME_DMA_PROOF=absent`, `diagnostic`, `qemu-or-stale-log`, or `fresh-pi` from serial evidence. `scripts/pi4_gate_proof.sh --require-driver-task-proof --runtime-dma-proof-out out/test-plan/<run-id>/pi4-runtime-dma-proof.env` writes the live proof bundle only after normalization passes. Only `fresh-pi` counts as live hardware runtime/DMA proof, and it requires driver-task dedicated readiness, cap/fault/revoke/scheduling/affinity proof, isolated VSpace, pointer-free IPC, per-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no`, sealed descriptor version/hash/identity proof for every active hot path, sealed bus-link proof for USB and CYW43 split clients, per-hot-path `DRIVER_TASK_DMA_PROOF` with bounded no-IOMMU profile and cache/bus-address policy, aggregate `DRIVER_TASK_DMA_BLOCKER=none`, no compatibility service roles, no unresolved ring timeouts/deferred bootstrap, no resource blockers, a fresh Pi cold-boot marker, and a live prompt. Raw `DRIVER_TASK_RING_CALL_TIMEOUT` events remain diagnostic, but `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT` must be `0` after later return proof closes any bounded keep-active turn. It also emits `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified` only when `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, and at least one valid `DRIVER_TASK_COUNTER` snapshot with `DRIVER_TASK_COUNTER_INVALID=0` are present.
+Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be inferred from adjacent evidence. `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$HOME/seL4/build_UBOOT" --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel"` writes `out/pi4-sd/pi4-runtime-dma-proof.env` with `PI4_RUNTIME_DMA_PROOF=target-build`, `PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu`, manifest hash, runtime CPIO hash, runtime uImage hash, staged image hash, and the hash of `pi4-image-identity.json`; this proves source freshness, packaging, and exact legacy-image identity only. Under Milestone 26d, that external Pi build tree must validate independently as a `pi4_diagnostic` seL4 15.0.0 `bcm2711` profile with pinned source/build-input evidence, `KernelArmExportVCNTUser=ON`, physical counter/timer-control exports off, `TIMER_CLOCK_HZ=54000000`, and no retained one-domain `KernelDomainSchedule` cache entry. The static `out/sel4/profile-v2/pi4-diagnostic` PASS proves only the canonical configuration/artifact contract and cannot substitute for the external tree, staged/read-back image identity, boot, Wi-Fi, TCP/`cohsh`, or benchmark lanes. The image wrapper must reject legacy or ambient CMake configuration and non-canonical host `mkimage` tools rather than silently reconfiguring the tree. `scripts/pi4_trace_normalize.py --gate-summary` emits `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER`, and `PI4_RUNTIME_DMA_PROOF=absent`, `diagnostic`, `qemu-or-stale-log`, or `fresh-pi` from serial evidence. `scripts/pi4_gate_proof.sh --require-driver-task-proof --runtime-dma-proof-out out/test-plan/<run-id>/pi4-runtime-dma-proof.env` writes the live proof bundle only after normalization passes. Only `fresh-pi` counts as live hardware runtime/DMA proof, and it requires driver-task dedicated readiness, cap/fault/revoke/scheduling/affinity proof, isolated VSpace, pointer-free IPC, per-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no`, sealed descriptor version/hash/identity proof for every active hot path, sealed bus-link proof for USB and CYW43 split clients, per-hot-path `DRIVER_TASK_DMA_PROOF` with bounded no-IOMMU profile and cache/bus-address policy, aggregate `DRIVER_TASK_DMA_BLOCKER=none`, no compatibility service roles, no unresolved ring timeouts/deferred bootstrap, no resource blockers, a fresh Pi cold-boot marker, and a live prompt. Raw `DRIVER_TASK_RING_CALL_TIMEOUT` events remain diagnostic, but `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT` must be `0` after later return proof closes any bounded keep-active turn. It also emits `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified` only when `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, and at least one valid `DRIVER_TASK_COUNTER` snapshot with `DRIVER_TASK_COUNTER_INVALID=0` are present.
 
 The isolated runtime engines contain production service turns for serial mini-UART init/RX/TX, HDMI framebuffer rendering, PCIe MMIO turns, direct-root-port xHCI boot-keyboard polling, GENET MDIO/MAC/RX/TX rings, CYW43 shared-control SDPCM command records, and SDIO fixed-layout CMD52/CMD53/POLL_IRQ service turns. Physical Pi root starts each isolated runtime with `TCB.WriteRegisters(resume=1)` at a shell-safe bootstrap priority while preserving the contract MCP, then raises it to contract priority after the pre-root descriptor handoff plus the mandatory serial bootstrap reply proof, or after a prompt-side reply proof for roles that were intentionally skipped because pointer-free runtime proof was unavailable; it may emit `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` so an unproved child cannot starve the root shell. Captures may show SDIO host, PCIe root, GENET, and CYW43 `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` lines before the prompt; those markers are acceptable only as shell-preserving fail-closed evidence, and the retained descriptor must later replay with `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=resumed owner=linked-runtime proof_effect=deferred-proof-retry-enabled` before matching call/return service proof can close SDIO, PCIe, or network acceptance. Wi-Fi descriptor replay is prompt-safe: when physical Pi pointer-free IPC proof is present, root emits `[net-console] deferred resume scheduled reason=driver-startup-before-root-prompt action=publish-prompt-then-supervise`, publishes `cohesix>`, and then starts the persistent SDIO/CYW43 bootstrap supervisor. Each transient attempt emits `CYW43_BOOTSTRAP_SUPERVISOR attempt=<n> status=begin|transient-retry-scheduled|ready ...`; retries use `1/2/4/8/16/30` seconds and then remain at 30 seconds. Once both linked-runtime restart contexts exist, every retry must perform the complete fenced pair restart and retained firmware/control replay before ordinary network construction continues. A no-reply runtime must emit `DRIVER_TASK_RING_CALL_TIMEOUT` and `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=pending owner=linked-runtime action=serial-shell proof_effect=acceptance-red-until-replayed`; the supervisor may retry only after another ordinary serial/local-seat event-pump turn and the elapsed backoff. If pointer-free proof is absent, root must emit `[net-console] deferred resume skipped reason=driver-task-net-runtime-unproved action=serial-diagnostics-only`, preserve serial diagnostics, and leave Wi-Fi acceptance red until an explicit diagnostic command retries the failed stage. Physical Pi local-seat captures must show HDMI as an independent display sink without making it a pre-prompt serial dependency: the framebuffer hint must be available before driver-task bootstrap, `hdmi-text` may receive a bounded nonblocking bootstrap engine-init retry after descriptor load, and the early `Starting HDMI` submit-frame proof must be bounded/nonblocking. A no-reply HDMI render path is display-red evidence and must emit `DRIVER_TASK_RING_CALL_TIMEOUT`, but it must not prevent `cohesix>` from becoming responsive on UART. No HAL-mapped framebuffer diagnostic mirror is allowed; HDMI output must come from the isolated `hdmi-text` runtime only, and UART remains the complete log stream. USB keyboard runtime attach may run before the prompt only after pointer-free isolated runtime proof; otherwise, after `cohesix>`, local-seat must defer if the USB runtime already has an active command, emit one `prompt-settle attach deferred reason=usb-runtime-active` summary, and retry after the normal quiet window before replaying the deferred PCIe root descriptor and one bounded USB engine-init proof. It must then advance HID discovery only through the explicit keyboard-enumeration aux while ordinary background polls report the current frontier without re-entering enumeration. No-reply background USB polls must produce `DRIVER_TASK_RING_CALL_TIMEOUT` plus `[local-seat] isolated USB runtime keyboard poll suspended contract=usb-local-seat source=linked-runtime reason=driver-task-no-reply action=serial-shell` rather than repeated blocking `usb-local-seat` calls. `usb probe-kbd` must execute a bounded progress-driven keyboard-enumeration burst and must not replay the whole isolated local-seat attach/init chain; each extra slice is permitted only while the child USB enumeration marker advances, and the burst stops at the finite cap, keyboard readiness, or no new marker. Root-console startup must emit UART-visible `[mark] root-console.start.begin`, publish `cohesix>` after bounded non-Wi-Fi driver startup settles or fails closed, and emit `[mark] root-console.start.ok` before persistent Wi-Fi bootstrap, `/log/queen.log`, or NineDoor log-stream handoff; host-EAPOL, association, DHCP, and retry backoff cannot hold the serial shell hostage. Once `cohesix>` is published and USB polling is armed, serial UART and USB keyboard input must both feed the shared parser concurrently after USB proof succeeds. Steady physical Pi root submits serial/network service turns through bounded ring calls; HDMI submits are limited to high-impact progress lines, while init, deferred-resume, timeout, and proof turns keep UART breadcrumbs. USB keyboard auto-poll uses bounded nonblocking sends until the runtime proves it can reply without risking serial. The isolated runtime `_start` entry must preserve root's task key, install the mapped driver-local IPC buffer before receiving commands, skip `Reply` for commands marked with the one-way flag, and emit replies only for call-delivered commands. Hardware captures should show `DRIVER_TASK_RING_CALL_BEGIN` and the matching `DRIVER_TASK_RING_CALL_RETURN` for init/deferred-resume/proof turns; routine steady console data turns may be suppressed to keep interactive serial latency bounded. Any `DRIVER_TASK_RING_CALL_TIMEOUT` or positive `DRIVER_TASK_BOOTSTRAP_DEFERRED` keeps driver-task acceptance red until later service proof closes it. A role boolean is credited only from a line proving both `live_tcb=yes` and `hot_path=dedicated`; static contract isolation, callback-pointer live-TCB service turns, shared-root ring service turns, runtime-image declarations, runtime-region mapping, runtime-image smoke loops, runtime-init descriptor commands, and any ring command marked root-context or init-descriptor non-acceptance are diagnostic until the driver state boundary is owned by an isolated ring-backed task, VSpace proof is `yes`, pointer-free IPC is `yes`, and `owner_state=driver-owned` is present. Pre-root bootstrap turns, including the serial bootstrap reply proof, must not sample timer registers. Later ring latency telemetry may sample the EL0 virtual counter only when the profile enables `timers-arch-counter`; dummy-timer Pi captures must suppress latency proof rather than reading CNT registers.
 
-The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; hardware captures must show `DRIVER_TASK_BOOT ... contract=bcmgenet-v5 ... affinity_core=3` and `DRIVER_TASK_BOOT ... contract=cyw43455 ... affinity_core=3` before claiming fourth-core driver placement. Physical Pi owner-state boots apply the same working `seL4_TCB_SetAffinity` path already used for NineDoor and worker TCBs; any `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence and must fail placement proof. Captures may still emit `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`; that keeps notification lifecycle proof red while allowing endpoint-backed command-ring startup to proceed. QEMU virtio compatibility boots may prove isolated VSpace/ASID allocation, runtime-image transport-region mapping, and pointer-free ring transport after virtio networking is online, but that is transport-substrate evidence only. Fresh Pi hardware proof is still required before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest isolated-driver hardware acceptance.
+The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; hardware captures must show `DRIVER_TASK_BOOT ... contract=bcmgenet-v5 ... affinity_core=3` and `DRIVER_TASK_BOOT ... contract=cyw43455 ... affinity_core=3` before claiming fourth-core driver placement. Physical Pi owner-state boots apply `seL4_TCB_SetAffinity` directly to each driver child TCB. That is distinct from the root-authority affinity wrapper used around in-process NineDoor and Worker-model operations; neither NineDoor nor a general Worker has a separate TCB in the current profile. Any `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence and must fail placement proof. Captures may still emit `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`; that keeps notification lifecycle proof red while allowing endpoint-backed command-ring startup to proceed. QEMU virtio compatibility boots may prove isolated VSpace/ASID allocation, runtime-image transport-region mapping, and pointer-free ring transport after virtio networking is online, but that is transport-substrate evidence only. Fresh Pi hardware proof is still required before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest isolated-driver hardware acceptance.
 
 Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CYW43 firmware/NVRAM/SDPCM command records, direct-root-port xHCI keyboard polling, GENET RX/TX descriptor-ring service, and PCIe port read/write/flush helpers now compile in isolated runtime code before any root hardware execution; host coverage must keep proving those ring turns while preserving the fresh-Pi board-proof boundary.
 
@@ -861,7 +946,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:763ef148ed19f1250afdcc2e99611be1668369c6b7c375593af99e3420716f41`
+- `configs/generated/root_task_resolved.json` — `sha256:376f09a49cdb37c07ae8ef007d4d4c715df4b4f949d4d6c1546002108d495599`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

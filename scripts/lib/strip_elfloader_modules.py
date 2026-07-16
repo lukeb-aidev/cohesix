@@ -260,7 +260,9 @@ def prepare_elfloader(source: Path, destination: Path, rootserver: Path) -> tupl
     rebuilt_len = len(rebuilt)
     if rebuilt_len > original_len:
         raise ElfloaderError(
-            f"Rebuilt archive ({rebuilt_len} bytes) exceeds original size ({original_len} bytes)"
+            f"Rebuilt archive ({rebuilt_len} bytes) exceeds original size "
+            f"({original_len} bytes); rebuild the selected seL4 profile with "
+            "sufficient contract-bound rootserver archive capacity"
         )
 
     padding = original_len - rebuilt_len

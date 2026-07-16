@@ -4,7 +4,7 @@
 
 # M26C Runtime Boundary Audit
 
-Status: `QEMU-CLOSED / PI4-GENET-CLOSED-FOR-26C`
+Status: `WORKER-EXECUTION-REOPENED / PI4-GENET-HISTORICAL-CLOSED-FOR-26C`
 
 ## Boundary Statement
 
@@ -18,13 +18,13 @@ create new authority paths.
 | Area | As-Built State | Status |
 | --- | --- | --- |
 | Root-task/NineDoor VM boundary | Separate VM root-task adapter and host NineDoor implementation remain distinct; Stage 05 QEMU due-diligence and final Pi Stage 05 evidence are closed. | PASS-QEMU+PI4 |
-| GPU boundary | CUDA/NVML remain host-side; VM worker-gpu emits control receipts only through bounded no_std loop helpers. | PASS-QEMU |
-| LoRA/PEFT boundary | Training/TensorRT/PEFT remain host-side; VM worker-lora emits control receipts only through bounded no_std loop helpers. | PASS-QEMU |
+| GPU boundary | CUDA/NVML remain host-side; worker-gpu helper code models bounded receipts but no Worker TCB is launched. | PASS-HOST-BOUNDARY / MODEL-ONLY |
+| LoRA/PEFT boundary | Training/TensorRT/PEFT remain host-side; worker-lora helper code models bounded receipts but no Worker TCB is launched. | PASS-HOST-BOUNDARY / MODEL-ONLY |
 | Driver runtime boundary | Isolated runtime and HAL proof surfaces exist; compiler-owned DMA profile truth resolves Pi-family profiles to `bounded-no-iommu`; final GENET board proof produced `PI4_RUNTIME_DMA_PROOF=fresh-pi` and `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`. | PASS-PI4-GENET |
-| Worker loops | worker-heart, worker-gpu, and worker-lora have bounded no_std loop primitives and target builds; kernel entrypoints drive those loops instead of placeholder-only semantics. | PASS-QEMU |
-| Endpoint-cap authority | Generated endpoint badge ranges are compiler-owned for implemented worker roles; root-task rejects metadata-only authority and stale/wrong badges. This is endpoint-badge evidence, not a claim of full future cap-bundle authority. | PASS-QEMU |
-| Notification lifecycle | Generated notification badge classes are compiler-owned and worker loops handle revoke/shutdown/lease/pressure events; full future cap-bundle notification isolation is not claimed. | PASS-QEMU |
-| MCS budget evidence | Generated scheduling evidence records non-MCS priority/domain/service-turn fallback and rejects MCS claims on non-MCS profiles. | PASS-QEMU |
+| Worker loops | worker-heart, worker-gpu, and worker-lora have bounded no_std helper primitives and some target build artifacts; root-task does not load or resume them as Worker tasks. | REOPENED / MODEL-ONLY |
+| Endpoint-cap authority | Current profiles disable endpoint caps. Reserved badge ranges are compiler-owned schema data, not minted or delivered capabilities. | REOPENED / DISABLED |
+| Notification lifecycle | Current profiles disable Worker notifications. Helper event handling does not prove notification-object creation, cap delivery, or target handling. | REOPENED / DISABLED |
+| MCS budget evidence | The generated non-MCS record rejects MCS claims but is metadata only; no Worker scheduling context or applied TCB settings exist. | NOT-CLAIMED |
 
 ## No-Std Gate Evidence
 

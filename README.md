@@ -25,7 +25,8 @@ Each Cohesix hive has a Queen—the central orchestration authority—and a smal
 set of narrowly focused Worker roles for heartbeat telemetry, GPU lease and
 status records, and LoRA adapter/model lifecycle receipts. These Workers are
 control-plane roles inside Cohesix, not the macOS or Linux machines in the
-fleet.
+fleet. In the checked-in target profiles they are root/host model and session
+views; no general Worker child TCB is launched yet.
 
 Cohesix is designed to coordinate large, mixed-platform hives of GPU-backed AI
 systems. Linux GPU nodes and macOS or Linux operator and AI hosts keep their
@@ -107,7 +108,7 @@ flowchart LR
     Root[root-task authority]
     Namespace[NineDoorBridge namespace]
     Queen["Queen role\nin root-task"]
-    Workers[Specialized Worker roles]
+    Workers["Worker model/session roles\nno general child TCBs"]
     Drivers[Isolated driver runtimes]
     Kernel[seL4 capabilities and scheduling]
     Console --> Root
@@ -197,9 +198,9 @@ source "$HOME/.cargo/env"
 Build and start the QEMU TCP-console profile:
 
 ```bash
-SEL4_BUILD_DIR="$PWD/seL4/SMP_build" \
+SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" \
   ./scripts/cohesix-build-run.sh \
-    --sel4-build "$PWD/seL4/SMP_build" \
+    --sel4-build "$PWD/out/sel4/profile-v2/qemu-smp-production" \
     --out-dir out/cohesix \
     --profile release \
     --root-task-features cohesix-dev \

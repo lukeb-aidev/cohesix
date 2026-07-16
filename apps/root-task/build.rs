@@ -22,7 +22,7 @@ mod build_support;
 
 use build_support::{
     classify_linker_script, format_build_marker, generated_artifact_is_stale, parse_timer_clock_hz,
-    BuildMarkerFeatures, LinkerScriptKind,
+    resolve_git_metadata_dirs, select_build_git_hash, BuildMarkerFeatures, LinkerScriptKind,
 };
 
 const IPC_GUARD_SOURCE: &str = "apps/root-task/src";
@@ -189,18 +189,40 @@ fn main() {
 fn emit_built_info() -> io::Result<()> {
     emit_git_rerun_triggers()?;
     println!("cargo:rerun-if-env-changed=COHESIX_BUILD_STAMP");
+    println!("cargo:rerun-if-env-changed=COHESIX_EXACT_GIT_COMMIT");
+    println!("cargo:rerun-if-env-changed=COHESIX_EXACT_SOURCE_CLEAN");
     println!("cargo:rerun-if-changed=Cargo.toml");
     println!("cargo:rerun-if-changed=build_support.rs");
     println!("cargo:rerun-if-changed=src");
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
-    let git = git_stdout(["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "nogit".to_owned());
-    let git_dirty_suffix = if git_has_tracked_changes() {
-        "-dirty"
-    } else {
-        ""
+    let git_full = git_stdout(["rev-parse", "HEAD"]).unwrap_or_else(|| "nogit".to_owned());
+    let git_short =
+        git_stdout(["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "nogit".to_owned());
+    let exact_git_commit = env::var("COHESIX_EXACT_GIT_COMMIT").ok();
+    let exact_source_clean = match env::var("COHESIX_EXACT_SOURCE_CLEAN") {
+        Ok(value) if value == "1" => true,
+        Ok(value) => {
+            return Err(io::Error::other(format!(
+                "COHESIX_EXACT_SOURCE_CLEAN must be exactly 1, got {value:?}"
+            )));
+        }
+        Err(env::VarError::NotPresent) => false,
+        Err(error) => return Err(io::Error::other(error)),
     };
+    if exact_git_commit.is_none() && exact_source_clean {
+        return Err(io::Error::other(
+            "COHESIX_EXACT_SOURCE_CLEAN requires COHESIX_EXACT_GIT_COMMIT",
+        ));
+    }
+    let git_hash = select_build_git_hash(
+        git_full.trim(),
+        git_short.trim(),
+        git_has_worktree_changes(),
+        exact_git_commit.as_deref(),
+        exact_source_clean,
+    )
+    .map_err(io::Error::other)?;
     let timestamp = env::var("COHESIX_BUILD_STAMP").unwrap_or_else(|_| Utc::now().to_rfc3339());
-    let git_hash = format!("{}{}", git.trim(), git_dirty_suffix);
     let build_marker = format_build_marker(
         &git_hash,
         &timestamp,
@@ -213,11 +235,14 @@ fn emit_built_info() -> io::Result<()> {
             qemu_driver_task_smoke: cargo_feature_enabled("QEMU_DRIVER_TASK_SMOKE"),
         },
     );
+    let build_marker_bytes = build_marker.len();
     let git_hash = rust_string_literal(&git_hash);
     let timestamp = rust_string_literal(&timestamp);
     let build_marker = rust_string_literal(&build_marker);
     let contents = format!(
-        "pub const GIT_HASH:&str={git_hash};\npub const BUILD_TS:&str={timestamp};\npub const BUILD_MARKER:&str={build_marker};\n"
+        "pub const GIT_HASH:&str={git_hash};\npub const BUILD_TS:&str={timestamp};\n\
+         #[used]\n\
+         pub static BUILD_MARKER_BYTES:[u8;{build_marker_bytes}]=*b{build_marker};\n"
     );
     fs::write(out_dir.join("built_info.rs"), contents)?;
     println!("cargo:rerun-if-changed=build.rs");
@@ -234,34 +259,20 @@ fn emit_git_rerun_triggers() -> io::Result<()> {
         .parent()
         .and_then(|parent| parent.parent())
         .ok_or_else(|| io::Error::other("unable to locate repo root"))?;
-    let Some(git_dir) = resolve_git_dir(repo_root, &repo_root.join(".git")) else {
+    let Some(git_dirs) = resolve_git_metadata_dirs(repo_root, &repo_root.join(".git")) else {
         return Ok(());
     };
 
-    emit_rerun_if_path_exists(&git_dir.join("HEAD"));
-    emit_rerun_if_path_exists(&git_dir.join("index"));
-    emit_rerun_if_path_exists(&git_dir.join("packed-refs"));
+    emit_rerun_if_path_exists(&git_dirs.worktree.join("HEAD"));
+    emit_rerun_if_path_exists(&git_dirs.worktree.join("index"));
+    emit_rerun_if_path_exists(&git_dirs.common.join("packed-refs"));
 
-    if let Ok(head) = fs::read_to_string(git_dir.join("HEAD")) {
+    if let Ok(head) = fs::read_to_string(git_dirs.worktree.join("HEAD")) {
         if let Some(reference) = head.trim().strip_prefix("ref: ") {
-            emit_rerun_if_path_exists(&git_dir.join(reference));
+            emit_rerun_if_path_exists(&git_dirs.common.join(reference));
         }
     }
     Ok(())
-}
-
-fn resolve_git_dir(repo_root: &Path, dot_git: &Path) -> Option<PathBuf> {
-    if dot_git.is_dir() {
-        return Some(dot_git.to_path_buf());
-    }
-    let gitdir = fs::read_to_string(dot_git).ok()?;
-    let raw_path = gitdir.trim().strip_prefix("gitdir:")?.trim();
-    let path = PathBuf::from(raw_path);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        Some(repo_root.join(path))
-    }
 }
 
 fn emit_rerun_if_path_exists(path: &Path) {
@@ -279,8 +290,8 @@ fn git_stdout<const N: usize>(args: [&str; N]) -> Option<String> {
         .and_then(|output| String::from_utf8(output.stdout).ok())
 }
 
-fn git_has_tracked_changes() -> bool {
-    git_stdout(["status", "--porcelain", "--untracked-files=no"])
+fn git_has_worktree_changes() -> bool {
+    git_stdout(["status", "--porcelain", "--untracked-files=all"])
         .is_some_and(|status| !status.trim().is_empty())
 }
 

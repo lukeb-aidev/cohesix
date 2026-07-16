@@ -1,11 +1,11 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document worker ticket rationale and minting process. -->
 <!-- Author: Lukas Bower -->
 # Worker Tickets
 
 **At a glance**
-- Worker tickets are the **capability boundary** for worker roles.
+- Worker tickets are the **application-layer authority boundary** for worker-role sessions.
 - Tickets are presented during `attach` and determine the namespace slice.
 - Tickets are distinct from console auth tokens; both may be required.
 
@@ -15,8 +15,14 @@
 - `docs/USERLAND_AND_CLI.md` — ticket limits and CLI behavior.
 - `docs/SECURITY.md` — security constraints and quota limits.
 
+The checked-in target profiles currently mark every Worker role
+non-executable. A ticket can authorize a role-scoped session and namespace
+view, but it does not load a Worker image, start a Worker TCB, or grant a live
+seL4 endpoint capability.
+
 ## 1. Why worker tickets exist
-Worker tickets are the capability boundary for worker roles. They:
+Worker tickets are the application-layer authority boundary for worker-role
+sessions. They:
 - enforce role-scoped access to Secure9P namespaces (no ad-hoc RPC or shared memory shortcuts).
 - bind a worker identity (subject) to the session, so telemetry and leases are attributable.
 - carry optional scopes and quotas that NineDoor enforces deterministically.
@@ -94,12 +100,15 @@ fn mint_worker_heartbeat(secret: &str, subject: &str) -> Result<String, cohesix_
 - Subject identity is required for worker roles and is used to build the attach identity.
 - Ticket length and quota limits are enforced by `cohsh` and NineDoor; ensure scopes/quotas stay within the manifest limits.
 - The TCP console auth token is separate from worker tickets; both may be required in a single session.
+- Ticket acceptance proves only session authority; current profiles do not
+  create a target Worker task or capability from it.
 
 ## 7. Attach flow (operator mental model)
 1. Client opens a TCP console session and authenticates with the auth token.
 2. Client issues `ATTACH <role> <ticket?>`.
 3. NineDoor validates ticket MAC, role, subject, and mount table.
-4. On success, the session is bound to the role-specific namespace.
+4. On success, the session is bound to the role-specific namespace. This does
+   not start or attach a target Worker task.
 
 ## 8. Common errors and recovery
 

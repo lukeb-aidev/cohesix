@@ -440,9 +440,6 @@ use sel4_sys::{
 #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
 use sel4_panicking::write_debug_byte;
 
-#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
-use sel4_panicking::DebugSink;
-
 /// Alias to the boot information structure exposed by `sel4_sys`.
 pub type BootInfo = seL4_BootInfo;
 
@@ -467,6 +464,22 @@ pub const fn vm_attributes_raw(attr: seL4_ARM_VMAttributes) -> seL4_Word {
     #[cfg(not(target_os = "none"))]
     {
         attr.0
+    }
+}
+
+/// Preserves an ARM mapping's cache policy while preventing instruction fetches.
+#[inline(always)]
+pub const fn vm_attributes_with_execute_never(
+    attr: seL4_ARM_VMAttributes,
+) -> seL4_ARM_VMAttributes {
+    let raw = vm_attributes_raw(attr) | vm_attributes_raw(sel4_sys::seL4_ARM_ExecuteNever);
+    #[cfg(target_os = "none")]
+    {
+        raw
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        seL4_ARM_VMAttributes(raw)
     }
 }
 
@@ -1249,9 +1262,18 @@ pub fn debug_put_char_raw(byte: u8) {
 #[inline(always)]
 pub(crate) fn debug_put_bytes_unlocked(bytes: &[u8]) {
     for &byte in bytes {
-        // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
-        // syscall and accepts any byte value.
-        unsafe { seL4_DebugPutChar(byte) }
+        #[cfg(sel4_config_printing)]
+        {
+            // SAFETY: seL4 exposes DebugPutChar as a side-effect-only
+            // diagnostic syscall and accepts any byte value.
+            unsafe { seL4_DebugPutChar(byte) }
+        }
+        #[cfg(not(sel4_config_printing))]
+        {
+            // Production kernels omit DebugPutChar. Route diagnostics through
+            // the validated user-provided sink once UART MMIO is admitted.
+            write_debug_byte(byte);
+        }
     }
 }
 
@@ -1260,12 +1282,7 @@ pub(crate) fn debug_put_bytes_unlocked(bytes: &[u8]) {
 #[inline(always)]
 pub(crate) fn debug_put_line_unlocked(line: &[u8]) {
     debug_put_bytes_unlocked(line);
-    // SAFETY: seL4 exposes DebugPutChar as a side-effect-only diagnostic
-    // syscall and accepts any byte value.
-    unsafe {
-        seL4_DebugPutChar(b'\r');
-        seL4_DebugPutChar(b'\n');
-    }
+    debug_put_bytes_unlocked(b"\r\n");
 }
 
 /// Emits a byte slice to the seL4 debug console using the raw debug syscall.
@@ -1281,48 +1298,6 @@ pub fn debug_put_bytes_raw(bytes: &[u8]) {
 pub fn debug_put_line_raw(line: &[u8]) {
     serial::with_uart_tx_lock(|| debug_put_line_unlocked(line));
 }
-
-#[cfg(all(feature = "kernel", not(sel4_config_printing)))]
-/// Installs the kernel-backed debug sink so that panic messages surface on the seL4 console.
-#[inline(always)]
-pub fn install_debug_sink() {
-    unsafe extern "C" fn emit(_ctx: *mut (), byte: u8) {
-        unsafe {
-            seL4_DebugPutChar(byte);
-        }
-    }
-
-    let sink = DebugSink {
-        context: core::ptr::null_mut(),
-        emit,
-    };
-    let emit_addr = sink.emit as usize;
-    let mut line = heapless::String::<96>::new();
-    let _ = write!(
-        line,
-        "[sel4::install_debug_sink] emit=0x{emit:016x}",
-        emit = emit_addr,
-    );
-    serial::puts(line.as_str());
-    if emit_addr & 0b11 != 0 {
-        panic!(
-            "debug sink emit pointer not 4-byte aligned: 0x{emit:016x}",
-            emit = emit_addr,
-        );
-    }
-    if emit_addr <= 0x1000 {
-        panic!(
-            "debug sink emit pointer unexpectedly low: 0x{emit:016x}",
-            emit = emit_addr,
-        );
-    }
-    sel4_panicking::install_debug_sink(sink);
-}
-
-#[cfg(any(not(feature = "kernel"), all(feature = "kernel", sel4_config_printing)))]
-/// No-op placeholder used when the kernel does not expose a debug sink attachment point.
-#[inline(always)]
-pub fn install_debug_sink() {}
 
 #[cfg(not(feature = "kernel"))]
 #[inline(always)]
@@ -1473,6 +1448,16 @@ pub fn debug_cap_identify(slot: seL4_CPtr) -> seL4_Word {
 #[inline(always)]
 pub fn debug_cap_identify(_slot: seL4_CPtr) -> seL4_Word {
     0
+}
+
+/// Reports whether the selected kernel exposes capability identification.
+///
+/// A successful production invocation, such as `Untyped_Retype`, remains the
+/// authority for the capability it creates. `DebugCapIdentify` is optional
+/// diagnostic evidence and must never become a production boot dependency.
+#[inline(always)]
+pub const fn debug_cap_identify_available() -> bool {
+    cfg!(all(feature = "kernel", sel4_config_debug_build))
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -5222,9 +5207,17 @@ impl<'a> KernelEnv<'a> {
         buffer_vaddr: usize,
     ) -> Option<CapTag> {
         #[cfg(target_os = "none")]
-        let cap_tag_raw = unsafe { sel4_sys::seL4_DebugCapIdentify(buffer_frame) };
+        let cap_tag_raw = debug_cap_identify(buffer_frame);
         #[cfg(not(target_os = "none"))]
         let cap_tag_raw = CapTag::Frame as seL4_Word;
+
+        #[cfg(target_os = "none")]
+        if !debug_cap_identify_available() {
+            ::log::info!(
+                "[ipcbuf] capid unavailable frame=0x{buffer_frame:04x} vaddr=0x{buffer_vaddr:08x}"
+            );
+            return None;
+        }
 
         let cap_tag = CapTag::from_raw(cap_tag_raw as seL4_Word);
 

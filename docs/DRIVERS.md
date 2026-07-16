@@ -284,7 +284,7 @@ image has passed the device's acceptance gate.
 | HDMI text | Isolated runtime renders bounded text into the HAL-admitted framebuffer; root submits text/service records. | Runtime implemented. Current-image framebuffer, visible output, and bounded refresh proof are separate from serial readiness. |
 | GENET | Isolated runtime owns MAC/MDIO and bounded RX/TX descriptor rings. Root consumes a network-driver trait. | Accepted Milestone 26c wired evidence exists for its recorded image. Milestone 26d current-image and benchmark revalidation is a separate requirement. |
 | PCIe root | Isolated runtime services declared PCIe MMIO operations; HAL owns platform admission and firmware/reset authority. | Runtime implemented. PCIe/VL805 identity, BAR/COMMAND, link, and downstream USB proof must be tied to the current boot. |
-| SDIO host | Isolated runtime exclusively owns SDHCI MMIO, CMD52/CMD53, card interrupt handling, and bus-owner service. | Runtime, generated IRQ/DPC topology, Linux-aligned elapsed timing, deterministic controller model, and exhaustive restart fault cuts are implemented. Repeated physical functional proof remains an acceptance gate. |
+| SDIO host | Isolated runtime exclusively owns SDHCI MMIO, CMD52/CMD53, card interrupt handling, and bus-owner service. | Runtime, generated IRQ/DPC topology, Linux-aligned elapsed timing, deterministic controller model, whole-action restart cuts, modeled CARD_INT/notification substeps, and persistent outer-fence failures are implemented. Repeated physical functional proof remains an acceptance gate. |
 | CYW43 Wi-Fi | Isolated runtime owns firmware upload, SDPCM/BDC control, EAPOL/data service, and bounded RX state through the generated CYW43-to-SDIO link. It receives no direct SDHCI MMIO authority. Root supervises transient bootstrap after publishing serial/local-seat and performs a full pair/context replay on retry. | Implementation remains active research/closure work. Production acceptance requires 10/10 cold plus 10/10 warm boots of one read-back image with association, DHCP, raw TCP/`cohsh`, ordered RX, and clean DPC counters; historical or offline success is not current closure. |
 
 ### QEMU network drivers
@@ -339,9 +339,15 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   replies, or RX drain work.
 - Function 1 enable uses the SDIO CIS timeout when that field is eventually
   carried by the ABI; the current fixed profile uses Linux's one-second
-  fallback. ALP availability uses a 15 ms elapsed deadline, validates the
-  immediate `CHIPCLKCSR` readback except asynchronous availability bits, and
-  preserves the 65 microsecond `FORCE_ALP` settle before backplane access.
+  fallback. ALP availability also uses a one-second elapsed deadline. After
+  `FORCE_ALP`, the runtime preserves the 65 microsecond settle, writes
+  `SBSDIO_FUNC1_SDIOPULLUP=0`, and validates `CHIPCLKCSR` while excluding only
+  asynchronous availability bits from the immediate readback comparison.
+- Function 2 enable is one `IOEx` write followed by elapsed `IORx` polling for
+  up to three seconds. A transient miss does not clear/re-enable F2 or start a
+  raw-spin retry. Post-release write readiness likewise does not re-prime F2
+  within the same generation; an ambiguous issued transfer poisons that
+  generation, and pair recovery owns the only retained replay.
 - SDIO captures/clears the source and wakes CYW43; CYW43 drains bounded control,
   event, and data work and resignal/yields on budget exhaustion.
 - Each retained foreground phase snapshots the committed DPC producer. Events
@@ -360,15 +366,66 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   before CYW43, and replays retained firmware and control context. Immutable
   credential, firmware-bundle, and descriptor-bound failures are terminal and
   remain visible to the local operator.
+- The same no-allocation bootstrap supervisor remains alive after the network
+  stack is attached. It owns monotonic turn IDs, immutable
+  descriptor/payload fingerprints, the current linked-pair generation,
+  pending-action and recovery cursors, and generation poisoning. A sticky
+  association, EAPOL, data, or pair-context fault fences ordinary NetStack
+  work and re-enters that retained supervisor; a stale completion cannot
+  mutate the replacement generation, and an issued-but-unknown action is
+  poisoned rather than replayed.
+- Steady association, EAPOL, maintenance, data, and pair-signal paths may only
+  publish the first immutable deferred-recovery record for the current
+  generation. That record separately binds the current recovery generation and
+  the generation that owned the immutable action, plus the cause, descriptor,
+  payload digest, ticket, completion detail and sequence, and outer turn ID.
+  Publication performs only lock-free admission fencing; it cannot clear
+  mutex-owned sessions or poison the generation. After the originating
+  EventPump turn releases every service guard, the retained supervisor adopts
+  any quiescent association/carrier epoch, consumes the current-generation
+  record, rejects stale ownership, and is the sole recovery authority that
+  poisons the generation exactly once before the ordered pair restart. The
+  first current-generation record wins; a retained stale record cannot mask a
+  later current fault. If association policy advances the logical epoch while
+  an op11 join cursor is still unresolved, the recovery record uses the new
+  epoch as its recovery generation while retaining the join cursor's original
+  owner generation, descriptor, payload digest, and ticket. This separation
+  prevents recovery from relocking a steady-path session, orphaning a
+  possibly-issued join, or creating extra epoch transitions from duplicate
+  faults.
+- One central CYW43 operation permit is opened for each ordinary EventPump
+  turn. At most one reciprocal CYW43/SDIO runtime or HAL operation may claim
+  it. Descriptor replay, firmware/NVRAM streaming, core release, control and
+  any-frame polling, the ordered 22-action pair restart, generation and
+  association recovery, host-EAPOL maintenance, data TX, and ARP/GARP output
+  retain their next action for a later turn. EventPump and NetStack do not
+  manufacture private Wi-Fi poll, tail-ingest, TCP-flush, or EAPOL bursts. In
+  particular, the post-up 256-frame drain requires 256 separately admitted
+  outer turns.
+- Between retained operations, live serial service is admitted only through
+  the independent linked-runtime route. It never falls back to the current
+  TCB or a path that reacquires the Wi-Fi HAL. Local-seat service consumes only
+  already-buffered bytes while Wi-Fi recovery owns the HAL; USB polling, HDMI
+  echo/redraw, and network service remain fenced. Reboot ACK dispatch wins
+  before another bootstrap/recovery operation.
 - Association alone is not acceptance. Require DHCP, raw TCP/`cohsh`, clean
   counters, and repeated current-image boots with paired network evidence.
 
-Hardware-free validation executes the production descriptor-to-SDHCI transfer
-path against a deterministic controller model, injects failure at every
-production pair-restart action, and exercises adversarial DPC schedules. These
-tests prove control-flow, ownership, timeout, and fail-closed invariants; they
-do not prove Pi electrical timing, firmware behavior, RF association, DHCP, or
-repeatability. Those remain target evidence.
+Hardware-free validation executes the production reciprocal runtime-ring and
+descriptor-to-SDHCI transfer path against a deterministic controller model,
+injects failure at every production pair-restart action plus the modeled
+CARD_INT/notification substeps and persistent outer fences, and exercises
+adversarial DPC schedules. Tests assert the central permit never records more
+than one child operation in an outer turn, that 256 retained polls consume 256
+turns, that every failure cut resumes or fails deterministically, and that
+reciprocal-ring association/EAPOL/maintenance faults return before supervisor
+recovery. Duplicate or stale deferred records cannot replay work or advance a
+replacement generation. Operator service runs only after the preceding scoped
+HAL borrow and service guards are released. These tests prove control-flow,
+ownership, timeout,
+operator-liveness, and fail-closed invariants; they do not prove Pi electrical
+timing, firmware behavior, RF association, DHCP, or repeatability. Those remain
+target evidence.
 
 ## Evidence ladder
 
@@ -449,7 +506,7 @@ feature that matches the implementation under review:
 
 | Lane | Contract and commands |
 | --- | --- |
-| QEMU release | `release-qemu` covers the QEMU `aarch64/virt` profile, including its virtual/network compatibility drivers. Build with `SEL4_BUILD_DIR="$PWD/seL4/SMP_build" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu`. |
+| QEMU release | `release-qemu` covers the canonical QEMU `aarch64/virt` GICv3 profile, including its virtual/network compatibility drivers. Build with `SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu` after the profile validator passes. |
 | Pi 4 release | `release-pi4` covers the Pi 4 serial, local-seat, GENET, CYW43/SDIO, PCIe/VL805, MMIO, and cache-maintained DMA closure. Build with `SEL4_BUILD_DIR="$PWD/seL4/build_UBOOT" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`. |
 | Shared isolated runtime | `cargo test -p pi4-driver-runtime --lib -- --test-threads=1` validates the pointer-free runtime implementation independently of physical acceptance. |
 | QEMU focused tests | Use `--features driver-tests-qemu` with the staged filters `drivers::rtl8139`, `drivers::virtio`, `hal::pci`, `hal::virtio_mmio`, and `hal::uart`. |

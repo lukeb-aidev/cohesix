@@ -270,14 +270,6 @@ const NET_DIAG_RATE_KINDS: usize = 1;
 #[cfg(feature = "net-console")]
 const NET_DIAG_STUCK_MS: u64 = 3_000;
 #[cfg(feature = "net-console")]
-const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
-#[cfg(feature = "net-console")]
-const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
-#[cfg(feature = "net-console")]
-// Wi-Fi can bind DHCP before ARP/TCP admission is ready; keep this bounded
-// pre-root window wide enough for CYW43 RX/TX drain without delaying Genet.
-const PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS: usize = 32;
-#[cfg(feature = "net-console")]
 const M26D_NET_PROOF_OVERRIDES_PHYSICAL_INPUT: bool = true;
 #[cfg(feature = "net-console")]
 // Network-origin NineDoor commands may enqueue multiple TCP response segments;
@@ -289,15 +281,7 @@ const NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 16;
 #[cfg(feature = "net-console")]
 const NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS: usize = 3;
 #[cfg(feature = "net-console")]
-const NET_CYW43_HOT_DISPATCH_ROUNDS: usize = 10;
-#[cfg(feature = "net-console")]
-const NET_CYW43_POST_DISPATCH_FLUSH_POLLS: usize = 12;
-#[cfg(feature = "net-console")]
-const NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 24;
-#[cfg(feature = "net-console")]
-const NET_CYW43_POST_FLUSH_INGEST_POLLS: usize = 8;
-#[cfg(feature = "net-console")]
-const NET_CYW43_IDLE_INGEST_POLLS: usize = 2;
+const NET_CYW43_HOT_DISPATCH_ROUNDS: usize = 1;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
@@ -478,19 +462,6 @@ fn net_status_needs_host_eapol_burst(status: &NetStatusReport) -> bool {
 #[cfg(feature = "net-console")]
 fn net_status_active_interface_is_wifi(status: &NetStatusReport) -> bool {
     status.active_interface == "wifi"
-}
-
-#[cfg(feature = "net-console")]
-fn net_status_needs_wifi_pre_root_dhcp_followup(status: &NetStatusReport) -> bool {
-    net_status_active_interface_is_wifi(status)
-        && net_status_terminal_failure_reason(status).is_none()
-        && (matches!(status.address_source, "dhcp-pending")
-            || matches!(
-                status.address_source,
-                "dhcp-lease" | "wifi-data-rx-admission-blocked"
-            )
-            || matches!(status.dhcp_phase, "selecting" | "requesting"))
-        && !net_status_allows_root_console(status)
 }
 
 #[cfg(feature = "net-console")]
@@ -720,79 +691,12 @@ const fn net_post_dispatch_flush_limit_for_display(
 fn net_post_dispatch_flush_limit_for_status(
     status: &NetStatusReport,
     display: Option<LocalSeatDisplayTrace>,
-) -> usize {
+) -> Option<usize> {
     if net_status_cyw43_data_ready(status) {
-        if net_post_dispatch_flush_limit_for_display(display)
-            == NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
-        {
-            NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS
-        } else {
-            NET_CYW43_POST_DISPATCH_FLUSH_POLLS
-        }
+        None
     } else {
-        net_post_dispatch_flush_limit_for_display(display)
+        Some(net_post_dispatch_flush_limit_for_display(display))
     }
-}
-
-#[cfg(feature = "net-console")]
-fn poll_cyw43_tail_ingest_bounded(
-    net: &mut dyn NetPoller,
-    audit: &mut dyn AuditSink,
-    metrics: &mut PumpMetrics,
-    now_ms: u64,
-    poll_limit: usize,
-) {
-    if !net_status_cyw43_data_ready(&net.status_report()) {
-        return;
-    }
-    let net_contract = net.driver_task_contract();
-    let mut tail_polls = 0u64;
-    let mut tail_hits = 0u64;
-    let mut tail_idle = 0u64;
-    let mut tail_budget_errors = 0u64;
-    for _ in 0..poll_limit {
-        let mut net_budget = match DriverServiceBudget::new(net_contract) {
-            Ok(budget) => budget,
-            Err(err) => {
-                let message = format_message(format_args!(
-                    "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                    net_contract.name,
-                    err.reason(),
-                    net_contract.max_service_us(),
-                ));
-                audit.denied(message.as_str());
-                tail_budget_errors = tail_budget_errors.saturating_add(1);
-                break;
-            }
-        };
-        match net.poll_with_budget(now_ms, &mut net_budget) {
-            Ok(true) => {
-                tail_polls = tail_polls.saturating_add(1);
-                tail_hits = tail_hits.saturating_add(1);
-            }
-            Ok(false) => {
-                tail_polls = tail_polls.saturating_add(1);
-                tail_idle = tail_idle.saturating_add(1);
-            }
-            Err(err) => {
-                let message = format_message(format_args!(
-                    "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                    net_contract.name,
-                    err.reason(),
-                    net_contract.max_service_us(),
-                ));
-                audit.denied(message.as_str());
-                tail_budget_errors = tail_budget_errors.saturating_add(1);
-                break;
-            }
-        }
-    }
-    metrics.net_cyw43_tail_polls = metrics.net_cyw43_tail_polls.saturating_add(tail_polls);
-    metrics.net_cyw43_tail_hits = metrics.net_cyw43_tail_hits.saturating_add(tail_hits);
-    metrics.net_cyw43_tail_idle = metrics.net_cyw43_tail_idle.saturating_add(tail_idle);
-    metrics.net_cyw43_tail_budget_errors = metrics
-        .net_cyw43_tail_budget_errors
-        .saturating_add(tail_budget_errors);
 }
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
@@ -2335,6 +2239,8 @@ where
 
     /// Execute a single cooperative polling cycle.
     pub fn poll(&mut self) {
+        #[cfg(feature = "kernel")]
+        crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
         let serial_rx_activity = self.serial.poll_io();
         let local_seat_input_waiting = self
             .local_seat
@@ -2426,63 +2332,66 @@ where
         );
     }
 
-    /// Service one bounded physical-operator turn while the post-prompt CYW43
-    /// bootstrap owns the kernel HAL.
+    /// Service one ordinary event-pump turn between retained CYW43 bootstrap
+    /// operations.
     ///
-    /// This deliberately omits timer, IPC, network, NineDoor, and driver
-    /// runtime service. Serial and local-seat ingress/egress remain live, while
-    /// Wi-Fi debug verbs fail closed so the debug handle cannot re-enter the
-    /// same `KernelHal` borrowed by the bootstrap program.
+    /// This turn admits only the independently owned serial linked runtime and
+    /// already-buffered local-seat bytes for physical I/O. Serial RX/TX uses
+    /// fail-closed helpers with no root-context or current-TCB UART fallback;
+    /// USB backend polling, HDMI pumping, network service, and hardware-facing
+    /// commands remain fenced. The normal timer/IPC/reboot runtime portion is
+    /// still serviced, and the caller invokes this method only after releasing
+    /// the prior turn's scoped `KernelHal` borrow.
     #[cfg(feature = "kernel")]
-    pub fn poll_cyw43_bootstrap_operator_turn(&mut self) {
+    pub fn poll_cyw43_bootstrap_supervisor_event_turn(&mut self) {
         debug_assert!(!self.cyw43_bootstrap_operator_turn_active);
         self.cyw43_bootstrap_operator_turn_active = true;
-        self.now_ms = crate::hal::timebase().now_ms();
-
         self.serial_console_turn_active = true;
-        self.serial.poll_io();
+        let serial_rx_activity = self.serial.poll_io_linked_runtime_only();
         let serial_input = self.consume_serial();
-        self.serial.flush_tx();
-
-        let local_input = self.consume_local_seat(LocalSeatConsumePhase::PreRuntime, true);
+        let local_input = self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime);
         if local_input {
-            self.serial.poll_io();
-            self.consume_local_seat(LocalSeatConsumePhase::PriorityFollowup, true);
-            self.pump_local_seat_display_after_local_input();
-        } else if !serial_input {
-            self.serial.poll_io();
-            self.consume_serial();
+            self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PriorityFollowup);
         }
-
-        self.serial.flush_tx();
-        self.flush_pending_console_output_if_idle();
-        self.retry_pending_usb_debug_hdmi_frontier();
-        self.pump_local_seat_display_if_idle();
+        self.poll_runtime(
+            false,
+            serial_rx_activity || serial_input || local_input || self.serial.tx_pending(),
+        );
+        let _ = self.serial.flush_tx_linked_runtime_only();
         self.serial_console_turn_active = false;
         self.cyw43_bootstrap_operator_turn_active = false;
+    }
+
+    /// Whether a deferred CYW43 bootstrap may begin after an ordinary pump.
+    ///
+    /// A scheduled reboot must retain the event loop until its ACK has flushed
+    /// and the reset backend has been invoked; bootstrap must never take the HAL
+    /// between those two steps.
+    #[cfg(feature = "kernel")]
+    #[must_use]
+    pub const fn cyw43_bootstrap_may_begin(&self) -> bool {
+        !self.reboot_pending
+    }
+
+    #[must_use]
+    const fn cyw43_bootstrap_operator_turn_is_active(&self) -> bool {
+        #[cfg(feature = "kernel")]
+        {
+            self.cyw43_bootstrap_operator_turn_active
+        }
+        #[cfg(not(feature = "kernel"))]
+        {
+            false
+        }
     }
 
     #[cfg(feature = "net-console")]
     /// Execute the pre-root network/timer portion of the pump without accepting
     /// console input.
     pub fn poll_pre_root_network(&mut self) {
+        #[cfg(feature = "kernel")]
+        crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
         self.poll_runtime(true, false);
-    }
-
-    #[cfg(feature = "net-console")]
-    pub fn poll_pre_root_wifi_dhcp_followup(&mut self) -> u32 {
-        let mut polls = 0u32;
-        for _ in 0..PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS {
-            if !self.net_console_needs_wifi_pre_root_dhcp_followup() {
-                break;
-            }
-            self.poll_pre_root_network();
-            polls = polls.saturating_add(1);
-            if self.net_console_ready_for_root() {
-                break;
-            }
-        }
-        polls
     }
 
     #[cfg(feature = "net-console")]
@@ -2523,9 +2432,14 @@ where
         #[cfg(feature = "net-console")]
         let local_seat_usb_input_pending = self.linked_local_seat_usb_input_pending();
         #[cfg(feature = "net-console")]
-        let net_poll = if let Some(net) = self.net.as_mut() {
+        let net_poll = if self.cyw43_bootstrap_operator_turn_is_active() {
+            // Bootstrap and linked-pair recovery retain sole CYW43 ownership.
+            // The independently owned serial route, buffered local-seat bytes,
+            // timer/IPC service, and reboot dispatch continue below, but an
+            // already-attached NetStack must not re-enter the same HAL.
+            None
+        } else if let Some(net) = self.net.as_mut() {
             let status_before = net.status_report();
-            let host_eapol_pending_before = net_status_needs_host_eapol_burst(&status_before);
             let net_contract = net.driver_task_contract();
             let network_data_yields_to_input = net_contract
                 .validate()
@@ -2561,56 +2475,9 @@ where
                     }
                 }
             }
-            let host_eapol_pending = if yield_for_physical_input {
-                host_eapol_pending_before
-            } else {
-                net_status_needs_host_eapol_burst(&net.status_report())
-            };
-            let burst_limit = if host_eapol_pending && !yield_for_physical_input {
-                if suppress_console_input {
-                    WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS
-                } else {
-                    WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS
-                }
-            } else {
-                0
-            };
-            for _ in 0..burst_limit {
-                if !net_status_needs_host_eapol_burst(&net.status_report()) {
-                    break;
-                }
-                let mut burst_budget = match DriverServiceBudget::new(net_contract) {
-                    Ok(budget) => budget,
-                    Err(err) => {
-                        let message = format_message(format_args!(
-                            "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                            net_contract.name,
-                            err.reason(),
-                            net_contract.max_service_us(),
-                        ));
-                        self.audit.denied(message.as_str());
-                        break;
-                    }
-                };
-                match net.poll_with_budget(self.now_ms, &mut burst_budget) {
-                    Ok(polled) => activity |= polled,
-                    Err(err) => {
-                        let message = format_message(format_args!(
-                            "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                            net_contract.name,
-                            err.reason(),
-                            net_contract.max_service_us(),
-                        ));
-                        self.audit.denied(message.as_str());
-                        break;
-                    }
-                }
-            }
             let telemetry = net.telemetry();
             let conn_id = net.active_console_conn_id();
             let status_after = net.status_report();
-            let cyw43_idle_tail_due =
-                !yield_for_physical_input && net_status_cyw43_data_ready(&status_after);
             let hot_dispatch_rounds = net_hot_dispatch_rounds_for_status(&status_after);
             let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_DISPATCH_BURST }> =
                 HeaplessVec::new();
@@ -2631,7 +2498,6 @@ where
                 conn_id,
                 ingest_snapshot,
                 hot_dispatch_rounds,
-                cyw43_idle_tail_due,
             ))
         } else {
             None
@@ -2645,7 +2511,6 @@ where
             conn_id,
             _ingest_snapshot,
             hot_dispatch_rounds,
-            cyw43_idle_tail_due,
         )) = net_poll
         {
             self.net_conn_id = conn_id;
@@ -2659,18 +2524,6 @@ where
                 self.audit.info(message.as_str());
             }
             let mut ingest_snapshot = _ingest_snapshot;
-            if cyw43_idle_tail_due && buffered.is_empty() && !suppress_console_input {
-                if let Some(net) = self.net.as_mut() {
-                    poll_cyw43_tail_ingest_bounded(
-                        *net,
-                        self.audit,
-                        &mut self.metrics,
-                        self.now_ms,
-                        NET_CYW43_IDLE_INGEST_POLLS,
-                    );
-                    ingest_snapshot = net.ingest_snapshot();
-                }
-            }
             for line in buffered {
                 if !suppress_console_input {
                     self.handle_network_line(line.text);
@@ -2731,8 +2584,11 @@ where
         let Some(net) = self.net.as_mut() else {
             return None;
         };
-        let flush_limit =
-            net_post_dispatch_flush_limit_for_status(&net.status_report(), display_trace);
+        let Some(flush_limit) =
+            net_post_dispatch_flush_limit_for_status(&net.status_report(), display_trace)
+        else {
+            return Some(net.ingest_snapshot());
+        };
         let net_contract = net.driver_task_contract();
         let mut flush_polls = 0u64;
         let mut flush_exhausted = false;
@@ -2783,18 +2639,6 @@ where
                 .net_post_dispatch_flush_exhaustions
                 .saturating_add(1);
         }
-        // DHCP proves the broadcast/control path, not unicast delivery. Keep a
-        // bounded CYW43 RX-first maintenance window after the lease as well as
-        // after TCP flush activity so SYN/ARP/ICMP frames are not stranded
-        // until an already-active TCP session makes progress.
-        poll_cyw43_tail_ingest_bounded(
-            *net,
-            self.audit,
-            &mut self.metrics,
-            self.now_ms,
-            NET_CYW43_POST_FLUSH_INGEST_POLLS,
-        );
-
         Some(net.ingest_snapshot())
     }
 
@@ -3217,14 +3061,6 @@ where
         self.net
             .as_ref()
             .and_then(|net| net_status_pre_root_serial_release_reason(&net.status_report()))
-    }
-
-    #[cfg(feature = "net-console")]
-    pub fn net_console_needs_wifi_pre_root_dhcp_followup(&self) -> bool {
-        match self.net.as_ref() {
-            Some(net) => net_status_needs_wifi_pre_root_dhcp_followup(&net.status_report()),
-            None => false,
-        }
     }
 
     /// Returns whether the NineDoor bridge is enabled.
@@ -4042,6 +3878,11 @@ where
     }
 
     fn emit_serial_line(&mut self, line: &str) {
+        #[cfg(feature = "kernel")]
+        if self.cyw43_bootstrap_operator_turn_active {
+            let _ = self.serial.try_enqueue_line_record(line);
+            return;
+        }
         if self.should_defer_physical_console_output()
             && self.queue_physical_console_output(PendingConsoleOutputKind::Line, line)
         {
@@ -4073,6 +3914,13 @@ where
     }
 
     fn emit_prompt(&mut self) {
+        #[cfg(feature = "kernel")]
+        if self.cyw43_bootstrap_operator_turn_active {
+            let _ = self
+                .serial
+                .try_enqueue_tx_record(&[CONSOLE_PROMPT.as_bytes()]);
+            return;
+        }
         if self.should_defer_physical_console_output()
             && self.queue_physical_console_output(PendingConsoleOutputKind::Prompt, CONSOLE_PROMPT)
         {
@@ -5339,6 +5187,15 @@ where
         };
         if !head.eq_ignore_ascii_case("usb") {
             return false;
+        }
+        if self.cyw43_bootstrap_operator_turn_active {
+            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+            self.emit_refusal(
+                USB_DEBUG_ACK_LABEL,
+                RefusalReason::Busy,
+                Some("detail=cyw43-bootstrap-in-progress"),
+            );
+            return true;
         }
         if !self.usb_debug_commands_enabled() {
             return false;
@@ -13107,18 +12964,30 @@ where
         };
         let mut lines = 0usize;
         while lines < line_budget {
-            let Some(line) = self.serial.next_line() else {
+            #[cfg(feature = "kernel")]
+            let line = if self.cyw43_bootstrap_operator_turn_is_active() {
+                self.serial.next_line_buffered_quiet()
+            } else {
+                self.serial.next_line()
+            };
+            #[cfg(not(feature = "kernel"))]
+            let line = self.serial.next_line();
+            let Some(line) = line else {
                 break;
             };
             consumed = true;
             lines = lines.saturating_add(1);
             self.last_input_source = ConsoleInputSource::Serial;
             #[cfg(feature = "kernel")]
-            crate::serial::emit_serial_input_consume_trace(line.len());
+            if !self.cyw43_bootstrap_operator_turn_is_active() {
+                crate::serial::emit_serial_input_consume_trace(line.len());
+            }
             if !self.local_line.is_empty() {
                 self.local_line.clear();
-                self.audit
-                    .info("console: cleared local-seat input before serial");
+                if !self.cyw43_bootstrap_operator_turn_is_active() {
+                    self.audit
+                        .info("console: cleared local-seat input before serial");
+                }
             }
             self.process_console_line(&line);
         }
@@ -13166,6 +13035,21 @@ where
     }
 
     fn consume_local_seat(&mut self, phase: LocalSeatConsumePhase, skip_runtime: bool) -> bool {
+        self.consume_local_seat_with_policy(phase, skip_runtime, true, true)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn consume_local_seat_buffered_only(&mut self, phase: LocalSeatConsumePhase) -> bool {
+        self.consume_local_seat_with_policy(phase, true, false, false)
+    }
+
+    fn consume_local_seat_with_policy(
+        &mut self,
+        phase: LocalSeatConsumePhase,
+        skip_runtime: bool,
+        poll_backend: bool,
+        echo_input: bool,
+    ) -> bool {
         let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
         let mut empty_polls = 0usize;
         let mut consumed = false;
@@ -13177,7 +13061,9 @@ where
             || (burst_allowed && passes < LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN)
         {
             passes = passes.saturating_add(1);
-            self.poll_local_seat_backend_for_ingress();
+            if poll_backend {
+                self.poll_local_seat_backend_for_ingress();
+            }
             if self
                 .local_seat
                 .as_ref()
@@ -13203,7 +13089,7 @@ where
             consumed = true;
             self.last_input_source = ConsoleInputSource::LocalSeat;
             #[cfg(feature = "kernel")]
-            if !self.local_seat_first_command_input_logged {
+            if poll_backend && !self.local_seat_first_command_input_logged {
                 if let Some(runtime) = self.local_seat.as_ref() {
                     if runtime.usb_keyboard_command_ready_latched() {
                         let trace = runtime.keyboard_trace();
@@ -13228,8 +13114,10 @@ where
                     }
                 }
             }
-            if let Some(runtime) = self.local_seat.as_mut() {
-                runtime.echo_input_bytes(&chunk[..read]);
+            if echo_input {
+                if let Some(runtime) = self.local_seat.as_mut() {
+                    runtime.echo_input_bytes(&chunk[..read]);
+                }
             }
             if read == KEYBOARD_POLL_CHUNK_BYTES
                 || self
@@ -13239,7 +13127,15 @@ where
             {
                 burst_allowed = true;
             }
-            if self.serial.clear_partial_line() {
+            #[cfg(feature = "kernel")]
+            let cleared_serial_line = if self.cyw43_bootstrap_operator_turn_is_active() {
+                self.serial.clear_partial_line_buffered_quiet()
+            } else {
+                self.serial.clear_partial_line()
+            };
+            #[cfg(not(feature = "kernel"))]
+            let cleared_serial_line = self.serial.clear_partial_line();
+            if cleared_serial_line && !self.cyw43_bootstrap_operator_turn_is_active() {
                 self.audit
                     .info("console: cleared serial input before local-seat");
             }
@@ -13331,6 +13227,15 @@ where
             self.console_input_turn_output_budget = prior_output_budget;
             return;
         }
+        #[cfg(feature = "kernel")]
+        if self.maybe_refuse_cyw43_bootstrap_command(line.as_str()) {
+            if self.last_input_source.is_physical_console() {
+                self.emit_prompt();
+            }
+            self.console_input_turn_active = prior_input_turn_active;
+            self.console_input_turn_output_budget = prior_output_budget;
+            return;
+        }
         let mut prompt_after_line = true;
         if let Err(err) = self.feed_parser(line) {
             prompt_after_line = self.handle_console_error(err);
@@ -13343,6 +13248,28 @@ where
         }
         self.console_input_turn_active = prior_input_turn_active;
         self.console_input_turn_output_budget = prior_output_budget;
+    }
+
+    #[cfg(feature = "kernel")]
+    fn maybe_refuse_cyw43_bootstrap_command(&mut self, line: &str) -> bool {
+        if !self.cyw43_bootstrap_operator_turn_active {
+            return false;
+        }
+        let command = line.split_ascii_whitespace().next();
+        if command.is_some_and(|head| head.eq_ignore_ascii_case("reboot")) {
+            // Reboot is the sole hardware-facing exception: this operator turn
+            // starts only after the prior retained HAL action released its
+            // guards, and a scheduled reset fences every later bootstrap turn
+            // until its ACK is flushed and the backend runs.
+            return false;
+        }
+        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+        self.emit_refusal(
+            "CONSOLE",
+            RefusalReason::Busy,
+            Some("detail=cyw43-bootstrap-in-progress"),
+        );
+        true
     }
 
     fn feed_parser(&mut self, line: &HeaplessString<LINE>) -> Result<(), ConsoleError> {
@@ -13821,25 +13748,7 @@ where
             }
             Command::Reboot => {
                 if self.ensure_reboot_authorized(verb_label) {
-                    #[cfg(feature = "kernel")]
-                    let bootstrap_blocks_reboot = self.cyw43_bootstrap_operator_turn_active;
-                    #[cfg(not(feature = "kernel"))]
-                    let bootstrap_blocks_reboot = false;
-
-                    if bootstrap_blocks_reboot {
-                        // Reset cannot run while the synchronous bootstrap owns
-                        // its scoped KernelHal borrow. Refuse instead of ACKing
-                        // a request that cannot fire until bootstrap returns.
-                        self.metrics.denied_commands += 1;
-                        self.audit
-                            .denied("reboot denied: cyw43 bootstrap in progress");
-                        cmd_status = "err";
-                        self.emit_refusal(
-                            verb_label,
-                            RefusalReason::Busy,
-                            Some("detail=cyw43-bootstrap-in-progress"),
-                        );
-                    } else if crate::reboot::backend_available() {
+                    if crate::reboot::backend_available() {
                         self.audit.info("console: reboot scheduled");
                         self.metrics.accepted_commands += 1;
                         self.reboot_pending = true;
@@ -19271,12 +19180,12 @@ mod tests {
         );
         assert_eq!(net.lines.len(), 2);
         assert_eq!(NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS, 3);
-        assert_eq!(NET_CYW43_HOT_DISPATCH_ROUNDS, 10);
+        assert_eq!(NET_CYW43_HOT_DISPATCH_ROUNDS, 1);
     }
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn cyw43_post_flush_ingest_pulls_next_request_into_hot_dispatch_turn() {
+    fn cyw43_post_dispatch_work_is_retained_for_a_later_outer_turn() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19302,32 +19211,26 @@ mod tests {
         let metrics = pump.metrics;
         drop(pump);
 
-        assert_eq!(metrics.accepted_commands, 2);
-        assert_eq!(
-            metrics.net_cyw43_tail_polls,
-            (NET_CYW43_POST_FLUSH_INGEST_POLLS * 2) as u64
-        );
-        assert_eq!(
-            metrics.net_cyw43_tail_hits,
-            (NET_CYW43_POST_FLUSH_INGEST_POLLS * 2) as u64
-        );
+        assert_eq!(metrics.accepted_commands, 1);
+        assert_eq!(metrics.net_cyw43_tail_polls, 0);
+        assert_eq!(metrics.net_cyw43_tail_hits, 0);
         assert_eq!(metrics.net_cyw43_tail_idle, 0);
         assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
-        assert!(net.released_line_after_flush_poll);
+        assert!(!net.released_line_after_flush_poll);
         assert_eq!(net.lines.len(), 0);
-        assert!(net.polls > 1);
-        assert!(
+        assert_eq!(net.polls, 1);
+        assert_eq!(
             net.sent
                 .iter()
                 .filter(|line| line.as_str().starts_with("OK PING"))
-                .count()
-                >= 2
+                .count(),
+            1
         );
     }
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn cyw43_post_flush_ingest_keeps_bounded_tail_poll_after_idle() {
+    fn cyw43_post_dispatch_does_not_spin_through_idle_flush_polls() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19354,23 +19257,19 @@ mod tests {
         let metrics = pump.metrics;
         drop(pump);
 
-        assert_eq!(metrics.accepted_commands, 2);
-        assert_eq!(
-            metrics.net_cyw43_tail_polls,
-            (NET_CYW43_POST_FLUSH_INGEST_POLLS * 2) as u64
-        );
-        assert_eq!(metrics.net_cyw43_tail_hits, 14);
-        assert_eq!(metrics.net_cyw43_tail_idle, 2);
+        assert_eq!(metrics.accepted_commands, 1);
+        assert_eq!(metrics.net_cyw43_tail_polls, 0);
+        assert_eq!(metrics.net_cyw43_tail_hits, 0);
+        assert_eq!(metrics.net_cyw43_tail_idle, 0);
         assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
-        assert!(net.released_line_after_flush_poll);
+        assert!(!net.released_line_after_flush_poll);
         assert_eq!(net.lines.len(), 0);
-        assert!(net.polls >= 3);
-        assert_eq!(NET_CYW43_POST_FLUSH_INGEST_POLLS, 8);
+        assert_eq!(net.polls, 1);
     }
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn cyw43_data_ready_gets_tail_poll_even_when_tcp_flush_is_idle() {
+    fn cyw43_data_ready_skips_private_tail_when_tcp_flush_is_idle() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19394,22 +19293,17 @@ mod tests {
         let metrics = pump.metrics;
         drop(pump);
 
-        assert_eq!(net.tcp_flushes, 1);
-        assert_eq!(
-            metrics.net_cyw43_tail_polls,
-            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
-        );
-        assert_eq!(
-            metrics.net_cyw43_tail_hits,
-            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
-        );
+        assert_eq!(net.tcp_flushes, 0);
+        assert_eq!(metrics.net_cyw43_tail_polls, 0);
+        assert_eq!(metrics.net_cyw43_tail_hits, 0);
         assert_eq!(metrics.net_cyw43_tail_idle, 0);
         assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
+        assert_eq!(net.polls, 1);
     }
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn cyw43_data_ready_gets_idle_tail_poll_without_network_line() {
+    fn cyw43_data_ready_gets_one_outer_network_poll_without_private_tail() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19431,17 +19325,11 @@ mod tests {
         drop(pump);
 
         assert_eq!(metrics.accepted_commands, 0);
-        assert_eq!(
-            metrics.net_cyw43_tail_polls,
-            NET_CYW43_IDLE_INGEST_POLLS as u64
-        );
-        assert_eq!(
-            metrics.net_cyw43_tail_hits,
-            NET_CYW43_IDLE_INGEST_POLLS as u64
-        );
+        assert_eq!(metrics.net_cyw43_tail_polls, 0);
+        assert_eq!(metrics.net_cyw43_tail_hits, 0);
         assert_eq!(metrics.net_cyw43_tail_idle, 0);
         assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
-        assert_eq!(net.polls, NET_CYW43_IDLE_INGEST_POLLS + 1);
+        assert_eq!(net.polls, 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -19509,34 +19397,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn wifi_pre_root_dhcp_followup_is_limited_to_wifi_dhcp_progress() {
-        let mut wifi = NetStatusReport::default();
-        wifi.active_driver = "cyw43";
-        wifi.active_interface = "wifi";
-        wifi.address_source = "dhcp-pending";
-        wifi.dhcp_phase = "selecting";
-        assert!(net_status_needs_wifi_pre_root_dhcp_followup(&wifi));
-
-        let mut wired = wifi.clone();
-        wired.active_interface = "wired";
-        assert!(!net_status_needs_wifi_pre_root_dhcp_followup(&wired));
-
-        let mut bound = wifi.clone();
-        bound.address_source = "dhcp-lease";
-        bound.dhcp_phase = "bound";
-        assert!(net_status_needs_wifi_pre_root_dhcp_followup(&bound));
-        bound.tcp_ready = true;
-        assert!(!net_status_needs_wifi_pre_root_dhcp_followup(&bound));
-
-        let mut terminal = wifi.clone();
-        terminal.address_source = "wifi-association-failed";
-        terminal.dhcp_phase = "wifi-association-failed";
-        assert!(!net_status_needs_wifi_pre_root_dhcp_followup(&terminal));
-    }
-
-    #[cfg(feature = "net-console")]
-    #[test]
-    fn wifi_pre_root_followup_services_dhcp_bound_until_tcp_ready() {
+    fn wifi_pre_root_dhcp_progress_requires_separate_outer_wait_turns() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::repeated(4, 1);
@@ -19554,61 +19415,19 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
 
         assert!(!pump.net_console_ready_for_root());
-        let polls = pump.poll_pre_root_wifi_dhcp_followup();
+        pump.poll_pre_root_network();
+        assert!(!pump.net_console_ready_for_root());
+        pump.poll_pre_root_network();
+        assert!(!pump.net_console_ready_for_root());
+        pump.poll_pre_root_network();
         assert!(pump.net_console_ready_for_root());
         drop(pump);
-
-        assert_eq!(polls, 3);
         assert_eq!(net.polls, 3);
-        assert_eq!(PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS, 32);
     }
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn pre_root_wifi_dhcp_followup_polls_bounded_extra_turns() {
-        let driver = LoopbackSerial::<32>::new();
-        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
-        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
-        let ipc = NullIpc;
-        let store: TicketTable<4> = TicketTable::new();
-        let mut audit = AuditLog::new();
-        let mut net = FakeNet::new();
-        net.status.active_interface = "wifi";
-        net.status.address_source = "dhcp-pending";
-        net.status.dhcp_phase = "selecting";
-
-        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
-        assert_eq!(
-            pump.poll_pre_root_wifi_dhcp_followup(),
-            PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS as u32
-        );
-        drop(pump);
-        assert_eq!(net.polls, PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS);
-    }
-
-    #[cfg(feature = "net-console")]
-    #[test]
-    fn pre_root_wifi_dhcp_followup_skips_wired_paths() {
-        let driver = LoopbackSerial::<32>::new();
-        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
-        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
-        let ipc = NullIpc;
-        let store: TicketTable<4> = TicketTable::new();
-        let mut audit = AuditLog::new();
-        let mut net = FakeNet::new();
-        net.status.active_interface = "wired";
-        net.status.address_source = "dhcp-pending";
-        net.status.dhcp_phase = "selecting";
-
-        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
-        assert_eq!(pump.poll_pre_root_wifi_dhcp_followup(), 0);
-        drop(pump);
-        assert_eq!(net.polls, 0);
-    }
-
-    #[cfg(feature = "net-console")]
-    #[test]
-    fn host_eapol_pending_uses_small_runtime_burst_without_input_pressure() {
+    fn host_eapol_pending_uses_one_outer_turn_without_private_burst() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19623,13 +19442,12 @@ mod tests {
         pump.poll();
         drop(pump);
 
-        assert_eq!(WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS, 8);
-        assert_eq!(net.polls, WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS + 1);
+        assert_eq!(net.polls, 1);
     }
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn host_eapol_burst_polls_get_separate_service_turns() {
+    fn host_eapol_budget_exhaustion_does_not_start_a_private_burst() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19645,7 +19463,7 @@ mod tests {
         pump.poll();
         drop(pump);
 
-        assert_eq!(net.polls, WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS + 1);
+        assert_eq!(net.polls, 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -19762,15 +19580,12 @@ mod tests {
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&genet, None),
-            NET_POST_DISPATCH_FLUSH_POLLS
+            Some(NET_POST_DISPATCH_FLUSH_POLLS)
         );
-        assert_eq!(
-            net_post_dispatch_flush_limit_for_status(&wifi, None),
-            NET_CYW43_POST_DISPATCH_FLUSH_POLLS
-        );
+        assert_eq!(net_post_dispatch_flush_limit_for_status(&wifi, None), None);
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&stack_reported_wifi, None),
-            NET_CYW43_POST_DISPATCH_FLUSH_POLLS
+            None
         );
 
         let mut pending = LocalSeatDisplayTrace {
@@ -19783,15 +19598,15 @@ mod tests {
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&genet, Some(pending)),
-            NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+            Some(NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS)
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
-            NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+            None
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&stack_reported_wifi, Some(pending)),
-            NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+            None
         );
 
         pending = LocalSeatDisplayTrace {
@@ -19806,11 +19621,11 @@ mod tests {
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&genet, Some(pending)),
-            NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+            Some(NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS)
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
-            NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+            None
         );
 
         pending = LocalSeatDisplayTrace {
@@ -19825,11 +19640,11 @@ mod tests {
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&genet, Some(pending)),
-            NET_POST_DISPATCH_FLUSH_POLLS
+            Some(NET_POST_DISPATCH_FLUSH_POLLS)
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
-            NET_CYW43_POST_DISPATCH_FLUSH_POLLS
+            None
         );
     }
 
@@ -19912,7 +19727,7 @@ mod tests {
             "hel"
         );
         drop(pump);
-        assert_eq!(net.polls, WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS + 1);
+        assert_eq!(net.polls, 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -20095,7 +19910,7 @@ mod tests {
         let emitted = pump.serial_mut().driver_mut().drain_tx();
         drop(pump);
 
-        assert_eq!(net.polls, NET_CYW43_IDLE_INGEST_POLLS + 1);
+        assert_eq!(net.polls, 1);
         assert!(!emitted.is_empty());
     }
 
@@ -20198,7 +20013,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn pre_root_host_eapol_pending_uses_larger_burst() {
+    fn pre_root_host_eapol_pending_uses_one_outer_turn() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -20213,7 +20028,7 @@ mod tests {
         pump.poll_pre_root_network();
         drop(pump);
 
-        assert_eq!(net.polls, WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS + 1);
+        assert_eq!(net.polls, 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -20807,6 +20622,40 @@ mod tests {
             "{rendered}"
         );
         assert_eq!(crate::reboot::test_reboot_requests(), 0);
+        crate::reboot::reset_test_backend();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn accepted_reboot_blocks_cyw43_bootstrap_until_backend_dispatch() {
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let token = issue_token("ticket", Role::Queen);
+        let line = format!("attach queen {token}\nreboot\n");
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.serial_mut().driver_mut().push_rx(line.as_bytes());
+
+        pump.poll();
+
+        assert!(pump.reboot_pending, "accepted reboot must remain scheduled");
+        assert!(
+            !pump.cyw43_bootstrap_may_begin(),
+            "supervisor must not begin bootstrap between ACK and reset dispatch"
+        );
+        assert_eq!(crate::reboot::test_reboot_requests(), 0);
+
+        pump.poll();
+        assert!(!pump.reboot_pending);
+        assert!(pump.cyw43_bootstrap_may_begin());
+        assert_eq!(crate::reboot::test_reboot_requests(), 1);
         crate::reboot::reset_test_backend();
     }
 
@@ -23102,7 +22951,10 @@ mod tests {
     #[test]
     fn cyw43_bootstrap_operator_turn_refuses_wifi_debug_without_hal_callback() {
         let driver = LoopbackSerial::<32768>::new();
-        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        serial.driver_mut().push_rx(b"wifi retry\n");
+        serial.poll_io();
+        serial.driver_mut().reset_io_call_counts();
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -23114,8 +22966,17 @@ mod tests {
                 .with_wifi_debug(&mut wifi)
                 .with_test_pi4_debug_commands();
 
-            pump.serial_mut().driver_mut().push_rx(b"wifi retry\n");
-            pump.poll_cyw43_bootstrap_operator_turn();
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert_eq!(
+                pump.serial_mut().driver_mut().io_call_counts(),
+                (0, 0),
+                "bootstrap callback must not poll or flush the serial driver"
+            );
+            assert_eq!(
+                pump.timer.index, 1,
+                "bootstrap supervisor turn must retain the ordinary timer pump"
+            );
+            pump.serial_mut().flush_tx();
             pump.serial_mut()
                 .driver_mut()
                 .drain_tx()
@@ -23133,10 +22994,17 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_bootstrap_operator_turn_refuses_authenticated_reboot_without_deferral() {
-        let _guard = crate::reboot::test_lock();
-        crate::reboot::reset_test_backend();
-        crate::reboot::set_test_backend_available(true);
+    fn cyw43_bootstrap_progress_services_live_linked_serial_without_hal_reentry() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -23144,30 +23012,177 @@ mod tests {
         let mut store: TicketTable<4> = TicketTable::new();
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
-        let token = issue_token("ticket", Role::Queen);
-        let line = format!("attach queen {token}\nreboot\n");
-        let (transcript, reboot_pending) = {
-            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
-            pump.serial_mut().driver_mut().push_rx(line.as_bytes());
-            pump.poll_cyw43_bootstrap_operator_turn();
-            let transcript = pump
-                .serial_mut()
+        let mut wifi = FakeWifiDebug::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+
+        let (rendered, serial_io_counts, timer_polls) = {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat)
+                .with_wifi_debug(&mut wifi)
+                .with_test_pi4_debug_commands();
+            pump.serial_mut().driver_mut().reset_io_call_counts();
+            let mut callback_count = 0usize;
+            let mut visible_during_callback = false;
+            let mut progress = |_stage: &'static str| {
+                callback_count = callback_count.saturating_add(1);
+                assert_eq!(
+                    crate::serial::test_inject_linked_runtime_only_rx(b"wifi retry\n"),
+                    11
+                );
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                let transcript = crate::serial::test_take_linked_runtime_only_tx();
+                let text = core::str::from_utf8(transcript.as_slice())
+                    .expect("linked serial output must be utf8");
+                visible_during_callback =
+                    text.contains("ERR WIFI reason=busy detail=cyw43-bootstrap-in-progress");
+            };
+            crate::drivers::driver_task_net::Cyw43BootstrapProgress::service_operator(
+                &mut progress,
+                "cyw43-inner-recovery-step",
+            );
+            drop(progress);
+            assert_eq!(callback_count, 1);
+            assert!(
+                visible_during_callback,
+                "reply must flush before the inner progress callback returns"
+            );
+            (
+                visible_during_callback,
+                pump.serial_mut().driver_mut().io_call_counts(),
+                pump.timer.index,
+            )
+        };
+
+        assert!(rendered);
+        assert_eq!(
+            serial_io_counts,
+            (0, 0),
+            "linked-only service must not fall through to the generic serial driver"
+        );
+        assert_eq!(
+            timer_polls, 1,
+            "bootstrap supervisor turn must retain the ordinary timer pump"
+        );
+        assert!(wifi.calls.is_empty(), "Wi-Fi HAL callback must stay fenced");
+        assert_eq!(local_seat.keyboard_trace().backend_poll_calls, 0);
+        assert_eq!(local_seat.keyboard_trace().echoed_bytes, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_bootstrap_operator_turn_accepts_authenticated_reboot_and_fences_bootstrap() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.session = Some(SessionRole::Queen);
+        pump.session_ticket = Some("ticket".to_owned());
+        pump.serial_mut().driver_mut().reset_io_call_counts();
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(b"reboot\n"),
+            7
+        );
+
+        pump.poll_cyw43_bootstrap_supervisor_event_turn();
+        assert_eq!(
+            pump.serial_mut().driver_mut().io_call_counts(),
+            (0, 0),
+            "accepted reboot must not re-enter generic serial HAL"
+        );
+        let transcript = crate::serial::test_take_linked_runtime_only_tx();
+        let rendered =
+            core::str::from_utf8(transcript.as_slice()).expect("linked serial output must be utf8");
+        assert!(
+            rendered.contains("OK REBOOT detail=scheduled"),
+            "{rendered}"
+        );
+        assert!(
+            pump.reboot_pending,
+            "ACK must remain pending for its flush turn"
+        );
+        assert!(!pump.cyw43_bootstrap_may_begin());
+        assert_eq!(crate::reboot::test_reboot_requests(), 0);
+
+        pump.poll_cyw43_bootstrap_supervisor_event_turn();
+        assert!(!pump.reboot_pending);
+        assert_eq!(crate::reboot::test_reboot_requests(), 1);
+        crate::reboot::reset_test_backend();
+    }
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_bootstrap_operator_turn_drains_buffered_usb_input_without_backend_or_hal() {
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        assert_eq!(local_seat.enqueue_keyboard_bytes(b"usb status\n"), 11);
+
+        let transcript = {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat)
+                .with_test_pi4_debug_commands();
+            pump.serial_mut().driver_mut().reset_io_call_counts();
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert_eq!(
+                pump.serial_mut().driver_mut().io_call_counts(),
+                (0, 0),
+                "buffered local-seat dispatch must not poll or flush serial"
+            );
+            assert_eq!(
+                pump.timer.index, 1,
+                "bootstrap supervisor turn must retain the ordinary timer pump"
+            );
+            pump.serial_mut().flush_tx();
+            pump.serial_mut()
                 .driver_mut()
                 .drain_tx()
                 .into_iter()
-                .collect::<Vec<u8>>();
-            (transcript, pump.reboot_pending)
+                .collect::<Vec<u8>>()
         };
 
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
-        assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
         assert!(
-            rendered.contains("ERR REBOOT reason=busy detail=cyw43-bootstrap-in-progress"),
+            rendered.contains("ERR USB reason=busy detail=cyw43-bootstrap-in-progress"),
             "{rendered}"
         );
-        assert!(!reboot_pending, "busy reboot must not be deferred");
-        assert_eq!(crate::reboot::test_reboot_requests(), 0);
-        crate::reboot::reset_test_backend();
+        assert_eq!(local_seat.keyboard_trace().backend_poll_calls, 0);
+        assert_eq!(local_seat.keyboard_trace().echoed_bytes, 0);
+        assert_eq!(local_seat.keyboard_trace().queued_bytes, 0);
     }
 
     #[cfg(feature = "kernel")]

@@ -79,16 +79,19 @@ CYW43_SDIO_DPC_RE = re.compile(
     r"poisoned=(?P<poisoned>yes|no)"
     r"(?: masked=(?P<masked>yes|no))?$"
 )
-CYW43_BOOTSTRAP_SUPERVISOR_RE = re.compile(
+CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE = re.compile(
     r"^CYW43_BOOTSTRAP_SUPERVISOR "
     r"attempt=(?P<attempt>[0-9]+) "
     r"status=(?P<status>[a-z0-9-]+) "
     r"backoff_ms=(?P<backoff_ms>[0-9]+) "
     r"next_attempt_ms=(?P<next_attempt_ms>[0-9]+)"
-    r"(?: serial=ready local_seat=(?:ready|disabled) "
-    r"recovery=pair-restart-full-context-if-partial)?"
-    r"(?: console_seq=[0-9]+ telemetry_sinks=(?:serial|serial\+queen-log) "
-    r"prompt_refresh=(?:yes|no))?$"
+    r"(?P<production_suffix>.*)$"
+)
+CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE = re.compile(
+    r"^ serial=ready local_seat=(?:ready|disabled) "
+    r"recovery=pair-restart-full-context-if-partial "
+    r"console_seq=[0-9]+ telemetry_sinks=(?:serial|serial\+queen-log) "
+    r"prompt_refresh=(?:yes|no)$"
 )
 CYW43_BOOTSTRAP_RETRY_BACKOFF_MS = (1_000, 2_000, 4_000, 8_000, 16_000, 30_000)
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
@@ -11635,11 +11638,20 @@ def summarize_cyw43_bootstrap_supervisor(
         if state == "ready":
             mark_blocker("ready-not-terminal")
 
-        match = CYW43_BOOTSTRAP_SUPERVISOR_RE.fullmatch(event.raw)
+        match = CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE.fullmatch(event.raw)
         if match is None:
             last_status = event.fields.get("status", "malformed")
             mark_blocker("malformed-line")
             continue
+
+        if CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE.fullmatch(
+            match.group("production_suffix")
+        ) is None:
+            # Older records remain useful for attempt/backoff diagnosis, but
+            # only the current full-fidelity UART record proves that serial,
+            # local-seat, recovery, console ordering, telemetry routing, and
+            # prompt refresh state were emitted atomically.
+            mark_blocker("production-suffix-incomplete")
 
         attempt = int(match.group("attempt"))
         status = match.group("status")
@@ -13792,6 +13804,8 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         blockers.append("driver-task-ring-call-unresolved-timeout")
     if record.get("SERIAL_RESPONSIVE_PROOF") != "yes":
         blockers.append("serial-responsive-proof-missing")
+    if record.get("HDMI_RESPONSIVE_PROOF") != "yes":
+        blockers.append("hdmi-responsive-proof-missing")
     if record.get("USB_BOOTLOADER_HANDOFF_SEEN") == "yes":
         blockers.append("usb-bootloader-handoff")
     if record.get("USB_COLD_BOOT_SEEN") != "yes":
@@ -13846,17 +13860,40 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         blockers.append("network-tcp-proof-missing")
     if (parse_hex_int(str(record.get("USB_GATE", "0"))) or 0) < 10:
         blockers.append("local-seat-usb-gate-incomplete")
-    if record.get("USB_COMMAND_READY") == "yes" and record.get("USB_FIRST_REPORT_READY") != "yes":
+    if record.get("USB_BLOCKER") != "none":
+        blockers.append("local-seat-usb-blocked")
+    if record.get("USB_COMMAND_READY") != "yes":
+        blockers.append("local-seat-usb-command-ready-missing")
+    if record.get("USB_FIRST_REPORT_READY") != "yes":
         blockers.append("local-seat-usb-first-report-missing")
-    if (
-        record.get("USB_FIRST_BYTE_READY") != "yes"
-        and record.get("USB_COMMAND_READY") != "yes"
-    ):
+    if record.get("USB_FIRST_BYTE_READY") != "yes":
         blockers.append("local-seat-usb-first-byte-missing")
+    if record.get("USB_LOCAL_SEAT_STATE") != "ready":
+        if record.get("USB_LOCAL_SEAT_STATE") not in {"recovered", "degraded"}:
+            blockers.append("local-seat-usb-state-not-ready")
     if record.get("USB_LOCAL_SEAT_STATE") in {"recovered", "degraded"}:
         blockers.append(f"local-seat-usb-{record.get('USB_LOCAL_SEAT_STATE')}")
-    if record.get("USB_BUSY_AFTER_READY") == "yes":
-        blockers.append("local-seat-usb-busy-after-ready")
+    if record.get("USB_BUSY_AFTER_READY") != "no":
+        blockers.append(
+            "local-seat-usb-busy-after-ready"
+            if record.get("USB_BUSY_AFTER_READY") == "yes"
+            else "local-seat-usb-busy-proof-missing"
+        )
+    if record.get("USB_OLDGOOD_REPLAY") != "yes":
+        blockers.append("local-seat-usb-oldgood-replay-missing")
+    if record.get("USB_OLDGOOD_MISSING") != "none":
+        blockers.append("local-seat-usb-oldgood-incomplete")
+    if record.get("USB_BURST_PROOF") != "yes":
+        blockers.append("local-seat-usb-burst-proof-missing")
+    if record.get("USB_BURST_DROPS") not in {0, "0"}:
+        blockers.append("local-seat-usb-burst-drops")
+    post_first_byte_blocker = str(
+        record.get("USB_POST_FIRST_BYTE_BLOCKER", "missing")
+    )
+    if post_first_byte_blocker != "none":
+        blockers.append(
+            f"local-seat-usb-post-first-byte-{post_first_byte_blocker}"
+        )
     if record.get("USB_STARTUP_BLOCKER_SEEN") == "yes":
         blockers.append("local-seat-usb-startup-blocker")
     if record.get("USB_ACTIVE_BLOCKER_SEEN") == "yes":

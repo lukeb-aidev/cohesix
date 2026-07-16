@@ -99,7 +99,7 @@ READY_TIMEOUT="${READY_TIMEOUT:-180}"
 PORT_TIMEOUT="${PORT_TIMEOUT:-30}"
 QUIT_CLOSE_TIMEOUT="${QUIT_CLOSE_TIMEOUT:-30}"
 AUTH_READY_TIMEOUT="${AUTH_READY_TIMEOUT:-60}"
-SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-${PROJECT_ROOT}/seL4/SMP_build}}"
+SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-${PROJECT_ROOT}/out/sel4/profile-v2/qemu-smp-production}}"
 BATCH_TARGET="${COHSH_BATCH_TARGET:-qemu}"
 case "$BATCH_TARGET" in
     qemu)
@@ -521,7 +521,8 @@ run_batch() {
         --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
         --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
-    COH_RTC_MANIFEST="$manifest" SEL4_BUILD_DIR="$SEL4_BUILD_DIR" ./scripts/cohesix-build-run.sh \
+    COHESIX_SEL4_PROFILE="${COHESIX_SEL4_PROFILE:-qemu_smp_production}" \
+        COH_RTC_MANIFEST="$manifest" SEL4_BUILD_DIR="$SEL4_BUILD_DIR" ./scripts/cohesix-build-run.sh \
         --sel4-build "$SEL4_BUILD_DIR" \
         --out-dir "$out_dir" \
         --profile release \
@@ -799,7 +800,7 @@ fi
 
 if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
     echo "Missing seL4 build directory: $SEL4_BUILD_DIR" >&2
-    echo "Set SEL4_BUILD_DIR (or SEL4_BUILD) to your kernel build, e.g. ${PROJECT_ROOT}/seL4/SMP_build" >&2
+    echo "Build the canonical profile or set SEL4_BUILD_DIR (or SEL4_BUILD) explicitly; default: ${PROJECT_ROOT}/out/sel4/profile-v2/qemu-smp-production" >&2
     exit 1
 fi
 

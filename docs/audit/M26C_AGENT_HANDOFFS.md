@@ -4,7 +4,7 @@
 
 # M26C Agent Handoffs
 
-Status: `COMPLETE / QEMU-PASS / PI4-GENET-STAGE-01-05-PASS / DOC-SUITE-PASS`
+Status: `WORKER-EXECUTION-REOPENED / PI4-GENET-HISTORICAL-PASS / DOC-SUITE-CORRECTED`
 
 Milestone 26c requires multi-agent execution. This index records the lanes used
 for the current run and whether their evidence is sufficient to advance the
@@ -15,7 +15,7 @@ milestone gate.
 | Runner | `019f08b4-39cf-7d51-9caa-9ff12cb09bb8` | Phase 0 target-qualified staged runner | `scripts/ci/test_plan_run.sh`, `scripts/ci/check_test_plan.sh`, `docs/TEST_PLAN.md`, `docs/audit/M26C_AGENT_RUNNER_HANDOFF.md` | PASS-contract / Stage 01 smoke closed | `docs/audit/M26C_AGENT_RUNNER_HANDOFF.md`; `docs/audit/M26C_TARGET_RUNNER_BASELINE.md` |
 | Docs provenance | `019f08b4-5355-7a82-8ad4-8ee35e5ca0a6` | Phase 1 Markdown/Mermaid/provenance inspection | none by agent | FINDINGS-RECORDED / NONBLOCKING-DEFERRED | Findings incorporated into inventory, Mermaid audit, drift ledger, and blocker ledger |
 | Runtime/DMA | `019f08b4-8733-7b82-9403-acc7b40b95d0`; `019f0d04-3c17-70b1-b199-ca797fd9cf03` | Pi 4 runtime/DMA proof and DMA protection profile inspection | none by agents | PASS-PI4-GENET | Findings drove `PI4_RUNTIME_DMA_PROOF`, proof bundle, and Stage 05 Pi proof-artifact gates; final GENET proof is `out/test-plan/m26c-pi4-live/pi4-runtime-dma-proof-genet-latest.env`. |
-| Worker/cap/lifecycle/MCS | `019f08b4-6c0e-7c92-9fe0-4ae2051a2ce8`; `019f0d04-f56b-7440-b0e7-0316a944a221` | Worker architecture, endpoint caps, notifications, MCS evidence inspection and stale-doc closure | `M26C_RUNTIME_BOUNDARY_AUDIT.md`, `M26C_NINEDOOR_PARITY_MATRIX.md`, `M26C_REFACTOR_OWNERSHIP.md` | PASS-QEMU / STAGE05-PASS | QEMU stale failures were reclassified; future cap-bundle authority remains out of 26c. |
+| Worker/cap/lifecycle/MCS | `019f08b4-6c0e-7c92-9fe0-4ae2051a2ce8`; `019f0d04-f56b-7440-b0e7-0316a944a221` | Worker architecture, endpoint caps, notifications, MCS evidence inspection and stale-doc closure | `M26C_RUNTIME_BOUNDARY_AUDIT.md`, `M26C_NINEDOOR_PARITY_MATRIX.md`, `M26C_REFACTOR_OWNERSHIP.md` | MODEL-ONLY / LIVE-CLOSURE-REOPENED | Historical tests characterized helper loops and generated records; they did not prove a loaded Worker TCB, live cap, notification delivery, or applied scheduling. |
 | Compiler DMA profile | parent run | `m26c-dma-protection-profile-truth` | `tools/coh-rtc/src/ir.rs`, `tools/coh-rtc/src/codegen/{rust.rs,docs.rs}`, `configs/root_task*.toml`, generated artifacts, docs/audit ledgers | PASS-profile / proof-gap | `cargo test -p coh-rtc --lib dma`; `scripts/check-generated.sh` |
 | QEMU closure/fix pass | parent run + subagents | Fresh QEMU/Pi builds, QEMU Stage 01-05 closure, and QEMU defect repair | runtime, root-task, cohsh scripts/tests, test-plan scripts/docs, audit registers | PASS-QEMU / PASS-PI4 | `out/test-plan/m26c-qemu`; `out/audit/gate/20260628T015332Z`; `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`; final Pi closure `out/audit/gate/20260629T061204Z` |
 | Pi hardware evidence | `019f104a-ea29-7500-a4cd-1eac8674ff1f` | Fresh Pi 4 serial/pcap proof-lane ledger | none by agent | PASS-BOOT-NET / DRIVER-PROOF-GREEN | Selected `/Users/lukasbower/pi4-serial-20260629-072441.log`; compared active pcap candidates and kept `/Users/lukasbower/tcpdump-usb-eth-20260629-072436.pcap` as the boot-paired evidence despite an older long-running capture having a newer mtime |
@@ -47,6 +47,11 @@ chain in `out/test-plan/m26c-pi4-live`: final runtime/DMA proof, TCP `cohsh`,
 REST/gateway Stage 04, and Stage 05 due diligence all pass without substituting
 QEMU or stale board evidence. Broad cleanup beyond the characterized 26c waves
 is deferred outside the milestone.
+
+The 2026-07-16 seL4 15 audit supersedes only the former Worker-execution part of
+that decision. QEMU helper/model tests remain useful characterization evidence,
+but live Worker execution, endpoint-cap delivery, lifecycle notifications, and
+applied scheduling are reopened.
 
 ## Commands Observed In Parent Run
 

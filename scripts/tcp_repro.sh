@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
+# Purpose: Reproduce bounded authenticated TCP-console QEMU runs with captured evidence.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
@@ -11,7 +13,7 @@ OUT_DIR="${OUT_DIR:-out/cohesix}"
 TCP_PORT="${TCP_PORT:-31337}"
 PROFILE="${PROFILE:-release}"
 CARGO_TARGET="${CARGO_TARGET:-aarch64-unknown-none}"
-SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-$HOME/seL4/build}"
+SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-$REPO_ROOT/out/sel4/profile-v2/qemu-smp-production}"
 STARTUP_TIMEOUT="${STARTUP_TIMEOUT:-120}"
 COHSH_TIMEOUT="${COHSH_TIMEOUT:-20}"
 RUNS="${RUNS:-1}"

@@ -1,3 +1,7 @@
+# Author: Lukas Bower
+# Purpose: Define the machine-checkable tailored NIST SP 800-53 LOW control registry.
+# Copyright 2026 Lukas Bower
+
 [[control]]
 id = "AC-1"
 title = "Access Control Policy and Procedures"
@@ -34,9 +38,9 @@ id = "AC-5"
 title = "Separation of Duties"
 family = "AC"
 status = "Implemented"
-rationale = "Queen orchestration and worker telemetry roles are separated by namespaces and tickets."
+rationale = "Queen orchestration and Worker-session telemetry duties are separated at the application policy layer by namespaces and tickets; current profiles do not claim separate Worker TCBs."
 evidence = [
-  { type = "doc", ref = "docs/ROLES_AND_SCHEDULING.md", note = "Distinct queen and worker capabilities and namespaces." },
+  { type = "doc", ref = "docs/ROLES_AND_SCHEDULING.md", note = "Distinct Queen and Worker-session policy scopes and namespaces." },
   { type = "doc", ref = "docs/INTERFACES.md", note = "Role-specific control surfaces and mounts." },
   { type = "script", ref = "tests/security/nist_evidence_smoke.sh", note = "Confirms role isolation is documented." }
 ]
@@ -167,7 +171,7 @@ id = "IA-2"
 title = "Identification and Authentication (Organizational Users)"
 family = "IA"
 status = "Implemented"
-rationale = "Attach requires role selection and worker tickets; claims are verified on attach."
+rationale = "Worker-role session attach requires role selection and a ticket whose claims are verified; attach does not launch a target Worker task."
 evidence = [
   { type = "doc", ref = "docs/INTERFACES.md", note = "Attach flow and ticket usage." },
   { type = "doc", ref = "docs/USERLAND_AND_CLI.md", note = "Attach grammar and ticket policy." },

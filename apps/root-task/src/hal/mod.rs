@@ -2216,6 +2216,17 @@ fn runtime_mmio_resource_tag(hot_path: driver_task::DriverTaskHotPath) -> u32 {
 struct RuntimeElfLoad {
     entry: usize,
     code_vaddr: usize,
+    root_write_aliases_unmapped: bool,
+}
+
+#[cfg(feature = "kernel")]
+fn validate_runtime_load_for_resume(load: RuntimeElfLoad) -> Result<(), HalError> {
+    if !load.root_write_aliases_unmapped {
+        return Err(HalError::Unsupported(
+            "driver-runtime-executable-root-alias",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(feature = "kernel")]
@@ -2259,6 +2270,41 @@ struct RuntimeElfPageFill {
 }
 
 #[cfg(feature = "kernel")]
+struct RuntimeElfPageMapping {
+    rights: sel4_sys::seL4_CapRights,
+    attributes: sel4_sys::seL4_ARM_VMAttributes,
+}
+
+#[cfg(feature = "kernel")]
+const fn runtime_cacheable_xn_attributes() -> sel4_sys::seL4_ARM_VMAttributes {
+    sel4::vm_attributes_with_execute_never(sel4_sys::seL4_ARM_Page_Default)
+}
+
+#[cfg(feature = "kernel")]
+const fn runtime_uncached_xn_attributes() -> sel4_sys::seL4_ARM_VMAttributes {
+    sel4::vm_attributes_with_execute_never(sel4_sys::seL4_ARM_Page_Uncached)
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_elf_page_mapping(fill: RuntimeElfPageFill) -> Result<RuntimeElfPageMapping, HalError> {
+    if fill.writable && fill.executable {
+        return Err(HalError::Unsupported("driver-runtime-elf-wx-page"));
+    }
+    Ok(RuntimeElfPageMapping {
+        rights: if fill.writable {
+            sel4_sys::seL4_CapRights_ReadWrite
+        } else {
+            sel4_sys::seL4_CapRights::new(0, 0, 1, 0)
+        },
+        attributes: if fill.executable {
+            sel4_sys::seL4_ARM_Page_Default
+        } else {
+            runtime_cacheable_xn_attributes()
+        },
+    })
+}
+
+#[cfg(feature = "kernel")]
 const MAX_RUNTIME_ELF_LOAD_SEGMENTS: usize = 8;
 
 #[cfg(feature = "kernel")]
@@ -2291,6 +2337,9 @@ fn plan_runtime_elf_load(
     const PROGRAM_HEADER_LEN: usize = 56;
     const PT_LOAD: u32 = 1;
     const PF_X: u32 = 1;
+    const PF_W: u32 = 2;
+    const PF_R: u32 = 4;
+    const PF_MASK: u32 = PF_X | PF_W | PF_R;
     const EM_AARCH64: u16 = 183;
     const ET_EXEC: u16 = 2;
 
@@ -2330,7 +2379,11 @@ fn plan_runtime_elf_load(
     let mut entry_in_exec = false;
     for index in 0..phnum {
         let ph = phoff
-            .checked_add(index.saturating_mul(phentsize))
+            .checked_add(
+                index
+                    .checked_mul(phentsize)
+                    .ok_or(HalError::Unsupported("driver-runtime-elf-phdr"))?,
+            )
             .ok_or(HalError::Unsupported("driver-runtime-elf-phdr"))?;
         let ph_end = ph
             .checked_add(PROGRAM_HEADER_LEN)
@@ -2344,6 +2397,12 @@ fn plan_runtime_elf_load(
             read_le_u32(image, ph + 4).ok_or(HalError::Unsupported("driver-runtime-elf-phdr"))?;
         if p_type != PT_LOAD {
             continue;
+        }
+        if p_flags & !PF_MASK != 0 || p_flags & PF_R == 0 {
+            return Err(HalError::Unsupported("driver-runtime-elf-flags"));
+        }
+        if p_flags & (PF_W | PF_X) == (PF_W | PF_X) {
+            return Err(HalError::Unsupported("driver-runtime-elf-wx-segment"));
         }
         let p_offset = usize::try_from(
             read_le_u64(image, ph + 8).ok_or(HalError::Unsupported("driver-runtime-elf-offset"))?,
@@ -2378,7 +2437,10 @@ fn plan_runtime_elf_load(
             .checked_add(p_memsz)
             .ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?;
         let page_base = p_vaddr & !(page_bytes - 1);
-        let page_end = segment_end.saturating_add(page_bytes - 1) & !(page_bytes - 1);
+        let page_end = segment_end
+            .checked_add(page_bytes - 1)
+            .ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?
+            & !(page_bytes - 1);
         min_vaddr = core::cmp::min(min_vaddr, page_base);
         max_vaddr = core::cmp::max(max_vaddr, page_end);
         if p_flags & PF_X != 0 && entry >= p_vaddr && entry < segment_end {
@@ -2396,6 +2458,33 @@ fn plan_runtime_elf_load(
 
     if segment_count == 0 || !entry_in_exec || min_vaddr == usize::MAX || max_vaddr <= min_vaddr {
         return Err(HalError::Unsupported("driver-runtime-elf-exec-segment"));
+    }
+    for executable in segments.iter().take(segment_count).copied() {
+        if executable.flags & PF_X == 0 {
+            continue;
+        }
+        let executable_start = executable.vaddr & !(page_bytes - 1);
+        let executable_end = executable
+            .vaddr
+            .checked_add(executable.memsz)
+            .and_then(|end| end.checked_add(page_bytes - 1))
+            .map(|end| end & !(page_bytes - 1))
+            .ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?;
+        for writable in segments.iter().take(segment_count).copied() {
+            if writable.flags & PF_W == 0 {
+                continue;
+            }
+            let writable_start = writable.vaddr & !(page_bytes - 1);
+            let writable_end = writable
+                .vaddr
+                .checked_add(writable.memsz)
+                .and_then(|end| end.checked_add(page_bytes - 1))
+                .map(|end| end & !(page_bytes - 1))
+                .ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?;
+            if executable_start < writable_end && writable_start < executable_end {
+                return Err(HalError::Unsupported("driver-runtime-elf-wx-page"));
+            }
+        }
     }
     let span = max_vaddr
         .checked_sub(min_vaddr)
@@ -2482,6 +2571,9 @@ fn fill_runtime_elf_page(
             }
         }
         index += 1;
+    }
+    if fill.writable && fill.executable {
+        return Err(HalError::Unsupported("driver-runtime-elf-wx-page"));
     }
     Ok(fill)
 }
@@ -3271,13 +3363,11 @@ impl<'a> KernelHal<'a> {
         vspace: seL4_CPtr,
         tracker: &mut VSpaceTableTracker,
     ) -> Result<RuntimeElfLoad, HalError> {
-        let code_rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
-        let data_rights = sel4_sys::seL4_CapRights_ReadWrite;
         let page_bytes = 1usize << sel4::PAGE_BITS;
         for page_index in 0..plan.page_count {
             let mut frame = self
                 .env
-                .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+                .alloc_dma_frame_attr(runtime_cacheable_xn_attributes())
                 .map_err(HalError::Sel4)?;
             let fill = fill_runtime_elf_page(image, plan, page_index, frame.as_mut_slice())?;
             crate::hal::cache::cache_clean(
@@ -3290,17 +3380,14 @@ impl<'a> KernelHal<'a> {
                 .base_vaddr
                 .checked_add(page_index.saturating_mul(page_bytes))
                 .ok_or(HalError::Unsupported("driver-runtime-elf-map-vaddr"))?;
+            let mapping = runtime_elf_page_mapping(fill)?;
             self.env
                 .map_page_copy_into_vspace(
                     frame.cap(),
                     vspace,
                     vaddr,
-                    if fill.writable {
-                        data_rights
-                    } else {
-                        code_rights
-                    },
-                    sel4_sys::seL4_ARM_Page_Default,
+                    mapping.rights,
+                    mapping.attributes,
                     tracker,
                 )
                 .map_err(HalError::Sel4)?;
@@ -3315,6 +3402,7 @@ impl<'a> KernelHal<'a> {
         Ok(RuntimeElfLoad {
             entry: plan.entry,
             code_vaddr: plan.base_vaddr,
+            root_write_aliases_unmapped: true,
         })
     }
 
@@ -3367,7 +3455,7 @@ impl<'a> KernelHal<'a> {
                     vspace,
                     vaddr,
                     rights,
-                    sel4_sys::seL4_ARM_Page_Uncached,
+                    runtime_uncached_xn_attributes(),
                     tracker,
                 )
                 .map_err(HalError::Sel4)?;
@@ -3433,7 +3521,7 @@ impl<'a> KernelHal<'a> {
                             vspace,
                             vaddr,
                             rights,
-                            sel4_sys::seL4_ARM_Page_Uncached,
+                            runtime_uncached_xn_attributes(),
                             tracker,
                         )
                         .map_err(HalError::Sel4)?;
@@ -3483,7 +3571,7 @@ impl<'a> KernelHal<'a> {
                         vspace,
                         vaddr,
                         rights,
-                        sel4_sys::seL4_ARM_Page_Uncached,
+                        runtime_uncached_xn_attributes(),
                         tracker,
                     )
                     .map_err(HalError::Sel4)?;
@@ -3506,7 +3594,7 @@ impl<'a> KernelHal<'a> {
     }
 
     fn runtime_ram_region_attr(_dma_owned: bool) -> sel4_sys::seL4_ARM_VMAttributes {
-        sel4_sys::seL4_ARM_Page_Uncached
+        runtime_uncached_xn_attributes()
     }
 
     fn map_isolated_runtime_ram_region(
@@ -3720,7 +3808,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR,
                 sel4_sys::seL4_CapRights_ReadWrite,
-                sel4_sys::seL4_ARM_Page_Uncached,
+                runtime_uncached_xn_attributes(),
                 tracker,
             )
             .map_err(HalError::Sel4)?;
@@ -3736,7 +3824,7 @@ impl<'a> KernelHal<'a> {
                     vspace,
                     vaddr,
                     sel4_sys::seL4_CapRights_ReadWrite,
-                    sel4_sys::seL4_ARM_Page_Uncached,
+                    runtime_uncached_xn_attributes(),
                     tracker,
                 )
                 .map_err(HalError::Sel4)?;
@@ -3799,7 +3887,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_PCIE_BUS_RING_VADDR,
                 sel4_sys::seL4_CapRights_ReadWrite,
-                sel4_sys::seL4_ARM_Page_Uncached,
+                runtime_uncached_xn_attributes(),
                 tracker,
             )
             .map_err(HalError::Sel4)?;
@@ -3888,11 +3976,11 @@ impl<'a> KernelHal<'a> {
 
         let mut ring_frame = self
             .env
-            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Uncached)
+            .alloc_dma_frame_attr(runtime_uncached_xn_attributes())
             .map_err(HalError::Sel4)?;
         let mut ipc_frame = self
             .env
-            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .alloc_dma_frame_attr(runtime_cacheable_xn_attributes())
             .map_err(HalError::Sel4)?;
         let stack_pages = runtime_image_stack_pages(runtime_image_spec);
         let stack_top = runtime_image_stack_top(runtime_image_spec)?;
@@ -3903,7 +3991,7 @@ impl<'a> KernelHal<'a> {
         for _ in 0..stack_pages {
             stack_frames.push(
                 self.env
-                    .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+                    .alloc_dma_frame_attr(runtime_cacheable_xn_attributes())
                     .map_err(HalError::Sel4)?,
             );
         }
@@ -3971,7 +4059,7 @@ impl<'a> KernelHal<'a> {
         } else {
             let mut code_frame = self
                 .env
-                .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+                .alloc_dma_frame_attr(runtime_cacheable_xn_attributes())
                 .map_err(HalError::Sel4)?;
             code_frame.as_mut_slice().fill(0);
             // SAFETY: The linker script page-aligns `.driver_task_text`, the
@@ -3999,10 +4087,14 @@ impl<'a> KernelHal<'a> {
                 .map_err(HalError::Sel4)?;
             crate::hal::cache::cache_unify_instruction(vspace, trampoline_range.start, page_bytes)
                 .map_err(|err| HalError::Sel4(err.code()))?;
+            self.env
+                .unmap_page_cap(code_frame.cap())
+                .map_err(HalError::Sel4)?;
             mapped_code_frame = Some(code_frame.cap());
             RuntimeElfLoad {
                 entry: driver_task::isolated_trampoline_entry(),
                 code_vaddr: trampoline_range.start,
+                root_write_aliases_unmapped: true,
             }
         };
         self.env
@@ -4011,7 +4103,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_RING_VADDR,
                 data_rights,
-                sel4_sys::seL4_ARM_Page_Uncached,
+                runtime_uncached_xn_attributes(),
                 &mut tracker,
             )
             .map_err(HalError::Sel4)?;
@@ -4022,7 +4114,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_IPC_VADDR,
                 data_rights,
-                sel4_sys::seL4_ARM_Page_Default,
+                runtime_cacheable_xn_attributes(),
                 &mut tracker,
             )
             .map_err(HalError::Sel4)?;
@@ -4042,7 +4134,7 @@ impl<'a> KernelHal<'a> {
                     vspace,
                     vaddr,
                     data_rights,
-                    sel4_sys::seL4_ARM_Page_Default,
+                    runtime_cacheable_xn_attributes(),
                     &mut tracker,
                 )
                 .map_err(HalError::Sel4)?;
@@ -4156,6 +4248,7 @@ impl<'a> KernelHal<'a> {
                 return Err(HalError::Unsupported("driver-runtime-restart-context"));
             }
         }
+        validate_runtime_load_for_resume(runtime_load)?;
         sel4::write_tcb_registers(
             tcb,
             runtime_load.entry,
@@ -4335,11 +4428,6 @@ impl<'a> KernelHal<'a> {
             }
             pointer_free_ipc
         };
-        if let Some(code_frame) = mapped_code_frame {
-            self.env
-                .unmap_page_cap(code_frame)
-                .map_err(HalError::Sel4)?;
-        }
         let affinity_core =
             apply_driver_tcb_affinity_after_bootstrap(contract, tcb, affinity_core)?;
         self.env
@@ -4902,15 +4990,29 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn runtime_ram_region_attr_keeps_shared_payload_pages_uncached() {
+    fn runtime_ram_region_attr_keeps_shared_payload_pages_uncached_and_xn() {
         assert_eq!(
             super::KernelHal::runtime_ram_region_attr(true),
-            sel4_sys::seL4_ARM_Page_Uncached
+            super::runtime_uncached_xn_attributes()
         );
         assert_eq!(
             super::KernelHal::runtime_ram_region_attr(false),
-            sel4_sys::seL4_ARM_Page_Uncached
+            super::runtime_uncached_xn_attributes()
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_xn_attributes_preserve_cache_policy() {
+        let xn = crate::sel4::vm_attributes_raw(sel4_sys::seL4_ARM_ExecuteNever);
+        let default = crate::sel4::vm_attributes_raw(sel4_sys::seL4_ARM_Page_Default);
+        let cacheable_xn = crate::sel4::vm_attributes_raw(super::runtime_cacheable_xn_attributes());
+        let uncached_xn = crate::sel4::vm_attributes_raw(super::runtime_uncached_xn_attributes());
+
+        assert_eq!(cacheable_xn, default | xn);
+        assert_eq!(uncached_xn, xn);
+        assert_eq!(cacheable_xn & default, default);
+        assert_eq!(uncached_xn & default, 0);
     }
 
     #[cfg(feature = "kernel")]
@@ -5311,51 +5413,63 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
-    #[test]
-    fn runtime_elf_loader_plans_multiple_load_segments() {
-        fn put16(bytes: &mut [u8], offset: usize, value: u16) {
-            bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
-        }
-        fn put32(bytes: &mut [u8], offset: usize, value: u32) {
-            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-        }
-        fn put64(bytes: &mut [u8], offset: usize, value: u64) {
-            bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-        }
-        fn phdr(
-            bytes: &mut [u8],
-            index: usize,
-            flags: u32,
-            offset: u64,
-            vaddr: u64,
-            filesz: u64,
-            memsz: u64,
-        ) {
-            let base = 64 + index * 56;
-            put32(bytes, base, 1);
-            put32(bytes, base + 4, flags);
-            put64(bytes, base + 8, offset);
-            put64(bytes, base + 16, vaddr);
-            put64(bytes, base + 24, vaddr);
-            put64(bytes, base + 32, filesz);
-            put64(bytes, base + 40, memsz);
-            put64(bytes, base + 48, 0x10000);
-        }
+    fn put_runtime_elf_u16(bytes: &mut [u8], offset: usize, value: u16) {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
 
-        let mut image = vec![0u8; 0x5000];
+    #[cfg(feature = "kernel")]
+    fn put_runtime_elf_u32(bytes: &mut [u8], offset: usize, value: u32) {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn put_runtime_elf_u64(bytes: &mut [u8], offset: usize, value: u64) {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn runtime_test_elf(
+        entry: u64,
+        segments: &[(u32, u64, u64, u64, u64)],
+        image_len: usize,
+    ) -> Vec<u8> {
+        let mut image = vec![0u8; image_len];
         image[0..4].copy_from_slice(b"\x7fELF");
         image[4] = 2;
         image[5] = 1;
-        put16(&mut image, 16, 2);
-        put16(&mut image, 18, 183);
-        put64(&mut image, 24, 0x210010);
-        put64(&mut image, 32, 64);
-        put16(&mut image, 52, 64);
-        put16(&mut image, 54, 56);
-        put16(&mut image, 56, 3);
-        phdr(&mut image, 0, 4, 0x1000, 0x200000, 0x10, 0x10);
-        phdr(&mut image, 1, 5, 0x2000, 0x210000, 0x1200, 0x1200);
-        phdr(&mut image, 2, 6, 0x4000, 0x226000, 0x20, 0x80);
+        put_runtime_elf_u16(&mut image, 16, 2);
+        put_runtime_elf_u16(&mut image, 18, 183);
+        put_runtime_elf_u64(&mut image, 24, entry);
+        put_runtime_elf_u64(&mut image, 32, 64);
+        put_runtime_elf_u16(&mut image, 52, 64);
+        put_runtime_elf_u16(&mut image, 54, 56);
+        put_runtime_elf_u16(&mut image, 56, segments.len() as u16);
+        for (index, &(flags, offset, vaddr, filesz, memsz)) in segments.iter().enumerate() {
+            let base = 64 + index * 56;
+            put_runtime_elf_u32(&mut image, base, 1);
+            put_runtime_elf_u32(&mut image, base + 4, flags);
+            put_runtime_elf_u64(&mut image, base + 8, offset);
+            put_runtime_elf_u64(&mut image, base + 16, vaddr);
+            put_runtime_elf_u64(&mut image, base + 24, vaddr);
+            put_runtime_elf_u64(&mut image, base + 32, filesz);
+            put_runtime_elf_u64(&mut image, base + 40, memsz);
+            put_runtime_elf_u64(&mut image, base + 48, 0x10000);
+        }
+        image
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_elf_loader_plans_multiple_load_segments() {
+        let mut image = runtime_test_elf(
+            0x210010,
+            &[
+                (4, 0x1000, 0x200000, 0x10, 0x10),
+                (5, 0x2000, 0x210000, 0x1200, 0x1200),
+                (6, 0x4000, 0x226000, 0x20, 0x80),
+            ],
+            0x5000,
+        );
         image[0x2000..0x3200].fill(0xaa);
         image[0x4000..0x4020].fill(0xbb);
 
@@ -5375,6 +5489,13 @@ mod tests {
         let fill = super::fill_runtime_elf_page(&image, plan, rx_page, &mut page).unwrap();
         assert!(!fill.writable);
         assert!(fill.executable);
+        let mapping = super::runtime_elf_page_mapping(fill).unwrap();
+        assert_eq!(mapping.rights.raw(), 0b10);
+        assert_eq!(
+            crate::sel4::vm_attributes_raw(mapping.attributes)
+                & crate::sel4::vm_attributes_raw(sel4_sys::seL4_ARM_ExecuteNever),
+            0
+        );
         assert_eq!(page[0], 0xaa);
         assert_eq!(page[0x0fff], 0xaa);
 
@@ -5382,9 +5503,117 @@ mod tests {
         let fill = super::fill_runtime_elf_page(&image, plan, data_page, &mut page).unwrap();
         assert!(fill.writable);
         assert!(!fill.executable);
+        let mapping = super::runtime_elf_page_mapping(fill).unwrap();
+        assert_eq!(mapping.rights.raw(), 0b11);
+        assert_ne!(
+            crate::sel4::vm_attributes_raw(mapping.attributes)
+                & crate::sel4::vm_attributes_raw(sel4_sys::seL4_ARM_ExecuteNever),
+            0
+        );
         assert_eq!(page[0], 0xbb);
         assert_eq!(page[0x1f], 0xbb);
         assert_eq!(page[0x20], 0);
+
+        let ro_page = 0;
+        let fill = super::fill_runtime_elf_page(&image, plan, ro_page, &mut page).unwrap();
+        assert!(!fill.writable);
+        assert!(!fill.executable);
+        let mapping = super::runtime_elf_page_mapping(fill).unwrap();
+        assert_eq!(mapping.rights.raw(), 0b10);
+        assert_ne!(
+            crate::sel4::vm_attributes_raw(mapping.attributes)
+                & crate::sel4::vm_attributes_raw(sel4_sys::seL4_ARM_ExecuteNever),
+            0
+        );
+
+        let hole_page = 1;
+        let fill = super::fill_runtime_elf_page(&image, plan, hole_page, &mut page).unwrap();
+        assert!(!fill.writable);
+        assert!(!fill.executable);
+        let mapping = super::runtime_elf_page_mapping(fill).unwrap();
+        assert_eq!(mapping.rights.raw(), 0b10);
+        assert_ne!(
+            crate::sel4::vm_attributes_raw(mapping.attributes)
+                & crate::sel4::vm_attributes_raw(sel4_sys::seL4_ARM_ExecuteNever),
+            0
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_elf_loader_rejects_writable_executable_segment() {
+        let image = runtime_test_elf(0x210010, &[(7, 0x1000, 0x210000, 0x100, 0x100)], 0x2000);
+        assert!(matches!(
+            super::plan_runtime_elf_load(&image, 4),
+            Err(super::HalError::Unsupported(
+                "driver-runtime-elf-wx-segment"
+            ))
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_elf_loader_rejects_effective_wx_page() {
+        let image = runtime_test_elf(
+            0x210010,
+            &[
+                (5, 0x1000, 0x210000, 0x800, 0x800),
+                (6, 0x1800, 0x210800, 0x100, 0x100),
+            ],
+            0x2000,
+        );
+        assert!(matches!(
+            super::plan_runtime_elf_load(&image, 4),
+            Err(super::HalError::Unsupported("driver-runtime-elf-wx-page"))
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_elf_loader_rejects_unsupported_or_non_readable_flags() {
+        for flags in [1, 12] {
+            let image =
+                runtime_test_elf(0x210010, &[(flags, 0x1000, 0x210000, 0x100, 0x100)], 0x2000);
+            assert!(matches!(
+                super::plan_runtime_elf_load(&image, 4),
+                Err(super::HalError::Unsupported("driver-runtime-elf-flags"))
+            ));
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_elf_page_mapping_defensively_rejects_wx() {
+        assert!(matches!(
+            super::runtime_elf_page_mapping(super::RuntimeElfPageFill {
+                writable: true,
+                executable: true,
+            }),
+            Err(super::HalError::Unsupported("driver-runtime-elf-wx-page"))
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_resume_requires_executable_root_write_aliases_unmapped() {
+        let load = super::RuntimeElfLoad {
+            entry: 0x210000,
+            code_vaddr: 0x210000,
+            root_write_aliases_unmapped: false,
+        };
+        assert!(matches!(
+            super::validate_runtime_load_for_resume(load),
+            Err(super::HalError::Unsupported(
+                "driver-runtime-executable-root-alias"
+            ))
+        ));
+        assert!(
+            super::validate_runtime_load_for_resume(super::RuntimeElfLoad {
+                root_write_aliases_unmapped: true,
+                ..load
+            })
+            .is_ok()
+        );
     }
 
     #[cfg(feature = "kernel")]

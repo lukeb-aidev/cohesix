@@ -62,9 +62,11 @@ Cohesix does not currently provide:
 The seL4 kernel controls memory objects, execution, notifications, interrupts,
 and IPC through capabilities. Cohesix root-task remains trusted for bootstrap,
 HAL admission, manifest enforcement, namespace authority, tickets, lifecycle,
-and audit. Queen and Worker roles receive only their generated namespace and
-endpoint authority; Worker tickets are mandatory and Queen ticket requirements
-are profile-controlled.
+and audit. Queen and Worker-role sessions receive only their generated
+namespace view; Worker tickets are mandatory and Queen ticket requirements are
+profile-controlled. Current profiles mark every target Worker role
+non-executable and disable Worker endpoint-cap and lifecycle-notification
+authority. Reserved generated badges are not installed capabilities.
 
 Physical devices run in manifest-declared, single-threaded Rust driver
 runtimes. HAL owns physical-address discovery, device-untyped admission, MMIO,
@@ -87,8 +89,9 @@ See [Architecture](ARCHITECTURE.md) for component boundaries,
 
 The authenticated root-task TCP console is the only in-VM TCP listener. It is a
 line-oriented console using `AUTH`, `ATTACH`, bounded commands, `OK`/`ERR`
-responses, and `END` stream terminators; it is not a 9P-over-TCP server. Worker
-attachments require a valid role ticket before namespace access.
+responses, and `END` stream terminators; it is not a 9P-over-TCP server.
+Worker-role session attachments require a valid role ticket before namespace
+access; attachment does not start a target Worker task.
 
 Authentication is not encryption. Bind direct console forwarding to loopback
 or carry it through an authenticated encrypted tunnel. `hive-gateway` also

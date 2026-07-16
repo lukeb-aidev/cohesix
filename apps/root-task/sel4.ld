@@ -1,5 +1,6 @@
 /* Author: Lukas Bower */
 /* Purpose: Linker script for the AArch64 root-task image layout (single PT_LOAD runs). */
+/* Copyright 2026 Lukas Bower */
 /* Minimal AArch64 seL4 rootserver linker script (no jumps inside PT_LOAD) */
 OUTPUT_FORMAT(elf64-littleaarch64)
 OUTPUT_ARCH(aarch64)
@@ -34,6 +35,11 @@ SECTIONS
     . = ALIGN(0x1000);
   } :text
   PROVIDE(__driver_task_text_end = .);
+
+  /* Fixed-width, file-backed UART identity patched only in the staged uImage. */
+  .cohesix_build_marker : ALIGN(1) {
+    KEEP(*(.rodata.*BUILD_MARKER_BYTES*))
+  } :text
 
   .rodata : {
     *(.rodata .rodata.*)

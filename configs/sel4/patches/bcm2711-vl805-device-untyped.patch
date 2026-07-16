@@ -1,0 +1,31 @@
+diff --git a/src/plat/bcm2711/overlay-rpi4.dts b/src/plat/bcm2711/overlay-rpi4.dts
+index 18858b20dd22319f138a9be327dc15f8f320a0ba..1d6560128b94cff68255a387a305ccfad6edf474 100644
+--- a/src/plat/bcm2711/overlay-rpi4.dts
++++ b/src/plat/bcm2711/overlay-rpi4.dts
+@@ -2,6 +2,9 @@
+  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+  * Copyright (C) 2021, Hensoldt Cyber GmbH
+  * Copyright 2021, Technology Innovation Institute
++ * Author: Lukas Bower
++ * Purpose: Expose the Pi 4 VL805 BAR as a seL4 device-untyped window.
++ * Copyright 2026 Lukas Bower
+  *
+  * SPDX-License-Identifier: GPL-2.0-only
+  */
+@@ -20,6 +23,16 @@
+ 		    &{/timer};
+ 	};
+ 
++	device-untypes@600000000 {
++		/*
++		 * Pi 4 U-Boot discovers the VL805 xHCI controller behind PCIe and
++		 * maps BAR0 at 0x600000000. Expose that controller window as a
++		 * device untyped so userspace can rediscover and map xHCI after the
++		 * bootloader quiesces USB for handoff.
++		 */
++		reg = <0x00000006 0x00000000 0x00040000>;
++	};
++
+ 	/*
+ 	 * See BCM2711 TRM section 1.2 and
+ 	 * https://github.com/raspberrypi/firmware/issues/1374 for

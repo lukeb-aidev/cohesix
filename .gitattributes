@@ -1,7 +1,11 @@
 # Author: Lukas Bower
-# Purpose: Preserve exact third-party firmware payload bytes in Git.
+# Purpose: Preserve exact third-party payload bytes and patch context in Git.
 # Copyright 2026 Lukas Bower
 
 third_party/raspberry-pi-firmware/**/*.bin -text -diff
 third_party/raspberry-pi-firmware/**/*.clm_blob -text -diff
 third_party/raspberry-pi-firmware/**/brcmfmac43455-sdio*.txt -text -diff
+
+# Inner unified-diff context intentionally starts with a context marker before
+# upstream tabs or blank lines; retain those bytes without outer-diff warnings.
+configs/sel4/patches/*.patch -whitespace

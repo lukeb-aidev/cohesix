@@ -1,214 +1,363 @@
 <!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-<!-- Purpose: Record Milestone 26d seL4 15 baseline provenance, generated artifact evidence, and remaining proof boundaries. -->
+<!-- Purpose: Record Milestone 26d seL4 15 source, toolchain, profile-build, and evidence-class provenance. -->
 <!-- Author: Lukas Bower -->
+
 # Milestone 26d seL4 15 Provenance
 
-## Scope
+## Scope and authorization
 
-Authorization: `docs/BUILD_PLAN.md` Milestone 26d, tasks
-`m26d-kernel-provenance-refresh`, `m26d-sel4-api-compat-audit`,
-`m26d-pi4-counter-contract-refresh`, `m26d-domain-schedule-debt-removal`,
-`m26d-benchmark-revalidation-and-tuning`, and
-`m26d-full-regression-refresh`.
+This ledger records the static source, configuration, toolchain, and artifact
+closure authorized by Milestone 26d tasks
+`m26d-kernel-provenance-refresh`,
+`m26d-domain-schedule-debt-removal`,
+`m26d-canonical-sel4-profile-closure`,
+`m26d-isolated-runtime-wx-closure`,
+`m26d-worker-execution-truth-repair`, and
+`m26d-sel4-capability-utilization-audit`.
 
-## Accepted Kernel Baseline
+It deliberately keeps these evidence classes separate:
 
-- Upstream source path: `/Users/lukasbower/seL4_15`.
-- Upstream version: `15.0.0`.
-- Upstream commit: `881de507fe528490dc5e570c7810a149bad5880f`.
-- Python environment: `/Users/lukasbower/seL4_15/.venv_aarch64`.
-- Manual artifact: `seL4/seL4-manual-latest.pdf` and
-  `seL4/seL4-manual-latest.md` refreshed from the official seL4 15.0.0
-  manual.
+- canonical seL4 source/profile/artifact validation;
+- a linked Cohesix QEMU image and QEMU boot;
+- a sealed, read-back-bound Pi image and current-image boot;
+- Pi Wi-Fi, USB/local-seat, TCP/`cohsh`, and benchmark proof; and
+- upstream proof-configuration eligibility.
 
-The local kernel source intentionally carries one Cohesix Pi 4 overlay patch in
-`src/plat/bcm2711/overlay-rpi4.dts`: `device-untypes@600000000` exposes the
-VL805 xHCI BAR0 window (`reg = <0x00000006 0x00000000 0x00040000>;`) so the
-Pi 4 USB runtime can rediscover the high BAR through HAL-owned mappings after
-U-Boot quiesces USB.
+A PASS in the first or last class does not satisfy any intervening live class.
 
-## Refreshed Artifact Trees
+## Accepted upstream source
 
-| Tree | Profile | Required evidence |
-| --- | --- | --- |
-| `seL4/build` | QEMU `aarch64/virt`, single-core | `KERNEL_PATH=/Users/lukasbower/seL4_15`, `KernelVerificationBuild=OFF`, `KernelDebugBuild=ON`, `KernelPrinting=ON`, `SMP=OFF`, `ElfloaderRootserversLast=ON`, QEMU `virt,secure=off,virtualization=on,gic-version=2` DTB with PSCI `method = "smc"`, no `KernelDomainSchedule` cache entry |
-| `seL4/SMP_build` | QEMU `aarch64/virt`, four-node SMP | `KERNEL_PATH=/Users/lukasbower/seL4_15`, `KernelMaxNumNodes=4`, `SMP=ON`, `ElfloaderRootserversLast=ON`, QEMU `virt,secure=off,virtualization=on,gic-version=2` DTB with PSCI `method = "smc"`, no `KernelDomainSchedule` cache entry |
-| `seL4/build_UBOOT` | Pi 4 `bcm2711`, U-Boot image | `KERNEL_PATH=/Users/lukasbower/seL4_15`, `ElfloaderRootserversLast=ON`, `IMAGE_START_ADDR=0x10000000`, `KernelArmExportVCNTUser=ON`, `KernelArmExportPCNTUser=OFF`, `KernelArmExportPTMRUser=OFF`, `KernelArmExportVTMRUser=OFF`, `TIMER_CLOCK_HZ=54000000`, no `KernelDomainSchedule` cache entry |
+The build input is the complete tag-pinned seL4Test project, not an isolated
+kernel checkout:
 
-QEMU generated evidence:
+| Input | Accepted identity |
+| --- | --- |
+| Manifest | `https://github.com/seL4/sel4test-manifest.git` |
+| Manifest ref | `refs/tags/15.0.0` |
+| Manifest commit | `367a780d5f3f1b59711618b3b321666cecb2f8a2` |
+| seL4 kernel commit | `881de507fe528490dc5e570c7810a149bad5880f` |
+| Component revisions | Every project revision pinned in `configs/sel4/profiles.toml` |
+| Wrapper | `tools/sel4-profile-project/CMakeLists.txt` |
 
-- `seL4/SMP_build/elfloader/gen_config/elfloader/gen_config.h` and
-  `seL4/build/elfloader/gen_config/elfloader/gen_config.h` define
-  `CONFIG_ELFLOADER_ROOTSERVERS_LAST=1`. This fixes the seL4 15 QEMU boot
-  failure where the default rootserver placement overlapped the elfloader.
-- `seL4/SMP_build/kernel/kernel.dts`, `seL4/SMP_build/qemu-arm-virt.dts`,
-  `seL4/build/kernel/kernel.dts`, and `seL4/build/qemu-arm-virt.dts` were
-  generated from QEMU with `virtualization=on` and record PSCI
-  `method = "smc"`. This matches the Cohesix QEMU launcher and avoids the
-  secondary-CPU `HVC is not supported for PSCI` failure on SMP boot.
+The wrapper consumes the pinned upstream project without introducing the
+obsolete seL4Test `KernelDomainSchedule` input. The validator rejects that
+cache key even when its value is empty.
 
-Pi 4 generated evidence:
+Pi operational profiles permit one authenticated source change: the VL805
+high-BAR device-untyped overlay at
+`configs/sel4/patches/bcm2711-vl805-device-untyped.patch`. Its canonical raw
+Git-diff SHA-256 is
+`3c82bf606f76823398f91070c9787d13aa137e7e7c2665a01db11df9797f69a6`.
+`prepare-source` applies it only to a pristine, revision-complete checkout;
+`validate` compares the live diff byte-for-byte and never mutates source.
+QEMU and proof-eligibility profiles require a pristine source set.
 
-- `seL4/build_UBOOT/elfloader/gen_config/elfloader/gen_config.h` defines
-  `CONFIG_ELFLOADER_ROOTSERVERS_LAST=1`, carrying the seL4 15 rootserver
-  placement fix from the QEMU boot investigation into the U-Boot profile.
-- `seL4/build_UBOOT/elfloader/gen_headers/image_start_addr.h` defines
-  `IMAGE_START_ADDR 0x10000000`. This preserves the Pi 4 U-Boot `bootm`
-  handoff shape proven by earlier live serial logs; the shoehorn-computed
-  `0x7ab000` address causes U-Boot to reject the seL4 elfloader with
-  `Bad Linux ARM64 Image magic!` before seL4 starts.
-- `seL4/build_UBOOT/kernel/gen_headers/plat/platform_gen.h`:
-  `TIMER_CLOCK_HZ=54000000`.
-- `seL4/build_UBOOT/kernel/gen_config/kernel/gen_config.h`:
-  `CONFIG_EXPORT_VCNT_USER=1`; physical counter and EL0 timer-control exports
-  disabled.
-- `seL4/build_UBOOT/kernel/kernel.dts` includes `device-untypes@600000000`
-  with the expected `0x600000000` / `0x40000` VL805 window.
-- `out/pi4-sd/pi4-runtime-dma-proof.env` is stage-only proof:
-  `PI4_RUNTIME_DMA_PROOF=target-build` and
-  `PI4_RUNTIME_DMA_COUNTER_PROOF=not-live`.
+The authenticated diff adds the required Lukas Bower author, purpose, and 2026
+copyright metadata in the patched DTS file's native comment header. The raw
+patch therefore remains byte-for-byte authenticated without a charter
+exception.
 
-## Commands Run
+The normative interface reference is the
+[seL4 Reference Manual 15.0.0](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf).
+The tracked `seL4/seL4-manual-latest.pdf` and
+`seL4/seL4-manual-latest.md` are the corresponding carried references.
+
+## Immutable host supply chain
+
+The profile contract and setup script bind the following host inputs:
+
+| Input | Accepted identity |
+| --- | --- |
+| AArch64 compiler | Official Arm GNU Toolchain `15.2.Rel1` macOS Arm64 archive; GCC `15.2.1`; target `aarch64-none-elf` |
+| Compiler archive | `arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz`; size `80863820`; SHA-256 `37084c99bc05fda43a6c48900c638ae4fd6d93e2287ceb3e9bcda55437f1aadd` |
+| Compiler programs | Exact SHA-256 identities for GCC, G++, CPP, assembler, linker, objcopy, ar, and ranlib in `configs/sel4/profiles.toml` |
+| Python | Dedicated `out/toolchain/sel4-profile-venv`; exact 38-distribution closure |
+| Python bootstrap lock | SHA-256 `a582a400e97b0b830952482a8923c4097024c9960fe2197315c341ca00a9548a` |
+| Python build lock | SHA-256 `5ef6b3b1e5edc912a0041417b7386ad17a57fab6ecd3b64c797ecbb3e37ea929` |
+| Pi packaging source | Official DENX `u-boot-2026.01.tar.bz2`; size `34172789`; SHA-256 `b60d5865cefdbc75da8da4156c56c458e00de75a49b80c1a2e58a96e30ad0d54` |
+| U-Boot identity | Release `2026.01`; reference commit `127a42c7257a6ffbbd1575ed1cbaa8f5408a44b3` |
+| Built `mkimage` | SHA-256 `b40094c4a5f7174afa3439fe48a3e14d2e80a6e5e6169bcafc8ce79dd583f3e1`; version `mkimage version 2026.01` |
+
+The final Python closure pins `setuptools==80.9.0`. The first fresh wrapper
+attempt exposed that upstream nanopb imports `pkg_resources`, which is absent
+from the initially selected setuptools 83 environment. Setup now verifies that
+import explicitly. The failed attempt was retained rather than relabelled.
+
+`toolchain/setup_macos_arm64.sh` verifies archive sizes and hashes before
+extraction, verifies installed executable identities and versions, builds
+`mkimage` from the pinned release archive, and emits provenance records bound
+to the setup script and profile contract. Profile validation rechecks the live
+compiler programs, complete Python distribution and installed-file closure,
+both lock digests, and the `mkimage` source and binary records.
+
+## Canonical profile-v2 results
+
+On 2026-07-17, all five fresh canonical defaults built and passed the final
+validator:
+
+| Profile | Canonical build directory | Claim class | Individual evidence |
+| --- | --- | --- | --- |
+| `qemu_smp_production` | `out/sel4/profile-v2/qemu-smp-production` | Static release-profile eligibility; no boot claim | `out/audit/m26d-profile-v2-qemu-smp-production.json` |
+| `qemu_smp_diagnostic` | `out/sel4/profile-v2/qemu-smp-diagnostic` | Static diagnostic/runtime profile; no boot claim | `out/audit/m26d-profile-v2-qemu-smp-diagnostic.json` |
+| `pi4_production` | `out/sel4/profile-v2/pi4-production` | Static release-profile eligibility; no exact-image or board claim | `out/audit/m26d-profile-v2-pi4-production.json` |
+| `pi4_diagnostic` | `out/sel4/profile-v2/pi4-diagnostic` | Static diagnostic profile; does not replace the CYW43 tree | `out/audit/m26d-profile-v2-pi4-diagnostic.json` |
+| `bcm2711_proof_eligibility` | `out/sel4/profile-v2/bcm2711-proof-eligibility` | Upstream verified-configuration compatibility only | `out/audit/m26d-profile-v2-bcm2711-proof-eligibility.json` |
+
+The final aggregate evidence is
+`out/audit/m26d-profile-v2-all.json`, schema
+`cohesix-sel4-profile-evidence-set/v2`. It records
+`valid=true`, `failed_profiles=[]`, source and artifact requirements
+enabled, and all five profile records valid with empty error lists.
+
+QEMU build, release, regression, staged-test, smoke, and newcomer entrypoints
+now default to `out/sel4/profile-v2/qemu-smp-production`. The normal build path
+validates runtime intent, and the release path validates release intent before
+consuming the selected tree. Explicit alternate trees are claim-ineligible
+unless a named contract passes. Default-consumer integration alone does not
+create linked-image or boot evidence; the separate target-qualified Test Plan
+below supplies that runtime class.
+
+The first integrated default-consumer run exposed that the release-optimized
+seL4Test placeholder left only 1,089,536 bytes in the linked elfloader CPIO,
+while the boot-minimized Cohesix root task required a 2,548,964-byte rebuilt
+archive. The rewrite helper correctly refused to grow a linked ELF in place.
+The production contract now reserves 2,097,152 file-backed placeholder bytes
+and requires at least 3,145,728 bytes of validated archive capacity. The reserve
+is discarded when the placeholder is replaced; the bounded rewrite and rootfs
+size guard remain fail-closed. The fresh production wrapper exposed 3,186,688
+bytes of linked archive capacity. The integrated default-consumer build then
+rewrote it to 2,548,964 bytes, stripped the 755,528-byte boot-only rootserver
+ELF, passed the rootfs size guard, selected GICv3, and completed its `--no-run`
+packaging path successfully.
+
+## Current canonical QEMU runtime evidence
+
+The target-qualified QEMU Test Plan at
+`out/test-plan/m26d-qemu-sel4-15-gap-audit` passed stages 1 through 5 on
+2026-07-17 local time. Its Stage 03 and Stage 04 logs independently validate
+`qemu_smp_production`, record `virt,gic-version=3`, boot the linked Cohesix
+image to `Cohesix console ready`, complete authenticated TCP handshakes, and
+exercise the live console and REST projection.
+
+Stage 03 passed all 18 `.coh` scripts across fresh QEMU processes, including
+the base, telemetry, 1,000-worker shard, and gated-policy groups. Stage 04
+passed the REST core and parity batches plus the Python client smoke test.
+Stage 05 passed the complete due-diligence gate using the Stage 03 evidence,
+including workspace tests, dependency/advisory policy, risk ratchet,
+generated-artifact drift, hard-coded-secret scan, and release guardrails.
+The `stage_01.qemu.done` through `stage_05.qemu.done` markers and per-stage
+input hashes bind the accepted run. This is current QEMU runtime evidence; it
+does not satisfy any Pi image, board, Wi-Fi, local-seat, or benchmark class.
+
+The separately coordinated external Pi diagnostic input at
+`/Users/lukasbower/seL4/build_UBOOT` was previously rebuilt under the same
+profile contract. Tightening the validator to reject unknown evidence classes
+and class/eligibility mismatches changed a causal build input. Current evidence
+at `out/audit/m26d-pi4-diagnostic-build-uboot.json` therefore records
+`valid=false` with the expected stale build-input-stamp error. The tree was not
+rebuilt here because it is the active exact-image/CYW43 input; its owning lane
+must refresh it from an empty path before the next image build. The last
+accepted pre-guard identities, retained only to identify the superseded input,
+were:
+
+| External Pi input | SHA-256 |
+| --- | --- |
+| Completed build-input stamp | `8ffb262930ae5925d73c1d0e68c1e3a7dcf0f94596f9d5900ed1b44477bd3acb` |
+| Kernel ELF | `28703ba33f52ab8127bda714998f0d9fb036c8fd76c61a3bd2c838bea087cf88` |
+| Rootserver ELF | `f97b86c2db3ce2a981aa7ccb8a0c8a9af2f052becc07dd23d29b4ed982ac9db5` |
+| Elfloader ELF | `95831566e8678b5be2b3363d58164b61115f2444aaaf46297ba956dd1ac062a3` |
+| U-Boot-wrapped seL4Test profile image | `b48506c6e91de207924c91978b0ecd61d97238ddbdf6287f6bf66c54f1e78680` |
+| Kernel DTB | `b46ea949e8b837aa218a50d6b6482ac13e1c8bc9c269d04b1a90dfe1d1e95897` |
+
+The superseded external tree has `KernelArmExportVCNTUser=ON`, the
+physical-counter and EL0 timer exports OFF, and generated
+`TIMER_CLOCK_HZ=54000000`. Those settings remain useful diagnostic identity,
+but the stale causal stamp makes the tree claim-ineligible until the CYW43 lane
+rebuilds and revalidates it. It is not itself a Cohesix root-task image, board
+boot, or Wi-Fi result.
+
+The superseded pass was bound to:
+
+- profile contract SHA-256
+  `6d765257df7d8c764f3ddf02bbcd3d1d592cf2b801558a56cc193ade31fd2f1e`;
+- validator SHA-256
+  `3ae3de20809c8ac8292a1b239aa4e0da3ad08a81d2428f8a66d60f0d324a3ba6`.
+
+The current validator SHA-256 is
+`3b95da8aaf06aaecfd693df0aa54477eaaacc78e1604c78d282e58f44e40d76f`;
+the mismatch is intentional and fail-closed. The Python bootstrap/build lock
+SHA-256 values remain recorded above.
+
+The focused profile suite passes `91` tests. Coverage includes source and
+patch provenance, compiler and Python tampering, packaging-tool provenance,
+fresh-tree and causal-stamp enforcement, disabled memoization, generated
+configuration, independent DTS/DTB GICv3 and PSCI parsing, rootservers-last Pi
+memory-map generation, QEMU rootserver-archive capacity, strict AArch64
+`ET_EXEC`/entry/load validation, and shipping versus non-shipping RWX policy.
+
+The final fresh builds completed 301/301 targets for the production QEMU
+wrapper, including its bounded reserve object; 300/300 for the diagnostic QEMU
+wrapper; 308/308 for each canonical Pi wrapper; and 31/31 plus the
+preprocessed-kernel target for the proof-eligibility lane. The external Pi
+tree's earlier 308/308 build predates the current validator and is not current
+closure evidence.
+
+Every configuration starts in an empty directory. A pending, missing, copied,
+path-moved, no-op, re-stamped, or causally stale artifact set is invalid.
+Configure and verified-config builds disable both seL4 cache variables:
+`SEL4_CACHE_DIR` and `MEMOIZE_CACHE_DIR`. The completion record binds the
+source revisions, contract, validator, wrapper, build commands, toolchain,
+configuration, and required artifact hashes.
+
+The upstream seL4Test kernel, rootserver, elfloader, and combined image contain
+RWX load segments. The evidence records the explicit
+`upstream-sel4test-rwx-load` exception and marks that artifact set
+non-shipping and not a Cohesix system image. A shipping-eligible artifact is
+fail-closed on RWX. This classification is independent of the Cohesix isolated
+runtime W^X loader, which now rejects effective W+X pages and removes executable
+frames' writable root aliases before child resume.
+
+## Commands and observed results
 
 ```bash
-git -C /Users/lukasbower/seL4_15 describe --tags --always --dirty
-git -C /Users/lukasbower/seL4_15 rev-parse HEAD
-cat /Users/lukasbower/seL4_15/VERSION
+./toolchain/setup_macos_arm64.sh
 
-CARGO_TARGET_DIR=target/m26d-pi4 scripts/pi4-image-build.sh \
-  --manifest configs/root_task_pi4_uboot_aarch64.toml \
-  --sel4-build-dir seL4/build_UBOOT \
-  --sel4-kernel-source-dir /Users/lukasbower/seL4_15 \
-  --venv /Users/lukasbower/seL4_15/.venv_aarch64
+out/toolchain/sel4-profile-venv/bin/python -m pytest -q \
+  tests/test_sel4_profile.py
+# 91 passed
 
-SEL4_BUILD_DIR="$PWD/seL4/SMP_build" \
-  COHSH_BATCH_TARGET=qemu \
-  COHSH_BATCH_GROUPS=base \
-  COHSH_LOG_ROOT=out/regression-logs/m26d-qemu-base \
-  scripts/cohsh/run_regression_batch.sh
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
+  --profile qemu_smp_production \
+  --source out/sel4/v15-worktree-project \
+  --build-dir out/sel4/profile-v2/qemu-smp-production \
+  --require-source --require-artifacts --for-release \
+  --evidence out/audit/m26d-profile-v2-qemu-smp-production.json
 
-SEL4_BUILD_DIR="$PWD/seL4/SMP_build" \
-  COHSH_BATCH_TARGET=qemu \
-  COHSH_BATCH_GROUPS=base-telemetry,base-shard,gated \
-  COHSH_LOG_ROOT=out/regression-logs/m26d-qemu-remaining \
-  scripts/cohsh/run_regression_batch.sh
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
+  --profile qemu_smp_diagnostic \
+  --source out/sel4/v15-worktree-project \
+  --build-dir out/sel4/profile-v2/qemu-smp-diagnostic \
+  --require-source --require-artifacts --for-runtime \
+  --evidence out/audit/m26d-profile-v2-qemu-smp-diagnostic.json
 
-.venv/bin/python -m pytest -q \
-  tests/test_rest_perf_harness.py \
-  tests/test_pi4_compare_driver_models.py
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
+  --profile pi4_production \
+  --source out/sel4/v15-pi4-project \
+  --build-dir out/sel4/profile-v2/pi4-production \
+  --require-source --require-artifacts --for-release \
+  --evidence out/audit/m26d-profile-v2-pi4-production.json
+
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
+  --profile pi4_diagnostic \
+  --source out/sel4/v15-pi4-project \
+  --build-dir out/sel4/profile-v2/pi4-diagnostic \
+  --require-source --require-artifacts --for-runtime \
+  --evidence out/audit/m26d-profile-v2-pi4-diagnostic.json
+
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
+  --profile bcm2711_proof_eligibility \
+  --source out/sel4/v15-worktree-project \
+  --build-dir out/sel4/profile-v2/bcm2711-proof-eligibility \
+  --require-source --require-artifacts \
+  --evidence out/audit/m26d-profile-v2-bcm2711-proof-eligibility.json
+
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
+  --profile pi4_diagnostic \
+  --source out/sel4/v15-pi4-project \
+  --build-dir /Users/lukasbower/seL4/build_UBOOT \
+  --require-source --require-artifacts --for-runtime \
+  --evidence out/audit/m26d-pi4-diagnostic-build-uboot.json
+# Expected until the CYW43 lane performs a coordinated fresh rebuild:
+# ERROR: profile build-input stamp does not match current source, commands,
+# configuration, tools, or artifacts
+
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
+  --all --require-source --require-artifacts \
+  --evidence out/audit/m26d-profile-v2-all.json
+# PASS profiles=5
+
+scripts/ci/test_plan_run.sh --target qemu \
+  --state-dir out/test-plan/m26d-qemu-sel4-15-gap-audit
+# PASS stages 1 2 3 4 5; Stage 03 passed 18 scripts
 ```
 
-The Pi image command completed stage-only and restored canonical generated
-manifest artifacts afterward.
+## Preserved, claim-ineligible trees
 
-## Focused QEMU Evidence
+The following are retained for diagnosis or historical identity and are not
+canonical aggregate defaults:
 
-- QEMU SMP TCP regression passed on `seL4/SMP_build`: `11` base `.coh`
-  scripts in `out/regression-logs/m26d-qemu-base` and `7` remaining `.coh`
-  scripts in `out/regression-logs/m26d-qemu-remaining`.
-- QEMU REST performance harness ran through a local `hive-gateway` backed by
-  the refreshed `seL4/SMP_build` VM:
-  - `out/bench/m26d-qemu-sel4-15-initial_20260629T082620Z.log`:
-    status suite complete, speedup `27.31x`; telemetry skipped because the
-    QEMU manifest exposed no `/worker` entries to the perf discovery path.
-  - `out/bench/m26d-qemu-sel4-15-final_20260629T082622Z.log`:
-    status suite complete, speedup `30.45x`; telemetry skipped for the same
-    QEMU worker-discovery reason.
-  - VM and gateway logs: `out/bench/m26d-qemu-sel4-15.qemu.log` and
-    `out/bench/m26d-qemu-sel4-15.gateway.log`.
-- Single-core QEMU smoke on `seL4/build` with `COHESIX_QEMU_SMP=1` confirmed
-  the seL4 15 loader/kernel/rootserver handoff reaches userspace with the
-  rootserver placed at `0x7fbe4000..0x7fffefff`. It then hits the existing
-  root-task `allocation attempted before allocator ready` bootstrap guard before
-  TCP auth readiness, so this ledger does not claim single-core Cohesix runtime
-  acceptance. Evidence: `out/bench/m26d-qemu-single-smoke-1cpu.qemu.log`.
+| Tree | Status |
+| --- | --- |
+| `seL4/build` | Historical single-core/GICv2 tree from the older seL4Test project |
+| `seL4/SMP_build` | Historical SMP/GICv2 comparison evidence; explicit diagnostic input only, not a publication/runtime default |
+| `seL4/build_UBOOT` | Historical tracked Pi build evidence; not the active exact-image input |
+| `/Users/lukasbower/seL4/build_UBOOT` | External Pi exact-image/CYW43 tree; separately owned, causally stale after the validator guard change, and pending coordinated rebuild |
+| `out/sel4/profile-v2/*.pre-final-frozen-20260716T144348Z` | Five preserved defaults that predate the final causal rebuild |
+| `/Users/lukasbower/seL4/build_UBOOT.pre-final-frozen-20260716T144348Z` | Preserved external tree that predates the final causal rebuild |
+| `out/sel4/profile-v2/*.failed-setuptools83` | Preserved first attempts that failed before completing the Python build-tool contract |
+| `out/sel4/profile-v2/*.pre-memoize-fix` | Preserved successful builds bound to the superseded validator before both memoization variables were disabled |
 
-## Focused Pi 4 Wi-Fi Evidence
+The failed and superseded siblings cannot satisfy default-path validation and
+must not be renamed over a canonical tree.
 
-- Selected newest non-empty serial log:
-  `/Users/lukasbower/pi4-serial-20260629-220122.log`.
-- Selected boot-time Wi-Fi packet capture:
-  `/Users/lukasbower/tcpdump-wifi-20260629-202452.pcap`.
-- Live boot reached U-Boot, seL4, root-task userspace, arch-counter timer
-  setup, Wi-Fi secure association, DHCP bind, USB input readiness, HDMI
-  readiness, and all six driver-task DMA proof rows.
-- Live ARP and ping proof: host `.102` ARPed for Pi `.154`, Pi replied from
-  `88:a2:9e:66:59:10`, and host ping to `192.168.86.154` returned `2/2`
-  packets with `15.048 ms` average round-trip time.
-- Raw authenticated TCP console proof:
-  `out/bench/m26d-pi4-wifi-20260629T120550Z-raw-cohsh.txt`.
-  The run completed `AUTH`, `ATTACH`, `PING`, and `NETSTATS` over
-  `192.168.86.154:31337`.
-- Strict normalized gate proof:
-  `out/test-plan/m26d-pi4/pi4-runtime-dma-proof-20260629-220122.env`.
-  The proof records `USB_GATE=10`, `WIFI_GATE=10`, `NET_ACTIVE=wifi`,
-  `NET_DHCP=bound`, `PI4_RUNTIME_DMA_PROOF=fresh-pi`,
-  `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`,
-  `DRIVER_TASK_ACTIVE_NET=cyw43`, `DRIVER_TASK_DMA_PROOFS=6`,
-  `DRIVER_TASK_DMA_BLOCKER=none`, and
-  `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT=0`.
-- Live Pi REST performance harness ran through a local `hive-gateway` backed by
-  the Wi-Fi TCP console:
-  - `out/bench/m26d-pi4-wifi-20260629T120550Z-m26d-pi4-sel4-15-final_20260629T120755Z.log`:
-    status suite complete, sequential average `0.093s`, parallel average
-    `0.004s`, speedup `25.73x`.
-  - Telemetry suite skipped because no `/worker` entries were exposed to the
-    perf discovery path on this live Pi manifest.
-  - Gateway counters stayed clean for the benchmark start state:
-    `pool_exhausted=0`, `checkout_retries=0`, and `timeout_rejections=0`.
+## Historical runtime evidence
 
-## Saved-Policy Wi-Fi and GENET Reboot Evidence
+Earlier Milestone 26d QEMU and Pi observations remain useful only with their
+original artifact identities:
 
-Follow-up saved-policy Wi-Fi reboot diagnostics on the pre-fix Pi image used
-serial logs
-`/Users/lukasbower/pi4-serial-20260630-070231-m26d-wifi-10cycle.log` and
-`/Users/lukasbower/pi4-serial-20260630-071225-m26d-wifi-cycles-5-10.log`,
-plus ledgers
-`out/pi4-live/m26d-wifi-10cycle-20260630-070231.jsonl` and
-`out/pi4-live/m26d-wifi-cycles-5-10-20260630-071225.jsonl`.
+- `out/regression-logs/m26d-qemu-base` and
+  `out/regression-logs/m26d-qemu-remaining` record the earlier
+  `seL4/SMP_build` TCP regression runs;
+- `out/bench/m26d-qemu-sel4-15-*.log` records earlier QEMU REST runs;
+- `/Users/lukasbower/pi4-serial-20260629-220122.log`,
+  `/Users/lukasbower/tcpdump-wifi-20260629-202452.pcap`, and
+  `out/test-plan/m26d-pi4/pi4-runtime-dma-proof-20260629-220122.env`
+  record the accepted historical Pi boot/network/runtime-DMA slice;
+- the later saved-policy Wi-Fi cycle evidence remained non-repeatable, while
+  the corrected GENET saved-policy cycle evidence passed 10/10.
 
-The Wi-Fi lane did not pass ten saved-policy reboots. Three cycles reached
-DHCP-bound `192.168.86.154` with raw TCP open, while later cycles exposed one
-TCP timeout after DHCP bind, two `dhcp=failed` boots, and one
-`dhcp=selecting` boot. Three early cycle records were host-harness settle
-artifacts and are not counted as target failures. The corrected `.coh` harness
-must avoid pre-attaching `--role queen` for scripts that contain their own
-`attach queen` step. The recurring `.154` Pi lease and `.102` host ARP/TCP
-pattern remains a live clue: DHCP bind alone did not guarantee host reachability
-after the AP delivered or withheld later broadcast/unicast traffic.
+Those results do not upgrade the new static profile-v2 artifacts to live
+runtime evidence and do not establish current-image Wi-Fi reliability. The
+current QEMU Test Plan is recorded separately above and does not upgrade any
+historical Pi artifact. The
+parallel CYW43 lane owns the required fresh external-tree rebuild, Cohesix
+exact-image identity,
+10-cold/10-warm repeatability, current-boot serial/pcap pairing, raw
+TCP/`cohsh`, and refreshed Pi benchmark proof. This profile work did not
+rewrite that state machine or its evidence classifiers.
 
-Saved-policy GENET diagnostics used
-`/Users/lukasbower/pi4-serial-20260630-072528-m26d-switch-genet.log`,
-`/Users/lukasbower/pi4-serial-20260630-072645-m26d-genet-netstats.log`, and
-`/Users/lukasbower/pi4-serial-20260630-073517-m26d-genet-cycles-2-10.log`.
-Corrected cycle evidence is split across
-`out/pi4-live/m26d-genet-10cycle-fixed-20260630-072953.jsonl` for cycle 1 and
-`out/pi4-live/m26d-genet-cycles-2-10-20260630-073517.jsonl` for cycles 2-10.
-GENET passed `10/10` saved-policy reboots at `192.168.10.50`; each corrected
-cycle reached DHCP bound, raw TCP open, and successful `tcp_basic.coh`,
-`boot_v0.coh`, and `smp_parity.coh` runs. The invalid earlier GENET cycle 2 was
-a host-harness stale-prompt/menu-input error, not a target failure.
+## Current closure boundary
 
-The fix batch in this change keeps existing CYW43 ARP assist and gratuitous ARP
-paths intact, adds a CYW43 pre-poll drain window before the DHCP client leaves
-`Disabled`, reasserts post-secure broadcast data admission at DHCP start and
-lease bind, and widens only the Pi 4 manifest DHCP retry envelope to
-`1500 ms` discover, `1500 ms` request, and `6` retries. The patched Pi image was
-stage-built at `out/pi4-sd-m26d-fix` and was not live reflashed in this run.
-The next hardware acceptance step is to reflash that image and rerun the same
-saved-policy Wi-Fi ten-cycle loop before claiming post-fix Wi-Fi stability.
+The canonical seL4 15 profile, provenance, and default-consumer gate is
+complete:
 
-## Remaining Closure Boundary
+- all five fresh defaults pass source and artifact validation;
+- QEMU defaults select GICv3 consistently through source, generated config,
+  both parsed DTBs, and launcher detection;
+- the linked canonical GICv3 QEMU image passes the target-qualified five-stage
+  Test Plan, authenticated TCP console regression, and REST projection checks;
+- the production wrapper carries a contract-bound, validated archive reserve
+  large enough for the current boot-minimized Cohesix root task;
+- one-domain builds contain no legacy domain-schedule input;
+- the external Pi diagnostic tree is fail-closed as causally stale after the
+  evidence-class guard change and remains a coordinated CYW43-lane rebuild
+  gate;
+- production, diagnostic, and proof-eligibility claims remain distinct;
+- evidence classes have fixed release/runtime eligibility and entrypoints
+  validate the applicable intent before claims;
+- compiler, Python, `mkimage`, source, build, and artifact identities are
+  fail-closed.
 
-This ledger proves the seL4 15 build-artifact replacement, Pi stage-only image
-build, focused QEMU SMP TCP regression, focused QEMU REST status benchmark,
-live Pi 4 Wi-Fi boot/network/raw-console proof, strict live Pi runtime/DMA
-proof, and live Pi 4 Wi-Fi REST status benchmark lane.
+Milestone 26d remains **In Progress**. The profile result does not close:
 
-The full target-qualified staged runner is not claimed here because the live
-Pi run did not execute the full lifecycle-reset/reboot path required by that
-runner. Saved-policy GENET reboot parity is evidenced above for `.coh` smoke
-and DHCP/TCP readiness, but full GENET performance/staged-runner closure remains
-a separate 26b/26d proof boundary. Wi-Fi evidence remains diagnostic until the
-patched image passes the saved-policy ten-cycle loop documented above.
+- a sealed/read-back-bound current Pi image and fresh board boot;
+- a fresh, current-validator rebuild of the external Pi exact-image input;
+- CYW43 10-cold/10-warm repeatability, Wi-Fi DPC, TCP/`cohsh`, and operator
+  gates;
+- refreshed target-qualified benchmark evidence.
+
+Proof-eligibility output means only that the pristine upstream
+source/configuration matches that profile's entry conditions. It is not formal
+verification of Cohesix userspace, its boot chain, the operational Pi overlay,
+DMA isolation, timing, or hardware behavior.

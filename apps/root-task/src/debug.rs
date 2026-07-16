@@ -16,13 +16,9 @@ use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use sel4_sys::{seL4_CPtr, seL4_Word};
 use spin::Mutex as SpinMutex;
 
-extern "C" {
-    fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
-}
-
 #[inline(always)]
 pub fn debug_identify(cap: seL4_CPtr) -> seL4_Word {
-    unsafe { seL4_DebugCapIdentify(cap) }
+    crate::sel4::debug_cap_identify(cap)
 }
 
 const MAX_WATCHED_RANGES: usize = 8;

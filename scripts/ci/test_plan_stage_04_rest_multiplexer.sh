@@ -254,7 +254,7 @@ if [[ -z "${gateway_url}" ]]; then
   coh_bin="${TP_COH_BIN:-${local_qemu_out}/host-tools/coh}"
   qemu_log="${TEST_PLAN_LOG_DIR}/stage4-local-qemu.log"
   gateway_log="${TEST_PLAN_LOG_DIR}/stage4-hive-gateway.log"
-  sel4_build_dir="${TP_STAGE4_SEL4_BUILD_DIR:-${SEL4_BUILD_DIR:-${TEST_PLAN_ROOT}/seL4/SMP_build}}"
+  sel4_build_dir="${TP_STAGE4_SEL4_BUILD_DIR:-${SEL4_BUILD_DIR:-${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production}}"
 
   if stage4_check_port_open 127.0.0.1 "${qemu_tcp_port}"; then
     tp_log "FAIL  local QEMU TCP port already in use: ${qemu_tcp_port}"
@@ -272,7 +272,8 @@ if [[ -z "${gateway_url}" ]]; then
   tp_log "INFO  local-qemu-out=${local_qemu_out}"
   tp_log "INFO  local-gateway-url=${gateway_url}"
 
-  SEL4_BUILD_DIR="${sel4_build_dir}" COH_RTC_MANIFEST="${TEST_PLAN_ROOT}/configs/root_task.toml" \
+  COHESIX_SEL4_PROFILE=qemu_smp_production \
+    SEL4_BUILD_DIR="${sel4_build_dir}" COH_RTC_MANIFEST="${TEST_PLAN_ROOT}/configs/root_task.toml" \
     "${TEST_PLAN_ROOT}/scripts/cohesix-build-run.sh" \
     --sel4-build "${sel4_build_dir}" \
     --out-dir "${local_qemu_out}" \

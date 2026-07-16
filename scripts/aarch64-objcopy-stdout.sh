@@ -5,9 +5,15 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PINNED_OBJCOPY="${REPO_ROOT}/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objcopy"
+
 find_real_objcopy() {
     local candidate=""
     for candidate in \
+        "${PINNED_OBJCOPY}" \
+        "$(command -v aarch64-none-elf-objcopy 2>/dev/null || true)" \
         /opt/homebrew/bin/aarch64-elf-objcopy \
         /opt/homebrew/bin/aarch64-linux-gnu-objcopy \
         "$(command -v aarch64-elf-objcopy 2>/dev/null || true)" \

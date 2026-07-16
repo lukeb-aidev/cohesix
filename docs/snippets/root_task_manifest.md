@@ -55,14 +55,14 @@
 - `telemetry.frame_schema`: `legacy-plaintext`
 - `telemetry.cursor.retain_on_boot`: `false`
 - `worker_runtime.implementation_epoch`: `26`
-- `worker_runtime.cap_backed_authority`: `true`
-- `worker_runtime.notification_lifecycle`: `true`
+- `worker_runtime.cap_backed_authority`: `false`
+- `worker_runtime.notification_lifecycle`: `false`
 - `worker_runtime.scheduling.profile`: `non-mcs`
 - `worker_runtime.scheduling.service_turn_budget`: `64`
-- `worker_runtime.roles.worker-heartbeat`: `implemented=true ticket_scope=/worker telemetry=/shard/<label>/worker/<id>/telemetry`
-- `worker_runtime.roles.worker-gpu`: `implemented=true ticket_scope=/gpu telemetry=/shard/<label>/worker/<id>/telemetry`
+- `worker_runtime.roles.worker-heartbeat`: `implemented=false ticket_scope=/worker telemetry=/shard/<label>/worker/<id>/telemetry`
+- `worker_runtime.roles.worker-gpu`: `implemented=false ticket_scope=/gpu telemetry=/shard/<label>/worker/<id>/telemetry`
 - `worker_runtime.roles.worker-bus`: `implemented=false ticket_scope=/bus telemetry=/shard/<label>/worker/<id>/telemetry`
-- `worker_runtime.roles.worker-lora`: `implemented=true ticket_scope=/worker telemetry=/shard/<label>/worker/<id>/telemetry`
+- `worker_runtime.roles.worker-lora`: `implemented=false ticket_scope=/worker telemetry=/shard/<label>/worker/<id>/telemetry`
 - `telemetry_ingest.max_segments_per_device`: `4`
 - `telemetry_ingest.max_bytes_per_segment`: `131072`
 - `telemetry_ingest.max_total_bytes_per_device`: `524288`
@@ -229,7 +229,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `763ef148ed19f1250afdcc2e99611be1668369c6b7c375593af99e3420716f41`
+- `manifest.sha256`: `376f09a49cdb37c07ae8ef007d4d4c715df4b4f949d4d6c1546002108d495599`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -288,4 +288,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `763ef148ed19f1250afdcc2e99611be1668369c6b7c375593af99e3420716f41`)._
+_Generated from `configs/root_task.toml` (sha256: `376f09a49cdb37c07ae8ef007d4d4c715df4b4f949d4d6c1546002108d495599`)._

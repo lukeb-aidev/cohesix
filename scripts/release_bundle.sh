@@ -22,7 +22,7 @@ LINUX_SYNC_KEY="${LINUX_SYNC_KEY:-${COHESIX_SYNC_KEY:-}}"
 LINUX_SYNC_REMOTE_DIR="${LINUX_SYNC_REMOTE_DIR:-${COHESIX_SYNC_REMOTE_DIR:-}}"
 LINUX_SYNC_LOCAL_OUT="${LINUX_SYNC_LOCAL_OUT:-${COHESIX_SYNC_LOCAL_OUT:-}}"
 HOST_TOOLS_PROFILE="${HOST_TOOLS_PROFILE:-release}"
-SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${ROOT_DIR}/seL4/SMP_build}"
+SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${ROOT_DIR}/out/sel4/profile-v2/qemu-smp-production}"
 
 usage() {
   cat <<'USAGE'
@@ -36,7 +36,8 @@ releases/<release-name>-linux.tar.gz. Use --linux-only to emit only the Linux bu
 
 Env overrides:
   RELEASE_NAME, RELEASE_VERSION
-  SEL4_BUILD_DIR (defaults to $REPO/seL4/SMP_build)
+  SEL4_BUILD_DIR (defaults to $REPO/out/sel4/profile-v2/qemu-smp-production;
+                  the selected tree must pass qemu_smp_production release validation)
   LINUX_HOST_TARGET (default: aarch64-unknown-linux-gnu)
   LINUX_HOST_TOOLS_DIR (prebuilt host tools dir; if empty, build from source)
   LINUX_SYNC_HOST (if set, run scripts/linux_host_tools_sync.sh before bundling)
@@ -98,6 +99,22 @@ LINUX_BUNDLE_NAME="${RELEASE_NAME}-linux"
 fail() {
   echo "$1" >&2
   exit 1
+}
+
+validate_release_sel4_profile() {
+  local profile_python="${ROOT_DIR}/out/toolchain/sel4-profile-venv/bin/python"
+  local profile_tool="${ROOT_DIR}/scripts/sel4_profile.py"
+
+  [[ -x "$profile_python" ]] || fail \
+    "canonical seL4 profile Python is missing: $profile_python (run toolchain/setup_macos_arm64.sh)"
+  [[ -f "$profile_tool" ]] || fail "seL4 profile validator is missing: $profile_tool"
+  "$profile_python" "$profile_tool" validate \
+    --profile qemu_smp_production \
+    --build-dir "$SEL4_BUILD_DIR" \
+    --require-source \
+    --require-artifacts \
+    --for-release \
+    || fail "release input does not satisfy qemu_smp_production"
 }
 
 purge_release_paths() {
@@ -649,6 +666,8 @@ require_file "${ROOT_DIR}/scripts/setup_environment.sh"
 require_dir "${ROOT_DIR}/apps/swarmui/frontend"
 require_dir "${ROOT_DIR}/docs"
 require_dir "${ROOT_DIR}/scripts/cohsh"
+
+validate_release_sel4_profile
 
 if [[ "$FORCE" -eq 1 ]]; then
   purge_release_paths

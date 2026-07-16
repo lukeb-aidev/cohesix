@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Decode generated worker endpoint, notification, and scheduling evidence.
+// Purpose: Report generated Worker execution availability and reject inactive authority claims.
 // Author: Lukas Bower
 
 use cohesix_ticket::Role;
@@ -50,7 +50,10 @@ pub struct WorkerEndpointObservation {
     pub badge: u64,
 }
 
-/// Profile-qualified scheduling evidence exported from generated truth.
+/// Profile-qualified scheduling metadata exported from generated truth.
+///
+/// This record does not prove that a Worker TCB exists or that the kernel
+/// applied these values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WorkerSchedulingEvidence {
     /// Scheduling profile selected by the manifest.
@@ -88,6 +91,8 @@ pub enum WorkerAuthorityError {
     BadgeEpochMismatch,
     /// The notification badge did not match the expected generated event.
     NotificationMismatch,
+    /// The selected profile does not enable Worker lifecycle notifications.
+    NotificationDisabled,
 }
 
 /// Return true when `role` is implemented as a VM-side worker role.
@@ -189,17 +194,24 @@ pub fn require_endpoint_invocation(
     Ok(observation)
 }
 
-/// Return the generated notification badge for a lifecycle event.
+/// Return the generated notification badge for an enabled lifecycle event.
 #[must_use]
-pub fn notification_badge(event: WorkerNotificationEvent) -> u64 {
-    let notifications = generated::worker_runtime_config().notifications;
-    match event {
+pub fn notification_badge(event: WorkerNotificationEvent) -> Option<u64> {
+    let config = generated::worker_runtime_config();
+    if !config.notification_lifecycle
+        || !config.notifications.enabled
+        || !config.roles.iter().any(|entry| entry.implemented)
+    {
+        return None;
+    }
+    let notifications = config.notifications;
+    Some(match event {
         WorkerNotificationEvent::Revoke => notifications.revoke_badge,
         WorkerNotificationEvent::Shutdown => notifications.shutdown_badge,
         WorkerNotificationEvent::LeaseExpiry => notifications.lease_expiry_badge,
         WorkerNotificationEvent::TelemetryPressure => notifications.telemetry_pressure_badge,
         WorkerNotificationEvent::Irq => notifications.irq_badge,
-    }
+    })
 }
 
 /// Verify that a notification badge matches the expected generated lifecycle event.
@@ -207,7 +219,8 @@ pub fn verify_notification_badge(
     event: WorkerNotificationEvent,
     badge: u64,
 ) -> Result<(), WorkerAuthorityError> {
-    if notification_badge(event) == badge {
+    let expected = notification_badge(event).ok_or(WorkerAuthorityError::NotificationDisabled)?;
+    if expected == badge {
         Ok(())
     } else {
         Err(WorkerAuthorityError::NotificationMismatch)
@@ -266,45 +279,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn metadata_only_worker_authority_is_rejected() {
+    fn modeled_worker_role_is_not_executable() {
+        assert!(!role_is_implemented(Role::WorkerHeartbeat));
+        assert_eq!(
+            endpoint_badge(WorkerEndpointAction::Attach, Role::WorkerHeartbeat, 1),
+            None
+        );
         let err = require_endpoint_invocation(
             WorkerEndpointAction::Attach,
             Role::WorkerHeartbeat,
             1,
             None,
         )
-        .expect_err("metadata-only worker attach must fail");
+        .expect_err("modeled worker attach must fail");
+        assert_eq!(err, WorkerAuthorityError::RoleNotImplemented);
+    }
+
+    #[test]
+    fn reserved_endpoint_badge_is_not_live_authority() {
+        let badge = generated::worker_runtime_config()
+            .endpoint_caps
+            .attach_badge_base;
+        let err = observe_endpoint_badge(badge)
+            .expect_err("reserved metadata must not decode as live authority");
         assert_eq!(err, WorkerAuthorityError::MetadataOnly);
-    }
-
-    #[test]
-    fn matching_endpoint_badge_decodes_role_action_and_epoch() {
-        let badge = endpoint_badge(WorkerEndpointAction::Telemetry, Role::WorkerGpu, 7)
-            .expect("generated badge");
-        let observation = require_endpoint_invocation(
-            WorkerEndpointAction::Telemetry,
-            Role::WorkerGpu,
-            7,
-            Some(badge),
-        )
-        .expect("valid worker badge");
-        assert_eq!(observation.action, WorkerEndpointAction::Telemetry);
-        assert_eq!(observation.role, Role::WorkerGpu);
-        assert_eq!(observation.epoch, 7);
-    }
-
-    #[test]
-    fn stale_epoch_badge_is_rejected() {
-        let badge = endpoint_badge(WorkerEndpointAction::Attach, Role::WorkerHeartbeat, 3)
-            .expect("generated badge");
-        let err = require_endpoint_invocation(
-            WorkerEndpointAction::Attach,
-            Role::WorkerHeartbeat,
-            4,
-            Some(badge),
-        )
-        .expect_err("stale epoch must fail");
-        assert_eq!(err, WorkerAuthorityError::BadgeEpochMismatch);
     }
 
     #[test]
@@ -315,13 +313,11 @@ mod tests {
     }
 
     #[test]
-    fn notification_badges_match_generated_events() {
-        let revoke = notification_badge(WorkerNotificationEvent::Revoke);
-        verify_notification_badge(WorkerNotificationEvent::Revoke, revoke)
-            .expect("revoke badge should match");
-        let err = verify_notification_badge(WorkerNotificationEvent::Shutdown, revoke)
-            .expect_err("wrong event must fail");
-        assert_eq!(err, WorkerAuthorityError::NotificationMismatch);
+    fn notification_badges_are_disabled_without_executable_workers() {
+        assert_eq!(notification_badge(WorkerNotificationEvent::Revoke), None);
+        let err = verify_notification_badge(WorkerNotificationEvent::Revoke, 0x260c_6000)
+            .expect_err("reserved notification badge must stay disabled");
+        assert_eq!(err, WorkerAuthorityError::NotificationDisabled);
     }
 
     #[test]

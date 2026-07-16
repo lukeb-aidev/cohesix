@@ -3181,6 +3181,7 @@ fn driver_task_ring_mode_log_key(mode: DriverTaskRingCommandMode) -> usize {
         DriverTaskRingCommandMode::Bootstrap => 2,
         DriverTaskRingCommandMode::NonBlocking => 3,
         DriverTaskRingCommandMode::PromptSlice => 4,
+        DriverTaskRingCommandMode::RetainedTurn => 5,
     }
 }
 
@@ -3289,7 +3290,9 @@ const fn driver_task_ring_repeat_allowed(
     repeat_count: usize,
 ) -> bool {
     match mode {
-        DriverTaskRingCommandMode::PromptSlice => repeat_count == 1,
+        DriverTaskRingCommandMode::PromptSlice | DriverTaskRingCommandMode::RetainedTurn => {
+            repeat_count == 1
+        }
         DriverTaskRingCommandMode::Steady
         | DriverTaskRingCommandMode::Bootstrap
         | DriverTaskRingCommandMode::NonBlocking => true,
@@ -3961,49 +3964,6 @@ fn driver_task_deadline_from_spins(spins: usize) -> DriverTaskDeadline {
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_deadline_from_micros(micros: u64, fallback_iterations: usize) -> DriverTaskDeadline {
-    match (driver_task_counter_ticks(), driver_task_counter_frequency()) {
-        (Some(start), Some(freq_hz)) if freq_hz != 0 => {
-            let cycles = driver_task_micros_to_cycles_at_hz(micros, freq_hz);
-            if cycles == 0 {
-                DriverTaskDeadline::Iterations { remaining: 0 }
-            } else {
-                DriverTaskDeadline::Counter { start, cycles }
-            }
-        }
-        _ => DriverTaskDeadline::Iterations {
-            remaining: fallback_iterations,
-        },
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn driver_task_counter_delay_micros(micros: u64) -> bool {
-    let Some(start) = driver_task_counter_ticks() else {
-        return false;
-    };
-    let Some(freq_hz) = driver_task_counter_frequency() else {
-        return false;
-    };
-    let cycles = driver_task_micros_to_cycles_at_hz(micros, freq_hz);
-    if cycles == 0 {
-        return false;
-    }
-    let mut polls = 0usize;
-    while polls < CYW43_SDIO_PAIR_RESTART_MMIO_DELAY_POLL_CAP {
-        let Some(current) = driver_task_counter_ticks() else {
-            return false;
-        };
-        if current.wrapping_sub(start) >= cycles {
-            return true;
-        }
-        polls = polls.saturating_add(1);
-        core::hint::spin_loop();
-    }
-    false
-}
-
-#[cfg(feature = "kernel")]
 fn driver_task_deadline_expired(deadline: &mut DriverTaskDeadline) -> bool {
     match deadline {
         DriverTaskDeadline::Counter { start, cycles } => driver_task_counter_ticks()
@@ -4511,6 +4471,12 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     slot.endpoint.store(0, Ordering::Release);
     slot.ring_root_ptr.store(0, Ordering::Release);
     slot.ring_frame_cap.store(0, Ordering::Release);
+    slot.ring_context.store(0, Ordering::Release);
+    slot.ring_handler.store(0, Ordering::Release);
+    slot.ring_service_kind.store(
+        DriverTaskRingServiceKind::None.as_usize(),
+        Ordering::Release,
+    );
     slot.shared_frame_count.store(0, Ordering::Release);
     let mut index = 0usize;
     while index < DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
@@ -5700,65 +5666,7 @@ const CYW43_SDIO_PAIR_RESTART_ACTION_ORDER: [Cyw43SdioPairRestartAction; 22] = [
     Cyw43SdioPairRestartAction::DelegateAndAdvanceEpoch,
 ];
 
-#[cfg(feature = "kernel")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Cyw43SdioPairRestartScheduleOutcome {
-    Completed,
-    Failed(Cyw43SdioPairRestartAction),
-}
-
-#[cfg(feature = "kernel")]
-impl Cyw43SdioPairRestartScheduleOutcome {
-    const fn completed(self) -> bool {
-        matches!(self, Self::Completed)
-    }
-
-    #[cfg(test)]
-    const fn requires_outer_fence(self) -> bool {
-        !self.completed()
-    }
-
-    #[cfg(test)]
-    const fn may_clear_pending(self) -> bool {
-        self.completed()
-    }
-
-    #[cfg(test)]
-    const fn failed_action(self) -> Option<Cyw43SdioPairRestartAction> {
-        match self {
-            Self::Completed => None,
-            Self::Failed(action) => Some(action),
-        }
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn execute_cyw43_sdio_pair_restart_schedule(
-    mut execute: impl FnMut(Cyw43SdioPairRestartAction) -> bool,
-) -> Cyw43SdioPairRestartScheduleOutcome {
-    for action in CYW43_SDIO_PAIR_RESTART_ACTION_ORDER {
-        if !execute(action) {
-            return Cyw43SdioPairRestartScheduleOutcome::Failed(action);
-        }
-    }
-    Cyw43SdioPairRestartScheduleOutcome::Completed
-}
-
-#[cfg(feature = "kernel")]
-fn execute_cyw43_sdio_pair_restart_schedule_with_progress(
-    mut execute: impl FnMut(Cyw43SdioPairRestartAction) -> bool,
-    mut service_operator: impl FnMut(&'static str),
-) -> Cyw43SdioPairRestartScheduleOutcome {
-    execute_cyw43_sdio_pair_restart_schedule(|action| {
-        // Complete the action call first so its ring, notification, and MMIO
-        // helper guards are gone before operator diagnostics can run.
-        let ready = execute(action);
-        service_operator(action.as_str());
-        ready
-    })
-}
-
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43SdioCardIntMaskStep {
     WriteSignalEnable,
@@ -5767,7 +5675,7 @@ enum Cyw43SdioCardIntMaskStep {
     DelayWriteCommit,
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", test))]
 const CYW43_SDIO_CARD_INT_MASK_STEPS: [Cyw43SdioCardIntMaskStep; 4] = [
     Cyw43SdioCardIntMaskStep::WriteInterruptEnable,
     Cyw43SdioCardIntMaskStep::DelayTwoSdClocks,
@@ -5782,7 +5690,7 @@ enum Cyw43SdioCardIntRegister {
     SignalEnable,
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", test))]
 trait Cyw43SdioCardIntMaskIo {
     fn read(&mut self, register: Cyw43SdioCardIntRegister) -> Option<u32>;
     fn write(&mut self, register: Cyw43SdioCardIntRegister, value: u32) -> bool;
@@ -5790,7 +5698,7 @@ trait Cyw43SdioCardIntMaskIo {
     fn barrier(&mut self, instruction_sync: bool);
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", test))]
 fn mask_cyw43_sdio_card_interrupt_with(io: &mut impl Cyw43SdioCardIntMaskIo) -> bool {
     for step in CYW43_SDIO_CARD_INT_MASK_STEPS {
         match step {
@@ -5954,76 +5862,20 @@ fn cyw43_sdio_restart_mmio_barrier(instruction_sync: bool) {
 }
 
 #[cfg(feature = "kernel")]
-struct Cyw43SdioCardIntMaskMmio {
-    window: super::MappedRegisterWindow,
-}
-
-#[cfg(feature = "kernel")]
-impl Cyw43SdioCardIntMaskIo for Cyw43SdioCardIntMaskMmio {
-    fn read(&mut self, register: Cyw43SdioCardIntRegister) -> Option<u32> {
-        self.window
-            .read_u32(match register {
-                Cyw43SdioCardIntRegister::InterruptEnable => SDHCI_INTERRUPT_ENABLE_OFFSET,
-                Cyw43SdioCardIntRegister::SignalEnable => SDHCI_SIGNAL_ENABLE_OFFSET,
-            })
-            .ok()
-    }
-
-    fn write(&mut self, register: Cyw43SdioCardIntRegister, value: u32) -> bool {
-        self.window
-            .write_u32(
-                match register {
-                    Cyw43SdioCardIntRegister::InterruptEnable => SDHCI_INTERRUPT_ENABLE_OFFSET,
-                    Cyw43SdioCardIntRegister::SignalEnable => SDHCI_SIGNAL_ENABLE_OFFSET,
-                },
-                value,
-            )
-            .is_ok()
-    }
-
-    fn delay_write_commit(&mut self) -> bool {
-        driver_task_counter_delay_micros(CYW43_SDIO_PAIR_RESTART_MMIO_GAP_US)
-    }
-
-    fn barrier(&mut self, instruction_sync: bool) {
-        cyw43_sdio_restart_mmio_barrier(instruction_sync);
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn mask_cyw43_sdio_card_interrupt(sdhci_root_ptr: usize) -> bool {
-    let Ok(window) = super::MappedRegisterWindow::new(sdhci_root_ptr, DRIVER_TASK_RING_PAGE_BYTES)
-    else {
-        return false;
-    };
-    mask_cyw43_sdio_card_interrupt_with(&mut Cyw43SdioCardIntMaskMmio { window })
-}
-
-#[cfg(feature = "kernel")]
-fn drain_cyw43_sdio_restart_notification(notification: usize) {
-    let mut polls = 0usize;
-    while polls < CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP {
-        let mut badge = 0;
-        let _ = crate::sel4::poll(notification as sel4_sys::seL4_CPtr, &mut badge);
-        polls = polls.saturating_add(1);
-    }
-}
-
-#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43SdioPairMember {
     Cyw43,
     Sdio,
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", test))]
 trait Cyw43SdioRestartNotificationIo {
     fn unbind(&mut self, member: Cyw43SdioPairMember) -> bool;
     fn rebind(&mut self, member: Cyw43SdioPairMember) -> bool;
     fn acknowledge_irq(&mut self, member: Cyw43SdioPairMember) -> bool;
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", test))]
 fn unbind_cyw43_sdio_restart_notifications_with(
     io: &mut impl Cyw43SdioRestartNotificationIo,
 ) -> bool {
@@ -6037,7 +5889,7 @@ fn unbind_cyw43_sdio_restart_notifications_with(
     true
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", test))]
 fn rebind_cyw43_sdio_restart_notifications_with(
     io: &mut impl Cyw43SdioRestartNotificationIo,
 ) -> bool {
@@ -6048,7 +5900,7 @@ fn rebind_cyw43_sdio_restart_notifications_with(
     sdio_bound && cyw43_bound
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", test))]
 fn acknowledge_cyw43_sdio_restart_irqs_with(io: &mut impl Cyw43SdioRestartNotificationIo) -> bool {
     io.acknowledge_irq(Cyw43SdioPairMember::Cyw43) && io.acknowledge_irq(Cyw43SdioPairMember::Sdio)
 }
@@ -6093,67 +5945,6 @@ fn acknowledge_cyw43_sdio_restart_irq(irq_handler: usize) -> bool {
     irq_handler == 0
         || crate::sel4::irq_handler_ack(irq_handler as sel4_sys::seL4_CPtr)
             == sel4_sys::seL4_NoError
-}
-
-#[cfg(feature = "kernel")]
-struct Cyw43SdioRestartNotificationSel4 {
-    cyw43: Cyw43SdioRuntimeRestartContext,
-    sdio: Cyw43SdioRuntimeRestartContext,
-}
-
-#[cfg(feature = "kernel")]
-impl Cyw43SdioRestartNotificationSel4 {
-    const fn context(&self, member: Cyw43SdioPairMember) -> Cyw43SdioRuntimeRestartContext {
-        match member {
-            Cyw43SdioPairMember::Cyw43 => self.cyw43,
-            Cyw43SdioPairMember::Sdio => self.sdio,
-        }
-    }
-}
-
-#[cfg(feature = "kernel")]
-impl Cyw43SdioRestartNotificationIo for Cyw43SdioRestartNotificationSel4 {
-    fn unbind(&mut self, member: Cyw43SdioPairMember) -> bool {
-        unbind_cyw43_sdio_restart_notification(self.context(member))
-    }
-
-    fn rebind(&mut self, member: Cyw43SdioPairMember) -> bool {
-        rebind_cyw43_sdio_restart_notification(self.context(member))
-    }
-
-    fn acknowledge_irq(&mut self, member: Cyw43SdioPairMember) -> bool {
-        acknowledge_cyw43_sdio_restart_irq(self.context(member).irq_handler)
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn unbind_cyw43_sdio_restart_notifications(
-    cyw43: Cyw43SdioRuntimeRestartContext,
-    sdio: Cyw43SdioRuntimeRestartContext,
-) -> bool {
-    unbind_cyw43_sdio_restart_notifications_with(&mut Cyw43SdioRestartNotificationSel4 {
-        cyw43,
-        sdio,
-    })
-}
-
-#[cfg(feature = "kernel")]
-fn rebind_cyw43_sdio_restart_notifications(
-    cyw43: Cyw43SdioRuntimeRestartContext,
-    sdio: Cyw43SdioRuntimeRestartContext,
-) -> bool {
-    rebind_cyw43_sdio_restart_notifications_with(&mut Cyw43SdioRestartNotificationSel4 {
-        cyw43,
-        sdio,
-    })
-}
-
-#[cfg(feature = "kernel")]
-fn acknowledge_cyw43_sdio_restart_irqs(
-    cyw43: Cyw43SdioRuntimeRestartContext,
-    sdio: Cyw43SdioRuntimeRestartContext,
-) -> bool {
-    acknowledge_cyw43_sdio_restart_irqs_with(&mut Cyw43SdioRestartNotificationSel4 { cyw43, sdio })
 }
 
 #[cfg(feature = "kernel")]
@@ -6228,90 +6019,6 @@ fn prepare_cyw43_sdio_restart_slot(context: Cyw43SdioRuntimeRestartContext) -> b
 }
 
 #[cfg(feature = "kernel")]
-fn replay_cyw43_sdio_restart_descriptor(
-    context: Cyw43SdioRuntimeRestartContext,
-    deadline: &mut DriverTaskDeadline,
-) -> bool {
-    let Some(frame) = describe_driver_runtime_init_descriptor(&context.descriptor) else {
-        return false;
-    };
-    let Some(bytes) = driver_runtime_init_descriptor_bytes(&context.descriptor) else {
-        return false;
-    };
-    let staging_segments = [DriverTaskStagingSegment::ring_frame(bytes, 0)];
-    let command = runtime_init_command(
-        context.hot_path,
-        DriverTaskBudgetGrant::from_contract(context.contract),
-        frame,
-    );
-    let mut turn = 0usize;
-    while turn < CYW43_SDIO_PAIR_RESTART_PROTOCOL_TURN_CAP
-        && !driver_task_deadline_expired(deadline)
-    {
-        let completion = run_driver_task_ring_command_nonblocking_staged_with_deadline(
-            context.contract,
-            command,
-            &staging_segments,
-            deadline,
-        );
-        if completion.is_some_and(|completion| {
-            completion.code == DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == context.hot_path.as_u32()
-        }) {
-            if !record_driver_runtime_descriptor_seal(
-                context.contract,
-                context.hot_path,
-                &context.descriptor,
-            ) {
-                return false;
-            }
-            let slot = deferred_runtime_init_slot(context.hot_path);
-            slot.initialized.store(1, Ordering::Release);
-            slot.pending.store(0, Ordering::Release);
-            return true;
-        }
-        if completion.is_some() {
-            return false;
-        }
-        turn = turn.saturating_add(1);
-    }
-    false
-}
-
-#[cfg(feature = "kernel")]
-fn replay_cyw43_sdio_restart_engine(
-    context: Cyw43SdioRuntimeRestartContext,
-    deadline: &mut DriverTaskDeadline,
-) -> Option<DriverTaskCompletionRecord> {
-    let command = runtime_engine_init_command(
-        context.hot_path,
-        DriverTaskBudgetGrant::from_contract(context.contract),
-    );
-    let mut turn = 0usize;
-    while turn < CYW43_SDIO_PAIR_RESTART_PROTOCOL_TURN_CAP
-        && !driver_task_deadline_expired(deadline)
-    {
-        let completion = run_driver_task_ring_command_nonblocking_with_deadline(
-            context.contract,
-            command,
-            deadline,
-        );
-        if completion.is_some_and(|completion| {
-            completion.code == DriverTaskCompletionCode::Progress.as_u16()
-                && completion.detail == DriverTaskFaultCode::None.as_u16()
-                && completion.result == 1
-        }) {
-            return completion;
-        }
-        if completion.is_some() {
-            return None;
-        }
-        turn = turn.saturating_add(1);
-    }
-    None
-}
-
-#[cfg(feature = "kernel")]
 const fn cyw43_sdio_pair_recovery_mmio_allowed(
     cyw43_suspended: bool,
     sdio_suspended: bool,
@@ -6340,297 +6047,1459 @@ impl Cyw43SdioPairFailureFenceOutcome {
     }
 }
 
+/// Stable reason class returned by the retained CYW43/SDIO pair restart.
 #[cfg(feature = "kernel")]
-fn suspend_cyw43_sdio_pair(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Cyw43SdioPairRestartFailureKind {
+    /// Another cursor currently owns the pair-restart generation.
+    AlreadyInProgress,
+    /// One retained runtime context was unavailable or invalid.
+    ContextMissing,
+    /// The permitted virtual counter was unavailable.
+    CounterUnavailable,
+    /// The aggregate deadline or a retained poll bound expired.
+    DeadlineExpired,
+    /// One exact restart operation failed.
+    ActionFailed,
+}
+
+/// Typed terminal failure from pair-restart admission or execution.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Cyw43SdioPairRestartFailure {
+    kind: Cyw43SdioPairRestartFailureKind,
+    action: &'static str,
+    status: &'static str,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SdioPairRestartFailure {
+    /// Return the stable failure class.
+    #[must_use]
+    pub const fn kind(self) -> Cyw43SdioPairRestartFailureKind {
+        self.kind
+    }
+
+    /// Return the canonical action that failed.
+    #[must_use]
+    pub const fn action(self) -> &'static str {
+        self.action
+    }
+
+    /// Return the stable fence/admission status.
+    #[must_use]
+    pub const fn status(self) -> &'static str {
+        self.status
+    }
+}
+
+/// Result of one retained CYW43/SDIO pair-restart outer turn.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[must_use]
+pub enum Cyw43SdioPairRestartTurn {
+    /// Exactly one HAL/runtime operation or retained poll completed.
+    Pending {
+        /// Canonical 22-action schedule entry.
+        action: &'static str,
+        /// Exact retained sub-operation completed by this turn.
+        operation: &'static str,
+    },
+    /// The pair was delegated in a fresh generation.
+    Complete {
+        /// Newly published pair epoch.
+        epoch: u32,
+    },
+    /// The deterministic outer failure fence reached a terminal state.
+    Failed(Cyw43SdioPairRestartFailure),
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+struct Cyw43SdioPairRestartDeadline {
+    start: u64,
+    cycles: u64,
+    frequency_hz: u64,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SdioPairRestartDeadline {
+    fn new(micros: u64) -> Option<Self> {
+        let start = driver_task_counter_ticks()?;
+        let frequency_hz = driver_task_counter_frequency()?;
+        let cycles = driver_task_micros_to_cycles_at_hz(micros, frequency_hz);
+        if frequency_hz == 0 || cycles == 0 {
+            return None;
+        }
+        Some(Self {
+            start,
+            cycles,
+            frequency_hz,
+        })
+    }
+
+    const fn expired_at(self, now: u64) -> bool {
+        now.wrapping_sub(self.start) >= self.cycles
+    }
+
+    const fn delay_cycles(self) -> u64 {
+        driver_task_micros_to_cycles_at_hz(CYW43_SDIO_PAIR_RESTART_MMIO_GAP_US, self.frequency_hz)
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioPairRestartFencePhase {
+    CloseCyw43Root,
+    CloseSdioRoot,
+    SuspendCyw43,
+    SuspendSdio,
+    MaskCardInterrupt,
+    UnbindCyw43,
+    UnbindSdio,
+    DrainBeforeIrq,
+    AcknowledgeCyw43Irq,
+    AcknowledgeSdioIrq,
+    DrainAfterIrq,
+    RebindSdio,
+    RebindCyw43,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43SdioPairRestartFenceCursor {
+    origin: Cyw43SdioPairRestartFailure,
+    failed_action: Cyw43SdioPairRestartAction,
+    phase: Cyw43SdioPairRestartFencePhase,
+    cyw43_suspended: bool,
+    sdio_suspended: bool,
+    card_int_masked: bool,
+    first_member_succeeded: bool,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioPairRestartCursorMode {
+    Running,
+    Fencing(Cyw43SdioPairRestartFenceCursor),
+    Complete { epoch: u32 },
+    Failed(Cyw43SdioPairRestartFailure),
+}
+
+/// Opaque no-allocation continuation for one CYW43/SDIO pair restart.
+#[cfg(feature = "kernel")]
+#[must_use = "dropping an unfinished restart cursor keeps the pair fenced"]
+pub struct Cyw43SdioPairRestartCursor {
     cyw43: Cyw43SdioRuntimeRestartContext,
     sdio: Cyw43SdioRuntimeRestartContext,
-) -> bool {
-    // Attempt both suspensions even if the first fails. Recovery MMIO is legal
-    // only after seL4 has confirmed that neither runtime can still own SDHCI.
-    let cyw43_suspended = crate::sel4::suspend_tcb(cyw43.tcb as sel4_sys::seL4_CPtr).is_ok();
-    let sdio_suspended = crate::sel4::suspend_tcb(sdio.tcb as sel4_sys::seL4_CPtr).is_ok();
-    cyw43_sdio_pair_recovery_mmio_allowed(cyw43_suspended, sdio_suspended)
+    deadline: Cyw43SdioPairRestartDeadline,
+    mode: Cyw43SdioPairRestartCursorMode,
+    action_index: u8,
+    substep: u16,
+    poll_count: usize,
+    scratch_u32: u32,
+    verify_signal_u32: u32,
+    delay_start: u64,
+    first_member_succeeded: bool,
+    cyw43_engine_completion: Option<DriverTaskCompletionRecord>,
+    published_epoch: u32,
+    owns_global_latch: bool,
+    released: bool,
 }
 
 #[cfg(feature = "kernel")]
-fn fence_cyw43_sdio_pair_after_restart_failure(
-    cyw43: Cyw43SdioRuntimeRestartContext,
-    sdio: Cyw43SdioRuntimeRestartContext,
-) -> Cyw43SdioPairFailureFenceOutcome {
-    // Fence every root submission first. If either seL4 suspension fails, the
-    // possibly-live child remains the sole hardware authority and root must not
-    // touch MMIO, notifications, IRQ state, or either shared ring.
-    if let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_CYW43455) {
-        slot.endpoint.store(0, Ordering::Release);
-    }
-    if let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_SDIO_HOST) {
-        slot.endpoint.store(0, Ordering::Release);
-        slot.ring_producer
-            .store(SDIO_RING_PRODUCER_TRANSITION, Ordering::Release);
-    }
-    CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
-    if !suspend_cyw43_sdio_pair(cyw43, sdio) {
-        return Cyw43SdioPairFailureFenceOutcome::SuspendUnproven;
-    }
-    let card_int_masked = mask_cyw43_sdio_card_interrupt(sdio.sdhci_root_ptr);
-    if unbind_cyw43_sdio_restart_notifications(cyw43, sdio) {
-        drain_cyw43_sdio_restart_notification(cyw43.notification);
-        drain_cyw43_sdio_restart_notification(sdio.notification);
-        let _ = acknowledge_cyw43_sdio_restart_irq(cyw43.irq_handler);
-        let _ = acknowledge_cyw43_sdio_restart_irq(sdio.irq_handler);
-        drain_cyw43_sdio_restart_notification(cyw43.notification);
-        drain_cyw43_sdio_restart_notification(sdio.notification);
-        let _ = rebind_cyw43_sdio_restart_notifications(cyw43, sdio);
-    }
-    if card_int_masked {
-        Cyw43SdioPairFailureFenceOutcome::FullyFenced
-    } else {
-        Cyw43SdioPairFailureFenceOutcome::RuntimesSuspendedCardIntUnproven
-    }
-}
-
-/// Restart the linked CYW43 and SDIO runtimes as one fenced generation.
-///
-/// This is the sole root-authoritative recovery path for an issued-unknown
-/// child turn. It is deliberately recovery-only: both TCBs are suspended before
-/// root masks CARD_INT or reuses either ring, notifications are drained and the
-/// retained IRQ handler is acknowledged before resume, and SDIO is completely
-/// re-admitted before CYW43. A `true` result means descriptor and engine replay,
-/// producer handoff, and a fresh pair epoch all completed. A `false` result
-/// always fences root submission. When both seL4 suspensions succeed it also
-/// leaves both TCBs suspended and attempts the recovery hardware fence. A
-/// failed CARD_INT mask is reported separately and never called fully fenced.
-/// If either suspension fails, recovery performs no MMIO, notification, IRQ,
-/// or ring-content mutation after closing root endpoints and producer access.
-#[cfg(feature = "kernel")]
-pub fn restart_cyw43_sdio_pair() -> bool {
-    restart_cyw43_sdio_pair_with_progress(|_| {})
-}
-
-/// Restart the linked CYW43/SDIO pair and invoke a bounded operator-service
-/// hook after every completed or failed restart action.
-///
-/// The hook runs only at action boundaries, never while a ring, notification,
-/// IRQ, or MMIO primitive is mid-update. It must not submit driver work or
-/// otherwise touch the HAL resources owned by this restart.
-#[cfg(feature = "kernel")]
-pub fn restart_cyw43_sdio_pair_with_progress(
-    mut service_operator: impl FnMut(&'static str),
-) -> bool {
-    if CYW43_SDIO_PAIR_RESTART_IN_PROGRESS
-        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+impl Drop for Cyw43SdioPairRestartCursor {
+    fn drop(&mut self) {
+        if !self.owns_global_latch || self.released {
+            return;
+        }
+        fence_cyw43_sdio_root_submission(Cyw43SdioPairMember::Cyw43);
+        fence_cyw43_sdio_root_submission(Cyw43SdioPairMember::Sdio);
+        CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
         CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
-        return false;
+        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+        self.released = true;
     }
-    CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
-    // One elapsed-time envelope covers both runtime receive handshakes, both
-    // descriptor replays, both engine replays, and final producer handoff.
-    // No subphase may create a fresh recovery deadline.
-    let mut deadline = driver_task_deadline_from_micros(
-        CYW43_SDIO_PAIR_RESTART_ENVELOPE_US,
-        CYW43_SDIO_PAIR_RESTART_PROTOCOL_TURN_CAP,
-    );
-    let Some(cyw43) = cyw43_sdio_runtime_restart_context(DriverTaskHotPath::Cyw43Wifi) else {
-        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Start, "context-missing");
-        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
-        return false;
-    };
-    let Some(sdio) = cyw43_sdio_runtime_restart_context(DriverTaskHotPath::SdioHost) else {
-        emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Start, "context-missing");
-        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
-        return false;
-    };
-    emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Start, "begin");
-    let mut cyw43_engine_completion = None;
-    let outcome = execute_cyw43_sdio_pair_restart_schedule_with_progress(
-        |action| match action {
-            Cyw43SdioPairRestartAction::SuspendPair => {
-                let ready = suspend_cyw43_sdio_pair(cyw43, sdio)
-                    && !driver_task_deadline_expired(&mut deadline);
-                if ready {
-                    emit_cyw43_sdio_pair_restart_status(
-                        Cyw43SdioPairRestartPhase::BothSuspended,
-                        "ready",
-                    );
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioPairRestartOperation {
+    Suspend(Cyw43SdioPairMember),
+    ReadCardInterrupt(Cyw43SdioCardIntRegister),
+    WriteCardInterrupt(Cyw43SdioCardIntRegister),
+    CardInterruptBarrier { instruction_sync: bool },
+    BeginCardInterruptDelay,
+    PollCardInterruptDelay,
+    UnbindNotification(Cyw43SdioPairMember),
+    DrainNotification(Cyw43SdioPairMember),
+    AcknowledgeIrq(Cyw43SdioPairMember),
+    RebindNotification(Cyw43SdioPairMember),
+    ClearDescriptorSeals,
+    ResetRing(Cyw43SdioPairMember),
+    ProgramRestartRegisters(Cyw43SdioPairMember),
+    Resume(Cyw43SdioPairMember),
+    PollRecvReady(Cyw43SdioPairMember),
+    ReplayDescriptor(Cyw43SdioPairMember),
+    ReplayEngine(Cyw43SdioPairMember),
+    HandoffRingToCyw43,
+    DelegateCyw43Endpoint,
+    AdvanceEpoch,
+    FenceRootSubmission(Cyw43SdioPairMember),
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SdioPairRestartOperation {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Suspend(Cyw43SdioPairMember::Cyw43) => "suspend-cyw43",
+            Self::Suspend(Cyw43SdioPairMember::Sdio) => "suspend-sdio",
+            Self::ReadCardInterrupt(Cyw43SdioCardIntRegister::InterruptEnable) => {
+                "read-card-int-enable"
+            }
+            Self::ReadCardInterrupt(Cyw43SdioCardIntRegister::SignalEnable) => {
+                "read-card-int-signal"
+            }
+            Self::WriteCardInterrupt(Cyw43SdioCardIntRegister::InterruptEnable) => {
+                "write-card-int-enable"
+            }
+            Self::WriteCardInterrupt(Cyw43SdioCardIntRegister::SignalEnable) => {
+                "write-card-int-signal"
+            }
+            Self::CardInterruptBarrier {
+                instruction_sync: false,
+            } => "card-int-data-barrier",
+            Self::CardInterruptBarrier {
+                instruction_sync: true,
+            } => "card-int-final-barrier",
+            Self::BeginCardInterruptDelay => "begin-card-int-delay",
+            Self::PollCardInterruptDelay => "poll-card-int-delay",
+            Self::UnbindNotification(Cyw43SdioPairMember::Cyw43) => "unbind-cyw43-notification",
+            Self::UnbindNotification(Cyw43SdioPairMember::Sdio) => "unbind-sdio-notification",
+            Self::DrainNotification(Cyw43SdioPairMember::Cyw43) => "drain-cyw43-notification",
+            Self::DrainNotification(Cyw43SdioPairMember::Sdio) => "drain-sdio-notification",
+            Self::AcknowledgeIrq(Cyw43SdioPairMember::Cyw43) => "acknowledge-cyw43-irq",
+            Self::AcknowledgeIrq(Cyw43SdioPairMember::Sdio) => "acknowledge-sdio-irq",
+            Self::RebindNotification(Cyw43SdioPairMember::Cyw43) => "rebind-cyw43-notification",
+            Self::RebindNotification(Cyw43SdioPairMember::Sdio) => "rebind-sdio-notification",
+            Self::ClearDescriptorSeals => "clear-descriptor-seals",
+            Self::ResetRing(Cyw43SdioPairMember::Cyw43) => "reset-cyw43-ring",
+            Self::ResetRing(Cyw43SdioPairMember::Sdio) => "reset-sdio-ring",
+            Self::ProgramRestartRegisters(Cyw43SdioPairMember::Cyw43) => {
+                "program-cyw43-restart-registers"
+            }
+            Self::ProgramRestartRegisters(Cyw43SdioPairMember::Sdio) => {
+                "program-sdio-restart-registers"
+            }
+            Self::Resume(Cyw43SdioPairMember::Cyw43) => "resume-cyw43",
+            Self::Resume(Cyw43SdioPairMember::Sdio) => "resume-sdio",
+            Self::PollRecvReady(Cyw43SdioPairMember::Cyw43) => "poll-cyw43-recv-ready",
+            Self::PollRecvReady(Cyw43SdioPairMember::Sdio) => "poll-sdio-recv-ready",
+            Self::ReplayDescriptor(Cyw43SdioPairMember::Cyw43) => "replay-cyw43-descriptor-turn",
+            Self::ReplayDescriptor(Cyw43SdioPairMember::Sdio) => "replay-sdio-descriptor-turn",
+            Self::ReplayEngine(Cyw43SdioPairMember::Cyw43) => "replay-cyw43-engine-turn",
+            Self::ReplayEngine(Cyw43SdioPairMember::Sdio) => "replay-sdio-engine-turn",
+            Self::HandoffRingToCyw43 => "handoff-ring-to-cyw43",
+            Self::DelegateCyw43Endpoint => "delegate-cyw43-endpoint",
+            Self::AdvanceEpoch => "advance-pair-epoch",
+            Self::FenceRootSubmission(Cyw43SdioPairMember::Cyw43) => "fence-cyw43-root-submission",
+            Self::FenceRootSubmission(Cyw43SdioPairMember::Sdio) => "fence-sdio-root-submission",
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioPairRestartOperationOutcome {
+    Complete,
+    Pending,
+    Value(u32),
+    Completion(DriverTaskCompletionRecord),
+    Failed,
+}
+
+#[cfg(feature = "kernel")]
+trait Cyw43SdioPairRestartExecutor {
+    fn execute(
+        &mut self,
+        cursor: &mut Cyw43SdioPairRestartCursor,
+        operation: Cyw43SdioPairRestartOperation,
+    ) -> Cyw43SdioPairRestartOperationOutcome;
+}
+
+#[cfg(feature = "kernel")]
+struct Cyw43SdioPairRestartProductionExecutor;
+
+#[cfg(feature = "kernel")]
+impl Cyw43SdioPairRestartProductionExecutor {
+    const fn context(
+        cursor: &Cyw43SdioPairRestartCursor,
+        member: Cyw43SdioPairMember,
+    ) -> Cyw43SdioRuntimeRestartContext {
+        match member {
+            Cyw43SdioPairMember::Cyw43 => cursor.cyw43,
+            Cyw43SdioPairMember::Sdio => cursor.sdio,
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SdioPairRestartExecutor for Cyw43SdioPairRestartProductionExecutor {
+    fn execute(
+        &mut self,
+        cursor: &mut Cyw43SdioPairRestartCursor,
+        operation: Cyw43SdioPairRestartOperation,
+    ) -> Cyw43SdioPairRestartOperationOutcome {
+        match operation {
+            Cyw43SdioPairRestartOperation::Suspend(member) => {
+                let context = Self::context(cursor, member);
+                if crate::sel4::suspend_tcb(context.tcb as sel4_sys::seL4_CPtr).is_ok() {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
                 }
-                ready
             }
-            Cyw43SdioPairRestartAction::MaskCardInterrupt => {
-                let ready = mask_cyw43_sdio_card_interrupt(sdio.sdhci_root_ptr)
-                    && !driver_task_deadline_expired(&mut deadline);
-                if ready {
-                    emit_cyw43_sdio_pair_restart_status(
-                        Cyw43SdioPairRestartPhase::CardIntMasked,
-                        "ready",
-                    );
+            Cyw43SdioPairRestartOperation::ReadCardInterrupt(register) => {
+                let Ok(window) = super::MappedRegisterWindow::new(
+                    cursor.sdio.sdhci_root_ptr,
+                    DRIVER_TASK_RING_PAGE_BYTES,
+                ) else {
+                    return Cyw43SdioPairRestartOperationOutcome::Failed;
+                };
+                match window
+                    .read_u32(match register {
+                        Cyw43SdioCardIntRegister::InterruptEnable => SDHCI_INTERRUPT_ENABLE_OFFSET,
+                        Cyw43SdioCardIntRegister::SignalEnable => SDHCI_SIGNAL_ENABLE_OFFSET,
+                    })
+                    .ok()
+                {
+                    Some(value) => Cyw43SdioPairRestartOperationOutcome::Value(value),
+                    None => Cyw43SdioPairRestartOperationOutcome::Failed,
                 }
-                ready
             }
-            Cyw43SdioPairRestartAction::UnbindNotifications => {
-                unbind_cyw43_sdio_restart_notifications(cyw43, sdio)
-            }
-            Cyw43SdioPairRestartAction::DrainNotificationsBeforeIrq => {
-                drain_cyw43_sdio_restart_notification(cyw43.notification);
-                drain_cyw43_sdio_restart_notification(sdio.notification);
-                emit_cyw43_sdio_pair_restart_status(
-                    Cyw43SdioPairRestartPhase::NotificationsDrained,
-                    "ready",
-                );
-                true
-            }
-            Cyw43SdioPairRestartAction::AcknowledgeIrqs => {
-                acknowledge_cyw43_sdio_restart_irqs(cyw43, sdio)
-            }
-            Cyw43SdioPairRestartAction::DrainNotificationsAfterIrq => {
-                drain_cyw43_sdio_restart_notification(cyw43.notification);
-                drain_cyw43_sdio_restart_notification(sdio.notification);
-                true
-            }
-            Cyw43SdioPairRestartAction::RebindNotifications => {
-                let ready = rebind_cyw43_sdio_restart_notifications(cyw43, sdio)
-                    && !driver_task_deadline_expired(&mut deadline);
-                if ready {
-                    emit_cyw43_sdio_pair_restart_status(
-                        Cyw43SdioPairRestartPhase::IrqAcknowledged,
-                        "ready",
-                    );
+            Cyw43SdioPairRestartOperation::WriteCardInterrupt(register) => {
+                let Ok(window) = super::MappedRegisterWindow::new(
+                    cursor.sdio.sdhci_root_ptr,
+                    DRIVER_TASK_RING_PAGE_BYTES,
+                ) else {
+                    return Cyw43SdioPairRestartOperationOutcome::Failed;
+                };
+                if window
+                    .write_u32(
+                        match register {
+                            Cyw43SdioCardIntRegister::InterruptEnable => {
+                                SDHCI_INTERRUPT_ENABLE_OFFSET
+                            }
+                            Cyw43SdioCardIntRegister::SignalEnable => SDHCI_SIGNAL_ENABLE_OFFSET,
+                        },
+                        cursor.scratch_u32 & !SDHCI_INTERRUPT_CARD_INT,
+                    )
+                    .is_ok()
+                {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
                 }
-                ready
             }
-            Cyw43SdioPairRestartAction::ClearDescriptorSeals => {
+            Cyw43SdioPairRestartOperation::CardInterruptBarrier { instruction_sync } => {
+                cyw43_sdio_restart_mmio_barrier(instruction_sync);
+                Cyw43SdioPairRestartOperationOutcome::Complete
+            }
+            Cyw43SdioPairRestartOperation::BeginCardInterruptDelay
+            | Cyw43SdioPairRestartOperation::PollCardInterruptDelay => {
+                Cyw43SdioPairRestartOperationOutcome::Complete
+            }
+            Cyw43SdioPairRestartOperation::UnbindNotification(member) => {
+                if unbind_cyw43_sdio_restart_notification(Self::context(cursor, member)) {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
+                }
+            }
+            Cyw43SdioPairRestartOperation::DrainNotification(member) => {
+                let context = Self::context(cursor, member);
+                let mut badge = 0;
+                let _ = crate::sel4::poll(context.notification as sel4_sys::seL4_CPtr, &mut badge);
+                Cyw43SdioPairRestartOperationOutcome::Complete
+            }
+            Cyw43SdioPairRestartOperation::AcknowledgeIrq(member) => {
+                let context = Self::context(cursor, member);
+                if acknowledge_cyw43_sdio_restart_irq(context.irq_handler) {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
+                }
+            }
+            Cyw43SdioPairRestartOperation::RebindNotification(member) => {
+                if rebind_cyw43_sdio_restart_notification(Self::context(cursor, member)) {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
+                }
+            }
+            Cyw43SdioPairRestartOperation::ClearDescriptorSeals => {
                 DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK.fetch_and(
                     !(DriverTaskHotPath::Cyw43Wifi.owner_state_bit()
                         | DriverTaskHotPath::SdioHost.owner_state_bit()),
                     Ordering::AcqRel,
                 );
-                true
+                Cyw43SdioPairRestartOperationOutcome::Complete
             }
-            Cyw43SdioPairRestartAction::ResetSdioRing => prepare_cyw43_sdio_restart_slot(sdio),
-            Cyw43SdioPairRestartAction::ResetCyw43Ring => {
-                let ready = prepare_cyw43_sdio_restart_slot(cyw43)
-                    && !driver_task_deadline_expired(&mut deadline);
-                if ready {
-                    emit_cyw43_sdio_pair_restart_status(
-                        Cyw43SdioPairRestartPhase::RingsReset,
-                        "ready",
-                    );
-                }
-                ready
-            }
-            Cyw43SdioPairRestartAction::ProgramSdioRestartRegisters => {
-                usize::try_from(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG).is_ok_and(|restart_flag| {
-                    crate::sel4::write_tcb_registers(
-                        sdio.tcb as sel4_sys::seL4_CPtr,
-                        sdio.entry,
-                        sdio.stack_top,
-                        (sdio.task_key | restart_flag) as sel4_sys::seL4_Word,
-                        false,
-                    )
-                    .is_ok()
-                })
-            }
-            Cyw43SdioPairRestartAction::ProgramCyw43RestartRegisters => {
-                let ready = usize::try_from(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG).is_ok_and(
-                    |restart_flag| {
-                        crate::sel4::write_tcb_registers(
-                            cyw43.tcb as sel4_sys::seL4_CPtr,
-                            cyw43.entry,
-                            cyw43.stack_top,
-                            (cyw43.task_key | restart_flag) as sel4_sys::seL4_Word,
-                            false,
-                        )
-                        .is_ok()
-                    },
-                );
-                ready && !driver_task_deadline_expired(&mut deadline)
-            }
-            Cyw43SdioPairRestartAction::ResumeSdio => {
-                crate::sel4::resume_tcb(sdio.tcb as sel4_sys::seL4_CPtr).is_ok()
-            }
-            Cyw43SdioPairRestartAction::WaitSdioRecvReady => {
-                wait_for_driver_task_runtime_recv_ready_with_deadline(
-                    sdio.contract,
-                    sdio.task_key,
-                    CYW43_SDIO_PAIR_RESTART_RECV_READY_POLL_CAP,
-                    &mut deadline,
-                )
-            }
-            Cyw43SdioPairRestartAction::ReplaySdioDescriptor => {
-                replay_cyw43_sdio_restart_descriptor(sdio, &mut deadline)
-            }
-            Cyw43SdioPairRestartAction::ReplaySdioEngine => {
-                let ready = replay_cyw43_sdio_restart_engine(sdio, &mut deadline).is_some()
-                    && !driver_task_deadline_expired(&mut deadline);
-                if ready {
-                    emit_cyw43_sdio_pair_restart_status(
-                        Cyw43SdioPairRestartPhase::SdioReady,
-                        "ready",
-                    );
-                }
-                ready
-            }
-            Cyw43SdioPairRestartAction::ResumeCyw43 => {
-                crate::sel4::resume_tcb(cyw43.tcb as sel4_sys::seL4_CPtr).is_ok()
-            }
-            Cyw43SdioPairRestartAction::WaitCyw43RecvReady => {
-                wait_for_driver_task_runtime_recv_ready_with_deadline(
-                    cyw43.contract,
-                    cyw43.task_key,
-                    CYW43_SDIO_PAIR_RESTART_RECV_READY_POLL_CAP,
-                    &mut deadline,
-                )
-            }
-            Cyw43SdioPairRestartAction::ReplayCyw43Descriptor => {
-                replay_cyw43_sdio_restart_descriptor(cyw43, &mut deadline)
-            }
-            Cyw43SdioPairRestartAction::ReplayCyw43Engine => {
-                cyw43_engine_completion = replay_cyw43_sdio_restart_engine(cyw43, &mut deadline);
-                let ready = cyw43_engine_completion.is_some()
-                    && !driver_task_deadline_expired(&mut deadline);
-                if ready {
-                    emit_cyw43_sdio_pair_restart_status(
-                        Cyw43SdioPairRestartPhase::Cyw43Ready,
-                        "ready",
-                    );
-                }
-                ready
-            }
-            Cyw43SdioPairRestartAction::HandoffRingToCyw43 => {
-                cyw43_engine_completion.is_some_and(handoff_sdio_command_ring_to_cyw43)
-                    && !driver_task_deadline_expired(&mut deadline)
-            }
-            Cyw43SdioPairRestartAction::DelegateAndAdvanceEpoch => {
-                if let Some(cyw43_slot) = slot_for_task_key(cyw43.task_key) {
-                    cyw43_slot
-                        .endpoint
-                        .store(cyw43.normal_endpoint, Ordering::Release);
-                    let _ = advance_cyw43_sdio_pair_restart_epoch();
-                    emit_cyw43_sdio_pair_restart_status(
-                        Cyw43SdioPairRestartPhase::Delegated,
-                        "ready",
-                    );
-                    true
+            Cyw43SdioPairRestartOperation::ResetRing(member) => {
+                if prepare_cyw43_sdio_restart_slot(Self::context(cursor, member)) {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
                 } else {
-                    false
+                    Cyw43SdioPairRestartOperationOutcome::Failed
                 }
             }
-        },
-        &mut service_operator,
-    );
-    match outcome {
-        Cyw43SdioPairRestartScheduleOutcome::Completed => {
-            CYW43_SDIO_PAIR_RESTART_PENDING.store(0, Ordering::Release);
-            CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(1, Ordering::Release);
-        }
-        Cyw43SdioPairRestartScheduleOutcome::Failed(failed_action) => {
-            let fence_outcome = fence_cyw43_sdio_pair_after_restart_failure(cyw43, sdio);
-            emit_cyw43_sdio_pair_restart_failure(failed_action, fence_outcome.status());
+            Cyw43SdioPairRestartOperation::ProgramRestartRegisters(member) => {
+                let context = Self::context(cursor, member);
+                let Ok(restart_flag) = usize::try_from(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG) else {
+                    return Cyw43SdioPairRestartOperationOutcome::Failed;
+                };
+                if crate::sel4::write_tcb_registers(
+                    context.tcb as sel4_sys::seL4_CPtr,
+                    context.entry,
+                    context.stack_top,
+                    (context.task_key | restart_flag) as sel4_sys::seL4_Word,
+                    false,
+                )
+                .is_ok()
+                {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
+                }
+            }
+            Cyw43SdioPairRestartOperation::Resume(member) => {
+                let context = Self::context(cursor, member);
+                if crate::sel4::resume_tcb(context.tcb as sel4_sys::seL4_CPtr).is_ok() {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
+                }
+            }
+            Cyw43SdioPairRestartOperation::PollRecvReady(member) => {
+                poll_cyw43_sdio_restart_recv_ready_once(Self::context(cursor, member))
+            }
+            Cyw43SdioPairRestartOperation::ReplayDescriptor(member) => {
+                replay_cyw43_sdio_restart_descriptor_once(Self::context(cursor, member))
+            }
+            Cyw43SdioPairRestartOperation::ReplayEngine(member) => {
+                replay_cyw43_sdio_restart_engine_once(Self::context(cursor, member))
+            }
+            Cyw43SdioPairRestartOperation::HandoffRingToCyw43 => {
+                if cursor
+                    .cyw43_engine_completion
+                    .is_some_and(handoff_sdio_command_ring_to_cyw43)
+                {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
+                }
+            }
+            Cyw43SdioPairRestartOperation::DelegateCyw43Endpoint => {
+                let Some(slot) = slot_for_task_key(cursor.cyw43.task_key) else {
+                    return Cyw43SdioPairRestartOperationOutcome::Failed;
+                };
+                slot.endpoint
+                    .store(cursor.cyw43.normal_endpoint, Ordering::Release);
+                Cyw43SdioPairRestartOperationOutcome::Complete
+            }
+            Cyw43SdioPairRestartOperation::AdvanceEpoch => {
+                Cyw43SdioPairRestartOperationOutcome::Value(advance_cyw43_sdio_pair_restart_epoch())
+            }
+            Cyw43SdioPairRestartOperation::FenceRootSubmission(member) => {
+                fence_cyw43_sdio_root_submission(member);
+                Cyw43SdioPairRestartOperationOutcome::Complete
+            }
         }
     }
-    CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
-    outcome.completed()
+}
+
+#[cfg(feature = "kernel")]
+fn fence_cyw43_sdio_root_submission(member: Cyw43SdioPairMember) {
+    let task_key = match member {
+        Cyw43SdioPairMember::Cyw43 => DRIVER_TASK_KEY_CYW43455,
+        Cyw43SdioPairMember::Sdio => DRIVER_TASK_KEY_SDIO_HOST,
+    };
+    if let Some(slot) = slot_for_task_key(task_key) {
+        slot.endpoint.store(0, Ordering::Release);
+        if member == Cyw43SdioPairMember::Sdio {
+            slot.ring_producer
+                .store(SDIO_RING_PRODUCER_TRANSITION, Ordering::Release);
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn poll_cyw43_sdio_restart_recv_ready_once(
+    context: Cyw43SdioRuntimeRestartContext,
+) -> Cyw43SdioPairRestartOperationOutcome {
+    let Some(slot) = slot_for_task_key(context.task_key) else {
+        return Cyw43SdioPairRestartOperationOutcome::Failed;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return Cyw43SdioPairRestartOperationOutcome::Failed;
+    }
+    let progress = driver_task_ring_read_progress_record(ring_root_ptr);
+    record_driver_task_ring_progress(slot, progress);
+    let expected_aux0 = (context.task_key & u32::MAX as usize) as u32;
+    if driver_task_runtime_progress_is_admission_ready(progress, expected_aux0) {
+        emit_driver_task_runtime_entry_status(
+            context.contract,
+            context.task_key,
+            context.tcb,
+            "ready",
+            progress,
+        );
+        Cyw43SdioPairRestartOperationOutcome::Complete
+    } else {
+        Cyw43SdioPairRestartOperationOutcome::Pending
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn replay_cyw43_sdio_restart_descriptor_once(
+    context: Cyw43SdioRuntimeRestartContext,
+) -> Cyw43SdioPairRestartOperationOutcome {
+    let Some(frame) = describe_driver_runtime_init_descriptor(&context.descriptor) else {
+        return Cyw43SdioPairRestartOperationOutcome::Failed;
+    };
+    let Some(bytes) = driver_runtime_init_descriptor_bytes(&context.descriptor) else {
+        return Cyw43SdioPairRestartOperationOutcome::Failed;
+    };
+    let staging_segments = [DriverTaskStagingSegment::ring_frame(bytes, 0)];
+    let command = runtime_init_command(
+        context.hot_path,
+        DriverTaskBudgetGrant::from_contract(context.contract),
+        frame,
+    );
+    match run_driver_task_ring_command_retained_turn_staged(
+        context.contract,
+        command,
+        &staging_segments,
+    ) {
+        Some(completion)
+            if completion.code == DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == context.hot_path.as_u32() =>
+        {
+            if !record_driver_runtime_descriptor_seal(
+                context.contract,
+                context.hot_path,
+                &context.descriptor,
+            ) {
+                return Cyw43SdioPairRestartOperationOutcome::Failed;
+            }
+            let slot = deferred_runtime_init_slot(context.hot_path);
+            slot.initialized.store(1, Ordering::Release);
+            slot.pending.store(0, Ordering::Release);
+            Cyw43SdioPairRestartOperationOutcome::Complete
+        }
+        Some(_) => Cyw43SdioPairRestartOperationOutcome::Failed,
+        None => Cyw43SdioPairRestartOperationOutcome::Pending,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn replay_cyw43_sdio_restart_engine_once(
+    context: Cyw43SdioRuntimeRestartContext,
+) -> Cyw43SdioPairRestartOperationOutcome {
+    let command = runtime_engine_init_command(
+        context.hot_path,
+        DriverTaskBudgetGrant::from_contract(context.contract),
+    );
+    match run_driver_task_ring_command_retained_turn(context.contract, command) {
+        Some(completion)
+            if completion.code == DriverTaskCompletionCode::Progress.as_u16()
+                && completion.detail == DriverTaskFaultCode::None.as_u16()
+                && completion.result == 1 =>
+        {
+            Cyw43SdioPairRestartOperationOutcome::Completion(completion)
+        }
+        Some(_) => Cyw43SdioPairRestartOperationOutcome::Failed,
+        None => Cyw43SdioPairRestartOperationOutcome::Pending,
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioCardIntTurn {
+    Pending { operation: &'static str },
+    Complete { operation: &'static str },
+    Failed { operation: &'static str },
+}
+
+#[cfg(feature = "kernel")]
+fn step_cyw43_sdio_card_int_mask<E: Cyw43SdioPairRestartExecutor>(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    now: u64,
+    executor: &mut E,
+) -> Cyw43SdioCardIntTurn {
+    let operation = match cursor.substep {
+        0 => Cyw43SdioPairRestartOperation::ReadCardInterrupt(
+            Cyw43SdioCardIntRegister::InterruptEnable,
+        ),
+        1 => Cyw43SdioPairRestartOperation::WriteCardInterrupt(
+            Cyw43SdioCardIntRegister::InterruptEnable,
+        ),
+        2 | 7 => Cyw43SdioPairRestartOperation::CardInterruptBarrier {
+            instruction_sync: false,
+        },
+        3 | 8 => Cyw43SdioPairRestartOperation::BeginCardInterruptDelay,
+        4 | 9 => Cyw43SdioPairRestartOperation::PollCardInterruptDelay,
+        5 | 11 => {
+            Cyw43SdioPairRestartOperation::ReadCardInterrupt(Cyw43SdioCardIntRegister::SignalEnable)
+        }
+        6 => Cyw43SdioPairRestartOperation::WriteCardInterrupt(
+            Cyw43SdioCardIntRegister::SignalEnable,
+        ),
+        10 => Cyw43SdioPairRestartOperation::CardInterruptBarrier {
+            instruction_sync: true,
+        },
+        12 => Cyw43SdioPairRestartOperation::ReadCardInterrupt(
+            Cyw43SdioCardIntRegister::InterruptEnable,
+        ),
+        _ => {
+            return Cyw43SdioCardIntTurn::Failed {
+                operation: "invalid-card-int-substep",
+            };
+        }
+    };
+    let operation_label = operation.as_str();
+    let outcome = executor.execute(cursor, operation);
+    match cursor.substep {
+        0 | 5 => match outcome {
+            Cyw43SdioPairRestartOperationOutcome::Value(value) => {
+                cursor.scratch_u32 = value;
+                cursor.substep = cursor.substep.saturating_add(1);
+            }
+            _ => {
+                return Cyw43SdioCardIntTurn::Failed {
+                    operation: operation_label,
+                };
+            }
+        },
+        1 | 2 | 6 | 7 | 10 => {
+            if outcome != Cyw43SdioPairRestartOperationOutcome::Complete {
+                return Cyw43SdioCardIntTurn::Failed {
+                    operation: operation_label,
+                };
+            }
+            cursor.substep = cursor.substep.saturating_add(1);
+        }
+        3 | 8 => {
+            if outcome != Cyw43SdioPairRestartOperationOutcome::Complete {
+                return Cyw43SdioCardIntTurn::Failed {
+                    operation: operation_label,
+                };
+            }
+            cursor.delay_start = now;
+            cursor.poll_count = 0;
+            cursor.substep = cursor.substep.saturating_add(1);
+        }
+        4 | 9 => {
+            if outcome != Cyw43SdioPairRestartOperationOutcome::Complete {
+                return Cyw43SdioCardIntTurn::Failed {
+                    operation: operation_label,
+                };
+            }
+            if now.wrapping_sub(cursor.delay_start) >= cursor.deadline.delay_cycles() {
+                cursor.poll_count = 0;
+                cursor.substep = cursor.substep.saturating_add(1);
+            } else {
+                cursor.poll_count = cursor.poll_count.saturating_add(1);
+                if cursor.poll_count >= CYW43_SDIO_PAIR_RESTART_MMIO_DELAY_POLL_CAP {
+                    return Cyw43SdioCardIntTurn::Failed {
+                        operation: operation_label,
+                    };
+                }
+            }
+        }
+        11 => match outcome {
+            Cyw43SdioPairRestartOperationOutcome::Value(value) => {
+                cursor.verify_signal_u32 = value;
+                cursor.substep = cursor.substep.saturating_add(1);
+            }
+            _ => {
+                return Cyw43SdioCardIntTurn::Failed {
+                    operation: operation_label,
+                };
+            }
+        },
+        12 => match outcome {
+            Cyw43SdioPairRestartOperationOutcome::Value(value)
+                if cursor.verify_signal_u32 & SDHCI_INTERRUPT_CARD_INT == 0
+                    && value & SDHCI_INTERRUPT_CARD_INT == 0 =>
+            {
+                return Cyw43SdioCardIntTurn::Complete {
+                    operation: operation_label,
+                };
+            }
+            _ => {
+                return Cyw43SdioCardIntTurn::Failed {
+                    operation: operation_label,
+                };
+            }
+        },
+        _ => {
+            return Cyw43SdioCardIntTurn::Failed {
+                operation: operation_label,
+            };
+        }
+    }
+    Cyw43SdioCardIntTurn::Pending {
+        operation: operation_label,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn current_cyw43_sdio_pair_restart_action(
+    cursor: &Cyw43SdioPairRestartCursor,
+) -> Option<Cyw43SdioPairRestartAction> {
+    CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
+        .get(usize::from(cursor.action_index))
+        .copied()
+}
+
+#[cfg(feature = "kernel")]
+fn release_cyw43_sdio_pair_restart_latch(cursor: &mut Cyw43SdioPairRestartCursor) {
+    if cursor.owns_global_latch && !cursor.released {
+        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+        cursor.released = true;
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn enter_cyw43_sdio_pair_restart_failure(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    action: Cyw43SdioPairRestartAction,
+    kind: Cyw43SdioPairRestartFailureKind,
+    status: &'static str,
+) {
+    CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
+    CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
+    cursor.substep = 0;
+    cursor.poll_count = 0;
+    cursor.mode = Cyw43SdioPairRestartCursorMode::Fencing(Cyw43SdioPairRestartFenceCursor {
+        origin: Cyw43SdioPairRestartFailure {
+            kind,
+            action: action.as_str(),
+            status,
+        },
+        failed_action: action,
+        phase: Cyw43SdioPairRestartFencePhase::CloseCyw43Root,
+        cyw43_suspended: false,
+        sdio_suspended: false,
+        card_int_masked: false,
+        first_member_succeeded: false,
+    });
+}
+
+#[cfg(feature = "kernel")]
+fn complete_cyw43_sdio_pair_restart_action(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    action: Cyw43SdioPairRestartAction,
+) -> Option<u32> {
+    match action {
+        Cyw43SdioPairRestartAction::SuspendPair => {
+            emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::BothSuspended, "ready")
+        }
+        Cyw43SdioPairRestartAction::MaskCardInterrupt => {
+            emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::CardIntMasked, "ready")
+        }
+        Cyw43SdioPairRestartAction::DrainNotificationsBeforeIrq => {
+            emit_cyw43_sdio_pair_restart_status(
+                Cyw43SdioPairRestartPhase::NotificationsDrained,
+                "ready",
+            );
+        }
+        Cyw43SdioPairRestartAction::RebindNotifications => {
+            emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::IrqAcknowledged, "ready")
+        }
+        Cyw43SdioPairRestartAction::ResetCyw43Ring => {
+            emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::RingsReset, "ready")
+        }
+        Cyw43SdioPairRestartAction::ReplaySdioEngine => {
+            emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::SdioReady, "ready")
+        }
+        Cyw43SdioPairRestartAction::ReplayCyw43Engine => {
+            emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Cyw43Ready, "ready")
+        }
+        Cyw43SdioPairRestartAction::DelegateAndAdvanceEpoch => {
+            emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Delegated, "ready");
+        }
+        _ => {}
+    }
+    cursor.action_index = cursor.action_index.saturating_add(1);
+    cursor.substep = 0;
+    cursor.poll_count = 0;
+    cursor.first_member_succeeded = false;
+    if usize::from(cursor.action_index) == CYW43_SDIO_PAIR_RESTART_ACTION_ORDER.len() {
+        let epoch = cursor.published_epoch;
+        CYW43_SDIO_PAIR_RESTART_PENDING.store(0, Ordering::Release);
+        CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(1, Ordering::Release);
+        cursor.mode = Cyw43SdioPairRestartCursorMode::Complete { epoch };
+        release_cyw43_sdio_pair_restart_latch(cursor);
+        Some(epoch)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn pending_cyw43_sdio_pair_restart_turn(
+    action: &'static str,
+    operation: Cyw43SdioPairRestartOperation,
+) -> Cyw43SdioPairRestartTurn {
+    Cyw43SdioPairRestartTurn::Pending {
+        action,
+        operation: operation.as_str(),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    now: u64,
+    executor: &mut E,
+) -> Cyw43SdioPairRestartTurn {
+    let Some(action) = current_cyw43_sdio_pair_restart_action(cursor) else {
+        let failure = Cyw43SdioPairRestartFailure {
+            kind: Cyw43SdioPairRestartFailureKind::ActionFailed,
+            action: "invalid-action-index",
+            status: "invalid-action-index",
+        };
+        cursor.mode = Cyw43SdioPairRestartCursorMode::Failed(failure);
+        release_cyw43_sdio_pair_restart_latch(cursor);
+        return Cyw43SdioPairRestartTurn::Failed(failure);
+    };
+    let action_label = action.as_str();
+    if matches!(
+        action,
+        Cyw43SdioPairRestartAction::WaitSdioRecvReady
+            | Cyw43SdioPairRestartAction::WaitCyw43RecvReady
+    ) && cursor.poll_count >= CYW43_SDIO_PAIR_RESTART_RECV_READY_POLL_CAP
+        || matches!(
+            action,
+            Cyw43SdioPairRestartAction::ReplaySdioDescriptor
+                | Cyw43SdioPairRestartAction::ReplaySdioEngine
+                | Cyw43SdioPairRestartAction::ReplayCyw43Descriptor
+                | Cyw43SdioPairRestartAction::ReplayCyw43Engine
+        ) && cursor.poll_count >= CYW43_SDIO_PAIR_RESTART_PROTOCOL_TURN_CAP
+    {
+        enter_cyw43_sdio_pair_restart_failure(
+            cursor,
+            action,
+            Cyw43SdioPairRestartFailureKind::DeadlineExpired,
+            "retained-poll-bound-expired",
+        );
+        return step_fenced_cyw43_sdio_pair_restart(cursor, Some(now), executor);
+    }
+
+    if action == Cyw43SdioPairRestartAction::MaskCardInterrupt {
+        return match step_cyw43_sdio_card_int_mask(cursor, now, executor) {
+            Cyw43SdioCardIntTurn::Pending { operation } => Cyw43SdioPairRestartTurn::Pending {
+                action: action_label,
+                operation,
+            },
+            Cyw43SdioCardIntTurn::Complete { operation } => {
+                if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
+                    Cyw43SdioPairRestartTurn::Complete { epoch }
+                } else {
+                    Cyw43SdioPairRestartTurn::Pending {
+                        action: action_label,
+                        operation,
+                    }
+                }
+            }
+            Cyw43SdioCardIntTurn::Failed { operation } => {
+                enter_cyw43_sdio_pair_restart_failure(
+                    cursor,
+                    action,
+                    Cyw43SdioPairRestartFailureKind::ActionFailed,
+                    "card-int-mask-failed",
+                );
+                Cyw43SdioPairRestartTurn::Pending {
+                    action: action_label,
+                    operation,
+                }
+            }
+        };
+    }
+
+    let operation = match action {
+        Cyw43SdioPairRestartAction::SuspendPair => match cursor.substep {
+            0 => Cyw43SdioPairRestartOperation::Suspend(Cyw43SdioPairMember::Cyw43),
+            _ => Cyw43SdioPairRestartOperation::Suspend(Cyw43SdioPairMember::Sdio),
+        },
+        Cyw43SdioPairRestartAction::UnbindNotifications => match cursor.substep {
+            0 => Cyw43SdioPairRestartOperation::UnbindNotification(Cyw43SdioPairMember::Cyw43),
+            _ => Cyw43SdioPairRestartOperation::UnbindNotification(Cyw43SdioPairMember::Sdio),
+        },
+        Cyw43SdioPairRestartAction::DrainNotificationsBeforeIrq
+        | Cyw43SdioPairRestartAction::DrainNotificationsAfterIrq => {
+            let member =
+                if usize::from(cursor.substep) < CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP {
+                    Cyw43SdioPairMember::Cyw43
+                } else {
+                    Cyw43SdioPairMember::Sdio
+                };
+            Cyw43SdioPairRestartOperation::DrainNotification(member)
+        }
+        Cyw43SdioPairRestartAction::AcknowledgeIrqs => match cursor.substep {
+            0 => Cyw43SdioPairRestartOperation::AcknowledgeIrq(Cyw43SdioPairMember::Cyw43),
+            _ => Cyw43SdioPairRestartOperation::AcknowledgeIrq(Cyw43SdioPairMember::Sdio),
+        },
+        Cyw43SdioPairRestartAction::RebindNotifications => match cursor.substep {
+            0 => Cyw43SdioPairRestartOperation::RebindNotification(Cyw43SdioPairMember::Sdio),
+            _ => Cyw43SdioPairRestartOperation::RebindNotification(Cyw43SdioPairMember::Cyw43),
+        },
+        Cyw43SdioPairRestartAction::ClearDescriptorSeals => {
+            Cyw43SdioPairRestartOperation::ClearDescriptorSeals
+        }
+        Cyw43SdioPairRestartAction::ResetSdioRing => {
+            Cyw43SdioPairRestartOperation::ResetRing(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartAction::ResetCyw43Ring => {
+            Cyw43SdioPairRestartOperation::ResetRing(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartAction::ProgramSdioRestartRegisters => {
+            Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartAction::ProgramCyw43RestartRegisters => {
+            Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartAction::ResumeSdio => {
+            Cyw43SdioPairRestartOperation::Resume(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartAction::WaitSdioRecvReady => {
+            Cyw43SdioPairRestartOperation::PollRecvReady(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartAction::ReplaySdioDescriptor => {
+            Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartAction::ReplaySdioEngine => {
+            Cyw43SdioPairRestartOperation::ReplayEngine(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartAction::ResumeCyw43 => {
+            Cyw43SdioPairRestartOperation::Resume(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartAction::WaitCyw43RecvReady => {
+            Cyw43SdioPairRestartOperation::PollRecvReady(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartAction::ReplayCyw43Descriptor => {
+            Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartAction::ReplayCyw43Engine => {
+            Cyw43SdioPairRestartOperation::ReplayEngine(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartAction::HandoffRingToCyw43 => {
+            Cyw43SdioPairRestartOperation::HandoffRingToCyw43
+        }
+        Cyw43SdioPairRestartAction::DelegateAndAdvanceEpoch => match cursor.substep {
+            0 => Cyw43SdioPairRestartOperation::DelegateCyw43Endpoint,
+            _ => Cyw43SdioPairRestartOperation::AdvanceEpoch,
+        },
+        Cyw43SdioPairRestartAction::MaskCardInterrupt => unreachable!(),
+    };
+    let outcome = executor.execute(cursor, operation);
+    let succeeded = matches!(
+        outcome,
+        Cyw43SdioPairRestartOperationOutcome::Complete
+            | Cyw43SdioPairRestartOperationOutcome::Completion(_)
+            | Cyw43SdioPairRestartOperationOutcome::Value(_)
+    );
+
+    match action {
+        Cyw43SdioPairRestartAction::SuspendPair
+        | Cyw43SdioPairRestartAction::UnbindNotifications
+        | Cyw43SdioPairRestartAction::AcknowledgeIrqs
+        | Cyw43SdioPairRestartAction::RebindNotifications => {
+            if cursor.substep == 0 {
+                cursor.first_member_succeeded = succeeded;
+                cursor.substep = 1;
+                return pending_cyw43_sdio_pair_restart_turn(action_label, operation);
+            }
+            let pair_succeeded = cursor.first_member_succeeded && succeeded;
+            if pair_succeeded {
+                if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
+                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                }
+            } else {
+                enter_cyw43_sdio_pair_restart_failure(
+                    cursor,
+                    action,
+                    Cyw43SdioPairRestartFailureKind::ActionFailed,
+                    "pair-substep-failed",
+                );
+            }
+        }
+        Cyw43SdioPairRestartAction::DrainNotificationsBeforeIrq
+        | Cyw43SdioPairRestartAction::DrainNotificationsAfterIrq => {
+            if !succeeded {
+                enter_cyw43_sdio_pair_restart_failure(
+                    cursor,
+                    action,
+                    Cyw43SdioPairRestartFailureKind::ActionFailed,
+                    "notification-drain-failed",
+                );
+            } else {
+                cursor.substep = cursor.substep.saturating_add(1);
+                if usize::from(cursor.substep)
+                    == CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP.saturating_mul(2)
+                {
+                    if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
+                        return Cyw43SdioPairRestartTurn::Complete { epoch };
+                    }
+                }
+            }
+        }
+        Cyw43SdioPairRestartAction::WaitSdioRecvReady
+        | Cyw43SdioPairRestartAction::WaitCyw43RecvReady
+        | Cyw43SdioPairRestartAction::ReplaySdioDescriptor
+        | Cyw43SdioPairRestartAction::ReplayCyw43Descriptor => match outcome {
+            Cyw43SdioPairRestartOperationOutcome::Complete => {
+                if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
+                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                }
+            }
+            Cyw43SdioPairRestartOperationOutcome::Pending => {
+                cursor.poll_count = cursor.poll_count.saturating_add(1);
+            }
+            _ => enter_cyw43_sdio_pair_restart_failure(
+                cursor,
+                action,
+                Cyw43SdioPairRestartFailureKind::ActionFailed,
+                "retained-poll-failed",
+            ),
+        },
+        Cyw43SdioPairRestartAction::ReplaySdioEngine
+        | Cyw43SdioPairRestartAction::ReplayCyw43Engine => match outcome {
+            Cyw43SdioPairRestartOperationOutcome::Completion(completion) => {
+                if action == Cyw43SdioPairRestartAction::ReplayCyw43Engine {
+                    cursor.cyw43_engine_completion = Some(completion);
+                }
+                if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
+                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                }
+            }
+            Cyw43SdioPairRestartOperationOutcome::Pending => {
+                cursor.poll_count = cursor.poll_count.saturating_add(1);
+            }
+            _ => enter_cyw43_sdio_pair_restart_failure(
+                cursor,
+                action,
+                Cyw43SdioPairRestartFailureKind::ActionFailed,
+                "engine-replay-failed",
+            ),
+        },
+        Cyw43SdioPairRestartAction::DelegateAndAdvanceEpoch => {
+            if cursor.substep == 0 && outcome == Cyw43SdioPairRestartOperationOutcome::Complete {
+                cursor.substep = 1;
+            } else if cursor.substep == 1 {
+                if let Cyw43SdioPairRestartOperationOutcome::Value(epoch) = outcome {
+                    if epoch != 0 {
+                        cursor.published_epoch = epoch;
+                        if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action)
+                        {
+                            return Cyw43SdioPairRestartTurn::Complete { epoch };
+                        }
+                    } else {
+                        enter_cyw43_sdio_pair_restart_failure(
+                            cursor,
+                            action,
+                            Cyw43SdioPairRestartFailureKind::ActionFailed,
+                            "epoch-advance-failed",
+                        );
+                    }
+                } else {
+                    enter_cyw43_sdio_pair_restart_failure(
+                        cursor,
+                        action,
+                        Cyw43SdioPairRestartFailureKind::ActionFailed,
+                        "epoch-advance-failed",
+                    );
+                }
+            } else {
+                enter_cyw43_sdio_pair_restart_failure(
+                    cursor,
+                    action,
+                    Cyw43SdioPairRestartFailureKind::ActionFailed,
+                    "delegation-failed",
+                );
+            }
+        }
+        _ => {
+            if succeeded {
+                if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
+                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                }
+            } else {
+                enter_cyw43_sdio_pair_restart_failure(
+                    cursor,
+                    action,
+                    Cyw43SdioPairRestartFailureKind::ActionFailed,
+                    "action-failed",
+                );
+            }
+        }
+    }
+    pending_cyw43_sdio_pair_restart_turn(action_label, operation)
+}
+
+#[cfg(feature = "kernel")]
+fn finish_fenced_cyw43_sdio_pair_restart(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    fence: Cyw43SdioPairRestartFenceCursor,
+    outcome: Cyw43SdioPairFailureFenceOutcome,
+) -> Cyw43SdioPairRestartTurn {
+    let failure = Cyw43SdioPairRestartFailure {
+        status: outcome.status(),
+        ..fence.origin
+    };
+    emit_cyw43_sdio_pair_restart_failure(fence.failed_action, failure.status);
+    cursor.mode = Cyw43SdioPairRestartCursorMode::Failed(failure);
+    release_cyw43_sdio_pair_restart_latch(cursor);
+    Cyw43SdioPairRestartTurn::Failed(failure)
+}
+
+#[cfg(feature = "kernel")]
+fn step_fenced_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    now: Option<u64>,
+    executor: &mut E,
+) -> Cyw43SdioPairRestartTurn {
+    let Cyw43SdioPairRestartCursorMode::Fencing(mut fence) = cursor.mode else {
+        let failure = Cyw43SdioPairRestartFailure {
+            kind: Cyw43SdioPairRestartFailureKind::ActionFailed,
+            action: "failure-fence",
+            status: "invalid-fence-state",
+        };
+        return Cyw43SdioPairRestartTurn::Failed(failure);
+    };
+    if fence.phase == Cyw43SdioPairRestartFencePhase::MaskCardInterrupt && now.is_none() {
+        fence.card_int_masked = false;
+        fence.phase = Cyw43SdioPairRestartFencePhase::UnbindCyw43;
+        cursor.substep = 0;
+        cursor.poll_count = 0;
+        cursor.mode = Cyw43SdioPairRestartCursorMode::Fencing(fence);
+    }
+    if fence.phase == Cyw43SdioPairRestartFencePhase::MaskCardInterrupt {
+        return match step_cyw43_sdio_card_int_mask(cursor, now.unwrap_or(0), executor) {
+            Cyw43SdioCardIntTurn::Pending { operation } => {
+                cursor.mode = Cyw43SdioPairRestartCursorMode::Fencing(fence);
+                Cyw43SdioPairRestartTurn::Pending {
+                    action: "failure-fence",
+                    operation,
+                }
+            }
+            Cyw43SdioCardIntTurn::Complete { operation } => {
+                fence.card_int_masked = true;
+                fence.phase = Cyw43SdioPairRestartFencePhase::UnbindCyw43;
+                cursor.substep = 0;
+                cursor.poll_count = 0;
+                cursor.mode = Cyw43SdioPairRestartCursorMode::Fencing(fence);
+                Cyw43SdioPairRestartTurn::Pending {
+                    action: "failure-fence",
+                    operation,
+                }
+            }
+            Cyw43SdioCardIntTurn::Failed { operation } => {
+                fence.card_int_masked = false;
+                fence.phase = Cyw43SdioPairRestartFencePhase::UnbindCyw43;
+                cursor.substep = 0;
+                cursor.poll_count = 0;
+                cursor.mode = Cyw43SdioPairRestartCursorMode::Fencing(fence);
+                Cyw43SdioPairRestartTurn::Pending {
+                    action: "failure-fence",
+                    operation,
+                }
+            }
+        };
+    }
+
+    let operation = match fence.phase {
+        Cyw43SdioPairRestartFencePhase::CloseCyw43Root => {
+            Cyw43SdioPairRestartOperation::FenceRootSubmission(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartFencePhase::CloseSdioRoot => {
+            Cyw43SdioPairRestartOperation::FenceRootSubmission(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartFencePhase::SuspendCyw43 => {
+            Cyw43SdioPairRestartOperation::Suspend(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartFencePhase::SuspendSdio => {
+            Cyw43SdioPairRestartOperation::Suspend(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartFencePhase::UnbindCyw43 => {
+            Cyw43SdioPairRestartOperation::UnbindNotification(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartFencePhase::UnbindSdio => {
+            Cyw43SdioPairRestartOperation::UnbindNotification(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartFencePhase::DrainBeforeIrq
+        | Cyw43SdioPairRestartFencePhase::DrainAfterIrq => {
+            let member =
+                if usize::from(cursor.substep) < CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP {
+                    Cyw43SdioPairMember::Cyw43
+                } else {
+                    Cyw43SdioPairMember::Sdio
+                };
+            Cyw43SdioPairRestartOperation::DrainNotification(member)
+        }
+        Cyw43SdioPairRestartFencePhase::AcknowledgeCyw43Irq => {
+            Cyw43SdioPairRestartOperation::AcknowledgeIrq(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartFencePhase::AcknowledgeSdioIrq => {
+            Cyw43SdioPairRestartOperation::AcknowledgeIrq(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartFencePhase::RebindSdio => {
+            Cyw43SdioPairRestartOperation::RebindNotification(Cyw43SdioPairMember::Sdio)
+        }
+        Cyw43SdioPairRestartFencePhase::RebindCyw43 => {
+            Cyw43SdioPairRestartOperation::RebindNotification(Cyw43SdioPairMember::Cyw43)
+        }
+        Cyw43SdioPairRestartFencePhase::MaskCardInterrupt => unreachable!(),
+    };
+    let succeeded =
+        executor.execute(cursor, operation) == Cyw43SdioPairRestartOperationOutcome::Complete;
+    match fence.phase {
+        Cyw43SdioPairRestartFencePhase::CloseCyw43Root => {
+            fence.phase = Cyw43SdioPairRestartFencePhase::CloseSdioRoot;
+        }
+        Cyw43SdioPairRestartFencePhase::CloseSdioRoot => {
+            fence.phase = Cyw43SdioPairRestartFencePhase::SuspendCyw43;
+        }
+        Cyw43SdioPairRestartFencePhase::SuspendCyw43 => {
+            fence.cyw43_suspended = succeeded;
+            fence.phase = Cyw43SdioPairRestartFencePhase::SuspendSdio;
+        }
+        Cyw43SdioPairRestartFencePhase::SuspendSdio => {
+            fence.sdio_suspended = succeeded;
+            if !cyw43_sdio_pair_recovery_mmio_allowed(fence.cyw43_suspended, fence.sdio_suspended) {
+                return finish_fenced_cyw43_sdio_pair_restart(
+                    cursor,
+                    fence,
+                    Cyw43SdioPairFailureFenceOutcome::SuspendUnproven,
+                );
+            }
+            fence.phase = Cyw43SdioPairRestartFencePhase::MaskCardInterrupt;
+            cursor.substep = 0;
+            cursor.poll_count = 0;
+        }
+        Cyw43SdioPairRestartFencePhase::UnbindCyw43 => {
+            fence.first_member_succeeded = succeeded;
+            fence.phase = Cyw43SdioPairRestartFencePhase::UnbindSdio;
+        }
+        Cyw43SdioPairRestartFencePhase::UnbindSdio => {
+            if fence.first_member_succeeded && succeeded {
+                fence.phase = Cyw43SdioPairRestartFencePhase::DrainBeforeIrq;
+                cursor.substep = 0;
+            } else {
+                fence.phase = Cyw43SdioPairRestartFencePhase::RebindSdio;
+            }
+        }
+        Cyw43SdioPairRestartFencePhase::DrainBeforeIrq => {
+            cursor.substep = cursor.substep.saturating_add(1);
+            if usize::from(cursor.substep)
+                == CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP.saturating_mul(2)
+            {
+                cursor.substep = 0;
+                fence.phase = Cyw43SdioPairRestartFencePhase::AcknowledgeCyw43Irq;
+            }
+        }
+        Cyw43SdioPairRestartFencePhase::AcknowledgeCyw43Irq => {
+            fence.phase = Cyw43SdioPairRestartFencePhase::AcknowledgeSdioIrq;
+        }
+        Cyw43SdioPairRestartFencePhase::AcknowledgeSdioIrq => {
+            fence.phase = Cyw43SdioPairRestartFencePhase::DrainAfterIrq;
+            cursor.substep = 0;
+        }
+        Cyw43SdioPairRestartFencePhase::DrainAfterIrq => {
+            cursor.substep = cursor.substep.saturating_add(1);
+            if usize::from(cursor.substep)
+                == CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP.saturating_mul(2)
+            {
+                cursor.substep = 0;
+                fence.phase = Cyw43SdioPairRestartFencePhase::RebindSdio;
+            }
+        }
+        Cyw43SdioPairRestartFencePhase::RebindSdio => {
+            fence.phase = Cyw43SdioPairRestartFencePhase::RebindCyw43;
+        }
+        Cyw43SdioPairRestartFencePhase::RebindCyw43 => {
+            let outcome = if fence.card_int_masked {
+                Cyw43SdioPairFailureFenceOutcome::FullyFenced
+            } else {
+                Cyw43SdioPairFailureFenceOutcome::RuntimesSuspendedCardIntUnproven
+            };
+            return finish_fenced_cyw43_sdio_pair_restart(cursor, fence, outcome);
+        }
+        Cyw43SdioPairRestartFencePhase::MaskCardInterrupt => unreachable!(),
+    }
+    cursor.mode = Cyw43SdioPairRestartCursorMode::Fencing(fence);
+    Cyw43SdioPairRestartTurn::Pending {
+        action: "failure-fence",
+        operation: operation.as_str(),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn step_cyw43_sdio_pair_restart_with<E: Cyw43SdioPairRestartExecutor>(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    now: Option<u64>,
+    executor: &mut E,
+) -> Cyw43SdioPairRestartTurn {
+    match cursor.mode {
+        Cyw43SdioPairRestartCursorMode::Complete { epoch } => {
+            Cyw43SdioPairRestartTurn::Complete { epoch }
+        }
+        Cyw43SdioPairRestartCursorMode::Failed(failure) => {
+            Cyw43SdioPairRestartTurn::Failed(failure)
+        }
+        Cyw43SdioPairRestartCursorMode::Fencing(_) => {
+            step_fenced_cyw43_sdio_pair_restart(cursor, now, executor)
+        }
+        Cyw43SdioPairRestartCursorMode::Running => {
+            let Some(now) = now else {
+                let action = current_cyw43_sdio_pair_restart_action(cursor)
+                    .unwrap_or(Cyw43SdioPairRestartAction::SuspendPair);
+                enter_cyw43_sdio_pair_restart_failure(
+                    cursor,
+                    action,
+                    Cyw43SdioPairRestartFailureKind::CounterUnavailable,
+                    "counter-unavailable",
+                );
+                return step_fenced_cyw43_sdio_pair_restart(cursor, None, executor);
+            };
+            if cursor.deadline.expired_at(now) {
+                let action = current_cyw43_sdio_pair_restart_action(cursor)
+                    .unwrap_or(Cyw43SdioPairRestartAction::SuspendPair);
+                enter_cyw43_sdio_pair_restart_failure(
+                    cursor,
+                    action,
+                    Cyw43SdioPairRestartFailureKind::DeadlineExpired,
+                    "aggregate-deadline-expired",
+                );
+                return step_fenced_cyw43_sdio_pair_restart(cursor, Some(now), executor);
+            }
+            step_running_cyw43_sdio_pair_restart(cursor, now, executor)
+        }
+    }
+}
+
+/// Begin one retained CYW43/SDIO pair restart.
+///
+/// This performs admission and immutable-context capture only. It never invokes
+/// a child runtime, seL4 hardware operation, MMIO access, or private poll loop.
+#[cfg(feature = "kernel")]
+pub fn begin_cyw43_sdio_pair_restart(
+) -> Result<Cyw43SdioPairRestartCursor, Cyw43SdioPairRestartFailure> {
+    if CYW43_SDIO_PAIR_RESTART_IN_PROGRESS
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
+        return Err(Cyw43SdioPairRestartFailure {
+            kind: Cyw43SdioPairRestartFailureKind::AlreadyInProgress,
+            action: "begin",
+            status: "already-in-progress",
+        });
+    }
+    CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
+    CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
+    let Some(cyw43) = cyw43_sdio_runtime_restart_context(DriverTaskHotPath::Cyw43Wifi) else {
+        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+        emit_cyw43_sdio_pair_restart_status(
+            Cyw43SdioPairRestartPhase::Start,
+            "cyw43-context-missing",
+        );
+        return Err(Cyw43SdioPairRestartFailure {
+            kind: Cyw43SdioPairRestartFailureKind::ContextMissing,
+            action: "begin",
+            status: "cyw43-context-missing",
+        });
+    };
+    let Some(sdio) = cyw43_sdio_runtime_restart_context(DriverTaskHotPath::SdioHost) else {
+        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+        emit_cyw43_sdio_pair_restart_status(
+            Cyw43SdioPairRestartPhase::Start,
+            "sdio-context-missing",
+        );
+        return Err(Cyw43SdioPairRestartFailure {
+            kind: Cyw43SdioPairRestartFailureKind::ContextMissing,
+            action: "begin",
+            status: "sdio-context-missing",
+        });
+    };
+    let Some(deadline) = Cyw43SdioPairRestartDeadline::new(CYW43_SDIO_PAIR_RESTART_ENVELOPE_US)
+    else {
+        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+        emit_cyw43_sdio_pair_restart_status(
+            Cyw43SdioPairRestartPhase::Start,
+            "counter-unavailable",
+        );
+        return Err(Cyw43SdioPairRestartFailure {
+            kind: Cyw43SdioPairRestartFailureKind::CounterUnavailable,
+            action: "begin",
+            status: "counter-unavailable",
+        });
+    };
+    emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Start, "begin");
+    Ok(Cyw43SdioPairRestartCursor {
+        cyw43,
+        sdio,
+        deadline,
+        mode: Cyw43SdioPairRestartCursorMode::Running,
+        action_index: 0,
+        substep: 0,
+        poll_count: 0,
+        scratch_u32: 0,
+        verify_signal_u32: 0,
+        delay_start: 0,
+        first_member_succeeded: false,
+        cyw43_engine_completion: None,
+        published_epoch: 0,
+        owns_global_latch: true,
+        released: false,
+    })
+}
+
+/// Execute one retained CYW43/SDIO pair-restart outer turn.
+///
+/// `Pending` means exactly one HAL/runtime operation or one retained poll has
+/// completed. The caller must release its HAL guard and return to the ordinary
+/// event pump before invoking this function again.
+#[cfg(feature = "kernel")]
+pub fn step_cyw43_sdio_pair_restart(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+) -> Cyw43SdioPairRestartTurn {
+    step_cyw43_sdio_pair_restart_with(
+        cursor,
+        driver_task_counter_ticks(),
+        &mut Cyw43SdioPairRestartProductionExecutor,
+    )
+}
+
+/// Result of one shell-deferred runtime-descriptor replay turn.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverTaskDescriptorReplayTurn {
+    /// The exact issued request remains active for a later outer turn.
+    Pending,
+    /// The descriptor was already current or completed in this turn.
+    Complete,
+    /// Validation or a terminal completion failed closed.
+    Failed(&'static str),
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverTaskDescriptorReplayMode {
+    Bounded,
+    RetainedTurn,
 }
 
 /// Replay a shell-deferred runtime-init descriptor before steady service.
@@ -6639,8 +7508,40 @@ pub fn ensure_deferred_runtime_init_descriptor(
     contract: DriverTaskContract,
     hot_path: DriverTaskHotPath,
 ) -> bool {
+    matches!(
+        service_deferred_runtime_init_descriptor_turn(
+            contract,
+            hot_path,
+            DriverTaskDescriptorReplayMode::Bounded,
+        ),
+        DriverTaskDescriptorReplayTurn::Complete
+    )
+}
+
+/// Execute one retained descriptor-replay send or completion poll.
+///
+/// `Pending` retains the exact command fingerprint and request sequence. The
+/// caller must return to the ordinary event pump before calling this again.
+#[cfg(feature = "kernel")]
+pub fn step_deferred_runtime_init_descriptor(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+) -> DriverTaskDescriptorReplayTurn {
+    service_deferred_runtime_init_descriptor_turn(
+        contract,
+        hot_path,
+        DriverTaskDescriptorReplayMode::RetainedTurn,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn service_deferred_runtime_init_descriptor_turn(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    mode: DriverTaskDescriptorReplayMode,
+) -> DriverTaskDescriptorReplayTurn {
     if !physical_pi_driver_task_only_owner_state_active() {
-        return true;
+        return DriverTaskDescriptorReplayTurn::Complete;
     }
     if hot_path.contract() != contract {
         emit_driver_task_resource_init_status(
@@ -6650,14 +7551,14 @@ pub fn ensure_deferred_runtime_init_descriptor(
             "wrong-contract",
             None,
         );
-        return false;
+        return DriverTaskDescriptorReplayTurn::Failed("wrong-contract");
     }
     let slot = deferred_runtime_init_slot(hot_path);
     if slot.initialized.load(Ordering::Acquire) != 0 {
-        return true;
+        return DriverTaskDescriptorReplayTurn::Complete;
     }
     if slot.pending.load(Ordering::Acquire) == 0 {
-        return true;
+        return DriverTaskDescriptorReplayTurn::Complete;
     }
     let descriptor = slot.load();
     let Some(task_key) = driver_task_contract_key(contract) else {
@@ -6669,7 +7570,7 @@ pub fn ensure_deferred_runtime_init_descriptor(
             None,
         );
         emit_deferred_runtime_init_status(contract, hot_path, "invalid-contract");
-        return false;
+        return DriverTaskDescriptorReplayTurn::Failed("invalid-contract");
     };
     if descriptor.hot_path != hot_path.as_u32()
         || descriptor.role_bit != hot_path.role_bit() as u32
@@ -6684,7 +7585,7 @@ pub fn ensure_deferred_runtime_init_descriptor(
             None,
         );
         emit_deferred_runtime_init_status(contract, hot_path, "invalid-descriptor");
-        return false;
+        return DriverTaskDescriptorReplayTurn::Failed("invalid-descriptor");
     }
     let Some(frame) = describe_driver_runtime_init_descriptor(&descriptor) else {
         emit_driver_task_resource_init_status(
@@ -6695,7 +7596,7 @@ pub fn ensure_deferred_runtime_init_descriptor(
             None,
         );
         emit_deferred_runtime_init_status(contract, hot_path, "stage-failed");
-        return false;
+        return DriverTaskDescriptorReplayTurn::Failed("stage-failed");
     };
     let Some(descriptor_bytes) = driver_runtime_init_descriptor_bytes(&descriptor) else {
         emit_driver_task_resource_init_status(
@@ -6706,7 +7607,7 @@ pub fn ensure_deferred_runtime_init_descriptor(
             None,
         );
         emit_deferred_runtime_init_status(contract, hot_path, "stage-failed");
-        return false;
+        return DriverTaskDescriptorReplayTurn::Failed("stage-failed");
     };
     let staging_segments = [DriverTaskStagingSegment::ring_frame(descriptor_bytes, 0)];
     let command = runtime_init_command(
@@ -6714,10 +7615,18 @@ pub fn ensure_deferred_runtime_init_descriptor(
         DriverTaskBudgetGrant::from_contract(contract),
         frame,
     );
-    let completion = if deferred_runtime_init_replay_must_be_bounded(hot_path) {
-        run_driver_task_ring_command_nonblocking_staged(contract, command, &staging_segments)
-    } else {
-        run_driver_task_ring_command_staged(contract, command, &staging_segments)
+    let completion = match mode {
+        DriverTaskDescriptorReplayMode::RetainedTurn => {
+            run_driver_task_ring_command_retained_turn_staged(contract, command, &staging_segments)
+        }
+        DriverTaskDescriptorReplayMode::Bounded
+            if deferred_runtime_init_replay_must_be_bounded(hot_path) =>
+        {
+            run_driver_task_ring_command_nonblocking_staged(contract, command, &staging_segments)
+        }
+        DriverTaskDescriptorReplayMode::Bounded => {
+            run_driver_task_ring_command_staged(contract, command, &staging_segments)
+        }
     };
     let complete = completion.is_some_and(|completion| {
         completion.code == DriverTaskCompletionCode::Progress.as_u16()
@@ -6738,14 +7647,20 @@ pub fn ensure_deferred_runtime_init_descriptor(
         completion,
     );
     if complete {
-        let _ = record_driver_runtime_descriptor_seal(contract, hot_path, &descriptor);
+        if !record_driver_runtime_descriptor_seal(contract, hot_path, &descriptor) {
+            emit_deferred_runtime_init_status(contract, hot_path, "seal-failed");
+            return DriverTaskDescriptorReplayTurn::Failed("seal-failed");
+        }
         slot.initialized.store(1, Ordering::Release);
         slot.pending.store(0, Ordering::Release);
         emit_deferred_runtime_init_status(contract, hot_path, "resumed");
-        true
+        DriverTaskDescriptorReplayTurn::Complete
+    } else if completion.is_some() {
+        emit_deferred_runtime_init_status(contract, hot_path, "unexpected-completion");
+        DriverTaskDescriptorReplayTurn::Failed("unexpected-completion")
     } else {
         emit_deferred_runtime_init_status(contract, hot_path, "pending");
-        false
+        DriverTaskDescriptorReplayTurn::Pending
     }
 }
 
@@ -7874,6 +8789,7 @@ enum DriverTaskRingCommandMode {
     Bootstrap,
     NonBlocking,
     PromptSlice,
+    RetainedTurn,
 }
 
 #[cfg(feature = "kernel")]
@@ -7884,6 +8800,7 @@ impl DriverTaskRingCommandMode {
             DriverTaskRingCommandMode::Bootstrap => "bootstrap",
             DriverTaskRingCommandMode::NonBlocking => "nonblocking",
             DriverTaskRingCommandMode::PromptSlice => "prompt-slice",
+            DriverTaskRingCommandMode::RetainedTurn => "retained-turn",
         }
     }
 
@@ -7893,6 +8810,7 @@ impl DriverTaskRingCommandMode {
             DriverTaskRingCommandMode::Steady
                 | DriverTaskRingCommandMode::NonBlocking
                 | DriverTaskRingCommandMode::PromptSlice
+                | DriverTaskRingCommandMode::RetainedTurn
         )
     }
 }
@@ -8047,6 +8965,7 @@ const fn driver_task_ring_mode_uses_bounded_send(mode: DriverTaskRingCommandMode
         DriverTaskRingCommandMode::NonBlocking
             | DriverTaskRingCommandMode::Bootstrap
             | DriverTaskRingCommandMode::PromptSlice
+            | DriverTaskRingCommandMode::RetainedTurn
     )
 }
 
@@ -8058,6 +8977,9 @@ fn driver_task_ring_attempt_limit(
 ) -> usize {
     if !driver_task_ring_mode_uses_bounded_send(mode) {
         return DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::RetainedTurn {
+        return 1;
     }
     if mode == DriverTaskRingCommandMode::PromptSlice
         && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
@@ -8145,7 +9067,9 @@ fn driver_task_ring_timeout_keep_active_limit(
     command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
 ) -> usize {
-    if matches!(
+    if mode == DriverTaskRingCommandMode::RetainedTurn {
+        usize::MAX
+    } else if matches!(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
     ) && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
@@ -8690,21 +9614,6 @@ pub fn run_driver_task_ring_command_nonblocking(
     )
 }
 
-#[cfg(feature = "kernel")]
-fn run_driver_task_ring_command_nonblocking_with_deadline(
-    contract: DriverTaskContract,
-    command: DriverTaskCommandRecord,
-    deadline: &mut DriverTaskDeadline,
-) -> Option<DriverTaskCompletionRecord> {
-    run_driver_task_ring_command_with_mode_and_staging_deadline(
-        contract,
-        command,
-        DriverTaskRingCommandMode::NonBlocking,
-        &[],
-        Some(deadline),
-    )
-}
-
 /// Execute a nonblocking command with atomic staged-byte publication.
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_command_nonblocking_staged(
@@ -8720,19 +9629,34 @@ pub fn run_driver_task_ring_command_nonblocking_staged(
     )
 }
 
+/// Execute exactly one retained nonblocking command-ring attempt.
+///
+/// The active request and staged-command fingerprint remain authoritative when
+/// no completion is present. This mode never performs a private yield or a
+/// second send attempt; the caller must return to the outer event pump.
 #[cfg(feature = "kernel")]
-fn run_driver_task_ring_command_nonblocking_staged_with_deadline(
+fn run_driver_task_ring_command_retained_turn(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode(
+        contract,
+        command,
+        DriverTaskRingCommandMode::RetainedTurn,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_ring_command_retained_turn_staged(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
     staging_segments: &[DriverTaskStagingSegment<'_>],
-    deadline: &mut DriverTaskDeadline,
 ) -> Option<DriverTaskCompletionRecord> {
-    run_driver_task_ring_command_with_mode_and_staging_deadline(
+    run_driver_task_ring_command_with_mode_and_staging(
         contract,
         command,
-        DriverTaskRingCommandMode::NonBlocking,
+        DriverTaskRingCommandMode::RetainedTurn,
         staging_segments,
-        Some(deadline),
     )
 }
 
@@ -8998,7 +9922,9 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     }
     let mut start_ticks = None;
     let trace_call = driver_task_ring_call_trace_enabled(contract, command, mode);
-    let _priority_restore = if driver_task_ring_mode_uses_bounded_send(mode) {
+    let _priority_restore = if driver_task_ring_mode_uses_bounded_send(mode)
+        && mode != DriverTaskRingCommandMode::RetainedTurn
+    {
         boost_driver_task_priorities_for_bounded_turn(contract, command)
     } else {
         (None, None)
@@ -9024,8 +9950,10 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 }
                 send_attempts = send_attempts.saturating_add(1);
                 crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
-                yield_count = yield_count.saturating_add(1);
-                crate::sel4::yield_now();
+                if mode != DriverTaskRingCommandMode::RetainedTurn {
+                    yield_count = yield_count.saturating_add(1);
+                    crate::sel4::yield_now();
+                }
                 if attempt % DRIVER_TASK_RING_CACHE_POLL_INTERVAL == 0 {
                     cache_counter_batch.record_completion_invalidate(ring_root_ptr);
                 }
@@ -9350,6 +10278,37 @@ pub fn run_driver_task_ring_service_prompt_slice_staged(
         contract,
         command,
         DriverTaskRingCommandMode::PromptSlice,
+        staging_segments,
+    )
+}
+
+/// Execute exactly one retained service-ring send or completion poll.
+///
+/// A missing completion keeps the exact request active. The caller must return
+/// to the outer event pump before invoking this function again.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_retained_turn(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode(
+        contract,
+        command,
+        DriverTaskRingCommandMode::RetainedTurn,
+    )
+}
+
+/// Execute one retained service turn with atomic staged-byte publication.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_retained_turn_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode_and_staging(
+        contract,
+        command,
+        DriverTaskRingCommandMode::RetainedTurn,
         staging_segments,
     )
 }
@@ -9906,6 +10865,50 @@ fn service_pending_driver_task_ring_command(task_key: usize) -> Option<usize> {
         core::ptr::write_volatile(completion_ptr, completion);
     }
     Some(completion.result as usize)
+}
+
+/// Publish a nonzero endpoint token for reciprocal shared-ring unit tests.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_publish_driver_task_ring_endpoint(contract: DriverTaskContract) -> bool {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.endpoint.store(1, Ordering::Release);
+    true
+}
+
+/// Dispatch one pending command through the registered reciprocal ring owner.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_dispatch_pending_driver_task_ring_command(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskCompletionRecord> {
+    let task_key = driver_task_contract_key(contract)?;
+    service_pending_driver_task_ring_command(task_key)?;
+    let slot = slot_for_task_key(task_key)?;
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let command_ptr = ring_root_ptr as *const DriverTaskCommandRecord;
+    let completion_ptr =
+        (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *const DriverTaskCompletionRecord;
+    // SAFETY: Unit tests publish one aligned, page-sized ring whose lifetime
+    // encloses this controller dispatch; the production service just wrote its
+    // completion into the same fixed-layout slot.
+    let command = unsafe { core::ptr::read_volatile(command_ptr) };
+    // SAFETY: The completion record is inside the same aligned test ring and
+    // is read only after the reciprocal service handler published it.
+    let completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+    if command.sequence == 0 || completion.sequence != command.sequence {
+        return None;
+    }
+    slot.active.store(0, Ordering::Release);
+    slot.active_command_fingerprint.store(0, Ordering::Release);
+    slot.timeout_resumes.store(0, Ordering::Release);
+    Some(completion)
 }
 
 #[cfg(all(
@@ -12402,383 +13405,6 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum RestartRingProducerModel {
-        RootBootstrap,
-        Transition,
-        Cyw43,
-    }
-
-    #[cfg(feature = "kernel")]
-    struct PairRestartFaultModel {
-        card_int: CardIntMaskModel,
-        notifications: RestartNotificationModel,
-        action_failures: Vec<Cyw43SdioPairRestartAction>,
-        primary_pair_suspend_completed: bool,
-        cyw43_suspended: bool,
-        sdio_suspended: bool,
-        outer_cyw43_suspend_succeeds: bool,
-        outer_sdio_suspend_succeeds: bool,
-        outer_card_int_attempted: bool,
-        outer_notification_cleanup_attempted: bool,
-        failure_fence_outcome: Option<Cyw43SdioPairFailureFenceOutcome>,
-        cyw43_root_endpoint_open: bool,
-        sdio_root_endpoint_open: bool,
-        ring_producer: RestartRingProducerModel,
-        descriptor_seals_present: bool,
-        sdio_ring_reset: bool,
-        cyw43_ring_reset: bool,
-        sdio_restart_registers_programmed: bool,
-        cyw43_restart_registers_programmed: bool,
-        sdio_resume_completed: bool,
-        cyw43_resume_completed: bool,
-        sdio_recv_ready_observed: bool,
-        cyw43_recv_ready_observed: bool,
-        sdio_descriptor_replayed: bool,
-        cyw43_descriptor_replayed: bool,
-        sdio_engine_replayed: bool,
-        cyw43_engine_replayed: bool,
-        drains_before_irq: usize,
-        drains_after_irq: usize,
-        handoff_complete: bool,
-        delegated: bool,
-        pending: bool,
-        context_replay: bool,
-        in_progress: bool,
-        epoch: u32,
-    }
-
-    #[cfg(feature = "kernel")]
-    impl PairRestartFaultModel {
-        const INITIAL_EPOCH: u32 = 41;
-
-        fn new(
-            action_failures: Vec<Cyw43SdioPairRestartAction>,
-            card_int_failures: Vec<CardIntModelCall>,
-            notification_failures: Vec<NotificationModelCall>,
-        ) -> Self {
-            Self {
-                card_int: CardIntMaskModel::new(card_int_failures),
-                notifications: RestartNotificationModel::new(notification_failures),
-                action_failures,
-                primary_pair_suspend_completed: false,
-                cyw43_suspended: false,
-                sdio_suspended: false,
-                outer_cyw43_suspend_succeeds: true,
-                outer_sdio_suspend_succeeds: true,
-                outer_card_int_attempted: false,
-                outer_notification_cleanup_attempted: false,
-                failure_fence_outcome: None,
-                cyw43_root_endpoint_open: true,
-                sdio_root_endpoint_open: true,
-                ring_producer: RestartRingProducerModel::RootBootstrap,
-                descriptor_seals_present: true,
-                sdio_ring_reset: false,
-                cyw43_ring_reset: false,
-                sdio_restart_registers_programmed: false,
-                cyw43_restart_registers_programmed: false,
-                sdio_resume_completed: false,
-                cyw43_resume_completed: false,
-                sdio_recv_ready_observed: false,
-                cyw43_recv_ready_observed: false,
-                sdio_descriptor_replayed: false,
-                cyw43_descriptor_replayed: false,
-                sdio_engine_replayed: false,
-                cyw43_engine_replayed: false,
-                drains_before_irq: 0,
-                drains_after_irq: 0,
-                handoff_complete: false,
-                delegated: false,
-                pending: true,
-                context_replay: false,
-                in_progress: true,
-                epoch: Self::INITIAL_EPOCH,
-            }
-        }
-
-        fn begin_card_int_mask(&mut self) {
-            self.card_int.interrupt_reads = 0;
-            self.card_int.signal_reads = 0;
-            self.card_int.delay_calls = 0;
-            self.card_int.barrier_calls = 0;
-        }
-
-        fn fail_action(&mut self, action: Cyw43SdioPairRestartAction) -> bool {
-            let Some(index) = self
-                .action_failures
-                .iter()
-                .position(|candidate| *candidate == action)
-            else {
-                return false;
-            };
-            self.action_failures.remove(index);
-            true
-        }
-
-        fn execute_action(&mut self, action: Cyw43SdioPairRestartAction) -> bool {
-            if self.fail_action(action) {
-                return false;
-            }
-            match action {
-                Cyw43SdioPairRestartAction::SuspendPair => {
-                    self.primary_pair_suspend_completed = true;
-                    self.cyw43_suspended = true;
-                    self.sdio_suspended = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::MaskCardInterrupt => {
-                    self.begin_card_int_mask();
-                    mask_cyw43_sdio_card_interrupt_with(&mut self.card_int)
-                }
-                Cyw43SdioPairRestartAction::UnbindNotifications => {
-                    unbind_cyw43_sdio_restart_notifications_with(&mut self.notifications)
-                }
-                Cyw43SdioPairRestartAction::DrainNotificationsBeforeIrq => {
-                    self.drains_before_irq = self.drains_before_irq.saturating_add(2);
-                    true
-                }
-                Cyw43SdioPairRestartAction::AcknowledgeIrqs => {
-                    acknowledge_cyw43_sdio_restart_irqs_with(&mut self.notifications)
-                }
-                Cyw43SdioPairRestartAction::DrainNotificationsAfterIrq => {
-                    self.drains_after_irq = self.drains_after_irq.saturating_add(2);
-                    true
-                }
-                Cyw43SdioPairRestartAction::RebindNotifications => {
-                    rebind_cyw43_sdio_restart_notifications_with(&mut self.notifications)
-                }
-                Cyw43SdioPairRestartAction::ClearDescriptorSeals => {
-                    self.descriptor_seals_present = false;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ResetSdioRing => {
-                    self.sdio_ring_reset = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ResetCyw43Ring => {
-                    self.cyw43_ring_reset = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ProgramSdioRestartRegisters => {
-                    if !self.cyw43_suspended
-                        || !self.sdio_suspended
-                        || !self.sdio_ring_reset
-                        || !self.cyw43_ring_reset
-                    {
-                        return false;
-                    }
-                    self.sdio_restart_registers_programmed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ProgramCyw43RestartRegisters => {
-                    if !self.sdio_restart_registers_programmed {
-                        return false;
-                    }
-                    self.cyw43_restart_registers_programmed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ResumeSdio => {
-                    if !self.sdio_restart_registers_programmed
-                        || !self.cyw43_restart_registers_programmed
-                        || !self.sdio_suspended
-                    {
-                        return false;
-                    }
-                    self.sdio_suspended = false;
-                    self.sdio_resume_completed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::WaitSdioRecvReady => {
-                    if !self.sdio_resume_completed || self.sdio_suspended {
-                        return false;
-                    }
-                    self.sdio_recv_ready_observed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ReplaySdioDescriptor => {
-                    if !self.sdio_recv_ready_observed {
-                        return false;
-                    }
-                    self.sdio_descriptor_replayed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ReplaySdioEngine => {
-                    if !self.sdio_descriptor_replayed {
-                        return false;
-                    }
-                    self.sdio_engine_replayed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ResumeCyw43 => {
-                    if !self.sdio_engine_replayed
-                        || !self.cyw43_restart_registers_programmed
-                        || !self.cyw43_suspended
-                    {
-                        return false;
-                    }
-                    self.cyw43_suspended = false;
-                    self.cyw43_resume_completed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::WaitCyw43RecvReady => {
-                    if !self.cyw43_resume_completed || self.cyw43_suspended {
-                        return false;
-                    }
-                    self.cyw43_recv_ready_observed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ReplayCyw43Descriptor => {
-                    if !self.cyw43_recv_ready_observed {
-                        return false;
-                    }
-                    self.cyw43_descriptor_replayed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::ReplayCyw43Engine => {
-                    if !self.cyw43_descriptor_replayed {
-                        return false;
-                    }
-                    self.cyw43_engine_replayed = true;
-                    true
-                }
-                Cyw43SdioPairRestartAction::HandoffRingToCyw43 => {
-                    if !self.sdio_engine_replayed || !self.cyw43_engine_replayed {
-                        return false;
-                    }
-                    self.handoff_complete = true;
-                    self.sdio_root_endpoint_open = false;
-                    self.ring_producer = RestartRingProducerModel::Cyw43;
-                    true
-                }
-                Cyw43SdioPairRestartAction::DelegateAndAdvanceEpoch => {
-                    if !self.handoff_complete {
-                        return false;
-                    }
-                    self.delegated = true;
-                    self.cyw43_root_endpoint_open = true;
-                    self.epoch = next_cyw43_sdio_pair_restart_epoch(self.epoch);
-                    true
-                }
-            }
-        }
-
-        fn apply_outer_failure_fence(&mut self) -> Cyw43SdioPairFailureFenceOutcome {
-            // Match the production failure boundary: root loses both endpoints
-            // and the SDIO producer before any best-effort hardware cleanup.
-            self.cyw43_root_endpoint_open = false;
-            self.sdio_root_endpoint_open = false;
-            self.ring_producer = RestartRingProducerModel::Transition;
-            self.pending = true;
-            self.delegated = false;
-
-            self.cyw43_suspended = self.outer_cyw43_suspend_succeeds;
-            self.sdio_suspended = self.outer_sdio_suspend_succeeds;
-            if !cyw43_sdio_pair_recovery_mmio_allowed(self.cyw43_suspended, self.sdio_suspended) {
-                return Cyw43SdioPairFailureFenceOutcome::SuspendUnproven;
-            }
-            self.outer_card_int_attempted = true;
-            self.begin_card_int_mask();
-            let card_int_masked = mask_cyw43_sdio_card_interrupt_with(&mut self.card_int);
-            self.outer_notification_cleanup_attempted = true;
-            if unbind_cyw43_sdio_restart_notifications_with(&mut self.notifications) {
-                self.drains_before_irq = self.drains_before_irq.saturating_add(2);
-                // Production deliberately attempts both acknowledgements in
-                // the outer fence even when the first one reports failure.
-                let _ = self
-                    .notifications
-                    .acknowledge_irq(Cyw43SdioPairMember::Cyw43);
-                let _ = self
-                    .notifications
-                    .acknowledge_irq(Cyw43SdioPairMember::Sdio);
-                self.drains_after_irq = self.drains_after_irq.saturating_add(2);
-                let _ = rebind_cyw43_sdio_restart_notifications_with(&mut self.notifications);
-            }
-            if card_int_masked {
-                Cyw43SdioPairFailureFenceOutcome::FullyFenced
-            } else {
-                Cyw43SdioPairFailureFenceOutcome::RuntimesSuspendedCardIntUnproven
-            }
-        }
-
-        fn run(&mut self) -> Cyw43SdioPairRestartScheduleOutcome {
-            let outcome =
-                execute_cyw43_sdio_pair_restart_schedule(|action| self.execute_action(action));
-            match outcome {
-                Cyw43SdioPairRestartScheduleOutcome::Completed => {
-                    self.pending = false;
-                    self.context_replay = true;
-                }
-                Cyw43SdioPairRestartScheduleOutcome::Failed(_) => {
-                    self.failure_fence_outcome = Some(self.apply_outer_failure_fence());
-                }
-            }
-            self.in_progress = false;
-            outcome
-        }
-
-        fn assert_root_submission_fenced(&self, label: &str) {
-            assert!(self.pending, "{label}: restart must remain pending");
-            assert!(
-                !self.context_replay,
-                "{label}: failed generation must not publish replay"
-            );
-            assert!(!self.in_progress, "{label}: in-progress latch must clear");
-            assert!(
-                !self.cyw43_root_endpoint_open && !self.sdio_root_endpoint_open,
-                "{label}: root endpoints must remain fenced"
-            );
-            assert_eq!(
-                self.ring_producer,
-                RestartRingProducerModel::Transition,
-                "{label}: shared ring must reject both root and child producers"
-            );
-            assert!(
-                !self.delegated,
-                "{label}: failed generation must not delegate"
-            );
-            assert_eq!(
-                self.epoch,
-                Self::INITIAL_EPOCH,
-                "{label}: failed generation must not advance epoch"
-            );
-        }
-
-        fn assert_final_failure_fence(&self, label: &str) {
-            self.assert_root_submission_fenced(label);
-            assert_eq!(
-                self.failure_fence_outcome,
-                Some(Cyw43SdioPairFailureFenceOutcome::FullyFenced),
-                "{label}: default fault cut must complete the outer hardware fence"
-            );
-            assert!(
-                self.cyw43_suspended && self.sdio_suspended,
-                "{label}: both runtimes must finish suspended"
-            );
-            assert!(
-                self.card_int.card_int_masked(),
-                "{label}: outer fence must leave CARD_INT masked"
-            );
-            assert!(
-                self.notifications.cyw43_bound && self.notifications.sdio_bound,
-                "{label}: notification topology must be restored while suspended"
-            );
-            assert!(
-                self.notifications.cyw43_irq_acks >= 1 && self.notifications.sdio_irq_acks >= 1,
-                "{label}: outer fence must acknowledge both retained IRQs"
-            );
-            assert!(
-                self.drains_before_irq >= 2 && self.drains_after_irq >= 2,
-                "{label}: notifications must be drained on both sides of IRQ ack"
-            );
-            assert!(
-                self.action_failures.is_empty()
-                    && self.card_int.failures.is_empty()
-                    && self.notifications.failures.is_empty(),
-                "{label}: configured failure must be reached exactly once"
-            );
-        }
-    }
-
     #[cfg(feature = "kernel")]
     #[test]
     fn sequence_committed_reader_acquires_body_and_rechecks_commit_word() {
@@ -13213,449 +13839,293 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
-    #[test]
-    fn pair_restart_operator_progress_follows_every_action_without_a_gap() {
-        let timeline = core::cell::RefCell::new(Vec::new());
-        // The shared RefCell also proves each action-local borrow is released
-        // before the matching operator callback begins.
-        let outcome = execute_cyw43_sdio_pair_restart_schedule_with_progress(
-            |action| {
-                timeline.borrow_mut().push(("action", action.as_str()));
-                true
-            },
-            |stage| timeline.borrow_mut().push(("operator", stage)),
-        );
+    #[cfg(feature = "kernel")]
+    fn retained_pair_restart_test_context(
+        member: Cyw43SdioPairMember,
+    ) -> Cyw43SdioRuntimeRestartContext {
+        let (contract, hot_path, task_key) = match member {
+            Cyw43SdioPairMember::Cyw43 => (
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi,
+                DRIVER_TASK_KEY_CYW43455,
+            ),
+            Cyw43SdioPairMember::Sdio => (
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::SdioHost,
+                DRIVER_TASK_KEY_SDIO_HOST,
+            ),
+        };
+        Cyw43SdioRuntimeRestartContext {
+            contract,
+            hot_path,
+            task_key,
+            tcb: task_key.saturating_add(1),
+            entry: 0x1000,
+            stack_top: 0x2000,
+            recovery_endpoint: 0x3000,
+            normal_endpoint: 0x4000,
+            notification: 0x5000,
+            irq_handler: 0x6000,
+            ring_root_ptr: 0x7000,
+            sdhci_root_ptr: 0x8000,
+            descriptor: DriverRuntimeInitDescriptor::empty(),
+        }
+    }
 
-        assert_eq!(outcome, Cyw43SdioPairRestartScheduleOutcome::Completed);
-        let timeline = timeline.into_inner();
-        assert_eq!(
-            timeline.len(),
-            CYW43_SDIO_PAIR_RESTART_ACTION_ORDER.len() * 2
-        );
-        for (index, action) in CYW43_SDIO_PAIR_RESTART_ACTION_ORDER.iter().enumerate() {
-            assert_eq!(timeline[index * 2], ("action", action.as_str()));
-            assert_eq!(timeline[index * 2 + 1], ("operator", action.as_str()));
+    #[cfg(feature = "kernel")]
+    fn retained_pair_restart_test_cursor() -> Cyw43SdioPairRestartCursor {
+        Cyw43SdioPairRestartCursor {
+            cyw43: retained_pair_restart_test_context(Cyw43SdioPairMember::Cyw43),
+            sdio: retained_pair_restart_test_context(Cyw43SdioPairMember::Sdio),
+            deadline: Cyw43SdioPairRestartDeadline {
+                start: 0,
+                cycles: u64::MAX,
+                frequency_hz: 1_000_000,
+            },
+            mode: Cyw43SdioPairRestartCursorMode::Running,
+            action_index: 0,
+            substep: 0,
+            poll_count: 0,
+            scratch_u32: 0,
+            verify_signal_u32: 0,
+            delay_start: 0,
+            first_member_succeeded: false,
+            cyw43_engine_completion: None,
+            published_epoch: 0,
+            owns_global_latch: false,
+            released: true,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    struct RetainedPairRestartTestExecutor {
+        calls: Vec<(&'static str, Cyw43SdioPairRestartOperation)>,
+        fail_running_at: Option<usize>,
+        running_calls: usize,
+        failure_injected: bool,
+        pending_operation: Option<Cyw43SdioPairRestartOperation>,
+        pending_remaining: usize,
+    }
+
+    #[cfg(feature = "kernel")]
+    impl RetainedPairRestartTestExecutor {
+        fn success() -> Self {
+            Self {
+                calls: Vec::new(),
+                fail_running_at: None,
+                running_calls: 0,
+                failure_injected: false,
+                pending_operation: None,
+                pending_remaining: 0,
+            }
         }
 
-        let failed_action = Cyw43SdioPairRestartAction::ReplaySdioDescriptor;
-        let mut callbacks = Vec::new();
-        let outcome = execute_cyw43_sdio_pair_restart_schedule_with_progress(
-            |action| action != failed_action,
-            |stage| callbacks.push(stage),
-        );
-        assert_eq!(
-            outcome,
-            Cyw43SdioPairRestartScheduleOutcome::Failed(failed_action)
-        );
-        assert_eq!(callbacks.last().copied(), Some(failed_action.as_str()));
-        assert_eq!(
-            callbacks.len(),
-            CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
-                .iter()
-                .position(|action| *action == failed_action)
-                .expect("failed action is in schedule")
-                + 1
-        );
+        fn failure_at(index: usize) -> Self {
+            Self {
+                fail_running_at: Some(index),
+                ..Self::success()
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    impl Cyw43SdioPairRestartExecutor for RetainedPairRestartTestExecutor {
+        fn execute(
+            &mut self,
+            cursor: &mut Cyw43SdioPairRestartCursor,
+            operation: Cyw43SdioPairRestartOperation,
+        ) -> Cyw43SdioPairRestartOperationOutcome {
+            let running = cursor.mode == Cyw43SdioPairRestartCursorMode::Running;
+            let action = if running {
+                current_cyw43_sdio_pair_restart_action(cursor)
+                    .map(Cyw43SdioPairRestartAction::as_str)
+                    .unwrap_or("invalid-action")
+            } else {
+                "failure-fence"
+            };
+            self.calls.push((action, operation));
+            if running {
+                let call = self.running_calls;
+                self.running_calls = self.running_calls.saturating_add(1);
+                if !self.failure_injected && self.fail_running_at == Some(call) {
+                    self.failure_injected = true;
+                    return Cyw43SdioPairRestartOperationOutcome::Failed;
+                }
+            }
+            if self.pending_operation == Some(operation) && self.pending_remaining != 0 {
+                self.pending_remaining = self.pending_remaining.saturating_sub(1);
+                return Cyw43SdioPairRestartOperationOutcome::Pending;
+            }
+            match operation {
+                Cyw43SdioPairRestartOperation::ReadCardInterrupt(_) => {
+                    Cyw43SdioPairRestartOperationOutcome::Value(0)
+                }
+                Cyw43SdioPairRestartOperation::ReplayEngine(_) => {
+                    Cyw43SdioPairRestartOperationOutcome::Completion(
+                        DriverTaskCompletionRecord::progress(1, 1),
+                    )
+                }
+                Cyw43SdioPairRestartOperation::AdvanceEpoch => {
+                    Cyw43SdioPairRestartOperationOutcome::Value(7)
+                }
+                _ => Cyw43SdioPairRestartOperationOutcome::Complete,
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn drive_retained_pair_restart_test(
+        cursor: &mut Cyw43SdioPairRestartCursor,
+        executor: &mut RetainedPairRestartTestExecutor,
+    ) -> Cyw43SdioPairRestartTurn {
+        let mut now = 1u64;
+        for _ in 0..1_024 {
+            let operations_before = executor.calls.len();
+            let turn = step_cyw43_sdio_pair_restart_with(cursor, Some(now), executor);
+            assert_eq!(
+                executor.calls.len(),
+                operations_before.saturating_add(1),
+                "each nonterminal retained turn must execute exactly one operation"
+            );
+            match turn {
+                Cyw43SdioPairRestartTurn::Pending { .. } => {
+                    now = now.saturating_add(10);
+                }
+                Cyw43SdioPairRestartTurn::Complete { .. } | Cyw43SdioPairRestartTurn::Failed(_) => {
+                    return turn
+                }
+            }
+        }
+        panic!("retained pair restart exceeded deterministic test bound");
     }
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pair_restart_injected_schedule_success_executes_every_production_action() {
-        let mut executed = Vec::new();
-        let outcome = execute_cyw43_sdio_pair_restart_schedule(|action| {
-            executed.push(action);
-            true
-        });
-
-        assert_eq!(executed.as_slice(), &CYW43_SDIO_PAIR_RESTART_ACTION_ORDER);
-        assert!(outcome.completed());
-        assert!(outcome.may_clear_pending());
-        assert!(!outcome.requires_outer_fence());
-        assert_eq!(outcome.failed_action(), None);
+    fn retained_pair_restart_executes_one_operation_per_turn_in_canonical_order() {
+        let mut cursor = retained_pair_restart_test_cursor();
+        let mut executor = RetainedPairRestartTestExecutor::success();
         assert_eq!(
-            executed.last(),
-            Some(&Cyw43SdioPairRestartAction::DelegateAndAdvanceEpoch)
+            drive_retained_pair_restart_test(&mut cursor, &mut executor),
+            Cyw43SdioPairRestartTurn::Complete { epoch: 7 }
         );
-    }
 
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn pair_restart_failure_action_names_are_stable_and_exhaustive() {
-        let names: Vec<_> = CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
+        let mut actions = Vec::new();
+        for (action, _) in &executor.calls {
+            if actions.last().copied() != Some(*action) {
+                actions.push(*action);
+            }
+        }
+        let expected: Vec<_> = CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
             .iter()
             .map(|action| action.as_str())
             .collect();
-
+        assert_eq!(actions, expected);
         assert_eq!(
-            names,
-            [
-                "suspend-pair",
-                "mask-card-int",
-                "unbind-notifications",
-                "drain-notifications-before-irq",
-                "acknowledge-irqs",
-                "drain-notifications-after-irq",
-                "rebind-notifications",
-                "clear-descriptor-seals",
-                "reset-sdio-ring",
-                "reset-cyw43-ring",
-                "program-sdio-restart-registers",
-                "program-cyw43-restart-registers",
-                "resume-sdio",
-                "wait-sdio-recv-ready",
-                "replay-sdio-descriptor",
-                "replay-sdio-engine",
-                "resume-cyw43",
-                "wait-cyw43-recv-ready",
-                "replay-cyw43-descriptor",
-                "replay-cyw43-engine",
-                "handoff-ring-to-cyw43",
-                "delegate-and-advance-epoch",
-            ]
+            executor
+                .calls
+                .iter()
+                .filter(|(action, _)| *action == "drain-notifications-before-irq")
+                .count(),
+            CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP * 2
+        );
+        assert_eq!(
+            executor
+                .calls
+                .iter()
+                .filter(|(action, _)| *action == "drain-notifications-after-irq")
+                .count(),
+            CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP * 2
         );
     }
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pair_restart_injected_failure_cuts_stop_and_require_outer_fence() {
-        for (failure_index, failure_action) in CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            let mut executed = Vec::new();
-            let mut delegated = false;
-            let outcome = execute_cyw43_sdio_pair_restart_schedule(|action| {
-                if action == failure_action {
-                    return false;
-                }
-                executed.push(action);
-                delegated |= action == Cyw43SdioPairRestartAction::DelegateAndAdvanceEpoch;
-                true
-            });
-
-            assert_eq!(
-                executed.as_slice(),
-                &CYW43_SDIO_PAIR_RESTART_ACTION_ORDER[..failure_index],
-                "actions after {failure_action:?} must not execute"
-            );
-            assert_eq!(outcome.failed_action(), Some(failure_action));
-            assert!(!outcome.completed());
-            assert!(!outcome.may_clear_pending());
-            assert!(outcome.requires_outer_fence());
-            assert!(!delegated, "failed restart must never delegate the ring");
-        }
+    fn retained_pair_restart_pending_runtime_poll_consumes_separate_outer_turns() {
+        let mut cursor = retained_pair_restart_test_cursor();
+        let mut executor = RetainedPairRestartTestExecutor::success();
+        executor.pending_operation = Some(Cyw43SdioPairRestartOperation::PollRecvReady(
+            Cyw43SdioPairMember::Sdio,
+        ));
+        executor.pending_remaining = 3;
+        assert!(matches!(
+            drive_retained_pair_restart_test(&mut cursor, &mut executor),
+            Cyw43SdioPairRestartTurn::Complete { .. }
+        ));
+        assert_eq!(
+            executor
+                .calls
+                .iter()
+                .filter(|(_, operation)| {
+                    *operation
+                        == Cyw43SdioPairRestartOperation::PollRecvReady(Cyw43SdioPairMember::Sdio)
+                })
+                .count(),
+            4
+        );
     }
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pair_restart_fault_model_success_publishes_one_complete_generation() {
-        let mut model = PairRestartFaultModel::new(Vec::new(), Vec::new(), Vec::new());
-        let outcome = model.run();
+    fn retained_pair_restart_every_operation_cut_uses_the_same_outer_fence() {
+        let mut success_cursor = retained_pair_restart_test_cursor();
+        let mut success_executor = RetainedPairRestartTestExecutor::success();
+        assert!(matches!(
+            drive_retained_pair_restart_test(&mut success_cursor, &mut success_executor),
+            Cyw43SdioPairRestartTurn::Complete { .. }
+        ));
+        let running_operations = success_executor.running_calls;
+        assert!(running_operations > CYW43_SDIO_PAIR_RESTART_ACTION_ORDER.len());
 
-        assert_eq!(outcome, Cyw43SdioPairRestartScheduleOutcome::Completed);
-        assert!(!model.pending);
-        assert!(model.context_replay);
-        assert!(!model.in_progress);
-        assert!(model.primary_pair_suspend_completed);
-        assert!(!model.cyw43_suspended && !model.sdio_suspended);
-        assert_eq!(model.failure_fence_outcome, None);
-        assert!(!model.outer_card_int_attempted);
-        assert!(!model.outer_notification_cleanup_attempted);
-        assert!(model.card_int.card_int_masked());
-        assert!(model.notifications.cyw43_bound && model.notifications.sdio_bound);
-        assert_eq!(model.notifications.cyw43_irq_acks, 1);
-        assert_eq!(model.notifications.sdio_irq_acks, 1);
-        assert_eq!(model.drains_before_irq, 2);
-        assert_eq!(model.drains_after_irq, 2);
-        assert!(!model.descriptor_seals_present);
-        assert!(model.sdio_ring_reset && model.cyw43_ring_reset);
-        assert!(model.sdio_restart_registers_programmed);
-        assert!(model.cyw43_restart_registers_programmed);
-        assert!(model.sdio_resume_completed && model.cyw43_resume_completed);
-        assert!(model.sdio_recv_ready_observed && model.cyw43_recv_ready_observed);
-        assert!(model.sdio_descriptor_replayed && model.cyw43_descriptor_replayed);
-        assert!(model.sdio_engine_replayed && model.cyw43_engine_replayed);
-        assert!(model.handoff_complete && model.delegated);
-        assert!(model.cyw43_root_endpoint_open);
-        assert!(!model.sdio_root_endpoint_open);
-        assert_eq!(model.ring_producer, RestartRingProducerModel::Cyw43);
-        assert_eq!(model.epoch, PairRestartFaultModel::INITIAL_EPOCH + 1);
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn pair_restart_every_action_cut_finishes_root_fenced_without_delegation() {
-        let sdio_reset_index = CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
-            .iter()
-            .position(|action| *action == Cyw43SdioPairRestartAction::ResetSdioRing)
-            .unwrap();
-        let cyw43_reset_index = CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
-            .iter()
-            .position(|action| *action == Cyw43SdioPairRestartAction::ResetCyw43Ring)
-            .unwrap();
-        let handoff_index = CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
-            .iter()
-            .position(|action| *action == Cyw43SdioPairRestartAction::HandoffRingToCyw43)
-            .unwrap();
-
-        for (failure_index, action) in CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
-            .iter()
-            .copied()
-            .enumerate()
-        {
-            let label = action.as_str();
-            let mut model = PairRestartFaultModel::new(vec![action], Vec::new(), Vec::new());
-            let outcome = model.run();
-
-            assert_eq!(outcome.failed_action(), Some(action), "{label}");
-            model.assert_final_failure_fence(label);
-            let completed_before_cut = |candidate| {
-                failure_index
-                    > CYW43_SDIO_PAIR_RESTART_ACTION_ORDER
-                        .iter()
-                        .position(|action| *action == candidate)
-                        .expect("modeled transition action is in the production schedule")
+        let mut expected_fence = None;
+        for cut in 0..running_operations {
+            let expected_action = success_executor.calls[cut].0;
+            let mut cursor = retained_pair_restart_test_cursor();
+            let mut executor = RetainedPairRestartTestExecutor::failure_at(cut);
+            let turn = drive_retained_pair_restart_test(&mut cursor, &mut executor);
+            let Cyw43SdioPairRestartTurn::Failed(failure) = turn else {
+                panic!("fault cut {cut} did not terminate failed");
             };
-            for (transition, observed, transition_label) in [
-                (
-                    Cyw43SdioPairRestartAction::SuspendPair,
-                    model.primary_pair_suspend_completed,
-                    "pair suspend",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::ProgramSdioRestartRegisters,
-                    model.sdio_restart_registers_programmed,
-                    "SDIO register program",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::ProgramCyw43RestartRegisters,
-                    model.cyw43_restart_registers_programmed,
-                    "CYW43 register program",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::ResumeSdio,
-                    model.sdio_resume_completed,
-                    "SDIO resume",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::WaitSdioRecvReady,
-                    model.sdio_recv_ready_observed,
-                    "SDIO receive-ready",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::ReplaySdioDescriptor,
-                    model.sdio_descriptor_replayed,
-                    "SDIO descriptor replay",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::ReplaySdioEngine,
-                    model.sdio_engine_replayed,
-                    "SDIO engine replay",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::ResumeCyw43,
-                    model.cyw43_resume_completed,
-                    "CYW43 resume",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::WaitCyw43RecvReady,
-                    model.cyw43_recv_ready_observed,
-                    "CYW43 receive-ready",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::ReplayCyw43Descriptor,
-                    model.cyw43_descriptor_replayed,
-                    "CYW43 descriptor replay",
-                ),
-                (
-                    Cyw43SdioPairRestartAction::ReplayCyw43Engine,
-                    model.cyw43_engine_replayed,
-                    "CYW43 engine replay",
-                ),
-            ] {
-                assert_eq!(
-                    observed,
-                    completed_before_cut(transition),
-                    "{label}: {transition_label} must reflect the exact whole-action cut"
-                );
+            assert_eq!(
+                failure.kind(),
+                Cyw43SdioPairRestartFailureKind::ActionFailed
+            );
+            assert_eq!(failure.action(), expected_action);
+            assert_eq!(failure.status(), "failed-fenced");
+            let fence: Vec<_> = executor
+                .calls
+                .iter()
+                .filter_map(|(action, operation)| {
+                    (*action == "failure-fence").then_some(*operation)
+                })
+                .collect();
+            assert!(!fence.is_empty(), "fault cut {cut} skipped the outer fence");
+            if let Some(expected) = &expected_fence {
+                assert_eq!(&fence, expected, "fault cut {cut} changed fence ordering");
+            } else {
+                expected_fence = Some(fence);
             }
-            assert_eq!(
-                model.sdio_ring_reset,
-                failure_index > sdio_reset_index,
-                "{label}: SDIO ring reset must reflect the exact cut"
-            );
-            assert_eq!(
-                model.cyw43_ring_reset,
-                failure_index > cyw43_reset_index,
-                "{label}: CYW43 ring reset must reflect the exact cut"
-            );
-            assert_eq!(
-                model.handoff_complete,
-                failure_index > handoff_index,
-                "{label}: handoff state must reflect the exact cut"
-            );
         }
     }
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pair_restart_persistent_outer_suspend_failures_skip_all_recovery_io() {
-        for (label, cyw43_suspend_succeeds, sdio_suspend_succeeds) in [
-            ("outer-cyw43-suspend", false, true),
-            ("outer-sdio-suspend", true, false),
-            ("outer-both-suspend", false, false),
-        ] {
-            let mut model = PairRestartFaultModel::new(
-                vec![Cyw43SdioPairRestartAction::ReplaySdioEngine],
-                Vec::new(),
-                Vec::new(),
-            );
-            model.outer_cyw43_suspend_succeeds = cyw43_suspend_succeeds;
-            model.outer_sdio_suspend_succeeds = sdio_suspend_succeeds;
-
-            let outcome = model.run();
-
-            assert_eq!(
-                outcome.failed_action(),
-                Some(Cyw43SdioPairRestartAction::ReplaySdioEngine),
-                "{label}"
-            );
-            model.assert_root_submission_fenced(label);
-            assert_eq!(
-                model.failure_fence_outcome,
-                Some(Cyw43SdioPairFailureFenceOutcome::SuspendUnproven),
-                "{label}"
-            );
-            assert_eq!(model.cyw43_suspended, cyw43_suspend_succeeds, "{label}");
-            assert_eq!(model.sdio_suspended, sdio_suspend_succeeds, "{label}");
-            assert!(!model.outer_card_int_attempted, "{label}");
-            assert!(!model.outer_notification_cleanup_attempted, "{label}");
-            assert!(model.action_failures.is_empty(), "{label}");
-        }
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn pair_restart_persistent_outer_card_int_failures_are_not_fully_fenced() {
-        for failure in CARD_INT_MODEL_FALLIBLE_CALLS {
-            let label = format!("persistent-card-int::{failure:?}");
-            let mut model =
-                PairRestartFaultModel::new(Vec::new(), vec![failure, failure], Vec::new());
-
-            let outcome = model.run();
-
-            assert_eq!(
-                outcome.failed_action(),
-                Some(Cyw43SdioPairRestartAction::MaskCardInterrupt),
-                "{label}"
-            );
-            model.assert_root_submission_fenced(&label);
-            assert_eq!(
-                model.failure_fence_outcome,
-                Some(Cyw43SdioPairFailureFenceOutcome::RuntimesSuspendedCardIntUnproven),
-                "{label}"
-            );
-            assert!(model.cyw43_suspended && model.sdio_suspended, "{label}");
-            assert!(model.outer_card_int_attempted, "{label}");
-            assert!(model.outer_notification_cleanup_attempted, "{label}");
-            assert!(model.card_int.failures.is_empty(), "{label}");
-            assert_eq!(
-                model.failure_fence_outcome.expect("outer outcome").status(),
-                "failed-runtimes-suspended-card-int-unproven-root-fenced",
-                "{label}"
-            );
-        }
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn pair_restart_every_card_int_substep_failure_finishes_root_fenced() {
-        for failure in CARD_INT_MODEL_FALLIBLE_CALLS {
-            let label = format!("card-int::{failure:?}");
-            let mut model = PairRestartFaultModel::new(Vec::new(), vec![failure], Vec::new());
-            let outcome = model.run();
-
-            assert_eq!(
-                outcome.failed_action(),
-                Some(Cyw43SdioPairRestartAction::MaskCardInterrupt),
-                "{label}"
-            );
-            model.assert_final_failure_fence(&label);
-            assert!(!model.sdio_ring_reset && !model.cyw43_ring_reset, "{label}");
-            assert!(!model.handoff_complete, "{label}");
-        }
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn pair_restart_every_notification_and_irq_substep_failure_finishes_root_fenced() {
-        for failure in NOTIFICATION_MODEL_PRIMARY_FALLIBLE_CALLS {
-            let label = format!("notification::{failure:?}");
-            let failed_action = match failure {
-                NotificationModelCall::UnbindCyw43 | NotificationModelCall::UnbindSdio => {
-                    Cyw43SdioPairRestartAction::UnbindNotifications
-                }
-                NotificationModelCall::AcknowledgeCyw43Irq
-                | NotificationModelCall::AcknowledgeSdioIrq => {
-                    Cyw43SdioPairRestartAction::AcknowledgeIrqs
-                }
-                NotificationModelCall::RebindSdio | NotificationModelCall::RebindCyw43 => {
-                    Cyw43SdioPairRestartAction::RebindNotifications
-                }
-                NotificationModelCall::CompensateCyw43Rebind => unreachable!(),
-            };
-            let mut model = PairRestartFaultModel::new(Vec::new(), Vec::new(), vec![failure]);
-            let outcome = model.run();
-
-            assert_eq!(outcome.failed_action(), Some(failed_action), "{label}");
-            model.assert_final_failure_fence(&label);
-            assert!(!model.sdio_ring_reset && !model.cyw43_ring_reset, "{label}");
-            assert!(!model.handoff_complete, "{label}");
-        }
-
-        let label = "notification::CompensateCyw43Rebind";
-        let mut compensation_failure = PairRestartFaultModel::new(
-            Vec::new(),
-            Vec::new(),
-            vec![
-                NotificationModelCall::UnbindSdio,
-                NotificationModelCall::CompensateCyw43Rebind,
-            ],
-        );
-        let outcome = compensation_failure.run();
+    fn retained_pair_restart_deadline_failure_fences_before_recovery_mmio() {
+        let mut cursor = retained_pair_restart_test_cursor();
+        cursor.deadline.cycles = 1;
+        let mut executor = RetainedPairRestartTestExecutor::success();
+        let turn = drive_retained_pair_restart_test(&mut cursor, &mut executor);
+        let Cyw43SdioPairRestartTurn::Failed(failure) = turn else {
+            panic!("expired restart did not fail");
+        };
         assert_eq!(
-            outcome.failed_action(),
-            Some(Cyw43SdioPairRestartAction::UnbindNotifications)
+            failure.kind(),
+            Cyw43SdioPairRestartFailureKind::DeadlineExpired
         );
-        compensation_failure.assert_final_failure_fence(label);
-        assert!(!compensation_failure.sdio_ring_reset);
-        assert!(!compensation_failure.cyw43_ring_reset);
-        assert!(!compensation_failure.handoff_complete);
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn pair_restart_suspend_failure_cannot_reach_recovery_mmio_or_ring_reuse() {
-        let mut attempted = Vec::new();
-        let outcome = execute_cyw43_sdio_pair_restart_schedule(|action| {
-            attempted.push(action);
-            action != Cyw43SdioPairRestartAction::SuspendPair
-        });
-
+        assert_eq!(executor.calls[0].0, "failure-fence");
         assert_eq!(
-            attempted,
-            [Cyw43SdioPairRestartAction::SuspendPair],
-            "masking and shared-ring mutation require proof of both suspensions"
+            executor.calls[0].1,
+            Cyw43SdioPairRestartOperation::FenceRootSubmission(Cyw43SdioPairMember::Cyw43)
         );
-        assert_eq!(
-            outcome.failed_action(),
-            Some(Cyw43SdioPairRestartAction::SuspendPair)
-        );
-        assert!(outcome.requires_outer_fence());
-        assert!(!outcome.may_clear_pending());
-        assert!(!cyw43_sdio_pair_recovery_mmio_allowed(true, false));
-        assert!(!cyw43_sdio_pair_recovery_mmio_allowed(false, true));
     }
 
     #[cfg(feature = "kernel")]
@@ -13874,6 +14344,11 @@ mod tests {
         publish_driver_task_ring(contract, 0x7000_0000);
         publish_driver_task_scheduler(contract, 0x4321, 240);
         publish_driver_task_steady_priority_active(contract);
+        assert!(register_driver_task_pointer_free_ring_service(
+            contract,
+            DriverTaskHotPath::UsbKeyboard.as_u32() as usize,
+            pi4_bus_ring_service_driver_task,
+        ));
 
         clear_driver_task_transport(contract);
 
@@ -13881,6 +14356,12 @@ mod tests {
         let slot = slot_for_task_key(task_key).expect("slot");
         assert_eq!(slot.endpoint.load(Ordering::Acquire), 0);
         assert_eq!(slot.ring_root_ptr.load(Ordering::Acquire), 0);
+        assert_eq!(slot.ring_context.load(Ordering::Acquire), 0);
+        assert_eq!(slot.ring_handler.load(Ordering::Acquire), 0);
+        assert_eq!(
+            slot.ring_service_kind.load(Ordering::Acquire),
+            DriverTaskRingServiceKind::None.as_usize()
+        );
         assert_eq!(slot.shared_frame_count.load(Ordering::Acquire), 0);
         assert_eq!(slot.shared_frame_caps[0].load(Ordering::Acquire), 0);
         assert_eq!(slot.shared_frame_root_ptrs[0].load(Ordering::Acquire), 0);
@@ -17810,6 +18291,14 @@ mod tests {
             64
         ));
         assert!(driver_task_ring_repeat_allowed(
+            DriverTaskRingCommandMode::RetainedTurn,
+            1
+        ));
+        assert!(!driver_task_ring_repeat_allowed(
+            DriverTaskRingCommandMode::RetainedTurn,
+            2
+        ));
+        assert!(driver_task_ring_repeat_allowed(
             DriverTaskRingCommandMode::Steady,
             64
         ));
@@ -17948,6 +18437,9 @@ mod tests {
         assert!(driver_task_ring_mode_uses_bounded_send(
             DriverTaskRingCommandMode::PromptSlice
         ));
+        assert!(driver_task_ring_mode_uses_bounded_send(
+            DriverTaskRingCommandMode::RetainedTurn
+        ));
         assert!(!driver_task_ring_mode_uses_bounded_send(
             DriverTaskRingCommandMode::Steady
         ));
@@ -17964,11 +18456,43 @@ mod tests {
             DRIVER_TASK_RING_FLAG_ONE_WAY
         );
         assert_eq!(
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, 0),
+            DRIVER_TASK_RING_FLAG_ONE_WAY
+        );
+        assert_eq!(
             driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::Steady, 0),
             0
         );
         assert!(!DriverTaskRingCommandMode::Bootstrap.records_latency());
         assert!(DriverTaskRingCommandMode::PromptSlice.records_latency());
+        assert!(DriverTaskRingCommandMode::RetainedTurn.records_latency());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_ring_turn_performs_one_attempt_and_defers_timeout_to_outer_deadline() {
+        let contract = SDIO_HOST_DRIVER_TASK_CONTRACT;
+        let command = runtime_engine_init_command(
+            DriverTaskHotPath::SdioHost,
+            DriverTaskBudgetGrant::from_contract(contract),
+        );
+
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                contract,
+                command,
+                DriverTaskRingCommandMode::RetainedTurn
+            ),
+            1
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                contract,
+                command,
+                DriverTaskRingCommandMode::RetainedTurn
+            ),
+            usize::MAX
+        );
     }
 
     #[cfg(feature = "kernel")]

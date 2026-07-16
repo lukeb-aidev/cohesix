@@ -111,6 +111,11 @@ roles require a valid ticket and subject identity. Failed application login
 attempts use the current bounded limiter: three failures within 60 seconds
 produce a 90-second cooldown.
 
+`ATTACH` binds an application session to a role-scoped namespace. Current
+profiles mark every target Worker role non-executable, so a successful Worker
+role attach does not load an image, start a TCB, or install endpoint or
+notification capabilities.
+
 ### Command grammar
 
 The compiler-owned command inventory is generated in
@@ -188,7 +193,7 @@ federated delivery still execute in host agents.
 | --- | --- | --- |
 | `/log/queen.log` | Client read stream; system append | Bounded retained Queen/root log. Console `log`, `tail`, and `cat` are projections over this path. |
 | `/proc/*` | Read-only unless a generated node explicitly says otherwise | Bounded session, lifecycle, pressure, ingest, scheduling, lease, and root-reachability observations. |
-| `/queen/ctl` | Queen control, JSONL | Worker lifecycle, bind, mount, and GPU-worker requests accepted by the implemented parser. |
+| `/queen/ctl` | Queen control, JSONL | Root-owned Worker model lifecycle, bind, mount, and GPU-worker requests accepted by the implemented parser; current profiles do not launch Worker tasks. |
 | `/queen/lifecycle/ctl` | Queen control, token line | Node lifecycle transitions. |
 | `/queen/schedule/ctl` | Queen control, JSONL | Bounded orchestration queue; not a direct seL4 scheduler interface. |
 | `/queen/lease/ctl` | Queen control, JSONL | Grant, renew, preempt, and quota state for bounded control-plane leases. |
@@ -222,8 +227,14 @@ include:
 ```
 
 A successful parse is not permission by itself. Role, ticket, lifecycle,
-provider presence, target-role implementation, and queue capacity remain
-mandatory.
+provider presence, supported parser/model-session shape, and queue capacity
+remain mandatory. Target-role implementation is a separate requirement only
+for a future executable-Worker profile.
+
+For current profiles an accepted `spawn` record creates bounded root-owned
+Worker model/session state only. It does not load or resume a Worker TCB. A
+future executable profile requires a separately packaged image and live seL4
+capability, notification, and fault-handling evidence.
 
 ### Lifecycle control
 
@@ -285,6 +296,10 @@ retention, and frame selection are manifest-controlled. The generated CBOR
 format is defined in
 [telemetry_cbor_schema.md](snippets/telemetry_cbor_schema.md). Plain-text and
 CBOR evidence must identify which selected schema produced it.
+
+Current telemetry records can be produced by authorized sessions, root-owned
+model helpers, or host simulation. Their presence is not proof that a separate
+target Worker task emitted them.
 
 The checked-in profiles currently select `legacy-plaintext`. Under that
 selection each append must be valid UTF-8 and is retained in the bounded
@@ -671,9 +686,9 @@ it.
   [`apps/nine-door/src/host/namespace.rs`](../apps/nine-door/src/host/namespace.rs)
 - Host-ticket lifecycle and federation agent:
   [`apps/host-ticket-agent`](../apps/host-ticket-agent)
-- Sidecar path contracts: [`apps/worker-bus`](../apps/worker-bus) and
-  [`apps/worker-lora`](../apps/worker-lora)
-- Host-only GPU job descriptor: [`apps/worker-gpu`](../apps/worker-gpu)
+- Worker model/build-artifact contracts: [`apps/worker-bus`](../apps/worker-bus),
+  [`apps/worker-lora`](../apps/worker-lora), and
+  [`apps/worker-gpu`](../apps/worker-gpu)
 - Codec operations: [`crates/secure9p-codec`](../crates/secure9p-codec)
 - Generated interface checks: `scripts/check-generated.sh`
 - Staged validation: [TEST_PLAN.md](TEST_PLAN.md)

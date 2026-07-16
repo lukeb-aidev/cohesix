@@ -4,20 +4,21 @@
 
 # M26C Post-Behavior Baseline
 
-Status: `QEMU+PI4-FROZEN`
+Status: `PI4-HISTORICAL-FROZEN / WORKER-BASELINE-SUPERSEDED`
 
-The QEMU post-behavior baseline is frozen for the authorized 26c behavior
-changes. Pi 4 hardware closure is frozen for 26c by the final wired GENET
-runtime/DMA proof bundle and target-qualified Pi Stage 01-05 pass.
+The earlier QEMU Worker-execution baseline is superseded: its tests covered
+helper/model behavior, not loaded Worker tasks. Pi 4 hardware closure remains
+historical 26c evidence for the final wired GENET runtime/DMA proof bundle and
+target-qualified Pi Stage 01-05 pass; it does not prove Worker execution.
 
 QEMU-frozen behavior:
 
-- VM worker-heart, worker-gpu, and worker-lora use bounded no_std loops.
-- Implemented worker roles require generated endpoint-badge authority.
-- Worker lifecycle uses generated notification badge classes for revoke,
-  shutdown, lease-expiry, telemetry-pressure, and IRQ events.
-- QEMU/non-MCS scheduling evidence is generated and rejects MCS budget claims on
-  non-MCS profiles.
+- Worker-heart, worker-gpu, and worker-lora expose bounded no_std helper loops,
+  but current root-task does not load or resume them as Worker tasks.
+- Every checked-in Worker role is non-executable; endpoint-cap and lifecycle
+  notification requirements are disabled.
+- Reserved badge ranges and the QEMU/non-MCS scheduling record are compiler
+  metadata only, not live authority or applied Worker scheduling evidence.
 - Pi runtime/DMA proof states now distinguish target-build, diagnostic,
   qemu-or-stale-log, and fresh-pi evidence.
 

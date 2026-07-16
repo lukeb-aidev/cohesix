@@ -1,0 +1,515 @@
+# Author: Lukas Bower
+# Purpose: Define fail-closed seL4 15 source and generated-build profile contracts for Cohesix.
+# Copyright 2026 Lukas Bower
+
+schema_version = 2
+
+[toolchain]
+family = "Arm GNU Toolchain AArch64 bare-metal"
+cross_prefix = "aarch64-none-elf-"
+target_triple = "aarch64-none-elf"
+version = "15.2.1"
+
+[toolchain.compiler]
+provider = "arm-gnu-toolchain-release-tarball"
+source_url = "https://armkeil.blob.core.windows.net/developer/files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz"
+source_archive = "out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz"
+source_archive_sha256 = "37084c99bc05fda43a6c48900c638ae4fd6d93e2287ceb3e9bcda55437f1aadd"
+source_archive_size = 80863820
+source_version = "15.2.Rel1"
+install_path = "out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf"
+bin_path = "out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin"
+path_prefixes = ["out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin"]
+provenance_path = "out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/cohesix-compiler-provenance.json"
+gcc_sha256 = "e3aca7127a4407f63b9a3f157021bda8476706370f98ded3fd4a20f898261066"
+gxx_sha256 = "dce7d3014f33b95e68dbc64ac885048e9de682b1263edea886ece769a4cf2b55"
+cpp_sha256 = "cd16a3d2f8f9972782c8eddb816675e8a92fe935075628d0340d018d0ee5ad4a"
+as_sha256 = "cf01313f7f00d24dedb273b7e3d3753290cf0dd4f4be389094e47de2c90d1e48"
+ld_sha256 = "16d591c8f44bbadb1c0f96990753b34efe74e0c92a594d1a8b600170e7d99d10"
+objcopy_sha256 = "0784ea59a9a45dea36c6129c0d5c010db8966508fccbd6b415a0aa6c78e23ddf"
+ar_sha256 = "38f32b4a1b196da8ef1c34412f68792bb2a3cdc8c20d5c98d70fa44f13c9c1bb"
+ranlib_sha256 = "939545db6eac3b78e5e145dcf428db22229aa6eec04cd86f95ca90f9a8d00e99"
+required_programs = ["aarch64-none-elf-gcc", "aarch64-none-elf-g++", "aarch64-none-elf-cpp", "aarch64-none-elf-as", "aarch64-none-elf-ld", "aarch64-none-elf-objcopy", "aarch64-none-elf-ar", "aarch64-none-elf-ranlib"]
+
+[toolchain.python]
+path = "out/toolchain/sel4-profile-venv/bin/python"
+provider = "homebrew"
+formula = "python@3.13"
+implementation = "CPython"
+major_minor_version = "3.13"
+bootstrap_lock = "configs/sel4/python-bootstrap.lock"
+bootstrap_lock_sha256 = "a582a400e97b0b830952482a8923c4097024c9960fe2197315c341ca00a9548a"
+requirements_lock = "configs/sel4/python-build-requirements.lock"
+requirements_lock_sha256 = "5ef6b3b1e5edc912a0041417b7386ad17a57fab6ecd3b64c797ecbb3e37ea929"
+distribution_count = 38
+sel4_deps_version = "0.7.0"
+protobuf_version = "6.33.5"
+setuptools_version = "80.9.0"
+
+[toolchain.mkimage]
+path = "out/toolchain/u-boot-tools-build/tools/mkimage"
+provider = "denx-release-tarball"
+source_url = "https://ftp.denx.de/pub/u-boot/u-boot-2026.01.tar.bz2"
+source_archive = "out/toolchain/downloads/u-boot-2026.01.tar.bz2"
+source_archive_sha256 = "b60d5865cefdbc75da8da4156c56c458e00de75a49b80c1a2e58a96e30ad0d54"
+source_archive_size = 34172789
+source_version = "2026.01"
+source_commit = "127a42c7257a6ffbbd1575ed1cbaa8f5408a44b3"
+snapshot_path = "out/toolchain/u-boot-tools-source"
+build_path = "out/toolchain/u-boot-tools-build"
+provenance_path = "out/toolchain/u-boot-tools-build/cohesix-mkimage-provenance.json"
+source_date_epoch = 1704067200
+version = "mkimage version 2026.01"
+
+[source]
+manifest_url = "https://github.com/seL4/sel4test-manifest.git"
+manifest_ref = "refs/tags/15.0.0"
+manifest_commit = "367a780d5f3f1b59711618b3b321666cecb2f8a2"
+
+[source.repositories]
+".repo/manifests" = "367a780d5f3f1b59711618b3b321666cecb2f8a2"
+"kernel" = "881de507fe528490dc5e570c7810a149bad5880f"
+"projects/musllibc" = "b0005f86fecbd6d0257b15363a5b013446914265"
+"projects/seL4_libs" = "4ce71fca2adbf1c2add7eabf5670633a70177a2f"
+"projects/sel4_projects_libs" = "0e06bebf4a3f0c21317c6877e0079f637e021562"
+"projects/sel4runtime" = "86489cf6efab9f314964e79468c036e9035394c7"
+"projects/sel4test" = "aebc7448f738c1360b1af2dae2faf414c4743fc9"
+"projects/util_libs" = "c8f9ea7c0ea390e3d82049de4125fe553a76ed1e"
+"tools/nanopb" = "1466e6f953835b191a7f5acf0c06c941d4cd33d9"
+"tools/opensbi" = "234ed8e427f4d92903123199f6590d144e0d9351"
+"tools/seL4" = "83eeeda94cc12eb59fb7eb79940d02f4da618ecd"
+
+[source.pi4_overlay]
+path = "kernel/src/plat/bcm2711/overlay-rpi4.dts"
+diff_format = "git-diff-binary-full-index-v1"
+diff_sha256 = "3c82bf606f76823398f91070c9787d13aa137e7e7c2665a01db11df9797f69a6"
+patch_file = "configs/sel4/patches/bcm2711-vl805-device-untyped.patch"
+
+[profiles.qemu_smp_production]
+description = "Release-eligible four-core QEMU aarch64/virt profile with GICv3 and production kernel diagnostics disabled."
+build_mode = "wrapper"
+python_tool = "out/toolchain/sel4-profile-venv/bin/python"
+evidence_class = "production"
+target = "qemu"
+default_build_dir = "out/sel4/profile-v2/qemu-smp-production"
+release_eligible = true
+runtime_eligible = true
+source_policy = "clean"
+memoization_cache = "disabled"
+forbidden_cache_keys = ["KernelDomainSchedule"]
+required_dts_literals = ["arm,gic-v3", "method = \"smc\""]
+forbidden_dts_literals = ["arm,cortex-a15-gic"]
+dts_files = ["kernel/kernel.dts", "qemu-arm-virt.dts"]
+qemu_gic_version = 3
+minimum_elfloader_archive_bytes = 3145728
+
+[profiles.qemu_smp_production.artifact_policy]
+class = "upstream-sel4test-profile-validation"
+shipping_eligible = false
+cohesix_system_image = false
+rwx_policy = "record-nonshipping-exception"
+elf_machine = 183
+elf_artifacts = ["kernel", "elfloader", "rootserver", "system_image"]
+exception_id = "upstream-sel4test-rwx-load"
+exception_reason = "Upstream seL4Test profile-validation ELFs are non-shipping inputs; Cohesix release-image W^X acceptance is a separate gate."
+
+[profiles.qemu_smp_production.dtb]
+artifacts = ["kernel_dtb", "qemu_dtb"]
+required_compatible = ["arm,gic-v3"]
+forbidden_compatible = ["arm,cortex-a15-gic"]
+required_nodes = []
+required_string_properties = ["method=smc"]
+
+[profiles.qemu_smp_production.cmake]
+AARCH64 = "ON"
+CROSS_COMPILER_PREFIX = "aarch64-none-elf-"
+PLATFORM = "qemu-arm-virt"
+KernelPlatform = "qemu-arm-virt"
+KernelSel4Arch = "aarch64"
+Sel4testAllowSettingsOverride = "ON"
+SIMULATION = "OFF"
+RELEASE = "ON"
+VERIFICATION = "OFF"
+DOMAINS = "OFF"
+MCS = "OFF"
+ARM_HYP = "OFF"
+SMP = "ON"
+NUM_NODES = "4"
+KernelMaxNumNodes = "4"
+KernelNumDomains = "1"
+KernelIsMCS = "OFF"
+KernelArmHypervisorSupport = "OFF"
+KernelVerificationBuild = "OFF"
+KernelDebugBuild = "OFF"
+KernelPrinting = "OFF"
+KernelBenchmarks = "none"
+KernelDangerousCodeInjection = "OFF"
+KernelFastpath = "ON"
+KernelArmSMMU = "OFF"
+KernelAllowSMCCalls = "OFF"
+HardwareDebugAPI = "OFF"
+KernelArmExportVCNTUser = "OFF"
+KernelArmExportPCNTUser = "OFF"
+KernelArmExportPTMRUser = "OFF"
+KernelArmExportVTMRUser = "OFF"
+ElfloaderRootserversLast = "ON"
+ElfloaderImage = "elf"
+ElfloaderIncludeDtb = "ON"
+CMAKE_BUILD_TYPE = "Release"
+COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES = "2097152"
+
+[profiles.qemu_smp_production.generated]
+PLAT_QEMU_ARM_VIRT = true
+PLAT_BCM2711 = false
+ARM_GIC_V3_SUPPORT = true
+MAX_NUM_NODES = "4"
+NUM_DOMAINS = "1"
+KERNEL_MCS = false
+VERIFICATION_BUILD = false
+DEBUG_BUILD = false
+PRINTING = false
+KERNEL_BENCHMARK = "none"
+ARM_HYPERVISOR_SUPPORT = false
+EXPORT_VCNT_USER = false
+EXPORT_PCNT_USER = false
+EXPORT_PTMR_USER = false
+EXPORT_VTMR_USER = false
+
+[profiles.qemu_smp_diagnostic]
+description = "Four-core QEMU aarch64/virt GICv3 profile for bring-up and diagnostic evidence only."
+build_mode = "wrapper"
+python_tool = "out/toolchain/sel4-profile-venv/bin/python"
+evidence_class = "diagnostic"
+target = "qemu"
+default_build_dir = "out/sel4/profile-v2/qemu-smp-diagnostic"
+release_eligible = false
+runtime_eligible = true
+source_policy = "clean"
+memoization_cache = "disabled"
+forbidden_cache_keys = ["KernelDomainSchedule"]
+required_dts_literals = ["arm,gic-v3", "method = \"smc\""]
+forbidden_dts_literals = ["arm,cortex-a15-gic"]
+dts_files = ["kernel/kernel.dts", "qemu-arm-virt.dts"]
+qemu_gic_version = 3
+
+[profiles.qemu_smp_diagnostic.artifact_policy]
+class = "upstream-sel4test-diagnostic-validation"
+shipping_eligible = false
+cohesix_system_image = false
+rwx_policy = "record-nonshipping-exception"
+elf_machine = 183
+elf_artifacts = ["kernel", "elfloader", "rootserver", "system_image"]
+exception_id = "upstream-sel4test-rwx-load"
+exception_reason = "Upstream seL4Test diagnostic ELFs are non-shipping inputs and cannot establish Cohesix release-image acceptance."
+
+[profiles.qemu_smp_diagnostic.dtb]
+artifacts = ["kernel_dtb", "qemu_dtb"]
+required_compatible = ["arm,gic-v3"]
+forbidden_compatible = ["arm,cortex-a15-gic"]
+required_nodes = []
+required_string_properties = ["method=smc"]
+
+[profiles.qemu_smp_diagnostic.cmake]
+AARCH64 = "ON"
+CROSS_COMPILER_PREFIX = "aarch64-none-elf-"
+PLATFORM = "qemu-arm-virt"
+KernelPlatform = "qemu-arm-virt"
+KernelSel4Arch = "aarch64"
+Sel4testAllowSettingsOverride = "ON"
+SIMULATION = "OFF"
+RELEASE = "OFF"
+VERIFICATION = "OFF"
+DOMAINS = "OFF"
+MCS = "OFF"
+ARM_HYP = "OFF"
+SMP = "ON"
+NUM_NODES = "4"
+KernelMaxNumNodes = "4"
+KernelNumDomains = "1"
+KernelIsMCS = "OFF"
+KernelArmHypervisorSupport = "OFF"
+KernelVerificationBuild = "OFF"
+KernelDebugBuild = "ON"
+KernelPrinting = "ON"
+KernelBenchmarks = "none"
+KernelDangerousCodeInjection = "OFF"
+KernelFastpath = "ON"
+KernelArmSMMU = "OFF"
+KernelAllowSMCCalls = "OFF"
+HardwareDebugAPI = "OFF"
+KernelArmExportVCNTUser = "OFF"
+KernelArmExportPCNTUser = "OFF"
+KernelArmExportPTMRUser = "OFF"
+KernelArmExportVTMRUser = "OFF"
+ElfloaderRootserversLast = "ON"
+ElfloaderImage = "elf"
+ElfloaderIncludeDtb = "ON"
+CMAKE_BUILD_TYPE = "Debug"
+
+[profiles.qemu_smp_diagnostic.generated]
+PLAT_QEMU_ARM_VIRT = true
+PLAT_BCM2711 = false
+ARM_GIC_V3_SUPPORT = true
+MAX_NUM_NODES = "4"
+NUM_DOMAINS = "1"
+KERNEL_MCS = false
+VERIFICATION_BUILD = false
+DEBUG_BUILD = true
+PRINTING = true
+KERNEL_BENCHMARK = "none"
+ARM_HYPERVISOR_SUPPORT = false
+EXPORT_VCNT_USER = false
+EXPORT_PCNT_USER = false
+EXPORT_PTMR_USER = false
+EXPORT_VTMR_USER = false
+
+[profiles.pi4_production]
+description = "Release-eligible Pi 4 SMP profile with the recorded VL805 overlay and virtual-counter contract."
+build_mode = "wrapper"
+python_tool = "out/toolchain/sel4-profile-venv/bin/python"
+evidence_class = "production"
+target = "pi4"
+default_build_dir = "out/sel4/profile-v2/pi4-production"
+release_eligible = true
+runtime_eligible = true
+source_policy = "pi4-overlay"
+memoization_cache = "disabled"
+forbidden_cache_keys = ["KernelDomainSchedule"]
+required_dts_literals = ["device-untypes@600000000"]
+forbidden_dts_literals = []
+dts_files = ["kernel/kernel.dts"]
+timer_clock_hz = 54000000
+objcopy_stdout_wrapper = "scripts/aarch64-objcopy-stdout.sh"
+mkimage_tool = "out/toolchain/u-boot-tools-build/tools/mkimage"
+
+[profiles.pi4_production.artifact_policy]
+class = "upstream-sel4test-pi-profile-validation"
+shipping_eligible = false
+cohesix_system_image = false
+rwx_policy = "record-nonshipping-exception"
+elf_machine = 183
+elf_artifacts = ["kernel", "elfloader", "rootserver"]
+exception_id = "upstream-sel4test-rwx-load"
+exception_reason = "Upstream seL4Test Pi profile-validation ELFs are non-shipping inputs; exact-image Cohesix acceptance is separate."
+
+[profiles.pi4_production.dtb]
+artifacts = ["kernel_dtb"]
+required_compatible = []
+forbidden_compatible = []
+required_nodes = ["device-untypes@600000000"]
+required_string_properties = []
+
+[profiles.pi4_production.cmake]
+AARCH64 = "ON"
+CROSS_COMPILER_PREFIX = "aarch64-none-elf-"
+PLATFORM = "bcm2711"
+KernelPlatform = "bcm2711"
+KernelSel4Arch = "aarch64"
+Sel4testAllowSettingsOverride = "ON"
+SIMULATION = "OFF"
+RELEASE = "ON"
+VERIFICATION = "OFF"
+DOMAINS = "OFF"
+MCS = "OFF"
+ARM_HYP = "OFF"
+SMP = "ON"
+NUM_NODES = "4"
+KernelMaxNumNodes = "4"
+KernelNumDomains = "1"
+KernelIsMCS = "OFF"
+KernelArmGicV3 = "OFF"
+KernelArmHypervisorSupport = "OFF"
+KernelVerificationBuild = "OFF"
+KernelDebugBuild = "OFF"
+KernelPrinting = "OFF"
+KernelBenchmarks = "none"
+KernelDangerousCodeInjection = "OFF"
+KernelFastpath = "ON"
+KernelArmSMMU = "OFF"
+KernelAllowSMCCalls = "OFF"
+HardwareDebugAPI = "OFF"
+KernelArmExportVCNTUser = "ON"
+KernelArmExportPCNTUser = "OFF"
+KernelArmExportPTMRUser = "OFF"
+KernelArmExportVTMRUser = "OFF"
+KernelRootCNodeSizeBits = "13"
+ElfloaderRootserversLast = "ON"
+ElfloaderImage = "uimage"
+ElfloaderIncludeDtb = "OFF"
+IMAGE_START_ADDR = "0x10000000"
+RPI4_MEMORY = "2048"
+CMAKE_BUILD_TYPE = "Release"
+
+[profiles.pi4_production.generated]
+PLAT_QEMU_ARM_VIRT = false
+PLAT_BCM2711 = true
+ARM_GIC_V3_SUPPORT = false
+MAX_NUM_NODES = "4"
+NUM_DOMAINS = "1"
+KERNEL_MCS = false
+VERIFICATION_BUILD = false
+DEBUG_BUILD = false
+PRINTING = false
+KERNEL_BENCHMARK = "none"
+ARM_HYPERVISOR_SUPPORT = false
+EXPORT_VCNT_USER = true
+EXPORT_PCNT_USER = false
+EXPORT_PTMR_USER = false
+EXPORT_VTMR_USER = false
+
+[profiles.pi4_diagnostic]
+description = "Pi 4 bring-up profile used by the reopened CYW43 lane; it is not release evidence."
+build_mode = "wrapper"
+python_tool = "out/toolchain/sel4-profile-venv/bin/python"
+evidence_class = "diagnostic"
+target = "pi4"
+default_build_dir = "out/sel4/profile-v2/pi4-diagnostic"
+release_eligible = false
+runtime_eligible = true
+source_policy = "pi4-overlay"
+memoization_cache = "disabled"
+forbidden_cache_keys = ["KernelDomainSchedule"]
+required_dts_literals = ["device-untypes@600000000"]
+forbidden_dts_literals = []
+dts_files = ["kernel/kernel.dts"]
+timer_clock_hz = 54000000
+objcopy_stdout_wrapper = "scripts/aarch64-objcopy-stdout.sh"
+mkimage_tool = "out/toolchain/u-boot-tools-build/tools/mkimage"
+
+[profiles.pi4_diagnostic.artifact_policy]
+class = "upstream-sel4test-pi-diagnostic-validation"
+shipping_eligible = false
+cohesix_system_image = false
+rwx_policy = "record-nonshipping-exception"
+elf_machine = 183
+elf_artifacts = ["kernel", "elfloader", "rootserver"]
+exception_id = "upstream-sel4test-rwx-load"
+exception_reason = "Upstream seL4Test Pi diagnostic ELFs are non-shipping inputs and cannot establish exact-image Cohesix acceptance."
+
+[profiles.pi4_diagnostic.dtb]
+artifacts = ["kernel_dtb"]
+required_compatible = []
+forbidden_compatible = []
+required_nodes = ["device-untypes@600000000"]
+required_string_properties = []
+
+[profiles.pi4_diagnostic.cmake]
+AARCH64 = "ON"
+CROSS_COMPILER_PREFIX = "aarch64-none-elf-"
+PLATFORM = "bcm2711"
+KernelPlatform = "bcm2711"
+KernelSel4Arch = "aarch64"
+Sel4testAllowSettingsOverride = "ON"
+SIMULATION = "OFF"
+RELEASE = "OFF"
+VERIFICATION = "OFF"
+DOMAINS = "OFF"
+MCS = "OFF"
+ARM_HYP = "OFF"
+SMP = "ON"
+NUM_NODES = "4"
+KernelMaxNumNodes = "4"
+KernelNumDomains = "1"
+KernelIsMCS = "OFF"
+KernelArmGicV3 = "OFF"
+KernelArmHypervisorSupport = "OFF"
+KernelVerificationBuild = "OFF"
+KernelDebugBuild = "ON"
+KernelPrinting = "ON"
+KernelBenchmarks = "none"
+KernelDangerousCodeInjection = "OFF"
+KernelFastpath = "ON"
+KernelArmSMMU = "OFF"
+KernelAllowSMCCalls = "OFF"
+HardwareDebugAPI = "OFF"
+KernelArmExportVCNTUser = "ON"
+KernelArmExportPCNTUser = "OFF"
+KernelArmExportPTMRUser = "OFF"
+KernelArmExportVTMRUser = "OFF"
+KernelRootCNodeSizeBits = "13"
+ElfloaderRootserversLast = "ON"
+ElfloaderImage = "uimage"
+ElfloaderIncludeDtb = "OFF"
+IMAGE_START_ADDR = "0x10000000"
+RPI4_MEMORY = "2048"
+CMAKE_BUILD_TYPE = "Debug"
+
+[profiles.pi4_diagnostic.generated]
+PLAT_QEMU_ARM_VIRT = false
+PLAT_BCM2711 = true
+ARM_GIC_V3_SUPPORT = false
+MAX_NUM_NODES = "4"
+NUM_DOMAINS = "1"
+KERNEL_MCS = false
+VERIFICATION_BUILD = false
+DEBUG_BUILD = true
+PRINTING = true
+KERNEL_BENCHMARK = "none"
+ARM_HYPERVISOR_SUPPORT = false
+EXPORT_VCNT_USER = true
+EXPORT_PCNT_USER = false
+EXPORT_PTMR_USER = false
+EXPORT_VTMR_USER = false
+
+[profiles.bcm2711_proof_eligibility]
+description = "Pristine upstream AARCH64 bcm2711 verified-configuration compatibility lane; not a Cohesix proof or runtime-acceptance profile."
+build_mode = "verified-config"
+python_tool = "out/toolchain/sel4-profile-venv/bin/python"
+verified_config = "kernel/configs/AARCH64_bcm2711_verified.cmake"
+evidence_class = "proof-eligibility"
+target = "pi4"
+default_build_dir = "out/sel4/profile-v2/bcm2711-proof-eligibility"
+release_eligible = false
+runtime_eligible = false
+source_policy = "clean"
+memoization_cache = "disabled"
+forbidden_cache_keys = ["KernelDomainSchedule"]
+required_dts_literals = []
+forbidden_dts_literals = ["device-untypes@600000000"]
+dts_files = ["kernel.dts"]
+
+[profiles.bcm2711_proof_eligibility.artifact_policy]
+class = "upstream-verified-config-compatibility"
+shipping_eligible = false
+cohesix_system_image = false
+rwx_policy = "record-nonshipping-exception"
+elf_machine = 183
+elf_artifacts = ["kernel"]
+exception_id = "upstream-verified-kernel-rwx-load"
+exception_reason = "The upstream verified-configuration kernel is compatibility evidence only and is not a Cohesix shipping artifact."
+
+[profiles.bcm2711_proof_eligibility.dtb]
+artifacts = ["kernel_dtb"]
+required_compatible = []
+forbidden_compatible = []
+required_nodes = []
+required_string_properties = []
+
+[profiles.bcm2711_proof_eligibility.cmake]
+CROSS_COMPILER_PREFIX = "aarch64-none-elf-"
+KernelPlatform = "bcm2711"
+KernelSel4Arch = "aarch64"
+KernelArmHypervisorSupport = "ON"
+KernelVerificationBuild = "ON"
+KernelMaxNumNodes = "1"
+KernelNumDomains = "16"
+KernelOptimisation = "-O2"
+KernelRetypeFanOutLimit = "256"
+KernelBenchmarks = "none"
+KernelDangerousCodeInjection = "OFF"
+KernelFastpath = "ON"
+KernelPrinting = "OFF"
+KernelArmSMMU = "OFF"
+KernelAllowSMCCalls = "ON"
+
+[profiles.bcm2711_proof_eligibility.generated]
+PLAT_QEMU_ARM_VIRT = false
+PLAT_BCM2711 = true
+MAX_NUM_NODES = "1"
+NUM_DOMAINS = "16"
+VERIFICATION_BUILD = true
+PRINTING = false
+KERNEL_BENCHMARK = "none"
+ARM_HYPERVISOR_SUPPORT = true
+ARM_SMMU = false
+ALLOW_SMC_CALLS = true

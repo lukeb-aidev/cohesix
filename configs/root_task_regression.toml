@@ -50,24 +50,24 @@ protection_profile = "none"
 implementation_epoch = 26
 max_workers = 8
 ticket_subject_required = true
-cap_backed_authority = true
-notification_lifecycle = true
+cap_backed_authority = false
+notification_lifecycle = false
 
 [[worker_runtime.roles]]
 role = "worker-heartbeat"
-implemented = true
+implemented = false
 ticket_scope = "/worker"
 telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
 lease_path_template = ""
-shutdown_policy = "notification"
+shutdown_policy = "deferred"
 
 [[worker_runtime.roles]]
 role = "worker-gpu"
-implemented = true
+implemented = false
 ticket_scope = "/gpu"
 telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
 lease_path_template = "/gpu/<id>/lease"
-shutdown_policy = "notification"
+shutdown_policy = "deferred"
 
 [[worker_runtime.roles]]
 role = "worker-bus"
@@ -79,14 +79,14 @@ shutdown_policy = "deferred"
 
 [[worker_runtime.roles]]
 role = "worker-lora"
-implemented = true
+implemented = false
 ticket_scope = "/worker"
 telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
 lease_path_template = ""
-shutdown_policy = "notification"
+shutdown_policy = "deferred"
 
 [worker_runtime.endpoint_caps]
-required = true
+required = false
 attach_badge_base = 638324736
 telemetry_badge_base = 638328832
 lease_badge_base = 638332928
@@ -96,7 +96,7 @@ epoch_bits = 8
 role_bits = 4
 
 [worker_runtime.notifications]
-enabled = true
+enabled = false
 revoke_badge = 638345216
 shutdown_badge = 638349312
 lease_expiry_badge = 638353408

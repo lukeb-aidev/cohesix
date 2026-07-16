@@ -5,8 +5,94 @@
 //! Shared helpers for the root-task build script.
 
 use std::fs;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::time::SystemTime;
+
+/// Fixed-width placeholder replaced only after the complete Pi image exists.
+///
+/// The image staging pipeline hashes the final U-Boot image with this field
+/// and the two U-Boot CRC fields normalized, writes that digest here, and then
+/// repairs the CRCs. A serial marker can therefore identify the complete image
+/// without attempting an impossible literal self-hash.
+pub const UNSEALED_PI4_IMAGE_ID: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Git metadata roots relevant to Cargo rerun tracking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitMetadataDirs {
+    /// Per-checkout metadata containing HEAD and the worktree index.
+    pub worktree: PathBuf,
+    /// Shared metadata containing branch refs and packed refs.
+    pub common: PathBuf,
+}
+
+/// Select the marker Git identity for ordinary or exact-image builds.
+///
+/// Exact-image builds begin from a clean committed checkout, then temporarily
+/// regenerate target-qualified outputs before compiling. The image wrapper
+/// records and continuously checks that expected generated-state fingerprint;
+/// this helper permits the already-verified clean commit to remain the marker
+/// identity while rejecting malformed or mismatched environment claims.
+pub fn select_build_git_hash(
+    detected_full: &str,
+    detected_short: &str,
+    working_tree_dirty: bool,
+    exact_commit: Option<&str>,
+    exact_source_clean: bool,
+) -> Result<String, &'static str> {
+    let detected_full = detected_full.trim();
+    let detected_short = detected_short.trim();
+    let Some(exact_commit) = exact_commit else {
+        return Ok(format!(
+            "{detected_short}{}",
+            if working_tree_dirty { "-dirty" } else { "" }
+        ));
+    };
+    if !exact_source_clean {
+        return Err("exact Git commit requires a clean-source attestation");
+    }
+    if !(40..=64).contains(&exact_commit.len())
+        || !exact_commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || exact_commit.bytes().any(|byte| byte.is_ascii_uppercase())
+    {
+        return Err("exact Git commit must be a full lowercase hexadecimal object ID");
+    }
+    if exact_commit != detected_full {
+        return Err("exact Git commit does not match repository HEAD");
+    }
+    if detected_short.len() < 7 || !exact_commit.starts_with(detected_short) {
+        return Err("short Git identity is not an unambiguous HEAD prefix");
+    }
+    Ok(detected_short.to_owned())
+}
+
+/// Resolve regular-repository and linked-worktree Git metadata roots.
+pub fn resolve_git_metadata_dirs(repo_root: &Path, dot_git: &Path) -> Option<GitMetadataDirs> {
+    let worktree = if dot_git.is_dir() {
+        dot_git.to_path_buf()
+    } else {
+        let gitdir = fs::read_to_string(dot_git).ok()?;
+        let raw_path = gitdir.trim().strip_prefix("gitdir:")?.trim();
+        let path = PathBuf::from(raw_path);
+        if path.is_absolute() {
+            path
+        } else {
+            repo_root.join(path)
+        }
+    };
+    let common = fs::read_to_string(worktree.join("commondir"))
+        .ok()
+        .map(|raw_path| PathBuf::from(raw_path.trim()))
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                worktree.join(path)
+            }
+        })
+        .unwrap_or_else(|| worktree.clone());
+    Some(GitMetadataDirs { worktree, common })
+}
 
 /// Build-profile flags encoded in the serial and image build marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,7 +115,7 @@ pub fn format_build_marker(
     features: BuildMarkerFeatures,
 ) -> String {
     format!(
-        "[BUILD] {git_hash} {build_timestamp} features=[kernel:{} bootstrap-trace:{} serial-console:{} net:{} net-console:{} qemu-driver-task-smoke:{}]",
+        "[BUILD] {git_hash} {build_timestamp} image-id={UNSEALED_PI4_IMAGE_ID} features=[kernel:{} bootstrap-trace:{} serial-console:{} net:{} net-console:{} qemu-driver-task-smoke:{}]",
         u8::from(features.kernel),
         u8::from(features.bootstrap_trace),
         u8::from(features.serial_console),
@@ -211,7 +297,9 @@ const USER_PATH_HINTS: &[&str] = &["rootserver", "sel4runtime"];
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::Path;
+    use tempfile::TempDir;
 
     #[test]
     fn build_marker_is_one_exact_serial_and_image_identity() {
@@ -228,7 +316,73 @@ mod tests {
                     qemu_driver_task_smoke: false,
                 },
             ),
-            "[BUILD] abc123-dirty 2026-07-16T00:00:00Z features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1 qemu-driver-task-smoke:0]"
+            "[BUILD] abc123-dirty 2026-07-16T00:00:00Z image-id=0000000000000000000000000000000000000000000000000000000000000000 features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1 qemu-driver-task-smoke:0]"
+        );
+    }
+
+    #[test]
+    fn linked_worktree_resolves_shared_branch_metadata() {
+        let repo = TempDir::new().expect("failed to create repository fixture");
+        let common = repo.path().join("repo.git");
+        let worktree = common.join("worktrees/fixture");
+        fs::create_dir_all(&worktree).expect("failed to create worktree metadata");
+        fs::write(
+            repo.path().join(".git"),
+            "gitdir: repo.git/worktrees/fixture\n",
+        )
+        .expect("failed to write .git pointer");
+        fs::write(worktree.join("commondir"), "../..\n")
+            .expect("failed to write commondir pointer");
+
+        let resolved = resolve_git_metadata_dirs(repo.path(), &repo.path().join(".git"))
+            .expect("failed to resolve linked worktree metadata");
+
+        assert_eq!(resolved.worktree, worktree);
+        assert_eq!(resolved.common, worktree.join("../.."));
+    }
+
+    #[test]
+    fn ordinary_git_identity_records_untracked_or_tracked_dirtiness() {
+        let clean = select_build_git_hash(
+            "abcdef0123456789abcdef0123456789abcdef01",
+            "abcdef012345",
+            false,
+            None,
+            false,
+        )
+        .expect("clean identity must be accepted");
+        let dirty = select_build_git_hash(
+            "abcdef0123456789abcdef0123456789abcdef01",
+            "abcdef012345",
+            true,
+            None,
+            false,
+        )
+        .expect("dirty identity must be accepted");
+
+        assert_eq!(clean, "abcdef012345");
+        assert_eq!(dirty, "abcdef012345-dirty");
+    }
+
+    #[test]
+    fn exact_git_identity_requires_clean_matching_full_commit() {
+        let full = "abcdef0123456789abcdef0123456789abcdef01";
+
+        assert_eq!(
+            select_build_git_hash(full, "abcdef012345", true, Some(full), true),
+            Ok("abcdef012345".to_owned())
+        );
+        assert_eq!(
+            select_build_git_hash(full, "abcdef012345", true, Some(full), false),
+            Err("exact Git commit requires a clean-source attestation")
+        );
+        assert_eq!(
+            select_build_git_hash(full, "abcdef012345", true, Some(&"0".repeat(40)), true),
+            Err("exact Git commit does not match repository HEAD")
+        );
+        assert_eq!(
+            select_build_git_hash(full, "abcdef012345", true, Some("ABCDEF0"), true),
+            Err("exact Git commit must be a full lowercase hexadecimal object ID")
         );
     }
 

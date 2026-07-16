@@ -13,7 +13,7 @@ OUT_DIR="${OUT_DIR:-out/cohesix}"
 TCP_PORT="${TCP_PORT:-31337}"
 PROFILE="${PROFILE:-release}"
 CARGO_TARGET="${CARGO_TARGET:-aarch64-unknown-none}"
-SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-$HOME/seL4/build}"
+SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-$REPO_ROOT/out/sel4/profile-v2/qemu-smp-production}"
 STARTUP_TIMEOUT="${STARTUP_TIMEOUT:-90}"
 BASE_MANIFEST="${BASE_MANIFEST:-configs/root_task.toml}"
 

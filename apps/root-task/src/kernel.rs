@@ -94,6 +94,10 @@ const DEVICE_FRAME_BITS: usize = 12;
 use sel4_panicking::{self, DebugSink};
 
 fn debug_identify_boot_caps() {
+    if !sel4::debug_cap_identify_available() {
+        return;
+    }
+
     let guard_stage = "BootCaps.identify";
     for slot in 0u64..16u64 {
         let cap = slot as sel4_sys::seL4_CPtr;
@@ -109,12 +113,17 @@ fn debug_identify_boot_caps() {
         let mut breadcrumb = HeaplessString::<128>::new();
         let _ = write!(breadcrumb, "slot=0x{slot:04x}", slot = guarded_cap);
         sel4_guard::uart_breadcrumb(guard_stage, "seL4_CapIdentify", breadcrumb.as_str());
-        let ty = unsafe { sel4_sys::seL4_CapIdentify(guarded_cap) };
+        let ty = sel4::debug_cap_identify(guarded_cap);
         log::info!(
             "[identify] slot=0x{slot:04x} ty=0x{ty:08x}",
             slot = guarded_cap
         );
     }
+}
+
+#[inline(always)]
+fn endpoint_identification_is_valid(available: bool, ident: u32) -> bool {
+    !available || ident == sel4_sys::seL4_EndpointObject as u32
 }
 
 fn emit_manifest_boot_lines<P: Platform>(console: &mut DebugConsole<'_, P>) {
@@ -3269,9 +3278,6 @@ fn bootstrap<P: Platform>(
     platform: &P,
     bootinfo: &'static BootInfo,
 ) -> Result<BootContext, BootError> {
-    #[cfg(all(feature = "kernel", not(sel4_config_printing)))]
-    crate::sel4::install_debug_sink();
-
     let mut sequencer = BootstrapSequencer::new();
     let mut boot_guard = BootStateGuard::acquire()?;
     let mut early_phase = EarlyBootPhase::BootInfoView;
@@ -3570,10 +3576,18 @@ fn bootstrap<P: Platform>(
         }
     };
 
-    // The build script materialises this exact contiguous line in the image.
-    // Serial evidence can therefore be bound to independently read-back image
-    // bytes instead of merely matching separately formatted components.
-    let build_line = crate::built_info::BUILD_MARKER;
+    // The build script materialises this exact contiguous line in a dedicated,
+    // file-backed ELF section. Pi staging replaces its fixed-width image-id
+    // placeholder with the normalized digest of the complete final uImage and
+    // repairs both legacy-image CRCs before the file becomes flashable.
+    let build_line = match core::str::from_utf8(&crate::built_info::BUILD_MARKER_BYTES) {
+        Ok(marker) => marker,
+        Err(_) => {
+            let msg = String::from("generated build marker is not valid UTF-8");
+            boot_log::force_uart_line(msg.as_str());
+            return Err(BootError::Fatal(msg));
+        }
+    };
     debug_uart_str("[breadcrumb] before BUILD log\r\n");
     boot_log::force_uart_line(build_line);
     log::info!("{}", build_line);
@@ -4058,7 +4072,7 @@ fn bootstrap<P: Platform>(
         }
 
         let ident = sel4::debug_cap_identify(ep_slot) as u32;
-        if ident == 0 {
+        if !endpoint_identification_is_valid(sel4::debug_cap_identify_available(), ident) {
             hard_guard_fail(
                 "bootstrap_ep",
                 HardGuardViolation::EPIdentifyInvalid { ident },
@@ -5248,8 +5262,8 @@ fn bootstrap<P: Platform>(
         }
         boot_log::force_uart_line("[manifest] ticket register end source=generated");
 
-        crate::bp!("spawn.worker.begin");
-        crate::bp!("spawn.worker.end");
+        crate::bp!("worker.model.begin");
+        crate::bp!("worker.model.end");
 
         crate::bp!("dtb.parse.begin");
         if !extra_bytes.is_empty() {
@@ -5606,12 +5620,12 @@ fn run_timers_and_ipc_phase(
 
         log::info!(
             target: "root_task::kernel",
-            "[boot] TimersAndIPC: timer.worker.spawn.begin"
+            "[boot] TimersAndIPC: timer.cooperative-poll.begin"
         );
-        timer.spawn_worker();
+        timer.announce_cooperative_polling();
         log::info!(
             target: "root_task::kernel",
-            "[boot] TimersAndIPC: timer.worker.spawn.end"
+            "[boot] TimersAndIPC: timer.cooperative-poll.end"
         );
 
         log::info!(
@@ -5870,14 +5884,14 @@ impl KernelTimer {
         }
     }
 
-    pub(crate) fn spawn_worker(&self) {
+    pub(crate) fn announce_cooperative_polling(&self) {
         log::info!(
             target: "root_task::kernel::timer",
-            "[timers] worker: spawn requested (deferred wait loop)",
+            "[timers] cooperative polling: deferred wait loop requested",
         );
         log::info!(
             target: "root_task::kernel::timer",
-            "[timers] worker: cooperative polling (no blocking wait in init)",
+            "[timers] cooperative polling: no blocking wait in init",
         );
     }
 }
@@ -7296,6 +7310,20 @@ mod tests {
     use crate::rust_alloc::vec::Vec;
     use core::fmt::Write as _;
     use heapless::{String as HeaplessString, Vec as HeaplessVec};
+
+    #[test]
+    fn endpoint_identification_is_diagnostic_only_when_unavailable() {
+        let endpoint_ident = sel4_sys::seL4_EndpointObject as u32;
+        let cnode_ident = sel4_sys::seL4_CapTableObject as u32;
+
+        assert!(super::endpoint_identification_is_valid(false, 0));
+        assert!(super::endpoint_identification_is_valid(
+            true,
+            endpoint_ident
+        ));
+        assert!(!super::endpoint_identification_is_valid(true, 0));
+        assert!(!super::endpoint_identification_is_valid(true, cnode_ident));
+    }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn test_extra_range(extra: &[u8]) -> core::ops::Range<usize> {

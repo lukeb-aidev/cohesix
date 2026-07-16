@@ -873,6 +873,64 @@ def test_boot_summary_rejects_console_only_boot_without_network_proof() -> None:
     assert "driver-task-dedicated-not-ready" in summaries[0]["blockers"]
 
 
+@pytest.mark.parametrize(
+    ("field", "value", "expected_blocker"),
+    [
+        ("HDMI_RESPONSIVE_PROOF", "no", "hdmi-responsive-proof-missing"),
+        ("USB_BLOCKER", "post-ready-busy", "local-seat-usb-blocked"),
+        (
+            "USB_COMMAND_READY",
+            "no",
+            "local-seat-usb-command-ready-missing",
+        ),
+        (
+            "USB_FIRST_REPORT_READY",
+            "no",
+            "local-seat-usb-first-report-missing",
+        ),
+        (
+            "USB_FIRST_BYTE_READY",
+            "no",
+            "local-seat-usb-first-byte-missing",
+        ),
+        ("USB_LOCAL_SEAT_STATE", "unknown", "local-seat-usb-state-not-ready"),
+        ("USB_BUSY_AFTER_READY", "unknown", "local-seat-usb-busy-proof-missing"),
+        (
+            "USB_OLDGOOD_REPLAY",
+            "no",
+            "local-seat-usb-oldgood-replay-missing",
+        ),
+        (
+            "USB_OLDGOOD_MISSING",
+            "first-byte",
+            "local-seat-usb-oldgood-incomplete",
+        ),
+        ("USB_BURST_PROOF", "no", "local-seat-usb-burst-proof-missing"),
+        ("USB_BURST_DROPS", 1, "local-seat-usb-burst-drops"),
+        (
+            "USB_POST_FIRST_BYTE_BLOCKER",
+            "usb-post-first-byte-queue-collapse",
+            "local-seat-usb-post-first-byte-usb-post-first-byte-queue-collapse",
+        ),
+    ],
+)
+def test_boot_summary_requires_complete_operator_liveness_proof(
+    field: str,
+    value: object,
+    expected_blocker: str,
+) -> None:
+    """A network-ready boot cannot hide a missing local-operator gate."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(strict_wired_boot_proof_lines())
+    ).to_record()
+    assert normalizer.boot_evidence_blockers(record) == []
+
+    record[field] = value
+
+    assert expected_blocker in normalizer.boot_evidence_blockers(record)
+
+
 def test_latest_boot_slice_keeps_same_boot_uboot_usb_evidence() -> None:
     lines = [
         "U-Boot 2026.01-dirty",
@@ -8053,8 +8111,8 @@ def test_gate_summary_treats_post_ready_cumulative_usb_counters_as_historical() 
     assert record["USB_LOCAL_SEAT_STATE"] == "ready"
     assert record["USB_BUSY_AFTER_READY"] == "no"
     assert "local-seat-usb-degraded" not in blockers
-    assert "local-seat-usb-first-byte-missing" not in blockers
-    assert "local-seat-usb-burst-proof-missing" not in blockers
+    assert "local-seat-usb-first-byte-missing" in blockers
+    assert "local-seat-usb-burst-proof-missing" in blockers
     assert "local-seat-usb-startup-blocker" in blockers
 
 
@@ -8087,7 +8145,7 @@ def test_gate_summary_treats_no_idle_report_as_usb_ready() -> None:
     assert record["USB_LOCAL_SEAT_STATE"] == "ready"
     assert record["USB_BUSY_AFTER_READY"] == "no"
     assert "local-seat-usb-degraded" not in blockers
-    assert "local-seat-usb-first-byte-missing" not in blockers
+    assert "local-seat-usb-first-byte-missing" in blockers
 
 
 def test_gate_summary_treats_missing_usb_recovery_diag_as_telemetry_for_idle_report() -> None:
@@ -13335,11 +13393,14 @@ def bootstrap_supervisor_line(
     backoff_ms: int,
     next_attempt_ms: int,
 ) -> str:
-    """Return one exact persistent-bootstrap supervisor evidence line."""
+    """Return one full-fidelity persistent-bootstrap supervisor record."""
 
     return (
         f"CYW43_BOOTSTRAP_SUPERVISOR attempt={attempt} status={status} "
-        f"backoff_ms={backoff_ms} next_attempt_ms={next_attempt_ms}"
+        f"backoff_ms={backoff_ms} next_attempt_ms={next_attempt_ms} "
+        "serial=ready local_seat=ready "
+        "recovery=pair-restart-full-context-if-partial "
+        "console_seq=17 telemetry_sinks=serial+queen-log prompt_refresh=yes"
     )
 
 
@@ -13383,15 +13444,10 @@ def test_bootstrap_supervisor_accepts_terminal_first_attempt_ready() -> None:
 def test_bootstrap_supervisor_accepts_production_raw_uart_suffix() -> None:
     """The raw UART ordering suffix must not invalidate supervisor proof."""
 
-    suffix = (
-        " serial=ready local_seat=ready "
-        "recovery=pair-restart-full-context-if-partial "
-        "console_seq=17 telemetry_sinks=serial+queen-log prompt_refresh=yes"
-    )
     events = normalizer.parse_events(
         [
-            bootstrap_supervisor_line(1, "begin", 0, 500) + suffix,
-            bootstrap_supervisor_line(1, "ready", 0, 500) + suffix,
+            bootstrap_supervisor_line(1, "begin", 0, 500),
+            bootstrap_supervisor_line(1, "ready", 0, 500),
         ]
     )
 
@@ -13400,6 +13456,64 @@ def test_bootstrap_supervisor_accepts_production_raw_uart_suffix() -> None:
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] == "yes"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "",
+        " serial=ready",
+        " serial=ready local_seat=ready",
+        (
+            " serial=ready local_seat=ready "
+            "recovery=pair-restart-full-context-if-partial"
+        ),
+        (
+            " serial=ready local_seat=ready "
+            "recovery=pair-restart-full-context-if-partial console_seq=17"
+        ),
+        (
+            " serial=ready local_seat=ready "
+            "recovery=pair-restart-full-context-if-partial console_seq=17 "
+            "telemetry_sinks=serial+queen-log"
+        ),
+        (
+            " serial=ready local_seat=ready "
+            "recovery=pair-restart-full-context-if-partial console_seq=17 "
+            "telemetry_sinks=serial+queen-log prompt_refresh="
+        ),
+    ],
+)
+def test_bootstrap_supervisor_truncated_production_suffix_is_diagnostic_only(
+    suffix: str,
+) -> None:
+    """Every production-suffix truncation boundary must fail readiness."""
+
+    ready_prefix = (
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready "
+        "backoff_ms=0 next_attempt_ms=500"
+    )
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                bootstrap_supervisor_line(1, "begin", 0, 500),
+                ready_prefix + suffix,
+            ]
+        )
+    ).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 1
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert (
+        record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
+        == "production-suffix-incomplete"
+    )
+    assert (
+        "cyw43-bootstrap-supervisor-production-suffix-incomplete"
+        in normalizer.boot_evidence_blockers(record)
+    )
 
 
 def test_bootstrap_supervisor_accepts_multiple_transient_retries_then_ready() -> None:

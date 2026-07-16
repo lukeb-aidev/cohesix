@@ -4,23 +4,24 @@
 
 # M26C Refactor Ownership
 
-Status: `COMPLETE / FUTURE-WAVES-DEFERRED`
+Status: `WORKER-EXECUTION-REOPENED / OTHER-FUTURE-WAVES-DEFERRED`
 
 | Lane | Owner | Files / Surfaces | Current State |
 | --- | --- | --- | --- |
 | Runner | runner-owner | `scripts/ci/test_plan_run.sh`, stage contract docs | Closed-QEMU+Pi |
 | Docs/audit | docs-owner | `docs/audit/M26C_*`, canonical docs, inventory scripts | Active docs-only synchronization |
-| Compiler IR | compiler-owner | `tools/coh-rtc/src/**`, `configs/root_task*.toml`, generated outputs | Closed-QEMU for worker/cap/notification/non-MCS evidence; Pi GENET runtime/DMA proof closed for 26c |
+| Compiler IR | compiler-owner | `tools/coh-rtc/src/**`, `configs/root_task*.toml`, generated outputs | Corrected to non-executable Worker roles with endpoint and notification claims disabled; live execution remains reopened |
 | Runtime/DMA | runtime-dma-owner | `apps/root-task/src/hal/**`, `apps/pi4-driver-runtime/**`, `crates/pi4-driver-abi/**` | Pi GENET runtime/DMA proof closed for 26c |
-| Worker loops | worker-owner | `apps/worker-heart/**`, `apps/worker-gpu/**`, `apps/worker-lora/**` | Closed-QEMU for implemented heartbeat/GPU/LoRA loops; worker-bus deferred |
-| Endpoint caps | capability-owner | `apps/root-task/src/event/**`, `worker_authority.rs`, `ninedoor.rs`, worker apps | Closed-QEMU for generated endpoint-badge authority; full future cap-bundle authority not claimed |
-| Notifications | lifecycle-owner | `tools/coh-rtc`, root-task lifecycle/event/HAL, worker apps | Closed-QEMU for generated notification badges and worker-loop lifecycle events |
-| Scheduling/MCS | scheduling-owner | `tools/coh-rtc`, root-task HAL/lifecycle, docs scheduling | Closed-QEMU as explicit non-MCS fallback; consumed MCS budget evidence not claimed |
+| Worker loops | worker-owner | `apps/worker-heart/**`, `apps/worker-gpu/**`, `apps/worker-lora/**` | Helper/model loops and build artifacts exist; target image load/resume is reopened |
+| Endpoint caps | capability-owner | `apps/root-task/src/event/**`, `worker_authority.rs`, `ninedoor.rs`, worker apps | Current profiles disable endpoint authority; live cap mint/delivery/invocation is reopened |
+| Notifications | lifecycle-owner | `tools/coh-rtc`, root-task lifecycle/event/HAL, worker apps | Current profiles disable Worker notifications; live object/cap delivery and handling is reopened |
+| Scheduling/MCS | scheduling-owner | `tools/coh-rtc`, root-task HAL/lifecycle, docs scheduling | Non-MCS record is metadata only; applied Worker scheduling and any MCS profile evidence remain open |
 | Host tools | host-tools-owner | `apps/coh`, `apps/cohsh`, `cohsh-core`, `host-ticket-agent`, `gpu-bridge-host`, `hive-gateway`, `tools/cohesix-py` | Existing QEMU parity evidence only; no new authority path or future host-tool scope authorized here |
 | Root-task decomposition | root-task-owner | `apps/root-task/src/ninedoor.rs`, `event/**`, `console/**`, `log_buffer.rs` | Not authorized yet |
 | HAL/network/local-seat cleanup | hal-owner | `apps/root-task/src/hal/**`, `net/**`, `drivers/**`, `local_seat.rs` | Pi 4 live hardware proof closed for 26c; cleanup still not authorized here |
 
-QEMU worker-loop, endpoint-badge, notification, and non-MCS scheduling items are
-closed for Milestone 26c QEMU evidence. Final Pi GENET runtime/DMA, TCP, REST,
-and Stage 05 evidence close the Pi 4 board lane for 26c. No owner may use either
-closure as full future cap-bundle authority.
+QEMU helper-loop and session-model tests remain characterization evidence, but
+they do not close Worker execution, endpoint-cap delivery, lifecycle
+notifications, or applied scheduling. Final Pi GENET runtime/DMA, TCP, REST,
+and Stage 05 evidence remain historical board evidence for 26c and do not close
+those Worker lanes.

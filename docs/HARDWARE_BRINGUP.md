@@ -64,7 +64,7 @@ flowchart LR
 
 | Target | Manifest | seL4 build truth |
 | --- | --- | --- |
-| QEMU `aarch64/virt` | `configs/root_task.toml` | Selected QEMU `SEL4_BUILD_DIR`, normally `seL4/SMP_build` for the current SMP regression lane. |
+| QEMU `aarch64/virt` | `configs/root_task.toml` | Canonical validated `SEL4_BUILD_DIR` at `out/sel4/profile-v2/qemu-smp-production`; explicit alternatives are diagnostic unless a named profile contract passes. |
 | Raspberry Pi 4 | `configs/root_task_pi4_uboot_aarch64.toml` | `seL4/build_UBOOT` plus the accepted external seL4 15 source and Pi overlay provenance. |
 
 The Pi 4 baseline is `Pi firmware -> U-Boot -> seL4 binary image -> root-task`.
@@ -81,9 +81,9 @@ authoritative for each build.
 ### Build and Boot
 
 ```bash
-SEL4_BUILD_DIR="$PWD/seL4/SMP_build" \
-  ./scripts/cohesix-build-run.sh \
-  --sel4-build "$PWD/seL4/SMP_build" \
+SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" \
+./scripts/cohesix-build-run.sh \
+  --sel4-build "$PWD/out/sel4/profile-v2/qemu-smp-production" \
   --out-dir out/cohesix \
   --profile release \
   --root-task-features cohesix-dev \
@@ -114,20 +114,43 @@ projection, and Stage 05 due diligence.
 For an acceptance candidate, perform a full build. Do not use `--skip-build`:
 
 ```bash
+python3 scripts/sel4_profile.py configure \
+  --profile pi4_diagnostic \
+  --source "$PWD/out/sel4/v15-pi4-project" \
+  --build-dir "$HOME/seL4/build_UBOOT"
+python3 scripts/sel4_profile.py build \
+  --profile pi4_diagnostic \
+  --source "$PWD/out/sel4/v15-pi4-project" \
+  --build-dir "$HOME/seL4/build_UBOOT"
+python3 scripts/sel4_profile.py validate \
+  --profile pi4_diagnostic \
+  --source "$PWD/out/sel4/v15-pi4-project" \
+  --build-dir "$HOME/seL4/build_UBOOT" \
+  --require-source --require-artifacts --for-runtime
 ./scripts/pi4-image-build.sh \
-  --clean \
   --manifest configs/root_task_pi4_uboot_aarch64.toml \
-  --sel4-build-dir seL4/build_UBOOT
+  --sel4-build-dir "$HOME/seL4/build_UBOOT" \
+  --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel"
 ```
 
 The default stage directory is `out/pi4-sd`. The script validates the Pi U-Boot
-shape, the selected seL4 configuration, the virtual-counter contract, generated
-artifacts, runtime payloads, and rootfs bounds before staging. A successful
-stage is build proof only.
+shape, the canonical `pi4_diagnostic` seL4 profile, its pinned source and build
+input stamp, the virtual-counter contract, generated
+artifacts, runtime payloads, and rootfs bounds before staging. It also proves
+that one fixed-width marker occupies a dedicated file-backed root-task load
+section, carries that placeholder through the stripped ELF and complete legacy
+image, and finally seals the staged image. Sealing hashes the complete image
+with only the marker's 64-byte self-reference plus the U-Boot header/data CRC
+fields normalized, writes the digest into `image-id=`, repairs both CRCs, and
+writes `out/pi4-sd/pi4-image-identity.json`. A successful stage is build proof
+only.
 
-Record hashes for the image, U-Boot, DTB, boot script, and driver-runtime
-archive that will be flashed. Record the build marker embedded in the staged
-image so the later serial boot can be associated with the same bytes.
+Record hashes for the image, U-Boot, DTB, boot script, firmware, and
+driver-runtime archive that will be flashed. Record the exact sealed build
+marker and `pi4-image-identity.json`. The marker content-binds the complete
+`cohesix-image-arm-bcm2711` file; it does not by itself bind U-Boot, DTB,
+boot-script, firmware, saved policy, or other partition files, which remain
+separate entries in the flash ledger.
 
 ### 2. Verify the Flash Target
 
@@ -149,7 +172,8 @@ Only after verification, pass the explicit whole-disk node:
 ```bash
 ./scripts/pi4-image-build.sh \
   --manifest configs/root_task_pi4_uboot_aarch64.toml \
-  --sel4-build-dir seL4/build_UBOOT \
+  --sel4-build-dir "$HOME/seL4/build_UBOOT" \
+  --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel" \
   --flash-disk /dev/diskN
 ```
 
@@ -159,8 +183,10 @@ the staged root and fallback image hashes, and unmounts the disk. Do not print
 the policy file: it may contain Wi-Fi credentials.
 
 For acceptance, remount the media and independently compare every staged
-artifact and the embedded build marker. The script's image checks do not replace
-the full readback ledger.
+artifact. Re-run `scripts/pi4_image_identity.py verify` on the read-back primary
+and fallback images, require them to be byte-identical, and preserve the mutable
+saved-policy hash separately without printing its contents. The script's image
+checks do not replace the full readback ledger.
 
 ### 4. Set First-Boot Network Policy
 
@@ -265,9 +291,12 @@ smp activity
 If `usb diag` echoes but does not return, stop sending input and preserve the
 sample. A merged or overlapped serial transcript is not acceptance evidence.
 
-The serial log must contain the exact read-back build marker before any current-
-image claim is made. Preserve the U-Boot policy selection, root prompt, first
-causal blocker, and all driver owner-state/counter evidence from the same boot.
+The serial log must contain the exact read-back sealed build marker before any
+current-image claim is made. The current bootstrap-supervisor record counts only
+with its complete production ownership/recovery and console-ordering suffix; a
+bare, legacy, or truncated record is diagnostic, not readiness proof. Preserve
+the U-Boot policy selection, root prompt, first causal blocker, and all driver
+owner-state/counter evidence from the same boot.
 
 ### 6. Normalize Without Overclaiming
 
@@ -404,6 +433,18 @@ Every counted boot must contain that image's exact `[BUILD]` marker and must
 pass the complete normalizer evidence predicate with `NET_ACTIVE=wifi`; one
 failed boot keeps repeatability open rather than being hidden by extra passes.
 
+Hardware-free closure is narrower: it requires the retained production
+supervisor, one-child-operation EventPump permit, reciprocal-ring/controller
+failure-cut tests, supervisor-only generation transitions from immutable
+deferred-recovery records after steady-path guards unwind, preservation of an
+unresolved association cursor across logical epoch changes, exact clean image
+identity, and all repository gates to pass. That result makes the committed
+image ready for the strongest available Pi test, but it is not evidence that
+the board associated, completed EAPOL,
+obtained DHCP, answered ARP, carried raw TCP/authenticated `cohsh`, preserved
+USB/local-seat liveness, or repeated reliably. Only the boot-paired 10-cold and
+10-warm capture set below can close those physical claims.
+
 After collecting the logs and independently reading the target image artifact
 back from the mounted medium, run the fail-closed aggregate gate:
 
@@ -414,15 +455,30 @@ python3 scripts/pi4_wifi_repeatability.py \
   --staged-image out/pi4-sd/cohesix-image-arm-bcm2711 \
   --readback-image /Volumes/COHESIX/cohesix-image-arm-bcm2711 \
   --image-sha256 <independent-readback-sha256> \
+  --image-identity-metadata out/pi4-sd/pi4-image-identity.json \
+  --expected-image-identity-sha256 <independently-preserved-sidecar-sha256> \
+  --capture-manifest out/pi4-evidence/capture-manifest.json \
+  --expected-git-commit <exact-clean-40-hex-commit> \
+  --expected-build-id <canonical-64-hex-build-id> \
   --build-marker '[BUILD] <exact-readback-marker>' \
   --output out/pi4-evidence/wifi-repeatability.json
 ```
 
 `PASS` is an evidence verdict, not a substitute for preserving each serial log
 and its boot-paired pcap. The staged source and independently read-back files
-must be distinct paths whose bytes hash identically. Reusing a log path or the
-same log bytes in either class is rejected. A missing/unreadable artifact, hash
-mismatch, absent or conflicting marker, missing/non-ready bootstrap-supervisor
+must be distinct paths and distinct open-file identities whose raw bytes hash
+identically. Each must independently pass the normalized image-ID calculation,
+legacy-image structure checks, and both U-Boot CRC checks. Reusing a log path or
+the same raw boot-slice bytes in either class is rejected. The required capture
+manifest uses `cohesix-pi4-wifi-capture-manifest/v2`; each counted slice has one
+unique run ID, declared cold/warm class, serial-file and raw-slice hashes, one
+distinct nonempty boot-paired pcap and its hash, the sealed image ID, clean Git
+commit, canonical build ID, and capture epoch. The manifest also binds the
+independently preserved SHA-256 of the exact identity sidecar, so a stale image,
+sidecar, and log set cannot authenticate itself merely by agreeing internally.
+A missing/unreadable artifact,
+hash mismatch, unsealed/absent/duplicated/conflicting marker, incomplete or
+non-ready bootstrap-supervisor
 record, skip-only log, wired boot, failed boot slice, or any existing
 Wi-Fi/driver/operator blocker fails the aggregate. Cold versus warm remains an
 operator-recorded reset classification, so retain a per-run collection ledger

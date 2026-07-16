@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the boot/ep module for root-task.
 // Author: Lukas Bower
@@ -34,7 +34,8 @@ pub struct RootEpReport {
     pub verify_err: Option<seL4_Error>,
     /// Outcome of the retype call.
     pub retype_err: Option<seL4_Error>,
-    /// Result of `debug_cap_identify` on the selected slot.
+    /// Result of `debug_cap_identify` on the selected slot, or zero when the
+    /// selected production kernel omits that diagnostic API.
     pub slot_ident: sel4_sys::seL4_Word,
 }
 

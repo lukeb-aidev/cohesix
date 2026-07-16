@@ -147,6 +147,15 @@ static SERIAL_INPUT_LINE_TRACE_COUNT: AtomicU32 = AtomicU32::new(0);
 static SERIAL_PROMPT_INPUT_SHADOW: SpinMutex<HeaplessString<DEFAULT_LINE_CAPACITY>> =
     SpinMutex::new(HeaplessString::new());
 
+#[cfg(all(feature = "kernel", test))]
+static SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(feature = "kernel", test))]
+static SERIAL_LINKED_RUNTIME_ONLY_TEST_RX: SpinMutex<Queue<u8, DEFAULT_RX_CAPACITY>> =
+    SpinMutex::new(Queue::new());
+#[cfg(all(feature = "kernel", test))]
+static SERIAL_LINKED_RUNTIME_ONLY_TEST_TX: SpinMutex<Queue<u8, DEFAULT_TX_CAPACITY>> =
+    SpinMutex::new(Queue::new());
+
 #[cfg(feature = "kernel")]
 fn prompt_shadow_push(byte: u8) {
     let mut shadow = SERIAL_PROMPT_INPUT_SHADOW.lock();
@@ -566,11 +575,64 @@ pub(crate) fn serial_driver_task_interactive_cutover_allowed() -> bool {
 
 #[cfg(feature = "kernel")]
 fn serial_driver_task_transport_active() -> bool {
+    #[cfg(test)]
+    if SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE.load(AtomicOrdering::Acquire) != 0 {
+        return true;
+    }
     serial_driver_task_transport_required(
         crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
         serial_driver_task_runtime_attached(),
         SERIAL_DRIVER_TASK_CLIENT_ACTIVE.load(AtomicOrdering::Acquire) != 0,
     )
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_begin_linked_runtime_only_transport() {
+    {
+        let mut rx = SERIAL_LINKED_RUNTIME_ONLY_TEST_RX.lock();
+        while rx.dequeue().is_some() {}
+    }
+    {
+        let mut tx = SERIAL_LINKED_RUNTIME_ONLY_TEST_TX.lock();
+        while tx.dequeue().is_some() {}
+    }
+    SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE.store(1, AtomicOrdering::Release);
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_end_linked_runtime_only_transport() {
+    SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE.store(0, AtomicOrdering::Release);
+    {
+        let mut rx = SERIAL_LINKED_RUNTIME_ONLY_TEST_RX.lock();
+        while rx.dequeue().is_some() {}
+    }
+    {
+        let mut tx = SERIAL_LINKED_RUNTIME_ONLY_TEST_TX.lock();
+        while tx.dequeue().is_some() {}
+    }
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_inject_linked_runtime_only_rx(bytes: &[u8]) -> usize {
+    let mut queue = SERIAL_LINKED_RUNTIME_ONLY_TEST_RX.lock();
+    let mut accepted = 0usize;
+    for &byte in bytes {
+        if queue.enqueue(byte).is_err() {
+            break;
+        }
+        accepted = accepted.saturating_add(1);
+    }
+    accepted
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_take_linked_runtime_only_tx() -> heapless::Vec<u8, DEFAULT_TX_CAPACITY> {
+    let mut queue = SERIAL_LINKED_RUNTIME_ONLY_TEST_TX.lock();
+    let mut bytes = heapless::Vec::new();
+    while let Some(byte) = queue.dequeue() {
+        let _ = bytes.push(byte);
+    }
+    bytes
 }
 
 #[cfg(feature = "kernel")]
@@ -1095,6 +1157,96 @@ where
         self.poll_io_current_tcb(contract)
     }
 
+    /// Poll only the independently owned physical serial linked runtime.
+    ///
+    /// This is the narrow operator-liveness route used while another physical
+    /// driver owns the root HAL. It fails closed unless the serial driver-task
+    /// transport has completed cutover, and it never falls through to a
+    /// root-context callback or the current-TCB UART driver.
+    #[cfg(feature = "kernel")]
+    pub fn poll_io_linked_runtime_only(&mut self) -> bool {
+        if !serial_driver_task_transport_active() {
+            return false;
+        }
+        #[cfg(test)]
+        if SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE.load(AtomicOrdering::Acquire) != 0 {
+            let mut staged = SERIAL_LINKED_RUNTIME_ONLY_TEST_RX.lock();
+            let mut accepted = 0usize;
+            while self.rx.len() < RX {
+                let Some(byte) = staged.dequeue() else {
+                    break;
+                };
+                if self.rx.enqueue(byte).is_err() {
+                    self.telemetry.rx_overflow();
+                    break;
+                }
+                accepted = accepted.saturating_add(1);
+            }
+            return accepted != 0;
+        }
+        let contract = <D as SerialDriver>::driver_task_contract();
+        self.poll_driver_task_rx_into_queue(contract)
+    }
+
+    /// Flush only through the independently owned physical serial linked runtime.
+    ///
+    /// The helper is intentionally separate from [`Self::flush_tx`]: callers
+    /// that temporarily cannot admit generic HAL work must not inherit its
+    /// compatibility or current-TCB fallbacks.
+    #[cfg(feature = "kernel")]
+    pub fn flush_tx_linked_runtime_only(&mut self) -> bool {
+        if !serial_driver_task_transport_active() {
+            return false;
+        }
+        #[cfg(test)]
+        if SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE.load(AtomicOrdering::Acquire) != 0 {
+            let mut emitted = SERIAL_LINKED_RUNTIME_ONLY_TEST_TX.lock();
+            let turn_limit = usize::from(
+                <D as SerialDriver>::driver_task_contract()
+                    .budget
+                    .max_ops_per_turn,
+            )
+            .min(
+                <D as SerialDriver>::driver_task_contract()
+                    .budget
+                    .max_bytes_per_turn as usize,
+            )
+            .min(DEFAULT_TX_CAPACITY.saturating_sub(emitted.len()));
+            let mut written = 0usize;
+            if let Some(byte) = self.driver_local.take_pending_tx() {
+                if emitted.enqueue(byte).is_ok() {
+                    written = written.saturating_add(1);
+                } else {
+                    self.driver_local.set_pending_tx(Some(byte));
+                }
+            }
+            while written < turn_limit {
+                let Some(byte) = self.tx.dequeue() else {
+                    break;
+                };
+                if emitted.enqueue(byte).is_err() {
+                    self.restore_staged_tx(&[byte]);
+                    break;
+                }
+                written = written.saturating_add(1);
+            }
+            drop(emitted);
+            let _ = self.poll_io_linked_runtime_only();
+            return true;
+        }
+        let contract = <D as SerialDriver>::driver_task_contract();
+        crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+            contract,
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+            serial_runtime_ring_service_driver_task,
+        );
+        let flushed = self.flush_tx_driver_task_ring(contract);
+        if flushed {
+            let _ = self.poll_driver_task_rx_into_queue(contract);
+        }
+        flushed
+    }
+
     fn poll_io_current_tcb(&mut self, contract: DriverTaskContract) -> bool {
         let mut budget = match DriverServiceBudget::new(contract) {
             Ok(budget) => budget,
@@ -1514,6 +1666,25 @@ where
 
     /// Retrieve the next sanitised console line, if available.
     pub fn next_line(&mut self) -> Option<HeaplessString<LINE>> {
+        self.next_line_with_observability(true)
+    }
+
+    /// Retrieve an already-buffered line without touching kernel observability.
+    ///
+    /// The CYW43 bootstrap operator callback uses this while the linked-runtime
+    /// HAL is borrowed. Input echo remains staged in the bounded TX queue, but
+    /// no debug UART trace or prompt-shadow lock is touched.
+    #[cfg(feature = "kernel")]
+    pub fn next_line_buffered_quiet(&mut self) -> Option<HeaplessString<LINE>> {
+        self.next_line_with_observability(false)
+    }
+
+    fn next_line_with_observability(
+        &mut self,
+        observe_kernel_line: bool,
+    ) -> Option<HeaplessString<LINE>> {
+        #[cfg(not(feature = "kernel"))]
+        let _ = observe_kernel_line;
         while let Some(byte) = self.rx.dequeue() {
             if self.driver_local.suppress_lf() && byte == b'\n' {
                 self.driver_local.set_suppress_lf(false);
@@ -1523,28 +1694,48 @@ where
                 b'\r' => {
                     self.driver_local.set_suppress_lf(true);
                     #[cfg(feature = "kernel")]
-                    prompt_shadow_clear();
+                    if observe_kernel_line {
+                        prompt_shadow_clear();
+                    }
                     self.emit_newline();
                     let mut completed = HeaplessString::new();
                     core::mem::swap(&mut completed, &mut self.line);
                     #[cfg(feature = "kernel")]
-                    emit_serial_input_line_trace("line-ready", completed.len(), self.rx.len(), 0);
+                    if observe_kernel_line {
+                        emit_serial_input_line_trace(
+                            "line-ready",
+                            completed.len(),
+                            self.rx.len(),
+                            0,
+                        );
+                    }
                     return Some(completed);
                 }
                 b'\n' => {
                     #[cfg(feature = "kernel")]
-                    prompt_shadow_clear();
+                    if observe_kernel_line {
+                        prompt_shadow_clear();
+                    }
                     self.emit_newline();
                     let mut completed = HeaplessString::new();
                     core::mem::swap(&mut completed, &mut self.line);
                     #[cfg(feature = "kernel")]
-                    emit_serial_input_line_trace("line-ready", completed.len(), self.rx.len(), 0);
+                    if observe_kernel_line {
+                        emit_serial_input_line_trace(
+                            "line-ready",
+                            completed.len(),
+                            self.rx.len(),
+                            0,
+                        );
+                    }
                     return Some(completed);
                 }
                 0x08 | 0x7f => {
                     if self.line.pop().is_some() && self.driver_local.echo_enabled() {
                         #[cfg(feature = "kernel")]
-                        prompt_shadow_pop();
+                        if observe_kernel_line {
+                            prompt_shadow_pop();
+                        }
                         let _ = self.try_enqueue_tx_record(&[b"\x08 \x08"]);
                     }
                 }
@@ -1557,7 +1748,9 @@ where
                         continue;
                     }
                     #[cfg(feature = "kernel")]
-                    prompt_shadow_push(byte);
+                    if observe_kernel_line {
+                        prompt_shadow_push(byte);
+                    }
                     if self.driver_local.echo_enabled() {
                         let _ = self.try_enqueue_tx_record(&[core::slice::from_ref(&byte)]);
                     }
@@ -1571,10 +1764,24 @@ where
     ///
     /// Returns true when a partial line was present.
     pub fn clear_partial_line(&mut self) -> bool {
+        self.clear_partial_line_with_observability(true)
+    }
+
+    /// Drop a partial buffered line without touching kernel prompt state.
+    #[cfg(feature = "kernel")]
+    pub fn clear_partial_line_buffered_quiet(&mut self) -> bool {
+        self.clear_partial_line_with_observability(false)
+    }
+
+    fn clear_partial_line_with_observability(&mut self, observe_kernel_line: bool) -> bool {
+        #[cfg(not(feature = "kernel"))]
+        let _ = observe_kernel_line;
         let had_partial = !self.line.is_empty();
         self.line.clear();
         #[cfg(feature = "kernel")]
-        prompt_shadow_clear();
+        if observe_kernel_line {
+            prompt_shadow_clear();
+        }
         had_partial
     }
 
@@ -1903,12 +2110,14 @@ impl SerialTelemetryCounters {
 #[cfg(any(test, not(feature = "kernel")))]
 pub mod test_support {
     use super::*;
-    use core::cell::RefCell;
+    use core::cell::{Cell, RefCell};
 
     /// In-memory serial stub backed by heapless queues.
     pub struct LoopbackSerial<const CAP: usize = 512> {
         pub(crate) rx: RefCell<Queue<u8, CAP>>,
         pub(crate) tx: RefCell<Queue<u8, CAP>>,
+        read_calls: Cell<usize>,
+        write_calls: Cell<usize>,
     }
 
     impl<const CAP: usize> Default for LoopbackSerial<CAP> {
@@ -1923,6 +2132,8 @@ pub mod test_support {
             Self {
                 rx: RefCell::new(Queue::new()),
                 tx: RefCell::new(Queue::new()),
+                read_calls: Cell::new(0),
+                write_calls: Cell::new(0),
             }
         }
 
@@ -1943,6 +2154,17 @@ pub mod test_support {
             }
             out
         }
+
+        /// Return underlying driver read/write calls made since construction or reset.
+        pub fn io_call_counts(&self) -> (usize, usize) {
+            (self.read_calls.get(), self.write_calls.get())
+        }
+
+        /// Reset underlying driver read/write call counters.
+        pub fn reset_io_call_counts(&self) {
+            self.read_calls.set(0);
+            self.write_calls.set(0);
+        }
     }
 
     impl<const CAP: usize> ErrorType for LoopbackSerial<CAP> {
@@ -1951,11 +2173,14 @@ pub mod test_support {
 
     impl<const CAP: usize> SerialDriver for LoopbackSerial<CAP> {
         fn read_byte(&mut self) -> nb::Result<u8, Self::Error> {
+            self.read_calls.set(self.read_calls.get().saturating_add(1));
             let mut guard = self.rx.borrow_mut();
             guard.dequeue().ok_or(NbError::WouldBlock)
         }
 
         fn write_byte(&mut self, byte: u8) -> nb::Result<(), Self::Error> {
+            self.write_calls
+                .set(self.write_calls.get().saturating_add(1));
             let mut guard = self.tx.borrow_mut();
             guard.enqueue(byte).map_err(|_| NbError::WouldBlock)
         }

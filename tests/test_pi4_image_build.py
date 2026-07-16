@@ -6,6 +6,10 @@
 
 import hashlib
 import pathlib
+import shutil
+import subprocess
+
+import pytest
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -123,6 +127,55 @@ def test_pi4_image_build_skip_build_rejects_stale_selected_image() -> None:
     assert 'apps/root-task/src' in source
     assert 'apps/root-task/src/generated' in source
     assert 'apps/pi4-driver-runtime/src' in source
+
+
+def test_pi4_image_build_requires_canonical_runtime_profile_and_mkimage() -> None:
+    """Image staging must not silently reconfigure or use ambient host tools."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    validator = source[
+        source.index("validate_pi4_sel4_build()") : source.index(
+            "resolve_mkimage()"
+        )
+    ]
+
+    assert 'PI4_SEL4_PROFILE="pi4_diagnostic"' in source
+    assert 'COHESIX_SEL4_PROJECT_ROOT:PATH=' in source
+    assert '--profile "$PI4_SEL4_PROFILE"' in validator
+    assert '--require-source' in validator
+    assert '--require-artifacts' in validator
+    assert '--for-runtime' in validator
+    assert "cmake -S" not in validator
+    assert "configure_pi4_sel4_build" not in source
+    assert (
+        'local canonical="${ROOT_DIR}/out/toolchain/u-boot-tools-build/tools/mkimage"'
+        in source
+    )
+    assert "command -v mkimage" not in source
+    assert 'third_party/u-boot/tools/mkimage"' not in source
+    assert "DEFAULT_SEL4_KERNEL_SOURCE_DIR" not in source
+
+    kernel_resolver = source[
+        source.index("resolve_sel4_kernel_source_dir()") : source.index(
+            "verify_pi4_sel4_xhci_device_untyped()"
+        )
+    ]
+    assert "COHESIX_SEL4_PROJECT_ROOT:PATH=" in kernel_resolver
+    assert 'cached="${source_root}/kernel"' in kernel_resolver
+
+    domain_guard = source[
+        source.index("verify_one_domain_schedule_cache_absent()") : source.index(
+            "ensure_sel4_lib_available()"
+        )
+    ]
+    assert "forbidden KernelDomainSchedule" in domain_guard
+    assert "mktemp" not in domain_guard
+    assert "mv " not in domain_guard
+
+    skip_branch = source[source.index('if [[ "$SKIP_BUILD" -eq 0 ]]') :]
+    assert skip_branch.index("validate_pi4_sel4_build") < skip_branch.index(
+        "verify_skip_build_provenance"
+    )
 
 
 def test_pi4_image_build_defaults_to_usb_uboot_menu_input() -> None:
@@ -425,3 +478,267 @@ def test_pi4_image_build_normalizes_menu_choices_before_dispatch() -> None:
     assert "run coh_read_choice; if test" in boot_template
     root_menu = boot_template[boot_template.index("setenv coh_prompt_root") :]
     assert 'elif test "${coh_choice}" = "2"; then run coh_prompt_dhcp' in root_menu
+
+
+def test_pi4_image_build_binds_one_clean_repository_snapshot() -> None:
+    """Root compilation and metadata publication must share one clean HEAD."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "capture_exact_source_identity" in source
+    assert "status --porcelain=v1 --untracked-files=all" in source
+    assert "exact Pi image builds require a clean checkout" in source
+    assert 'EXACT_GIT_COMMIT="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"' in source
+    assert 'COHESIX_EXACT_GIT_COMMIT="$EXACT_GIT_COMMIT"' in source
+    assert "COHESIX_EXACT_SOURCE_CLEAN=1" in source
+    assert 'capture_build_repository_state' in source
+    for phase in (
+        "after root-task build",
+        "after final seL4 wrapper build",
+        "before identity metadata publication",
+        "after identity metadata publication",
+    ):
+        assert f'verify_build_repository_state "{phase}"' in source
+
+
+def test_pi4_image_build_proves_root_archive_and_v2_identity() -> None:
+    """The sealed wrapper must bind exact rootserver membership and provenance."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'embedded_root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"' in source
+    assert '--expected-root-elf "$expected_root_elf"' in source
+    assert '--expected-root-cpio "$expected_root_cpio"' in source
+    assert '--metadata "$identity_metadata"' in source
+    assert '--git-commit "$EXACT_GIT_COMMIT"' in source
+    assert "--source-tree-clean" in source
+    assert "verify-metadata" in source
+    assert '--expected-git-commit "$EXACT_GIT_COMMIT"' in source
+    assert '--expected-build-id "$EXACT_BUILD_ID"' in source
+    assert 'cmp -s "$staged_image" "$fallback_image"' in source
+    assert '"$mkimage_bin" -l "$staged_image"' in source
+    assert '"$mkimage_bin" -l "$fallback_image"' in source
+    assert "PI4_IMAGE_IDENTITY_SCHEME=cohesix-pi4-image-identity/v2" in source
+
+
+def test_pi4_image_build_publishes_metadata_after_final_image_rename() -> None:
+    """Identity-v2 metadata must record the final public image path."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    seal_start = source.index("seal_staged_pi4_image() {")
+    seal_end = source.index("\nfind_aarch64_strip() {", seal_start)
+    seal_body = source[seal_start:seal_end]
+
+    seal_call = 'pi4_image_identity.py" seal'
+    rename = 'mv -f "$unsealed_image" "$staged_image"'
+    publish = 'pi4_image_identity.py" verify'
+    assert seal_body.index(seal_call) < seal_body.index(rename)
+    assert seal_body.index(rename) < seal_body.index(publish)
+    pre_rename = seal_body[seal_body.index(seal_call) : seal_body.index(rename)]
+    assert '--metadata "$identity_metadata"' not in pre_rename
+
+
+def test_pi4_image_build_rechecks_identity_after_proof_publication() -> None:
+    """No late staging operation can escape final image and fallback checks."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    stage_start = source.index("stage_sd_payload() {")
+    stage_end = source.index("\nflash_sd_card() {", stage_start)
+    stage_body = source[stage_start:stage_end]
+
+    assert stage_body.index("write_pi4_runtime_dma_build_proof") < stage_body.index(
+        'verify_final_staged_pi4_image "$mkimage_bin"'
+    )
+    assert "after final staged-image verification" in source
+
+
+def _copy_sourceable_build_script(tmp_path: pathlib.Path) -> pathlib.Path:
+    """Create a minimal repository containing a sourceable build wrapper."""
+
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    copied = scripts / SCRIPT_PATH.name
+    shutil.copy2(SCRIPT_PATH, copied)
+    (tmp_path / "tracked.txt").write_text("alpha\n", encoding="utf-8")
+    subprocess.run(("git", "init", "-q"), cwd=tmp_path, check=True)
+    subprocess.run(
+        ("git", "config", "user.email", "tests@example.invalid"),
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ("git", "config", "user.name", "Cohesix tests"),
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(("git", "add", "."), cwd=tmp_path, check=True)
+    subprocess.run(
+        ("git", "commit", "-q", "-m", "fixture"), cwd=tmp_path, check=True
+    )
+    return copied
+
+
+def _source_function(script: pathlib.Path, command: str) -> subprocess.CompletedProcess[str]:
+    """Source a copied wrapper and execute one function without running main."""
+
+    return subprocess.run(
+        ("bash", "-c", 'source "$1"; eval "$2"', "build-test", str(script), command),
+        cwd=script.parent.parent,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_repository_state_digest_binds_tracked_and_untracked_contents(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Equal status paths with different bytes cannot share one build snapshot."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    initial = _source_function(script, "repository_state_digest")
+    assert initial.returncode == 0, initial.stderr
+
+    (tmp_path / "tracked.txt").write_text("bravo\n", encoding="utf-8")
+    tracked_first = _source_function(script, "repository_state_digest")
+    (tmp_path / "tracked.txt").write_text("delta\n", encoding="utf-8")
+    tracked_second = _source_function(script, "repository_state_digest")
+    assert tracked_first.stdout.strip() != tracked_second.stdout.strip()
+
+    (tmp_path / "untracked.txt").write_text("first\n", encoding="utf-8")
+    untracked_first = _source_function(script, "repository_state_digest")
+    (tmp_path / "untracked.txt").write_text("other\n", encoding="utf-8")
+    untracked_second = _source_function(script, "repository_state_digest")
+    assert untracked_first.stdout.strip() != untracked_second.stdout.strip()
+
+
+@pytest.mark.parametrize(
+    "image_name",
+    [
+        "nested/image",
+        ".",
+        "..",
+        "sel4test-driver-image-arm-bcm2711",
+        "pi4-image-identity.json",
+        "config.txt",
+        "Config.txt",
+        "u-boot.bin",
+        "boot.scr.uimg",
+        "BOOT.SCR.UIMG",
+        "start4.elf",
+        "cohesix.env",
+        "PI4-IMAGE-IDENTITY.JSON",
+        "image.bin.",
+    ],
+)
+def test_image_name_aliases_fail_before_stage_deletion(
+    tmp_path: pathlib.Path,
+    image_name: str,
+) -> None:
+    """Unsafe or aliased output names are rejected before any stage write."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    result = _source_function(
+        script,
+        f'COHESIX_IMAGE_NAME={image_name!r}; STAGE_DIR="$ROOT_DIR/out"; validate_output_paths',
+    )
+
+    assert result.returncode != 0
+    assert "--image-name" in result.stderr
+
+
+def test_stage_dir_cannot_delete_tracked_checkout_subtrees(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The unconditional staging cleanup is confined to the checkout's out tree."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    result = _source_function(
+        script,
+        'COHESIX_IMAGE_NAME=image.bin; STAGE_DIR="$ROOT_DIR/apps"; validate_output_paths',
+    )
+
+    assert result.returncode != 0
+    assert "strictly under" in result.stderr
+
+
+def test_skip_build_requires_exact_manifest_feature_and_profile_provenance() -> None:
+    """Reused wrappers cannot be relabelled from a self-consistent wrong build."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "write_sel4_image_provenance" in source
+    assert "verify_skip_build_provenance" in source
+    skip_branch = source[source.index('if [[ "$SKIP_BUILD" -eq 0 ]]') :]
+    assert skip_branch.index("verify_skip_build_provenance") < skip_branch.index(
+        "run_coh_rtc_codegen"
+    )
+    assert skip_branch.index("run_coh_rtc_codegen") < skip_branch.index(
+        "capture_build_repository_state"
+    )
+    for field in (
+        "source_manifest_sha256",
+        "root_task_features",
+        "sel4_cmake_cache_sha256",
+        "sel4_timer_header_sha256",
+        "wrapper_sha256",
+        "rootserver_sha256",
+        "rootserver_cpio_sha256",
+    ):
+        assert field in source
+
+
+@pytest.mark.parametrize(
+    "tampered_relative_path",
+    [
+        "sel4-build/images/sel4test-driver-image-arm-bcm2711",
+        "sel4-build/elfloader/rootserver",
+        "sel4-build/elfloader/archive.archive.o.cpio",
+        "manifest.toml",
+        "sel4-build/CMakeCache.txt",
+        "sel4-build/kernel/gen_headers/plat/platform_gen.h",
+    ],
+)
+def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
+    tmp_path: pathlib.Path,
+    tampered_relative_path: str,
+) -> None:
+    """Every source, profile, root, archive, and wrapper digest is enforced."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    artifacts = {
+        "sel4-build/images/sel4test-driver-image-arm-bcm2711": b"wrapper\n",
+        "sel4-build/elfloader/rootserver": b"rootserver\n",
+        "sel4-build/elfloader/archive.archive.o.cpio": b"cpio\n",
+        "manifest.toml": b"manifest\n",
+        "sel4-build/CMakeCache.txt": b"cache\n",
+        "sel4-build/kernel/gen_headers/plat/platform_gen.h": b"timer\n",
+    }
+    for relative_path, payload in artifacts.items():
+        path = tmp_path / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+
+    shell_state = (
+        'SEL4_BUILD_DIR="$ROOT_DIR/sel4-build"; '
+        'SEL4_UPSTREAM_IMAGE_NAME="sel4test-driver-image-arm-bcm2711"; '
+        'MANIFEST_PATH="$ROOT_DIR/manifest.toml"; '
+        f'EXACT_GIT_COMMIT={"a" * 40!r}; '
+        "EXACT_BUILD_TIMESTAMP='2026-07-16T00:00:00Z'; "
+        "ROOT_TASK_FEATURES='release-pi4,bootstrap-trace'; "
+    )
+    published = _source_function(
+        script,
+        f"{shell_state} write_sel4_image_provenance; verify_skip_build_provenance",
+    )
+    assert published.returncode == 0, published.stderr
+
+    tampered = tmp_path / tampered_relative_path
+    tampered.write_bytes(tampered.read_bytes() + b"tamper\n")
+    verified = _source_function(
+        script,
+        f"{shell_state} verify_skip_build_provenance",
+    )
+
+    assert verified.returncode != 0
+    assert "provenance does not match" in verified.stderr

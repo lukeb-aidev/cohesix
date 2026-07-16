@@ -69,21 +69,21 @@ const OUT_DIR_INCLUDE_CONTRACTS: [(&str, &str, &str, &str, &str); 5] = [
         "apps/root-task/src/lib.rs",
         "built_info.rs",
         "apps/root-task/build.rs",
-        "25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c",
+        "f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
         "apps/root-task/src/hal/pi4_wifi.rs",
         "pi4_wifi_firmware.rs",
         "apps/root-task/build.rs",
-        "25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c",
+        "f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
         "apps/root-task/src/hal/driver_task.rs",
         "pi4_driver_runtime_payload.rs",
         "apps/root-task/build.rs",
-        "25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c",
+        "f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
 ];
@@ -95,7 +95,7 @@ const BUILD_SCRIPT_CONTRACTS: [(&str, &str, &str); 4] = [
     ),
     (
         "apps/root-task/build.rs",
-        "25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c",
+        "f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
@@ -111,7 +111,7 @@ const BUILD_SCRIPT_CONTRACTS: [(&str, &str, &str); 4] = [
 ];
 const BUILD_SCRIPT_INPUT_CONTRACTS: [(&str, &str, &str); 1] = [(
     "apps/root-task/build_support.rs",
-    "ce5f4df7aea162b6b9d5371c03012bc3f18cc638f5d1393f2f294e05c922d2b7",
+    "4bee303fb82ba4412c68c47d1674edc790ed978dab086176aed0a9eba00c9134",
     "60908d93a4131cdb388fdd5d1d857abdf00e66d1ede30be26ab40c4755fbde6b",
 )];
 const CURRENT_ONLY_BUILD_TOOL_CONTRACTS: [(&str, &str); 2] = [

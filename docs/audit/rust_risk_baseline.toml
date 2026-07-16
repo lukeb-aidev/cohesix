@@ -47,18 +47,18 @@ external_non_rust_trees = ["crates/sel4-sys/upstream"]
 out_dir_generator_contracts = [
   "crates/sel4-sys/src/lib.rs:bindings.rs:crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
   "crates/sel4-sys/src/lib.rs:sel4_config_consts.rs:crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
-  "apps/root-task/src/lib.rs:built_info.rs:apps/root-task/build.rs:25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/root-task/src/hal/pi4_wifi.rs:pi4_wifi_firmware.rs:apps/root-task/build.rs:25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/root-task/src/hal/driver_task.rs:pi4_driver_runtime_payload.rs:apps/root-task/build.rs:25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/lib.rs:built_info.rs:apps/root-task/build.rs:f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/pi4_wifi.rs:pi4_wifi_firmware.rs:apps/root-task/build.rs:f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/driver_task.rs:pi4_driver_runtime_payload.rs:apps/root-task/build.rs:f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
 ]
 build_script_contracts = [
   "apps/pi4-driver-runtime/build.rs:f424066cecefb6ec3c2a974f47bde52785451b77d48ab0dd31fefc46ac8afec9:aa98e6fd87c6a6a72ccc01ff5332d068dc42cb30e6d95c0147ed27d7180a7975",
-  "apps/root-task/build.rs:25b33cbcc1bd13736b5a399624687091587bd151d84691a5ce3ca87ab771ef6c:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/build.rs:f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
   "apps/swarmui/build.rs:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a",
   "crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
 ]
 build_script_input_contracts = [
-  "apps/root-task/build_support.rs:ce5f4df7aea162b6b9d5371c03012bc3f18cc638f5d1393f2f294e05c922d2b7:60908d93a4131cdb388fdd5d1d857abdf00e66d1ede30be26ab40c4755fbde6b",
+  "apps/root-task/build_support.rs:4bee303fb82ba4412c68c47d1674edc790ed978dab086176aed0a9eba00c9134:60908d93a4131cdb388fdd5d1d857abdf00e66d1ede30be26ab40c4755fbde6b",
 ]
 current_only_build_tool_contracts = [
   "crates/cargo-build-directive/Cargo.toml:b3e346271ee20abb30f92811adcc0c3eb63fce5aeef5edf88cb4bb06a5529fd4:absent@cf8f9ee30",

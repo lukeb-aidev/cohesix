@@ -168,7 +168,7 @@ Artifacts and identity:
   and 2,542,080-byte rootfs CPIO
   `275cc3a5a5de327170c42de99e9eac2c6812c27884e291a03f0cb4fbcf4b8101`.
   The runtime manifest reports
-  `763ef148ed19f1250afdcc2e99611be1668369c6b7c375593af99e3420716f41`.
+  `376f09a49cdb37c07ae8ef007d4d4c715df4b4f949d4d6c1546002108d495599`.
 - Final status-read companion:
   `out/bench/m26d-gicv3-final-read-status_20260715T223511Z.perf-summary.json`
   (5 runs, 108 cache hits, 12 misses, no pool exhaustion, checkout retry, or

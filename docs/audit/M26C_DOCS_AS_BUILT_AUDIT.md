@@ -4,7 +4,7 @@
 
 # M26C Docs-As-Built Audit
 
-Status: `COMPLETE / README-LINKED-SUITE-REMEDIATED / AS-BUILT-ALIGNED`
+Status: `WORKER-CLAIMS-REOPENED / OTHER-26C-EVIDENCE-RETAINED`
 
 ## Audited Inputs
 
@@ -39,10 +39,10 @@ Status: `COMPLETE / README-LINKED-SUITE-REMEDIATED / AS-BUILT-ALIGNED`
 | Reopened 26b DPC status | Aligned-current | Reciprocal notification/IRQ topology, the bounded DPC ring, and isolated-runtime service are implemented; repeated current-image Wi-Fi functional proof remains open. | `docs/BUILD_PLAN.md`; `docs/DRIVERS.md`; Pi manifest and driver-runtime source |
 | Pi DMA protection profile | Aligned-compiler | `coh-rtc` now owns `dma.protection_profile`; virt resolves to `none`, Pi-family manifests resolve to `bounded-no-iommu`, and SMMU profiles are rejected until generated DMA-domain state exists. | `cargo test -p coh-rtc --lib dma`; `scripts/check-generated.sh` |
 | Runtime/DMA proof states | Aligned-Pi | Pi 4 proof states are machine-checkable: the image build writes target-build provenance, the normalizer classifies absent/diagnostic/qemu-or-stale/fresh-pi states, the gate wrapper writes the live proof bundle, and Pi Stage 05 requires `PI4_RUNTIME_DMA_PROOF=fresh-pi` with `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`. Final board closure uses `out/test-plan/m26c-pi4-live/pi4-runtime-dma-proof-genet-latest.env` and does not count QEMU or stage-only image builds as live board proof. | `scripts/pi4-image-build.sh`; `scripts/pi4_trace_normalize.py`; `scripts/pi4_gate_proof.sh`; `scripts/ci/test_plan_run.sh`; `out/audit/gate/20260629T061204Z` |
-| Worker implementation | Aligned-QEMU | VM worker-heart/gpu/lora now use bounded no_std loop primitives for heartbeat, receipt, lifecycle, revoke, lease, and pressure handling; GPU and LoRA remain control-plane receipt workers only. | `cargo test -p worker-heart -p worker-gpu -p worker-lora`; `cargo check -p worker-heart -p worker-gpu -p worker-lora --target aarch64-unknown-none` |
-| Cap-backed worker tickets | Aligned-QEMU | Generated worker endpoint badge classes are required for implemented roles, root-task rejects metadata-only authority, and stale/wrong action/role/epoch badges fail tests. | `cargo test -p root-task --test worker_authority`; `cargo test -p coh-rtc worker_runtime` |
-| Notification lifecycle | Aligned-QEMU | Generated notification badge classes exist for revoke, shutdown, lease-expiry, telemetry-pressure, and IRQ; worker loops handle notification events and root-task verifies event-specific badges. This does not claim future full cap-bundle notification isolation. | `cargo test -p worker-heart -p worker-gpu -p worker-lora`; `cargo test -p root-task --test worker_authority` |
-| MCS scheduling evidence | Aligned-QEMU | Generated scheduling evidence records QEMU/non-MCS priority, domain, and bounded service-turn fallback, and validation rejects MCS budget/timeout/consumed-budget claims on non-MCS profiles. | `cargo test -p coh-rtc worker_runtime`; `cargo test -p root-task --test worker_authority` |
+| Worker implementation | Reopened / model-only | Worker crates contain bounded no_std helper loops, but current profiles mark every role non-executable and root-task does not load or resume a Worker TCB. | Source/image-loading audit; `cargo test -p worker-heart -p worker-gpu -p worker-lora` characterizes helpers only. |
+| Cap-backed worker tickets | Corrected-disabled | Tickets authorize application sessions. Current profiles disable Worker endpoint caps; reserved badge classes are not installed seL4 authority. | `cargo test -p root-task --test worker_authority`; `cargo test -p coh-rtc worker_runtime` |
+| Notification lifecycle | Corrected-disabled | Current profiles disable Worker lifecycle notifications. Helper event tests do not prove a notification object, cap delivery, or target handling. | `cargo test -p root-task --test worker_authority`; generated manifest truth |
+| MCS scheduling evidence | Metadata-only | The generated non-MCS scheduling record rejects false MCS fields, but no Worker TCB exists on which to apply its priority, affinity, or service policy. | `cargo test -p coh-rtc worker_runtime`; `cargo test -p root-task --test worker_authority` |
 
 ## README-Linked Suite Remediation (2026-07-15)
 
@@ -75,9 +75,10 @@ than being copied through the suite.
 
 ## Required Follow-Up
 
-1. Keep full cap-bundle notification authority out of 26c QEMU and Pi claims; current
-   closure is generated badge classes, root-task verification, and no_std
-   worker-loop handling.
+1. Keep all live Worker execution, endpoint-cap, notification, fault, and
+   applied scheduling claims open until separately loaded Worker tasks produce
+   QEMU and Pi target evidence. Helper-loop and generated-record tests are
+   model evidence only.
 2. Re-run `cargo run -p coh-rtc`, `scripts/check-generated.sh`, and
    `scripts/ci/check_test_plan.sh` after generated truth changes.
 

@@ -143,10 +143,8 @@ fn log_window(tag: &str, window: &CSpaceWindow) {
 pub fn debug_identify_cap(label: &str, cap: sys::seL4_CPtr) {
     #[cfg(all(feature = "kernel", target_os = "none"))]
     {
-        unsafe {
-            let ty = sys::seL4_CapIdentify(cap);
-            ::log::info!("[capid] {label} cap=0x{cap:04x} ty_raw=0x{ty:x}");
-        }
+        let ty = sel4::debug_cap_identify(cap);
+        ::log::info!("[capid] {label} cap=0x{cap:04x} ty_raw=0x{ty:x}");
     }
 
     #[cfg(not(all(feature = "kernel", target_os = "none")))]
@@ -175,7 +173,7 @@ pub fn dump_init_cnode_slots(range: Range<usize>) {
             format_args!("slot=0x{slot:04x}", slot = guarded_cap),
         );
         sel4_guard::uart_breadcrumb(guard_stage, "seL4_CapIdentify", breadcrumb.as_str());
-        let ty = unsafe { sys::seL4_CapIdentify(guarded_cap) };
+        let ty = sel4::debug_cap_identify(guarded_cap);
         ::log::info!(
             "[cnode.slot] slot=0x{slot:04x} type=0x{ty:08x}",
             slot = guarded_cap
@@ -666,11 +664,9 @@ fn cnode_mint_with_style(
     let depth_word = path_depth_word(bi);
 
     #[cfg(target_os = "none")]
-    // SAFETY: Debug capability identification queries kernel metadata for
-    // existing CPtrs and does not dereference user memory.
-    unsafe {
-        let dst_ty = sys::seL4_DebugCapIdentify(dst_root);
-        let src_ty = sys::seL4_DebugCapIdentify(src_root);
+    {
+        let dst_ty = sel4::debug_cap_identify(dst_root);
+        let src_ty = sel4::debug_cap_identify(src_root);
         debug_log(format_args!(
             "[cnode.capid] dst_root=0x{dst_root:04x} ty=0x{dst_ty:08x} src_root=0x{src_root:04x} ty=0x{src_ty:08x}",
         ));
@@ -1411,9 +1407,13 @@ pub fn verify_root_cnode_slot(
         return Err(sys::seL4_InvalidCapability);
     }
 
-    #[cfg(all(feature = "bootstrap-debug", target_os = "none"))]
+    #[cfg(all(
+        feature = "bootstrap-debug",
+        target_os = "none",
+        sel4_config_debug_build
+    ))]
     {
-        let root_ident = unsafe { sys::seL4_DebugCapIdentify(root_cnode()) };
+        let root_ident = sel4::debug_cap_identify(root_cnode());
         if root_ident == 0 {
             ::log::error!("[verify_root_cnode_slot] init CNode ident empty; refusing probe");
             return Err(sys::seL4_InvalidCapability);
@@ -1451,10 +1451,10 @@ pub fn preflight_init_cnode_writable(probe_slot: sys::seL4_CPtr) -> Result<(), P
     let capacity = 1usize << (bits as usize);
     debug_assert!((probe_slot as usize) < capacity);
 
-    #[cfg(all(debug_assertions, feature = "sel4-debug"))]
-    unsafe {
+    #[cfg(all(debug_assertions, feature = "sel4-debug", sel4_config_debug_build))]
+    {
         let root = bi_init_cnode_cptr();
-        let ty = sys::seL4_DebugCapIdentify(root);
+        let ty = sel4::debug_cap_identify(root);
         debug_assert_eq!(
             ty, seL4_CapTableObject as u32,
             "preflight: root 0x{root:x} is not a CNode (ty={ty})",
@@ -2188,11 +2188,9 @@ pub fn retype_into_root(
     #[cfg(target_os = "none")]
     let depth_bits = bits_as_u8(depth as usize);
 
-    #[cfg(all(target_os = "none", debug_assertions))]
+    #[cfg(all(target_os = "none", debug_assertions, sel4_config_debug_build))]
     {
-        // SAFETY: Debug capability identification queries kernel metadata for
-        // the known init CNode cap and does not dereference user memory.
-        let ident = unsafe { sys::seL4_DebugCapIdentify(root) };
+        let ident = sel4::debug_cap_identify(root);
         debug_log(format_args!(
             "[debug] Identify(root CNode) = {}",
             ident as u64

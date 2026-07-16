@@ -14,7 +14,7 @@ remain deferred outside 26c until their own characterization evidence exists.
 | --- | --- | --- | --- | --- | --- |
 | Markdown/Mermaid inventory tooling | Low-risk audit tooling | docs-owner | Inventory must match `git ls-files '*.md'`; active Mermaid checker must not scan ignored outputs. | `M26C_MARKDOWN_INVENTORY.*`, `M26C_MERMAID_INVENTORY.csv` | Implemented |
 | Target-qualified runner | Enabling gate | runner-owner | Existing QEMU defaults, no Pi/QEMU evidence blending, no incomplete markers in PASS. | `M26C_TARGET_RUNNER_BASELINE.md` | Implemented-contract |
-| QEMU worker-runtime cleanup | Low-risk cleanup | worker-owner | No protocol/grammar drift; worker loops stay bounded no_std; GPU/LoRA remain receipt-only. | Worker tests, root-task authority test, QEMU no_std tree | Implemented |
+| QEMU Worker helper cleanup | Low-risk cleanup | worker-owner | No protocol/grammar drift; helper loops stay bounded no_std; GPU/LoRA remain receipt-only; no live Worker task is claimed. | Worker helper tests and QEMU no_std build tree; target image load/resume remains reopened | Implemented-model-only |
 | AI-fingerprint cleanup | Low-risk cleanup | docs-owner | No generated/release/vendored hand edits; no behavior or grammar drift. | Post-behavior baseline plus AI audit | QEMU-touched closed / broader deferred |
 | Host tool structural cleanup | Characterization-first refactor | host-tools-owner | ACK/ERR/END, REST/TCP/FUSE behavior, ticket schemas, request auth. | Host tests and post-behavior baseline | Deferred |
 | Root-task runtime decomposition | Boundary-sensitive refactor | root-task-owner | Console grammar, `/proc` shapes, Secure9P semantics, append-only logs, no-std closure. | NineDoor parity and no-std trees | Deferred |

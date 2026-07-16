@@ -6,6 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HOST_OS="$(uname -s 2>/dev/null || true)"
 
 log() {
@@ -55,7 +56,7 @@ KERNEL=""
 ROOT_TASK=""
 OUT_DIR="out"
 QEMU_BIN="qemu-system-aarch64"
-SEL4_BUILD_DIR="${SEL4_BUILD:-$HOME/seL4/build}"
+SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production}}"
 DTB_OVERRIDE=""
 DEFAULT_TCP_PORT=31337
 TCP_PORT=""

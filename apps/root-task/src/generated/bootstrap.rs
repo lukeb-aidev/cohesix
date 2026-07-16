@@ -31,7 +31,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "eaaa999db798a49da686c9c2ea37d3ec43827c83eb2a76cf61263d843e36f5d0";
+    "c6bda9a692e53e0839845688f092f3c6f1d241a5b98448b37fe25f6d0e2ddb4f";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -100,19 +100,19 @@ pub const DMA_CONFIG: DmaConfig = DmaConfig {
 pub const WORKER_RUNTIME_ROLES: [WorkerRoleRuntime; 4] = [
     WorkerRoleRuntime {
         role: Role::WorkerHeartbeat,
-        implemented: true,
+        implemented: false,
         ticket_scope: "/worker",
         telemetry_path_template: "/shard/<label>/worker/<id>/telemetry",
         lease_path_template: "",
-        shutdown_policy: "notification",
+        shutdown_policy: "deferred",
     },
     WorkerRoleRuntime {
         role: Role::WorkerGpu,
-        implemented: true,
+        implemented: false,
         ticket_scope: "/gpu",
         telemetry_path_template: "/shard/<label>/worker/<id>/telemetry",
         lease_path_template: "/gpu/<id>/lease",
-        shutdown_policy: "notification",
+        shutdown_policy: "deferred",
     },
     WorkerRoleRuntime {
         role: Role::WorkerBus,
@@ -124,11 +124,11 @@ pub const WORKER_RUNTIME_ROLES: [WorkerRoleRuntime; 4] = [
     },
     WorkerRoleRuntime {
         role: Role::WorkerLora,
-        implemented: true,
+        implemented: false,
         ticket_scope: "/worker",
         telemetry_path_template: "/shard/<label>/worker/<id>/telemetry",
         lease_path_template: "",
-        shutdown_policy: "notification",
+        shutdown_policy: "deferred",
     },
 ];
 
@@ -136,11 +136,11 @@ pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {
     implementation_epoch: 26,
     max_workers: 8,
     ticket_subject_required: true,
-    cap_backed_authority: true,
-    notification_lifecycle: true,
+    cap_backed_authority: false,
+    notification_lifecycle: false,
     roles: &WORKER_RUNTIME_ROLES,
     endpoint_caps: WorkerEndpointCapConfig {
-        required: true,
+        required: false,
         attach_badge_base: 638324736,
         telemetry_badge_base: 638328832,
         lease_badge_base: 638332928,
@@ -150,7 +150,7 @@ pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {
         role_bits: 4,
     },
     notifications: WorkerNotificationConfig {
-        enabled: true,
+        enabled: false,
         revoke_badge: 638345216,
         shutdown_badge: 638349312,
         lease_expiry_badge: 638353408,
@@ -750,7 +750,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.6",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=763ef148ed19f1250afdcc2e99611be1668369c6b7c375593af99e3420716f41",
+    "manifest.sha256=376f09a49cdb37c07ae8ef007d4d4c715df4b4f949d4d6c1546002108d495599",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -771,8 +771,8 @@ pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.cache.unify_instructions=false",
     "manifest.dma.protection_profile=none",
     "manifest.worker_runtime.implementation_epoch=26",
-    "manifest.worker_runtime.cap_backed_authority=true",
-    "manifest.worker_runtime.notification_lifecycle=true",
+    "manifest.worker_runtime.cap_backed_authority=false",
+    "manifest.worker_runtime.notification_lifecycle=false",
     "manifest.worker_runtime.scheduling.profile=non-mcs",
     "manifest.worker_runtime.scheduling.service_turn_budget=64",
     "manifest.features.net_console=true",

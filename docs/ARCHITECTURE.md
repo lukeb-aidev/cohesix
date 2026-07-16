@@ -48,7 +48,6 @@ The target trusted computing base contains:
 
 - the selected upstream seL4 kernel build;
 - the Rust root task and compiler-generated policy tables;
-- manifest-declared worker images selected by the profile; and
 - manifest-declared physical-driver runtime images plus their fixed ABI.
 
 The target does not contain CUDA, NVML, container runtimes, a POSIX emulation
@@ -63,16 +62,18 @@ only permitted in-target TCP listener is the authenticated root-task console.
 | Upstream seL4 | Target kernel | Capability enforcement, address spaces, scheduling, notifications, interrupts, and kernel-generated platform truth. |
 | `root-task` | Target, `no_std` | Bootstraps CSpace/VSpaces, admits resources through HAL, runs the bounded event pump, owns operator consoles, validates tickets, and projects the in-target namespace through `NineDoorBridge`. |
 | `pi4-driver-*` | Pi 4 target, `no_std` child images | Own steady-state physical-device service behind HAL-admitted resources and the pointer-free driver-task ABI. |
-| Worker images | Target, `no_std` where selected | Execute profile-declared worker roles and interact through generated capabilities, notifications, tickets, and namespace files. |
+| Worker role/session model | Root-task and host test surfaces | Enforces ticket, namespace, lifecycle, telemetry, and lease semantics. Current selected profiles do not launch Worker child tasks. |
 | Host NineDoor | Host, `std` | Implements the Secure9P server used by host builds and in-process tests. It is not the in-target console server. |
 | `cohsh`, `coh`, `swarmui`, gateway and bridges | Host | Project documented console or Secure9P semantics; they do not create a new authority path. |
 | `coh-rtc` | Build host | Validates manifest IR and generates Rust tables, resolved manifests, policy defaults, scripts, and documentation snippets. |
 
-The default and Pi 4 manifests currently mark `worker-heartbeat`, `worker-gpu`,
-and `worker-lora` as implemented target worker roles. `worker-bus` is a
-recognized ticket/namespace role but is not an implemented target worker role
-in those profiles. See [ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md) for
-the support matrix.
+The checked-in profiles retain records for `worker-heartbeat`, `worker-gpu`,
+`worker-bus`, and `worker-lora`, but mark every target Worker role
+`implemented = false`. Endpoint-cap and lifecycle-notification requirements are
+also disabled. The role records, reserved badge ranges, Worker crates, and
+packaged build artifacts are model and interface scaffolding; none proves that
+root-task loaded or resumed a Worker TCB. See
+[ROLES_AND_SCHEDULING.md](ROLES_AND_SCHEDULING.md) for the support matrix.
 
 ### 2.2 System boundary
 
@@ -96,14 +97,14 @@ flowchart LR
     Tcp[TCP console]
     EventPump[Root-task event pump]
     Bridge[NineDoorBridge namespace adapter]
-    Workers[Implemented worker tasks]
+    WorkerModel[Root-owned Worker session and telemetry model]
     Hal[HAL admission and driver clients]
     Drivers[Isolated physical-driver runtimes]
 
     Serial -->|console lines| EventPump
     Tcp -->|authenticated framed console lines| EventPump
     EventPump --> Bridge
-    EventPump --> Workers
+    EventPump --> WorkerModel
     EventPump --> Hal
     Hal -->|bounded ABI service turns| Drivers
   end
@@ -123,8 +124,8 @@ state. There is no in-target 9P-over-TCP listener.
 ### 3.1 Root-task authority
 
 The root task is the target authority process. It constructs seL4 objects,
-validates generated descriptors, creates child address spaces, installs
-capabilities, and schedules bounded service work. It may retain emergency
+validates generated descriptors, creates admitted physical-driver child address
+spaces, installs their capabilities, and schedules bounded service work. It may retain emergency
 serial diagnostics, but it must not become the steady-state owner of a physical
 device that the selected manifest assigns to an isolated driver runtime.
 
@@ -135,29 +136,35 @@ the console implementation.
 
 ### 3.2 Task isolation
 
-Root-task, each selected worker image, and each physical-driver runtime execute
-as separate seL4 tasks with task-local address spaces and capability spaces.
-Root-task constructs those tasks and delegates only the generated endpoint,
-notification, frame, and shared-ring capabilities required by their manifest
-records. A child therefore has no ambient access to another task's memory or
-devices: communication crosses an explicit capability or a HAL-admitted shared
-page, and revocation can remove that authority without creating an undocumented
-in-process call path. This is capability isolation, not a claim that every
-device is protected from malicious DMA; the selected DMA protection profile
-and target evidence qualify that separate guarantee.
+Current manifest-declared physical-driver runtimes execute as separate seL4
+tasks with task-local address spaces and capability spaces. Root-task creates
+those children and delegates only the endpoint, notification, frame, and
+shared-ring capabilities admitted for their driver records. The event pump,
+console transports, target namespace adapter, tickets, lifecycle state, and
+Worker session/model logic remain in the single root-task process.
+
+No checked-in profile currently loads or resumes a Worker child TCB, CSpace, or
+VSpace. Worker source crates and generated role records therefore do not add a
+separate task-isolation boundary. Driver-task isolation is capability isolation,
+not a claim that every device is protected from malicious DMA; the selected DMA
+protection profile and target evidence qualify that separate guarantee.
 
 ### 3.3 Workers
 
 Queen is the orchestration authority exposed through the root-task and
-NineDoor control surfaces; it is not a separate host RPC service. Target worker
-authority is profile-generated. The current profiles require cap-backed worker
-endpoint badges and notification-backed lifecycle events, and select a
-profile-qualified scheduling record. Exact values come from the selected
-manifest rather than this overview.
+NineDoor control surfaces; it is not a separate host RPC service. Current
+profiles expose Worker role, ticket, namespace, telemetry, lease, and scheduling
+records as control-plane model state only. They mark every target Worker role
+non-executable, disable cap-backed endpoint authority, and disable
+notification-backed lifecycle delivery. Reserved badge values and a non-MCS
+scheduling record remain compiler-owned schema data, not installed caps or
+applied Worker scheduling evidence.
 
-Workers coordinate through scoped namespace files and generated events. They
-do not receive implicit access to root-task memory, physical devices, or host
-services. GPU workers consume lease and telemetry files; CUDA and NVML remain
+Worker-role sessions coordinate through scoped namespace files and bounded
+model events. A valid Worker ticket authorizes that application-layer view; it
+does not create a Worker TCB or seL4 invocation authority. Any future executable
+Worker must receive explicit capabilities and must not gain implicit access to
+root-task memory, physical devices, or host services. CUDA and NVML remain
 outside the target.
 
 ### 3.4 Physical drivers
@@ -222,9 +229,9 @@ as-built boot and recovery procedures live in
 
 An authorized Queen operation appends a bounded control record. Root-task or
 host NineDoor validates the role, ticket, lifecycle gate, and generated limits.
-For implemented target workers, root-task also requires the generated endpoint
-authority and lifecycle notification contract. Worker telemetry is appended to
-the canonical sharded path:
+In current profiles the operation updates root-owned or host model state; it
+does not load or resume a Worker task. Authorized sessions and model helpers
+append Worker telemetry to the canonical sharded path:
 
 `/shard/<label>/worker/<id>/telemetry`
 
@@ -236,9 +243,10 @@ manifest enables it. Exact role views and scheduling semantics are in
 
 Host `gpu-bridge-host` owns hardware discovery and CUDA/NVML interaction. It
 publishes bounded GPU namespace state through the documented bridge surface.
-Target GPU workers consume lease, status, and telemetry files. Host NineDoor
-simulation may additionally expose a job node; that host-only surface is not a
-live target claim. Model and GPU schema details are in
+GPU-role policy and model records consume lease, status, and telemetry files.
+Current profiles do not launch a target GPU Worker. Host NineDoor simulation
+may additionally expose a job node; that host-only surface is not a live target
+claim. Model and GPU schema details are in
 [GPU_NODES.md](GPU_NODES.md).
 
 ### 6.3 Observability

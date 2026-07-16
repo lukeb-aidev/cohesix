@@ -34,7 +34,7 @@ Examples here are therefore conditional on the selected profile.
 | --- | --- |
 | Operator control | Authenticated console grammar projected by `cohsh`, `coh`, the REST gateway, and other host tools. There is no independent in-VM 9P/TCP listener. |
 | Authority | Role-scoped tickets, manifest-defined namespaces, bounded file operations, and explicit policy gates. |
-| Orchestration | Queen control files plus profile-declared worker roles and telemetry paths. The default profile implements heartbeat, GPU, and AI LoRA lifecycle-receipt roles; it declares `worker-bus` with `implemented=false`. Another profile may differ. |
+| Orchestration | Queen control files plus profile-declared Worker model/session roles and telemetry paths. The default profile declares heartbeat, GPU, bus, and AI LoRA records with `implemented=false`; these records do not launch target Worker tasks. |
 | Observability | Bounded `/proc`, `/log`, worker telemetry, driver counters, and host-projected status. Retention and durability depend on the selected profile and host integration. |
 | Host integration | REST, Python, GPU inventory, model-registry descriptors, and host-side adapters project existing Cohesix semantics; they do not create new VM authority. |
 | Heavy runtimes | CUDA, NVML, Kubernetes, systemd, Docker, model training, field protocols, and application data planes remain outside the VM trusted computing base. |
@@ -44,7 +44,7 @@ flowchart LR
   Operator["Operator or automation"] --> Tools["Host tools and approved adapters"]
   Tools -->|"authenticated console semantics"| Root["root-task\npolicy and HAL admission"]
   Root --> Namespace["manifest-defined namespace\n/queen /proc /log /shard /gpu /host"]
-  Namespace --> Workers["profile-declared workers\ncontrol and telemetry"]
+  Namespace --> Workers["profile-declared Worker model/session views\ncontrol and telemetry"]
   External["External systems\nGPU stacks, registries, OT, cloud"] --> Adapters["Host-side adapters"]
   Adapters -->|"bounded publish or ticket"| Tools
   Namespace -->|"bounded evidence"| Tools
@@ -60,6 +60,8 @@ The Queen and Workers are control-plane roles, not language models running
 inside the VM. Models and agent frameworks stay on a host and can propose
 intent; a Queen-scoped client submits an allowed bounded operation, while
 specialized Workers contribute scoped telemetry, lease state, or receipts.
+In current profiles those Worker roles are root-owned model/session views, not
+loaded child tasks.
 
 ### 1. The Agent Action Airlock
 
@@ -172,14 +174,16 @@ the authority and result inspectable.
 
 ### 5. The Private LoRA Foundry
 
-**Maturity: as-built Worker LoRA receipt loop and bounded host PEFT helpers;
-profile-dependent integration pattern.**
+**Maturity: as-built root-owned Worker LoRA receipt model and bounded host PEFT
+helpers; profile-dependent integration pattern.**
 
 A private training pool can export a bounded job package, train an adapter on
 the host, import size-checked and hashed adapter metadata into a host registry,
-and request activation through the Queen. The Worker LoRA VM loop records
-control receipts; it never performs training. The selected profile must declare
-the role and generated authority. Lowercase `lora` in paths, files, and source
+and request activation through the Queen. The current root-owned Worker LoRA
+model records control receipts; it never performs training. Current profiles do
+not launch a Worker LoRA VM task or deliver Worker endpoint authority. Any
+future executable profile must declare and prove that target authority before
+using it as acceptance evidence. Lowercase `lora` in paths, files, and source
 identifiers is the ASCII form of this same low-rank-adaptation lifecycle.
 
 Model training, data governance, evaluation, artifact scanning, and runtime

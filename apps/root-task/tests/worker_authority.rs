@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Verify generated worker endpoint, notification, and scheduling evidence.
+// Purpose: Verify disabled Worker execution metadata does not become live authority.
 // Author: Lukas Bower
 
 use cohesix_ticket::Role;
@@ -12,73 +12,47 @@ use root_task::worker_authority::{
 };
 
 #[test]
-fn worker_endpoint_cap_is_required_for_attach() {
+fn modeled_worker_roles_are_not_executable() {
+    for role in [
+        Role::WorkerHeartbeat,
+        Role::WorkerGpu,
+        Role::WorkerBus,
+        Role::WorkerLora,
+    ] {
+        assert!(!role_is_implemented(role));
+        assert_eq!(endpoint_badge(WorkerEndpointAction::Attach, role, 0), None);
+    }
     let err =
         require_endpoint_invocation(WorkerEndpointAction::Attach, Role::WorkerHeartbeat, 0, None)
-            .expect_err("metadata-only worker attach must be rejected");
-    assert_eq!(err, WorkerAuthorityError::MetadataOnly);
+            .expect_err("modeled worker attach must be rejected");
+    assert_eq!(err, WorkerAuthorityError::RoleNotImplemented);
 }
 
 #[test]
-fn worker_endpoint_badge_must_match_action_role_and_epoch() {
-    let badge = endpoint_badge(WorkerEndpointAction::Receipt, Role::WorkerGpu, 9)
-        .expect("generated receipt badge");
-    let observation = require_endpoint_invocation(
-        WorkerEndpointAction::Receipt,
-        Role::WorkerGpu,
-        9,
-        Some(badge),
-    )
-    .expect("matching endpoint badge");
-    assert_eq!(observation.action, WorkerEndpointAction::Receipt);
-    assert_eq!(observation.role, Role::WorkerGpu);
-    assert_eq!(observation.epoch, 9);
-
+fn reserved_endpoint_badge_is_not_live_authority() {
     let err = require_endpoint_invocation(
-        WorkerEndpointAction::Telemetry,
-        Role::WorkerGpu,
-        9,
-        Some(badge),
+        WorkerEndpointAction::Attach,
+        Role::WorkerHeartbeat,
+        0,
+        Some(0x260c_1000),
     )
-    .expect_err("wrong endpoint action must fail");
-    assert_eq!(err, WorkerAuthorityError::BadgeActionMismatch);
+    .expect_err("reserved endpoint range must not grant authority");
+    assert_eq!(err, WorkerAuthorityError::RoleNotImplemented);
 }
 
 #[test]
-fn worker_endpoint_epoch_is_revocation_sensitive() {
-    let badge = endpoint_badge(WorkerEndpointAction::Revoke, Role::WorkerLora, 2)
-        .expect("generated revoke badge");
-    let err = require_endpoint_invocation(
-        WorkerEndpointAction::Revoke,
-        Role::WorkerLora,
-        3,
-        Some(badge),
-    )
-    .expect_err("stale revoke epoch must fail");
-    assert_eq!(err, WorkerAuthorityError::BadgeEpochMismatch);
-}
-
-#[test]
-fn worker_bus_remains_deferred_not_implemented() {
-    assert!(!role_is_implemented(Role::WorkerBus));
+fn worker_notification_badges_are_disabled() {
     assert_eq!(
-        endpoint_badge(WorkerEndpointAction::Attach, Role::WorkerBus, 0),
+        notification_badge(WorkerNotificationEvent::LeaseExpiry),
         None
     );
+    let err = verify_notification_badge(WorkerNotificationEvent::LeaseExpiry, 0x260c_8000)
+        .expect_err("reserved notification badge must not be active");
+    assert_eq!(err, WorkerAuthorityError::NotificationDisabled);
 }
 
 #[test]
-fn worker_notification_badges_are_event_specific() {
-    let lease_expiry = notification_badge(WorkerNotificationEvent::LeaseExpiry);
-    verify_notification_badge(WorkerNotificationEvent::LeaseExpiry, lease_expiry)
-        .expect("lease-expiry badge");
-    let err = verify_notification_badge(WorkerNotificationEvent::TelemetryPressure, lease_expiry)
-        .expect_err("wrong notification event must fail");
-    assert_eq!(err, WorkerAuthorityError::NotificationMismatch);
-}
-
-#[test]
-fn qemu_worker_scheduling_uses_non_mcs_fallback() {
+fn worker_scheduling_record_is_non_mcs_metadata_only() {
     let evidence = scheduling_evidence();
     assert_eq!(evidence.profile, WorkerSchedulingProfile::NonMcs);
     assert!(evidence.service_turn_budget > 0);

@@ -98,7 +98,7 @@ const DRIVER_RUNTIME_DPC_EVENT_LEN: u16 = 96;
 const DRIVER_RUNTIME_DPC_EVENT_DEPTH: u16 = 4;
 const MAX_WORKER_RUNTIME_ROLES: usize = 8;
 const MAX_WORKER_RUNTIME_TEXT_LEN: usize = 96;
-const REQUIRED_IMPLEMENTED_WORKER_ROLES: [Role; 3] =
+const REQUIRED_WORKER_ROLE_RECORDS: [Role; 3] =
     [Role::WorkerHeartbeat, Role::WorkerGpu, Role::WorkerLora];
 const REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS: [&str; 7] = [
     "serial-console",
@@ -1394,30 +1394,18 @@ impl Manifest {
 
     fn validate_worker_runtime(&self) -> Result<()> {
         self.worker_runtime.validate()?;
-        for role in REQUIRED_IMPLEMENTED_WORKER_ROLES {
-            let Some(entry) = self.worker_runtime.role(role) else {
+        for role in REQUIRED_WORKER_ROLE_RECORDS {
+            if self.worker_runtime.role(role).is_none() {
                 bail!(
-                    "worker_runtime.roles missing required role {}",
-                    role.as_str()
-                );
-            };
-            if !entry.implemented {
-                bail!(
-                    "worker_runtime.roles role={} must be implemented for Milestone 26c QEMU closure",
+                    "worker_runtime.roles missing required role record {}",
                     role.as_str()
                 );
             }
         }
         if self.worker_runtime.has_implemented_roles() {
-            if !self.worker_runtime.ticket_subject_required {
-                bail!("worker_runtime.ticket_subject_required must be true for implemented roles");
-            }
-            if !self.worker_runtime.endpoint_caps.required {
-                bail!("worker_runtime.endpoint_caps.required must be true for implemented roles");
-            }
-            if !self.worker_runtime.notifications.enabled {
-                bail!("worker_runtime.notifications.enabled must be true for implemented roles");
-            }
+            bail!(
+                "worker_runtime executable roles are unsupported until the generated contract includes image, TCB, CSpace, VSpace, IPC-buffer, stack, fault, and revocation state"
+            );
         }
         Ok(())
     }
@@ -3212,20 +3200,31 @@ mod tests {
     }
 
     #[test]
-    fn worker_runtime_requires_implemented_26c_roles() {
-        let mut manifest = fixture_manifest();
-        let heartbeat = manifest
+    fn worker_runtime_accepts_modeled_non_executable_roles() {
+        let manifest = fixture_manifest();
+        assert!(manifest
             .worker_runtime
             .roles
-            .iter_mut()
-            .find(|entry| entry.role == super::Role::WorkerHeartbeat)
-            .expect("heartbeat role");
-        heartbeat.implemented = false;
+            .iter()
+            .all(|entry| !entry.implemented));
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("modeled role records do not claim target execution");
+    }
+
+    #[test]
+    fn worker_runtime_requires_role_records() {
+        let mut manifest = fixture_manifest();
+        manifest
+            .worker_runtime
+            .roles
+            .retain(|entry| entry.role != super::Role::WorkerHeartbeat);
         let err = manifest
             .validate_with_base(Some(repo_root().as_path()))
-            .expect_err("heartbeat implementation is required");
+            .expect_err("heartbeat role record is required");
         assert!(
-            err.to_string().contains("worker-heartbeat"),
+            err.to_string()
+                .contains("missing required role record worker-heartbeat"),
             "unexpected error: {err}"
         );
     }
@@ -3233,14 +3232,68 @@ mod tests {
     #[test]
     fn worker_runtime_rejects_metadata_only_authority() {
         let mut manifest = fixture_manifest();
-        manifest.worker_runtime.endpoint_caps.required = false;
-        manifest.worker_runtime.cap_backed_authority = false;
+        let heartbeat = manifest
+            .worker_runtime
+            .roles
+            .iter_mut()
+            .find(|entry| entry.role == super::Role::WorkerHeartbeat)
+            .expect("heartbeat role");
+        heartbeat.implemented = true;
         let err = manifest
             .validate_with_base(Some(repo_root().as_path()))
-            .expect_err("implemented workers require endpoint caps");
+            .expect_err("metadata-only implementation must not become executable authority");
         assert!(
             err.to_string()
-                .contains("endpoint_caps.required must be true"),
+                .contains("executable roles are unsupported until the generated contract"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_runtime_rejects_executable_roles_without_task_object_contract() {
+        let mut manifest = fixture_manifest();
+        manifest.worker_runtime.roles[0].implemented = true;
+        manifest.worker_runtime.cap_backed_authority = true;
+        manifest.worker_runtime.endpoint_caps.required = true;
+        manifest.worker_runtime.notification_lifecycle = true;
+        manifest.worker_runtime.notifications.enabled = true;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("executable workers require a generated task-object contract");
+        assert!(
+            err.to_string().contains(
+                "executable roles are unsupported until the generated contract includes image"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_runtime_rejects_capability_claims_without_executable_roles() {
+        let mut manifest = fixture_manifest();
+        manifest.worker_runtime.cap_backed_authority = true;
+        manifest.worker_runtime.endpoint_caps.required = true;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("disabled worker roles must not claim endpoint authority");
+        assert!(
+            err.to_string()
+                .contains("endpoint authority must be false when no roles are implemented"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_runtime_rejects_notification_claims_without_executable_roles() {
+        let mut manifest = fixture_manifest();
+        manifest.worker_runtime.notification_lifecycle = true;
+        manifest.worker_runtime.notifications.enabled = true;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("disabled worker roles must not claim notification lifecycle");
+        assert!(
+            err.to_string()
+                .contains("notification lifecycle must be false when no roles are implemented"),
             "unexpected error: {err}"
         );
     }
@@ -3248,6 +3301,11 @@ mod tests {
     #[test]
     fn worker_runtime_rejects_duplicate_worker_badges() {
         let mut manifest = fixture_manifest();
+        manifest.worker_runtime.roles[0].implemented = true;
+        manifest.worker_runtime.cap_backed_authority = true;
+        manifest.worker_runtime.endpoint_caps.required = true;
+        manifest.worker_runtime.notification_lifecycle = true;
+        manifest.worker_runtime.notifications.enabled = true;
         manifest.worker_runtime.notifications.revoke_badge =
             manifest.worker_runtime.endpoint_caps.attach_badge_base;
         let err = manifest
@@ -3958,8 +4016,6 @@ impl WorkerRuntimeConfig {
                 );
             }
         }
-        self.endpoint_caps.validate()?;
-        self.notifications.validate()?;
         self.scheduling.validate()?;
         if self.cap_backed_authority != self.endpoint_caps.required {
             bail!("worker_runtime.cap_backed_authority must match worker_runtime.endpoint_caps.required");
@@ -3967,6 +4023,19 @@ impl WorkerRuntimeConfig {
         if self.notification_lifecycle != self.notifications.enabled {
             bail!("worker_runtime.notification_lifecycle must match worker_runtime.notifications.enabled");
         }
+        if !self.has_implemented_roles() {
+            if self.cap_backed_authority || self.endpoint_caps.required {
+                bail!(
+                    "worker_runtime endpoint authority must be false when no roles are implemented"
+                );
+            }
+            if self.notification_lifecycle || self.notifications.enabled {
+                bail!("worker_runtime notification lifecycle must be false when no roles are implemented");
+            }
+            return Ok(());
+        }
+        self.endpoint_caps.validate()?;
+        self.notifications.validate()?;
         let mut badges = BTreeSet::new();
         for (name, badge) in self.endpoint_caps.badge_entries() {
             if badge == 0 {
@@ -4030,8 +4099,8 @@ impl Default for WorkerRuntimeConfig {
             implementation_epoch: 26,
             max_workers: 8,
             ticket_subject_required: true,
-            cap_backed_authority: true,
-            notification_lifecycle: true,
+            cap_backed_authority: false,
+            notification_lifecycle: false,
             roles: default_worker_roles(),
             endpoint_caps: WorkerEndpointCapConfig::default(),
             notifications: WorkerNotificationConfig::default(),
@@ -4081,7 +4150,7 @@ impl Default for WorkerRoleRuntime {
             ticket_scope: String::new(),
             telemetry_path_template: String::new(),
             lease_path_template: String::new(),
-            shutdown_policy: "notification".to_owned(),
+            shutdown_policy: "deferred".to_owned(),
         }
     }
 }
@@ -4132,7 +4201,7 @@ impl WorkerEndpointCapConfig {
 impl Default for WorkerEndpointCapConfig {
     fn default() -> Self {
         Self {
-            required: true,
+            required: false,
             attach_badge_base: 0x260c_1000,
             telemetry_badge_base: 0x260c_2000,
             lease_badge_base: 0x260c_3000,
@@ -4177,7 +4246,7 @@ impl WorkerNotificationConfig {
 impl Default for WorkerNotificationConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             revoke_badge: 0x260c_6000,
             shutdown_badge: 0x260c_7000,
             lease_expiry_badge: 0x260c_8000,
@@ -4264,19 +4333,19 @@ fn default_worker_roles() -> Vec<WorkerRoleRuntime> {
     vec![
         WorkerRoleRuntime {
             role: Role::WorkerHeartbeat,
-            implemented: true,
+            implemented: false,
             ticket_scope: "/worker".to_owned(),
             telemetry_path_template: "/shard/<label>/worker/<id>/telemetry".to_owned(),
             lease_path_template: String::new(),
-            shutdown_policy: "notification".to_owned(),
+            shutdown_policy: "deferred".to_owned(),
         },
         WorkerRoleRuntime {
             role: Role::WorkerGpu,
-            implemented: true,
+            implemented: false,
             ticket_scope: "/gpu".to_owned(),
             telemetry_path_template: "/shard/<label>/worker/<id>/telemetry".to_owned(),
             lease_path_template: "/gpu/<id>/lease".to_owned(),
-            shutdown_policy: "notification".to_owned(),
+            shutdown_policy: "deferred".to_owned(),
         },
         WorkerRoleRuntime {
             role: Role::WorkerBus,
@@ -4288,11 +4357,11 @@ fn default_worker_roles() -> Vec<WorkerRoleRuntime> {
         },
         WorkerRoleRuntime {
             role: Role::WorkerLora,
-            implemented: true,
+            implemented: false,
             ticket_scope: "/worker".to_owned(),
             telemetry_path_template: "/shard/<label>/worker/<id>/telemetry".to_owned(),
             lease_path_template: String::new(),
-            shutdown_policy: "notification".to_owned(),
+            shutdown_policy: "deferred".to_owned(),
         },
     ]
 }

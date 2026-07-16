@@ -14,15 +14,17 @@ Secure9P framing, or physical-driver scheduling. See
 ## Generated authority
 
 The selected profile manifest and generated root-task tables are authoritative
-for implemented worker roles, worker count, endpoint-cap requirements,
-notification badges, affinity, and scheduling parameters. The checked-in
+for Worker role records, worker count, any enabled endpoint-cap or notification
+requirements, affinity, and scheduling metadata. The checked-in
 default-profile values are summarized in
 [the generated manifest snippet](snippets/root_task_manifest.md). Do not copy
 generated badge bases or quotas into client code or hand-maintained prose.
 
-The role enum recognizes more roles than every target profile implements. A
-recognized ticket label or host namespace view is not proof that a target
-worker image is enabled.
+All checked-in profiles currently mark every target Worker role
+`implemented = false`, with cap-backed authority and lifecycle notifications
+disabled. The role enum, a recognized ticket label, a reserved badge range, a
+Worker crate, or a host namespace view is not proof that a target Worker image
+was loaded or resumed.
 
 ## Role support matrix
 
@@ -31,15 +33,17 @@ The checked-in default and Pi 4 profiles currently declare the following:
 | Role | Ticket and host policy | Target worker in selected profiles | Authority scope |
 | --- | --- | --- | --- |
 | Queen | Implemented | Root-task authority, not a separate worker image | Hive-wide access to enabled control and observability providers. |
-| WorkerHeartbeat | Implemented | Implemented | Own telemetry and the minimal worker observability view. |
-| WorkerGpu | Implemented | Implemented | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
-| WorkerBus | Recognized | **Not implemented** | Host/sidecar policy can describe a bus scope, but the selected target profiles must reject it as target-worker authority. |
-| WorkerLora | Implemented | Implemented | Own Worker view plus bounded AI LoRA lifecycle receipts delivered through generated Worker endpoint badges. It has no separate root namespace or file-backed LoRA lease. |
+| WorkerHeartbeat | Model/session only | **Not executable** | Own telemetry and the minimal worker observability view. |
+| WorkerGpu | Model/session only | **Not executable** | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
+| WorkerBus | Recognized | **Not executable; session/model only** | Host/sidecar policy can describe a bus scope, but the selected target profiles must reject it as target-task authority. |
+| WorkerLora | Model/session only | **Not executable** | Own Worker view plus bounded AI LoRA model receipts. It has no live target endpoint, separate root namespace, or file-backed LoRA lease. |
 
-`worker-bus` must not be presented as an active target role until a selected
-manifest sets `implemented = true` and the required code, tests, and milestone
-evidence agree. Conversely, a worker crate existing in the repository is not
-sufficient proof of profile selection.
+No Worker role may be presented as an active target task until compiler IR is
+extended with the task-object contract and then accepts `implemented = true`
+for a selected manifest whose packaged image, live TCB/CSpace/VSpace,
+capability delivery, lifecycle handling, fault behavior, tests, and
+target-qualified milestone evidence agree. Current validation rejects that
+value.
 
 ## Namespace views
 
@@ -121,8 +125,11 @@ their secret material.
   supplied.
 - MAC, TTL, scope, quota, role, subject, and selected-manifest bounds are
   checked before authority is granted.
-- Target worker attach additionally requires the role to be marked implemented
-  and the generated cap-backed endpoint authority to match its role and epoch.
+- A successful application attach binds a role-scoped control-plane session; it
+  does not start or prove a target Worker task.
+- Any future target-task attach additionally requires the role to be marked
+  implemented and live cap-backed endpoint authority to match its role and
+  epoch.
 
 Host NineDoor verifies tickets against registered role keys. The target console
 performs transport authentication first for TCP, then validates the
@@ -146,34 +153,35 @@ revokes the affected authority and returns the protocol-specific error surface.
 
 ## Worker authority lifecycle
 
-Target worker authority has two independent proofs:
+Worker authority has two distinct layers:
 
 1. **Session authority.** A valid role, subject, ticket, lifecycle gate, and
    namespace scope authorize an operation at the control-plane layer.
-2. **seL4 invocation authority.** For implemented target roles, generated
-   endpoint badges encode the action, role, and authority epoch. Generated
-   notification badges carry revoke, shutdown, lease-expiry, telemetry-pressure,
-   and optional IRQ events.
+2. **seL4 invocation authority.** A future executable target role must receive
+   a live endpoint cap and lifecycle notification cap whose badges encode the
+   action, role, epoch, and event class.
 
-Root-task rejects metadata-only worker authority when the profile requires
-badged endpoint caps. The decoder and checks are implemented in
-[`worker_authority.rs`](../apps/root-task/src/worker_authority.rs); exact badge
-values remain generated data.
+Current checked-in profiles implement only the first layer. They disable
+endpoint-cap and notification authority for every target Worker role. The
+badge values retained in generated records are reserved schema ranges; they are
+not minted caps, delivered notifications, or live seL4 authority.
+[`worker_authority.rs`](../apps/root-task/src/worker_authority.rs) reports the
+roles as non-executable and rejects those reserved ranges as inactive.
 
 Revocation is bounded and explicit:
 
 1. Policy denial, ticket expiry, budget exhaustion, lease expiry, or a valid
    Queen lifecycle operation selects the authority to close.
 2. The session or worker record is marked closed/revoked with a reason.
-3. Implemented target workers receive the generated lifecycle notification
-   where required by the selected profile.
-4. Subsequent endpoint, namespace, and console operations fail rather than
+3. Current root/host model state records the transition; no Worker notification
+   is delivered because no Worker task or notification cap exists.
+4. Subsequent namespace and console operations fail rather than
    silently continuing.
 5. Logs and enabled observability providers record the transition.
 
-A generated notification record proves the configured topology. Target
-acceptance still requires evidence that the selected image created, delivered,
-and handled the notification correctly.
+A future enabled notification record would prove only configured topology.
+Target acceptance additionally requires evidence that the selected image
+created, delivered, and handled the notification correctly.
 
 ## Scheduling layers
 
@@ -182,10 +190,11 @@ claim.
 
 ### 1. Kernel and target-task scheduling
 
-The selected manifest defines the target worker scheduling profile. Current
-checked-in profiles select a non-MCS record with a generated priority, domain,
-and bounded service-turn budget; MCS budget/period fields are zero and consumed
-budget evidence is disabled for that profile. Affinity is also profile-generated.
+The selected manifest carries Worker scheduling metadata. Current checked-in
+profiles select a non-MCS record with a generated priority, domain, and bounded
+service-turn budget; MCS budget/period fields are zero and consumed-budget
+evidence is disabled. Because no Worker TCB exists, these values are not applied
+target-task scheduling evidence. Affinity is also profile-generated metadata.
 
 These values are target execution policy. Claims about applied affinity,
 priority, scheduling contexts, or consumed budget require the selected seL4
@@ -193,10 +202,10 @@ build and target evidence, not just generated metadata.
 
 ### 2. Root-task service turns
 
-The event pump gives workers, consoles, timers, and driver clients bounded
-service opportunities. A service-turn budget limits cooperative work performed
-before yielding. It does not create a new kernel scheduler and must not be used
-to claim CPU isolation or real-time latency without target evidence.
+The event pump gives the root-owned Worker model, consoles, timers, and driver
+clients bounded service opportunities. A service-turn budget limits cooperative
+work performed before yielding. It does not create a Worker TCB, a new kernel
+scheduler, CPU isolation, or real-time latency evidence.
 
 Physical operator input and an authenticated TCP console follow the bounded
 priority rules in `AGENTS.md`; nonessential mirroring and verbose output may be

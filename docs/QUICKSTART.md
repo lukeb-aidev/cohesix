@@ -34,8 +34,10 @@ source "$HOME/.cargo/env"
 
 For a QEMU target run, the selected seL4 15.0.0 output directory must already
 contain the kernel, elfloader, generated headers, and configuration for that
-profile. The repository convention is `seL4/SMP_build`; the complete contract
-is in [Toolchain setup](TOOLCHAIN_MAC_ARM64.md) and
+profile. The canonical operational/release input is
+`out/sel4/profile-v2/qemu-smp-production`; preserved `seL4/*` trees are
+explicit diagnostic or historical inputs only. The complete construction and
+validation contract is in [Toolchain setup](TOOLCHAIN_MAC_ARM64.md) and
 [Hardware bring-up](HARDWARE_BRINGUP.md#qemu-runbook).
 
 ## 1. Run a mock session
@@ -71,7 +73,7 @@ From the repository root, select the seL4 output explicitly and launch the
 authenticated TCP-console profile:
 
 ```bash
-export SEL4_BUILD_DIR="$PWD/seL4/SMP_build"
+export SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production"
 test -f "$SEL4_BUILD_DIR/kernel/autoconf/autoconf.h"
 
 ./scripts/cohesix-build-run.sh \
@@ -124,7 +126,7 @@ To avoid exposing the TCP listener to the host, stage without running and let
 
 ```bash
 ./scripts/cohesix-build-run.sh \
-  --sel4-build "$PWD/seL4/SMP_build" \
+  --sel4-build "$PWD/out/sel4/profile-v2/qemu-smp-production" \
   --out-dir out/cohesix \
   --profile release \
   --cargo-target aarch64-unknown-none \

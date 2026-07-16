@@ -10,6 +10,8 @@ declare -a EXTRA_QEMU_ARGS=()
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GENERATED_CONFIG_DIR="$PROJECT_ROOT/configs/generated"
+CANONICAL_QEMU_PROFILE="qemu_smp_production"
+CANONICAL_QEMU_BUILD_DIR="$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production"
 HOST_OS="$(uname -s)"
 QEMU_MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
 if [[ -z "$QEMU_MACHINE_EXTRA" && "$HOST_OS" == "Darwin" ]]; then
@@ -27,10 +29,12 @@ Usage: scripts/cohesix-build-run.sh [options] [-- <extra-qemu-args>]
 Build the Cohesix Rust workspace, assemble the seL4 payload CPIO archive, and
 boot the system under QEMU. The script expects an existing seL4 build tree that
 already produced `elfloader`, `kernel.elf`, and support artefacts. By default it
-looks for that tree at `$PROJECT_ROOT/seL4/SMP_build`.
+uses the validated `qemu_smp_production` contract at
+`$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production`.
 
 Options:
-  --sel4-build <dir>    Path to the seL4 build output (default: $PROJECT_ROOT/seL4/SMP_build)
+  --sel4-build <dir>    Path to the seL4 build output
+                        (default: $PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production)
   --out-dir <dir>       Directory for generated artefacts (default: out/cohesix)
   --clean               Remove existing contents of the output directory before building
   --profile <name>      Cargo profile to build (release|debug|custom; default: release)
@@ -61,6 +65,8 @@ Env overrides:
   COHESIX_QEMU_VIRT / QEMU_VIRT (on|off; default: on)
   COHESIX_QEMU_ACCEL / QEMU_ACCEL (auto; default tcg on macOS, kvm/tcg on Linux)
   COHESIX_QEMU_MACHINE_EXTRA / QEMU_MACHINE_EXTRA (appended to -machine)
+  COHESIX_SEL4_PROFILE (qemu_smp_production|qemu_smp_diagnostic; validates an
+                        explicitly selected build tree against that contract)
 USAGE
 }
 
@@ -71,6 +77,32 @@ log() {
 fail() {
     echo "[cohesix-build] error: $*" >&2
     exit 1
+}
+
+validate_selected_qemu_profile() {
+    local profile_name="$1"
+    local profile_python="$PROJECT_ROOT/out/toolchain/sel4-profile-venv/bin/python"
+    local profile_tool="$SCRIPT_DIR/sel4_profile.py"
+
+    case "$profile_name" in
+        qemu_smp_production|qemu_smp_diagnostic)
+            ;;
+        *)
+            fail "Unsupported QEMU seL4 profile contract: $profile_name"
+            ;;
+    esac
+    [[ -x "$profile_python" ]] || fail \
+        "canonical seL4 profile Python is missing: $profile_python (run toolchain/setup_macos_arm64.sh)"
+    [[ -f "$profile_tool" ]] || fail "seL4 profile validator is missing: $profile_tool"
+
+    log "Validating seL4 profile contract: $profile_name"
+    "$profile_python" "$profile_tool" validate \
+        --profile "$profile_name" \
+        --build-dir "$SEL4_BUILD_DIR" \
+        --require-source \
+        --require-artifacts \
+        --for-runtime \
+        || fail "seL4 build does not satisfy profile contract $profile_name"
 }
 
 qemu_args_have_accel() {
@@ -467,7 +499,8 @@ detect_gic_version() {
 }
 
 main() {
-    SEL4_BUILD_DIR="${SEL4_BUILD:-$PROJECT_ROOT/seL4/SMP_build}"
+    SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-$CANONICAL_QEMU_BUILD_DIR}}"
+    SEL4_PROFILE="${COHESIX_SEL4_PROFILE:-}"
     OUT_DIR="out/cohesix"
     PROFILE="release"
     CARGO_TARGET=""
@@ -652,6 +685,15 @@ main() {
         fail "seL4 build directory not found: $SEL4_BUILD_DIR"
     fi
     SEL4_BUILD_DIR="$(cd "$SEL4_BUILD_DIR" && pwd)"
+
+    if [[ -z "$SEL4_PROFILE" && "$SEL4_BUILD_DIR" == "$CANONICAL_QEMU_BUILD_DIR" ]]; then
+        SEL4_PROFILE="$CANONICAL_QEMU_PROFILE"
+    fi
+    if [[ -n "$SEL4_PROFILE" ]]; then
+        validate_selected_qemu_profile "$SEL4_PROFILE"
+    else
+        log "Explicit non-canonical seL4 build selected; this run is claim-ineligible unless COHESIX_SEL4_PROFILE names a passing contract"
+    fi
 
     export SEL4_BUILD_DIR
     export SEL4_BUILD="$SEL4_BUILD_DIR"

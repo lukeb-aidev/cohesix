@@ -12,7 +12,6 @@ MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
 CANONICAL_MANIFEST_PATH="${ROOT_DIR}/configs/root_task.toml"
 DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/seL4/build_UBOOT"
 DEFAULT_HOME_SEL4_BUILD_DIR="${HOME}/seL4/build_UBOOT"
-DEFAULT_SEL4_KERNEL_SOURCE_DIR="${HOME}/seL4_15"
 if [[ -d "${DEFAULT_REPO_SEL4_BUILD_DIR}" ]]; then
     SEL4_BUILD_DIR="${DEFAULT_REPO_SEL4_BUILD_DIR}"
 else
@@ -20,8 +19,8 @@ else
 fi
 SEL4_KERNEL_SOURCE_DIR="${COHESIX_SEL4_KERNEL_SOURCE_DIR:-}"
 SEL4_VENV_DIR="${ROOT_DIR}/.venv"
+PI4_SEL4_PROFILE="pi4_diagnostic"
 U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
-OBJCOPY_WRAPPER="${ROOT_DIR}/scripts/aarch64-objcopy-stdout.sh"
 GENERATED_CONFIG_DIR="${ROOT_DIR}/configs/generated"
 FIRMWARE_DIR="${ROOT_DIR}/third_party/raspberry-pi-firmware/v1.50"
 PI4_WIFI_FIRMWARE_DIR=""
@@ -34,6 +33,8 @@ BOOTSTD_LOGO_STAGE_NAME="boot.bmp"
 BRCMFMAC_CMDLINE_STAGE_NAME="brcmfmac-dyndbg.cmdline"
 BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME="brcmfmac-dyndbg.sh"
 DRIVER_RUNTIME_CPIO_STAGE_NAME="cohesix-driver-runtimes.cpio.uimg"
+PI4_IMAGE_IDENTITY_STAGE_NAME="pi4-image-identity.json"
+SEL4_IMAGE_PROVENANCE_SUFFIX=".cohesix-provenance.json"
 DRIVER_RUNTIME_EMBED_DIR="${ROOT_DIR}/out/pi4-driver-runtime-embed"
 DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"
 ROOT_TASK_STRIP_DIR="${ROOT_DIR}/out/pi4-root-task-stripped"
@@ -50,6 +51,11 @@ PI4_DTB_PADDED_SIZE=$((128 * 1024))
 U_BOOT_CROSS_COMPILE="aarch64-linux-gnu-"
 U_BOOT_MENU_INPUT="usb"
 U_BOOT_MENU_INPUT_SOURCE="default"
+EXACT_GIT_COMMIT=""
+EXACT_GIT_SHORT=""
+EXACT_BUILD_TIMESTAMP=""
+BUILD_REPOSITORY_STATE_DIGEST=""
+EXACT_BUILD_ID=""
 
 usage() {
     cat <<'USAGE'
@@ -74,8 +80,9 @@ Options:
   --sel4-build-dir <dir>    seL4 Pi4 build directory (default: repo seL4/build_UBOOT
                             when present, otherwise ~/seL4/build_UBOOT)
   --sel4-kernel-source-dir <dir>
-                            seL4 kernel source used by the sel4test image wrapper
-                            (default: $HOME/seL4_15 when present; env:
+                            Pinned seL4 kernel source used by the canonical
+                            pi4_diagnostic profile wrapper
+                            (default: derived from the selected build cache; env:
                             COHESIX_SEL4_KERNEL_SOURCE_DIR)
   --venv <dir>              Python venv containing build tooling (default: <repo>/.venv)
   --u-boot-bin <path>       U-Boot binary (default: third_party/u-boot/u-boot.bin)
@@ -96,6 +103,8 @@ Options:
 
 Environment:
   USB is always staged as Cohesix-owned cold boot. U-Boot xHCI handoff export is disabled.
+  The seL4 build must already validate as configs/sel4/profiles.toml profile
+  pi4_diagnostic; this script never reconfigures it through a legacy wrapper.
 USAGE
 }
 
@@ -116,6 +125,300 @@ require_file() {
 require_dir() {
     local path="$1"
     [[ -d "$path" ]] || fail "required directory missing: ${path}"
+}
+
+repository_state_digest() {
+    python3 - "$ROOT_DIR" <<'PY'
+import hashlib
+import os
+import stat
+import subprocess
+import sys
+
+root = sys.argv[1]
+
+
+def git(*args: str) -> bytes:
+    return subprocess.check_output(("git", "-C", root, *args))
+
+
+digest = hashlib.sha256()
+digest.update(b"cohesix-exact-repository-state/v2\0")
+for label, payload in (
+    (b"head", git("rev-parse", "--verify", "HEAD")),
+    (b"index", git("diff", "--binary", "--cached", "HEAD", "--")),
+    (b"worktree", git("diff", "--binary", "HEAD", "--")),
+):
+    digest.update(label + b"\0")
+    digest.update(len(payload).to_bytes(8, "big"))
+    digest.update(payload)
+
+untracked = sorted(
+    entry
+    for entry in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0")
+    if entry
+)
+for encoded_path in untracked:
+    path = os.path.join(root, os.fsdecode(encoded_path))
+    observed = os.lstat(path)
+    if not stat.S_ISREG(observed.st_mode):
+        raise SystemExit(f"untracked repository entry is not a regular file: {path}")
+    digest.update(b"untracked\0" + len(encoded_path).to_bytes(8, "big"))
+    digest.update(encoded_path)
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+print(digest.hexdigest())
+PY
+}
+
+verify_only_codegen_repository_changes() {
+    python3 - "$ROOT_DIR" <<'PY'
+import os
+import subprocess
+import sys
+
+root = sys.argv[1]
+allowed_exact = {
+    "apps/coh/src/generated/policy.rs",
+    "apps/cohsh/src/generated/client.rs",
+    "apps/cohsh/src/generated/policy.rs",
+    "apps/swarmui/src/generated.rs",
+    "configs/generated/cas_manifest_template.json",
+    "configs/generated/coh_policy.toml",
+    "configs/generated/coh_policy.toml.sha256",
+    "configs/generated/cohsh_policy.toml",
+    "configs/generated/cohsh_policy.toml.sha256",
+    "configs/generated/root_task_resolved.json",
+    "configs/generated/root_task_resolved.json.sha256",
+    "configs/generated/swarmui_defaults.toml",
+    "configs/generated/swarmui_defaults.toml.sha256",
+    "docs/snippets/cas_interfaces.md",
+    "docs/snippets/cas_security.md",
+    "docs/snippets/coh_doctor_checks.md",
+    "docs/snippets/coh_policy.md",
+    "docs/snippets/cohesix_py_defaults.md",
+    "docs/snippets/cohsh_client.md",
+    "docs/snippets/cohsh_grammar.md",
+    "docs/snippets/cohsh_policy.md",
+    "docs/snippets/cohsh_ticket_policy.md",
+    "docs/snippets/gpu_breadcrumbs.md",
+    "docs/snippets/observability_interfaces.md",
+    "docs/snippets/observability_security.md",
+    "docs/snippets/root_task_manifest.md",
+    "docs/snippets/swarmui_defaults.md",
+    "docs/snippets/ticket_quotas.md",
+    "docs/snippets/trace_policy.md",
+    "scripts/cohsh/boot_v0.coh",
+    "tools/cohesix-py/cohesix/generated.py",
+}
+
+
+def git_paths(*args: str) -> set[str]:
+    payload = subprocess.check_output(("git", "-C", root, *args))
+    return {
+        os.fsdecode(path)
+        for path in payload.split(b"\0")
+        if path
+    }
+
+
+changed = git_paths("diff", "--name-only", "-z", "HEAD", "--")
+changed |= git_paths("diff", "--cached", "--name-only", "-z", "HEAD", "--")
+changed |= git_paths("ls-files", "--others", "--exclude-standard", "-z")
+unexpected = sorted(
+    path
+    for path in changed
+    if path not in allowed_exact
+    and not path.startswith("apps/root-task/src/generated/")
+)
+if unexpected:
+    raise SystemExit(
+        "repository changed outside coh-rtc outputs during exact build: "
+        + ", ".join(unexpected)
+    )
+PY
+}
+
+capture_exact_source_identity() {
+    local status
+    EXACT_GIT_COMMIT="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
+    [[ "$EXACT_GIT_COMMIT" =~ ^[0-9a-f]{40,64}$ ]] || \
+      fail "repository HEAD is not a full lowercase hexadecimal Git object ID"
+    EXACT_GIT_SHORT="$(git -C "$ROOT_DIR" rev-parse --short=12 HEAD)"
+    [[ "$EXACT_GIT_COMMIT" == "$EXACT_GIT_SHORT"* ]] || \
+      fail "short Git identity is not a prefix of repository HEAD"
+    status="$(git -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all)"
+    [[ -z "$status" ]] || \
+      fail "exact Pi image builds require a clean checkout including untracked files"
+    EXACT_BUILD_TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    log "Exact source identity: commit=${EXACT_GIT_COMMIT} timestamp=${EXACT_BUILD_TIMESTAMP}"
+}
+
+capture_build_repository_state() {
+    verify_only_codegen_repository_changes
+    BUILD_REPOSITORY_STATE_DIGEST="$(repository_state_digest)"
+    [[ -n "$BUILD_REPOSITORY_STATE_DIGEST" ]] || \
+      fail "failed to fingerprint repository state before root-task build"
+}
+
+verify_final_clean_repository_state() {
+    local current_head
+    local status
+    current_head="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
+    [[ "$current_head" == "$EXACT_GIT_COMMIT" ]] || \
+      fail "repository HEAD changed before exact image build cleanup completed"
+    status="$(git -C "$ROOT_DIR" status --porcelain=v1 --untracked-files=all)"
+    [[ -z "$status" ]] || \
+      fail "repository did not return to its exact clean checkout after target codegen"
+}
+
+verify_build_repository_state() {
+    local phase="$1"
+    local current_head
+    local current_digest
+    [[ -n "$BUILD_REPOSITORY_STATE_DIGEST" ]] || \
+      fail "repository build-state fingerprint is unavailable at ${phase}"
+    current_head="$(git -C "$ROOT_DIR" rev-parse --verify HEAD)"
+    [[ "$current_head" == "$EXACT_GIT_COMMIT" ]] || \
+      fail "repository HEAD changed during exact image build at ${phase}"
+    current_digest="$(repository_state_digest)"
+    [[ "$current_digest" == "$BUILD_REPOSITORY_STATE_DIGEST" ]] || \
+      fail "repository files changed during exact image build at ${phase}"
+}
+
+verify_unsealed_pi4_build_marker() {
+    local artifact="$1"
+    local require_elf_section="${2:-0}"
+    local expected_root_elf="${3:-}"
+    local expected_root_cpio="${4:-}"
+    local -a args=(
+        verify-unsealed-marker
+        --artifact "$artifact"
+    )
+    require_file "$artifact"
+    if [[ "$require_elf_section" -eq 1 ]]; then
+        args+=(--require-elf-load-section)
+    fi
+    if [[ -n "$expected_root_elf" || -n "$expected_root_cpio" ]]; then
+        [[ -n "$expected_root_elf" && -n "$expected_root_cpio" ]] || \
+          fail "root archive verification requires both ELF and CPIO inputs"
+        args+=(
+          --expected-root-elf "$expected_root_elf"
+          --expected-root-cpio "$expected_root_cpio"
+        )
+    fi
+    python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" "${args[@]}" >/dev/null || \
+      fail "Pi image build marker is absent, ambiguous, or not runtime-loaded: ${artifact}"
+}
+
+seal_staged_pi4_image() {
+    local unsealed_image="$1"
+    local staged_image="$2"
+    local fallback_image="$3"
+    local identity_metadata="${STAGE_DIR}/${PI4_IMAGE_IDENTITY_STAGE_NAME}"
+    local expected_root_elf="${STRIPPED_ROOT_TASK_ELF:-${SEL4_BUILD_DIR}/elfloader/rootserver}"
+    local expected_root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
+
+    require_file "$unsealed_image"
+    require_file "$expected_root_elf"
+    require_file "$expected_root_cpio"
+    verify_build_repository_state "before identity metadata publication"
+    python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" seal \
+      --image "$unsealed_image" \
+      --expected-root-elf "$expected_root_elf" \
+      --expected-root-cpio "$expected_root_cpio" >/dev/null || \
+      fail "failed to seal the staged Pi image identity"
+    mv -f "$unsealed_image" "$staged_image"
+    python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" verify \
+      --image "$staged_image" \
+      --metadata "$identity_metadata" \
+      --git-commit "$EXACT_GIT_COMMIT" \
+      --source-tree-clean \
+      --expected-root-elf "$expected_root_elf" \
+      --expected-root-cpio "$expected_root_cpio" >/dev/null || \
+      fail "failed to publish final-path Pi image identity metadata"
+    require_file "$identity_metadata"
+    EXACT_BUILD_ID="$(python3 - "$ROOT_DIR" "$identity_metadata" "$EXACT_GIT_COMMIT" "$EXACT_BUILD_TIMESTAMP" <<'PY'
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+import pi4_image_identity as identity
+
+metadata = identity.read_metadata(Path(sys.argv[2]))
+if metadata.git_commit != sys.argv[3]:
+    raise SystemExit("identity metadata Git commit differs from the exact build")
+if metadata.build_timestamp != sys.argv[4]:
+    raise SystemExit("identity metadata timestamp differs from the exact build")
+expected = identity.canonical_build_id(
+    sys.argv[3], sys.argv[4], metadata.image_id
+)
+if metadata.build_id != expected:
+    raise SystemExit("identity metadata build ID is not canonical")
+print(expected)
+PY
+)"
+    [[ "$EXACT_BUILD_ID" =~ ^[0-9a-f]{64}$ ]] || \
+      fail "identity metadata omitted the canonical build ID"
+    python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" verify-metadata \
+      --image "$staged_image" \
+      --metadata "$identity_metadata" \
+      --expected-git-commit "$EXACT_GIT_COMMIT" \
+      --expected-build-id "$EXACT_BUILD_ID" \
+      --expected-root-elf "$expected_root_elf" \
+      --expected-root-cpio "$expected_root_cpio" >/dev/null || \
+      fail "sealed staged Pi image identity did not verify"
+
+    cp -f "$staged_image" "$fallback_image"
+    python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" verify \
+      --image "$fallback_image" \
+      --expected-root-elf "$expected_root_elf" \
+      --expected-root-cpio "$expected_root_cpio" >/dev/null || \
+      fail "sealed fallback Pi image identity did not verify"
+    cmp -s "$staged_image" "$fallback_image" || \
+      fail "primary and fallback Pi images differ after identity sealing"
+    # Reinspect the primary image after metadata publication and fallback copy.
+    python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" verify-metadata \
+      --image "$staged_image" \
+      --metadata "$identity_metadata" \
+      --expected-git-commit "$EXACT_GIT_COMMIT" \
+      --expected-build-id "$EXACT_BUILD_ID" \
+      --expected-root-elf "$expected_root_elf" \
+      --expected-root-cpio "$expected_root_cpio" >/dev/null || \
+      fail "sealed staged image changed after metadata publication"
+    verify_build_repository_state "after identity metadata publication"
+    log "Sealed complete Pi image identity: ${identity_metadata}"
+}
+
+verify_final_staged_pi4_image() {
+    local mkimage_bin="$1"
+    local staged_image="${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
+    local fallback_image="${STAGE_DIR}/${SEL4_UPSTREAM_IMAGE_NAME}"
+    local identity_metadata="${STAGE_DIR}/${PI4_IMAGE_IDENTITY_STAGE_NAME}"
+    local expected_root_elf="${STRIPPED_ROOT_TASK_ELF:-${SEL4_BUILD_DIR}/elfloader/rootserver}"
+    local expected_root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
+
+    python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" verify-metadata \
+      --image "$staged_image" \
+      --metadata "$identity_metadata" \
+      --expected-git-commit "$EXACT_GIT_COMMIT" \
+      --expected-build-id "$EXACT_BUILD_ID" \
+      --expected-root-elf "$expected_root_elf" \
+      --expected-root-cpio "$expected_root_cpio" >/dev/null || \
+      fail "final primary image identity verification failed"
+    python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" verify \
+      --image "$fallback_image" \
+      --expected-root-elf "$expected_root_elf" \
+      --expected-root-cpio "$expected_root_cpio" >/dev/null || \
+      fail "final fallback image identity verification failed"
+    cmp -s "$staged_image" "$fallback_image" || \
+      fail "primary and fallback Pi images differ at final verification"
+    "$mkimage_bin" -l "$staged_image" >/dev/null || \
+      fail "mkimage rejected the final primary Pi image"
+    "$mkimage_bin" -l "$fallback_image" >/dev/null || \
+      fail "mkimage rejected the final fallback Pi image"
+    verify_build_repository_state "after final staged-image verification"
 }
 
 find_aarch64_strip() {
@@ -269,6 +572,172 @@ verify_skip_build_image_fresh() {
     done
 }
 
+adopt_skip_build_source_timestamp() {
+    local image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+    local root_elf="${SEL4_BUILD_DIR}/elfloader/rootserver"
+    local root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
+    local identity_json
+
+    require_file "$image"
+    require_file "$root_elf"
+    require_file "$root_cpio"
+    identity_json="$(python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" \
+      verify-unsealed-marker \
+      --artifact "$image" \
+      --expected-root-elf "$root_elf" \
+      --expected-root-cpio "$root_cpio")" || \
+      fail "--skip-build image lacks exact root/archive marker provenance"
+    EXACT_BUILD_TIMESTAMP="$(printf '%s' "$identity_json" | \
+      python3 -c 'import json,sys; record=json.load(sys.stdin); commit=sys.argv[1]; marker=record["build_marker"]; embedded=record["embedded_git_commit"]; assert commit.startswith(embedded) and not marker.split()[1].endswith("-dirty"); print(record["build_timestamp"])' \
+      "$EXACT_GIT_COMMIT")" || \
+      fail "--skip-build image marker does not belong to the exact clean commit"
+    [[ -n "$EXACT_BUILD_TIMESTAMP" ]] || \
+      fail "--skip-build image marker omitted its exact build timestamp"
+    log "Reusing exact image build timestamp: ${EXACT_BUILD_TIMESTAMP}"
+}
+
+write_sel4_image_provenance() {
+    local image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+    local root_elf="${SEL4_BUILD_DIR}/elfloader/rootserver"
+    local root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
+    local cache="${SEL4_BUILD_DIR}/CMakeCache.txt"
+    local timer_header="${SEL4_BUILD_DIR}/kernel/gen_headers/plat/platform_gen.h"
+    local provenance="${image}${SEL4_IMAGE_PROVENANCE_SUFFIX}"
+
+    python3 - \
+      "$provenance" "$image" "$root_elf" "$root_cpio" "$MANIFEST_PATH" \
+      "$cache" "$timer_header" "$EXACT_GIT_COMMIT" "$EXACT_BUILD_TIMESTAMP" \
+      "$ROOT_TASK_FEATURES" <<'PY'
+import hashlib
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+(
+    destination,
+    image_path,
+    root_path,
+    cpio_path,
+    manifest_path,
+    cache_path,
+    timer_header_path,
+    commit,
+    timestamp,
+    features,
+) = sys.argv[1:]
+
+
+def digest(path: str) -> str:
+    value = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+record = {
+    "schema": "cohesix-pi4-sel4-image-provenance/v1",
+    "git_commit": commit,
+    "source_tree_clean": True,
+    "build_timestamp": timestamp,
+    "root_task_features": features,
+    "source_manifest_sha256": digest(manifest_path),
+    "sel4_cmake_cache_sha256": digest(cache_path),
+    "sel4_timer_header_sha256": digest(timer_header_path),
+    "wrapper_sha256": digest(image_path),
+    "rootserver_sha256": digest(root_path),
+    "rootserver_cpio_sha256": digest(cpio_path),
+}
+rendered = (json.dumps(record, indent=2, sort_keys=True) + "\n").encode()
+target = Path(destination)
+target.parent.mkdir(parents=True, exist_ok=True)
+temporary_name = None
+try:
+    with tempfile.NamedTemporaryFile(
+        mode="wb", dir=target.parent, prefix=f".{target.name}.", delete=False
+    ) as temporary:
+        temporary_name = temporary.name
+        temporary.write(rendered)
+        temporary.flush()
+        os.fsync(temporary.fileno())
+    os.replace(temporary_name, target)
+    temporary_name = None
+finally:
+    if temporary_name is not None:
+        try:
+            os.unlink(temporary_name)
+        except FileNotFoundError:
+            pass
+PY
+    require_file "$provenance"
+    log "Wrote exact seL4 wrapper provenance: ${provenance}"
+}
+
+verify_skip_build_provenance() {
+    local image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+    local provenance="${image}${SEL4_IMAGE_PROVENANCE_SUFFIX}"
+
+    require_file "$provenance"
+    python3 - \
+      "$provenance" "$image" "${SEL4_BUILD_DIR}/elfloader/rootserver" \
+      "${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio" "$MANIFEST_PATH" \
+      "${SEL4_BUILD_DIR}/CMakeCache.txt" \
+      "${SEL4_BUILD_DIR}/kernel/gen_headers/plat/platform_gen.h" \
+      "$EXACT_GIT_COMMIT" "$EXACT_BUILD_TIMESTAMP" "$ROOT_TASK_FEATURES" <<'PY'
+import hashlib
+import json
+import sys
+
+(
+    provenance_path,
+    image_path,
+    root_path,
+    cpio_path,
+    manifest_path,
+    cache_path,
+    timer_header_path,
+    commit,
+    timestamp,
+    features,
+) = sys.argv[1:]
+
+
+def digest(path: str) -> str:
+    value = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+with open(provenance_path, "r", encoding="utf-8") as handle:
+    record = json.load(handle)
+expected = {
+    "schema": "cohesix-pi4-sel4-image-provenance/v1",
+    "git_commit": commit,
+    "source_tree_clean": True,
+    "build_timestamp": timestamp,
+    "root_task_features": features,
+    "source_manifest_sha256": digest(manifest_path),
+    "sel4_cmake_cache_sha256": digest(cache_path),
+    "sel4_timer_header_sha256": digest(timer_header_path),
+    "wrapper_sha256": digest(image_path),
+    "rootserver_sha256": digest(root_path),
+    "rootserver_cpio_sha256": digest(cpio_path),
+}
+if record != expected:
+    missing = sorted(set(expected) - set(record)) if isinstance(record, dict) else []
+    extra = sorted(set(record) - set(expected)) if isinstance(record, dict) else []
+    raise SystemExit(
+        "--skip-build provenance does not match the selected exact build "
+        f"(missing={missing} extra={extra})"
+    )
+PY
+    log "Verified --skip-build manifest, feature, profile, rootserver, and wrapper provenance"
+}
+
 verify_boot_cmd_handoff() {
     local path="$1"
 
@@ -349,6 +818,7 @@ resolve_sel4_source_dir() {
 
 resolve_sel4_kernel_source_dir() {
     local cached=""
+    local source_root=""
 
     if [[ -n "${SEL4_KERNEL_SOURCE_DIR}" ]]; then
         [[ -f "${SEL4_KERNEL_SOURCE_DIR}/CMakeLists.txt" ]] || \
@@ -361,22 +831,16 @@ resolve_sel4_kernel_source_dir() {
         return 0
     fi
 
-    if [[ -d "${DEFAULT_SEL4_KERNEL_SOURCE_DIR}" && \
-          -f "${DEFAULT_SEL4_KERNEL_SOURCE_DIR}/CMakeLists.txt" && \
-          -f "${DEFAULT_SEL4_KERNEL_SOURCE_DIR}/VERSION" ]]; then
-        printf "%s\n" "${DEFAULT_SEL4_KERNEL_SOURCE_DIR}"
-        return 0
-    fi
-
     if [[ -f "${SEL4_BUILD_DIR}/CMakeCache.txt" ]]; then
-        cached="$(awk -F= '/^KERNEL_PATH:STRING=/{print $2}' "${SEL4_BUILD_DIR}/CMakeCache.txt" | tail -n 1)"
-        if [[ -n "$cached" && -d "$cached" && -f "${cached}/CMakeLists.txt" ]]; then
+        source_root="$(awk -F= '/^COHESIX_SEL4_PROJECT_ROOT:PATH=/{print $2}' "${SEL4_BUILD_DIR}/CMakeCache.txt" | tail -n 1)"
+        cached="${source_root}/kernel"
+        if [[ -n "$source_root" && -d "$cached" && -f "${cached}/CMakeLists.txt" ]]; then
             printf "%s\n" "$cached"
             return 0
         fi
     fi
 
-    fail "could not resolve seL4 kernel source for ${SEL4_BUILD_DIR}; pass --sel4-kernel-source-dir"
+    fail "could not resolve canonical seL4 profile kernel source for ${SEL4_BUILD_DIR}; pass --sel4-kernel-source-dir"
 }
 
 verify_pi4_sel4_xhci_device_untyped() {
@@ -496,19 +960,13 @@ generate_pi4_elfloader_platform_info() {
       fail "Pi4 elfloader platform_info.h is missing memory_region after regeneration"
 }
 
-resolve_one_domain_schedule_cache() {
+verify_one_domain_schedule_cache_absent() {
     local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
-    local tmp_file
 
     require_file "$cache_file"
     grep -q "^KernelNumDomains:STRING=1$" "$cache_file" || return 0
-
-    if grep -Eq "^KernelDomainSchedule(:|-)" "$cache_file"; then
-        tmp_file="$(mktemp "${cache_file}.domain.XXXXXX")"
-        awk '$0 !~ /^KernelDomainSchedule(:|-)/ { print }' "$cache_file" > "$tmp_file"
-        mv "$tmp_file" "$cache_file"
-        log "Removed unused one-domain KernelDomainSchedule cache entry"
-    fi
+    ! grep -Eq "^KernelDomainSchedule(:|-)" "$cache_file" || \
+      fail "canonical one-domain seL4 profile contains forbidden KernelDomainSchedule input"
 }
 
 ensure_sel4_lib_available() {
@@ -526,42 +984,45 @@ ensure_sel4_lib_available() {
     require_file "${SEL4_BUILD_DIR}/libsel4/libsel4.a"
 }
 
-configure_pi4_sel4_build() {
+resolve_canonical_sel4_project_root() {
+    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
+    local source_root=""
+
+    require_file "$cache_file"
+    source_root="$(awk -F= '/^COHESIX_SEL4_PROJECT_ROOT:PATH=/{print $2}' "$cache_file" | tail -n 1)"
+    [[ -n "$source_root" && -d "$source_root" ]] || \
+      fail "seL4 build is not configured by the canonical profile wrapper: ${SEL4_BUILD_DIR}"
+    [[ -f "${source_root}/kernel/CMakeLists.txt" ]] || \
+      fail "canonical seL4 project root is missing its pinned kernel: ${source_root}"
+    printf "%s\n" "$source_root"
+}
+
+validate_pi4_sel4_build() {
     local sel4_source_dir="$1"
     local sel4_kernel_source_dir="$2"
+    local canonical_source_root=""
+    local profile_tool="${ROOT_DIR}/scripts/sel4_profile.py"
+    local profile_python="${SEL4_VENV_DIR}/bin/python"
 
-    log "Configuring ${SEL4_BUILD_DIR} for Pi4 serial diagnostics"
-    cmake -S "$sel4_source_dir" -B "$SEL4_BUILD_DIR" \
-      -DKERNEL_PATH="${sel4_kernel_source_dir}" \
-      -DKERNEL_HELPERS_PATH="${sel4_kernel_source_dir}/tools/helpers.cmake" \
-      -DKERNEL_CONFIG_PATH="${sel4_kernel_source_dir}/configs/seL4Config.cmake" \
-      -DARM_HYP=OFF \
-      -DPLATFORM=bcm2711 \
-      -DRPI4_MEMORY="${PI4_TOTAL_MEM_MB}" \
-      -DRELEASE=OFF \
-      -DVERIFICATION=OFF \
-      -DSMP=ON \
-      -DNUM_NODES=4 \
-      -DSel4testAllowSettingsOverride=ON \
-      -DKernelPlatform=bcm2711 \
-      -DKernelSel4Arch=aarch64 \
-      -DKernelVerificationBuild=OFF \
-      -DKernelDebugBuild=ON \
-      -DKernelPrinting=ON \
-      -DKernelArmExportVCNTUser=ON \
-      -DKernelArmExportPCNTUser=OFF \
-      -DKernelArmExportPTMRUser=OFF \
-      -DKernelArmExportVTMRUser=OFF \
-      -DHardwareDebugAPI=OFF \
-      -DKernelMaxNumNodes=4 \
-      -DKernelRootCNodeSizeBits=13 \
-      -DElfloaderRootserversLast=ON \
-      -DElfloaderImage=uimage \
-      -DElfloaderIncludeDtb=OFF \
-      -DIMAGE_START_ADDR="${PI4_UBOOT_IMAGE_START_ADDR}" \
-      -DCMAKE_OBJCOPY="${OBJCOPY_WRAPPER}" \
-      -DSIMULATION=OFF \
-      -DCMAKE_BUILD_TYPE=Debug
+    canonical_source_root="$(resolve_canonical_sel4_project_root)"
+    require_file "$profile_tool"
+    require_file "$profile_python"
+    [[ "$(realpath_py "$sel4_kernel_source_dir")" == \
+       "$(realpath_py "${canonical_source_root}/kernel")" ]] || \
+      fail "--sel4-kernel-source-dir does not match the canonical profile source"
+    [[ "$(realpath_py "$sel4_source_dir")" == \
+       "$(realpath_py "${ROOT_DIR}/tools/sel4-profile-project")" ]] || \
+      fail "seL4 build CMAKE_HOME_DIRECTORY is not the canonical Cohesix wrapper"
+
+    log "Validating ${SEL4_BUILD_DIR} as canonical ${PI4_SEL4_PROFILE}"
+    "$profile_python" "$profile_tool" validate \
+      --profile "$PI4_SEL4_PROFILE" \
+      --source "$canonical_source_root" \
+      --build-dir "$SEL4_BUILD_DIR" \
+      --require-source \
+      --require-artifacts \
+      --for-runtime >/dev/null || \
+      fail "canonical ${PI4_SEL4_PROFILE} validation failed for ${SEL4_BUILD_DIR}"
 
     local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
     require_file "$cache_file"
@@ -584,18 +1045,13 @@ configure_pi4_sel4_build() {
 }
 
 resolve_mkimage() {
-    if command -v mkimage >/dev/null 2>&1; then
-        command -v mkimage
+    local canonical="${ROOT_DIR}/out/toolchain/u-boot-tools-build/tools/mkimage"
+    if [[ -x "$canonical" ]]; then
+        printf "%s\n" "$canonical"
         return 0
     fi
 
-    local fallback="${ROOT_DIR}/third_party/u-boot/tools/mkimage"
-    if [[ -x "$fallback" ]]; then
-        printf "%s\n" "$fallback"
-        return 0
-    fi
-
-    fail "mkimage not found (install u-boot-tools or build third_party/u-boot/tools/mkimage)"
+    fail "canonical source-derived mkimage missing: ${canonical}; run the documented macOS toolchain preparation"
 }
 
 cpio_supports_reproducible() {
@@ -773,7 +1229,7 @@ rebuild_sel4_pi4_uboot_tree() {
     sel4_source_dir="$(resolve_sel4_source_dir)"
     sel4_kernel_source_dir="$(resolve_sel4_kernel_source_dir)"
     verify_pi4_sel4_xhci_device_untyped "${sel4_kernel_source_dir}"
-    configure_pi4_sel4_build "${sel4_source_dir}" "${sel4_kernel_source_dir}"
+    validate_pi4_sel4_build "${sel4_source_dir}" "${sel4_kernel_source_dir}"
 
     jobs="$(sysctl -n hw.ncpu)"
 
@@ -782,8 +1238,9 @@ rebuild_sel4_pi4_uboot_tree() {
     generate_pi4_elfloader_platform_info
     log "Rebuilding Pi4 seL4 U-Boot build tree"
     cmake --build "${SEL4_BUILD_DIR}" -j"${jobs}"
-    resolve_one_domain_schedule_cache
+    verify_one_domain_schedule_cache_absent
     verify_pi4_uboot_image_start_addr generated
+    validate_pi4_sel4_build "${sel4_source_dir}" "${sel4_kernel_source_dir}"
 
     require_file "${SEL4_BUILD_DIR}/libsel4/libsel4.a"
     require_file "${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
@@ -888,6 +1345,64 @@ validate_menu_input_mode() {
     esac
 }
 
+validate_output_paths() {
+    local image_name_folded
+    local protected
+    local reserved
+    local reserved_folded
+    [[ -n "$COHESIX_IMAGE_NAME" ]] || fail "--image-name must not be empty"
+    [[ "$COHESIX_IMAGE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
+      fail "--image-name must use a FAT-safe alphanumeric basename"
+    [[ "$COHESIX_IMAGE_NAME" == "$(basename "$COHESIX_IMAGE_NAME")" ]] || \
+      fail "--image-name must be one basename without directory components"
+    [[ "$COHESIX_IMAGE_NAME" != "." && "$COHESIX_IMAGE_NAME" != ".." ]] || \
+      fail "--image-name must not be . or .."
+    [[ "$COHESIX_IMAGE_NAME" != *. ]] || \
+      fail "--image-name must not end with a FAT-normalized trailing dot"
+    image_name_folded="$(printf '%s' "$COHESIX_IMAGE_NAME" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+    for reserved in \
+        "$SEL4_UPSTREAM_IMAGE_NAME" \
+        "$PI4_IMAGE_IDENTITY_STAGE_NAME" \
+        "$COHESIX_LOGO_STAGE_NAME" \
+        "$BOOTSTD_LOGO_STAGE_NAME" \
+        "$BRCMFMAC_CMDLINE_STAGE_NAME" \
+        "$BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME" \
+        "$DRIVER_RUNTIME_CPIO_STAGE_NAME" \
+        "cohesix-driver-runtimes.cpio" \
+        "start4.elf" "fixup4.dat" "bcm2711-rpi-4-b.dtb" "u-boot.bin" \
+        "config.txt" "boot.cmd" "boot.scr.uimg" "cohesix_boot_state.txt" \
+        "pi4-runtime-dma-proof.env" "cohesix.env" "overlays"; do
+        reserved_folded="$(printf '%s' "$reserved" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+        [[ "$image_name_folded" != "$reserved_folded" ]] || \
+          fail "--image-name collides with reserved staged artifact: ${reserved}"
+    done
+    [[ "$STAGE_DIR" != "/" && "$STAGE_DIR" != "$ROOT_DIR" ]] || \
+      fail "--stage-dir must not name the filesystem root or repository root"
+    case "${STAGE_DIR}/" in
+        "${ROOT_DIR}/out/"*) ;;
+        "${ROOT_DIR}/"*)
+            fail "--stage-dir inside the checkout must be strictly under ${ROOT_DIR}/out"
+            ;;
+    esac
+    for protected in \
+        "$SEL4_BUILD_DIR" \
+        "$SEL4_VENV_DIR" \
+        "$FIRMWARE_DIR" \
+        "$(dirname "$MANIFEST_PATH")" \
+        "$(dirname "$U_BOOT_BIN")"; do
+        case "${protected}/" in
+            "${STAGE_DIR}/"*)
+                fail "--stage-dir must not contain a protected source/build path: ${protected}"
+                ;;
+        esac
+        case "${STAGE_DIR}/" in
+            "${protected}/"*)
+                fail "--stage-dir must not be inside a protected source/build path: ${protected}"
+                ;;
+        esac
+    done
+}
+
 activate_venv() {
     if [[ ! -d "$SEL4_VENV_DIR" ]]; then
         fail "venv directory not found: ${SEL4_VENV_DIR}"
@@ -935,7 +1450,7 @@ run_coh_rtc_codegen_for_manifest() {
     local manifest_json="$2"
     mkdir -p "${GENERATED_CONFIG_DIR}"
 
-    cargo run -p coh-rtc -- \
+    cargo run --locked -p coh-rtc -- \
       "$manifest_path" \
       --out "${ROOT_DIR}/apps/root-task/src/generated" \
       --manifest "$manifest_json" \
@@ -993,6 +1508,9 @@ cleanup() {
     if ! restore_canonical_codegen; then
         status=1
     fi
+    if [[ -n "$EXACT_GIT_COMMIT" ]] && ! verify_final_clean_repository_state; then
+        status=1
+    fi
     exit "$status"
 }
 
@@ -1020,6 +1538,7 @@ sync_resolved_manifest_json() {
 build_pi4_image() {
     local root_task_elf
     local embedded_rootserver="${SEL4_BUILD_DIR}/elfloader/rootserver"
+    local embedded_root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
     local sel4_source_dir
     local sel4_kernel_source_dir
     local jobs
@@ -1035,7 +1554,7 @@ build_pi4_image() {
     sel4_source_dir="$(resolve_sel4_source_dir)"
     sel4_kernel_source_dir="$(resolve_sel4_kernel_source_dir)"
     verify_pi4_sel4_xhci_device_untyped "$sel4_kernel_source_dir"
-    configure_pi4_sel4_build "$sel4_source_dir" "$sel4_kernel_source_dir"
+    validate_pi4_sel4_build "$sel4_source_dir" "$sel4_kernel_source_dir"
     ensure_sel4_lib_available
 
     if [[ "${MANIFEST_PATH}" == *.toml ]]; then
@@ -1047,9 +1566,11 @@ build_pi4_image() {
     else
         fail "unsupported --manifest extension (expected .toml or .json): ${MANIFEST_PATH}"
     fi
+    capture_build_repository_state
 
     log "Building Pi4 isolated driver runtime images"
     cargo build \
+      --locked \
       --target aarch64-unknown-none \
       --release \
       -p pi4-driver-runtime
@@ -1061,20 +1582,26 @@ build_pi4_image() {
     log "Building root-task (${ROOT_TASK_FEATURES})"
     require_dir "${PI4_WIFI_FIRMWARE_DIR}"
     log "Using Pi4 WiFi firmware bundle: ${PI4_WIFI_FIRMWARE_DIR}"
-    COHESIX_BUILD_STAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    COHESIX_BUILD_STAMP="$EXACT_BUILD_TIMESTAMP" \
+      COHESIX_EXACT_GIT_COMMIT="$EXACT_GIT_COMMIT" \
+      COHESIX_EXACT_SOURCE_CLEAN=1 \
       COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="${embedded_runtime_cpio}" \
       COHESIX_PI4_WIFI_FIRMWARE_DIR="${PI4_WIFI_FIRMWARE_DIR}" \
       cargo build \
+        --locked \
         --target aarch64-unknown-none \
         --release \
         -p root-task \
         --no-default-features \
         --features "$ROOT_TASK_FEATURES"
+    verify_build_repository_state "after root-task build"
 
     jobs="$(sysctl -n hw.ncpu)"
     require_file "$root_task_elf"
+    verify_unsealed_pi4_build_marker "$root_task_elf" 1
     log "Built root-task ELF: ${root_task_elf}"
     strip_root_task_for_pi_image "$root_task_elf"
+    verify_unsealed_pi4_build_marker "$STRIPPED_ROOT_TASK_ELF" 1
     log "Rebuilding Pi4 seL4 image in ${SEL4_BUILD_DIR}"
     cmake --build "$SEL4_BUILD_DIR" \
       --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
@@ -1090,13 +1617,21 @@ build_pi4_image() {
     cmake --build "$SEL4_BUILD_DIR" \
       --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
       -j"$jobs"
-    resolve_one_domain_schedule_cache
+    verify_one_domain_schedule_cache_absent
     verify_pi4_uboot_image_start_addr generated
+    require_file "$embedded_root_cpio"
+    verify_unsealed_pi4_build_marker \
+      "${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}" 0 \
+      "$STRIPPED_ROOT_TASK_ELF" "$embedded_root_cpio"
 
     root_hash_expected="$(shasum -a 256 "$STRIPPED_ROOT_TASK_ELF" | awk '{print $1}')"
     root_hash_actual="$(shasum -a 256 "$embedded_rootserver" | awk '{print $1}')"
     [[ "$root_hash_actual" == "$root_hash_expected" ]] || \
       fail "embedded rootserver was regenerated after root-task injection"
+    verify_one_domain_schedule_cache_absent
+    validate_pi4_sel4_build "$sel4_source_dir" "$sel4_kernel_source_dir"
+    verify_build_repository_state "after final seL4 wrapper build"
+    write_sel4_image_provenance
 }
 
 stage_uboot_logo() {
@@ -1473,12 +2008,16 @@ write_pi4_runtime_dma_build_proof() {
     local runtime_raw="${STAGE_DIR}/cohesix-driver-runtimes.cpio"
     local runtime_uimg="${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
     local staged_image="${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
+    local image_identity="${STAGE_DIR}/${PI4_IMAGE_IDENTITY_STAGE_NAME}"
+    local expected_root_elf="${STRIPPED_ROOT_TASK_ELF:-${SEL4_BUILD_DIR}/elfloader/rootserver}"
     local timestamp
 
     require_file "$manifest_json"
     require_file "$runtime_raw"
     require_file "$runtime_uimg"
     require_file "$staged_image"
+    require_file "$image_identity"
+    require_file "$expected_root_elf"
 
     timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     {
@@ -1495,6 +2034,15 @@ write_pi4_runtime_dma_build_proof() {
         printf "PI4_RUNTIME_DMA_RUNTIME_UIMAGE_SHA256=%s\n" "$(shasum -a 256 "$runtime_uimg" | awk '{print $1}')"
         printf "PI4_RUNTIME_DMA_STAGED_IMAGE=%s\n" "$staged_image"
         printf "PI4_RUNTIME_DMA_STAGED_IMAGE_SHA256=%s\n" "$(shasum -a 256 "$staged_image" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_SCHEME=cohesix-pi4-image-identity/v2\n"
+        printf "PI4_IMAGE_IDENTITY_GIT_COMMIT=%s\n" "$EXACT_GIT_COMMIT"
+        printf "PI4_IMAGE_IDENTITY_BUILD_TIMESTAMP=%s\n" "$EXACT_BUILD_TIMESTAMP"
+        printf "PI4_IMAGE_IDENTITY_BUILD_ID=%s\n" "$EXACT_BUILD_ID"
+        printf "PI4_IMAGE_IDENTITY_SOURCE_TREE_CLEAN=yes\n"
+        printf "PI4_IMAGE_IDENTITY_METADATA=%s\n" "$image_identity"
+        printf "PI4_IMAGE_IDENTITY_METADATA_SHA256=%s\n" "$(shasum -a 256 "$image_identity" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_ROOT_ELF_SHA256=%s\n" "$(shasum -a 256 "$expected_root_elf" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_ROOT_CPIO_SHA256=%s\n" "$(shasum -a 256 "${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio" | awk '{print $1}')"
     } >"$proof_path"
     require_file "$proof_path"
     log "Wrote Pi4 runtime/DMA stage-only proof at ${proof_path}"
@@ -1504,7 +2052,9 @@ stage_sd_payload() {
     local mkimage_bin="$1"
     local sel4_image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
     local stage_overlays="${STAGE_DIR}/overlays"
+    local staged_image="${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
     local fallback_image="${STAGE_DIR}/${SEL4_UPSTREAM_IMAGE_NAME}"
+    local unsealed_image="${STAGE_DIR}/.${COHESIX_IMAGE_NAME}.unsealed"
 
     require_file "$sel4_image"
     require_file "$U_BOOT_BIN"
@@ -1519,16 +2069,14 @@ stage_sd_payload() {
     cp -f "${FIRMWARE_DIR}/overlays/miniuart-bt.dtbo" "${stage_overlays}/miniuart-bt.dtbo"
     cp -f "${FIRMWARE_DIR}/overlays/upstream-pi4.dtbo" "${stage_overlays}/upstream-pi4.dtbo"
     cp -f "$U_BOOT_BIN" "${STAGE_DIR}/u-boot.bin"
-    cp -f "$sel4_image" "${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
-    # Keep legacy fallback filename in sync with the staged Cohesix image so a
-    # fallback boot path cannot silently run stale bits.
-    cp -f "${STAGE_DIR}/${COHESIX_IMAGE_NAME}" "$fallback_image"
+    # Keep the unsealed wrapper hidden until the complete final image passes
+    # marker-section, normalized-identity, and U-Boot CRC verification.
+    cp -f "$sel4_image" "$unsealed_image"
     stage_uboot_logo "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}"
     if [[ -f "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}" ]]; then
         cp -f "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}" "${STAGE_DIR}/${BOOTSTD_LOGO_STAGE_NAME}"
     fi
     stage_driver_runtime_payload "$mkimage_bin"
-    write_pi4_runtime_dma_build_proof
     write_linux_wifi_debug_helpers
 
     cat > "${STAGE_DIR}/config.txt" <<EOF
@@ -1561,6 +2109,15 @@ cohesix_boot_bytes=0
 cohesix_boot_image=${COHESIX_IMAGE_NAME}
 EOF
 
+    # Identity sealing is the final transformation of the boot image. No
+    # repack, padding, or mkimage operation may mutate it after this point.
+    seal_staged_pi4_image "$unsealed_image" "$staged_image" "$fallback_image"
+    "$mkimage_bin" -l "$staged_image" >/dev/null || \
+      fail "mkimage rejected the sealed primary Pi image"
+    "$mkimage_bin" -l "$fallback_image" >/dev/null || \
+      fail "mkimage rejected the sealed fallback Pi image"
+    write_pi4_runtime_dma_build_proof
+    verify_final_staged_pi4_image "$mkimage_bin"
     require_file "${STAGE_DIR}/boot.scr.uimg"
     log "Staged Pi4 payload at ${STAGE_DIR}"
 }
@@ -1768,6 +2325,7 @@ main() {
     parse_args "$@"
     validate_menu_input_mode
     canonicalize_input_paths
+    validate_output_paths
 
     cd "$ROOT_DIR"
     trap cleanup EXIT
@@ -1775,6 +2333,7 @@ main() {
     if [[ "${CLEAN_BUILD}" -eq 1 && "${SKIP_BUILD}" -eq 1 ]]; then
         fail "--clean cannot be combined with --skip-build"
     fi
+    capture_exact_source_identity
     local manifest_real
     manifest_real="$(realpath_py "${MANIFEST_PATH}")"
     if [[ "${manifest_real}" != "$(realpath_py "${CANONICAL_MANIFEST_PATH}")" ]]; then
@@ -1806,11 +2365,25 @@ main() {
     if [[ "$SKIP_BUILD" -eq 0 ]]; then
         build_pi4_image
     else
+        local sel4_source_dir
         local sel4_kernel_source_dir
+        sel4_source_dir="$(resolve_sel4_source_dir)"
         sel4_kernel_source_dir="$(resolve_sel4_kernel_source_dir)"
         verify_pi4_sel4_xhci_device_untyped "$sel4_kernel_source_dir"
-        verify_pi4_sel4_counter_config
+        validate_pi4_sel4_build "$sel4_source_dir" "$sel4_kernel_source_dir"
         verify_skip_build_image_fresh
+        adopt_skip_build_source_timestamp
+        verify_skip_build_provenance
+        if [[ "${MANIFEST_PATH}" == *.toml ]]; then
+            log "Regenerating selected manifest artifacts for --skip-build proof"
+            run_coh_rtc_codegen
+        elif [[ "${MANIFEST_PATH}" == *.json ]]; then
+            log "Synchronizing selected resolved manifest for --skip-build proof"
+            sync_resolved_manifest_json
+        else
+            fail "unsupported --manifest extension (expected .toml or .json): ${MANIFEST_PATH}"
+        fi
+        capture_build_repository_state
         log "Skipping build (--skip-build)"
     fi
 
@@ -1823,4 +2396,6 @@ main() {
     fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

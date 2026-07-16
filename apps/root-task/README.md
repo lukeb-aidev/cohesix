@@ -133,7 +133,7 @@ cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib 
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::
 cargo test -p pi4-driver-runtime --lib -- --test-threads=1
 cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance
-SEL4_BUILD_DIR=$REPO/seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu
+SEL4_BUILD_DIR=$REPO/out/sel4/profile-v2/qemu-smp-production cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu
 SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
 ```
 

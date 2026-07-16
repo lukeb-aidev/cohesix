@@ -58,7 +58,6 @@ use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
 use crate::drivers::driver_task_net::{
     Cyw43DriverTaskDevice, DriverTaskNetError, GenetDriverTaskDevice,
-    CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS,
 };
 use crate::drivers::rtl8139::{DriverError as Rtl8139DriverError, Rtl8139Device};
 #[cfg(feature = "net-backend-virtio")]
@@ -79,8 +78,6 @@ const TCP_RX_BUFFER: usize = 32 * 1024;
 const TCP_TX_BUFFER: usize = 32 * 1024;
 const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 32;
 const MAX_CONSOLE_BYTES_PER_POLL: usize = 20 * 1024;
-const CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN: u32 = 16;
-const CYW43_RESPONSE_FLUSH_BYTES_PER_TURN: usize = 8 * 1024;
 const SAME_TICK_STALL_WARN_POLLS: u16 = 256;
 const MAX_DHCP_RX_PACKETS_PER_POLL: usize = 2;
 const MAX_UDP_ECHO_PACKETS_PER_POLL: usize = 2;
@@ -89,7 +86,6 @@ const MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL: usize = 64;
 const MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL: usize = 20 * 1024;
 const TCP_SERVICE_BYTES_PER_TURN: u32 =
     (MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL + MAX_CONSOLE_BYTES_PER_POLL) as u32;
-const TCP_RESPONSE_FLUSH_BYTES_PER_TURN: u32 = CYW43_RESPONSE_FLUSH_BYTES_PER_TURN as u32;
 const MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL: usize = 2;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
@@ -111,7 +107,9 @@ const DHCP_RESTART_BACKOFF_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 const CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS: u64 = 0;
 const CYW43_DHCP_POST_SECURE_EAPOL_OVERSHOOT_LOG_MS: u64 = 1_000;
 const CYW43_DHCP_RX_ADMISSION_RETRY_MS: u64 = 250;
-const CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS: usize = 16;
+// CYW43 host-EAPOL urgency is retained by the linked-runtime cursor. The
+// ordinary EventPump grants one child-runtime operation per outer turn.
+const CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS: usize = 1;
 const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 pub(crate) const TCP_SMOKE_PORT: u16 = 31_339;
@@ -269,11 +267,8 @@ fn wifi_host_eapol_blocks_driver_task_pre_poll(bringup_status: Option<&'static s
 }
 
 fn wifi_host_eapol_stack_service_polls(bringup_status: Option<&'static str>) -> usize {
-    if wifi_host_eapol_blocks_data_path(bringup_status) {
-        CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS
-    } else {
-        1
-    }
+    let _ = bringup_status;
+    1
 }
 
 fn dhcp_start_defer_reason_for(bringup_status: Option<&'static str>) -> Option<&'static str> {
@@ -2217,6 +2212,41 @@ where
     Ok(DefaultNetStack::Cyw43DriverTask(stack))
 }
 
+/// Construct the root-side smoltcp shell after the retained CYW43 supervisor
+/// has published a ready linked-runtime generation.
+///
+/// This function deliberately does not invoke the legacy bootstrap entrypoint
+/// or register/replay a child runtime. `Cyw43BootstrapSupervisor` already did
+/// that work one operation per outer event turn; construction below is local
+/// stack bookkeeping and the driver-task device shell ignores the HAL value.
+#[cfg(feature = "kernel")]
+pub fn finish_cyw43_net_console_after_bootstrap<H>(
+    hal: &mut H,
+    config: ConsoleNetConfig,
+) -> Result<DefaultNetStack, DefaultNetConsoleError>
+where
+    H: Hardware<Error = HalError>,
+{
+    let config = prepare_cyw43_net_console_config(config)?;
+    let backend = config.backend;
+    let mark = if matches!(config.policy.interface, NetInterfacePolicy::Auto) {
+        "net.init.wrap.after-retained.cyw43-driver-task-auto"
+    } else {
+        "net.init.wrap.after-retained.cyw43-driver-task"
+    };
+    let stack = NetStack::<Cyw43DriverTaskDevice>::new(hal, config, backend)
+        .map_err(convert_console_error::<DriverTaskNetError>)?;
+    check_bootinfo_wrap(mark)?;
+    Ok(DefaultNetStack::Cyw43DriverTask(stack))
+}
+
+/// Map a retained supervisor failure into the public network-console error
+/// grammar without re-entering runtime bootstrap.
+#[cfg(feature = "kernel")]
+pub fn map_cyw43_bootstrap_error(error: DriverTaskNetError) -> DefaultNetConsoleError {
+    convert_driver_error(error)
+}
+
 fn configured_active_driver_label(config: &ConsoleNetConfig) -> &'static str {
     match (config.backend, config.policy.interface) {
         (NetBackend::BcmGenet, NetInterfacePolicy::Wifi) => "cyw43",
@@ -2230,29 +2260,9 @@ fn configured_active_driver_label(config: &ConsoleNetConfig) -> &'static str {
     }
 }
 
-/// Initialise the network console stack, translating low-level errors into
-/// user-facing diagnostics.
-pub fn init_net_console<H>(
-    hal: &mut H,
+fn validate_net_console_config(
     config: ConsoleNetConfig,
-) -> Result<DefaultNetStack, DefaultNetConsoleError>
-where
-    H: Hardware<Error = HalError>,
-{
-    let mut progress = |_: &'static str| {};
-    init_net_console_with_cyw43_progress(hal, config, &mut progress)
-}
-
-fn init_net_console_with_cyw43_progress<H>(
-    hal: &mut H,
-    config: ConsoleNetConfig,
-    progress: &mut dyn crate::drivers::driver_task_net::Cyw43BootstrapProgress,
-) -> Result<DefaultNetStack, DefaultNetConsoleError>
-where
-    H: Hardware<Error = HalError>,
-{
-    log_socket_tripwire(concat!(file!(), ":", line!()));
-
+) -> Result<ConsoleNetConfig, DefaultNetConsoleError> {
     let config = config.with_profile_defaults();
     let iface_ip = config.address.ip;
     if config.listen_port == 0
@@ -2289,6 +2299,53 @@ where
         );
         return Err(NetConsoleError::InvalidConfig(reason));
     }
+    Ok(config)
+}
+
+/// Validate and canonicalise a deferred physical-CYW43 console configuration
+/// before any supervisor turn is allowed to touch the linked runtimes.
+#[cfg(feature = "kernel")]
+pub fn prepare_cyw43_net_console_config(
+    config: ConsoleNetConfig,
+) -> Result<ConsoleNetConfig, DefaultNetConsoleError> {
+    let config = validate_net_console_config(config)?;
+    let selects_wifi = matches!(config.backend, NetBackend::BcmGenet)
+        && (matches!(config.policy.interface, NetInterfacePolicy::Wifi)
+            || (matches!(config.policy.interface, NetInterfacePolicy::Auto)
+                && config.wifi_credentials.is_some()));
+    if !selects_wifi {
+        return Err(NetConsoleError::InvalidConfig(
+            "deferred CYW43 supervisor requires a Wi-Fi interface policy",
+        ));
+    }
+    Ok(config)
+}
+
+/// Initialise the network console stack, translating low-level errors into
+/// user-facing diagnostics.
+pub fn init_net_console<H>(
+    hal: &mut H,
+    config: ConsoleNetConfig,
+) -> Result<DefaultNetStack, DefaultNetConsoleError>
+where
+    H: Hardware<Error = HalError>,
+{
+    let mut progress = |_: &'static str| {};
+    init_net_console_with_cyw43_progress(hal, config, &mut progress)
+}
+
+fn init_net_console_with_cyw43_progress<H>(
+    hal: &mut H,
+    config: ConsoleNetConfig,
+    progress: &mut dyn crate::drivers::driver_task_net::Cyw43BootstrapProgress,
+) -> Result<DefaultNetStack, DefaultNetConsoleError>
+where
+    H: Hardware<Error = HalError>,
+{
+    log_socket_tripwire(concat!(file!(), ":", line!()));
+
+    let config = validate_net_console_config(config)?;
+    let iface_ip = config.address.ip;
 
     debug_validate_socket_storage(concat!(file!(), ":", line!()));
 
@@ -2382,40 +2439,6 @@ where
             Ok(DefaultNetStack::Virtio(stack))
         }
     }
-}
-
-/// Retry a physical-Pi Wi-Fi console bootstrap. Once a previous attempt has
-/// reached both linked runtimes, the driver seam performs the fenced pair
-/// restart and full retained firmware/control replay before ordinary stack
-/// construction is allowed to resume.
-#[cfg(feature = "kernel")]
-pub fn retry_cyw43_net_console<H>(
-    hal: &mut H,
-    config: ConsoleNetConfig,
-) -> Result<DefaultNetStack, DefaultNetConsoleError>
-where
-    H: Hardware<Error = HalError>,
-{
-    let mut progress = |_: &'static str| {};
-    retry_cyw43_net_console_with_progress(hal, config, &mut progress)
-}
-
-/// Retry post-prompt CYW43 bootstrap while yielding at every bounded linked
-/// runtime progress point to physical-operator service.
-#[cfg(feature = "kernel")]
-pub fn retry_cyw43_net_console_with_progress<H>(
-    hal: &mut H,
-    config: ConsoleNetConfig,
-    progress: &mut dyn crate::drivers::driver_task_net::Cyw43BootstrapProgress,
-) -> Result<DefaultNetStack, DefaultNetConsoleError>
-where
-    H: Hardware<Error = HalError>,
-{
-    crate::drivers::driver_task_net::prepare_cyw43_bootstrap_retry_with_progress(
-        hal, &config, progress,
-    )
-    .map_err(convert_driver_error::<DriverTaskNetError>)?;
-    init_net_console_with_cyw43_progress(hal, config, progress)
 }
 
 /// Return whether a failed physical-Pi CYW43 console bootstrap is eligible for
@@ -3687,14 +3710,6 @@ impl<D: NetDevice> NetStack<D> {
         budget.charge_bytes(TCP_SERVICE_BYTES_PER_TURN)
     }
 
-    fn charge_tcp_response_flush_budget(
-        budget: &mut DriverServiceBudget,
-    ) -> Result<(), DriverServiceBudgetError> {
-        budget.charge_ops(16)?;
-        budget.charge_frames(CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN as u16)?;
-        budget.charge_bytes(TCP_RESPONSE_FLUSH_BYTES_PER_TURN)
-    }
-
     fn charge_interface_poll_budget(
         budget: &mut DriverServiceBudget,
     ) -> Result<(), DriverServiceBudgetError> {
@@ -3956,42 +3971,6 @@ impl<D: NetDevice> NetStack<D> {
         activity
     }
 
-    fn service_budgeted_tcp_response_flush_turn(
-        &mut self,
-        timestamp: Instant,
-        now_ms: u64,
-        post_label: &'static str,
-    ) -> bool {
-        if !self.stage_policy.allow_tcp || !self.session_active {
-            return false;
-        }
-        let activity = {
-            let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
-            if socket.state() != TcpState::Established {
-                return false;
-            }
-            Self::flush_outbound(
-                &mut self.server,
-                &mut self.outbound,
-                &mut self.telemetry,
-                &mut self.conn_bytes_written,
-                &mut self.counters,
-                socket,
-                now_ms,
-                self.active_client_id,
-                self.auth_state,
-                &mut self.session_state,
-                CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN,
-                CYW43_RESPONSE_FLUSH_BYTES_PER_TURN,
-            )
-        };
-        if activity {
-            self.poll_smoltcp_once(timestamp, now_ms, post_label)
-        } else {
-            false
-        }
-    }
-
     fn flush_budgeted_tcp_with_time(
         &mut self,
         now_ms: u64,
@@ -4035,21 +4014,6 @@ impl<D: NetDevice> NetStack<D> {
                     now_ms,
                     "budgeted-genet-dispatch-tcp",
                     "budgeted-genet-dispatch-flush",
-                );
-                if !turn_activity {
-                    break;
-                }
-                activity = true;
-            }
-        } else if self.budgeted_cyw43_tcp_fast_path_due() && activity {
-            for _ in 0..CYW43_TCP_POST_DISPATCH_EXTRA_TURNS {
-                if Self::charge_tcp_response_flush_budget(budget).is_err() {
-                    break;
-                }
-                let turn_activity = self.service_budgeted_tcp_response_flush_turn(
-                    timestamp,
-                    now_ms,
-                    "budgeted-cyw43-response-flush",
                 );
                 if !turn_activity {
                     break;
@@ -4332,9 +4296,6 @@ impl<D: NetDevice> NetStack<D> {
             }
             BudgetedNetPhase::SelfTest if cyw43_selftest_tcp_defer => {
                 Self::charge_tcp_budget(budget)?;
-                for _ in 0..CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS {
-                    Self::charge_tcp_response_flush_budget(budget)?;
-                }
             }
             BudgetedNetPhase::SelfTest => {
                 budget.charge_ops(16)?;
@@ -4465,28 +4426,13 @@ impl<D: NetDevice> NetStack<D> {
             BudgetedNetPhase::InterfaceFlush => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
             }
-            BudgetedNetPhase::SelfTest if cyw43_selftest_tcp_defer => {
-                let mut tcp_activity = self.service_budgeted_tcp_turn(
+            BudgetedNetPhase::SelfTest if cyw43_selftest_tcp_defer => self
+                .service_budgeted_tcp_turn(
                     timestamp,
                     now_ms,
                     "budgeted-cyw43-selftest-defer-tcp-pre",
                     "budgeted-cyw43-selftest-defer-tcp-post",
-                );
-                if tcp_activity {
-                    for _ in 0..CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS {
-                        let turn_activity = self.service_budgeted_tcp_response_flush_turn(
-                            timestamp,
-                            now_ms,
-                            "budgeted-cyw43-selftest-defer-response-flush",
-                        );
-                        if !turn_activity {
-                            break;
-                        }
-                        tcp_activity = true;
-                    }
-                }
-                tcp_activity
-            }
+                ),
             BudgetedNetPhase::SelfTest => {
                 let selftest_activity =
                     self.stage_policy.allow_selftest && self.service_self_test(now_ms, timestamp);
@@ -4512,21 +4458,6 @@ impl<D: NetDevice> NetStack<D> {
                     now_ms,
                     "budgeted-genet-extra-tcp",
                     "budgeted-genet-extra-flush",
-                );
-                if !turn_activity {
-                    break;
-                }
-                activity = true;
-            }
-        } else if cyw43_tcp_fast_path && phase == BudgetedNetPhase::Tcp && activity {
-            for _ in 0..CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS {
-                if Self::charge_tcp_response_flush_budget(budget).is_err() {
-                    break;
-                }
-                let turn_activity = self.service_budgeted_tcp_response_flush_turn(
-                    timestamp,
-                    now_ms,
-                    "budgeted-cyw43-tcp-phase-response-flush",
                 );
                 if !turn_activity {
                     break;
@@ -7936,13 +7867,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 #[cfg(feature = "kernel")]
 const NET_RING_FLAG_BUDGETED: u16 = 1;
 const GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 8;
-const CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 8;
+const CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
 const DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
 const DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
 const GENET_TCP_FAST_PATH_EXTRA_TURNS: usize = 1;
 const GENET_TCP_POST_DISPATCH_EXTRA_TURNS: usize = 2;
-const CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS: usize = 1;
-const CYW43_TCP_POST_DISPATCH_EXTRA_TURNS: usize = 1;
 
 #[cfg(feature = "kernel")]
 struct NetDriverTaskContext<D: NetDevice> {
@@ -8536,20 +8465,18 @@ mod tests {
     }
 
     #[test]
-    fn host_eapol_pending_uses_linux_style_service_burst() {
+    fn host_eapol_pending_retains_work_across_single_operation_turns() {
         assert_eq!(
             wifi_host_eapol_stack_service_polls(Some("wifi-host-eapol-pending")),
-            CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS
+            1
         );
         assert_eq!(
             wifi_host_eapol_stack_service_polls(Some("wifi-host-eapol-required")),
-            CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS
+            1
         );
         assert_eq!(wifi_host_eapol_stack_service_polls(None), 1);
         assert_eq!(wifi_host_eapol_stack_service_polls(Some("dhcp-pending")), 1);
-        assert!(
-            CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS < CYW43_HOST_EAPOL_CONTINUOUS_SERVICE_POLLS
-        );
+        assert_eq!(CYW43_HOST_EAPOL_BUDGETED_SERVICE_POLLS, 1);
     }
 
     #[test]
@@ -8789,15 +8716,9 @@ mod tests {
         assert!(MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL <= TCP_RX_BUFFER);
         assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 32);
         assert!(MAX_CONSOLE_BYTES_PER_POLL <= TCP_TX_BUFFER);
-        assert!(CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN <= MAX_CONSOLE_FRAMES_PER_POLL);
-        assert!(CYW43_RESPONSE_FLUSH_BYTES_PER_TURN <= MAX_CONSOLE_BYTES_PER_POLL);
         assert_eq!(
             TCP_SERVICE_BYTES_PER_TURN,
             (MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL + MAX_CONSOLE_BYTES_PER_POLL) as u32
-        );
-        assert_eq!(
-            TCP_RESPONSE_FLUSH_BYTES_PER_TURN,
-            CYW43_RESPONSE_FLUSH_BYTES_PER_TURN as u32
         );
     }
 
@@ -8868,9 +8789,6 @@ mod tests {
         let tcp_ops = 64u16;
         let tcp_frames = MAX_CONSOLE_FRAMES_PER_POLL as u16;
         let tcp_bytes = TCP_SERVICE_BYTES_PER_TURN;
-        let response_flush_ops = 16u16;
-        let response_flush_frames = CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN as u16;
-        let response_flush_bytes = TCP_RESPONSE_FLUSH_BYTES_PER_TURN;
         let dhcp_ops = 16u16;
         let dhcp_frames = MAX_DHCP_RX_PACKETS_PER_POLL as u16 + 1;
         let dhcp_bytes = (MAX_DHCP_RX_PACKETS_PER_POLL as u32 + 1) * 1024;
@@ -8900,17 +8818,9 @@ mod tests {
                 .saturating_add(interface_bytes)
                 <= contract.budget.max_bytes_per_turn
         );
-        assert!(
-            pre_poll_ops.saturating_mul(2).saturating_add(tcp_ops)
-                <= contract.budget.max_ops_per_turn
-        );
-        assert!(
-            pre_poll_frames.saturating_mul(2).saturating_add(tcp_frames)
-                <= contract.budget.max_frames_per_turn
-        );
-        assert!(
-            pre_poll_bytes.saturating_mul(2).saturating_add(tcp_bytes)
-                > contract.budget.max_bytes_per_turn
+        assert_eq!(
+            CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT, 1,
+            "CYW43 pre-poll urgency must be retained for the next EventPump turn"
         );
         assert!(
             base_ops
@@ -9005,51 +8915,6 @@ mod tests {
                 > contract.budget.max_bytes_per_turn
         );
         assert!(tcp_bytes.saturating_mul(2) > contract.budget.max_bytes_per_turn);
-        assert_eq!(CYW43_TCP_POST_DISPATCH_EXTRA_TURNS, 1);
-        assert!(response_flush_bytes < tcp_bytes);
-        assert!(tcp_ops.saturating_add(response_flush_ops) <= contract.budget.max_ops_per_turn);
-        assert!(
-            tcp_frames.saturating_add(response_flush_frames) <= contract.budget.max_frames_per_turn
-        );
-        assert!(
-            tcp_bytes.saturating_add(response_flush_bytes) <= contract.budget.max_bytes_per_turn
-        );
-        assert!(
-            pre_poll_ops
-                .saturating_add(tcp_ops)
-                .saturating_add(response_flush_ops)
-                <= contract.budget.max_ops_per_turn
-        );
-        assert!(
-            pre_poll_frames
-                .saturating_add(tcp_frames)
-                .saturating_add(response_flush_frames)
-                <= contract.budget.max_frames_per_turn
-        );
-        assert!(
-            pre_poll_bytes
-                .saturating_add(tcp_bytes)
-                .saturating_add(response_flush_bytes)
-                <= contract.budget.max_bytes_per_turn
-        );
-        assert_eq!(CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS, 1);
-        assert!(
-            pre_poll_ops.saturating_add(tcp_ops).saturating_add(
-                response_flush_ops.saturating_mul(CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS as u16)
-            ) <= contract.budget.max_ops_per_turn
-        );
-        assert!(
-            pre_poll_frames.saturating_add(tcp_frames).saturating_add(
-                response_flush_frames
-                    .saturating_mul(CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS as u16)
-            ) <= contract.budget.max_frames_per_turn
-        );
-        assert!(
-            pre_poll_bytes.saturating_add(tcp_bytes).saturating_add(
-                response_flush_bytes
-                    .saturating_mul(CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS as u32)
-            ) <= contract.budget.max_bytes_per_turn
-        );
 
         let mut dhcp_budget = DriverServiceBudget::new(contract).expect("valid CYW43 contract");
         dhcp_budget.charge_ops(1).expect("base budget charge fits");

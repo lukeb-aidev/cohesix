@@ -66,6 +66,7 @@ host_matrix=(
   "cargo check -p pi4-driver-runtime --target aarch64-unknown-none"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib ninedoor::tests"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task"
+  "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::tests::runtime_"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::driver_task_net -- --test-threads=1"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib net::stack"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::poll_io_obeys_driver_task_budget"
@@ -81,7 +82,8 @@ host_matrix=(
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::"
   "cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance"
   "cargo test -p sel4-sys --lib"
-  "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/SMP_build\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu"
+  "\"${TEST_PLAN_ROOT}/out/toolchain/sel4-profile-venv/bin/python\" scripts/sel4_profile.py validate --profile qemu_smp_production --build-dir \"${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production\" --require-source --require-artifacts --for-runtime"
+  "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu"
   "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/build_UBOOT\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4"
   "cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture"
   "CARGO_INCREMENTAL=0 cargo test --workspace --exclude swarmui"
@@ -119,6 +121,10 @@ else
     fi
   fi
   python_matrix=(
+    "\"${python_bin}\" -m pytest tests/test_sel4_profile.py"
+    "\"${python_bin}\" -m pytest tests/test_pi4_image_build.py"
+    "\"${python_bin}\" -m pytest tests/test_pi4_image_identity.py"
+    "\"${python_bin}\" -m pytest tests/test_pi4_wifi_repeatability.py"
     "\"${python_bin}\" -m pytest tests/test_pi4_trace_normalize.py"
     "\"${python_bin}\" -m pytest tests/test_pi4_gate_proof.py"
     "\"${python_bin}\" -m pytest tools/cohesix-py/tests"
