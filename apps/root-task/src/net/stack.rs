@@ -2367,6 +2367,38 @@ where
     }
 }
 
+/// Retry a physical-Pi Wi-Fi console bootstrap. Once a previous attempt has
+/// reached both linked runtimes, the driver seam performs the fenced pair
+/// restart and full retained firmware/control replay before ordinary stack
+/// construction is allowed to resume.
+#[cfg(feature = "kernel")]
+pub fn retry_cyw43_net_console<H>(
+    hal: &mut H,
+    config: ConsoleNetConfig,
+) -> Result<DefaultNetStack, DefaultNetConsoleError>
+where
+    H: Hardware<Error = HalError>,
+{
+    crate::drivers::driver_task_net::prepare_cyw43_bootstrap_retry(hal, &config)
+        .map_err(convert_driver_error::<DriverTaskNetError>)?;
+    init_net_console(hal, config)
+}
+
+/// Return whether a failed physical-Pi CYW43 console bootstrap is eligible for
+/// the persistent supervisor. Missing devices, invalid policy, corrupted root
+/// storage/bootinfo, and immutable build-input defects remain terminal; normal
+/// driver timing and runtime progress faults are recoverable.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn cyw43_net_console_bootstrap_error_retryable(error: &DefaultNetConsoleError) -> bool {
+    matches!(
+        error,
+        NetConsoleError::Init(NetStackError::Driver(DefaultDriverError::DriverTaskNet(
+            driver_error
+        ))) if driver_error.cyw43_bootstrap_retryable()
+    )
+}
+
 fn convert_console_error<E>(err: NetStackError<E>) -> DefaultNetConsoleError
 where
     E: NetDriverError + Into<DefaultDriverError>,
@@ -8358,6 +8390,27 @@ mod tests {
             Some(WifiCredentials::new("cohesix", "passphrase").expect("valid WiFi credentials"));
         assert_eq!(configured_active_driver_label(&config), "cyw43");
         assert_eq!(config.backend.label(), "bcmgenet-v5");
+    }
+
+    #[test]
+    fn cyw43_bootstrap_supervisor_retries_driver_timing_but_not_configuration() {
+        let timing =
+            NetConsoleError::Init(NetStackError::Driver(DefaultDriverError::DriverTaskNet(
+                DriverTaskNetError::RuntimeInit("cyw43-function1-ready-timeout"),
+            )));
+        assert!(cyw43_net_console_bootstrap_error_retryable(&timing));
+
+        let artifact =
+            NetConsoleError::Init(NetStackError::Driver(DefaultDriverError::DriverTaskNet(
+                DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"),
+            )));
+        assert!(!cyw43_net_console_bootstrap_error_retryable(&artifact));
+        assert!(!cyw43_net_console_bootstrap_error_retryable(
+            &NetConsoleError::InvalidConfig("wifi-credentials-missing")
+        ));
+        assert!(!cyw43_net_console_bootstrap_error_retryable(
+            &NetConsoleError::NoDevice
+        ));
     }
 
     #[test]

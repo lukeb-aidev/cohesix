@@ -1083,6 +1083,12 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DPC_POISONED": "unknown",
         "WIFI_DPC_MASKED": "unknown",
         "WIFI_DPC_LINE": 0,
+        "CYW43_BOOTSTRAP_SUPERVISOR_SEEN": "no",
+        "CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT": 0,
+        "CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES": 0,
+        "CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS": "none",
+        "CYW43_BOOTSTRAP_SUPERVISOR_READY": "no",
+        "CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER": "none",
         "WIFI_FIRMWARE_IDENTITY_PROOF": "no",
         "WIFI_FIRMWARE_IDENTITY_BLOCKER": "nvram-len",
         "WIFI_CLM_READY_PROOF": "no",
@@ -13321,3 +13327,180 @@ def test_jsonl_output_is_stable() -> None:
 
     assert '"domain": "usb"' in encoded
     assert '"stage": "handoff-final"' in encoded
+
+
+def bootstrap_supervisor_line(
+    attempt: int,
+    status: str,
+    backoff_ms: int,
+    next_attempt_ms: int,
+) -> str:
+    """Return one exact persistent-bootstrap supervisor evidence line."""
+
+    return (
+        f"CYW43_BOOTSTRAP_SUPERVISOR attempt={attempt} status={status} "
+        f"backoff_ms={backoff_ms} next_attempt_ms={next_attempt_ms}"
+    )
+
+
+def test_bootstrap_supervisor_absence_preserves_historical_scoring() -> None:
+    """Logs from before the supervisor do not acquire a new blocker."""
+
+    record = normalizer.summarize_gates([]).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 0
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 0
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "none"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+    assert not any(
+        blocker.startswith("cyw43-bootstrap-supervisor-")
+        for blocker in normalizer.boot_evidence_blockers(record)
+    )
+
+
+def test_bootstrap_supervisor_accepts_terminal_first_attempt_ready() -> None:
+    """A begin followed by terminal ready is a valid no-retry sequence."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 500),
+            bootstrap_supervisor_line(1, "ready", 0, 500),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 1
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 0
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+
+
+def test_bootstrap_supervisor_accepts_multiple_transient_retries_then_ready() -> None:
+    """Monotonic 1/2-second retry progression may close at a later ready."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100),
+            bootstrap_supervisor_line(
+                1, "transient-retry-scheduled", 1_000, 1_200
+            ),
+            bootstrap_supervisor_line(2, "begin", 0, 1_200),
+            bootstrap_supervisor_line(
+                2, "transient-retry-scheduled", 2_000, 3_300
+            ),
+            bootstrap_supervisor_line(3, "begin", 0, 3_300),
+            bootstrap_supervisor_line(3, "ready", 0, 3_350),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 3
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 2
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+    assert not any(
+        blocker.startswith("cyw43-bootstrap-supervisor-")
+        for blocker in blockers
+    )
+
+
+@pytest.mark.parametrize(
+    ("lines", "expected_blocker"),
+    [
+        ([bootstrap_supervisor_line(0, "begin", 0, 100)], "attempt-zero"),
+        ([bootstrap_supervisor_line(1, "begin", 0, 100)], "begin-not-terminal"),
+        (
+            [
+                bootstrap_supervisor_line(1, "begin", 0, 100),
+                bootstrap_supervisor_line(
+                    1, "transient-retry-scheduled", 1_000, 1_100
+                ),
+            ],
+            "scheduled-not-terminal",
+        ),
+        (
+            [
+                bootstrap_supervisor_line(1, "begin", 0, 100),
+                bootstrap_supervisor_line(
+                    1, "transient-retry-scheduled", 999, 1_100
+                ),
+            ],
+            "malformed-backoff-progression",
+        ),
+        (
+            [
+                bootstrap_supervisor_line(1, "begin", 0, 100),
+                bootstrap_supervisor_line(
+                    1, "transient-retry-scheduled", 1_000, 1_100
+                ),
+                bootstrap_supervisor_line(2, "begin", 0, 1_100),
+                bootstrap_supervisor_line(1, "ready", 0, 1_100),
+            ],
+            "attempt-regression",
+        ),
+        (
+            [
+                bootstrap_supervisor_line(1, "begin", 0, 100),
+                bootstrap_supervisor_line(
+                    1, "permanent-config-or-artifact-failure", 0, 200
+                ),
+            ],
+            "permanent-status",
+        ),
+        (
+            [
+                "CYW43_BOOTSTRAP_SUPERVISOR status=begin attempt=1 "
+                "backoff_ms=0 next_attempt_ms=100"
+            ],
+            "malformed-line",
+        ),
+    ],
+)
+def test_bootstrap_supervisor_rejects_incomplete_or_malformed_sequences(
+    lines: list[str], expected_blocker: str
+) -> None:
+    """Incomplete, regressing, permanent, and malformed sequences fail closed."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == expected_blocker
+    assert (
+        f"cyw43-bootstrap-supervisor-{expected_blocker}"
+        in normalizer.boot_evidence_blockers(record)
+    )
+
+
+def test_bootstrap_ready_clears_only_transient_supervisor_blocker() -> None:
+    """Supervisor recovery cannot erase an independent CYW43 gate failure."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: preserved_failure source=live "
+            "stage=cyw43-load-firmware-fail "
+            "exact=cyw43-device-on-timeout-before-ht",
+            bootstrap_supervisor_line(1, "begin", 0, 100),
+            bootstrap_supervisor_line(
+                1, "transient-retry-scheduled", 1_000, 1_100
+            ),
+            bootstrap_supervisor_line(2, "begin", 0, 1_100),
+            bootstrap_supervisor_line(2, "ready", 0, 1_200),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["WIFI_BLOCKER"] == "devon-timeout"

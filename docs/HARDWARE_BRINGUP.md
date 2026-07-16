@@ -398,8 +398,29 @@ current image must be reflashed and revalidated with fresh serial and packet
 evidence. Repeatability closure requires repeated current-image boots of the
 same read-back-proven image with paired network evidence and repeatable raw TCP
 and authenticated `cohsh` proof, with no unresolved transport, DPC, generation,
-or recovery ambiguity. The evidence record must state the sample count actually
-run; the active plan does not define a numeric cold/warm threshold.
+or recovery ambiguity. The minimum closure sample is 10/10 cold power-on boots
+and 10/10 warm software-reset boots of the same independently read-back image.
+Every counted boot must contain that image's exact `[BUILD]` marker and must
+pass the complete normalizer evidence predicate with `NET_ACTIVE=wifi`; one
+failed boot keeps repeatability open rather than being hidden by extra passes.
+
+After collecting the logs and independently reading the target image artifact
+back from the mounted medium, run the fail-closed aggregate gate:
+
+```bash
+python3 scripts/pi4_wifi_repeatability.py \
+  --cold-log out/pi4-evidence/cold.log \
+  --warm-log out/pi4-evidence/warm.log \
+  --readback-image /Volumes/COHESIX/cohesix-image-arm-bcm2711 \
+  --image-sha256 <independent-readback-sha256> \
+  --build-marker '[BUILD] <exact-readback-marker>' \
+  --output out/pi4-evidence/wifi-repeatability.json
+```
+
+`PASS` is an evidence verdict, not a substitute for preserving each serial log
+and its boot-paired pcap. A missing/unreadable image, hash mismatch, absent or
+conflicting marker, skip-only log, wired boot, failed boot slice, or any existing
+Wi-Fi/driver/operator blocker fails the aggregate.
 
 ### USB Keyboard and HDMI
 

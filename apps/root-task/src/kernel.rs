@@ -808,6 +808,24 @@ fn pi4_pre_root_net_bootstrap_selection(
     }
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn physical_pi_failed_net_bootstrap_should_defer(
+    physical_pi_owner: bool,
+    config: &crate::net::ConsoleNetConfig,
+    error: &crate::net::DefaultNetConsoleError,
+) -> bool {
+    let wifi_selected = matches!(
+        config.policy.interface,
+        crate::net::NetInterfacePolicy::Wifi
+    ) || (matches!(
+        config.policy.interface,
+        crate::net::NetInterfacePolicy::Auto
+    ) && config.wifi_credentials.is_some());
+    physical_pi_owner
+        && wifi_selected
+        && crate::net::cyw43_net_console_bootstrap_error_retryable(error)
+}
+
 fn required_local_seat_probe_should_abort(
     _required: bool,
     _result: local_seat::LocalSeatKeyboardProbeResult,
@@ -5022,15 +5040,15 @@ fn bootstrap<P: Platform>(
                 let mut line = heapless::String::<192>::new();
                 let _ = write!(
                     line,
-                    "[net-console] deferred reason={reason} action=bounded-pre-root-wifi-release"
+                    "[net-console] deferred reason={reason} action=post-prompt-persistent-wifi-supervisor"
                 );
                 boot_log::force_uart_line(line.as_str());
                 console.writeln_prefixed(line.as_str());
                 boot_log::force_uart_line(
-                    "[boot] wifi net-console deferred; root console uses bounded Wi-Fi release before serial shell",
+                    "[boot] wifi net-console deferred; serial/local-seat prompt starts before persistent Wi-Fi supervision",
                 );
                 log::info!(
-                    "[net-console] Pi4 local-seat Wi-Fi net-console deferred to pre-root-console wait reason={reason}"
+                    "[net-console] Pi4 local-seat Wi-Fi net-console deferred to post-prompt persistent supervisor reason={reason}"
                 );
                 let detail = pi4_local_usb_boot_wifi_defer_detail(reason);
                 (None, false, Some(detail), net_backend_label, Some(config))
@@ -5120,6 +5138,13 @@ fn bootstrap<P: Platform>(
                         )
                     }
                     Err(err) => {
+                        let physical_pi_owner =
+                            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
+                        let retry_deferred = physical_pi_failed_net_bootstrap_should_defer(
+                            physical_pi_owner,
+                            &config,
+                            &err,
+                        );
                         let (reason, err_code) = match err {
                             NetConsoleError::NoDevice => ("no-device", "NoDevice"),
                             NetConsoleError::InvalidConfig(_) => {
@@ -5133,10 +5158,13 @@ fn bootstrap<P: Platform>(
                             "[net-console] disabled reason={reason} err={err_code}"
                         );
                         boot_log::force_uart_line(fail_line.as_str());
-                        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(
-                        ) {
+                        if retry_deferred {
                             boot_log::force_uart_line(
-                                "[boot] net-console init failed fatal; physical Pi has no root hardware fallback",
+                                "[boot] physical Pi Wi-Fi bootstrap transient failure; serial/local-seat continue and post-prompt supervisor will retry",
+                            );
+                        } else if physical_pi_owner {
+                            boot_log::force_uart_line(
+                                "[boot] physical Pi net-console bootstrap permanent failure; continuing serial/local-seat diagnostics without retry",
                             );
                         } else {
                             boot_log::force_uart_line(
@@ -5149,17 +5177,16 @@ fn bootstrap<P: Platform>(
                             write!(detail_line, "[net-console] init detail={}", detail.as_str());
                         boot_log::force_uart_line(detail_line.as_str());
                         log::warn!("{} detail={}", fail_line.as_str(), detail.as_str());
-                        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(
-                        ) {
-                            return Err(BootError::Fatal(format!(
-                                "physical Pi net-console init failed without fallback: {}",
-                                detail.as_str()
-                            )));
-                        }
                         let virtio_present = cfg!(feature = "net-backend-virtio")
                             && net_backend_label == "virtio-net"
                             && !matches!(err, NetConsoleError::NoDevice);
-                        (None, virtio_present, Some(detail), net_backend_label, None)
+                        (
+                            None,
+                            virtio_present,
+                            Some(detail),
+                            net_backend_label,
+                            retry_deferred.then_some(config),
+                        )
                     }
                 }
             }
@@ -7283,10 +7310,11 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
 mod tests {
     use super::{
         bounded_message_words, copy_message_words, dtb_rejected_net_policy_reason,
-        fault_ep_poll_budget_exhausted, format_net_console_init_detail, preview_payload,
-        ControlEndpoint, FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource,
-        StagedMessage, StrayTracker, FAULT_EP_POLL_BUDGET_PER_DISPATCH, HEX_CHUNK_BYTES,
-        MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
+        fault_ep_poll_budget_exhausted, format_net_console_init_detail,
+        physical_pi_failed_net_bootstrap_should_defer, preview_payload, ControlEndpoint,
+        FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource, StagedMessage,
+        StrayTracker, FAULT_EP_POLL_BUDGET_PER_DISPATCH, HEX_CHUNK_BYTES, MAX_HEX_LINES,
+        MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
     };
     use crate::event::IpcDispatcher;
     use crate::rust_alloc::vec::Vec;
@@ -7554,6 +7582,49 @@ mod tests {
             format_net_console_init_detail(&err).as_str(),
             "invalid net config: wifi-credentials-missing",
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn physical_pi_routes_only_retryable_wifi_failures_to_userland_supervisor() {
+        let mut config = crate::net::ConsoleNetConfig::default();
+        config.backend = crate::net::NetBackend::BcmGenet;
+        config.policy.interface = crate::net::NetInterfacePolicy::Wifi;
+
+        let timing = crate::net::NetConsoleError::Init(crate::net::NetStackError::Driver(
+            crate::net::DefaultDriverError::DriverTaskNet(
+                crate::drivers::driver_task_net::DriverTaskNetError::RuntimeInit(
+                    "cyw43-alp-ready-timeout",
+                ),
+            ),
+        ));
+        assert!(physical_pi_failed_net_bootstrap_should_defer(
+            true, &config, &timing
+        ));
+        assert!(!physical_pi_failed_net_bootstrap_should_defer(
+            false, &config, &timing
+        ));
+
+        let permanent = crate::net::NetConsoleError::InvalidConfig("wifi-credentials-missing");
+        assert!(!physical_pi_failed_net_bootstrap_should_defer(
+            true, &config, &permanent
+        ));
+
+        config.policy.interface = crate::net::NetInterfacePolicy::Wired;
+        assert!(!physical_pi_failed_net_bootstrap_should_defer(
+            true, &config, &timing
+        ));
+
+        config.policy.interface = crate::net::NetInterfacePolicy::Auto;
+        config.wifi_credentials = None;
+        assert!(!physical_pi_failed_net_bootstrap_should_defer(
+            true, &config, &timing
+        ));
+        config.wifi_credentials =
+            Some(crate::net::WifiCredentials::new("cohesix", "passphrase").expect("valid creds"));
+        assert!(physical_pi_failed_net_bootstrap_should_defer(
+            true, &config, &timing
+        ));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

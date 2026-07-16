@@ -284,8 +284,8 @@ image has passed the device's acceptance gate.
 | HDMI text | Isolated runtime renders bounded text into the HAL-admitted framebuffer; root submits text/service records. | Runtime implemented. Current-image framebuffer, visible output, and bounded refresh proof are separate from serial readiness. |
 | GENET | Isolated runtime owns MAC/MDIO and bounded RX/TX descriptor rings. Root consumes a network-driver trait. | Accepted Milestone 26c wired evidence exists for its recorded image. Milestone 26d current-image and benchmark revalidation is a separate requirement. |
 | PCIe root | Isolated runtime services declared PCIe MMIO operations; HAL owns platform admission and firmware/reset authority. | Runtime implemented. PCIe/VL805 identity, BAR/COMMAND, link, and downstream USB proof must be tied to the current boot. |
-| SDIO host | Isolated runtime exclusively owns SDHCI MMIO, CMD52/CMD53, card interrupt handling, and bus-owner service. | Runtime and generated IRQ/DPC topology implemented. Reopened 26b notification/DPC and repeated functional proof remain acceptance gates. |
-| CYW43 Wi-Fi | Isolated runtime owns firmware upload, SDPCM/BDC control, EAPOL/data service, and bounded RX state through the generated CYW43-to-SDIO link. It receives no direct SDHCI MMIO authority. | Implementation is active research/closure work. Production acceptance requires repeated current-image association, DHCP, raw TCP/`cohsh`, ordered RX, and clean DPC counters; historical success is not current closure. |
+| SDIO host | Isolated runtime exclusively owns SDHCI MMIO, CMD52/CMD53, card interrupt handling, and bus-owner service. | Runtime, generated IRQ/DPC topology, Linux-aligned elapsed timing, deterministic controller model, and exhaustive restart fault cuts are implemented. Repeated physical functional proof remains an acceptance gate. |
+| CYW43 Wi-Fi | Isolated runtime owns firmware upload, SDPCM/BDC control, EAPOL/data service, and bounded RX state through the generated CYW43-to-SDIO link. It receives no direct SDHCI MMIO authority. Root supervises transient bootstrap after publishing serial/local-seat and performs a full pair/context replay on retry. | Implementation remains active research/closure work. Production acceptance requires 10/10 cold plus 10/10 warm boots of one read-back image with association, DHCP, raw TCP/`cohsh`, ordered RX, and clean DPC counters; historical or offline success is not current closure. |
 
 ### QEMU network drivers
 
@@ -337,14 +337,38 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
 - SDIO is the sole SDHCI owner; CYW43 submits bounded bus-link operations.
 - Root-task must not wait synchronously for CMD52/CMD53 credit, firmware
   replies, or RX drain work.
+- Function 1 enable uses the SDIO CIS timeout when that field is eventually
+  carried by the ABI; the current fixed profile uses Linux's one-second
+  fallback. ALP availability uses a 15 ms elapsed deadline, validates the
+  immediate `CHIPCLKCSR` readback except asynchronous availability bits, and
+  preserves the 65 microsecond `FORCE_ALP` settle before backplane access.
 - SDIO captures/clears the source and wakes CYW43; CYW43 drains bounded control,
   event, and data work and resignal/yields on budget exhaustion.
+- Each retained foreground phase snapshots the committed DPC producer. Events
+  through that watermark drain first; later level-triggered publications stay
+  queued until after one foreground quantum. A new snapshot before the next
+  phase preserves DPC service without allowing a continuously asserted
+  `CARD_INT` source to starve control or bootstrap progress.
 - Control replies, asynchronous events, EAPOL, and data frames may interleave;
   sequence and channel identity must be preserved.
 - A fixed event ring must report overrun, drop, stale epoch, and malformed
   entries explicitly.
+- Physical-Pi Wi-Fi bootstrap is supervised after the serial/local-seat prompt.
+  Transient timing, transport, and linked-runtime progress faults retry forever
+  at `1/2/4/8/16/30` seconds and then every 30 seconds. Once both restart
+  contexts exist, every retry first suspends and fences the pair, restarts SDIO
+  before CYW43, and replays retained firmware and control context. Immutable
+  credential, firmware-bundle, and descriptor-bound failures are terminal and
+  remain visible to the local operator.
 - Association alone is not acceptance. Require DHCP, raw TCP/`cohsh`, clean
   counters, and repeated current-image boots with paired network evidence.
+
+Hardware-free validation executes the production descriptor-to-SDHCI transfer
+path against a deterministic controller model, injects failure at every
+production pair-restart action, and exercises adversarial DPC schedules. These
+tests prove control-flow, ownership, timeout, and fail-closed invariants; they
+do not prove Pi electrical timing, firmware behavior, RF association, DHCP, or
+repeatability. Those remain target evidence.
 
 ## Evidence ladder
 

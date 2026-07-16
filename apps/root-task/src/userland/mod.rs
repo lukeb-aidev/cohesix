@@ -44,6 +44,8 @@ use crate::net::DefaultNetStack as NetStack;
 use crate::net::NetPoller;
 use crate::platform::Platform;
 use crate::profile;
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+use crate::rust_alloc::boxed::Box;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::serial::pl011::Pl011;
@@ -229,11 +231,11 @@ pub fn main(ctx: BootContext) -> ! {
                 if resume_deferred_net_after_prompt {
                     start_deferred_net_after_prompt = true;
                     boot_log::force_uart_line(
-                        "[net-console] deferred resume scheduled reason=driver-startup-before-root-prompt action=delay-interactive-prompt",
+                        "[net-console] deferred resume scheduled reason=driver-startup-before-root-prompt action=publish-prompt-then-supervise",
                     );
                     log::info!(
                         target: "net-console",
-                        "[net-console] deferred Wi-Fi resume scheduled before the interactive serial prompt"
+                        "[net-console] deferred Wi-Fi resume scheduled after the interactive serial/local-seat prompt"
                     );
                 } else {
                     let skip_reason = deferred_net_console_after_prompt_skip_reason(
@@ -263,50 +265,27 @@ pub fn main(ctx: BootContext) -> ! {
             {
                 pump = attach_network(pump, None, net_unavailable_detail.take());
             }
-            start_root_console_starting(&mut pump);
+            // Publish serial/local-seat before touching the potentially slow
+            // physical Wi-Fi bootstrap. The supervisor below polls these
+            // operator surfaces between complete, fenced retry attempts.
+            start_root_console_prompt(&mut pump);
             #[cfg(all(feature = "net-console", feature = "kernel"))]
             {
                 if let Some(config) = net_deferred_config.take() {
                     boot_log::force_uart_line(
-                        "[net-console] deferred resume reason=before-root-prompt action=start-wifi",
+                        "[net-console] deferred resume reason=post-root-prompt action=start-persistent-wifi-supervisor",
                     );
-                    let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
-                    if local_seat_enabled {
-                        boot_log::force_uart_line_raw(
-                            "[trace] deferred Wi-Fi logs remain on serial before interactive prompt",
-                        );
-                    }
                     log::info!(
                         target: "net-console",
-                        "[net-console] deferred resume before interactive serial prompt; starting Wi-Fi stack"
+                        "[net-console] serial/local-seat ready; starting persistent Wi-Fi bootstrap supervisor"
                     );
-                    match init_deferred_net_console(config, ctx.wifi_debug_hal_ptr) {
-                        Ok(mut stack) => {
-                            emit_deferred_net_console_result(&stack, local_seat_enabled);
-                            pump = attach_network(pump, Some(&mut stack), None);
-                            if pump.net_console_enabled() {
-                                log::info!(
-                                target: "net-console",
-                                "[net-console] listening on 0.0.0.0:{}",
-                                    crate::net::CONSOLE_TCP_PORT
-                                );
-                            }
-                            wait_for_net_console_before_root_console(&mut pump);
-                            publish_root_console_ready(&mut pump);
-                            enter_root_console_loop(pump);
-                        }
-                        Err(err) => {
-                            let mut detail = HeaplessString::<192>::new();
-                            let _ = write!(detail, "{err}");
-                            emit_deferred_net_console_failure(&detail, local_seat_enabled);
-                            pump = attach_network(pump, None, Some(detail));
-                            publish_root_console_ready(&mut pump);
-                            enter_root_console_loop(pump);
-                        }
-                    }
+                    enter_root_console_loop_with_deferred_net_supervisor(
+                        pump,
+                        config,
+                        ctx.wifi_debug_hal_ptr,
+                    );
                 }
             }
-            publish_root_console_ready(&mut pump);
             enter_root_console_loop(pump);
         } else if let Some(mut active_net_stack) = net_stack.take() {
             #[cfg(feature = "net-console")]
@@ -418,6 +397,12 @@ where
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
+    announce_root_console_loop_start();
+    pump.run();
+}
+
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+fn announce_root_console_loop_start() {
     log::info!(
         target: "root_task::kernel",
         "[boot] TimersAndIPC: root-console.start.ok"
@@ -433,7 +418,193 @@ where
     );
     log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
     boot_log::allow_ep_only_transport();
-    pump.run();
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const CYW43_BOOTSTRAP_RETRY_BACKOFF_MS: [u64; 6] = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeferredNetBootstrapSupervisor {
+    transient_failures: u32,
+    next_attempt_ms: u64,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+impl DeferredNetBootstrapSupervisor {
+    const fn new(now_ms: u64) -> Self {
+        Self {
+            transient_failures: 0,
+            next_attempt_ms: now_ms,
+        }
+    }
+
+    const fn attempt_due(self, now_ms: u64) -> bool {
+        now_ms >= self.next_attempt_ms
+    }
+
+    const fn attempt_number(self) -> u32 {
+        self.transient_failures.saturating_add(1)
+    }
+
+    fn record_transient_failure(&mut self, now_ms: u64) -> u64 {
+        let index = usize::try_from(self.transient_failures)
+            .unwrap_or(usize::MAX)
+            .min(CYW43_BOOTSTRAP_RETRY_BACKOFF_MS.len() - 1);
+        let delay_ms = CYW43_BOOTSTRAP_RETRY_BACKOFF_MS[index];
+        self.transient_failures = self.transient_failures.saturating_add(1);
+        self.next_attempt_ms = now_ms.saturating_add(delay_ms);
+        delay_ms
+    }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn emit_deferred_net_bootstrap_supervisor_status(
+    attempt: u32,
+    status: &'static str,
+    backoff_ms: u64,
+    next_attempt_ms: u64,
+    local_seat_enabled: bool,
+) {
+    let mut line = HeaplessString::<256>::new();
+    let _ = write!(
+        line,
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt={} status={} backoff_ms={} next_attempt_ms={} serial=ready local_seat={} recovery=pair-restart-full-context-if-partial",
+        attempt,
+        status,
+        backoff_ms,
+        next_attempt_ms,
+        if local_seat_enabled { "ready" } else { "disabled" },
+    );
+    boot_log::force_uart_line_raw(line.as_str());
+    log::info!(target: "net-console", "{}", line.as_str());
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn enter_root_console_loop_with_deferred_net_supervisor<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
+    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    config: crate::net::ConsoleNetConfig,
+    hal_ptr: usize,
+) -> !
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    announce_root_console_loop_start();
+    let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
+    let mut supervisor = DeferredNetBootstrapSupervisor::new(crate::hal::timebase().now_ms());
+
+    loop {
+        // One ordinary event-pump turn always precedes a bootstrap attempt so
+        // serial and local-seat input cannot be permanently hidden behind a
+        // failed Wi-Fi boot. Each call below is one complete fenced retry; the
+        // linked runtimes retain their internal one-action-per-turn contracts.
+        pump.poll();
+        let now_ms = crate::hal::timebase().now_ms();
+        if !supervisor.attempt_due(now_ms) {
+            sel4::yield_now();
+            continue;
+        }
+
+        let attempt = supervisor.attempt_number();
+        emit_deferred_net_bootstrap_supervisor_status(
+            attempt,
+            "begin",
+            0,
+            now_ms,
+            local_seat_enabled,
+        );
+        match init_deferred_net_console(config, hal_ptr) {
+            Ok(stack) => {
+                emit_deferred_net_console_result(&stack, local_seat_enabled);
+                let stack: &'static mut NetStackHandle = Box::leak(Box::new(stack));
+                if !pump.attach_network_after_bootstrap(stack) {
+                    let mut detail = HeaplessString::<192>::new();
+                    let _ = detail.push_str("deferred network attach rejected: stack already live");
+                    emit_deferred_net_console_failure(&detail, local_seat_enabled);
+                    emit_deferred_net_bootstrap_supervisor_status(
+                        attempt,
+                        "permanent-attach-conflict",
+                        0,
+                        now_ms,
+                        local_seat_enabled,
+                    );
+                    pump.run();
+                }
+                emit_deferred_net_bootstrap_supervisor_status(
+                    attempt,
+                    "ready",
+                    0,
+                    now_ms,
+                    local_seat_enabled,
+                );
+                log::info!(
+                    target: "net-console",
+                    "[net-console] listening on 0.0.0.0:{} after bootstrap attempt {}",
+                    crate::net::CONSOLE_TCP_PORT,
+                    attempt,
+                );
+                pump.run();
+            }
+            Err(err) => {
+                let failure_now_ms = crate::hal::timebase().now_ms();
+                let mut detail = HeaplessString::<192>::new();
+                let _ = write!(detail, "{err}");
+                emit_deferred_net_console_failure(&detail, local_seat_enabled);
+                if crate::net::cyw43_net_console_bootstrap_error_retryable(&err) {
+                    let delay_ms = supervisor.record_transient_failure(failure_now_ms);
+                    emit_deferred_net_bootstrap_supervisor_status(
+                        attempt,
+                        "transient-retry-scheduled",
+                        delay_ms,
+                        supervisor.next_attempt_ms,
+                        local_seat_enabled,
+                    );
+                } else {
+                    emit_deferred_net_bootstrap_supervisor_status(
+                        attempt,
+                        "permanent-config-or-artifact-failure",
+                        0,
+                        failure_now_ms,
+                        local_seat_enabled,
+                    );
+                    pump.run();
+                }
+            }
+        }
+        sel4::yield_now();
+    }
 }
 
 /// Start the userland console or Cohesix shell over the serial transport.
@@ -603,11 +774,12 @@ fn init_deferred_net_console(
     }
 
     // SAFETY: `hal_ptr` is the leaked bootstrap `KernelHal` pointer already
-    // used by the root-console Wi-Fi debug handle. The deferred resume runs
-    // after the startup banner but before the prompt is published, so no Wi-Fi
-    // debug command can concurrently borrow the HAL while the stack is created.
+    // used by the root-console Wi-Fi debug handle. The post-prompt supervisor
+    // remains single-threaded with the event pump: it attempts bootstrap only
+    // after a completed operator-service turn, so a debug command cannot
+    // concurrently borrow the HAL while the stack is created.
     let hal = unsafe { &mut *(hal_ptr as *mut KernelHal<'static>) };
-    crate::net::init_net_console(hal, config)
+    crate::net::retry_cyw43_net_console(hal, config)
 }
 
 #[cfg(all(feature = "net-console", feature = "kernel"))]
@@ -1118,6 +1290,29 @@ fn counter_frequency() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn cyw43_bootstrap_supervisor_backoff_caps_and_remains_persistent() {
+        let mut supervisor = super::DeferredNetBootstrapSupervisor::new(100);
+        assert!(supervisor.attempt_due(100));
+        assert_eq!(supervisor.attempt_number(), 1);
+
+        let expected = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+        let mut now_ms = 100;
+        for (index, expected_delay) in expected.into_iter().enumerate() {
+            let delay = supervisor.record_transient_failure(now_ms);
+            assert_eq!(delay, expected_delay);
+            assert!(!supervisor.attempt_due(supervisor.next_attempt_ms.saturating_sub(1)));
+            assert!(supervisor.attempt_due(supervisor.next_attempt_ms));
+            assert_eq!(supervisor.attempt_number(), index as u32 + 2);
+            now_ms = supervisor.next_attempt_ms;
+        }
+    }
+
     #[cfg(all(feature = "net-console", feature = "kernel"))]
     #[test]
     fn deferred_net_console_after_prompt_still_requires_driver_task_ring_proof_on_pi() {

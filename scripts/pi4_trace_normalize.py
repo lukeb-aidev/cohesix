@@ -79,6 +79,16 @@ CYW43_SDIO_DPC_RE = re.compile(
     r"poisoned=(?P<poisoned>yes|no)"
     r"(?: masked=(?P<masked>yes|no))?$"
 )
+CYW43_BOOTSTRAP_SUPERVISOR_RE = re.compile(
+    r"^CYW43_BOOTSTRAP_SUPERVISOR "
+    r"attempt=(?P<attempt>[0-9]+) "
+    r"status=(?P<status>[a-z0-9-]+) "
+    r"backoff_ms=(?P<backoff_ms>[0-9]+) "
+    r"next_attempt_ms=(?P<next_attempt_ms>[0-9]+)"
+    r"(?: serial=ready local_seat=(?:ready|disabled) "
+    r"recovery=pair-restart-full-context-if-partial)?$"
+)
+CYW43_BOOTSTRAP_RETRY_BACKOFF_MS = (1_000, 2_000, 4_000, 8_000, 16_000, 30_000)
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
 WIFI_HINTS = ("wifi", "wi-fi", "wlan", "cyw", "brcmf", "sdio", "sdhci", "mmc")
 UBOOT_WIFI_POLICY_MISSING_MARKERS = (
@@ -532,6 +542,18 @@ class WifiDpcProof:
 
 
 @dataclass(frozen=True)
+class Cyw43BootstrapSupervisorProof:
+    """Validated terminal state for persistent CYW43 bootstrap retries."""
+
+    seen: bool = False
+    max_attempt: int = 0
+    transient_retries: int = 0
+    last_status: str = "none"
+    ready: bool = False
+    blocker: str = "none"
+
+
+@dataclass(frozen=True)
 class GateSummary:
     """Current USB/WiFi hardware bring-up gate state."""
 
@@ -626,6 +648,12 @@ class GateSummary:
     wifi_dpc_poisoned: str = "unknown"
     wifi_dpc_masked: str = "unknown"
     wifi_dpc_line: int = 0
+    cyw43_bootstrap_supervisor_seen: bool = False
+    cyw43_bootstrap_supervisor_max_attempt: int = 0
+    cyw43_bootstrap_supervisor_transient_retries: int = 0
+    cyw43_bootstrap_supervisor_last_status: str = "none"
+    cyw43_bootstrap_supervisor_ready: bool = False
+    cyw43_bootstrap_supervisor_blocker: str = "none"
     wifi_firmware_identity_proof: bool = False
     wifi_firmware_identity_blocker: str = "not-seen"
     wifi_clm_ready_proof: bool = False
@@ -860,6 +888,24 @@ class GateSummary:
             "WIFI_DPC_POISONED": self.wifi_dpc_poisoned,
             "WIFI_DPC_MASKED": self.wifi_dpc_masked,
             "WIFI_DPC_LINE": self.wifi_dpc_line,
+            "CYW43_BOOTSTRAP_SUPERVISOR_SEEN": (
+                "yes" if self.cyw43_bootstrap_supervisor_seen else "no"
+            ),
+            "CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT": (
+                self.cyw43_bootstrap_supervisor_max_attempt
+            ),
+            "CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES": (
+                self.cyw43_bootstrap_supervisor_transient_retries
+            ),
+            "CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS": (
+                self.cyw43_bootstrap_supervisor_last_status
+            ),
+            "CYW43_BOOTSTRAP_SUPERVISOR_READY": (
+                "yes" if self.cyw43_bootstrap_supervisor_ready else "no"
+            ),
+            "CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER": (
+                self.cyw43_bootstrap_supervisor_blocker
+            ),
             "WIFI_FIRMWARE_IDENTITY_PROOF": (
                 "yes" if self.wifi_firmware_identity_proof else "no"
             ),
@@ -11556,11 +11602,151 @@ def summarize_wifi_dpc_proof(events: Iterable[TraceEvent]) -> WifiDpcProof:
     return replace(latest, proof=True, reason="none")
 
 
+def summarize_cyw43_bootstrap_supervisor(
+    events: Iterable[TraceEvent],
+) -> Cyw43BootstrapSupervisorProof:
+    """Validate the persistent bootstrap supervisor's terminal retry state."""
+
+    supervisor_events = [
+        event
+        for event in events
+        if event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR")
+    ]
+    if not supervisor_events:
+        return Cyw43BootstrapSupervisorProof()
+
+    blocker: str | None = None
+    state = "none"
+    current_attempt = 0
+    max_attempt = 0
+    transient_retries = 0
+    last_status = "none"
+    begin_ms = 0
+    scheduled_ms = 0
+
+    def mark_blocker(reason: str) -> None:
+        nonlocal blocker
+        if blocker is None:
+            blocker = reason
+
+    for event in supervisor_events:
+        if state == "ready":
+            mark_blocker("ready-not-terminal")
+
+        match = CYW43_BOOTSTRAP_SUPERVISOR_RE.fullmatch(event.raw)
+        if match is None:
+            last_status = event.fields.get("status", "malformed")
+            mark_blocker("malformed-line")
+            continue
+
+        attempt = int(match.group("attempt"))
+        status = match.group("status")
+        backoff_ms = int(match.group("backoff_ms"))
+        next_attempt_ms = int(match.group("next_attempt_ms"))
+        last_status = status
+
+        previous_max_attempt = max_attempt
+        max_attempt = max(max_attempt, attempt)
+        if attempt == 0:
+            mark_blocker("attempt-zero")
+            continue
+        if previous_max_attempt and attempt < previous_max_attempt:
+            mark_blocker("attempt-regression")
+            continue
+
+        if status == "begin":
+            sequence_valid = True
+            if backoff_ms != 0:
+                mark_blocker("malformed-backoff-progression")
+                sequence_valid = False
+            if state == "none":
+                if attempt != 1:
+                    mark_blocker("attempt-sequence-gap")
+                    sequence_valid = False
+            elif state == "transient-retry-scheduled":
+                if attempt <= current_attempt:
+                    mark_blocker("attempt-regression")
+                    sequence_valid = False
+                elif attempt != current_attempt + 1:
+                    mark_blocker("attempt-sequence-gap")
+                    sequence_valid = False
+                if next_attempt_ms < scheduled_ms:
+                    mark_blocker("malformed-backoff-progression")
+                    sequence_valid = False
+            else:
+                mark_blocker("invalid-status-sequence")
+                sequence_valid = False
+            if sequence_valid:
+                state = "begin"
+                current_attempt = attempt
+                begin_ms = next_attempt_ms
+            continue
+
+        if status == "transient-retry-scheduled":
+            transient_retries += 1
+            sequence_valid = state == "begin" and attempt == current_attempt
+            if not sequence_valid:
+                mark_blocker("invalid-status-sequence")
+            expected_backoff_ms = CYW43_BOOTSTRAP_RETRY_BACKOFF_MS[
+                min(attempt - 1, len(CYW43_BOOTSTRAP_RETRY_BACKOFF_MS) - 1)
+            ]
+            if (
+                backoff_ms != expected_backoff_ms
+                or next_attempt_ms < begin_ms + backoff_ms
+            ):
+                mark_blocker("malformed-backoff-progression")
+                sequence_valid = False
+            if sequence_valid:
+                state = status
+                scheduled_ms = next_attempt_ms
+            continue
+
+        if status == "ready":
+            sequence_valid = state == "begin" and attempt == current_attempt
+            if not sequence_valid:
+                mark_blocker("invalid-status-sequence")
+            if backoff_ms != 0 or next_attempt_ms < begin_ms:
+                mark_blocker("malformed-backoff-progression")
+                sequence_valid = False
+            if sequence_valid:
+                state = "ready"
+            continue
+
+        if status.startswith("permanent-"):
+            mark_blocker("permanent-status")
+            state = status
+            current_attempt = attempt
+            continue
+
+        mark_blocker("invalid-status")
+        state = status
+        current_attempt = attempt
+
+    if blocker is None:
+        if state == "begin":
+            blocker = "begin-not-terminal"
+        elif state == "transient-retry-scheduled":
+            blocker = "scheduled-not-terminal"
+        elif state != "ready":
+            blocker = "ready-missing"
+
+    ready = state == "ready" and blocker is None
+    return Cyw43BootstrapSupervisorProof(
+        seen=True,
+        max_attempt=max_attempt,
+        transient_retries=transient_retries,
+        last_status=last_status,
+        ready=ready,
+        blocker=blocker or "none",
+    )
+
+
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
     event_list = list(events)
     wifi_dpc = summarize_wifi_dpc_proof(event_list)
+    cyw43_bootstrap_supervisor = summarize_cyw43_bootstrap_supervisor(event_list)
     usb_gate, usb_blocker = summarize_usb_gate(event_list)
     usb_oldgood = summarize_usb_oldgood_replay(event_list)
     usb_event_ring_alive, usb_psc_drain_count, usb_psc_drain_mask = (
@@ -12313,6 +12499,18 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_dpc_poisoned=wifi_dpc.poisoned,
         wifi_dpc_masked=wifi_dpc.masked,
         wifi_dpc_line=wifi_dpc.line,
+        cyw43_bootstrap_supervisor_seen=cyw43_bootstrap_supervisor.seen,
+        cyw43_bootstrap_supervisor_max_attempt=(
+            cyw43_bootstrap_supervisor.max_attempt
+        ),
+        cyw43_bootstrap_supervisor_transient_retries=(
+            cyw43_bootstrap_supervisor.transient_retries
+        ),
+        cyw43_bootstrap_supervisor_last_status=(
+            cyw43_bootstrap_supervisor.last_status
+        ),
+        cyw43_bootstrap_supervisor_ready=cyw43_bootstrap_supervisor.ready,
+        cyw43_bootstrap_supervisor_blocker=cyw43_bootstrap_supervisor.blocker,
         wifi_firmware_identity_proof=wifi_firmware_identity_proof,
         wifi_firmware_identity_blocker=wifi_firmware_identity_blocker,
         wifi_clm_ready_proof=wifi_clm_ready_proof,
@@ -13494,6 +13692,14 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         blockers.append("panic")
     if record.get("SERIAL_CLEAN") != "yes":
         blockers.append("serial-unclean")
+    if record.get("CYW43_BOOTSTRAP_SUPERVISOR_SEEN") == "yes":
+        supervisor_blocker = str(
+            record.get("CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER", "ready-missing")
+        )
+        if supervisor_blocker != "none":
+            blockers.append(f"cyw43-bootstrap-supervisor-{supervisor_blocker}")
+        elif record.get("CYW43_BOOTSTRAP_SUPERVISOR_READY") != "yes":
+            blockers.append("cyw43-bootstrap-supervisor-ready-missing")
     if record.get("ROOT_CONSOLE_READY") != "yes":
         blockers.append("root-console-not-ready")
     if record.get("ROOT_PROMPT_SEEN") != "yes":

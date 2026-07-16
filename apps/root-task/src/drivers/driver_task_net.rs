@@ -491,6 +491,11 @@ static CYW43_ARP_TARGET_HW_ZEROED: AtomicU32 = AtomicU32::new(0);
 static GENET_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static CYW43_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static CYW43_CONTROL_PLANE_READY: AtomicU32 = AtomicU32::new(0);
+// Counts root bootstrap entries, including attempts that fail before firmware
+// context can be retained. The post-prompt supervisor uses this to avoid
+// restarting a pair that has never been touched while still fencing every
+// retry after a partial hardware bootstrap.
+static CYW43_BOOTSTRAP_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 static CYW43_ASSOCIATED: AtomicU32 = AtomicU32::new(0);
 static CYW43_LINK_UP: AtomicU32 = AtomicU32::new(0);
 static CYW43_CONNECTION_EPOCH: AtomicU32 = AtomicU32::new(0);
@@ -3450,6 +3455,38 @@ impl fmt::Display for DriverTaskNetError {
     }
 }
 
+impl DriverTaskNetError {
+    /// Return whether a failed CYW43 bootstrap can be retried after a fenced
+    /// linked-runtime pair restart. Hardware timing, transport, and runtime
+    /// progress failures are transient by default. Only inputs that cannot
+    /// change without replacing configuration or build artifacts are terminal.
+    #[must_use]
+    pub fn cyw43_bootstrap_retryable(self) -> bool {
+        let Self::RuntimeInit(stage) = self else {
+            return true;
+        };
+        !matches!(
+            stage,
+            "wifi-credentials-missing"
+                | "wifi-ssid-missing"
+                | "cyw43-firmware-bundle"
+                | "cyw43-rstvec"
+                | "cyw43-nvram-len"
+                | "cyw43-nvram-range"
+                | "cyw43-nvram-tail"
+                | "cyw43-offset"
+                | "cyw43-target-range"
+                | "cyw43-payload-offset"
+                | "cyw43-iovar-len"
+                | "cyw43-clm-chunk-len"
+                | "cyw43-clm-payload-len"
+                | "cyw43-wsec-pmk-len"
+                | "cyw43-wsec-pmk-derive"
+                | "cyw43-command-budget"
+        )
+    }
+}
+
 impl NetDriverError for DriverTaskNetError {
     fn is_absent(&self) -> bool {
         false
@@ -3492,6 +3529,40 @@ where
     )
 }
 
+/// Fence and reconstruct a partially bootstrapped CYW43/SDIO pair before a
+/// post-prompt retry. Early failures that occurred before both runtimes
+/// published restart authority re-enter ordinary descriptor initialisation;
+/// once both contexts exist, retry always performs the complete HAL-owned pair
+/// restart and retained firmware/control replay first.
+#[cfg(feature = "kernel")]
+pub fn prepare_cyw43_bootstrap_retry<H>(
+    hal: &mut H,
+    config: &ConsoleNetConfig,
+) -> Result<(), DriverTaskNetError>
+where
+    H: Hardware<Error = HalError>,
+{
+    if CYW43_BOOTSTRAP_ATTEMPTS.load(Ordering::Acquire) == 0
+        || !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+    {
+        return Ok(());
+    }
+    if !crate::hal::driver_task::cyw43_sdio_pair_restart_context_available() {
+        // No runnable pair exists yet. The normal initialisation path can
+        // safely replay the rejected/pending descriptors without latching a
+        // restart that has no TCB context to consume it.
+        CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
+        CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
+        return Ok(());
+    }
+
+    let recovery_context = Cyw43RetainedRecoveryContext::acquire(hal, *config)?;
+    *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = Some(recovery_context);
+    let _ = invalidate_cyw43_root_generation_for_recovery();
+    crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+    recover_cyw43_required_pair_context("cyw43-bootstrap-supervisor-retry")
+}
+
 fn init_runtime_via_driver_task<H>(
     hal: &mut H,
     config: ConsoleNetConfig,
@@ -3508,6 +3579,21 @@ where
             hot_path.as_u32() as usize,
             runtime_ring_service,
         );
+        if hot_path == DriverTaskHotPath::Cyw43Wifi {
+            CYW43_BOOTSTRAP_ATTEMPTS.fetch_add(1, Ordering::AcqRel);
+            if CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0
+                && !crate::hal::driver_task::cyw43_sdio_pair_restart_required()
+                && !crate::hal::driver_task::cyw43_sdio_pair_context_replay_required()
+            {
+                emit_net_driver_task_replay_status(
+                    config,
+                    hot_path,
+                    "bootstrap-supervisor",
+                    "preserved-ready",
+                );
+                return Ok(());
+            }
+        }
         emit_net_driver_task_replay_status(config, hot_path, "descriptor-replay", "begin");
         if !crate::hal::driver_task::ensure_deferred_runtime_init_descriptor(contract, hot_path) {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -21629,6 +21715,7 @@ mod tests {
         *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
         CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
         CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
+        CYW43_BOOTSTRAP_ATTEMPTS.store(0, Ordering::Release);
         CYW43_ASSOCIATED.store(0, Ordering::Release);
         CYW43_LINK_UP.store(0, Ordering::Release);
         CYW43_CONNECTION_EPOCH.store(0, Ordering::Release);
@@ -21745,6 +21832,44 @@ mod tests {
         *CYW43_HOST_EAPOL_SESSION.lock() = None;
         CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
         clear_cyw43_active_prompt_poll();
+    }
+
+    #[test]
+    fn bootstrap_retry_classification_keeps_hardware_timing_faults_transient() {
+        for stage in [
+            "cyw43-sdio-prereq",
+            "cyw43-function1-ready-timeout",
+            "cyw43-alp-ready-timeout",
+            "sdio-host-linked-runtime",
+            "cyw43-command-completion",
+            "cyw43-sdio-pair-restart",
+            "cyw43-transport-phase-budget",
+            "cyw43-stage-shared-payload",
+            "wifi-event-mask-too-short",
+        ] {
+            assert!(
+                DriverTaskNetError::RuntimeInit(stage).cyw43_bootstrap_retryable(),
+                "hardware/bootstrap stage must remain retryable: {stage}"
+            );
+        }
+        assert!(DriverTaskNetError::RuntimePending("descriptor-replay").cyw43_bootstrap_retryable());
+    }
+
+    #[test]
+    fn bootstrap_retry_classification_rejects_permanent_inputs() {
+        for stage in [
+            "wifi-credentials-missing",
+            "wifi-ssid-missing",
+            "cyw43-firmware-bundle",
+            "cyw43-rstvec",
+            "cyw43-nvram-range",
+            "cyw43-command-budget",
+        ] {
+            assert!(
+                !DriverTaskNetError::RuntimeInit(stage).cyw43_bootstrap_retryable(),
+                "configuration/artifact stage must remain terminal: {stage}"
+            );
+        }
     }
 
     #[test]

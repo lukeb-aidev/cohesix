@@ -2241,6 +2241,21 @@ where
         self
     }
 
+    /// Attach a network stack that completed bootstrap after the serial/local
+    /// seat console was already published. The persistent Pi Wi-Fi supervisor
+    /// calls this exactly once; replacing a live stack would invalidate active
+    /// session ownership and is therefore rejected.
+    #[cfg(feature = "net-console")]
+    pub fn attach_network_after_bootstrap(&mut self, net: &'a mut dyn NetPoller) -> bool {
+        if self.net.is_some() {
+            return false;
+        }
+        self.audit.info("event-pump: attach deferred network");
+        self.net = Some(net);
+        self.net_unavailable_detail = None;
+        true
+    }
+
     /// Attach the preserved reason why the network stack was unavailable.
     #[cfg(feature = "net-console")]
     pub fn with_network_unavailable_detail(mut self, detail: Option<HeaplessString<192>>) -> Self {
@@ -16903,6 +16918,29 @@ mod tests {
         assert!(!second_transcript.contains(CONSOLE_PROMPT));
         #[cfg(all(feature = "kernel", feature = "usb"))]
         assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn deferred_network_attach_is_single_assignment() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut first = FakeNet::new();
+        let mut replacement = FakeNet::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        assert!(!pump.net_console_enabled());
+        assert!(pump.attach_network_after_bootstrap(&mut first));
+        assert!(pump.net_console_enabled());
+        assert!(!pump.attach_network_after_bootstrap(&mut replacement));
     }
 
     #[cfg(feature = "net-console")]
