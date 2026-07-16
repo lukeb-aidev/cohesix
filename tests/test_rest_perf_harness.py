@@ -846,6 +846,160 @@ def test_operation_summary_includes_report_quantiles() -> None:
     assert summary["p99_s"] >= summary["p95_s"]
 
 
+def test_error_classification_preserves_all_failures() -> None:
+    stats = rest_perf.OpStats()
+    stats.record(0.01, False, "detail=buffer-full error=buffer full")
+    stats.record(0.01, False, "invalid payload")
+    stats.record(0.01, False, None)
+
+    classification = rest_perf.error_classification(stats)
+
+    assert classification == {
+        "buffer_full_errors": 1,
+        "other_errors": 2,
+        "unclassified_errors": 1,
+        "all_errors_buffer_full": False,
+    }
+    assert rest_perf.error_classification(rest_perf.OpStats())[
+        "all_errors_buffer_full"
+    ] is None
+
+
+def test_retained_state_summary_keeps_operation_ownership() -> None:
+    schedule = rest_perf.OpStats()
+    schedule.record(0.01, True, None)
+    schedule.record(0.01, False, "detail=buffer-full")
+    lease_grant = rest_perf.OpStats()
+    lease_grant.record(0.01, False, "invalid payload")
+    lease_preempt = rest_perf.OpStats()
+    lease_preempt.record(0.01, True, None)
+    unrelated = rest_perf.OpStats()
+    unrelated.record(0.01, False, "detail=buffer-full")
+
+    summary = rest_perf.retained_state_summary(
+        {
+            "schedule_write": schedule,
+            "lease_grant": lease_grant,
+            "lease_preempt": lease_preempt,
+            "status": unrelated,
+        }
+    )
+
+    assert summary["operation_names"] == [
+        "schedule_write",
+        "lease_grant",
+        "lease_preempt",
+        "lease_quota",
+    ]
+    assert summary["operations_attempted"]
+    assert summary["count"] == 4
+    assert summary["ok"] == 2
+    assert summary["err"] == 2
+    assert summary["buffer_full_errors"] == 1
+    assert summary["other_errors"] == 1
+    assert summary["bounded_refusal_observed"]
+    assert summary["all_errors_buffer_full"] is False
+    assert summary["operations"]["schedule_write"]["err"] == 1
+    assert summary["operations"]["lease_grant"]["other_errors"] == 1
+    assert summary["operations"]["lease_quota"]["count"] == 0
+
+
+def test_capacity_boundary_summary_uses_observed_strict_crossing() -> None:
+    args = argparse.Namespace(
+        workers_min=8,
+        workers_max=12,
+        intensity_min=6,
+        intensity_max=6,
+        error_budget_rate=0.01,
+    )
+    ramp_rows = [
+        {
+            "step": 0,
+            "workers": 8,
+            "intensity": 6.0,
+            "rps": 28.8,
+            "ops": 100,
+            "ok": 99,
+            "err": 1,
+            "err_rate": 0.01,
+            "unexpected": "not projected",
+        },
+        {
+            "step": 1,
+            "workers": 10,
+            "intensity": 6.0,
+            "rps": 36.0,
+            "ops": 9999,
+            "ok": 9899,
+            "err": 100,
+            "err_rate": 0.01,
+        },
+    ]
+
+    summary = rest_perf.capacity_boundary_summary(args, ramp_rows, worker_cap=10)
+
+    assert summary["worker_shape"] == "ramped"
+    assert summary["intensity_shape"] == "fixed"
+    assert summary["configured_workers_max"] == 12
+    assert summary["effective_workers_max"] == 10
+    assert summary["observed_workers_max"] == 10
+    assert summary["worker_cap_limited"]
+    assert not summary["configured_endpoint_observed"]
+    assert summary["effective_endpoint_observed"]
+    assert summary["first_error"]["step"] == 0
+    assert "unexpected" not in summary["first_error"]
+    assert summary["first_error_budget_crossing"]["step"] == 1
+    assert summary["first_error_budget_crossing"]["exact_err_rate"] > 0.01
+
+    fixed_args = argparse.Namespace(
+        workers_min=10,
+        workers_max=10,
+        intensity_min=6,
+        intensity_max=6,
+        error_budget_rate=None,
+    )
+    fixed = rest_perf.capacity_boundary_summary(
+        fixed_args,
+        [ramp_rows[1]],
+        worker_cap=None,
+    )
+    assert fixed["worker_shape"] == "fixed"
+    assert fixed["intensity_shape"] == "fixed"
+    assert fixed["configured_endpoint_observed"]
+    assert fixed["first_error_budget_crossing"] is None
+
+
+def test_default_stateful_control_operation_mix_is_unchanged() -> None:
+    state = rest_perf.SimState(
+        bounds={},
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=0,
+        policy_enabled=True,
+        actions_enabled=True,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=True,
+        transient_retries=False,
+        strict_control_errors=True,
+    )
+
+    operations = rest_perf.build_operations({}, ["queen"], [], [], state)
+    control_weights = {
+        operation.name: operation.weight
+        for operation in operations
+        if operation.category == "control"
+    }
+
+    assert control_weights == {
+        "schedule_write": 0.6,
+        "lease_grant": 0.4,
+        "lease_preempt": 0.3,
+        "lease_quota": 0.2,
+    }
+
+
 def test_gateway_status_delta_saturates_missing_fields() -> None:
     before = {
         "broker": {
@@ -884,13 +1038,21 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
         multi_hive=False,
         hives=1,
         workers_per_hive=2,
+        entropy=5.0,
         intensity_min=1,
         intensity_max=2,
         duration_mins=1,
+        ramp_step_secs=30,
         base_rps=0.5,
         max_inflight=8,
+        tail_bytes=256,
+        include_lifecycle=False,
+        auto_approve=True,
         transient_retries=True,
         strict_control_errors=False,
+        timeout=10.0,
+        request_auth_token="sensitive-test-token",
+        role="queen",
         fast_ramp=False,
         scenario=None,
         telemetry_reference_chunk_bytes=rest_perf.DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES,
@@ -925,8 +1087,24 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
             "cumulative_p99_s": 0.01,
         }
     ]
-    gateway_start = {"broker": {"proc_cache_hits": 10, "pool_exhausted": 0}}
-    gateway_end = {"broker": {"proc_cache_hits": 15, "pool_exhausted": 1}}
+    gateway_start = {
+        "broker": {
+            "control_waiters": 1,
+            "control_waiters_high_water": 2,
+            "control_checkouts": 10,
+            "proc_cache_hits": 10,
+            "pool_exhausted": 0,
+        }
+    }
+    gateway_end = {
+        "broker": {
+            "control_waiters": 3,
+            "control_waiters_high_water": 5,
+            "control_checkouts": 14,
+            "proc_cache_hits": 15,
+            "pool_exhausted": 1,
+        }
+    }
     gateway_diff = rest_perf.gateway_status_delta(gateway_start, gateway_end)
     concurrency = {
         "configured_max_inflight": 8,
@@ -957,15 +1135,44 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
     assert payload["gateway_status_start"] == gateway_start
     assert payload["gateway_status_end"] == gateway_end
     assert payload["gateway_status_delta"] == {
-        "broker": {"proc_cache_hits": 5, "pool_exhausted": 1}
+        "broker": {
+            "control_waiters": 2,
+            "control_waiters_high_water": 3,
+            "control_checkouts": 4,
+            "proc_cache_hits": 5,
+            "pool_exhausted": 1,
+        }
     }
     assert payload["concurrency"]["observed_high_water"] == 1
     assert payload["overall"]["p99_s"] == 0.01
     assert payload["operations"]["status"]["error_rate"] == 0.0
     assert payload["report"]["schema"] == "cohesix-benchmark-report/v1"
     assert payload["report"]["workload"]["target_rps_max"] == 2.0
+    assert payload["report"]["workload"]["seed"] == 123
+    assert payload["report"]["workload"]["request_auth_enabled"]
+    assert payload["report"]["capacity_boundary"] == {
+        "ramp_steps": 1,
+        "worker_shape": "ramped",
+        "intensity_shape": "ramped",
+        "configured_workers_max": 2,
+        "effective_workers_max": 2,
+        "observed_workers_max": 2,
+        "worker_cap_limited": False,
+        "configured_endpoint_observed": True,
+        "effective_endpoint_observed": True,
+        "first_error": None,
+        "first_error_budget_crossing": None,
+    }
+    assert payload["report"]["retained_state"]["operations_attempted"] is False
+    assert payload["report"]["reliability"]["all_errors_buffer_full"] is None
+    assert payload["report"]["backpressure"]["control_waiters"] == 2
+    assert payload["report"]["backpressure"]["control_waiters_high_water"] == 3
+    assert payload["report"]["backpressure"]["control_checkouts"] == 4
     assert payload["report"]["backpressure"]["pool_exhausted"] == 1
     assert payload["report"]["visualization"]["recommended_charts"]
+    assert "sensitive-test-token" not in pathlib.Path(
+        artifacts["summary_json"]
+    ).read_text()
 
 
 def test_parse_args_no_retries_alias_disables_transient_retries() -> None:

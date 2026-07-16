@@ -12,7 +12,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -1927,6 +1927,21 @@ impl AppState {
         ProcReadCacheClaim::Leader(fill)
     }
 
+    fn read_cache_try_get(&self, path: &str) -> Option<Vec<String>> {
+        let mut cache = match self.inner.proc_cache.try_lock() {
+            Ok(cache) => cache,
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+            Err(TryLockError::WouldBlock) => return None,
+        };
+        let lines = read_cache_valid_entry(&mut cache, path)?;
+        self.inner
+            .broker
+            .proc_cache_hits
+            .fetch_add(1, Ordering::Relaxed);
+        drop(cache);
+        Some(lines.as_ref().to_vec())
+    }
+
     #[cfg(test)]
     fn read_cache_get(&self, path: &str) -> Option<Vec<String>> {
         let mut cache = self.proc_cache_guard();
@@ -2115,6 +2130,11 @@ async fn handle_list(state: AppState, path: String) -> impl axum::response::Into
     if let Err(err) = validate_path(&path) {
         return response_err(verb, &path, err, StatusCode::BAD_REQUEST);
     }
+    if is_cacheable_list_path(&path) {
+        if let Some(lines) = state.read_cache_try_get(&path) {
+            return response_ok(verb, path, lines, None);
+        }
+    }
     let path_clone = path.clone();
     let result = tokio::task::spawn_blocking(move || state.list(&path_clone)).await;
     match result {
@@ -2158,20 +2178,15 @@ async fn handle_cat(state: AppState, query: CatQuery) -> impl axum::response::In
             );
         }
     }
+    if is_cacheable_read_path(&query.path) {
+        if let Some(lines) = state.read_cache_try_get(&query.path) {
+            return response_cat_lines(query.path, lines, max_bytes);
+        }
+    }
     let path = query.path.clone();
     let result = tokio::task::spawn_blocking(move || state.read(&path)).await;
     match result {
-        Ok(Ok(lines)) => {
-            let Some(bytes) = bounded_joined_line_bytes(&lines, max_bytes) else {
-                return response_err(
-                    verb,
-                    &query.path,
-                    format!("read exceeded max_bytes {max_bytes}"),
-                    StatusCode::BAD_REQUEST,
-                );
-            };
-            response_ok(verb, query.path, lines, Some(bytes))
-        }
+        Ok(Ok(lines)) => response_cat_lines(query.path, lines, max_bytes),
         Ok(Err(err)) => response_transport_err(verb, &query.path, err),
         Err(err) => response_err(
             verb,
@@ -2180,6 +2195,22 @@ async fn handle_cat(state: AppState, query: CatQuery) -> impl axum::response::In
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
     }
+}
+
+fn response_cat_lines(
+    path: String,
+    lines: Vec<String>,
+    max_bytes: usize,
+) -> (StatusCode, Json<GatewayResponse>) {
+    let Some(bytes) = bounded_joined_line_bytes(&lines, max_bytes) else {
+        return response_err(
+            "CAT",
+            &path,
+            format!("read exceeded max_bytes {max_bytes}"),
+            StatusCode::BAD_REQUEST,
+        );
+    };
+    response_ok("CAT", path, lines, Some(bytes))
 }
 
 async fn handle_tail(state: AppState, query: TailQuery) -> impl axum::response::IntoResponse {
@@ -3471,6 +3502,272 @@ mod tests {
                 .broker
                 .timeout_rejections
                 .load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn nonblocking_cache_probe_returns_independent_hit_without_a_miss() {
+        let state = disconnected_cached_state();
+        let path = "/proc/root/reachable";
+        state.read_cache_insert(path, vec!["reachable=yes".to_owned()]);
+
+        let mut lines = state
+            .read_cache_try_get(path)
+            .expect("nonblocking cache probe must hit");
+        lines[0].push_str("-mutated");
+
+        let cache = state.proc_cache_guard();
+        assert_eq!(
+            cache
+                .entries
+                .get(path)
+                .expect("cached entry must remain present")
+                .lines
+                .as_ref(),
+            ["reachable=yes"]
+        );
+        drop(cache);
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state.inner.broker.proc_cache_misses.load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn nonblocking_cache_probe_miss_defers_accounting_to_fallback() {
+        let state = disconnected_cached_state();
+        let path = "/proc/root/reachable";
+
+        assert!(state.read_cache_try_get(path).is_none());
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state.inner.broker.proc_cache_misses.load(Ordering::Relaxed),
+            0
+        );
+
+        let lines = state
+            .read_through_cache(path, || Ok(vec!["reachable=yes".to_owned()]))
+            .expect("blocking fallback must fill the cache");
+        assert_eq!(lines, ["reachable=yes"]);
+        assert_eq!(
+            state.inner.broker.proc_cache_misses.load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn nonblocking_cache_probe_preserves_existing_fill_for_fallback() {
+        let state = disconnected_cached_state();
+        let path = "/proc/root/reachable";
+        let fill = Arc::new(ProcReadFill::default());
+        state
+            .proc_cache_guard()
+            .in_flight
+            .insert(path.to_owned(), Arc::clone(&fill));
+
+        assert!(state.read_cache_try_get(path).is_none());
+        let cache = state.proc_cache_guard();
+        assert!(cache
+            .in_flight
+            .get(path)
+            .is_some_and(|current| Arc::ptr_eq(current, &fill)));
+        drop(cache);
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state.inner.broker.proc_cache_misses.load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn nonblocking_cache_probe_expires_then_refills_once() {
+        let state = disconnected_cached_state();
+        let path = "/proc/root/reachable";
+        state.read_cache_insert(path, vec!["reachable=stale".to_owned()]);
+        {
+            let mut cache = state.proc_cache_guard();
+            cache
+                .entries
+                .get_mut(path)
+                .expect("cached entry must exist")
+                .inserted_at =
+                Instant::now() - Duration::from_millis(DEFAULT_PROC_CACHE_TTL_MS + 1);
+        }
+
+        assert!(state.read_cache_try_get(path).is_none());
+        {
+            let cache = state.proc_cache_guard();
+            assert!(!cache.entries.contains_key(path));
+            assert!(!cache.order.iter().any(|entry| entry == path));
+        }
+        assert_eq!(
+            state.inner.broker.proc_cache_misses.load(Ordering::Relaxed),
+            0
+        );
+
+        let lines = state
+            .read_through_cache(path, || Ok(vec!["reachable=fresh".to_owned()]))
+            .expect("expired cache entry must refill");
+        assert_eq!(lines, ["reachable=fresh"]);
+        assert_eq!(
+            state.inner.broker.proc_cache_misses.load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn nonblocking_cache_probe_falls_back_without_waiting_on_contention() {
+        let state = disconnected_cached_state();
+        let path = "/proc/root/reachable";
+        state.read_cache_insert(path, vec!["reachable=yes".to_owned()]);
+        let cache = state.proc_cache_guard();
+        let probe_state = state.clone();
+        let probe = thread::spawn(move || probe_state.read_cache_try_get(path));
+
+        assert!(probe
+            .join()
+            .expect("nonblocking cache probe thread must join")
+            .is_none());
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state.inner.broker.proc_cache_misses.load(Ordering::Relaxed),
+            0
+        );
+
+        drop(cache);
+        assert_eq!(
+            state
+                .read_cache_try_get(path)
+                .expect("probe must hit after contention clears"),
+            ["reachable=yes"]
+        );
+    }
+
+    #[test]
+    fn nonblocking_cache_probe_recovers_poisoned_cache() {
+        let state = disconnected_cached_state();
+        let path = "/proc/root/reachable";
+        state.read_cache_insert(path, vec!["reachable=yes".to_owned()]);
+        let poison_state = state.clone();
+        let poison = thread::spawn(move || {
+            let _cache = poison_state
+                .inner
+                .proc_cache
+                .lock()
+                .expect("cache must start unpoisoned");
+            panic!("poison cache mutex for recovery test");
+        });
+        assert!(poison.join().is_err());
+
+        assert_eq!(
+            state
+                .read_cache_try_get(path)
+                .expect("nonblocking probe must recover poisoned cache"),
+            ["reachable=yes"]
+        );
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn cached_list_and_cat_handlers_preserve_wire_response_bounds() {
+        let state = disconnected_cached_state();
+        state.read_cache_insert("/proc", vec!["root".to_owned(), "lease".to_owned()]);
+        state.read_cache_insert("/proc/root/reachable", vec!["reachable=yes".to_owned()]);
+
+        let list_response = handle_list(state.clone(), "/proc".to_owned())
+            .await
+            .into_response();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_body = axum::body::to_bytes(list_response.into_body(), 1024)
+            .await
+            .expect("cached list response body");
+        let list_json: serde_json::Value =
+            serde_json::from_slice(&list_body).expect("cached list response JSON");
+        assert_eq!(list_json["status"], "OK");
+        assert_eq!(list_json["verb"], "LS");
+        assert_eq!(list_json["path"], "/proc");
+        assert_eq!(list_json["end"], true);
+        assert_eq!(list_json["lines"], serde_json::json!(["root", "lease"]));
+
+        let cat_response = handle_cat(
+            state.clone(),
+            CatQuery {
+                path: "/proc/root/reachable".to_owned(),
+                max_bytes: Some(64),
+            },
+        )
+        .await
+        .into_response();
+        assert_eq!(cat_response.status(), StatusCode::OK);
+        let cat_body = axum::body::to_bytes(cat_response.into_body(), 1024)
+            .await
+            .expect("cached CAT response body");
+        let cat_json: serde_json::Value =
+            serde_json::from_slice(&cat_body).expect("cached CAT response JSON");
+        assert_eq!(cat_json["status"], "OK");
+        assert_eq!(cat_json["verb"], "CAT");
+        assert_eq!(cat_json["path"], "/proc/root/reachable");
+        assert_eq!(cat_json["end"], true);
+        assert_eq!(cat_json["lines"], serde_json::json!(["reachable=yes"]));
+        assert_eq!(cat_json["bytes"], "reachable=yes".len());
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
+            2
+        );
+        assert_eq!(
+            state.inner.broker.proc_cache_misses.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state
+                .inner
+                .broker
+                .telemetry_checkouts
+                .load(Ordering::Relaxed),
+            0
+        );
+
+        let too_small = handle_cat(
+            state,
+            CatQuery {
+                path: "/proc/root/reachable".to_owned(),
+                max_bytes: Some(4),
+            },
+        )
+        .await
+        .into_response();
+        assert_eq!(too_small.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn invalidation_removes_entry_from_nonblocking_cache_probe() {
+        let state = disconnected_cached_state();
+        state.read_cache_insert(PROC_SCHEDULE_SUMMARY_PATH, vec!["queue=stale".to_owned()]);
+
+        state.read_cache_invalidate_for_write(CLIENT_QUEEN_SCHEDULE_CTL_PATH, br#"{}"#);
+
+        assert!(state
+            .read_cache_try_get(PROC_SCHEDULE_SUMMARY_PATH)
+            .is_none());
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
             0
         );
     }

@@ -187,6 +187,64 @@ errors, telemetry has zero errors, and no failure was hidden or retried. This
 QEMU result also provides no current Pi 4, GENET, CYW43/SDIO, Wi-Fi, or
 repeated-boot proof.
 
+### M26d Async Cache-Hit Fast-Path Revalidation (2026-07-16)
+
+This tuning pass is also authorized by Milestone 26d
+`m26d-benchmark-revalidation-and-tuning`. For validated cacheable `LS` and
+`CAT` requests, `hive-gateway` now probes the existing read cache before
+dispatching blocking work. A hit copies the immutable cached lines after
+releasing the cache lock. A miss, expired entry, in-flight fill, or contended
+lock follows the existing blocking/coalescing path, which remains the sole
+place that accounts a miss and performs target I/O. Path and `max_bytes`
+validation still occurs before the probe, and successful `CAT` responses use
+the same byte-bound response builder in both paths.
+
+The strongest changed-layer comparison is a same-QEMU-boot, gateway-restart
+A/B using 100 `status` runs per binary. Excluding the first cold sample,
+sequential latency improved from 1.578 ms to 1.469 ms (-6.90%) and parallel
+latency improved from 1.604 ms to 1.577 ms (-1.68%). Both lanes recorded
+exactly 2,388 cache hits, 12 misses, and 12 telemetry checkouts, with zero pool
+exhaustion, checkout retry, or timeout rejection. The retained summaries are:
+
+- pre-fast-path control:
+  `out/bench/m26d-gicv3-cache-hit-control-status-100_20260716T022400Z.perf-summary.json`;
+- cache-hit fast path:
+  `out/bench/m26d-gicv3-cache-hit-fastpath-status-100_20260716T022432Z.perf-summary.json`.
+
+Three full high-pressure repetitions retained the unchanged 8-to-1000-worker
+workload described above. Together they attempted 334,725 operations, completed
+315,004 successfully, and returned 19,721 explicit bounded errors (5.8917%).
+Their count-weighted average latency was 9.612 ms and estimated p50 was
+0.201 ms. Against the preceding two-run final aggregate, those values improve
+by 22.9% and 6.0%, respectively, while attempted and successful throughput are
+effectively flat (-0.53% and -0.44%). Estimated p95 and p99 were mixed at
+29.177 ms and 176.221 ms (+20.7% and +67.8%), so this pass makes no broad tail
+latency or capacity-envelope claim. Two interleaved pre-fast-path controls also
+show substantial QEMU/telemetry tail variance. No candidate or control run
+observed gateway pool exhaustion, checkout retry, or timeout rejection.
+
+Full-pressure artifacts are:
+
+- candidate repetitions:
+  `out/bench/m26d-high-pressure-gicv3-cache-hit-fastpath_20260716T020540Z.summary.json`,
+  `out/bench/m26d-high-pressure-gicv3-cache-hit-fastpath-rep2_20260716T020807Z.summary.json`,
+  and
+  `out/bench/m26d-high-pressure-gicv3-cache-hit-fastpath-rep3_20260716T021541Z.summary.json`;
+- interleaved controls:
+  `out/bench/m26d-high-pressure-gicv3-cache-hit-control_20260716T021312Z.summary.json`
+  and
+  `out/bench/m26d-high-pressure-gicv3-cache-hit-control-rep2_20260716T022051Z.summary.json`.
+
+The pre-fast-path gateway SHA-256 is
+`20ed7c0257137e2096654fe62085b1a95526dd3814aa6772ce93b777f5cf42f9`;
+the candidate gateway SHA-256 is
+`9020a2213bf21216b201f4445311f9954d25f66c4d367b9ad96f0b1241bc918c`.
+The REST harness and target hashes are byte-identical to the preceding GICv3
+ledger. No cache TTL or capacity, queue, timeout, retry policy, authority check,
+error classification, API field, or ACK/ERR/END behavior changed. The tuning is
+retained for its reproducible hot-read benefit, not as permission to weaken the
+unchanged 1% budget or bounded target refusal behavior.
+
 No current mixed-load `simulate` worker envelope is accepted by this document.
 The former 1500-worker result and later local 400/600/1200-worker observations
 lack a retained, current, fully qualified artifact index here. They may guide a
@@ -272,15 +330,22 @@ projections; automation and review decisions must use the versioned object.
 | Report field | Contents and interpretation |
 | --- | --- |
 | `schema` | Exact report contract identifier; reject unknown major versions. |
-| `workload` | Mode, scenario, worker bounds/cap, intensity, base and target RPS, duration, configured in-flight limit, retry state, and strict-error state. These fields define comparability. |
+| `workload` | Mode, scenario, seed, entropy, worker/multi-hive bounds, intensity, base and target RPS, duration/ramp interval, read-size controls, lifecycle/approval state, configured in-flight limit, timeout, role, auth-presence boolean, retry state, and strict-error state. These fields define comparability; secret values are never serialized. |
 | `throughput` | Attempted, successful, and failed operations per second over the configured duration. Throughput without reliability is not a capacity result. |
 | `latency` | Overall average, minimum, maximum, p50, p90, p95, and p99 seconds. Use `operations` in the parent summary for per-operation latency. |
-| `reliability` | Counts, error rate, declared error budget, and pass/fail result. Exact error strings remain in the parent `overall` and `operations` objects. |
+| `reliability` | Counts, error rate, declared error budget, pass/fail result, and lossless classification of `buffer-full`, other, and unclassified errors. `all_errors_buffer_full` is `null` when no errors occurred; classification never removes an error from the total. Exact error strings remain in the parent `overall` and `operations` objects. |
+| `capacity_boundary` | Fixed-versus-ramped worker/intensity shape, configured/effective/observed worker maxima, whether each endpoint was observed, and bounded projections of the first error row and first row strictly over the declared error budget. A worker cap can make the effective endpoint lower than the configured endpoint. |
+| `retained_state` | Independent count/success/error/refusal projections for `schedule_write`, `lease_grant`, `lease_preempt`, and `lease_quota`. It identifies bounded `buffer-full` refusals without reclassifying them as success or changing the run verdict. |
 | `concurrency` | Configured maximum, observed high-water mark, current in-flight count, and submitted/completed counts. |
-| `backpressure` | Gateway-status deltas for pool exhaustion, checkout retries, timeout refusal, control-write retry behavior, and `/proc` cache effectiveness. Zero means no observed delta, not proof that another layer had no pressure. |
+| `backpressure` | Gateway-status deltas for waiters/high-water marks, checkouts, pool exhaustion, checkout retries, timeout refusal, control-write retry behavior, and `/proc` cache effectiveness. Zero means no observed delta, not proof that another layer had no pressure. |
 | `top_operations_by_p95` | Up to ten operation rows ranked by p95 latency, including count, success, and error totals. |
 | `top_operations_by_error_rate` | Up to ten operation rows ranked by error rate, including count, success, and error totals. |
 | `visualization` | Canonical series names and recommended chart types; guidance only, not measured data. |
+
+These additive diagnostics do not alter operation selection, weights, random
+number consumption, retries, request ordering, strict-error behavior, or exit
+criteria. The regression suite locks the stateful control operation names and
+weights so a reporting change cannot silently redefine the workload.
 
 `perf` writes a `*.perf-summary.json` artifact. Always state that it is a read
 microbenchmark and name whether status, telemetry, or both suites ran.
@@ -389,6 +454,124 @@ For a focused read-path run:
   --log-prefix candidate-read-path
 ```
 
+### Split Cardinality from Steady-State Performance
+
+The existing harness supports complementary tests that must retain separate
+artifacts and verdicts. Do not infer sustained throughput from a cardinality
+fill, or worker-scale mutation capacity from a read microbenchmark.
+
+| Method | Harness mode | Valid conclusion | Important boundary |
+| --- | --- | --- | --- |
+| Retained-state cardinality/refusal | `simulate` with strict control errors | Accepted schedule/lease records, first bounded refusal, and owning operation | The mixed workload fills state indirectly; this is not an isolated or zero-traffic cardinality probe. |
+| Bounded fixed-cardinality mixed load | `simulate` with equal worker and intensity minima/maxima | Reliability, latency, and throughput for a finite interval in which no retained-state bound is reached | It is not a long-duration steady-state result once monotonic schedule or preemption state fills. |
+| State-neutral read service | `perf` with `status`, `telemetry`, or `all` | Sequential-versus-parallel read latency and gateway counter deltas | It does not measure mixed mutations, target RPS, or worker-admission capacity. |
+
+#### Retained-state cardinality and refusal
+
+Run each repetition from a fresh target state. The retained M26d pressure
+method uses the following exact workload:
+
+```bash
+BENCH_BUNDLE="${BENCH_BUNDLE:?set one matching unpacked release bundle}"
+
+.venv/bin/python scripts/rest_perf_harness.py \
+  --mode simulate \
+  --bundle "$BENCH_BUNDLE" \
+  --workers-min 8 \
+  --workers-max 1000 \
+  --intensity-min 6 \
+  --intensity-max 6 \
+  --duration-mins 2 \
+  --ramp-step-secs 10 \
+  --base-rps 0.6 \
+  --max-inflight 256 \
+  --seed 2501 \
+  --no-transient-retries \
+  --strict-control-errors \
+  --error-budget-rate 0.01 \
+  --qemu-log out/bench/split-cardinality-qemu.log \
+  --gateway-log out/bench/split-cardinality-gateway.log \
+  --log-dir out/bench \
+  --log-prefix split-cardinality
+```
+
+Crossing the declared budget makes this command return non-zero even when the
+intended overload boundary was reached. Accept the artifact as a cardinality
+result only when the summary and end marker are complete and the exact errors
+are bounded target refusals. Use `report.retained_state` and
+`report.capacity_boundary` to report:
+
+- successful and refused counts for `schedule_write`, `lease_grant`,
+  `lease_preempt`, and `lease_quota` independently;
+- the first `ramp` row whose interval error rate crosses the declared budget,
+  using the row's actual workers and RPS rather than configured maxima;
+- `worker_cap`, actual maximum worker row, and whether the configured endpoint
+  was fixed-point confirmed in a separate run;
+- gateway pool, checkout-retry, waiter, and timeout deltas so target
+  cardinality is not misclassified as gateway saturation.
+
+`capacity_boundary.first_error_budget_crossing` uses a strict greater-than
+comparison of exact interval `err / ops`, not the six-decimal display value;
+its bounded row projection includes `exact_err_rate`. A row exactly equal to
+the budget is not the first crossing.
+`configured_endpoint_observed` describes only this artifact; it is not a claim
+that a separate fixed-point run confirmed the endpoint.
+
+The current mixed operation builder always includes unique schedule writes and
+lease grant/preempt/quota operations when `/queen` exists. It therefore exposes
+retained-state limits probabilistically through the fixed seed and operation
+mix; it does not directly assert a pure collection capacity. A linear ramp also
+need not execute its configured final worker value before time expires.
+
+#### Bounded fixed-cardinality mixed load
+
+Use equal worker minima/maxima and equal intensity minima/maxima, as in the
+`candidate-fixed100-i4` example above. Start every repetition from equivalent
+fresh state, keep the seed and operation mix fixed, and change only one load
+dimension at a time. Use separate prefixes for every candidate.
+
+This method is valid only while all control operations remain successful and
+the target's retained collections stay within their generated bounds. Total
+lease-grant admissions may exceed the active-lease bound when successful
+preemption releases slots, so judge the run from exact operation outcomes and
+target state rather than raw cumulative admissions alone. If `buffer-full`
+appears, classify that repetition as a cardinality/refusal result from its first
+failing step; do not pool it into a steady-state throughput average. Never omit
+`--strict-control-errors`, enable retries, reuse dirty target state, or widen a
+bound to preserve a throughput claim.
+
+#### State-neutral read service
+
+Use `perf` for a long read-path sample that does not grow schedule or lease
+state. Against one already accepted target and gateway:
+
+```bash
+test -n "${COH_REST_URL:?set the accepted gateway URL}"
+
+.venv/bin/python scripts/rest_perf_harness.py \
+  --mode perf \
+  --suite status \
+  --runs 100 \
+  --no-qemu \
+  --no-gateway \
+  --rest-url "$COH_REST_URL" \
+  --log-dir out/bench \
+  --log-prefix split-steady-status-read
+```
+
+Use `--suite telemetry --max-workers <count>` only when the accepted target
+already exposes the intended worker set. Declare any warm-up exclusion before
+comparison, retain every raw timing sample, and compare exact gateway status
+deltas. `perf` reports sequential and parallel batch timing; it does not offer
+a sustained target-RPS controller.
+
+The current CLI has no operation-family selector, custom operation weights,
+read-only `simulate` profile, bounded-ID recycler, schedule consumer, or lease
+expiry/reaping mode. Consequently, the existing harness cannot qualify a
+long-duration mixed-mutation steady state. Disabling strict errors merely hides
+the retained-state boundary and is invalid. Such a claim requires an explicit
+profile plus harness tests before it is added to this methodology.
+
 ## Pi 4 Preconditions
 
 A Pi result is not interpretable until the same boot proves:
@@ -480,6 +663,9 @@ Do not accept a result produced by:
 A benchmark is ready for documentation only when all answers are explicit:
 
 - What exact workload, target, transport, manifest, and seL4 build were used?
+- Is the artifact a retained-state cardinality test, a bounded fixed-cardinality
+  mixed interval, or a state-neutral read test, and does the selected harness
+  mode support that conclusion?
 - Which `*.summary.json` or `*.perf-summary.json` is canonical?
 - Did the target proof and raw console pass on the same boot?
 - What were success, error rate, latency percentiles, throughput, and observed

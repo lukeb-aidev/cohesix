@@ -85,6 +85,26 @@ GATEWAY_STATUS_BROKER_COUNTERS = (
     "control_write_retry_exhaustions",
     "control_write_success_after_retry",
 )
+RETAINED_STATE_OPERATION_NAMES = (
+    "schedule_write",
+    "lease_grant",
+    "lease_preempt",
+    "lease_quota",
+)
+RAMP_BOUNDARY_FIELDS = (
+    "step",
+    "workers",
+    "intensity",
+    "rps",
+    "ops",
+    "ok",
+    "err",
+    "err_rate",
+    "throughput_ops_s",
+    "ok_ops_s",
+    "max_inflight_observed",
+    "max_inflight_configured",
+)
 
 FAST_RAMP_WORKERS_MIN = 24
 FAST_RAMP_WORKERS_MAX = 120
@@ -182,14 +202,18 @@ def is_transient_error(error: Exception) -> bool:
     return False
 
 
-def is_buffer_full_error(error: Exception) -> bool:
-    message = str(error).lower()
+def is_buffer_full_message(message: str) -> bool:
+    """Return true when a gateway or target error is a bounded refusal."""
+    message = message.lower()
     return "buffer full" in message or "buffer-full" in message
+
+
+def is_buffer_full_error(error: Exception) -> bool:
+    return is_buffer_full_message(str(error))
 
 
 def is_buffer_full_response(response: GatewayResponse) -> bool:
-    message = (response.error or "").lower()
-    return "buffer full" in message or "buffer-full" in message
+    return is_buffer_full_message(response.error or "")
 
 
 def is_worker_capacity_event(error: Exception) -> bool:
@@ -3152,6 +3176,148 @@ def operation_summary(entry: OpStats, max_error_lines: int) -> Dict[str, object]
     return summary
 
 
+def error_classification(entry: OpStats) -> Dict[str, object]:
+    """Classify recorded failures without changing reliability accounting."""
+    recorded_errors = sum(entry.errors.values())
+    buffer_full_errors = sum(
+        count
+        for message, count in entry.errors.items()
+        if is_buffer_full_message(message)
+    )
+    unclassified_errors = max(entry.err - recorded_errors, 0)
+    other_errors = max(entry.err - buffer_full_errors, 0)
+    return {
+        "buffer_full_errors": buffer_full_errors,
+        "other_errors": other_errors,
+        "unclassified_errors": unclassified_errors,
+        "all_errors_buffer_full": (
+            None if entry.err == 0 else other_errors == 0
+        ),
+    }
+
+
+def retained_state_summary(stats: Dict[str, OpStats]) -> Dict[str, object]:
+    """Project stateful control results used to identify bounded refusals."""
+    operations: Dict[str, Dict[str, object]] = {}
+    total_count = 0
+    total_ok = 0
+    total_err = 0
+    total_buffer_full = 0
+    total_unclassified = 0
+
+    for name in RETAINED_STATE_OPERATION_NAMES:
+        entry = stats.get(name, OpStats())
+        classification = error_classification(entry)
+        operations[name] = {
+            "count": entry.count,
+            "ok": entry.ok,
+            "err": entry.err,
+            "error_rate": error_rate(entry),
+            **classification,
+        }
+        total_count += entry.count
+        total_ok += entry.ok
+        total_err += entry.err
+        total_buffer_full += int(classification["buffer_full_errors"])
+        total_unclassified += int(classification["unclassified_errors"])
+
+    total_other = max(total_err - total_buffer_full, 0)
+    return {
+        "operation_names": list(RETAINED_STATE_OPERATION_NAMES),
+        "operations_attempted": total_count > 0,
+        "count": total_count,
+        "ok": total_ok,
+        "err": total_err,
+        "error_rate": 0.0 if total_count == 0 else total_err / total_count,
+        "buffer_full_errors": total_buffer_full,
+        "other_errors": total_other,
+        "unclassified_errors": total_unclassified,
+        "bounded_refusal_observed": total_buffer_full > 0,
+        "all_errors_buffer_full": (
+            None if total_err == 0 else total_other == 0
+        ),
+        "operations": operations,
+    }
+
+
+def ramp_row_projection(row: Dict[str, object]) -> Dict[str, object]:
+    """Return the bounded ramp fields needed to review a reliability boundary."""
+    projection = {
+        field: row[field] for field in RAMP_BOUNDARY_FIELDS if field in row
+    }
+    projection["exact_err_rate"] = ramp_error_rate(row)
+    return projection
+
+
+def ramp_error_rate(row: Dict[str, object]) -> float:
+    """Return an exact interval error rate, preferring integer count fields."""
+    ops = row.get("ops")
+    errors = row.get("err")
+    if is_json_number(ops) and is_json_number(errors) and float(ops) > 0:
+        return float(errors) / float(ops)
+    stored_rate = row.get("err_rate")
+    return float(stored_rate) if is_json_number(stored_rate) else 0.0
+
+
+def capacity_boundary_summary(
+    args: argparse.Namespace,
+    ramp_rows: List[Dict[str, object]],
+    worker_cap: Optional[int],
+) -> Dict[str, object]:
+    """Describe the observed endpoint and first interval reliability failures."""
+    observed_workers_max = max(
+        (
+            int(row["workers"])
+            for row in ramp_rows
+            if is_json_number(row.get("workers"))
+        ),
+        default=0,
+    )
+    effective_workers_max = (
+        args.workers_max
+        if worker_cap is None
+        else min(args.workers_max, worker_cap)
+    )
+    first_error = next(
+        (
+            ramp_row_projection(row)
+            for row in ramp_rows
+            if is_json_number(row.get("err")) and float(row["err"]) > 0
+        ),
+        None,
+    )
+    first_budget_crossing = None
+    if args.error_budget_rate is not None:
+        first_budget_crossing = next(
+            (
+                ramp_row_projection(row)
+                for row in ramp_rows
+                if ramp_error_rate(row) > args.error_budget_rate
+            ),
+            None,
+        )
+
+    return {
+        "ramp_steps": len(ramp_rows),
+        "worker_shape": (
+            "fixed" if args.workers_min == args.workers_max else "ramped"
+        ),
+        "intensity_shape": (
+            "fixed"
+            if args.intensity_min == args.intensity_max
+            else "ramped"
+        ),
+        "configured_workers_max": args.workers_max,
+        "effective_workers_max": effective_workers_max,
+        "observed_workers_max": observed_workers_max,
+        "worker_cap_limited": effective_workers_max < args.workers_max,
+        "configured_endpoint_observed": observed_workers_max >= args.workers_max,
+        "effective_endpoint_observed": observed_workers_max >= effective_workers_max,
+        "first_error": first_error,
+        "first_error_budget_crossing": first_budget_crossing,
+    }
+
+
 def numeric_broker_delta(
     gateway_status_diff: Optional[Dict[str, Dict[str, object]]],
     key: str,
@@ -3173,6 +3339,30 @@ def benchmark_backpressure_summary(
     cache_total = cache_hits + cache_misses
     return {
         "source": "gateway_status_delta",
+        "control_waiters": int(
+            numeric_broker_delta(gateway_status_diff, "control_waiters")
+        ),
+        "telemetry_waiters": int(
+            numeric_broker_delta(gateway_status_diff, "telemetry_waiters")
+        ),
+        "control_waiters_high_water": int(
+            numeric_broker_delta(
+                gateway_status_diff,
+                "control_waiters_high_water",
+            )
+        ),
+        "telemetry_waiters_high_water": int(
+            numeric_broker_delta(
+                gateway_status_diff,
+                "telemetry_waiters_high_water",
+            )
+        ),
+        "control_checkouts": int(
+            numeric_broker_delta(gateway_status_diff, "control_checkouts")
+        ),
+        "telemetry_checkouts": int(
+            numeric_broker_delta(gateway_status_diff, "telemetry_checkouts")
+        ),
         "pool_exhausted": int(numeric_broker_delta(gateway_status_diff, "pool_exhausted")),
         "checkout_retries": int(
             numeric_broker_delta(gateway_status_diff, "checkout_retries")
@@ -3262,18 +3452,35 @@ def benchmark_report_payload(
         "workload": {
             "mode": "simulate",
             "scenario": args.scenario or "mixed",
+            "seed": args.seed,
+            "entropy": args.entropy,
             "workers_min": args.workers_min,
             "workers_max": args.workers_max,
             "worker_cap": worker_cap,
+            "multi_hive": args.multi_hive,
+            "hives": args.hives if args.multi_hive else 1,
+            "workers_per_hive": (
+                args.workers_per_hive if args.multi_hive else args.workers_max
+            ),
             "intensity_min": args.intensity_min,
             "intensity_max": args.intensity_max,
             "base_rps": args.base_rps,
             "target_rps_min": target_rps_min,
             "target_rps_max": target_rps_max,
             "duration_s": duration_s,
+            "ramp_step_secs": args.ramp_step_secs,
             "max_inflight_configured": args.max_inflight,
+            "tail_bytes": args.tail_bytes,
+            "telemetry_reference_chunk_bytes": (
+                args.telemetry_reference_chunk_bytes
+            ),
+            "include_lifecycle": args.include_lifecycle,
+            "auto_approve": args.auto_approve,
             "transient_retries": args.transient_retries,
             "strict_control_errors": args.strict_control_errors,
+            "request_timeout_s": args.timeout,
+            "request_auth_enabled": bool(args.request_auth_token.strip()),
+            "role": args.role,
         },
         "throughput": {
             "ops_per_s": overall.count / duration_s,
@@ -3288,7 +3495,14 @@ def benchmark_report_payload(
             "ok": overall.ok,
             "err": overall.err,
             "count": overall.count,
+            **error_classification(overall),
         },
+        "capacity_boundary": capacity_boundary_summary(
+            args,
+            ramp_rows,
+            worker_cap,
+        ),
+        "retained_state": retained_state_summary(stats),
         "concurrency": concurrency,
         "backpressure": benchmark_backpressure_summary(gateway_status_diff),
         "top_operations_by_p95": top_operations_by(stats, "p95_s"),
