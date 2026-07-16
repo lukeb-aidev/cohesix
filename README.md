@@ -21,12 +21,12 @@ Cohesix is a research operating system for edge AI, built around a simple idea: 
 
 Each Cohesix hive has a primary "Queen" role with orchestration authority. The Queen manages specialized "Workers", scoped to heartbeat telemetry, GPU lease/status records, and LoRA adapter/model lifecycle receipts, each limited by role-specific capabilities and tickets.
 
-Models, agents, CUDA/NVML, training, and inference stay on the Linux or Mac OS host. Cohesix is the compact trust layer beneath them: approved host tools reduce intent to bounded, policy-checked requests with visible state and evidence.
+Models, agents, CUDA/NVML, training, and inference stay on the Linux or Mac OS host - and interact with Cohesix via a suite of Mac OS and Linux-native tools. Cohesix is the compact trust layer beneath them: the Cohesix host tools reduce intent to bounded, policy-checked requests with visible state and evidence - and allow one Cohesix OS Queen to govern a large hive of Mac OS and Linux AI workers.
 
 ## What makes Cohesix different?
-Cohesix does not seek to replace traditional OSes, but rather it aims to coexeist - performing a key AI governance role in an auditable fashion.
+Cohesix does not seek to coexist with - not replace - traditional OSes. Cohesix is designed for AI systems where safe action matters as much as smart inference: what was allowed, which policy governed it, and what evidence remains.
 
-To achieve this, Cohesix relies on a single protocol (9p) for **everything** - and deliberately avoids large code ecosystems (e.g. POSIX) that other OSes use extensively. This keeps Cohesix extremely lean, but quite capable and performant.
+To achieve this, Cohesix relies on just **one protocol** (9p) as a uniform file-shaped control model. Cohesix also deliberately avoids large code ecosystems (e.g. POSIX) that other OSes use extensively. This keeps Cohesix extremely lean, but quite capable and performant.
 
 - **Authority is explicit.** Cohesix combines kernel-enforced capabilities with
   generated role, policy, ticket, and lifecycle checks rather than relying on
@@ -41,10 +41,6 @@ To achieve this, Cohesix relies on a single protocol (9p) for **everything** - a
   through approved host tools, while target-side role, ticket, lifecycle, and
   bounds checks decide what is accepted and retain evidence of the outcome.
 
-Cohesix is designed for AI systems where safe action matters as much as smart inference:
-what was allowed, which policy governed it, and what evidence remains. It is not
-a general-purpose desktop/server OS, Linux distribution, POSIX environment, or
-in-VM GPU stack.
 
 ## Why seL4, Plan 9, and 9P?
 
