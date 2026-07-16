@@ -21,7 +21,7 @@ Cohesix is a research operating system for edge AI, built around a simple idea: 
 
 Each Cohesix hive has a primary "Queen" role with orchestration authority. The Queen manages specialized "Workers", scoped to heartbeat telemetry, GPU lease/status records, and LoRA adapter/model lifecycle receipts, each limited by role-specific capabilities and tickets.
 
-Models, agents, CUDA/NVML, training, and inference stay on the host. Cohesix is the compact trust layer beneath them: approved host tools reduce intent to bounded, policy-checked requests with visible state and evidence.
+Models, agents, CUDA/NVML, training, and inference stay on the Linux or Mac OS host. Cohesix is the compact trust layer beneath them: approved host tools reduce intent to bounded, policy-checked requests with visible state and evidence.
 
 ## What makes Cohesix different?
 
@@ -38,15 +38,14 @@ Models, agents, CUDA/NVML, training, and inference stay on the host. Cohesix is 
   through approved host tools, while target-side role, ticket, lifecycle, and
   bounds checks decide what is accepted and retain evidence of the outcome.
 
-Cohesix is for AI systems where safe action matters as much as smart inference:
+Cohesix is designed for AI systems where safe action matters as much as smart inference:
 what was allowed, which policy governed it, and what evidence remains. It is not
 a general-purpose desktop/server OS, Linux distribution, POSIX environment, or
 in-VM GPU stack.
 
 ## Why seL4, Plan 9, and 9P?
 
-These names describe different layers; no prior Plan 9 or seL4 experience is
-required to operate Cohesix.
+These are the core open-source components which underpin Cohesix.
 
 | Term | Plain-language meaning | Why Cohesix uses it |
 | --- | --- | --- |
@@ -55,15 +54,12 @@ required to operate Cohesix.
 | **[9P](https://9p.io/sys/doc/names.html)** | The protocol Plan 9 uses to access those file hierarchies. A client connects, follows a path, opens a node, and reads or writes bytes. | Host NineDoor implements a bounded 9P2000.L subset called Secure9P, so path, role, ticket, and size limits are visible and testable. |
 | **NineDoor** | Cohesix's namespace server and related adapters. | Host NineDoor speaks Secure9P. The target uses a separate `NineDoorBridge` behind its authenticated console; it is not an in-VM 9P-over-TCP server. |
 
-The layers solve complementary problems. seL4 answers **who may use a kernel
-resource**; the ticketed namespace answers **which named control or state
+These component layers solve complementary problems. seL4 answers **who may use a kernel
+resource**; the Secure9p ticketed namespace answers **which named control or state
 surface that role may use**. A typical control flow is: write a bounded command,
 receive an acknowledgement (`OK`) or refusal (`ERR`), then read state or tail
 events for completion. This reduces protocol sprawl and makes policy, limits,
 and evidence easier to inspect.
-
-seL4's machine-checked proofs apply to the kernel and their documented
-assumptions; they do not mean that Cohesix as a whole is formally verified.
 
 ## Architecture at a glance
 
@@ -112,16 +108,14 @@ sequence, `OK`/`ERR` responses, and `END` stream terminator—not 9P frames on t
 wire. Host tools preserve the same namespace authority without creating a
 second control path.
 
-SwarmUI is the host-side desktop view of Cohesix telemetry and replay. It reuses
+**SwarmUI** is the host-side desktop view of Cohesix telemetry and replay. It reuses
 the existing host transport semantics and adds no target authority.
 
 ![SwarmUI replay showing Live Hive telemetry](docs/swarmui-replay.png)
 
 ## Current project status
 
-Active work is Milestone 26d, with Milestone 26b reopened for bounded Pi 4
-Wi-Fi/SDIO driver-task closure. See the [build plan](docs/BUILD_PLAN.md) for the
-normative task and acceptance boundaries.
+Work is tracked in the [Build Plan](docs/BUILD_PLAN.md), including future planned Milestones.
 
 | Surface | Current state | Evidence boundary |
 | --- | --- | --- |
