@@ -13380,6 +13380,28 @@ def test_bootstrap_supervisor_accepts_terminal_first_attempt_ready() -> None:
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
 
 
+def test_bootstrap_supervisor_accepts_production_raw_uart_suffix() -> None:
+    """The raw UART ordering suffix must not invalidate supervisor proof."""
+
+    suffix = (
+        " serial=ready local_seat=ready "
+        "recovery=pair-restart-full-context-if-partial "
+        "console_seq=17 telemetry_sinks=serial+queen-log prompt_refresh=yes"
+    )
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 500) + suffix,
+            bootstrap_supervisor_line(1, "ready", 0, 500) + suffix,
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+
+
 def test_bootstrap_supervisor_accepts_multiple_transient_retries_then_ready() -> None:
     """Monotonic 1/2-second retry progression may close at a later ready."""
 

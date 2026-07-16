@@ -8,6 +8,37 @@ use std::fs;
 use std::path::{Component, Path};
 use std::time::SystemTime;
 
+/// Build-profile flags encoded in the serial and image build marker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuildMarkerFeatures {
+    pub kernel: bool,
+    pub bootstrap_trace: bool,
+    pub serial_console: bool,
+    pub net: bool,
+    pub net_console: bool,
+    pub qemu_driver_task_smoke: bool,
+}
+
+/// Format the exact build marker embedded in the root-task image and emitted
+/// on serial. Keeping this in build support lets the build script materialise
+/// one contiguous string instead of assembling an unverifiable line at run
+/// time.
+pub fn format_build_marker(
+    git_hash: &str,
+    build_timestamp: &str,
+    features: BuildMarkerFeatures,
+) -> String {
+    format!(
+        "[BUILD] {git_hash} {build_timestamp} features=[kernel:{} bootstrap-trace:{} serial-console:{} net:{} net-console:{} qemu-driver-task-smoke:{}]",
+        u8::from(features.kernel),
+        u8::from(features.bootstrap_trace),
+        u8::from(features.serial_console),
+        u8::from(features.net),
+        u8::from(features.net_console),
+        u8::from(features.qemu_driver_task_smoke),
+    )
+}
+
 /// Return whether a generated artifact is stale after the source manifest was
 /// changed in the current checkout.
 ///
@@ -181,6 +212,25 @@ const USER_PATH_HINTS: &[&str] = &["rootserver", "sel4runtime"];
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn build_marker_is_one_exact_serial_and_image_identity() {
+        assert_eq!(
+            format_build_marker(
+                "abc123-dirty",
+                "2026-07-16T00:00:00Z",
+                BuildMarkerFeatures {
+                    kernel: true,
+                    bootstrap_trace: true,
+                    serial_console: true,
+                    net: true,
+                    net_console: true,
+                    qemu_driver_task_smoke: false,
+                },
+            ),
+            "[BUILD] abc123-dirty 2026-07-16T00:00:00Z features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 net-console:1 qemu-driver-task-smoke:0]"
+        );
+    }
 
     #[test]
     fn kernel_component_in_path_short_circuits() {

@@ -411,6 +411,7 @@ back from the mounted medium, run the fail-closed aggregate gate:
 python3 scripts/pi4_wifi_repeatability.py \
   --cold-log out/pi4-evidence/cold.log \
   --warm-log out/pi4-evidence/warm.log \
+  --staged-image out/pi4-sd/cohesix-image-arm-bcm2711 \
   --readback-image /Volumes/COHESIX/cohesix-image-arm-bcm2711 \
   --image-sha256 <independent-readback-sha256> \
   --build-marker '[BUILD] <exact-readback-marker>' \
@@ -418,9 +419,14 @@ python3 scripts/pi4_wifi_repeatability.py \
 ```
 
 `PASS` is an evidence verdict, not a substitute for preserving each serial log
-and its boot-paired pcap. A missing/unreadable image, hash mismatch, absent or
-conflicting marker, skip-only log, wired boot, failed boot slice, or any existing
-Wi-Fi/driver/operator blocker fails the aggregate.
+and its boot-paired pcap. The staged source and independently read-back files
+must be distinct paths whose bytes hash identically. Reusing a log path or the
+same log bytes in either class is rejected. A missing/unreadable artifact, hash
+mismatch, absent or conflicting marker, missing/non-ready bootstrap-supervisor
+record, skip-only log, wired boot, failed boot slice, or any existing
+Wi-Fi/driver/operator blocker fails the aggregate. Cold versus warm remains an
+operator-recorded reset classification, so retain a per-run collection ledger
+and power/reset evidence alongside the serial and pcap files.
 
 ### USB Keyboard and HDMI
 

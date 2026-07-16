@@ -492,8 +492,10 @@ fn emit_deferred_net_bootstrap_supervisor_status(
         next_attempt_ms,
         if local_seat_enabled { "ready" } else { "disabled" },
     );
-    boot_log::force_uart_line_raw(line.as_str());
-    log::info!(target: "net-console", "{}", line.as_str());
+    // Emit one full-fidelity record to UART and, after handoff, queen.log.
+    // Routing the same payload through `log::info!` would add a prefix and can
+    // truncate this machine-readable line at the logger's frame bound.
+    boot_log::force_uart_line_raw_and_log(line.as_str());
 }
 
 #[cfg(all(
@@ -545,7 +547,10 @@ where
             now_ms,
             local_seat_enabled,
         );
-        match init_deferred_net_console(config, hal_ptr) {
+        let mut service_operator = |_stage: &'static str| {
+            pump.poll_cyw43_bootstrap_operator_turn();
+        };
+        match init_deferred_net_console(config, hal_ptr, &mut service_operator) {
             Ok(stack) => {
                 emit_deferred_net_console_result(&stack, local_seat_enabled);
                 let stack: &'static mut NetStackHandle = Box::leak(Box::new(stack));
@@ -766,6 +771,7 @@ fn take_net_deferred_config(_ctx: &BootContext) -> Option<()> {
 fn init_deferred_net_console(
     config: crate::net::ConsoleNetConfig,
     hal_ptr: usize,
+    progress: &mut dyn crate::drivers::driver_task_net::Cyw43BootstrapProgress,
 ) -> Result<NetStackHandle, crate::net::DefaultNetConsoleError> {
     if hal_ptr == 0 {
         return Err(crate::net::NetConsoleError::InvalidConfig(
@@ -775,11 +781,13 @@ fn init_deferred_net_console(
 
     // SAFETY: `hal_ptr` is the leaked bootstrap `KernelHal` pointer already
     // used by the root-console Wi-Fi debug handle. The post-prompt supervisor
-    // remains single-threaded with the event pump: it attempts bootstrap only
-    // after a completed operator-service turn, so a debug command cannot
-    // concurrently borrow the HAL while the stack is created.
+    // remains single-threaded with the event pump. Cooperative progress turns
+    // set the pump's bootstrap fence before consuming physical input, so every
+    // Wi-Fi debug command returns busy without dereferencing its raw HAL handle.
+    // Those turns omit timer/IPC/network/runtime service and therefore cannot
+    // otherwise enter this `KernelHal` while the mutable reference is live.
     let hal = unsafe { &mut *(hal_ptr as *mut KernelHal<'static>) };
-    crate::net::retry_cyw43_net_console(hal, config)
+    crate::net::retry_cyw43_net_console_with_progress(hal, config, progress)
 }
 
 #[cfg(all(feature = "net-console", feature = "kernel"))]

@@ -21,7 +21,8 @@ use regex::Regex;
 mod build_support;
 
 use build_support::{
-    classify_linker_script, generated_artifact_is_stale, parse_timer_clock_hz, LinkerScriptKind,
+    classify_linker_script, format_build_marker, generated_artifact_is_stale, parse_timer_clock_hz,
+    BuildMarkerFeatures, LinkerScriptKind,
 };
 
 const IPC_GUARD_SOURCE: &str = "apps/root-task/src";
@@ -188,6 +189,9 @@ fn main() {
 fn emit_built_info() -> io::Result<()> {
     emit_git_rerun_triggers()?;
     println!("cargo:rerun-if-env-changed=COHESIX_BUILD_STAMP");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    println!("cargo:rerun-if-changed=build_support.rs");
+    println!("cargo:rerun-if-changed=src");
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
     let git = git_stdout(["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "nogit".to_owned());
     let git_dirty_suffix = if git_has_tracked_changes() {
@@ -197,13 +201,31 @@ fn emit_built_info() -> io::Result<()> {
     };
     let timestamp = env::var("COHESIX_BUILD_STAMP").unwrap_or_else(|_| Utc::now().to_rfc3339());
     let git_hash = format!("{}{}", git.trim(), git_dirty_suffix);
+    let build_marker = format_build_marker(
+        &git_hash,
+        &timestamp,
+        BuildMarkerFeatures {
+            kernel: cargo_feature_enabled("KERNEL"),
+            bootstrap_trace: cargo_feature_enabled("BOOTSTRAP_TRACE"),
+            serial_console: cargo_feature_enabled("SERIAL_CONSOLE"),
+            net: cargo_feature_enabled("NET"),
+            net_console: cargo_feature_enabled("NET_CONSOLE"),
+            qemu_driver_task_smoke: cargo_feature_enabled("QEMU_DRIVER_TASK_SMOKE"),
+        },
+    );
     let git_hash = rust_string_literal(&git_hash);
     let timestamp = rust_string_literal(&timestamp);
-    let contents =
-        format!("pub const GIT_HASH:&str={git_hash};\npub const BUILD_TS:&str={timestamp};\n");
+    let build_marker = rust_string_literal(&build_marker);
+    let contents = format!(
+        "pub const GIT_HASH:&str={git_hash};\npub const BUILD_TS:&str={timestamp};\npub const BUILD_MARKER:&str={build_marker};\n"
+    );
     fs::write(out_dir.join("built_info.rs"), contents)?;
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())
+}
+
+fn cargo_feature_enabled(name: &str) -> bool {
+    env::var_os(format!("CARGO_FEATURE_{name}")).is_some()
 }
 
 fn emit_git_rerun_triggers() -> io::Result<()> {

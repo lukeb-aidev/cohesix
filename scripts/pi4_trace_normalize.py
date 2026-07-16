@@ -86,7 +86,9 @@ CYW43_BOOTSTRAP_SUPERVISOR_RE = re.compile(
     r"backoff_ms=(?P<backoff_ms>[0-9]+) "
     r"next_attempt_ms=(?P<next_attempt_ms>[0-9]+)"
     r"(?: serial=ready local_seat=(?:ready|disabled) "
-    r"recovery=pair-restart-full-context-if-partial)?$"
+    r"recovery=pair-restart-full-context-if-partial)?"
+    r"(?: console_seq=[0-9]+ telemetry_sinks=(?:serial|serial\+queen-log) "
+    r"prompt_refresh=(?:yes|no))?$"
 )
 CYW43_BOOTSTRAP_RETRY_BACKOFF_MS = (1_000, 2_000, 4_000, 8_000, 16_000, 30_000)
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")

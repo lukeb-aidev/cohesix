@@ -2197,12 +2197,15 @@ fn init_cyw43_driver_task_console<H>(
     config: ConsoleNetConfig,
     backend: NetBackend,
     mark: &'static str,
+    progress: &mut dyn crate::drivers::driver_task_net::Cyw43BootstrapProgress,
 ) -> Result<DefaultNetStack, DefaultNetConsoleError>
 where
     H: Hardware<Error = HalError>,
 {
-    crate::drivers::driver_task_net::init_cyw43_runtime(hal, &config, NET_STAGE)
-        .map_err(convert_driver_error::<DriverTaskNetError>)?;
+    crate::drivers::driver_task_net::init_cyw43_runtime_with_progress(
+        hal, &config, NET_STAGE, progress,
+    )
+    .map_err(convert_driver_error::<DriverTaskNetError>)?;
     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
         crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
@@ -2232,6 +2235,18 @@ fn configured_active_driver_label(config: &ConsoleNetConfig) -> &'static str {
 pub fn init_net_console<H>(
     hal: &mut H,
     config: ConsoleNetConfig,
+) -> Result<DefaultNetStack, DefaultNetConsoleError>
+where
+    H: Hardware<Error = HalError>,
+{
+    let mut progress = |_: &'static str| {};
+    init_net_console_with_cyw43_progress(hal, config, &mut progress)
+}
+
+fn init_net_console_with_cyw43_progress<H>(
+    hal: &mut H,
+    config: ConsoleNetConfig,
+    progress: &mut dyn crate::drivers::driver_task_net::Cyw43BootstrapProgress,
 ) -> Result<DefaultNetStack, DefaultNetConsoleError>
 where
     H: Hardware<Error = HalError>,
@@ -2335,6 +2350,7 @@ where
                 config,
                 backend,
                 "net.init.wrap.after-new.cyw43-driver-task",
+                progress,
             ),
             NetInterfacePolicy::Auto => {
                 if config.wifi_credentials.is_some() {
@@ -2343,6 +2359,7 @@ where
                         config,
                         backend,
                         "net.init.wrap.after-new.cyw43-driver-task-auto",
+                        progress,
                     )
                 } else {
                     info!(
@@ -2379,9 +2396,26 @@ pub fn retry_cyw43_net_console<H>(
 where
     H: Hardware<Error = HalError>,
 {
-    crate::drivers::driver_task_net::prepare_cyw43_bootstrap_retry(hal, &config)
-        .map_err(convert_driver_error::<DriverTaskNetError>)?;
-    init_net_console(hal, config)
+    let mut progress = |_: &'static str| {};
+    retry_cyw43_net_console_with_progress(hal, config, &mut progress)
+}
+
+/// Retry post-prompt CYW43 bootstrap while yielding at every bounded linked
+/// runtime progress point to physical-operator service.
+#[cfg(feature = "kernel")]
+pub fn retry_cyw43_net_console_with_progress<H>(
+    hal: &mut H,
+    config: ConsoleNetConfig,
+    progress: &mut dyn crate::drivers::driver_task_net::Cyw43BootstrapProgress,
+) -> Result<DefaultNetStack, DefaultNetConsoleError>
+where
+    H: Hardware<Error = HalError>,
+{
+    crate::drivers::driver_task_net::prepare_cyw43_bootstrap_retry_with_progress(
+        hal, &config, progress,
+    )
+    .map_err(convert_driver_error::<DriverTaskNetError>)?;
+    init_net_console_with_cyw43_progress(hal, config, progress)
 }
 
 /// Return whether a failed physical-Pi CYW43 console bootstrap is eligible for

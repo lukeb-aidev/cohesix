@@ -26,7 +26,16 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = repeatability
 SPEC.loader.exec_module(repeatability)
 
-VALID_BUILD_MARKER = "[BUILD] cohesix-test-build-123"
+VALID_BUILD_MARKER = (
+    "[BUILD] abc123 2026-07-16T00:00:00Z "
+    "features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 "
+    "net-console:1 qemu-driver-task-smoke:0]"
+)
+STALE_BUILD_MARKER = (
+    "[BUILD] deadbeef 2026-07-15T00:00:00Z "
+    "features=[kernel:1 bootstrap-trace:1 serial-console:1 net:1 "
+    "net-console:1 qemu-driver-task-smoke:0]"
+)
 VALID_READBACK_BYTES = (
     b"cohesix-image-prefix\x00"
     + VALID_BUILD_MARKER.encode("utf-8")
@@ -69,11 +78,15 @@ def synthetic_boot_summaries(monkeypatch: pytest.MonkeyPatch) -> None:
                 continue
             net_active = "wired" if token == "wired" else "wifi"
             boot_blockers = ["panic"] if token == "fail" else []
+            supervisor_seen = "no" if token == "no-supervisor" else "yes"
+            supervisor_ready = "no" if token == "no-supervisor" else "yes"
             summaries.append(
                 {
                     "blockers": boot_blockers,
                     "boot": boot_index,
                     "gates": {
+                        "CYW43_BOOTSTRAP_SUPERVISOR_READY": supervisor_ready,
+                        "CYW43_BOOTSTRAP_SUPERVISOR_SEEN": supervisor_seen,
                         "NET_ACTIVE": net_active,
                         "_blockers": boot_blockers,
                     },
@@ -109,7 +122,7 @@ def write_log(
         [VALID_BUILD_MARKER] * len(tokens) if markers is None else markers
     )
     assert len(selected_markers) == len(tokens)
-    lines: list[str] = []
+    lines: list[str] = [f"CAPTURE {path.name}"]
     for token, marker in zip(tokens, selected_markers, strict=True):
         lines.append(f"BOOT {token}")
         if marker is not None:
@@ -128,6 +141,7 @@ def run_report(
     *,
     image_sha256: str = VALID_SHA256,
     build_marker: str = VALID_BUILD_MARKER,
+    staged_image: pathlib.Path | None = None,
     readback_image: pathlib.Path | None = None,
     output: pathlib.Path | None = None,
 ) -> tuple[int, dict[str, object], str]:
@@ -138,6 +152,13 @@ def run_report(
         assert evidence_logs
         readback_image = evidence_logs[0].parent / "readback.img"
         readback_image.write_bytes(VALID_READBACK_BYTES)
+    if staged_image is None:
+        staged_image = readback_image.parent / "staged.img"
+        try:
+            staged_bytes = readback_image.read_bytes()
+        except OSError:
+            staged_bytes = VALID_READBACK_BYTES
+        staged_image.write_bytes(staged_bytes)
 
     argv: list[str] = []
     for path in cold_logs:
@@ -145,6 +166,7 @@ def run_report(
     for path in warm_logs:
         argv.extend(("--warm-log", str(path)))
     argv.extend(("--image-sha256", image_sha256))
+    argv.extend(("--staged-image", str(staged_image)))
     argv.extend(("--readback-image", str(readback_image)))
     argv.extend(("--build-marker", build_marker))
     if output is not None:
@@ -181,7 +203,7 @@ def test_ten_cold_and_ten_warm_pass_across_repeatable_logs(
     assert result == 0
     assert report["result"] == "PASS"
     assert report["image"] == {
-        "identity_role": "external-readback",
+        "identity_role": "staged-source-and-external-readback",
         "sha256": VALID_SHA256,
         "valid": True,
     }
@@ -192,6 +214,10 @@ def test_ten_cold_and_ten_warm_pass_across_repeatable_logs(
         "valid": True,
     }
     assert report["readback_image"] == {
+        "conflicting_marker_count": 0,
+        "distinct_marker_line_sha256": [
+            hashlib.sha256(VALID_BUILD_MARKER.encode("utf-8")).hexdigest()
+        ],
         "hash_match": True,
         "marker_occurrence_count": 1,
         "path": str(tmp_path / "readback.img"),
@@ -200,12 +226,66 @@ def test_ten_cold_and_ten_warm_pass_across_repeatable_logs(
         "status": "verified",
         "verified": True,
     }
+    assert report["staged_image"] == {
+        "conflicting_marker_count": 0,
+        "distinct_marker_line_sha256": [
+            hashlib.sha256(VALID_BUILD_MARKER.encode("utf-8")).hexdigest()
+        ],
+        "hash_match": True,
+        "marker_occurrence_count": 1,
+        "path": str(tmp_path / "staged.img"),
+        "sha256": VALID_SHA256,
+        "size_bytes": len(VALID_READBACK_BYTES),
+        "status": "verified",
+        "verified": True,
+    }
+    assert report["staged_readback_binding"] == {
+        "distinct_paths": True,
+        "sha256_match": True,
+        "valid": True,
+    }
     assert report["identity_binding"]["valid"] is True
     assert report["classes"]["cold"]["counts"]["passing_wifi_slices"] == 10
     assert report["classes"]["warm"]["counts"]["passing_wifi_slices"] == 10
     assert len(report["classes"]["cold"]["logs"]) == 2
     assert len(report["classes"]["warm"]["logs"]) == 2
     assert output.read_text(encoding="utf-8") == rendered
+
+
+def test_repeated_log_path_cannot_inflate_boot_count(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """One capture repeated on the CLI is still only one observation."""
+
+    one_cold = write_log(tmp_path / "cold.log", ["pass"])
+    warm = write_log(tmp_path / "warm.log", ["pass"] * 10)
+
+    result, report, _ = run_report(
+        capsys, [one_cold] * 10, [warm]
+    )
+
+    assert result == 2
+    assert "duplicate-log-paths" in report["failure_reasons"]
+    assert "duplicate-log-content" in report["failure_reasons"]
+    assert len(report["evidence_inputs"]["duplicate_paths"]) == 1
+
+
+def test_copied_or_cross_class_capture_cannot_count_twice(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Byte-identical aliases cannot masquerade as distinct reset classes."""
+
+    source = write_log(tmp_path / "source.log", ["pass"] * 10)
+    copied = tmp_path / "copied.log"
+    copied.write_bytes(source.read_bytes())
+
+    result, report, _ = run_report(capsys, [source], [copied])
+
+    assert result == 2
+    assert "duplicate-log-content" in report["failure_reasons"]
+    assert "cold-warm-log-content-overlap" in report["failure_reasons"]
 
 
 def test_one_failed_slice_fails_even_with_ten_other_passes(
@@ -247,6 +327,26 @@ def test_wrong_active_transport_does_not_count(
     assert wrong_boot["failure_reasons"] == ["net-active-not-wifi"]
 
 
+def test_current_profile_requires_terminal_bootstrap_supervisor_proof(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Historical no-supervisor logs cannot close current-image reliability."""
+
+    cold = write_log(
+        tmp_path / "cold.log", ["pass"] * 9 + ["no-supervisor"]
+    )
+    warm = write_log(tmp_path / "warm.log", ["pass"] * 10)
+
+    result, report, _ = run_report(capsys, [cold], [warm])
+
+    assert result == 2
+    missing = report["classes"]["cold"]["logs"][0]["boots"][-1]
+    assert missing["supervisor_seen"] == "no"
+    assert missing["supervisor_ready"] == "no"
+    assert missing["failure_reasons"] == ["bootstrap-supervisor-not-seen"]
+
+
 def test_insufficient_class_count_fails(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
@@ -282,7 +382,7 @@ def test_invalid_image_sha256_emits_fail_report(
     assert result == 2
     assert report["result"] == "FAIL"
     assert report["image"] == {
-        "identity_role": "external-readback",
+        "identity_role": "staged-source-and-external-readback",
         "sha256": "not-a-sha256",
         "valid": False,
     }
@@ -388,7 +488,7 @@ def test_each_boot_range_requires_its_own_marker(
     ("argument", "expected"),
     [
         (VALID_BUILD_MARKER, VALID_BUILD_MARKER),
-        ("cohesix-test-build-123", VALID_BUILD_MARKER),
+        (VALID_BUILD_MARKER.removeprefix("[BUILD] "), VALID_BUILD_MARKER),
     ],
 )
 def test_build_marker_argument_accepts_exact_line_or_unambiguous_payload(
@@ -400,7 +500,10 @@ def test_build_marker_argument_accepts_exact_line_or_unambiguous_payload(
     assert repeatability.exact_build_marker(argument) == expected
 
 
-@pytest.mark.parametrize("argument", ["", " ", "[BUILD]", "x [BUILD] y", "x\n"])
+@pytest.mark.parametrize(
+    "argument",
+    ["", " ", "[BUILD]", "[BUILD] legacy-image", "x [BUILD] y", "x\n"],
+)
 def test_build_marker_argument_rejects_empty_or_ambiguous_values(
     argument: str,
 ) -> None:
@@ -429,6 +532,54 @@ def test_missing_readback_image_fails_closed(
     assert report["readback_image"]["status"] == "missing"
     assert report["readback_image"]["sha256"] is None
     assert report["failure_reasons"] == ["readback-image-missing"]
+
+
+def test_missing_staged_source_image_fails_closed(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A target readback is not proof of what source artifact was copied."""
+
+    cold = write_log(tmp_path / "cold.log", ["pass"] * 10)
+    warm = write_log(tmp_path / "warm.log", ["pass"] * 10)
+    readback = tmp_path / "readback.img"
+    readback.write_bytes(VALID_READBACK_BYTES)
+
+    result, report, _ = run_report(
+        capsys,
+        [cold],
+        [warm],
+        staged_image=tmp_path / "missing-staged.img",
+        readback_image=readback,
+    )
+
+    assert result == 2
+    assert report["staged_image"]["status"] == "missing"
+    assert report["failure_reasons"] == ["staged-image-missing"]
+
+
+def test_staged_and_readback_paths_must_not_alias(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Reading the source file twice is not independent target readback."""
+
+    cold = write_log(tmp_path / "cold.log", ["pass"] * 10)
+    warm = write_log(tmp_path / "warm.log", ["pass"] * 10)
+    artifact = tmp_path / "same.img"
+    artifact.write_bytes(VALID_READBACK_BYTES)
+
+    result, report, _ = run_report(
+        capsys,
+        [cold],
+        [warm],
+        staged_image=artifact,
+        readback_image=artifact,
+    )
+
+    assert result == 2
+    assert report["staged_readback_binding"]["distinct_paths"] is False
+    assert report["failure_reasons"] == ["staged-readback-path-alias"]
 
 
 def test_unreadable_readback_image_fails_closed(
@@ -485,41 +636,22 @@ def test_readback_hash_must_equal_supplied_image_sha256(
     assert report["readback_image"]["sha256"] == VALID_SHA256
     assert report["readback_image"]["hash_match"] is False
     assert report["readback_image"]["status"] == "hash-mismatch"
-    assert report["failure_reasons"] == ["readback-image-hash-mismatch"]
+    assert report["failure_reasons"] == [
+        "readback-image-hash-mismatch",
+        "staged-image-hash-mismatch",
+    ]
 
 
-@pytest.mark.parametrize(
-    ("artifact", "status", "reason", "occurrences"),
-    [
-        (
-            b"image-with-no-build-marker",
-            "marker-absent",
-            "readback-image-build-marker-absent",
-            0,
-        ),
-        (
-            VALID_BUILD_MARKER.encode("utf-8")
-            + b"\x00"
-            + VALID_BUILD_MARKER.encode("utf-8"),
-            "marker-ambiguous",
-            "readback-image-build-marker-ambiguous",
-            2,
-        ),
-    ],
-)
-def test_readback_requires_one_unambiguous_build_marker(
+def test_staged_and_readback_images_require_the_build_marker(
     tmp_path: pathlib.Path,
     capsys: pytest.CaptureFixture[str],
-    artifact: bytes,
-    status: str,
-    reason: str,
-    occurrences: int,
 ) -> None:
-    """Absent and duplicate marker bytes cannot bind serial boots to an image."""
+    """An artifact without the serial identity cannot bind the boot logs."""
 
     cold = write_log(tmp_path / "cold.log", ["pass"] * 10)
     warm = write_log(tmp_path / "warm.log", ["pass"] * 10)
     readback = tmp_path / "readback.img"
+    artifact = b"image-with-no-build-marker"
     readback.write_bytes(artifact)
     artifact_sha256 = hashlib.sha256(artifact).hexdigest()
 
@@ -533,6 +665,135 @@ def test_readback_requires_one_unambiguous_build_marker(
 
     assert result == 2
     assert report["readback_image"]["hash_match"] is True
-    assert report["readback_image"]["marker_occurrence_count"] == occurrences
-    assert report["readback_image"]["status"] == status
-    assert report["failure_reasons"] == [reason]
+    assert report["readback_image"]["marker_occurrence_count"] == 0
+    assert report["readback_image"]["status"] == "marker-absent"
+    assert report["failure_reasons"] == [
+        "readback-image-build-marker-absent",
+        "staged-image-build-marker-absent",
+    ]
+
+
+def test_repeated_identical_marker_bytes_remain_valid(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Linker duplication of one exact identity is not conflicting evidence."""
+
+    cold = write_log(tmp_path / "cold.log", ["pass"] * 10)
+    warm = write_log(tmp_path / "warm.log", ["pass"] * 10)
+    artifact = (
+        VALID_BUILD_MARKER.encode("utf-8")
+        + b"\x00"
+        + VALID_BUILD_MARKER.encode("utf-8")
+    )
+    readback = tmp_path / "readback.img"
+    readback.write_bytes(artifact)
+
+    result, report, _ = run_report(
+        capsys,
+        [cold],
+        [warm],
+        image_sha256=hashlib.sha256(artifact).hexdigest(),
+        readback_image=readback,
+    )
+
+    assert result == 0
+    assert report["result"] == "PASS"
+    assert report["readback_image"]["marker_occurrence_count"] == 2
+    assert report["readback_image"]["conflicting_marker_count"] == 0
+    assert report["readback_image"]["distinct_marker_line_sha256"] == [
+        hashlib.sha256(VALID_BUILD_MARKER.encode("utf-8")).hexdigest()
+    ]
+    assert report["readback_image"]["status"] == "verified"
+
+
+@pytest.mark.parametrize(
+    ("conflict_role", "expected_reason"),
+    [
+        ("staged", "staged-image-build-marker-conflict"),
+        ("readback", "readback-image-build-marker-conflict"),
+    ],
+)
+def test_distinct_canonical_marker_in_either_artifact_fails_closed(
+    tmp_path: pathlib.Path,
+    capsys: pytest.CaptureFixture[str],
+    conflict_role: str,
+    expected_reason: str,
+) -> None:
+    """A stale canonical identity cannot hide beside the expected marker."""
+
+    cold = write_log(tmp_path / "cold.log", ["pass"] * 10)
+    warm = write_log(tmp_path / "warm.log", ["pass"] * 10)
+    clean = VALID_READBACK_BYTES
+    conflicting = clean + b"\x00" + STALE_BUILD_MARKER.encode("utf-8")
+    staged = tmp_path / "staged.img"
+    readback = tmp_path / "readback.img"
+    if conflict_role == "staged":
+        staged.write_bytes(conflicting)
+        readback.write_bytes(clean)
+        expected_sha256 = hashlib.sha256(conflicting).hexdigest()
+    else:
+        staged.write_bytes(clean)
+        readback.write_bytes(conflicting)
+        expected_sha256 = hashlib.sha256(clean).hexdigest()
+
+    result, report, _ = run_report(
+        capsys,
+        [cold],
+        [warm],
+        image_sha256=expected_sha256,
+        staged_image=staged,
+        readback_image=readback,
+    )
+
+    assert result == 2
+    assert expected_reason in report["failure_reasons"]
+    conflicted = report[f"{conflict_role}_image"]
+    assert conflicted["conflicting_marker_count"] == 1
+    assert conflicted["status"] == (
+        "marker-conflict" if conflicted["hash_match"] else "hash-mismatch"
+    )
+
+
+def test_conflicting_marker_scanner_covers_chunk_boundary_and_eof(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical conflict discovery retains an EOF marker split by reads."""
+
+    artifact = (
+        VALID_BUILD_MARKER.encode("utf-8")
+        + b"\x00abcde"
+        + STALE_BUILD_MARKER.encode("utf-8")
+    )
+    path = tmp_path / "conflict-boundary.img"
+    path.write_bytes(artifact)
+    monkeypatch.setattr(repeatability, "READBACK_CHUNK_BYTES", 7)
+
+    record = repeatability.assess_readback_image(
+        path, hashlib.sha256(artifact).hexdigest(), VALID_BUILD_MARKER
+    )
+
+    assert record["status"] == "marker-conflict"
+    assert record["marker_occurrence_count"] == 1
+    assert record["conflicting_marker_count"] == 1
+
+
+def test_marker_scanner_counts_cross_chunk_and_eof_match(
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Streaming identity scans retain matches split at chunk boundaries."""
+
+    marker = VALID_BUILD_MARKER.encode("utf-8")
+    artifact = b"abcde" + marker
+    path = tmp_path / "boundary.img"
+    path.write_bytes(artifact)
+    monkeypatch.setattr(repeatability, "READBACK_CHUNK_BYTES", 7)
+
+    record = repeatability.assess_readback_image(
+        path, hashlib.sha256(artifact).hexdigest(), VALID_BUILD_MARKER
+    )
+
+    assert record["status"] == "verified"
+    assert record["marker_occurrence_count"] == 1

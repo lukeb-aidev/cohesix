@@ -265,13 +265,18 @@ Stage 02 includes host-safe 1000-worker pressure coverage for Secure9P tag/windo
 Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` and `scripts/pi4_gate_proof.sh` tests directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `USB_BLOCKER=usbcmd-run-preserved-reset-bit`, `USB_POST_FIRST_BYTE_BLOCKER=usb-post-first-byte-queue-collapse`, `USB_POST_FIRST_BYTE_BLOCKER=usb-post-first-byte-recovery-failed`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, `WIFI_BLOCKER=ht-clock-timeout`, `BOOT_HALTED=yes`, `PANIC_SEEN=yes`, `PANIC_REASON=bootinfo-snapshot-corrupted`, or `TIMER_IRQ27_SEEN=yes`. For USB and Wi-Fi, `*_GATE` records the last proven gate; `*_BLOCKER` names the failed or blocked next gate when acceptance is not complete. Gate 10 records USB command-ready parser admission, while `USB_FIRST_REPORT_READY`, `USB_LOCAL_SEAT_STATE`, `USB_BUSY_AFTER_READY`, and `USB_POST_FIRST_BYTE_BLOCKER` separately guard local-seat HID proof and sustained keyboard acceptance. `USB_STARTUP_BLOCKER_SEEN` is diagnostic pre-command churn; `USB_ACTIVE_BLOCKER_SEEN` and `USB_RECOVERED_FROM_BLOCKER` are post-ready health evidence and can block perfect local-seat proof. The Pi 4 local-seat driver coverage module is part of Stage 02 because it owns USB keyboard input proof contracts, Caps/Num/Scroll LED bitmaps, post-seal LED-sync enablement, HDMI progress refresh cadence, and Wi-Fi progress suppression while USB boot activity is active.
 
 CYW43 repeatability is a separate post-capture aggregate gate. Run
-`scripts/pi4_wifi_repeatability.py` with the independently read-back image file,
-its expected SHA-256, the exact embedded `[BUILD]` line, and every cold/warm
-serial log. The default threshold is 10 passing Wi-Fi cold boots and 10 passing
-Wi-Fi warm boots. Every counted slice must carry its own exact marker, have
-`NET_ACTIVE=wifi`, and satisfy `boot_evidence_blockers`; failed slices cannot be
-offset by additional passes. The gate also recomputes the read-back file hash
-and verifies that the exact marker is embedded in those bytes. Unit coverage is
+`scripts/pi4_wifi_repeatability.py` with the staged source image, an independently
+read-back image file at a distinct path, their expected SHA-256, the exact
+embedded `[BUILD]` line, and every cold/warm serial log. The default threshold
+is 10 passing Wi-Fi cold boots and 10 passing Wi-Fi warm boots. Every counted
+slice must carry its own exact marker, show the persistent bootstrap supervisor
+reaching `ready`, have `NET_ACTIVE=wifi`, and satisfy `boot_evidence_blockers`;
+failed slices cannot be offset by additional passes. Duplicate log paths or
+byte-identical captures are rejected across and within both classes. The gate
+recomputes both artifact hashes and verifies that the exact marker is embedded
+in each. Cold versus warm is an operator-recorded reset classification, so the
+serial logs and boot-paired pcaps must retain a per-run collection ledger. Unit
+coverage is
 `python3 -m pytest -q tests/test_pi4_wifi_repeatability.py tests/test_pi4_trace_normalize.py`.
 Synthetic tests prove the scorer and identity binding only; a `PASS` report
 requires real supplied captures and still does not replace their boot-paired

@@ -3570,37 +3570,13 @@ fn bootstrap<P: Platform>(
         }
     };
 
-    let mut build_line = heapless::String::<192>::new();
-    let mut feature_report = heapless::String::<128>::new();
-    for (idx, (label, enabled)) in [
-        ("kernel", profile::KERNEL),
-        ("bootstrap-trace", cfg!(feature = "bootstrap-trace")),
-        ("serial-console", profile::SERIAL_CONSOLE),
-        ("net", profile::NET),
-        ("net-console", profile::NET_CONSOLE),
-        (
-            "qemu-driver-task-smoke",
-            cfg!(feature = "qemu-driver-task-smoke"),
-        ),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        if idx > 0 {
-            let _ = write!(feature_report, " ");
-        }
-        let _ = write!(feature_report, "{label}:{value}", value = enabled as u8);
-    }
-    let _ = write!(
-        build_line,
-        "[BUILD] {} {} features=[{}]",
-        crate::built_info::GIT_HASH,
-        crate::built_info::BUILD_TS,
-        feature_report
-    );
+    // The build script materialises this exact contiguous line in the image.
+    // Serial evidence can therefore be bound to independently read-back image
+    // bytes instead of merely matching separately formatted components.
+    let build_line = crate::built_info::BUILD_MARKER;
     debug_uart_str("[breadcrumb] before BUILD log\r\n");
-    boot_log::force_uart_line(build_line.as_str());
-    log::info!("{}", build_line.as_str());
+    boot_log::force_uart_line(build_line);
+    log::info!("{}", build_line);
     debug_uart_str("[breadcrumb] after BUILD log\r\n");
     crate::features::emit_dev_umbrella_audit();
 

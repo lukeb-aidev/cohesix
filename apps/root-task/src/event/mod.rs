@@ -2053,6 +2053,8 @@ where
     console_context: Option<ConsoleContext>,
     #[cfg(feature = "kernel")]
     wifi_debug: Option<&'a mut dyn WifiDebugOps>,
+    #[cfg(feature = "kernel")]
+    cyw43_bootstrap_operator_turn_active: bool,
     local_seat: Option<&'a mut LocalSeatRuntime>,
     #[cfg(test)]
     test_pi4_debug_commands: bool,
@@ -2183,6 +2185,8 @@ where
             console_context: None,
             #[cfg(feature = "kernel")]
             wifi_debug: None,
+            #[cfg(feature = "kernel")]
+            cyw43_bootstrap_operator_turn_active: false,
             local_seat: None,
             #[cfg(test)]
             test_pi4_debug_commands: false,
@@ -2420,6 +2424,42 @@ where
         self.maybe_emit_serial_input_idle_trace(
             serial_rx_activity || serial_input || local_input || post_runtime_local_input,
         );
+    }
+
+    /// Service one bounded physical-operator turn while the post-prompt CYW43
+    /// bootstrap owns the kernel HAL.
+    ///
+    /// This deliberately omits timer, IPC, network, NineDoor, and driver
+    /// runtime service. Serial and local-seat ingress/egress remain live, while
+    /// Wi-Fi debug verbs fail closed so the debug handle cannot re-enter the
+    /// same `KernelHal` borrowed by the bootstrap program.
+    #[cfg(feature = "kernel")]
+    pub fn poll_cyw43_bootstrap_operator_turn(&mut self) {
+        debug_assert!(!self.cyw43_bootstrap_operator_turn_active);
+        self.cyw43_bootstrap_operator_turn_active = true;
+        self.now_ms = crate::hal::timebase().now_ms();
+
+        self.serial_console_turn_active = true;
+        self.serial.poll_io();
+        let serial_input = self.consume_serial();
+        self.serial.flush_tx();
+
+        let local_input = self.consume_local_seat(LocalSeatConsumePhase::PreRuntime, true);
+        if local_input {
+            self.serial.poll_io();
+            self.consume_local_seat(LocalSeatConsumePhase::PriorityFollowup, true);
+            self.pump_local_seat_display_after_local_input();
+        } else if !serial_input {
+            self.serial.poll_io();
+            self.consume_serial();
+        }
+
+        self.serial.flush_tx();
+        self.flush_pending_console_output_if_idle();
+        self.retry_pending_usb_debug_hdmi_frontier();
+        self.pump_local_seat_display_if_idle();
+        self.serial_console_turn_active = false;
+        self.cyw43_bootstrap_operator_turn_active = false;
     }
 
     #[cfg(feature = "net-console")]
@@ -5234,6 +5274,15 @@ where
         };
         if !head.eq_ignore_ascii_case("wifi") {
             return false;
+        }
+        if self.cyw43_bootstrap_operator_turn_active {
+            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+            self.emit_refusal(
+                WIFI_DEBUG_ACK_LABEL,
+                RefusalReason::Busy,
+                Some("detail=cyw43-bootstrap-in-progress"),
+            );
+            return true;
         }
         if !self.wifi_debug_commands_enabled() {
             return false;
@@ -13772,7 +13821,25 @@ where
             }
             Command::Reboot => {
                 if self.ensure_reboot_authorized(verb_label) {
-                    if crate::reboot::backend_available() {
+                    #[cfg(feature = "kernel")]
+                    let bootstrap_blocks_reboot = self.cyw43_bootstrap_operator_turn_active;
+                    #[cfg(not(feature = "kernel"))]
+                    let bootstrap_blocks_reboot = false;
+
+                    if bootstrap_blocks_reboot {
+                        // Reset cannot run while the synchronous bootstrap owns
+                        // its scoped KernelHal borrow. Refuse instead of ACKing
+                        // a request that cannot fire until bootstrap returns.
+                        self.metrics.denied_commands += 1;
+                        self.audit
+                            .denied("reboot denied: cyw43 bootstrap in progress");
+                        cmd_status = "err";
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Busy,
+                            Some("detail=cyw43-bootstrap-in-progress"),
+                        );
+                    } else if crate::reboot::backend_available() {
                         self.audit.info("console: reboot scheduled");
                         self.metrics.accepted_commands += 1;
                         self.reboot_pending = true;
@@ -23029,6 +23096,78 @@ mod tests {
         assert!(
             !KernelConsoleTestPump::usb_runtime_progress_superseded_by_command_ready(true, 10, 10)
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_bootstrap_operator_turn_refuses_wifi_debug_without_hal_callback() {
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        let transcript = {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_wifi_debug(&mut wifi)
+                .with_test_pi4_debug_commands();
+
+            pump.serial_mut().driver_mut().push_rx(b"wifi retry\n");
+            pump.poll_cyw43_bootstrap_operator_turn();
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect::<Vec<u8>>()
+        };
+
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR WIFI reason=busy detail=cyw43-bootstrap-in-progress"),
+            "{rendered}"
+        );
+        assert!(wifi.calls.is_empty(), "Wi-Fi HAL callback must stay fenced");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_bootstrap_operator_turn_refuses_authenticated_reboot_without_deferral() {
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let token = issue_token("ticket", Role::Queen);
+        let line = format!("attach queen {token}\nreboot\n");
+        let (transcript, reboot_pending) = {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+            pump.serial_mut().driver_mut().push_rx(line.as_bytes());
+            pump.poll_cyw43_bootstrap_operator_turn();
+            let transcript = pump
+                .serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect::<Vec<u8>>();
+            (transcript, pump.reboot_pending)
+        };
+
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
+        assert!(
+            rendered.contains("ERR REBOOT reason=busy detail=cyw43-bootstrap-in-progress"),
+            "{rendered}"
+        );
+        assert!(!reboot_pending, "busy reboot must not be deferred");
+        assert_eq!(crate::reboot::test_reboot_requests(), 0);
+        crate::reboot::reset_test_backend();
     }
 
     #[cfg(feature = "kernel")]

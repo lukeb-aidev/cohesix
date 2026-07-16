@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
+# Purpose: Validate root-task ELF identity, layout, and bounded image size.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
@@ -155,7 +157,7 @@ if (( span_bytes > max_span_limit )); then
     exit 1
 fi
 
-if (( max_end >= 0x1_0000_0000 )); then
+if (( max_end >= 0x100000000 )); then
     printf 'rootserver physical end address 0x%X exceeds 32-bit space\n' "$max_end" >&2
     exit 1
 fi
