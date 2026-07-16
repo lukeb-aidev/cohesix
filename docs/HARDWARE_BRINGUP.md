@@ -136,7 +136,16 @@ python3 scripts/sel4_profile.py validate \
 The default stage directory is `out/pi4-sd`. The script validates the Pi U-Boot
 shape, the canonical `pi4_diagnostic` seL4 profile, its pinned source and build
 input stamp, the virtual-counter contract, generated
-artifacts, runtime payloads, and rootfs bounds before staging. It also proves
+artifacts, runtime payloads, and rootfs bounds before staging. The selected
+seL4 build directory is immutable profile evidence: the wrapper fingerprints
+it, builds and validates a fresh disposable `pi4_diagnostic` composition tree,
+injects and relinks the Cohesix rootserver only in that derived tree, and then
+revalidates the selected tree and its complete byte/mode/symlink fingerprint.
+The durable `out/pi4-image-assembly` provenance binds the selected canonical
+profile stamp and state, the pristine composition stamp/configuration, and the
+derived rootserver, exact newc archive, and wrapper. A failed or interrupted
+composition therefore cannot turn the canonical build stamp into stale
+self-consistent evidence. The script also proves
 that one fixed-width marker occupies a dedicated file-backed root-task load
 section, carries that placeholder through the stripped ELF and complete legacy
 image, and finally seals the staged image. Sealing hashes the complete image

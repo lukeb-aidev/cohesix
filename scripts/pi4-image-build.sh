@@ -38,6 +38,7 @@ SEL4_IMAGE_PROVENANCE_SUFFIX=".cohesix-provenance.json"
 DRIVER_RUNTIME_EMBED_DIR="${ROOT_DIR}/out/pi4-driver-runtime-embed"
 DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"
 ROOT_TASK_STRIP_DIR="${ROOT_DIR}/out/pi4-root-task-stripped"
+PI4_ASSEMBLY_DIR="${ROOT_DIR}/out/pi4-image-assembly"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"
@@ -56,6 +57,16 @@ EXACT_GIT_SHORT=""
 EXACT_BUILD_TIMESTAMP=""
 BUILD_REPOSITORY_STATE_DIGEST=""
 EXACT_BUILD_ID=""
+CANONICAL_SEL4_STATE_DIGEST=""
+COMPOSITION_ROOT=""
+COMPOSITION_SEL4_BUILD_DIR=""
+EXACT_PI4_IMAGE=""
+EXACT_ROOT_ELF=""
+EXACT_ROOT_CPIO=""
+EXACT_CANONICAL_PROFILE_STAMP=""
+EXACT_COMPOSITION_PROFILE_STAMP=""
+EXACT_COMPOSITION_CACHE=""
+EXACT_COMPOSITION_TIMER_HEADER=""
 
 usage() {
     cat <<'USAGE'
@@ -94,9 +105,9 @@ Options:
                             (default: release-pi4,bootstrap-trace)
   --uboot-menu-input <m>    U-Boot setup menu input mode: usb or serial
                             (default: usb; serial is an explicit lab opt-out)
-  --clean                   Clean and rebuild root-task, Pi4 seL4/U-Boot outputs,
-                            and the Pi 4 U-Boot binary before staging/flashing
-  --skip-build              Skip rebuild and reuse existing seL4 image in sel4 build dir
+  --clean                   Clean and rebuild root-task and Pi 4 U-Boot outputs;
+                            exact seL4 composition always uses a fresh derived tree
+  --skip-build              Reuse the provenance-bound derived exact-image assembly
   --flash-disk <device>     Erase + flash SD card (example: /dev/disk16)
   --disk-label <name>       FAT32 label when flashing (default: COHESIX)
   -h, --help                Show this help
@@ -104,7 +115,8 @@ Options:
 Environment:
   USB is always staged as Cohesix-owned cold boot. U-Boot xHCI handoff export is disabled.
   The seL4 build must already validate as configs/sel4/profiles.toml profile
-  pi4_diagnostic; this script never reconfigures it through a legacy wrapper.
+  pi4_diagnostic. It remains immutable profile evidence; Cohesix rootserver
+  composition occurs only in a fresh derived build tree under out/.
 USAGE
 }
 
@@ -273,6 +285,61 @@ verify_final_clean_repository_state() {
       fail "repository did not return to its exact clean checkout after target codegen"
 }
 
+sel4_tree_state_digest() {
+    local tree="$1"
+    python3 - "$tree" <<'PY'
+import hashlib
+import os
+import stat
+import sys
+
+root = os.path.realpath(sys.argv[1])
+digest = hashlib.sha256()
+digest.update(b"cohesix-sel4-tree-state/v1\0")
+for current, directories, files in os.walk(root, topdown=True, followlinks=False):
+    directories.sort()
+    files.sort()
+    for name in (*directories, *files):
+        path = os.path.join(current, name)
+        relative = os.path.relpath(path, root).encode("utf-8", "surrogateescape")
+        observed = os.lstat(path)
+        mode = stat.S_IFMT(observed.st_mode) | stat.S_IMODE(observed.st_mode)
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(mode.to_bytes(8, "big"))
+        if stat.S_ISLNK(observed.st_mode):
+            target = os.readlink(path).encode("utf-8", "surrogateescape")
+            digest.update(b"link\0" + len(target).to_bytes(8, "big") + target)
+        elif stat.S_ISREG(observed.st_mode):
+            digest.update(b"file\0" + observed.st_size.to_bytes(8, "big"))
+            with open(path, "rb") as handle:
+                while chunk := handle.read(1024 * 1024):
+                    digest.update(chunk)
+        elif stat.S_ISDIR(observed.st_mode):
+            digest.update(b"dir\0")
+        else:
+            raise SystemExit(f"unsupported entry in seL4 build tree: {path}")
+print(digest.hexdigest())
+PY
+}
+
+capture_canonical_sel4_state() {
+    CANONICAL_SEL4_STATE_DIGEST="$(sel4_tree_state_digest "$SEL4_BUILD_DIR")"
+    [[ "$CANONICAL_SEL4_STATE_DIGEST" =~ ^[0-9a-f]{64}$ ]] || \
+      fail "failed to fingerprint the canonical seL4 profile tree"
+    log "Bound immutable canonical seL4 tree: ${CANONICAL_SEL4_STATE_DIGEST}"
+}
+
+verify_canonical_sel4_state() {
+    local phase="$1"
+    local observed
+    [[ -n "$CANONICAL_SEL4_STATE_DIGEST" ]] || \
+      fail "canonical seL4 fingerprint is unavailable at ${phase}"
+    observed="$(sel4_tree_state_digest "$SEL4_BUILD_DIR")"
+    [[ "$observed" == "$CANONICAL_SEL4_STATE_DIGEST" ]] || \
+      fail "canonical seL4 profile tree changed during exact-image work at ${phase}"
+}
+
 verify_build_repository_state() {
     local phase="$1"
     local current_head
@@ -317,8 +384,8 @@ seal_staged_pi4_image() {
     local staged_image="$2"
     local fallback_image="$3"
     local identity_metadata="${STAGE_DIR}/${PI4_IMAGE_IDENTITY_STAGE_NAME}"
-    local expected_root_elf="${STRIPPED_ROOT_TASK_ELF:-${SEL4_BUILD_DIR}/elfloader/rootserver}"
-    local expected_root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
+    local expected_root_elf="$EXACT_ROOT_ELF"
+    local expected_root_cpio="$EXACT_ROOT_CPIO"
 
     require_file "$unsealed_image"
     require_file "$expected_root_elf"
@@ -396,8 +463,8 @@ verify_final_staged_pi4_image() {
     local staged_image="${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
     local fallback_image="${STAGE_DIR}/${SEL4_UPSTREAM_IMAGE_NAME}"
     local identity_metadata="${STAGE_DIR}/${PI4_IMAGE_IDENTITY_STAGE_NAME}"
-    local expected_root_elf="${STRIPPED_ROOT_TASK_ELF:-${SEL4_BUILD_DIR}/elfloader/rootserver}"
-    local expected_root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
+    local expected_root_elf="$EXACT_ROOT_ELF"
+    local expected_root_cpio="$EXACT_ROOT_CPIO"
 
     python3 "${ROOT_DIR}/scripts/pi4_image_identity.py" verify-metadata \
       --image "$staged_image" \
@@ -539,7 +606,7 @@ verify_u_boot_pi4_target() {
 }
 
 verify_skip_build_image_fresh() {
-    local image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+    local image="$EXACT_PI4_IMAGE"
     local input=""
     local stale=""
     local -a freshness_inputs=(
@@ -572,10 +639,20 @@ verify_skip_build_image_fresh() {
     done
 }
 
+select_exact_assembly_inputs() {
+    EXACT_PI4_IMAGE="${PI4_ASSEMBLY_DIR}/${SEL4_UPSTREAM_IMAGE_NAME}"
+    EXACT_ROOT_ELF="${PI4_ASSEMBLY_DIR}/rootserver"
+    EXACT_ROOT_CPIO="${PI4_ASSEMBLY_DIR}/archive.archive.o.cpio"
+    EXACT_CANONICAL_PROFILE_STAMP="${SEL4_BUILD_DIR}/cohesix-profile-build-inputs.json"
+    EXACT_COMPOSITION_PROFILE_STAMP="${PI4_ASSEMBLY_DIR}/composition-profile-build-inputs.json"
+    EXACT_COMPOSITION_CACHE="${PI4_ASSEMBLY_DIR}/composition-CMakeCache.txt"
+    EXACT_COMPOSITION_TIMER_HEADER="${PI4_ASSEMBLY_DIR}/composition-platform_gen.h"
+}
+
 adopt_skip_build_source_timestamp() {
-    local image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
-    local root_elf="${SEL4_BUILD_DIR}/elfloader/rootserver"
-    local root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
+    local image="$EXACT_PI4_IMAGE"
+    local root_elf="$EXACT_ROOT_ELF"
+    local root_cpio="$EXACT_ROOT_CPIO"
     local identity_json
 
     require_file "$image"
@@ -597,17 +674,18 @@ adopt_skip_build_source_timestamp() {
 }
 
 write_sel4_image_provenance() {
-    local image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
-    local root_elf="${SEL4_BUILD_DIR}/elfloader/rootserver"
-    local root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
-    local cache="${SEL4_BUILD_DIR}/CMakeCache.txt"
-    local timer_header="${SEL4_BUILD_DIR}/kernel/gen_headers/plat/platform_gen.h"
+    local image="$EXACT_PI4_IMAGE"
+    local root_elf="$EXACT_ROOT_ELF"
+    local root_cpio="$EXACT_ROOT_CPIO"
+    local cache="$EXACT_COMPOSITION_CACHE"
+    local timer_header="$EXACT_COMPOSITION_TIMER_HEADER"
     local provenance="${image}${SEL4_IMAGE_PROVENANCE_SUFFIX}"
 
     python3 - \
       "$provenance" "$image" "$root_elf" "$root_cpio" "$MANIFEST_PATH" \
       "$cache" "$timer_header" "$EXACT_GIT_COMMIT" "$EXACT_BUILD_TIMESTAMP" \
-      "$ROOT_TASK_FEATURES" <<'PY'
+      "$ROOT_TASK_FEATURES" "$EXACT_CANONICAL_PROFILE_STAMP" \
+      "$EXACT_COMPOSITION_PROFILE_STAMP" "$CANONICAL_SEL4_STATE_DIGEST" <<'PY'
 import hashlib
 import json
 import os
@@ -626,6 +704,9 @@ from pathlib import Path
     commit,
     timestamp,
     features,
+    canonical_profile_stamp,
+    composition_profile_stamp,
+    canonical_profile_state,
 ) = sys.argv[1:]
 
 
@@ -638,14 +719,17 @@ def digest(path: str) -> str:
 
 
 record = {
-    "schema": "cohesix-pi4-sel4-image-provenance/v1",
+    "schema": "cohesix-pi4-sel4-image-provenance/v2",
     "git_commit": commit,
     "source_tree_clean": True,
     "build_timestamp": timestamp,
     "root_task_features": features,
     "source_manifest_sha256": digest(manifest_path),
-    "sel4_cmake_cache_sha256": digest(cache_path),
-    "sel4_timer_header_sha256": digest(timer_header_path),
+    "canonical_profile_stamp_sha256": digest(canonical_profile_stamp),
+    "canonical_profile_state_sha256": canonical_profile_state,
+    "composition_profile_stamp_sha256": digest(composition_profile_stamp),
+    "composition_cmake_cache_sha256": digest(cache_path),
+    "composition_timer_header_sha256": digest(timer_header_path),
     "wrapper_sha256": digest(image_path),
     "rootserver_sha256": digest(root_path),
     "rootserver_cpio_sha256": digest(cpio_path),
@@ -676,16 +760,17 @@ PY
 }
 
 verify_skip_build_provenance() {
-    local image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+    local image="$EXACT_PI4_IMAGE"
     local provenance="${image}${SEL4_IMAGE_PROVENANCE_SUFFIX}"
 
     require_file "$provenance"
     python3 - \
-      "$provenance" "$image" "${SEL4_BUILD_DIR}/elfloader/rootserver" \
-      "${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio" "$MANIFEST_PATH" \
-      "${SEL4_BUILD_DIR}/CMakeCache.txt" \
-      "${SEL4_BUILD_DIR}/kernel/gen_headers/plat/platform_gen.h" \
-      "$EXACT_GIT_COMMIT" "$EXACT_BUILD_TIMESTAMP" "$ROOT_TASK_FEATURES" <<'PY'
+      "$provenance" "$image" "$EXACT_ROOT_ELF" "$EXACT_ROOT_CPIO" \
+      "$MANIFEST_PATH" "$EXACT_COMPOSITION_CACHE" \
+      "$EXACT_COMPOSITION_TIMER_HEADER" "$EXACT_GIT_COMMIT" \
+      "$EXACT_BUILD_TIMESTAMP" "$ROOT_TASK_FEATURES" \
+      "$EXACT_CANONICAL_PROFILE_STAMP" "$EXACT_COMPOSITION_PROFILE_STAMP" \
+      "$CANONICAL_SEL4_STATE_DIGEST" <<'PY'
 import hashlib
 import json
 import sys
@@ -701,6 +786,9 @@ import sys
     commit,
     timestamp,
     features,
+    canonical_profile_stamp,
+    composition_profile_stamp,
+    canonical_profile_state,
 ) = sys.argv[1:]
 
 
@@ -715,14 +803,17 @@ def digest(path: str) -> str:
 with open(provenance_path, "r", encoding="utf-8") as handle:
     record = json.load(handle)
 expected = {
-    "schema": "cohesix-pi4-sel4-image-provenance/v1",
+    "schema": "cohesix-pi4-sel4-image-provenance/v2",
     "git_commit": commit,
     "source_tree_clean": True,
     "build_timestamp": timestamp,
     "root_task_features": features,
     "source_manifest_sha256": digest(manifest_path),
-    "sel4_cmake_cache_sha256": digest(cache_path),
-    "sel4_timer_header_sha256": digest(timer_header_path),
+    "canonical_profile_stamp_sha256": digest(canonical_profile_stamp),
+    "canonical_profile_state_sha256": canonical_profile_state,
+    "composition_profile_stamp_sha256": digest(composition_profile_stamp),
+    "composition_cmake_cache_sha256": digest(cache_path),
+    "composition_timer_header_sha256": digest(timer_header_path),
     "wrapper_sha256": digest(image_path),
     "rootserver_sha256": digest(root_path),
     "rootserver_cpio_sha256": digest(cpio_path),
@@ -903,8 +994,9 @@ platform_timer_clock_hz() {
 }
 
 verify_pi4_sel4_counter_config() {
-    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
-    local platform_header="${SEL4_BUILD_DIR}/kernel/gen_headers/plat/platform_gen.h"
+    local build_dir="${1:-$SEL4_BUILD_DIR}"
+    local cache_file="${build_dir}/CMakeCache.txt"
+    local platform_header="${build_dir}/kernel/gen_headers/plat/platform_gen.h"
     local timer_clock_hz
 
     require_file "$cache_file"
@@ -923,8 +1015,9 @@ verify_pi4_sel4_counter_config() {
 
 verify_pi4_uboot_image_start_addr() {
     local require_generated="${1:-cache}"
-    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
-    local image_start_header="${SEL4_BUILD_DIR}/elfloader/gen_headers/image_start_addr.h"
+    local build_dir="${2:-$SEL4_BUILD_DIR}"
+    local cache_file="${build_dir}/CMakeCache.txt"
+    local image_start_header="${build_dir}/elfloader/gen_headers/image_start_addr.h"
 
     require_file "$cache_file"
     grep -Eq "^IMAGE_START_ADDR(:[A-Z]+)?=${PI4_UBOOT_IMAGE_START_ADDR}$" "$cache_file" || \
@@ -937,31 +1030,18 @@ verify_pi4_uboot_image_start_addr() {
     fi
 }
 
-generate_pi4_elfloader_platform_info() {
-    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
-    local platform_yaml="${SEL4_BUILD_DIR}/kernel/gen_headers/plat/machine/platform_gen.yaml"
-    local platform_info="${SEL4_BUILD_DIR}/elfloader/gen_headers/platform_info.h"
-    local elfloader_source_dir=""
-    local platform_sift=""
+verify_pi4_elfloader_platform_info() {
+    local build_dir="${1:-$SEL4_BUILD_DIR}"
+    local platform_info="${build_dir}/elfloader/gen_headers/platform_info.h"
 
-    require_file "$cache_file"
-    require_file "$platform_yaml"
-
-    elfloader_source_dir="$(awk -F= '/^elfloader_SOURCE_DIR:STATIC=/{print $2}' "$cache_file" | tail -n 1)"
-    [[ -n "$elfloader_source_dir" && -d "$elfloader_source_dir" ]] || \
-      fail "could not resolve elfloader source directory from ${cache_file}"
-
-    platform_sift="${elfloader_source_dir}/../cmake-tool/helpers/platform_sift.py"
-    require_file "$platform_sift"
-
-    mkdir -p "$(dirname "$platform_info")"
-    python3 "$platform_sift" --emit-c-syntax "$platform_yaml" > "$platform_info"
+    require_file "$platform_info"
     grep -q "memory_region" "$platform_info" || \
-      fail "Pi4 elfloader platform_info.h is missing memory_region after regeneration"
+      fail "Pi4 elfloader platform_info.h is missing memory_region"
 }
 
 verify_one_domain_schedule_cache_absent() {
-    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
+    local build_dir="${1:-$SEL4_BUILD_DIR}"
+    local cache_file="${build_dir}/CMakeCache.txt"
 
     require_file "$cache_file"
     grep -q "^KernelNumDomains:STRING=1$" "$cache_file" || return 0
@@ -969,18 +1049,7 @@ verify_one_domain_schedule_cache_absent() {
       fail "canonical one-domain seL4 profile contains forbidden KernelDomainSchedule input"
 }
 
-ensure_sel4_lib_available() {
-    local jobs=""
-
-    if [[ -f "${SEL4_BUILD_DIR}/libsel4/libsel4.a" ]]; then
-        return 0
-    fi
-
-    jobs="$(sysctl -n hw.ncpu)"
-    log "Building seL4 support archive required by Cargo bindings"
-    cmake --build "${SEL4_BUILD_DIR}" \
-      --target libsel4.a \
-      -j"${jobs}"
+require_sel4_lib_available() {
     require_file "${SEL4_BUILD_DIR}/libsel4/libsel4.a"
 }
 
@@ -1041,7 +1110,7 @@ validate_pi4_sel4_build() {
     grep -q "^ElfloaderImage:STRING=uimage$" "$cache_file" || fail "ElfloaderImage not set to uimage"
     grep -q "^ElfloaderIncludeDtb:BOOL=OFF$" "$cache_file" || fail "ElfloaderIncludeDtb must be OFF for Pi4 U-Boot DTB handoff"
     verify_pi4_uboot_image_start_addr
-    generate_pi4_elfloader_platform_info
+    verify_pi4_elfloader_platform_info
 }
 
 resolve_mkimage() {
@@ -1221,35 +1290,10 @@ rebuild_u_boot_pi4() {
     prepend_path_var PATH "${u_boot_source_dir}/tools"
 }
 
-rebuild_sel4_pi4_uboot_tree() {
-    local sel4_source_dir=""
-    local sel4_kernel_source_dir=""
-    local jobs=""
-
-    sel4_source_dir="$(resolve_sel4_source_dir)"
-    sel4_kernel_source_dir="$(resolve_sel4_kernel_source_dir)"
-    verify_pi4_sel4_xhci_device_untyped "${sel4_kernel_source_dir}"
-    validate_pi4_sel4_build "${sel4_source_dir}" "${sel4_kernel_source_dir}"
-
-    jobs="$(sysctl -n hw.ncpu)"
-
-    log "Cleaning Pi4 seL4 U-Boot build tree in ${SEL4_BUILD_DIR}"
-    cmake --build "${SEL4_BUILD_DIR}" --target clean
-    generate_pi4_elfloader_platform_info
-    log "Rebuilding Pi4 seL4 U-Boot build tree"
-    cmake --build "${SEL4_BUILD_DIR}" -j"${jobs}"
-    verify_one_domain_schedule_cache_absent
-    verify_pi4_uboot_image_start_addr generated
-    validate_pi4_sel4_build "${sel4_source_dir}" "${sel4_kernel_source_dir}"
-
-    require_file "${SEL4_BUILD_DIR}/libsel4/libsel4.a"
-    require_file "${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
-}
-
 clean_pi4_build() {
     clean_root_task_build
     rebuild_u_boot_pi4
-    rebuild_sel4_pi4_uboot_tree
+    log "Canonical seL4 profile remains immutable; derived composition is always fresh"
 }
 
 parse_args() {
@@ -1376,8 +1420,9 @@ validate_output_paths() {
         [[ "$image_name_folded" != "$reserved_folded" ]] || \
           fail "--image-name collides with reserved staged artifact: ${reserved}"
     done
-    [[ "$STAGE_DIR" != "/" && "$STAGE_DIR" != "$ROOT_DIR" ]] || \
-      fail "--stage-dir must not name the filesystem root or repository root"
+    [[ "$STAGE_DIR" != "/" && "$STAGE_DIR" != "$ROOT_DIR" && \
+       "$STAGE_DIR" != "${ROOT_DIR}/out" ]] || \
+      fail "--stage-dir must be a dedicated directory strictly below the repository out directory"
     case "${STAGE_DIR}/" in
         "${ROOT_DIR}/out/"*) ;;
         "${ROOT_DIR}/"*)
@@ -1388,6 +1433,7 @@ validate_output_paths() {
         "$SEL4_BUILD_DIR" \
         "$SEL4_VENV_DIR" \
         "$FIRMWARE_DIR" \
+        "$PI4_ASSEMBLY_DIR" \
         "$(dirname "$MANIFEST_PATH")" \
         "$(dirname "$U_BOOT_BIN")"; do
         case "${protected}/" in
@@ -1505,6 +1551,18 @@ cleanup() {
         rm -f "$PRESERVED_POLICY_TEMP"
         PRESERVED_POLICY_TEMP=""
     fi
+    if [[ -n "${COMPOSITION_ROOT:-}" ]]; then
+        case "${COMPOSITION_ROOT}/" in
+            "${ROOT_DIR}/out/.pi4-exact-composition."*/)
+                rm -rf "$COMPOSITION_ROOT"
+                ;;
+            *)
+                log "Refusing to remove unexpected composition path: ${COMPOSITION_ROOT}"
+                status=1
+                ;;
+        esac
+        COMPOSITION_ROOT=""
+    fi
     if ! restore_canonical_codegen; then
         status=1
     fi
@@ -1535,12 +1593,80 @@ sync_resolved_manifest_json() {
     fi
 }
 
+prepare_pi4_composition_tree() {
+    local source_root="$1"
+    local jobs="$2"
+    local profile_tool="${ROOT_DIR}/scripts/sel4_profile.py"
+    local profile_python="${SEL4_VENV_DIR}/bin/python"
+    local relative
+
+    mkdir -p "${ROOT_DIR}/out"
+    COMPOSITION_ROOT="$(mktemp -d "${ROOT_DIR}/out/.pi4-exact-composition.XXXXXX")"
+    COMPOSITION_SEL4_BUILD_DIR="${COMPOSITION_ROOT}/sel4-build"
+    log "Building fresh derived Pi composition input in ${COMPOSITION_SEL4_BUILD_DIR}"
+    "$profile_python" "$profile_tool" configure \
+      --profile "$PI4_SEL4_PROFILE" \
+      --source "$source_root" \
+      --build-dir "$COMPOSITION_SEL4_BUILD_DIR" >/dev/null
+    "$profile_python" "$profile_tool" build \
+      --profile "$PI4_SEL4_PROFILE" \
+      --source "$source_root" \
+      --build-dir "$COMPOSITION_SEL4_BUILD_DIR" \
+      --jobs "$jobs" >/dev/null
+    "$profile_python" "$profile_tool" validate \
+      --profile "$PI4_SEL4_PROFILE" \
+      --source "$source_root" \
+      --build-dir "$COMPOSITION_SEL4_BUILD_DIR" \
+      --require-source \
+      --require-artifacts \
+      --for-runtime >/dev/null || \
+      fail "fresh derived Pi composition tree failed pristine profile validation"
+
+    for relative in \
+        kernel/gen_config/kernel/gen_config.json \
+        kernel/gen_headers/plat/platform_gen.h \
+        kernel/kernel.dtb \
+        elfloader/gen_headers/platform_info.h; do
+        require_file "${SEL4_BUILD_DIR}/${relative}"
+        require_file "${COMPOSITION_SEL4_BUILD_DIR}/${relative}"
+        cmp -s "${SEL4_BUILD_DIR}/${relative}" \
+          "${COMPOSITION_SEL4_BUILD_DIR}/${relative}" || \
+          fail "derived Pi composition configuration differs from canonical profile: ${relative}"
+    done
+    verify_canonical_sel4_state "after pristine derived profile build"
+}
+
+publish_pi4_assembly() {
+    local composition_rootserver="${COMPOSITION_SEL4_BUILD_DIR}/elfloader/rootserver"
+    local composition_cpio="${COMPOSITION_SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
+    local composition_image="${COMPOSITION_SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+
+    rm -rf "$PI4_ASSEMBLY_DIR"
+    mkdir -p "$PI4_ASSEMBLY_DIR"
+    select_exact_assembly_inputs
+    cp -f "$composition_image" "$EXACT_PI4_IMAGE"
+    cp -f "$composition_rootserver" "$EXACT_ROOT_ELF"
+    cp -f "$composition_cpio" "$EXACT_ROOT_CPIO"
+    cp -f "${COMPOSITION_SEL4_BUILD_DIR}/cohesix-profile-build-inputs.json" \
+      "$EXACT_COMPOSITION_PROFILE_STAMP"
+    cp -f "${COMPOSITION_SEL4_BUILD_DIR}/CMakeCache.txt" \
+      "$EXACT_COMPOSITION_CACHE"
+    cp -f "${COMPOSITION_SEL4_BUILD_DIR}/kernel/gen_headers/plat/platform_gen.h" \
+      "$EXACT_COMPOSITION_TIMER_HEADER"
+    require_file "$EXACT_CANONICAL_PROFILE_STAMP"
+    verify_unsealed_pi4_build_marker \
+      "$EXACT_PI4_IMAGE" 0 "$EXACT_ROOT_ELF" "$EXACT_ROOT_CPIO"
+    log "Published immutable-input-derived Pi assembly at ${PI4_ASSEMBLY_DIR}"
+}
+
 build_pi4_image() {
     local root_task_elf
-    local embedded_rootserver="${SEL4_BUILD_DIR}/elfloader/rootserver"
-    local embedded_root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
     local sel4_source_dir
     local sel4_kernel_source_dir
+    local canonical_source_root
+    local composition_rootserver
+    local composition_cpio
+    local composition_image
     local jobs
     local root_hash_expected
     local root_hash_actual
@@ -1555,7 +1681,8 @@ build_pi4_image() {
     sel4_kernel_source_dir="$(resolve_sel4_kernel_source_dir)"
     verify_pi4_sel4_xhci_device_untyped "$sel4_kernel_source_dir"
     validate_pi4_sel4_build "$sel4_source_dir" "$sel4_kernel_source_dir"
-    ensure_sel4_lib_available
+    require_sel4_lib_available
+    capture_canonical_sel4_state
 
     if [[ "${MANIFEST_PATH}" == *.toml ]]; then
         log "Regenerating manifest artifacts via coh-rtc"
@@ -1602,34 +1729,34 @@ build_pi4_image() {
     log "Built root-task ELF: ${root_task_elf}"
     strip_root_task_for_pi_image "$root_task_elf"
     verify_unsealed_pi4_build_marker "$STRIPPED_ROOT_TASK_ELF" 1
-    log "Rebuilding Pi4 seL4 image in ${SEL4_BUILD_DIR}"
-    cmake --build "$SEL4_BUILD_DIR" \
+    canonical_source_root="$(resolve_canonical_sel4_project_root)"
+    prepare_pi4_composition_tree "$canonical_source_root" "$jobs"
+    composition_rootserver="${COMPOSITION_SEL4_BUILD_DIR}/elfloader/rootserver"
+    composition_cpio="${COMPOSITION_SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"
+    composition_image="${COMPOSITION_SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+    require_file "$composition_rootserver"
+    cp -f "$STRIPPED_ROOT_TASK_ELF" "$composition_rootserver"
+    log "Injected root-task into derived composition tree"
+
+    cmake --build "$COMPOSITION_SEL4_BUILD_DIR" \
       --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
       -j"$jobs"
-    verify_pi4_uboot_image_start_addr generated
-
-    require_file "$embedded_rootserver"
-    cp -f "$STRIPPED_ROOT_TASK_ELF" "$embedded_rootserver"
-    log "Injected root-task into ${embedded_rootserver}"
-
-    # Repack the image after injection. The second build should not regenerate
-    # rootserver if sel4test-driver has not changed.
-    cmake --build "$SEL4_BUILD_DIR" \
-      --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
-      -j"$jobs"
-    verify_one_domain_schedule_cache_absent
-    verify_pi4_uboot_image_start_addr generated
-    require_file "$embedded_root_cpio"
+    verify_one_domain_schedule_cache_absent "$COMPOSITION_SEL4_BUILD_DIR"
+    verify_pi4_uboot_image_start_addr generated "$COMPOSITION_SEL4_BUILD_DIR"
+    verify_pi4_sel4_counter_config "$COMPOSITION_SEL4_BUILD_DIR"
+    verify_pi4_elfloader_platform_info "$COMPOSITION_SEL4_BUILD_DIR"
+    require_file "$composition_cpio"
     verify_unsealed_pi4_build_marker \
-      "${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}" 0 \
-      "$STRIPPED_ROOT_TASK_ELF" "$embedded_root_cpio"
+      "$composition_image" 0 "$STRIPPED_ROOT_TASK_ELF" "$composition_cpio"
 
     root_hash_expected="$(shasum -a 256 "$STRIPPED_ROOT_TASK_ELF" | awk '{print $1}')"
-    root_hash_actual="$(shasum -a 256 "$embedded_rootserver" | awk '{print $1}')"
+    root_hash_actual="$(shasum -a 256 "$composition_rootserver" | awk '{print $1}')"
     [[ "$root_hash_actual" == "$root_hash_expected" ]] || \
       fail "embedded rootserver was regenerated after root-task injection"
-    verify_one_domain_schedule_cache_absent
+    verify_canonical_sel4_state "after derived rootserver composition"
     validate_pi4_sel4_build "$sel4_source_dir" "$sel4_kernel_source_dir"
+    verify_canonical_sel4_state "after canonical post-composition validation"
+    publish_pi4_assembly
     verify_build_repository_state "after final seL4 wrapper build"
     write_sel4_image_provenance
 }
@@ -2009,7 +2136,7 @@ write_pi4_runtime_dma_build_proof() {
     local runtime_uimg="${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
     local staged_image="${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
     local image_identity="${STAGE_DIR}/${PI4_IMAGE_IDENTITY_STAGE_NAME}"
-    local expected_root_elf="${STRIPPED_ROOT_TASK_ELF:-${SEL4_BUILD_DIR}/elfloader/rootserver}"
+    local expected_root_elf="$EXACT_ROOT_ELF"
     local timestamp
 
     require_file "$manifest_json"
@@ -2042,7 +2169,7 @@ write_pi4_runtime_dma_build_proof() {
         printf "PI4_IMAGE_IDENTITY_METADATA=%s\n" "$image_identity"
         printf "PI4_IMAGE_IDENTITY_METADATA_SHA256=%s\n" "$(shasum -a 256 "$image_identity" | awk '{print $1}')"
         printf "PI4_IMAGE_IDENTITY_ROOT_ELF_SHA256=%s\n" "$(shasum -a 256 "$expected_root_elf" | awk '{print $1}')"
-        printf "PI4_IMAGE_IDENTITY_ROOT_CPIO_SHA256=%s\n" "$(shasum -a 256 "${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio" | awk '{print $1}')"
+        printf "PI4_IMAGE_IDENTITY_ROOT_CPIO_SHA256=%s\n" "$(shasum -a 256 "$EXACT_ROOT_CPIO" | awk '{print $1}')"
     } >"$proof_path"
     require_file "$proof_path"
     log "Wrote Pi4 runtime/DMA stage-only proof at ${proof_path}"
@@ -2050,7 +2177,7 @@ write_pi4_runtime_dma_build_proof() {
 
 stage_sd_payload() {
     local mkimage_bin="$1"
-    local sel4_image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+    local sel4_image="$EXACT_PI4_IMAGE"
     local stage_overlays="${STAGE_DIR}/overlays"
     local staged_image="${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
     local fallback_image="${STAGE_DIR}/${SEL4_UPSTREAM_IMAGE_NAME}"
@@ -2371,6 +2498,8 @@ main() {
         sel4_kernel_source_dir="$(resolve_sel4_kernel_source_dir)"
         verify_pi4_sel4_xhci_device_untyped "$sel4_kernel_source_dir"
         validate_pi4_sel4_build "$sel4_source_dir" "$sel4_kernel_source_dir"
+        capture_canonical_sel4_state
+        select_exact_assembly_inputs
         verify_skip_build_image_fresh
         adopt_skip_build_source_timestamp
         verify_skip_build_provenance
@@ -2388,6 +2517,7 @@ main() {
     fi
 
     stage_sd_payload "$mkimage_bin"
+    verify_canonical_sel4_state "after final staged-image publication"
 
     if [[ -n "$FLASH_DISK" ]]; then
         flash_sd_card "$FLASH_DISK"

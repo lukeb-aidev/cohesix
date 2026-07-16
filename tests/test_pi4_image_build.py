@@ -165,7 +165,7 @@ def test_pi4_image_build_requires_canonical_runtime_profile_and_mkimage() -> Non
 
     domain_guard = source[
         source.index("verify_one_domain_schedule_cache_absent()") : source.index(
-            "ensure_sel4_lib_available()"
+            "require_sel4_lib_available()"
         )
     ]
     assert "forbidden KernelDomainSchedule" in domain_guard
@@ -506,7 +506,8 @@ def test_pi4_image_build_proves_root_archive_and_v2_identity() -> None:
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert 'embedded_root_cpio="${SEL4_BUILD_DIR}/elfloader/archive.archive.o.cpio"' in source
+    assert 'EXACT_ROOT_CPIO="${PI4_ASSEMBLY_DIR}/archive.archive.o.cpio"' in source
+    assert 'local expected_root_cpio="$EXACT_ROOT_CPIO"' in source
     assert '--expected-root-elf "$expected_root_elf"' in source
     assert '--expected-root-cpio "$expected_root_cpio"' in source
     assert '--metadata "$identity_metadata"' in source
@@ -519,6 +520,66 @@ def test_pi4_image_build_proves_root_archive_and_v2_identity() -> None:
     assert '"$mkimage_bin" -l "$staged_image"' in source
     assert '"$mkimage_bin" -l "$fallback_image"' in source
     assert "PI4_IMAGE_IDENTITY_SCHEME=cohesix-pi4-image-identity/v2" in source
+
+
+def test_pi4_image_composition_never_writes_canonical_profile_tree() -> None:
+    """Rootserver composition must target only the fresh disposable build."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    build_start = source.index("build_pi4_image() {")
+    build_end = source.index("\nstage_uboot_logo() {", build_start)
+    build_body = source[build_start:build_end]
+    validator_start = source.index("validate_pi4_sel4_build() {")
+    validator_end = source.index("\nresolve_mkimage() {", validator_start)
+    validator = source[validator_start:validator_end]
+
+    assert 'cmake --build "$SEL4_BUILD_DIR"' not in build_body
+    assert 'cp -f "$STRIPPED_ROOT_TASK_ELF" "$composition_rootserver"' in build_body
+    assert 'cmake --build "$COMPOSITION_SEL4_BUILD_DIR"' in build_body
+    assert "generate_pi4_elfloader_platform_info" not in source
+    assert "cmake --build" not in validator
+    assert "mkdir -p" not in validator
+    assert 'verify_pi4_elfloader_platform_info' in validator
+
+
+def test_pi4_image_composition_revalidates_unchanged_canonical_input() -> None:
+    """The selected stamped tree is fingerprinted across every derived build."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    build_start = source.index("build_pi4_image() {")
+    build_end = source.index("\nstage_uboot_logo() {", build_start)
+    build_body = source[build_start:build_end]
+
+    capture = build_body.index("capture_canonical_sel4_state")
+    compose = build_body.index("prepare_pi4_composition_tree")
+    post_compose = build_body.index(
+        'verify_canonical_sel4_state "after derived rootserver composition"'
+    )
+    revalidate = build_body.rindex("validate_pi4_sel4_build")
+    post_validate = build_body.index(
+        'verify_canonical_sel4_state "after canonical post-composition validation"'
+    )
+    publish = build_body.index("publish_pi4_assembly")
+
+    assert capture < compose < post_compose < revalidate < post_validate < publish
+
+
+def test_pi4_stage_dir_cannot_alias_out_or_derived_assembly(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Staging cleanup cannot erase the durable derived exact-image inputs."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    for stage in ("$ROOT_DIR/out", "$ROOT_DIR/out/pi4-image-assembly"):
+        result = _source_function(
+            script,
+            f'COHESIX_IMAGE_NAME=image.bin; STAGE_DIR="{stage}"; '
+            'PI4_ASSEMBLY_DIR="$ROOT_DIR/out/pi4-image-assembly"; '
+            "validate_output_paths",
+        )
+
+        assert result.returncode != 0
+        assert "--stage-dir" in result.stderr
 
 
 def test_pi4_image_build_publishes_metadata_after_final_image_rename() -> None:
@@ -612,6 +673,40 @@ def test_repository_state_digest_binds_tracked_and_untracked_contents(
     assert untracked_first.stdout.strip() != untracked_second.stdout.strip()
 
 
+def test_sel4_tree_state_digest_binds_bytes_modes_and_symlinks(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Canonical-profile preservation detects content, mode, and link drift."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    tree = tmp_path / "sel4-tree"
+    tree.mkdir()
+    artifact = tree / "artifact"
+    artifact.write_bytes(b"first\n")
+    artifact.chmod(0o644)
+    link = tree / "selected"
+    link.symlink_to("artifact")
+    command = 'sel4_tree_state_digest "$ROOT_DIR/sel4-tree"'
+    initial = _source_function(script, command)
+    assert initial.returncode == 0, initial.stderr
+
+    artifact.write_bytes(b"other\n")
+    content = _source_function(script, command)
+    artifact.chmod(0o755)
+    mode = _source_function(script, command)
+    link.unlink()
+    link.symlink_to("missing")
+    target = _source_function(script, command)
+
+    observed = {
+        initial.stdout.strip(),
+        content.stdout.strip(),
+        mode.stdout.strip(),
+        target.stdout.strip(),
+    }
+    assert len(observed) == 4
+
+
 @pytest.mark.parametrize(
     "image_name",
     [
@@ -679,8 +774,11 @@ def test_skip_build_requires_exact_manifest_feature_and_profile_provenance() -> 
     for field in (
         "source_manifest_sha256",
         "root_task_features",
-        "sel4_cmake_cache_sha256",
-        "sel4_timer_header_sha256",
+        "canonical_profile_stamp_sha256",
+        "canonical_profile_state_sha256",
+        "composition_profile_stamp_sha256",
+        "composition_cmake_cache_sha256",
+        "composition_timer_header_sha256",
         "wrapper_sha256",
         "rootserver_sha256",
         "rootserver_cpio_sha256",
@@ -691,12 +789,14 @@ def test_skip_build_requires_exact_manifest_feature_and_profile_provenance() -> 
 @pytest.mark.parametrize(
     "tampered_relative_path",
     [
-        "sel4-build/images/sel4test-driver-image-arm-bcm2711",
-        "sel4-build/elfloader/rootserver",
-        "sel4-build/elfloader/archive.archive.o.cpio",
+        "assembly/sel4test-driver-image-arm-bcm2711",
+        "assembly/rootserver",
+        "assembly/archive.archive.o.cpio",
         "manifest.toml",
-        "sel4-build/CMakeCache.txt",
-        "sel4-build/kernel/gen_headers/plat/platform_gen.h",
+        "sel4-build/cohesix-profile-build-inputs.json",
+        "assembly/composition-profile-build-inputs.json",
+        "assembly/composition-CMakeCache.txt",
+        "assembly/composition-platform_gen.h",
     ],
 )
 def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
@@ -707,12 +807,14 @@ def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
 
     script = _copy_sourceable_build_script(tmp_path)
     artifacts = {
-        "sel4-build/images/sel4test-driver-image-arm-bcm2711": b"wrapper\n",
-        "sel4-build/elfloader/rootserver": b"rootserver\n",
-        "sel4-build/elfloader/archive.archive.o.cpio": b"cpio\n",
+        "assembly/sel4test-driver-image-arm-bcm2711": b"wrapper\n",
+        "assembly/rootserver": b"rootserver\n",
+        "assembly/archive.archive.o.cpio": b"cpio\n",
         "manifest.toml": b"manifest\n",
-        "sel4-build/CMakeCache.txt": b"cache\n",
-        "sel4-build/kernel/gen_headers/plat/platform_gen.h": b"timer\n",
+        "sel4-build/cohesix-profile-build-inputs.json": b"canonical stamp\n",
+        "assembly/composition-profile-build-inputs.json": b"composition stamp\n",
+        "assembly/composition-CMakeCache.txt": b"cache\n",
+        "assembly/composition-platform_gen.h": b"timer\n",
     }
     for relative_path, payload in artifacts.items():
         path = tmp_path / relative_path
@@ -721,7 +823,14 @@ def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
 
     shell_state = (
         'SEL4_BUILD_DIR="$ROOT_DIR/sel4-build"; '
-        'SEL4_UPSTREAM_IMAGE_NAME="sel4test-driver-image-arm-bcm2711"; '
+        'EXACT_PI4_IMAGE="$ROOT_DIR/assembly/sel4test-driver-image-arm-bcm2711"; '
+        'EXACT_ROOT_ELF="$ROOT_DIR/assembly/rootserver"; '
+        'EXACT_ROOT_CPIO="$ROOT_DIR/assembly/archive.archive.o.cpio"; '
+        'EXACT_CANONICAL_PROFILE_STAMP="$ROOT_DIR/sel4-build/cohesix-profile-build-inputs.json"; '
+        'EXACT_COMPOSITION_PROFILE_STAMP="$ROOT_DIR/assembly/composition-profile-build-inputs.json"; '
+        'EXACT_COMPOSITION_CACHE="$ROOT_DIR/assembly/composition-CMakeCache.txt"; '
+        'EXACT_COMPOSITION_TIMER_HEADER="$ROOT_DIR/assembly/composition-platform_gen.h"; '
+        f'CANONICAL_SEL4_STATE_DIGEST={"b" * 64!r}; '
         'MANIFEST_PATH="$ROOT_DIR/manifest.toml"; '
         f'EXACT_GIT_COMMIT={"a" * 40!r}; '
         "EXACT_BUILD_TIMESTAMP='2026-07-16T00:00:00Z'; "

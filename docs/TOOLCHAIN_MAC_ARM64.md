@@ -423,6 +423,16 @@ required artifact digest must recompute byte-for-byte during validation. A
 pending, missing, stale, reused, re-stamped, or path-moved record does not
 qualify as exact-image input.
 
+`scripts/pi4-image-build.sh` consumes that qualified tree read-only. It hashes
+the complete tree, creates and validates a fresh disposable `pi4_diagnostic`
+composition build below `out/`, and injects the exact stripped Cohesix
+rootserver only into that derivative. Final provenance binds the canonical
+stamp/tree fingerprint, the derivative's pristine stamp and generated timing
+configuration, and the derived rootserver/newc/wrapper bytes. The canonical
+tree must validate and retain the same complete fingerprint after composition
+and final staging; the script never repairs, re-stamps, or accepts a mutated
+profile tree.
+
 Wrapper AArch64 contracts set `AARCH64=ON`, and every profile binds
 `CROSS_COMPILER_PREFIX=aarch64-none-elf-` before upstream `kernel/gcc.cmake`
 selects the compiler. The upstream verified-config script derives its
