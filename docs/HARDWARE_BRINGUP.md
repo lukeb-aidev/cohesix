@@ -199,14 +199,20 @@ checks do not replace the full readback ledger.
 
 ### 4. Set First-Boot Network Policy
 
-The staged Pi image always stops at the Cohesix U-Boot menu. Menu state is
+This operator contract is authorized by reopened Milestone 26b tasks
+`m26b-uboot-network-wizard` and `m26b-uboot-net-policy`; live Pi acceptance
+still requires the hardware evidence in [TEST_PLAN.md](TEST_PLAN.md).
+
+The staged Pi image always stops at **Cohesix boot menu**. Its opening state is
 determined by successfully imported, coherent network overrides, not merely by
 whether a file named `cohesix.env` exists:
 
-- **Saved network settings:** option 1 is **Continue with existing config**.
-- **Manifest defaults:** option 1 is **Boot with manifest defaults**. This state
-  applies when `cohesix.env` is absent, empty, oversized, malformed, contains
-  no network override, or contains an incoherent network tuple.
+- **Saved network settings loaded:** option 1 is **Boot with saved settings**.
+- **Default network settings active:** option 1 is **Boot with default
+  settings**. This state applies when `cohesix.env` is absent, empty, oversized,
+  malformed, contains no network override, or contains an incoherent network
+  tuple. "Default" in the menu means the selected manifest's generated network
+  defaults.
 
 Policy loading is capped at 384 bytes, accepts LF or CRLF text, and imports only
 the allowlisted fields below. An invalid or partial network tuple, or a logo
@@ -216,41 +222,63 @@ SSID values are never printed in U-Boot summaries. Root-task remains the final
 validator for exact IPv4 octets, Wi-Fi text, and compiler-owned bounds; a
 rejected DTB handoff falls back deterministically to manifest defaults.
 
-The root menu provides these transitions:
+The root menu provides these exact actions:
 
-- `1` — boot with the state named on the screen.
-- `2` — configure networking through DHCP/static and wired/Wi-Fi pages.
-- `3` — toggle the HDMI logo for the current working state.
-- `4` — clear saved settings, restore the enabled-logo default, verify the
-  rewritten policy file, and redraw the manifest-default menu state.
-- `5` — save and verify the current state, then reboot.
-- `0` — exit to the U-Boot prompt.
+- `1` — **Boot with saved settings** or **Boot with default settings**, matching
+  the state shown above it.
+- `2` — **Change network settings**.
+- `3` — **Boot logo: On (select to turn off)** or **Boot logo: Off (select to
+  turn on)**, so the current choice is visible before it is toggled.
+- `4` — **Reset saved settings to defaults**. This opens **Reset saved
+  settings?**; `1` is **Confirm reset**, `0` is **Cancel**, and `9` is
+  **Advanced: Open U-Boot shell**. **Cancel** is the Enter-key default, and
+  nothing is erased before confirmation.
+- `5` — **Save settings and restart**.
+- `9` — **Advanced: Open U-Boot shell**.
+
+The guided pages use one navigation convention: `0` goes back or cancels and
+`9` opens the advanced U-Boot shell. **Choose IPv4 configuration** presents
+**Automatic (DHCP)** and **Manual (static IPv4)**. **Choose network connection**
+presents **Ethernet (wired)** and **Wi-Fi (wireless)**. Manual mode collects the
+address, subnet prefix length, and optional default gateway before review.
+These labels deliberately use normal operator terminology; U-Boot variables
+retain their internal `dhcp|static` and `wired|wifi` values.
 
 Back and discard actions return through the bounded menu dispatcher. Returning
 to the root page from an abandoned configuration reloads `cohesix.env`, so
-unsaved working values are never presented as saved settings. The review page
-can boot once without writing media, edit the working values, discard them, or
-save them. Save, clear, and reboot actions first verify file size and a private
-byte-for-byte readback; export, write, size, or readback failure leaves the user
-in the menu and does not invoke reset.
+unsaved working values are never presented as saved settings. **Review network
+settings** offers `1` **Boot once without saving**, `2` **Save settings and
+restart**, `3` **Edit network settings**, `0` **Discard changes and return to
+boot menu**, and `9` **Advanced: Open U-Boot shell**. Save and reset actions
+first verify file size and a private byte-for-byte readback; export, write,
+size, or readback failure leaves the user in the menu and does not restart.
 
-When Wi-Fi credentials already exist, the Wi-Fi page offers **Keep current
-Wi-Fi credentials**, **Replace Wi-Fi credentials**, and **Back to interface
-selection**. Replacement uses temporary variables and commits them to the
-working policy only after valid local entry, so a failed retry does not destroy
-the existing credentials. Saving overwrites `cohesix.env`; a separate
-delete/reflash cycle is not needed to move to another Wi-Fi network. Option 4
-does not delete the file: it writes an allowlisted policy with empty network
-fields, which intentionally produces the manifest-default menu state on the
-next boot.
+When Wi-Fi credentials already exist, **Choose Wi-Fi network** offers **Keep
+current Wi-Fi settings**, **Change Wi-Fi network**, **Back**, and the advanced
+shell. Replacement uses temporary variables and commits them to the working
+policy only after valid local entry, so a failed retry does not destroy the
+existing credentials. When no network is configured, the page instead offers
+**Enter Wi-Fi network**.
+
+To move to a different Wi-Fi network, select **Change network settings**, then
+**Wi-Fi (wireless)** and **Change Wi-Fi network**; a delete or reflash cycle is
+not needed. If a completely fresh policy is wanted, select **Reset saved
+settings to defaults**, confirm the reset, then select **Change network
+settings** and enter the new network. The confirmed reset does not delete the
+file: it writes a verified allowlisted policy with empty network fields and the
+boot logo enabled, then returns to **Default network settings active**. Saving
+the new choices recreates or overwrites `cohesix.env` and restarts the board.
 
 The default image is built with `--uboot-menu-input usb`. Use an HDMI display
-and USB keyboard for the guided Wi-Fi setup. U-Boot normally echoes serial
-input, so the script refuses to collect a Wi-Fi password through a serial-only
-session. While the USB Wi-Fi prompts are active, input is restricted to the USB
-keyboard and output to the video console; serial/video output is restored after
-capture. Do not type a Wi-Fi PSK into minicom, a serial automation script, or a
-command recorded in shell history.
+and USB keyboard for the guided Wi-Fi setup. Before entry, the screen warns:
+**Privacy notice: Wi-Fi network name and password are visible on this display;
+they are hidden from serial output**. U-Boot normally echoes serial input, so
+the script refuses to collect a Wi-Fi password through a serial-only session.
+While the **Wi-Fi network name (SSID)** and **Wi-Fi password** prompts are
+active, input is restricted to the USB keyboard and output to the video
+console; serial/video output is restored after capture. Do not type a Wi-Fi
+password into minicom, a serial automation script, or a command recorded in
+shell history.
 
 The saved file may contain only these imported fields:
 

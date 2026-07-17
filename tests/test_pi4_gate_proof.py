@@ -411,6 +411,17 @@ def test_gate_proof_waits_for_prompt_at_line_start() -> None:
     assert "grep -q 'cohesix>'" not in source
 
 
+def test_gate_proof_advances_current_cohesix_boot_menu() -> None:
+    """Capture automation must recognize the current root-menu heading."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "\\[cohesix\\] Cohesix boot menu" in source
+    assert "\\[cohesix\\] Cohesix boot options" not in source
+    assert "Select option \\[1\\]:" in source
+    assert "printf '1\\r'" in source
+
+
 def test_gate_proof_runs_smp_activity_for_post_prompt_driver_proof() -> None:
     """Default captures should refresh driver-task proof after prompt-side replay."""
 

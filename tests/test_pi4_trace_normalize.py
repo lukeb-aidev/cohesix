@@ -561,6 +561,28 @@ def pi4_hardware_wifi_gate7_to_10_capture_lines() -> list[str]:
     ]
 
 
+def test_wifi_password_prompt_redacts_typed_secret() -> None:
+    """Current and historical U-Boot prompts must not leak typed passwords."""
+
+    current_prompt = (
+        "Wi-Fi password (leave blank for an open network): "
+        "correct-horse-battery-staple"
+    )
+    historical_prompt = "Wi-Fi PSK (blank for open network): legacy-secret"
+
+    current_redacted = normalizer.redact_sensitive_line(current_prompt)
+    historical_redacted = normalizer.redact_sensitive_line(historical_prompt)
+
+    assert current_redacted == (
+        "Wi-Fi password (leave blank for an open network): <redacted>"
+    )
+    assert "correct-horse-battery-staple" not in current_redacted
+    assert historical_redacted == (
+        "Wi-Fi PSK (blank for open network): <redacted>"
+    )
+    assert "legacy-secret" not in historical_redacted
+
+
 def test_usb_trace_line_extracts_stage_and_tokens() -> None:
     event = normalizer.parse_line(
         "[cohesix:usb-trace] stage=handoff-usb-reset-begin input=0 "
@@ -789,6 +811,48 @@ def test_cli_gate_summary_labels_uboot_policy_missing(
     assert gate_lines["WIFI_PHASE"] == "none"
 
 
+def test_cli_gate_summary_labels_current_uboot_policy_missing(
+    tmp_path: pathlib.Path, capsys
+) -> None:
+    """Current local-input failure is classified only when policy is absent."""
+
+    unavailable = (
+        "[cohesix] Wi-Fi password entry is unavailable over serial because "
+        "U-Boot echoes typed input"
+    )
+    missing = (
+        "[cohesix] No Wi-Fi network is configured and local USB input is unavailable"
+    )
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "U-Boot 2026.01-dirty",
+                "[cohesix] Cohesix boot menu",
+                "[cohesix] No Wi-Fi network is configured",
+                unavailable,
+                missing,
+                "[cohesix] Connect a USB keyboard or create cohesix.env on the "
+                "SD boot partition, then restart",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = normalizer.main([str(log_path), "--gate-summary"])
+    captured = capsys.readouterr()
+    gate_lines = dict(line.split("=", 1) for line in captured.out.splitlines())
+
+    assert result == 0
+    assert gate_lines["WIFI_GATE"] == "1"
+    assert gate_lines["WIFI_BLOCKER"] == "uboot-policy-missing"
+    assert gate_lines["WIFI_EXACT"] == "uboot-policy-missing"
+    assert not normalizer.uboot_wifi_policy_missing_line(unavailable)
+    assert not normalizer.uboot_wifi_policy_missing_line(
+        "[cohesix] Existing Wi-Fi settings were not changed"
+    )
+
+
 def test_cli_boot_summary_scores_each_boot_slice(
     tmp_path: pathlib.Path, capsys
 ) -> None:
@@ -993,6 +1057,29 @@ def test_boot_summary_skips_uboot_save_reset_menu_slice() -> None:
         "[cohesix] Cohesix boot options",
         "[cohesix] mode=dhcp",
         "[cohesix] saved settings to cohesix.env",
+        "resetting ...",
+        *strict_wired_boot_proof_lines(),
+    ]
+
+    summaries = normalizer.summarize_boot_slices(lines)
+    line_offset, latest_lines = normalizer.latest_boot_slice(lines)
+
+    assert summaries[0]["score"] == "skip"
+    assert summaries[0]["kind"] == "uboot-menu-save-reset"
+    assert summaries[1]["kind"] == "cohesix-boot"
+    assert summaries[1]["score"] == "pass"
+    assert line_offset == 5
+    assert latest_lines[0] == "U-Boot 2026.01-dirty"
+
+
+def test_boot_summary_skips_current_verified_save_restart_slice() -> None:
+    """Current verified-save wording is not scored as a failed Cohesix boot."""
+
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "[cohesix] Cohesix boot menu",
+        "[cohesix] saved and verified settings in cohesix.env",
+        "[cohesix] Saved settings verified; restarting",
         "resetting ...",
         *strict_wired_boot_proof_lines(),
     ]

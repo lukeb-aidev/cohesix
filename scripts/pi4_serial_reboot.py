@@ -30,24 +30,28 @@ DEFAULT_TICKET_CONFIG = pathlib.Path("configs/root_task_pi4_uboot_aarch64.toml")
 DEFAULT_CHAR_DELAY_S = 0.06
 DEFAULT_LINE_TERMINATOR = "\r"
 TAIL_LIMIT = 131_072
-CHOICE_PROMPT = b"Select option [1]:"
+CHOICE_PROMPT = b"Select option ["
 ROOT_PROMPT = b"cohesix>"
 ROOT_PROMPT_MIN_SUFFIX = 2
 ROOT_MENU_MARKERS = (
-    b"[cohesix] Cohesix boot options",
-    b"Continue with existing config",
-    b"Boot with manifest defaults",
+    b"[cohesix] Cohesix boot menu",
+    b"Boot with saved settings",
+    b"Boot with default settings",
 )
-DHCP_MENU_MARKER = b"Select address acquisition mode"
-INTERFACE_MENU_MARKER = b"Select active interface"
+DHCP_MENU_MARKER = b"Choose IPv4 configuration"
+INTERFACE_MENU_MARKER = b"Choose network connection"
 REVIEW_MENU_MARKER = b"Review network settings"
-WIFI_SETUP_MARKER = b"Configure Wi-Fi credentials"
+WIFI_SETUP_MARKER = b"Choose Wi-Fi network"
+STATIC_SETUP_MARKER = b"Network setup: manual IPv4"
+RESET_MENU_MARKER = b"Reset saved settings?"
 MENU_MARKERS = (
     *ROOT_MENU_MARKERS,
     DHCP_MENU_MARKER,
     INTERFACE_MENU_MARKER,
     REVIEW_MENU_MARKER,
     WIFI_SETUP_MARKER,
+    STATIC_SETUP_MARKER,
+    RESET_MENU_MARKER,
     CHOICE_PROMPT,
 )
 DIAGNOSTIC_RESULT_MARKERS: dict[str, tuple[bytes, bytes]] = {
@@ -81,6 +85,8 @@ MENU_DHCP = "dhcp"
 MENU_INTERFACE = "interface"
 MENU_REVIEW = "review"
 MENU_WIFI_SETUP = "wifi-setup"
+MENU_STATIC_SETUP = "static-setup"
+MENU_RESET = "reset"
 MENU_UNKNOWN = "unknown"
 
 
@@ -283,7 +289,7 @@ def mint_ticket(repo: pathlib.Path, cohsh: pathlib.Path, ticket_config: pathlib.
 
 
 def classify_menu_state(snapshot: bytes) -> str:
-    """Classify the currently visible restored Cohesix U-Boot menu page."""
+    """Classify the currently visible Cohesix U-Boot menu page."""
 
     candidates: list[tuple[int, str]] = []
     for marker in ROOT_MENU_MARKERS:
@@ -293,6 +299,8 @@ def classify_menu_state(snapshot: bytes) -> str:
         (INTERFACE_MENU_MARKER, MENU_INTERFACE),
         (REVIEW_MENU_MARKER, MENU_REVIEW),
         (WIFI_SETUP_MARKER, MENU_WIFI_SETUP),
+        (STATIC_SETUP_MARKER, MENU_STATIC_SETUP),
+        (RESET_MENU_MARKER, MENU_RESET),
     ):
         candidates.append((snapshot.rfind(marker), state))
     offset, state = max(candidates, key=lambda item: item[0])
@@ -308,7 +316,7 @@ def read_menu_snapshot(
     label: str,
     initial_snapshot: bytes = b"",
 ) -> bytes:
-    """Read enough restored U-Boot menu output to include the choice prompt."""
+    """Read enough U-Boot menu output to include the choice prompt."""
 
     snapshot = initial_snapshot
     if not snapshot:
@@ -328,7 +336,7 @@ def wait_for_menu_state(
     *,
     label: str,
 ) -> tuple[str, bytes]:
-    """Wait for a restored U-Boot menu page and return its classified state."""
+    """Wait for a U-Boot menu page and return its classified state."""
 
     snapshot = read_menu_snapshot(controller, timeout_s, label=label)
     return classify_menu_state(snapshot), snapshot
@@ -339,28 +347,36 @@ def return_to_root_menu(
     state: str,
     snapshot: bytes,
 ) -> bytes:
-    """Back out of restored submenus to the root boot-options menu."""
+    """Back out of submenus to the root boot menu."""
 
     if state == MENU_ROOT:
         return snapshot
     if state == MENU_DHCP:
-        controller.send_line("3")
+        controller.send_line("0")
         return wait_for_menu_state(controller, 20, label="root U-Boot menu")[1]
     if state == MENU_INTERFACE:
-        controller.send_line("3")
+        controller.send_line("0")
         wait_for_menu_state(controller, 20, label="U-Boot DHCP mode prompt")
-        controller.send_line("3")
+        controller.send_line("0")
         return wait_for_menu_state(controller, 20, label="root U-Boot menu")[1]
     if state == MENU_REVIEW:
-        controller.send_line("4")
+        controller.send_line("0")
         return wait_for_menu_state(controller, 20, label="root U-Boot menu")[1]
     if state == MENU_WIFI_SETUP:
+        controller.send_line("0")
         next_state, next_snapshot = wait_for_menu_state(
-            controller,
-            20,
-            label="Wi-Fi setup follow-up menu",
+            controller, 20, label="U-Boot interface prompt"
         )
         return return_to_root_menu(controller, next_state, next_snapshot)
+    if state == MENU_STATIC_SETUP:
+        controller.send_line("0")
+        next_state, next_snapshot = wait_for_menu_state(
+            controller, 20, label="U-Boot interface prompt"
+        )
+        return return_to_root_menu(controller, next_state, next_snapshot)
+    if state == MENU_RESET:
+        controller.send_line("0")
+        return wait_for_menu_state(controller, 20, label="root U-Boot menu")[1]
     raise RuntimeError("cannot recover to root U-Boot menu from unknown menu state")
 
 
@@ -369,20 +385,23 @@ def boot_saved_wifi(
     state: str,
     snapshot: bytes,
 ) -> None:
-    """Select the old saved-policy root-menu path for WiFi proof boots."""
+    """Select the saved-settings root-menu path for Wi-Fi proof boots."""
 
     root_snapshot = return_to_root_menu(controller, state, snapshot)
-    if b"No saved network settings" in root_snapshot or b"Boot with manifest defaults" in (
-        root_snapshot
+    if b"Default network settings active" in root_snapshot or (
+        b"Boot with default settings" in root_snapshot
     ):
         raise RuntimeError(
-            "saved WiFi policy is not visible in the U-Boot root menu; "
-            "refusing to boot manifest defaults for a WiFi proof lane"
+            "saved Wi-Fi policy is not visible in the U-Boot root menu; "
+            "refusing to boot default settings for a Wi-Fi proof lane"
         )
-    if b"interface=wifi" not in root_snapshot or b"interface=wired" in root_snapshot:
+    if (
+        b"Network: Wi-Fi" not in root_snapshot
+        or b"Network: Ethernet" in root_snapshot
+    ):
         raise RuntimeError(
-            "saved network policy is not WiFi; refusing to boot a non-WiFi "
-            "saved policy for a WiFi proof lane"
+            "saved network policy is not Wi-Fi; refusing to boot a non-Wi-Fi "
+            "saved policy for a Wi-Fi proof lane"
         )
     controller.send_line("1")
 
@@ -392,18 +411,20 @@ def boot_genet_dhcp(
     state: str,
     snapshot: bytes,
 ) -> None:
-    """Use the old menu's guided path for a non-persistent Genet DHCP boot."""
+    """Use guided setup for a one-time Ethernet DHCP boot."""
 
     if state == MENU_UNKNOWN:
-        raise RuntimeError("cannot select Genet lane from unknown U-Boot menu state")
-    if state == MENU_WIFI_SETUP:
-        state, snapshot = wait_for_menu_state(
-            controller,
-            20,
-            label="Wi-Fi setup follow-up menu",
+        raise RuntimeError(
+            "cannot select Ethernet lane from unknown U-Boot menu state"
         )
+    if state in (MENU_WIFI_SETUP, MENU_STATIC_SETUP, MENU_RESET):
+        snapshot = return_to_root_menu(controller, state, snapshot)
+        state = MENU_ROOT
     if state == MENU_REVIEW:
-        if b"interface=wired" in snapshot and b"mode=dhcp" in snapshot:
+        if (
+            b"Network: Ethernet" in snapshot
+            and b"IPv4: Automatic (DHCP)" in snapshot
+        ):
             controller.send_line("1")
             return
         controller.send_line("3")
@@ -414,6 +435,13 @@ def boot_genet_dhcp(
         )
     if state == MENU_ROOT:
         controller.send_line("2")
+        state, snapshot = wait_for_menu_state(
+            controller,
+            20,
+            label="U-Boot DHCP mode prompt",
+        )
+    if state == MENU_INTERFACE:
+        controller.send_line("0")
         state, snapshot = wait_for_menu_state(
             controller,
             20,
@@ -434,7 +462,9 @@ def boot_genet_dhcp(
             label="U-Boot review prompt",
         )
     if state != MENU_REVIEW:
-        raise RuntimeError(f"expected U-Boot review prompt before Genet boot, got {state}")
+        raise RuntimeError(
+            f"expected U-Boot review prompt before Ethernet boot, got {state}"
+        )
     controller.send_line("1")
 
 
@@ -443,10 +473,10 @@ def select_lane(
     lane: str,
     menu_snapshot: bytes | None = None,
 ) -> None:
-    """Select a boot lane through the restored Cohesix U-Boot menu."""
+    """Select a boot lane through the Cohesix U-Boot menu."""
 
     if menu_snapshot is None:
-        controller.note("reading restored U-Boot menu before selecting boot lane")
+        controller.note("reading U-Boot menu before selecting boot lane")
         snapshot = read_menu_snapshot(controller, 60, label="Cohesix U-Boot menu")
         state = classify_menu_state(snapshot)
     else:

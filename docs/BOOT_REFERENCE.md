@@ -124,12 +124,15 @@ A Pi boot additionally needs:
   lane.
 
 Every normal cold boot and authenticated Cohesix reboot enters the interactive
-U-Boot menu. A consumed high reset marker and the software-reset bit are bounded
-diagnostics only; neither bypasses the menu. The first action continues with a
-coherent saved network policy or with generated manifest defaults. An absent,
-empty, oversized, malformed, or incoherent `cohesix.env` selects the manifest
-state. Saving or clearing policy reboots only after bounded FAT write and exact
-readback verification succeed.
+**Cohesix boot menu**. A consumed high reset marker and the software-reset bit
+are bounded diagnostics only; neither bypasses the menu. The first action is
+**Boot with saved settings** for a coherent saved network policy or **Boot with
+default settings** for generated manifest defaults. An absent, empty,
+oversized, malformed, logo-only, or incoherent `cohesix.env` selects the
+default-settings state. **Reset saved settings to defaults** requires explicit
+confirmation and returns to that state; save and reset report success only
+after bounded FAT write and exact readback verification succeed, and only the
+explicit **Save settings and restart** action invokes restart.
 
 Historical Milestone 26c evidence contains an accepted wired GENET boot,
 authenticated `cohsh`, runtime/DMA proof, and Pi Stage 01-05 result. That

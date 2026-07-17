@@ -118,7 +118,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Reopened |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Reopened (Worker execution truth correction only) |
 | [26d](#26d) | seL4 15 Baseline Refresh + Reference/Performance Realignment | In Progress |
-| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation | Pending |
+| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Pending |
 | [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
 | [27b](#27b) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
 | [27c](#27c) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Pending |
@@ -6262,7 +6262,11 @@ Add the HAL-enforced driver-task substrate, migrate serial/display and GENET beh
   - QEMU/host compatibility profiles may still dispatch bounded service callbacks through live driver TCBs or root compatibility paths so existing virtual-device tests keep running. Those paths now enter through a single HAL callback-compatibility gate and a single HAL root-compatibility admission gate; physical Pi 4 builds compile out the callback slot state and both gates fail closed for steady-state hardware service. If the independent ring-backed path is unavailable, the service turn fails closed and acceptance remains red. The May 20 Pi 4 proof is not closure because every driver-task bootstrap failed with `seL4_DeleteFirst` and hot paths stayed root-task compatibility. CYW43, SDIO, and PCIe now have owner-ring service queues: SDIO records CMD52/CMD53/POLL_IRQ completion through the isolated runtime before owner-state can credit `sdio-host`, CYW43 firmware/NVRAM/SDPCM command records return from isolated runtime completions before root hardware execution, and PCIe port read/write/flush helpers return from isolated runtime completions before root hardware execution. Their current acceptance specs still need fresh Pi hardware proof to show the complete SDIO, CYW43, USB, and PCIe hardware state machines are live in the isolated runtimes.
   - The normal physical Pi 4 service path now uses linked-image command/completion rings where implemented and fails closed otherwise. Serial still keeps emergency boot logging alive, but normal UART runtime initialization now runs through the profile-selected `pi4-driver-serial` image and the event pump receives only a `driver-task-serial-client` after that command succeeds. Physical Pi network init selects ring-backed `GenetDriverTaskDevice` / `Cyw43DriverTaskDevice` clients; the isolated GENET image now owns MDIO/MAC plus bounded RX/TX descriptor-ring turns when wired is selected, and the isolated CYW43 image owns shared-control SDPCM command records while SDIO transport authority sits with the profile-selected `sdio-host` image when Wi-Fi is selected. Local-seat init has the same boundary: root has USB/HDMI ring-client shells, the isolated HDMI runtime can render with framebuffer metadata, and the isolated USB runtime owns the xHCI boot-keyboard path. The older `Pi4LocalSeat` root-resident selector handler and root-owned USB support crate have been removed and are not acceptance evidence. The physical Pi `KernelHal` no longer carries a direct `Pi4WifiState` slot and direct Wi-Fi HAL construction returns `pi4-wifi-driver-task-runtime-required`. The HAL still splits root-context diagnostic ring registration from pointer-free selector ring registration; QEMU/host compatibility can keep root-context diagnostic services, while physical Pi linked-image hardware service uses the fixed ring or fails closed. Shared-ring completions are tracked as `shared_ring_roles` and do not satisfy `hot_path=dedicated` or full acceptance; idle completions and zero-result progress completions cannot credit hot-path ownership. The proof layer also requires `DRIVER_TASK_OWNER_STATE_PROOF=yes` backed by per-active-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no` lines for the selected boot set, acceptance-eligible runtime-image specs, and the runtime transport mapping mask complete; `sdio-host` must prove the isolated SDIO runtime completed non-root-context hardware progress before it can credit Wi-Fi owner-state. Owner-state descriptor registration is rejected if the corresponding runtime-image spec is not acceptance-eligible. The QEMU smoke path proves the isolated trampoline, per-driver VSpace/ASID allocation, restricted mapping set, runtime-image declaration accounting, actual transport-region mapping, and pointer-free ring transport, but that is transport-substrate proof rather than Pi hardware hot-path ownership. Any callback-pointer, root-task compatibility, or root-resident selector service turn remains QEMU/host or migration evidence only and fails reopened Pi closure.
   - Root keeps authority and revocation; driver tasks receive only compiler-declared caps and bounded shared rings.
-  - seL4 scheduling-context fields are profile-qualified: MCS builds bind explicit scheduling contexts, while non-MCS builds enforce the same contract with TCB priority/domain plus bounded IPC/poll budgets.
+  - seL4 scheduling fields are profile-qualified. Current accepted profiles use
+    non-MCS TCB priority/domain plus bounded IPC/poll budgets. A future MCS
+    profile may claim explicit scheduling-context binding only after the
+    Milestone 26e ABI, admission, timeout, reply/donation, and target-evidence
+    gates pass for that exact profile.
   - The substrate must not introduce POSIX threads, implicit async runtimes, unbounded queues, or a second listener/protocol.
 
 - **Serial/display driver-task migration**
@@ -6561,7 +6565,7 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
     - DHCP timing bounds and retry limits.
   - When bootloader setup can provide network policy inputs, capture them pre-handoff and normalize through manifest/DTB-generated structures validated by `coh-rtc`.
   - Preserve deterministic fallback behavior when U-Boot policy inputs are missing or invalid.
-  - Stage an interactive Pi 4 U-Boot wizard that offers a Linux-style default action (`Continue with existing config` when saved Cohesix policy exists, otherwise `Boot with manifest defaults`), bounded DHCP/static selection, bounded wired/Wi-Fi selection, serial/USB-keyboard-safe numbered prompts, and optional HDMI logo display without introducing any new Cohesix protocol semantics.
+  - Stage an interactive Pi 4 U-Boot wizard whose `Cohesix boot menu` offers `Boot with saved settings` when coherent saved policy exists, otherwise `Boot with default settings`; use `Automatic (DHCP)` / `Manual (static IPv4)` and `Ethernet (wired)` / `Wi-Fi (wireless)` choices, `0` Back/Cancel and `9` advanced-shell submenu navigation, explicit one-time versus saved restart actions, reset confirmation, USB-keyboard/HDMI-only credential capture, and optional stateful HDMI logo display without introducing any new Cohesix protocol semantics.
 
 - **Backward-compatibility guardrails**
   - Keep QEMU `aarch64/virt` behavior for macOS/Linux unchanged by default (existing static/dev-virt flows must keep working with no required operator command changes).
@@ -6812,7 +6816,7 @@ Commands:
   - cargo test -p root-task reboot --lib
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::local_seat_ticket_backed_reboot_schedules_backend_request
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
-Checks: Bare `reboot` without an authenticated session fails; physical console/local-seat reboot requires a Queen ticket minted from the existing Queen secret; TCP reboot remains gated by the existing TCP auth token plus Queen session; Pi 4 reset access uses only HAL-mapped PM/watchdog registers; an authenticated Pi reset best-effort sets the Cohesix high RSTS marker without making marker readback a policy gate; the watchdog reset path follows the BCM2711 PM WDOG/RSTC restart sequence and fails closed if those reset-critical accesses are unavailable; the next generated U-Boot script load consumes high marker state before menu/input setup when present, reports the software-reset bit as diagnostics only, and enters the interactive Cohesix menu whose first action continues with saved or manifest settings; the Pi 4 U-Boot default command sources `boot.scr.uimg` directly rather than entering EFI/bootflow scan.
+Checks: Bare `reboot` without an authenticated session fails; physical console/local-seat reboot requires a Queen ticket minted from the existing Queen secret; TCP reboot remains gated by the existing TCP auth token plus Queen session; Pi 4 reset access uses only HAL-mapped PM/watchdog registers; an authenticated Pi reset best-effort sets the Cohesix high RSTS marker without making marker readback a policy gate; the watchdog reset path follows the BCM2711 PM WDOG/RSTC restart sequence and fails closed if those reset-critical accesses are unavailable; the next generated U-Boot script load consumes high marker state before menu/input setup when present, reports the software-reset bit as diagnostics only, and enters the interactive Cohesix menu whose first action is `Boot with saved settings` or `Boot with default settings` as appropriate; the Pi 4 U-Boot default command sources `boot.scr.uimg` directly rather than entering EFI/bootflow scan.
 Deliverables: Shared reboot verb, host CLI forwarding, authenticated root-task scheduling, HAL-backed Pi 4 reboot backend, one-shot authenticated reboot marker diagnostics, preserved interactive splash/menu behavior, generated-script validation, and tests for denial/success paths.
 
 Title/ID: m26b-queen-log-evidence-dump
@@ -6877,8 +6881,9 @@ Commands:
   - make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
 Checks:
-  - The first wizard action continues with saved Cohesix settings when a coherent persisted network override exists; a logo-only or cleared policy boots manifest defaults by default.
-  - `DHCP OFF` collects bounded static IPv4 fields and mirrors them into DTB `/chosen/cohesix,static-*` properties before handoff.
+  - The first wizard action is `Boot with saved settings` when a coherent persisted network override exists; a logo-only or cleared policy presents `Boot with default settings`.
+  - `Manual (static IPv4)` collects bounded static IPv4 fields and mirrors them into DTB `/chosen/cohesix,static-*` properties before handoff.
+  - Review distinguishes `Boot once without saving` from `Save settings and restart`; saved-settings reset requires explicit confirmation, and a new Wi-Fi policy can be entered without deleting or reflashing the SD image.
   - The HDMI logo is optional: it renders when enabled and available, and boot still proceeds cleanly when it is disabled or cannot be staged.
 Deliverables:
   - Pi 4 U-Boot network wizard with deterministic saved-config continuation and optional logo display.
@@ -7089,9 +7094,10 @@ tasks below are inactive and retained for traceability only; they may not be
 executed under this reopening. Actual Worker objects, endpoint authority,
 notifications, or MCS scheduling require a future explicitly authorized atomic
 task that also satisfies the 26d MCS and root-TCB decision gates. Milestone 26e
-owns root-service and Worker task isolation, Milestone 27c owns the optional
-MCS admission experiment, and Milestone 28e owns full production cap bundles
-and structured fault lifecycle. Other accepted 26c QEMU/Pi evidence remains
+owns root-service and Worker task isolation plus the SMP+MCS architecture and
+target acceptance; Milestone 27d validates mixed-load operator scheduling on
+that accepted architecture, and Milestone 28e owns full production cap bundles and structured fault
+lifecycle. Other accepted 26c QEMU/Pi evidence remains
 historical and is not invalidated by this correction.
 
 The original QEMU and Pi 4 closure remains accepted. QEMU closure is anchored
@@ -7115,9 +7121,12 @@ It does not substitute for current-image Milestone 26d Pi 4 revalidation.
 - The earlier named Worker architecture, phase-1 cap-backed endpoint,
   notification-lifecycle, and MCS tasks are inactive historical proposals. No
   26c behavior change is authorized by this truth-correction reopening.
-- Future Worker/root-task isolation, MCS admission, and full cap-bundle/fault
-  work must land only through Milestones 26e, 27c, and 28e respectively, with
-  their own post-behavior external-contract baselines.
+- Future Worker/root-task isolation and the one SMP+MCS QEMU/Pi transition must
+  land and obtain target acceptance in Milestone 26e. Milestone 27c optimizes
+  that accepted scheduler with core-local service buckets, Milestone 27d proves
+  mixed-load operator responsiveness on it, and Milestone 28e completes cap
+  bundles/fault lifecycle. Each requires its own post-behavior
+  external-contract baseline.
 - The target-qualified staged runner is an enabling blocker, not merely closure polish. `scripts/ci/test_plan_run.sh --target qemu|pi4` and `scripts/ci/check_test_plan.sh` must exist and agree before cleanup or structural decomposition can start.
 - Humanization is evidence-first and mostly subtractive: delete generic boilerplate before rewriting, keep comments only for invariants/bounds/authority/failure behavior, and make the AI-fingerprint audit an independent gate.
 - Simplicity must be measured, not asserted. Cleanup/refactor waves must show reduced duplication, clearer ownership, fewer generic comments, smaller or better-named hot modules where practical, and no new abstraction unless it removes real repetition or isolates authority.
@@ -7144,7 +7153,7 @@ Later phases may start only when earlier phase gates are complete for the touche
 | --- | --- | --- | --- |
 | 0 | Scope, ownership, blockers | `m26c-as-built-blocker-ledger`, `m26c-target-qualified-runner-baseline`, `m26c-refactor-map-and-risk-ratchet`, lane setup in `M26C_AGENT_HANDOFFS.md` | No unowned files, hidden blockers, missing target-qualified runner contract, missing sub-agent lanes, or unmeasured simplification targets. |
 | 1 | Documentation and provenance truth | `m26c-authoring-charter-and-header-rules`, `m26c-ai-fingerprint-authorship-review`, `m26c-markdown-inventory-and-disposition`, `m26c-mermaid-as-built-diagram-audit`, `m26c-docs-as-built-audit`, `m26c-runtime-boundary-and-semantic-parity-audit` | Inventories, drift ledger, AI-fingerprint audit, parity matrix, and generated-source dispositions are complete. |
-| 2 | Accepted runtime additions and superseded Worker proposals | Accepted: `m26c-pi-runtime-dma-proof-closure`, `m26c-dma-protection-profile-truth`, and the non-Worker baseline evidence. Inactive history: `m26c-worker-architecture-implementation`, `m26c-cap-backed-worker-endpoints`, `m26c-notification-backed-worker-lifecycle`, and `m26c-worker-driver-mcs-budget-evidence`. | Accepted Pi/runtime behavior remains compiler-declared and tested. Inactive Worker proposals supply no implementation claim and route to Milestones 26e, 27c, and 28e. |
+| 2 | Accepted runtime additions and superseded Worker proposals | Accepted: `m26c-pi-runtime-dma-proof-closure`, `m26c-dma-protection-profile-truth`, and the non-Worker baseline evidence. Inactive history: `m26c-worker-architecture-implementation`, `m26c-cap-backed-worker-endpoints`, `m26c-notification-backed-worker-lifecycle`, and `m26c-worker-driver-mcs-budget-evidence`. | Accepted Pi/runtime behavior remains compiler-declared and tested. Inactive Worker proposals supply no implementation claim; 26e owns Worker isolation and SMP+MCS, 27c owns later core-local optimization, and 28e owns full cap bundles. |
 | 3 | Refactor safety gates | `m26c-characterization-gates-before-refactor`, `m26c-no-std-boundary-gates` | Cleanup-sensitive behavior and VM dependency closures are pinned before structural edits. |
 | 4 | Humanization and structural cleanup | `m26c-low-risk-surface-cleanup`, `m26c-host-tool-structural-cleanup`, `m26c-root-task-runtime-decomposition`, `m26c-hal-network-and-local-seat-decomposition` | Each cleanup wave is bisectable and starts only after its characterization artifact, preserved-contract list, owner, scorecard entry, and target test subset are recorded; risk-ratchet does not regress and HAL/no_std/protocol boundaries hold. |
 | 5 | Closure | `m26c-full-test-plan-qemu-and-pi4` | QEMU and Pi 4 staged Test Plan runs pass with target-qualified artifacts and no incomplete markers. |
@@ -7160,7 +7169,7 @@ Task blocks below own the exact file changes, commands, checks, and deliverables
 - Audit control: `docs/audit/M26C_AS_BUILT_BLOCKERS.md`, `M26C_AGENT_HANDOFFS.md`, `M26C_TARGET_RUNNER_BASELINE.md`, `M26C_REFACTOR_MAP.md`, `M26C_REFACTOR_RISK_RATCHET.csv`, `M26C_REFACTOR_OWNERSHIP.md`, `M26C_SIMPLICITY_SCORECARD.md`, `M26C_POST_BEHAVIOR_BASELINE.md`.
 - Documentation truth: `M26C_MARKDOWN_INVENTORY.{csv,md}`, `M26C_MERMAID_INVENTORY.csv`, `M26C_MERMAID_GITHUB_RENDER_AUDIT.md`, `M26C_DOCS_AS_BUILT_AUDIT.md`, `M26C_DOC_DRIFT_LEDGER.md`, `M26C_AI_FINGERPRINT_AUDIT.md`.
 - Runtime boundaries: `M26C_RUNTIME_BOUNDARY_AUDIT.md`, `M26C_NINEDOOR_PARITY_MATRIX.md`, VM-target dependency trees, generated manifest/snippet hashes, Pi 4 runtime/DMA proof classification, arch-counter timer-backend proof, and DMA protection profile evidence.
-- Worker/runtime implementation evidence: worker architecture tests, cap-backed endpoint negative tests, notification lifecycle tests, MCS/non-MCS scheduling evidence, isolated runtime ABI tests, and fresh-source provenance for staged Pi runtime artifacts.
+- Worker/runtime implementation evidence: worker architecture tests, cap-backed endpoint negative tests, notification lifecycle tests, then-current scheduling evidence, isolated runtime ABI tests, and fresh-source provenance for staged Pi runtime artifacts.
 - Cleanup evidence: before/after characterization for each refactor wave, risk-ratchet review, no-std/HAL boundary evidence, simplification scorecard entries, and authoring cleanup decisions tied back to as-built facts.
 - Closure evidence: QEMU and Pi 4 state dirs with `stage_01.done` through `stage_05.done`, required target artifacts present before `stage_05.done`, no incomplete markers, due-diligence outputs, and a final planner reconciliation of all sub-agent handoffs.
 
@@ -7632,40 +7641,28 @@ Deliverables:
   - Event-driven worker and driver lifecycle signaling with seL4 notification objects, bounded tests, and no new Cohesix protocol surface.
 
 Inactive historical proposal — superseded as active Milestone 26c work and not
-authorized by the truth-correction reopening. Any future MCS task must satisfy
+authorized by the truth-correction reopening. Its future replacement is owned
+by the staged Milestone 26e MCS tasks and must satisfy
 `docs/audit/M26D_MCS_DECISION.md` first:
 
 Title/ID: m26c-worker-driver-mcs-budget-evidence
 Status: Inactive and superseded as active 26c work; retained for historical traceability only.
-Goal: Bind worker and manifest-declared isolated driver runtime bounded-execution claims to generated scheduling-context evidence on MCS profiles while preserving explicit non-MCS fallback evidence.
-Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/pi4-driver-runtime/src/**, tools/coh-rtc/src/**, docs/ROLES_AND_SCHEDULING.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
+Goal: Preserve the record of the rejected 26c dual-scheduler proposal without authorizing its fallback design.
+Inputs: docs/audit/M26D_MCS_DECISION.md, Milestone 26e `m26e-mcs-abi-foundation`, Milestone 26e `m26e-mcs-smp-target-acceptance`.
 Changes:
-  - tools/coh-rtc/src/** — add profile-qualified worker/driver scheduling fields for MCS budget, period, timeout endpoint, consumed-budget reporting, and non-MCS priority/domain fallback state.
-  - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — bind worker and driver TCBs to generated scheduling contexts on MCS profiles; on non-MCS profiles, emit the documented priority/domain and bounded service-turn evidence instead.
-  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** + apps/pi4-driver-runtime/src/** — surface bounded-loop progress, timeout, and shutdown evidence without changing protocol grammar or namespace layout.
-  - docs/ROLES_AND_SCHEDULING.md + docs/SECURITY.md + docs/TEST_PLAN.md — document profile-qualified MCS enforcement, timeout-fault behavior, consumed-budget evidence, and non-MCS fallback wording.
-  - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md — reject prose that claims kernel-enforced CPU budgets on profiles that only provide priority/domain and bounded service turns.
+  - None authorized. Milestone 26e replaces this proposal with one SMP+MCS QEMU/Pi architecture and no compiled classic fallback.
 Commands:
-  - cargo test -p root-task --tests scheduling
-  - cargo test -p worker-heart
-  - cargo test -p worker-gpu
-  - cargo test -p worker-lora
-  - cargo test -p pi4-driver-runtime
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
-  - scripts/check-generated.sh
+  - None; this task is not executable.
 Checks:
-  - MCS profiles prove generated scheduling-context budget/period binding, timeout endpoint routing, and consumed-budget evidence for worker and driver tasks.
-  - Non-MCS profiles continue to pass with explicit priority/domain and bounded service-turn evidence and never claim MCS enforcement.
-  - Worker and driver loop tests cover budget exhaustion or service-turn exhaustion, telemetry backpressure, lease expiry, revoke, and shutdown without unbounded spin.
-  - Public docs, generated snippets, and test-plan gates distinguish MCS enforcement from non-MCS compatibility.
+  - No implementation or fallback-profile claim cites this historical proposal.
 Deliverables:
-  - Profile-qualified scheduling evidence strong enough for seL4 reviewers to audit bounded worker and driver execution claims.
+  - Traceability from the superseded proposal to the selected Milestone 26e SMP+MCS tasks.
 
 Title/ID: m26c-post-behavior-baseline-freeze
 Goal: Freeze the external behavior snapshot after the authorized 26c worker/runtime additions and before cleanup refactors begin.
 Inputs: docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md, docs/audit/M26C_RUNTIME_BOUNDARY_AUDIT.md, docs/audit/M26C_NINEDOOR_PARITY_MATRIX.md, docs/audit/M26C_TARGET_RUNNER_BASELINE.md, docs/audit/M26C_REFACTOR_MAP.md, apps/root-task/tests/**, apps/nine-door/tests/**, worker test suites, generated snippets/manifests, scripts/ci/test_plan_run.sh, scripts/ci/check_test_plan.sh
 Changes:
-  - docs/audit/M26C_POST_BEHAVIOR_BASELINE.md — record the post-Phase-2 external contract snapshot: console grammar, Secure9P/NineDoor namespace semantics, manifest and generated-snippet hashes, worker ticket/lease/telemetry/lifecycle behavior, cap-backed endpoint evidence, notification evidence, MCS/non-MCS scheduling evidence, Pi runtime/DMA evidence classifications, and known deferred blockers.
+  - docs/audit/M26C_POST_BEHAVIOR_BASELINE.md — record the post-Phase-2 external contract snapshot: console grammar, Secure9P/NineDoor namespace semantics, manifest and generated-snippet hashes, worker ticket/lease/telemetry/lifecycle behavior, cap-backed endpoint evidence, notification evidence, then-current scheduling evidence, Pi runtime/DMA evidence classifications, and known deferred blockers.
   - docs/audit/M26C_REFACTOR_MAP.md — link every Phase 4 cleanup candidate to the relevant post-behavior baseline section and preserved-contract list.
   - docs/audit/M26C_AGENT_HANDOFFS.md — record the freeze decision, commands, skipped commands, residual blockers, and PASS/FAIL status before any cleanup lane starts.
   - docs/TEST_PLAN.md — state that Phase 4 refactors compare against the post-behavior baseline rather than pre-26c placeholder worker behavior.
@@ -7908,7 +7905,11 @@ to imply new product behavior or completed Pi 4 Wi-Fi evidence.
 - Older manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 15 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
 - Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 15 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
 - Generated Worker roles may be described as implemented, capability-backed, notification-backed, or live only when the selected target actually creates the declared TCB, CSpace, VSpace, IPC buffer, stack, endpoint badge, lifecycle notifications, and fault/revocation path. Model-only or in-process Worker behavior must be emitted and documented as such.
-- MCS activation and root-service decomposition remain explicit decisions, not implicit benefits of the version refresh. 26d keeps the accepted non-MCS scheduling model and current root-task service boundary. Pending `m27c-mcs-admission-experiment` owns any MCS experiment; pending Milestone 26e owns the ordered root-service and Worker split after 26d closes.
+- MCS activation and root-service decomposition remain explicit decisions, not
+  implicit benefits of the version refresh. Milestone 26d keeps the accepted
+  non-MCS scheduling model and current root-task service boundary. Pending
+  Milestone 26e owns both the ordered root-service/Worker split and the SMP+MCS
+  ABI, generated policy, and exact-target acceptance after 26d closes.
 - The seL4 15 refresh must preserve the Pi 4 hardware-counter contract used by isolated runtime performance proof: `release-pi4` / `timers-arch-counter` builds expose only the read-only EL0 virtual counter (`KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`), keep physical counter and EL0 timer-control exports disabled, and derive elapsed-time proof from refreshed `TIMER_CLOCK_HZ=54000000` generated headers. Kernel refresh work must not reclassify dummy-timer or physical-counter captures as valid latency evidence.
 - Performance tuning is permitted in 26d only when tied to a measured same-harness regression, regression-risk, or drift exposed by the seL4 15 refresh. Allowed tuning includes bounded scheduler/budget constants, driver-runtime service-turn cadence, cache-maintenance batching thresholds, TCP/REST gateway timeout plumbing, harness provenance/reporting fixes, and comparator hygiene. Tuning must preserve Secure9P semantics, ACK/ERR/END grammar, manifest authority, HAL-only physical-device authority, root/driver-task ownership boundaries, no-retry benchmark accounting, and the documented Pi 4 wired/GENET versus Wi-Fi proof split.
 - 26d tuning must not become service-bucket/core-local redesign, new protocol work, new namespace or telemetry grammar, relaxed error budgets, retry masking, root-owned physical-driver shortcuts, larger unbounded queues, or a reclassification of Wi-Fi stress diagnostics as production parity. Those remain reopened 26b, 27c, or later scoped work.
@@ -7975,8 +7976,9 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - **Capability, MCS, and root-TCB decision evidence**
   - Publish the seL4 15 capability-use matrix with implemented, partial/model-only, intentionally unused, and blocker classifications.
   - Record why non-MCS remains the accepted 26d baseline, compare classic SMP,
-    single-core MCS, and SMP+MCS, and route any experiment to the exact 27c
-    admission task.
+    single-core MCS, and SMP+MCS, identify MCS as the preferred Cohesix temporal
+    architecture, and route staged implementation/admission to the exact 26e
+    tasks without enabling it in 26d.
   - Record the current root-owned parsing/network/supervision surface and route
     the security-first split order to exact pending Milestone 26e tasks without
     claiming that decomposition has occurred.
@@ -8193,7 +8195,7 @@ Goal: Bound what Cohesix uses from seL4 15 today and prevent unused features or 
 Inputs: seL4 Reference Manual v15.0.0, generated kernel headers, root-task/HAL/Worker code, docs/audit/M26D_SEL4_15_CAPABILITY_AUDIT.md, docs/audit/M26D_MCS_DECISION.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
 Changes:
   - docs/audit/M26D_SEL4_15_CAPABILITY_AUDIT.md — classify each relevant kernel capability as implemented, partial/model-only, intentionally unused, or blocked, with direct evidence and closure routing.
-  - docs/audit/M26D_MCS_DECISION.md — retain non-MCS for 26d, compare classic SMP/single-core MCS/SMP+MCS, define bindings, scheduling-contract, WCET/budget, fault, target-evidence, and rollback admission gates, and route any experiment to `m27c-mcs-admission-experiment`.
+  - docs/audit/M26D_MCS_DECISION.md — retain non-MCS for 26d, record the strong architectural-fit verdict and selected SMP+MCS successor, compare classic SMP/single-core MCS/SMP+MCS, define bindings, scheduling-contract, WCET/budget, fault, target-evidence, and atomic-reversion gates, and route implementation to `m26e-mcs-abi-foundation` and `m26e-mcs-smp-target-acceptance`.
   - docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md — record current root-owned parsers, networking, supervision, policy, and audit surfaces plus the exact ordered Milestone 26e split tasks and required evidence.
 Commands:
   - scripts/check-generated.sh
@@ -8292,7 +8294,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 
 ---
 
-## Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation <a id="26e"></a>
+## Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation <a id="26e"></a>
 [Milestones](#Milestones)
 
 **Status:** Pending — inactive until Milestone 26d closes. This planning entry
@@ -8307,6 +8309,20 @@ QEMU/Pi baseline and CYW43 evidence are stable, Cohesix can reduce that
 userspace TCB in the security-first order recorded by
 `docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md` without mixing a system-model
 change into hardware bring-up.
+
+MCS is the preferred Cohesix temporal-isolation architecture, not a feature
+checkbox or a throughput shortcut. Capability-controlled CPU time, enforced
+budget/period ceilings, timeout faults, explicit Reply objects, and consumed
+time evidence match Cohesix's mixed-criticality shape: root/Queen policy,
+emergency serial, and fault supervision must remain live beside untrusted
+parsers, network ingress, Workers, drivers, telemetry, and display work. The
+split must therefore establish the MCS task/IPC contract before child ABIs
+freeze. seL4 15 still describes SMP+MCS as less explored and experimental, so
+exact QEMU/Pi acceptance is a hard evidence gate. Cohesix nevertheless selects
+one architecture: accepted 26e operational profiles use SMP+MCS on both targets.
+There is no compiled classic-SMP fallback; an unforeseen blocker requires
+reverting the atomic 26e scheduler change set before another architecture can
+be planned.
 
 ### Prerequisites
 
@@ -8324,9 +8340,12 @@ change into hardware bring-up.
 ### Goal
 
 Move untrusted namespace parsing, TCP/network parsing, and executable Worker
-loops into compiler-declared restricted seL4 child tasks while keeping Queen
-policy, HAL admission, emergency serial, and authoritative ordering explicit
-and preserving every existing protocol and operator-visible contract.
+loops into compiler-declared restricted seL4 child tasks; establish the
+version-pinned MCS ABI and generated temporal-authority contract before those
+child ABIs freeze; and make exact SMP+MCS builds the sole accepted operational
+architecture on QEMU and Pi 4 while keeping Queen policy, HAL admission,
+emergency serial, authoritative ordering, and every existing protocol and
+operator-visible contract explicit.
 
 ### Non-negotiable constraints
 
@@ -8344,9 +8363,31 @@ and preserving every existing protocol and operator-visible contract.
 - Emergency serial and fatal reporting remain root-owned. The TCP child must
   preserve the sole-listener exception and cannot starve serial/local-seat
   input or deterministic response flushing.
-- The accepted scheduler remains non-MCS. Any MCS experiment belongs only to
-  `m27c-mcs-admission-experiment` after this milestone supplies real task
-  consumers.
+- The Milestone 26d accepted scheduler remains classic non-MCS only until the
+  atomic 26e transition. Milestone 26e owns the mandatory MCS ABI, generated
+  policy, and exact SMP+MCS target acceptance. Accepted QEMU and Pi 4
+  operational profiles may not retain a non-MCS scheduler switch, compatibility
+  mode, fallback profile, or runtime branch. If acceptance fails, 26e does not
+  close and the scheduler change set is reverted as a whole.
+- Operational kernel contracts remain four-node, one-domain, non-hypervisor
+  AArch64 profiles with MCS enabled. Milestone 26e does not introduce domain
+  scheduling, VCPU/hypervisor support, or a second placement mechanism.
+- The root/Queen authority path, emergency serial, and fault supervisor retain
+  independent active scheduling contexts and reserved admitted CPU time. A
+  child never receives `SchedControl` authority.
+- Dedicated active scheduling contexts are the default for asynchronous
+  network ingress, periodic/event-driven Workers, IRQ/DPC work, locality-bound
+  drivers, and authoritative mutation. Passive-server donation is allowed only
+  for compiler-allowlisted, short, synchronous request/reply paths with bounded
+  call depth, explicit Reply-object cardinality, timeout/revoke recovery, and
+  proof that the donated scheduling context always returns. Cross-core donation
+  is prohibited for IRQ- or locality-bound paths unless separately admitted.
+- MCS budgets do not replace max-operations, max-bytes, max-completions, queue,
+  backpressure, cancellation, or replay bounds; both kernel temporal authority
+  and application service-turn bounds remain mandatory.
+- MCS work may not edit CYW43/SDIO timing, restart, packaging, state-machine, or
+  evidence-classification logic. Exact-image Pi MCS evidence must consume the
+  accepted/frozen CYW43 lane as an input and remain a separate proof class.
 - Milestone 26e supplies the minimum generated task-object, endpoint,
   notification, fault, and deterministic revoke contract required to prove
   executable isolation. Production-wide role/lease/epoch bundles covering all
@@ -8355,33 +8396,95 @@ and preserving every existing protocol and operator-visible contract.
 - Host/model tests, QEMU execution, fresh Pi execution, transport proof, and
   benchmark evidence remain separate classes.
 
+### Selected MCS topology
+
+- Root/Queen authoritative mutation, fault/fatal supervision, and emergency
+  serial use separate active SCs with generated per-core reserves; none depends
+  on a child or caller donation for progress.
+- The synchronous NineDoor parser/provider child is passive and caller-funded.
+  Its allowed donors, Reply objects, call depth, timeout path, and SC return are
+  generated. Any autonomous provider drain uses a separate admitted active SC.
+- TCP/smoltcp owns an active SC because receive, retransmission, and protocol
+  timers require autonomous progress. A separately isolated pure request parser
+  may be passive only if its donation chain is compiler-validated.
+- Serial and USB input/IRQ work use notification-backed active SCs. Synchronous
+  driver commands may use same-core passive donation, while IRQ/DPC or other
+  work with no caller uses an admitted active SC. Locality-bound drivers may not
+  accept cross-core donation.
+- CYW43/SDIO synchronous bus operations may be caller-funded, IRQ/DPC work uses
+  active notification time, and bootstrap/recovery uses a bounded resumable
+  maintenance SC. These changes begin only after the current CYW43 lane closes
+  or is explicitly frozen and may not rewrite its accepted timing/state logic.
+- `worker-heart` uses a small periodic active SC. GPU/LoRA receipt handling is
+  passive where synchronous, with a minimal active notification SC only for
+  lifecycle work. Telemetry/persistence drains use capped low-priority active
+  SCs. HDMI draws are caller-funded; autonomous refresh, if enabled, uses a
+  separate capped background SC.
+- Nonblocking send paths never claim donation. Every executable path is
+  classified as active/periodic, notification-funded, or synchronous
+  caller-funded IPC, with one generated owner for its time authority.
+
 ### Definition of done
 
 - The selected manifest and generated outputs enumerate every service/Worker
-  image, object, cap, shared frame, bound, scheduling record, fault badge, and
-  revoke rule; invalid or incomplete executable-task declarations fail closed.
+  image, object, cap, shared frame, bound, fault badge, and revoke rule. Every
+  live TCB also has an MCS scheduling record declaring either a bound active SC
+  or an allowlisted passive donation chain. Active records contain SC
+  object/size, SchedControl core, budget, period, refill/max-refill policy,
+  priority/MCP, timeout/overrun policy, consumed-time evidence, and
+  WCET/admission provenance; passive records contain allowed donor SCs/cores,
+  Reply-object cardinality, timeout/recovery policy, and maximum donation depth.
+  Invalid or incomplete executable-task declarations fail closed.
 - NineDoor parser/provider, TCP/smoltcp, and enabled Worker execution occur in
   restricted child VSpaces in the required order, with the superseded root
   implementation path removed or profile-disabled rather than duplicated.
 - Injected child faults are attributed, suspended, boundedly revoked, and
   prevented from mutating authoritative state or reusing stale mappings.
-- Single-core and four-core QEMU transcripts preserve deterministic authority
-  order and existing protocol fixtures. Fresh Pi proof preserves serial,
-  local-seat, TCP, driver, and fatal-status liveness with boot/image identity.
+- Four-core QEMU transcripts preserve deterministic authority order and
+  existing protocol fixtures. Fresh Pi proof preserves serial, local-seat, TCP,
+  driver, and fatal-status liveness with boot/image identity.
+- The retired 26d classic-SMP baseline, four-core QEMU SMP+MCS, and fresh Pi
+  SMP+MCS remain separate evidence classes. Both
+  operational targets must pass SMP+MCS scheduling, fault, liveness, and
+  performance gates; a boot or throughput win alone is insufficient. Failure
+  blocks 26e and triggers whole-change reversion rather than a shipped fallback.
 - Before/after TCB inventory, mapped authority, latency, pressure, and full
-  same-harness benchmark evidence are archived with an explicit rollback
-  profile. A split that increases authority, creates duplicate policy, or
-  regresses bounded operator behavior is rejected.
+  same-harness benchmark evidence are archived with the atomic change-set and
+  pre-change baseline identities. A split that increases authority, creates
+  duplicate policy, or regresses bounded operator behavior is rejected and
+  reverted as a whole.
 
 ### Task Breakdown
 
 ```
+Title/ID: m26e-mcs-abi-foundation
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / MCS ABI and generated temporal-authority foundation
+Goal: Establish the seL4 15 SMP+MCS syscall, object, IPC, profile, and compiler contract and prove it with minimal four-core QEMU and fresh Pi scheduler probes before service-child ABIs freeze.
+Inputs: seL4 Reference Manual v15.0.0, tag-pinned seL4 15 headers/caveats, configs/sel4/profiles.toml, crates/sel4-sys/**, crates/sel4-runtime/**, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, selected QEMU/Pi kernel builds, docs/audit/M26D_MCS_DECISION.md.
+Changes:
+  - crates/sel4-sys/** + crates/sel4-runtime/** — add version-pinned SchedContext, SchedControl, Reply, timeout-fault, `Consumed`, `YieldTo`, TCB setup, receive, call, reply, and reply-receive bindings with ABI/negative tests; remove classic reply/scheduling behavior from the QEMU/Pi operational VM closure.
+  - configs/sel4/profiles.toml + profile tooling — make the four-node QEMU and Pi production/diagnostic runtime contracts MCS-only, validate `KernelIsMCS`, object sizes, cores, and generated headers, and provide no non-MCS runtime-eligible counterpart.
+  - tools/coh-rtc/src/** + generated artifacts — require each live TCB to declare either a bound active scheduling context or a compiler-validated passive donation chain. Active records carry SC object/size, SchedControl core, budget, period, refill/max-refill policy, priority/MCP, timeout/overrun policy, consumed-time evidence, and WCET/admission provenance; passive records carry allowed donor SCs/cores, Reply-object cardinality, timeout policy, and maximum donation depth.
+  - apps/root-task/src/sel4/** + focused probe child — allocate/bind MCS objects only through BootInfo/untyped authority and prove active execution, passive donation and return, timeout-fault routing, Reply ownership, budget exhaustion/replenishment, consumed time, and four-core SC placement before broad extraction begins.
+  - docs/ROLES_AND_SCHEDULING.md + docs/TEST_PLAN.md — define the selected MCS topology, offline admission calculation, evidence schema, and explicit whole-change-reversion rule.
+Commands:
+  - cargo test -p sel4-sys -p sel4-runtime
+  - cargo test -p coh-rtc
+  - cargo test -p root-task --tests schedule
+  - python3 scripts/sel4_profile.py validate --profile qemu_smp_production --require-source --require-artifacts --for-runtime
+  - python3 scripts/sel4_profile.py validate --profile pi4_production --require-source --require-artifacts --for-runtime
+  - scripts/check-generated.sh
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-mcs-foundation-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-mcs-foundation-pi4
+Checks: both operational contracts are four-node MCS with no runtime-eligible classic profile; every active probe TCB has an admitted SC/core/budget/period and every passive probe has an allowlisted donor/Reply/timeout chain; Reply/donation ownership returns on success, timeout, cancellation, and fault; root emergency/fault work retains independent time; a failed QEMU or Pi gate stops 26e and requires atomic source/configuration reversion.
+Deliverables: One MCS-only QEMU/Pi scheduling ABI and compiler contract, minimal target evidence, and a stable foundation for every later 26e child.
+
 Title/ID: m26e-ninedoor-service-isolation
-Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation / NineDoor parser-provider isolation
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / NineDoor parser-provider isolation
 Goal: Move untrusted target namespace parsing and provider projection behind a bounded restricted seL4 child without moving Queen policy authority.
 Inputs: apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/nine-door/src/**, tools/coh-rtc/src/**, configs/root_task*.toml, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md.
 Changes:
-  - tools/coh-rtc/src/** + configs/root_task*.toml — add compiler-owned service-image, TCB, CSpace, VSpace, IPC-buffer, stack, endpoint, shared-frame, scheduling, fault-badge, and revoke records for the target namespace service.
+  - tools/coh-rtc/src/** + configs/root_task*.toml — add compiler-owned service-image, TCB, CSpace, VSpace, IPC-buffer, stack, endpoint, shared-frame, MCS scheduling-context/Reply/donation/timeout, fault-badge, and revoke records for the target namespace service.
   - apps/nine-door-runtime/** — add a pure-Rust `no_std` child image that parses bounded namespace requests and returns typed prepared operations over the generated internal ABI.
   - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — retain policy and authoritative mutation in root, replace in-root untrusted parsing for enabled profiles with bounded child IPC, and delete/profile-disable the duplicate parser path.
   - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURITY.md — document the new target child separately from host NineDoor and preserve the no in-VM 9P/TCP-listener rule.
@@ -8391,15 +8494,15 @@ Commands:
   - cargo test -p nine-door
   - cargo check -p nine-door-runtime --target aarch64-unknown-none
   - scripts/check-generated.sh
-Checks: malformed and over-limit requests are contained in the child; root receives only typed bounded operations; namespace, Secure9P, console, replay, and error fixtures do not drift; no broad namespace or root CSpace authority reaches the child.
+Checks: malformed and over-limit requests are contained in the child; root receives only typed bounded operations; the passive donor/Reply/timeout chain returns its SC on success, denial, timeout, cancellation, and child fault; namespace, Secure9P, console, replay, and error fixtures do not drift; no broad namespace, SchedControl, or root CSpace authority reaches the child.
 Deliverables: Executable target namespace service with generated least-authority objects, bounded IPC, fault containment, and unchanged external semantics.
 
 Title/ID: m26e-console-network-service-isolation
-Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation / TCP console-network isolation
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / TCP console-network isolation
 Goal: Move TCP framing, authentication parsing, and smoltcp packet handling into a restricted child while preserving root-owned operator policy and emergency surfaces.
 Inputs: apps/root-task/src/net/**, apps/root-task/src/console/**, apps/root-task/src/event/**, apps/root-task/src/serial/**, apps/root-task/src/hal/**, tools/coh-rtc/src/**, docs/SECURITY.md, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
 Changes:
-  - tools/coh-rtc/src/** + generated artifacts — add the console/network service image, object inventory, endpoint/notification badges, bounded packet/request frames, scheduling, fault, shutdown, and revoke policy.
+  - tools/coh-rtc/src/** + generated artifacts — add the console/network service image, object inventory, endpoint/notification badges, bounded packet/request frames, active MCS scheduling context, Reply/timeout records, fault, shutdown, and revoke policy.
   - apps/console-network-runtime/** — add a pure-Rust `no_std` smoltcp/TCP/authentication child using only the generated network-service ABI and admitted virtual/driver transport caps.
   - apps/root-task/src/net/** + apps/root-task/src/event/** — replace enabled-profile packet/parser ownership with bounded child exchanges while retaining sole-listener admission, Queen policy decisions, response ordering, emergency serial, and fatal output in root.
   - docs/SECURITY.md + docs/USERLAND_AND_CLI.md + docs/TEST_PLAN.md — preserve authentication, sole-listener, transport-confidentiality, ACK/ERR/END, and operator-priority contracts.
@@ -8408,15 +8511,15 @@ Commands:
   - cargo check -p console-network-runtime --target aarch64-unknown-none
   - scripts/cohsh/run_regression_batch.sh
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-console-qemu
-Checks: malformed packets/auth frames fault or fail inside the child; root policy cannot be bypassed; TCP load and child failure never starve serial/local-seat/fatal output; no second listener or root-owned physical NIC path appears.
+Checks: malformed packets/auth frames fault or fail inside the child; its active SC stays inside generated budget/period and timeout policy; root policy cannot be bypassed; TCP load and child failure never consume the independent root/emergency/fault reserves or starve serial/local-seat/fatal output; no second listener or root-owned physical NIC path appears.
 Deliverables: Restricted console/network child with bounded transport IPC, preserved operator semantics, and containment evidence.
 
 Title/ID: m26e-worker-supervisor-child-isolation
-Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation / executable Worker substrate
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / executable Worker substrate
 Goal: Replace model-only target Worker claims with separately packaged, supervised Worker child tasks only for roles whose full generated task-object contract is present.
 Inputs: apps/worker-heart/**, apps/worker-gpu/**, apps/worker-lora/**, apps/root-task/src/worker_authority.rs, apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, tools/coh-rtc/src/**, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/WORKER_TICKETS.md, docs/GPU_NODES.md.
 Changes:
-  - tools/coh-rtc/src/** + configs/root_task*.toml — extend executable Worker IR with image identity, TCB/CSpace/VSpace/IPC-buffer/stack, role/epoch-badged endpoint, lifecycle notification, shared frames, non-MCS scheduling, fault, shutdown, and deterministic revoke records.
+  - tools/coh-rtc/src/** + configs/root_task*.toml — extend executable Worker IR with image identity, TCB/CSpace/VSpace/IPC-buffer/stack, role/epoch-badged endpoint, lifecycle notification, shared frames, MCS scheduling-context/Reply/timeout/donation policy, fault, shutdown, and deterministic revoke records.
   - apps/root-task/src/worker_authority.rs + lifecycle/event code — load and supervise declared Worker images, retain parent caps required for bounded revoke, reject metadata-only authority, and keep Queen decisions serialized.
   - apps/worker-heart/** + apps/worker-gpu/** + apps/worker-lora/** — consume only delivered role authority, emit bounded telemetry/receipts, handle notification/fault/shutdown paths, and keep CUDA/NVML/training/inference host-side.
   - generated artifacts + canonical Worker docs — set `implemented=true` only for roles that pass the complete selected-profile task-object and target-evidence gate; leave every other role model-only.
@@ -8426,17 +8529,17 @@ Commands:
   - cargo test -p worker-heart -p worker-gpu -p worker-lora
   - cargo check -p worker-heart -p worker-gpu -p worker-lora --target aarch64-unknown-none
   - scripts/check-generated.sh
-Checks: each enabled Worker is a real restricted child with live badged IPC and lifecycle notification evidence; forged metadata, wrong role/epoch badges, stale calls, late telemetry, and post-revoke activity fail deterministically; model-only roles remain non-executable.
+Checks: each enabled Worker is a real restricted child with live badged IPC, lifecycle notification, and its generated active or passive MCS topology; forged metadata, wrong role/epoch badges, stale calls, late telemetry, stranded Reply/donated-SC state, budget overrun, and post-revoke activity fail deterministically; model-only roles remain non-executable.
 Deliverables: Honest executable Worker substrate that satisfies the Milestone 26d task-object gate without claiming the broader Milestone 28e production cap-bundle lifecycle.
 
 Title/ID: m26e-root-tcb-target-proof
-Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation / target containment and regression proof
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / target containment and regression proof
 Goal: Prove the ordered service/Worker split reduces root authority and preserves deterministic QEMU/Pi behavior under normal, pressure, and injected-fault conditions.
 Inputs: selected generated profiles and images, scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, docs/TEST_PLAN.md, docs/BENCHMARKS.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
 Changes:
   - root-task/service/Worker tests — add cap-inventory, W^X, IPC-bound, wrong-badge, stale-frame, fault-injection, revoke, shutdown, replay, cancellation, and pressure coverage for every split child.
   - scripts/ci/test_plan_run.sh + docs/TEST_PLAN.md — add separate host/model, QEMU execution, fresh Pi execution, operator-liveness, and fault-containment gates.
-  - docs/BENCHMARKS.md + evidence packs — archive before/after TCB inventory, authority matrices, latency, pressure, and same-harness QEMU/Pi results with rollback-profile identity.
+  - docs/BENCHMARKS.md + evidence packs — archive before/after TCB inventory, authority matrices, latency, pressure, and same-harness QEMU/Pi results with atomic change-set and pre-change baseline identity.
 Commands:
   - cargo fmt --all -- --check
   - cargo clippy --workspace --all-targets -- -D warnings
@@ -8446,8 +8549,31 @@ Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-root-tcb-qemu
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-root-tcb-pi4
   - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26e-root-tcb-qemu
-Checks: generated and observed cap inventories agree; each child runs in the selected image, contains injected faults, loses stale authority, and cannot bypass serialized policy; QEMU and fresh Pi evidence preserve console/network/driver behavior and separated proof lanes; the accepted split measurably reduces root authority without an unbounded latency or TCB regression.
+Checks: generated and observed cap/SC/Reply inventories agree; each child runs in the selected image, contains injected faults and timeouts, loses stale authority, returns or revokes donated time, and cannot bypass serialized policy; QEMU and fresh Pi evidence preserve console/network/driver/operator behavior and separated proof lanes; the accepted split measurably reduces root authority without an unbounded latency, temporal-reserve, or TCB regression.
 Deliverables: Reviewable target evidence closing the reopened Milestone 25 root-service/Worker task-isolation claims and establishing the prerequisite for Milestone 28e.
+
+Title/ID: m26e-mcs-smp-target-acceptance
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / full-system SMP+MCS target acceptance
+Goal: Accept the single four-core SMP+MCS operational architecture on QEMU and Pi 4 using the real root, service, Worker, and driver topology under normal, overload, timeout, fault, restart, and operator-liveness conditions.
+Inputs: `m26e-mcs-abi-foundation`, all enabled 26e child images and generated task records, configs/sel4/profiles.toml, configs/root_task*.toml, scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, docs/ROLES_AND_SCHEDULING.md, docs/TEST_PLAN.md, docs/BENCHMARKS.md, docs/audit/M26D_MCS_DECISION.md.
+Changes:
+  - tools/coh-rtc/src/** + selected manifests — compute and fail closed on per-core admitted demand, reserve root/emergency/fault time, validate active/passive and Reply/donation topology, bind every live SC to its declared SchedControl core, and reject cross-core donation for locality-bound tasks.
+  - apps/root-task/src/** + child runtimes — apply only generated SMP+MCS policy, preserve Reply/donated-SC ownership across normal, timeout, cancel, fault, and revoke paths, decode timeout faults, and expose bounded consumed/budget/overrun evidence.
+  - configs/sel4/profiles.toml + build/release consumers — make the accepted four-core MCS contracts the sole runtime/release profiles for QEMU and Pi 4; remove non-MCS switches, compatibility profiles, and fallback selection from operational paths.
+  - docs/ROLES_AND_SCHEDULING.md + docs/TEST_PLAN.md + docs/BENCHMARKS.md + evidence packs — record WCET/admission inputs, per-core totals/reserves, full topology, exact build/image identity, timeout/fault/restart results, operator-liveness results, and performance deltas without overstating upstream AArch64 or SMP verification.
+Commands:
+  - cargo test -p sel4-sys -p sel4-runtime
+  - cargo test -p coh-rtc
+  - cargo test -p root-task --tests schedule
+  - cargo test -p pi4-driver-abi -p pi4-driver-runtime
+  - scripts/check-generated.sh
+  - python3 scripts/sel4_profile.py validate --profile qemu_smp_production --require-source --require-artifacts --for-release --for-runtime
+  - python3 scripts/sel4_profile.py validate --profile pi4_production --require-source --require-artifacts --for-release --for-runtime
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-mcs-smp-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-mcs-smp-pi4
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26e-mcs-smp-qemu
+Checks: every active TCB has an admitted MCS budget/period/core, every passive TCB has a bounded allowlisted donor/Reply/timeout chain to an admitted active context, and all paths preserve correct ownership; aggregate demand preserves root/emergency/fault reserves; four-core QEMU and fresh Pi pass cold/warm boot, mixed load, budget exhaustion, timeout, fault, revoke/restart, SC-leak, operator-liveness, protocol-regression, and same-harness performance gates; no operational classic scheduler path or profile remains. Any failure blocks closure and requires whole-change source/configuration reversion rather than a shipped fallback.
+Deliverables: One target-qualified SMP+MCS scheduling architecture for QEMU and Pi 4 with no runtime scheduler rollback path.
 ```
 
 ---
@@ -8464,9 +8590,10 @@ Deliverables: Reviewable target evidence closing the reopened Milestone 25 root-
 Benchmark evidence must keep proof lanes separate: raw direct `cohsh`/TCP, REST/gateway overhead, QEMU semantic/capacity reference, Pi wired/GENET production parity, Pi Wi-Fi research/diagnostic evidence, storage/spool pressure, UI render cadence, and target-specific ENA/AWS proof are not interchangeable. Any claimed optimization must identify the moved layer and preserve Secure9P bounds, ACK/ERR/END grammar, manifest authority, HAL-only physical-device authority, no-retry accounting, and bounded queues.
 
 Cadence by milestone family:
-- **26e task isolation:** full same-harness QEMU/Pi benchmark and
-  fault-containment gate because root-service IPC, network parsing, and Worker
-  execution boundaries change.
+- **26e task isolation and SMP+MCS transition:** full same-harness QEMU/Pi
+  benchmark, timeout/fault-containment, admission, and operator-liveness gates
+  because root-service IPC, network parsing, Worker execution, and the kernel
+  scheduling model change together.
 - **27 persistence:** targeted spool/settings pressure plus a small REST/status sanity benchmark only for profiles with persistence enabled.
 - **27b verification:** no runtime benchmark; track verification-gate runtime and proof reproducibility only.
 - **27c core-local scheduling:** full same-harness QEMU/Pi benchmark gate with service-bucket counters and fresh target evidence.
@@ -8507,6 +8634,8 @@ Cadence by milestone family:
   is closed or explicitly non-blocking for the selected persistence profile,
   the 26c blocker ledger is clear or scoped, the seL4 baseline is current, and
   root-service/Worker execution claims match the selected task inventory.
+  `m26e-mcs-smp-target-acceptance` must have accepted the sole QEMU/Pi SMP+MCS
+  architecture before the storage runtime adds another live task.
 
 ### Goal
 Provide **bounded, crash‑resilient on‑device persistence** for:
@@ -8530,6 +8659,10 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 - Pi 4 validation rejects persistence if the profile attempts to bind storage to `cyw43455`, the CYW43 `sdio-host` bus role, `usb-local-seat`, root-task SD/MMC MMIO, or any FAT-path/U-Boot policy file. Runtime persistence must not read or write `cohesix.env`.
 - Persistence config is **separate** from existing `sidecars.*.adapters[].spool`; the names must not be reused or overloaded.
 - Generated docs snippets and manifest validation reject persistence when the selected boot profile does not declare a compatible storage region.
+- The isolated storage runtime has a generated MCS scheduling context, core,
+  budget/period/refill policy, timeout/overrun action, and Reply/donation
+  topology included in the same per-core admission calculation as the existing
+  26e tasks; persistence cannot introduce a non-MCS compatibility path.
 
 #### B) Storage plumbing (hardware + QEMU parity)
 - Block-device abstraction in HAL (role-selected devices, not model-selected) plus a fixed-layout block-service ABI for physical storage runtimes.
@@ -8608,7 +8741,7 @@ Title/ID: m27-persistence-ir
 Goal: Admit persistent spool/settings in compiler IR without overloading existing sidecar spool semantics.
 Inputs: tools/coh-rtc, docs/ARCHITECTURE.md, docs/INTERFACES.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — `persistence.*` schema, validation, and profile gating.
+  - tools/coh-rtc/src/ir.rs — `persistence.*` schema, validation, profile gating, and required storage-runtime MCS task/admission record.
   - tools/coh-rtc/src/codegen/{docs,rust,cohsh}.rs — generated limits and snippet updates.
 Commands:
   - cargo test -p coh-rtc
@@ -8641,7 +8774,7 @@ Title/ID: m27-block-hal
 Goal: Add bounded block-device plumbing for persistent regions without reintroducing root-owned physical storage drivers.
 Inputs: apps/root-task/src/hal/, crates/pi4-driver-abi, apps/pi4-driver-runtime, docs/ARCHITECTURE.md.
 Changes:
-  - apps/root-task/src/hal/block.rs — block traits, role-selected storage admission, and root-side ring-client binding.
+  - apps/root-task/src/hal/block.rs — block traits, role-selected storage admission, root-side ring-client binding, and generated MCS Reply/donation/timeout ownership.
   - apps/root-task/src/storage/layout.rs — persistent region selection and bounds.
   - crates/pi4-driver-abi/src/** — fixed-layout block read/write/flush records and bounded completion evidence for physical storage runtimes.
   - apps/pi4-driver-runtime/src/** — isolated `driver-storage` service for Pi 4 raw SD/MMC block-region access, separate from CYW43 SDIO and U-Boot FAT policy storage.
@@ -8651,6 +8784,8 @@ Commands:
   - cargo test -p pi4-driver-runtime
 Checks:
   - QEMU `virtio-blk` path and Pi 4 isolated runtime `pi4-sdmmc-raw` path resolve the same bounded block contract.
+  - The storage runtime's SC/core/budget is included in generated per-core
+    admission and no non-MCS storage-service branch exists.
   - Physical Pi 4 tests fail closed if persistence attempts direct root-task SD/MMC MMIO or a missing isolated storage-runtime descriptor.
   - USB mass storage is absent from the default Pi 4 persistence profile and cannot preempt USB keyboard/local-seat service.
 Deliverables:
@@ -8730,9 +8865,17 @@ Deliverables:
 - No new runtime protocols, namespace roots, ticket semantics, or HAL bypasses are permitted under the banner of verification.
 - Verification witnesses are generated artifacts or generated-adjacent evidence; they must not become a hand-maintained second source of truth.
 - Physical Pi 4 hardware behavior remains evidence-based. Formal verification can prove the admission/resource/ABI contracts that precede hardware execution, not that a device actually behaves correctly on the board.
+- Cohesix checks over MCS manifests, admission arithmetic, Reply/donation
+  lifecycles, and timeout policy must not be described as upstream AArch64 or
+  SMP+MCS kernel verification. The selected architecture remains outside the
+  tag-pinned verified configuration unless upstream proof coverage says
+  otherwise for the exact build.
 
 ### Prerequisite
 - Milestone **27** completed for the selected profile, including manifest-bound persistence, generated docs alignment, and deterministic regression evidence.
+- Milestone **26e**, including `m26e-mcs-smp-target-acceptance`, completed so
+  witnesses describe the one accepted SMP+MCS QEMU/Pi task topology rather than
+  a hypothetical or dual-scheduler design.
 - Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to the proof surface: driver-task substrate, HAL admission, isolated runtime descriptors, 26b benchmark parity evidence, target-qualified tests, and refreshed seL4 baseline evidence.
 
 ### Goal
@@ -8743,8 +8886,10 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
 4. HAL-only hardware authority and driver-task resource admission,
 5. pointer-free, bounded Pi 4 driver-task ABI descriptors,
 6. selected Queen/Worker, policy, audit, replay, and persistence state machines,
-7. explicit proof assumptions, residual gaps, and non-claims,
-8. a claim ladder that downstream milestones can cite without collapsing static proof, model checking, QEMU evidence, Pi 4 evidence, and AWS target evidence into one assurance label.
+7. MCS scheduling-context/core ownership, offline admission, Reply/donation
+   return, timeout, cancellation, fault, and revoke invariants,
+8. explicit proof assumptions, residual gaps, and non-claims,
+9. a claim ladder that downstream milestones can cite without collapsing static proof, model checking, QEMU evidence, Pi 4 evidence, and AWS target evidence into one assurance label.
 
 ### Deliverables
 
@@ -8769,6 +8914,9 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
   - HAL storage, MMIO, DMA, IRQ, and driver-task resource grants,
   - driver-image ABI bounds, runtime resource windows, and non-overlap checks,
   - persistence bounds and data-at-rest identity binding,
+  - scheduling-context/core ownership, budget/period/refills, per-core admitted
+    demand and reserves, Reply-object cardinality, donation depth, timeout
+    routing, overrun policy, and consumed-time evidence,
   - claim ids and evidence-class tags consumed by downstream production, AI, MCP/A2A, Pi 4, and AWS milestone gates.
 - Add a verifier that checks the witness against the resolved manifest and generated Rust tables, failing closed on drift.
 - Witnesses must be regenerated from IR; hand-editing witness output is invalid.
@@ -8786,7 +8934,10 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
 
 #### D) HAL and driver-task authority checks
 - Add a static authority checker that rejects direct physical-address discovery, device-untyped retyping, DMA allocation/publish, IRQ binding, cache maintenance, or ad-hoc MMIO outside approved HAL modules.
-- Check that driver-task bootstrap grants only declared CSpace, VSpace, endpoint, notification, fault endpoint, stack, IPC, ring, MMIO, DMA, shared-buffer, and IRQ resources from generated manifests.
+- Check that driver-task bootstrap grants only declared CSpace, VSpace,
+  endpoint, notification, fault/timeout endpoint, Reply object, scheduling
+  context, stack, IPC, ring, MMIO, DMA, shared-buffer, and IRQ resources from
+  generated manifests; SchedControl remains root-owned.
 - Check that driver tasks do not receive Secure9P authority, broad namespace state, ticket secrets, or catch-all `KernelHal` authority.
 - Verify `pi4-driver-abi` descriptors are pointer-free, layout-stable, bounded, and incapable of representing overlapping undeclared resource windows.
 
@@ -8797,7 +8948,9 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
   - Queen/Worker lifecycle and namespace visibility,
   - policy apply/rollback and audit/replay ordering,
   - persistence spool append/read/ack crash behavior,
-  - driver-task admission and fail-closed service turns.
+  - driver-task admission and fail-closed service turns,
+  - MCS Reply/donated-SC return across timeout, cancellation, fault, revoke,
+    and task restart without cross-epoch reuse.
 - Model outputs must map back to generated manifest fields and checked Rust fixtures. Models that cannot be tied to as-built fields are design notes, not verification closure.
 
 #### F) CI verification gate and evidence archive
@@ -8825,6 +8978,9 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
 - Secure9P codec/core proofs or bounded checks pass for the documented contract set.
 - HAL/static authority checker has no bypass findings outside approved HAL modules and documented test fixtures.
 - Driver-task ABI/resource checks prove no undeclared resource windows, pointer-bearing descriptors, overlapping arenas, or broad authority grants.
+- MCS witnesses and state models prove generated SC/core ownership, per-core
+  admission totals/reserves, bounded donation depth, Reply return, timeout
+  routing, and no donated-SC or Reply-object reuse across revoke/restart.
 - State models run at documented bounds and any counterexample is either fixed or recorded as a blocker with a named later milestone.
 - `docs/FORMAL_VERIFICATION.md` states exact claims, assumptions, and non-claims, including that Pi 4 hardware behavior still requires fresh board evidence.
 - Verification evidence is reproducible and archived under `out/verification/<run-id>/`.
@@ -8895,12 +9051,13 @@ Deliverables:
 
 Title/ID: m27b-state-models
 Goal: Model and check selected Cohesix authority/state machines.
-Inputs: Secure9P session semantics, ticket policy, worker lifecycle, policy/audit/replay, persistence spool, driver-task admission.
+Inputs: Secure9P session semantics, ticket policy, worker lifecycle, policy/audit/replay, persistence spool, driver-task admission, and the accepted 26e MCS scheduling/IPC topology.
 Changes:
   - specs/secure9p_session.tla — session/fid lifecycle model.
   - specs/ticket_authority.tla — issue/use/revoke/deny model.
   - specs/driver_task_admission.tla — generated resource grant and fail-closed service model.
   - specs/persistence_spool.tla — crash-safe append/read/ack model.
+  - specs/mcs_reply_donation.tla — SC/Reply ownership, timeout, cancel, fault, revoke, and restart model.
 Commands:
   - scripts/ci/verification_gate.sh --models-only
 Checks:
@@ -8926,7 +9083,7 @@ Deliverables:
 ## Milestone 27c — Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) <a id="27c"></a>
 [Milestones](#Milestones)
 
-**Why now (core-local performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Milestone 26b closes the immediate isolated runtime same-harness benchmark parity gate. Milestones 26c, 26d, 27, and 27b add the missing enforcement substrate around generated worker/driver scheduling evidence, seL4 baseline alignment, persistence drains, profile-qualified MCS/non-MCS budget fields, proof witnesses, HAL authority checks, and verification gates. Milestone 27c is the right point to turn affinity placement and the 26b hot-path evidence into compiler-owned core-local service scheduling without weakening authority, replay, or hardware-proof boundaries.
+**Why now (core-local performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Milestone 26b closes the immediate isolated runtime same-harness benchmark parity gate. Milestones 26c, 26d, 26e, 27, and 27b add the missing enforcement substrate around generated worker/driver scheduling evidence, seL4 baseline alignment, the accepted SMP+MCS temporal-authority model, persistence drains, proof witnesses, HAL authority checks, and verification gates. Milestone 27c is the right point to turn the already accepted SC/core placement and the 26b hot-path evidence into compiler-owned core-local service scheduling without weakening authority, replay, or hardware-proof boundaries; it does not reopen scheduler selection.
 
 **As-built alignment note:** Cohesix already has manifest affinity, `smp activity`, manifest-declared isolated driver runtime active-slot rules, bounded service-turn language, and host-safe pressure evidence. Milestone 26b owns the first isolated runtime benchmark comparator, same-harness Pi/QEMU parity result, and immediate bounded driver hot-path fixes. Cohesix does **not** yet have compiler-owned core-local service buckets, generated per-core service-turn budgets, per-core telemetry/spool drain policy, IRQ-locality witnesses, or Pi/QEMU evidence proving that hot paths stay local to their assigned core under mixed load. Older prose must not claim core-local hot-path scheduling or multicore throughput closure until this milestone has passing evidence.
 
@@ -8943,10 +9100,9 @@ Deliverables:
   `m26e-worker-supervisor-child-isolation` must be complete for the selected
   profile, including applied Worker scheduling and notification-lifecycle
   evidence. Model-only roles remain excluded.
-- `m27c-mcs-admission-experiment` is optional and non-blocking for classic
-  non-MCS service-bucket work. Until it records an admitted result satisfying
-  `docs/audit/M26D_MCS_DECISION.md`, no MCS profile is selectable and all MCS
-  fields remain disabled.
+- Milestone 26e task `m26e-mcs-smp-target-acceptance` must be complete for both
+  QEMU and Pi 4. Milestone 27c consumes that single SMP+MCS architecture and may
+  not add a scheduler switch, classic compatibility profile, or fallback path.
 - Milestone **26e** completed for the selected service topology so NineDoor,
   console/network, Worker, and root-task bucket ownership is assigned to real
   as-built tasks rather than the superseded root-owned/model-only layout.
@@ -8974,16 +9130,18 @@ This milestone optimizes the runtime shape; it does not add user-visible capabil
   - roles assigned to unavailable cores,
   - physical-driver hot paths without isolated runtime ownership,
   - unbounded queues or bursts,
+  - a bucket core that differs from its owner's SchedControl/SC core,
+  - cross-core donation for IRQ- or locality-bound work,
   - overlapping authority that would let a worker or driver bypass its cap bundle or HAL-declared resources.
 
 #### B) Core-local event pumps
 - Root-task, NineDoor/provider adapters, workers, and manifest-declared isolated driver runtimes drain only their assigned bucket unless an explicit manifest rule declares a bounded handoff.
 - Each service turn has fixed max work, max bytes, and max completions.
 - Authority decisions remain serialized; local buckets may prepare, parse, drain, publish counters, and return deterministic busy/yield status.
-- Non-MCS profiles expose priority/domain plus service-turn fallback evidence.
-  An MCS profile may expose scheduling-context binding, consumed-budget, and
-  timeout evidence only after `m27c-mcs-admission-experiment` admits that exact
-  profile and target class.
+- Every service bucket remains inside its admitted MCS budget and exposes
+  scheduling-context binding, consumed-budget, timeout, Reply/donation, and
+  overrun evidence. Per-turn max work/bytes/completions remain independent
+  application bounds rather than being replaced by the SC budget.
 
 #### C) Core-local linked-driver hot-path integration
 - Build on the Milestone 26b bounded batching and counter evidence by binding GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe service loops to generated service buckets.
@@ -9028,11 +9186,10 @@ This milestone optimizes the runtime shape; it does not add user-visible capabil
 
 ### Checks (DoD)
 - Generated manifests and proof witnesses identify every service bucket, owner core, role/driver membership, budget, burst limit, queue bound, and backpressure rule.
-- Non-MCS profiles prove priority/domain plus bounded service-turn fallback
-  evidence without claiming MCS enforcement. If and only if
-  `m27c-mcs-admission-experiment` admits an exact profile, that profile also
-  proves scheduling-context binding, donation/reply ownership, timeout-fault
-  routing, consumed-budget evidence, admission bounds, and rollback behavior.
+- QEMU and Pi 4 profiles prove scheduling-context/core binding,
+  donation/Reply ownership, timeout-fault routing, consumed-budget evidence,
+  aggregate admission bounds, root/emergency/fault reserves, and absence of a
+  classic scheduling fallback.
 - Manifest-declared isolated driver runtimes keep payload-bearing work on staged active-slot APIs, return busy on conflicting payloads, and never overwrite in-flight turns.
 - Service-bucket integration preserves the Milestone 26b batching and counter bounds while reducing multicore contention without changing ACK/ERR/END, Secure9P, console, worker namespace, or persistent-spool semantics.
 - `smp activity` and `/proc/schedule/*` report bounded service-bucket counters with `cpu_pct=unavailable` unless a real kernel-backed utilization source exists.
@@ -9047,25 +9204,6 @@ This milestone optimizes the runtime shape; it does not add user-visible capabil
 
 ### Task Breakdown
 ```
-Title/ID: m27c-mcs-admission-experiment
-Milestone: Milestone 27c — Core-Local Service-Turn Scheduling / optional MCS temporal-isolation admission
-Goal: Compare classic SMP, single-core MCS, and SMP+MCS as separate non-production evidence classes and either admit an exact experimental profile or retain non-MCS explicitly.
-Inputs: docs/audit/M26D_MCS_DECISION.md, configs/sel4/profiles.toml, tools/coh-rtc/src/**, crates/sel4-sys/**, crates/sel4-runtime/**, apps/root-task/src/**, apps/pi4-driver-runtime/src/**, Milestone 26e executable service/Worker task records.
-Changes:
-  - crates/sel4-sys/** + crates/sel4-runtime/** — add version-pinned SchedContext, SchedControl, Reply, timeout-fault, consumed-time, and donation bindings with ABI and negative tests.
-  - tools/coh-rtc/src/** + experimental profile contracts — emit budget, period, refill, max-refill, core, priority, passive-server, timeout endpoint, donation, overrun, and rollback state for each live task; keep experimental profiles distinct from production.
-  - apps/root-task/src/** + child runtimes — allocate/bind scheduling objects through BootInfo/untyped authority, preserve reply/donation ownership, decode timeout faults, and apply generated suspend/quarantine/replenish policy.
-  - docs/audit/M26D_MCS_DECISION.md + docs/ROLES_AND_SCHEDULING.md + docs/TEST_PLAN.md — record measured WCET/admission inputs, classic/single-core-MCS/SMP+MCS results, target class, rollback evidence, and the final `admit-experimental` or `retain-non-mcs` verdict.
-Commands:
-  - cargo test -p sel4-sys -p sel4-runtime
-  - cargo test -p coh-rtc
-  - cargo test -p root-task --tests schedule
-  - scripts/check-generated.sh
-  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27c-mcs-qemu
-  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27c-mcs-pi4
-Checks: every live task has an admitted budget/period and correct scheduling-context/reply/donation ownership; timeout faults preserve operator/fatal liveness; single-core and SMP evidence remain separate; any failed admission, fault, liveness, or target gate deterministically records `retain-non-mcs` and leaves production profiles unchanged.
-Deliverables: Explicit MCS-versus-classic decision evidence with a safe negative outcome and no implicit MCS enablement.
-
 Title/ID: m27c-smp-service-ir
 Goal: Add compiler-owned core-local service bucket IR and validation.
 Inputs: tools/coh-rtc, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/INTERFACES.md.
@@ -9187,6 +9325,9 @@ claim Linux-like parallel activity handling until this milestone has evidence.
 ### Prerequisite
 - Milestone **27c** completed for the selected profile so generated service
   buckets, core assignment, and service-turn counters exist.
+- Milestone **26e** SMP+MCS target acceptance remains the sole scheduler
+  architecture consumed by lane policy; 27d may tune generated admitted values
+  but may not introduce a classic or runtime-selectable scheduler mode.
 - Milestones **26c/26d**, **27**, and **27b** completed or explicitly scoped
   where their artifacts define the selected profile, persistence drains,
   formal witnesses, and rolling performance baseline.
@@ -9212,16 +9353,18 @@ persistence work progress fairly and observably under mixed load.
   - `telemetry-spool`
 - Each lane declares priority class, starvation deadline, max work per turn,
   max bytes per turn, bounded queue depth, backpressure policy, degradation
-  policy, and its generated behavior for TCP-authenticated versus no-TCP
-  operator modes. Runtime session state selects between those generated modes;
-  clients cannot supply or raise lane priority.
+  policy, owning task/SC/service bucket, admitted budget demand, and its
+  generated behavior for TCP-authenticated versus no-TCP operator modes.
+  Runtime session state selects only between statically admitted modes; it
+  cannot inflate a budget, period, refill supply, MCP, or aggregate per-core
+  demand, and clients cannot supply or raise lane priority.
 - Validation rejects unbounded lanes, authority overlap, physical-driver lane
   ownership drift, and any lane that can bypass generated service-bucket or HAL
   resource limits.
 
 #### B) Deterministic lane scheduler
 - Root-task drains generated lanes using bounded deterministic policy over the
-  27c service buckets.
+  27c service buckets and within the owning MCS scheduling contexts.
 - With no authenticated TCP session, serial input precedes USB local-seat
   input, which precedes HDMI feedback; all three stay above routine network
   data, verbose diagnostics, telemetry, and storage drains.
@@ -9287,7 +9430,10 @@ persistence work progress fairly and observably under mixed load.
 
 ### Checks (DoD)
 - Generated manifests and docs identify every operator lane, priority, deadline,
-  max work, queue bound, and degradation policy.
+  max work, queue bound, degradation policy, owning SC/core, and admitted demand.
+- Both authenticated-TCP and no-TCP static modes preserve generated per-core
+  admission plus independent root/emergency/fault reserves; mode changes cannot
+  mint or enlarge CPU-time authority.
 - Serial and USB local-seat input have bounded key/line-to-echo and
   line-to-dispatch latency under mixed TCP/HDMI/network/diagnostic/storage
   pressure.
@@ -9323,11 +9469,11 @@ Title/ID: m27d-operator-lane-ir
 Goal: Add generated operator-lane policy and validation.
 Inputs: tools/coh-rtc, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/USERLAND_AND_CLI.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — lane schema for TCP-authenticated/no-TCP priority modes, deadline, work/byte bounds, queue depth, and degradation policy.
-  - tools/coh-rtc/src/validate.rs — reject unbounded lanes, authority overlap, physical-driver ownership drift, and incompatible service-bucket references.
+  - tools/coh-rtc/src/ir.rs — lane schema for TCP-authenticated/no-TCP priority modes, owning task/SC/core, admitted demand, deadline, work/byte bounds, queue depth, and degradation policy.
+  - tools/coh-rtc/src/validate.rs — reject unbounded lanes, admission overflow, authority overlap, physical-driver ownership drift, incompatible service-bucket references, and session modes that enlarge CPU-time authority.
   - tools/coh-rtc/src/codegen/* — emit Rust/docs/proof-witness lane tables.
 Commands: cargo test -p coh-rtc && scripts/check-generated.sh
-Checks: Lane policy and authenticated-session mode transitions are compiler-owned, generated docs match resolved manifests, clients cannot raise priority, and invalid topology fails closed.
+Checks: Lane policy and authenticated-session mode transitions are compiler-owned, generated docs match resolved manifests, both modes fit the accepted SMP+MCS admission totals and reserves, clients cannot raise priority or budget, and invalid topology fails closed.
 Deliverables: Generated operator-lane contract for QEMU and Pi 4 profiles.
 
 Title/ID: m27d-event-pump-qos
@@ -9376,7 +9522,7 @@ Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27d-qemu-lanes
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27d-pi4-lanes
   - python3 scripts/rest_perf_harness.py --mode perf --suite console-pressure --runs 5 --log-dir out/bench --log-prefix m27d-qemu-lanes
-Checks: QEMU proves semantic stability and latency bounds; Pi 4 claims require fresh target logs and separated serial, USB, TCP, Wi-Fi/GENET, HDMI, persistence, and flash proof lanes.
+Checks: QEMU proves semantic stability, timeout/overrun behavior, and latency bounds; Pi 4 claims require fresh target logs, preserved MCS admission/reserve evidence, and separated serial, USB, TCP, Wi-Fi/GENET, HDMI, persistence, and flash proof lanes.
 Deliverables: Repeatable validation for Cohesix multi-surface responsiveness.
 ```
 
@@ -11216,6 +11362,9 @@ After Milestone 28d:
   lifecycle/fault evidence, and negative metadata-only ticket tests. The
   inactive historical `m26c-cap-backed-worker-endpoints` proposal and current
   model-only profiles do not satisfy this prerequisite.
+- Milestone 26e task `m26e-mcs-smp-target-acceptance` completed; all cap bundles
+  extend the accepted SMP+MCS task topology and may not introduce a second
+  scheduler architecture.
 - Milestone **26d** seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
 - Milestone **28b** completed, including audit/replay defaults and generated gates that distinguish host authority records from VM cap-backed tickets.
 
@@ -11230,9 +11379,14 @@ Complete production VM authority by making worker and driver tickets correspond 
 - No claim that host tickets, REST delegated tickets, provider tickets, or PEFT receipts are seL4 cap-backed unless a generated VM projection explicitly maps them to live caps.
 
 **Deliverables**
-- Generated per-role cap-bundle records for endpoint caps, notification caps, fault endpoint caps, shared-ring frames, allowed data frames, declared MMIO frames, and DMA/shared-buffer frames where applicable.
+- Generated per-role cap-bundle records for endpoint caps, notification caps,
+  fault/timeout endpoint caps, scheduling-context caps, Reply objects,
+  shared-ring frames, allowed data frames, declared MMIO frames, and
+  DMA/shared-buffer frames where applicable. SchedControl remains root-only.
 - Root-task constructs per-role child CSpaces/VSpaces from generated bundle records and never hands out catch-all root authority, broad namespace authority, or undeclared frame caps.
-- Revocation deletes/revokes derived caps and makes late invocations, stale shared-ring turns, and stale telemetry writes fail deterministically.
+- Revocation deletes/revokes derived caps, cancels or recovers Reply/donated-SC
+  ownership, and makes late invocations, stale timeout events, stale shared-ring
+  turns, and stale telemetry writes fail deterministically.
 - Every production worker and driver TCB receives a generated badged fault endpoint whose badge identifies role, instance, lease epoch, and cap-bundle generation.
 - Root-task records bounded fault evidence, revokes the affected cap bundle, marks the lease terminal or quarantined, and refuses late telemetry, shared-ring turns, or receipts from the old epoch.
 - Restart is allowed only through a new ticket/lease/cap-bundle path; fault recovery must not silently reuse stale caps, stale DMA mappings, or stale shared rings.
@@ -11256,27 +11410,36 @@ Complete production VM authority by making worker and driver tickets correspond 
 - Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
 - Production profiles that expose AI, MCP/A2A, provider, or driver-runtime projections fail validation if they claim VM worker/driver cap-bundle authority or structured-fault containment without the generated 28e cap-bundle and fault-lifecycle evidence.
 - Read-only and host-ticket-only profiles remain valid without 28e only when generated profile state, docs, and evidence packs explicitly state that VM worker/driver cap-bundle authority is not claimed.
-- Revoked tickets lose endpoint, notification, frame, shared-ring, MMIO, DMA/shared-buffer, and fault authority; stale invocations and stale ring turns fail deterministically.
+- Revoked tickets lose endpoint, notification, scheduling-context, Reply,
+  timeout/fault, frame, shared-ring, MMIO, and DMA/shared-buffer authority;
+  stale invocations, timeout events, donations, and ring turns fail
+  deterministically.
 - Recovery reconciles ticket ledger and CSpace/VSpace state so no active ticket exists without live caps and no live caps remain for terminal tickets.
 - Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
 - Fault handling revokes old caps, rejects stale shared-ring turns and telemetry, and requires fresh lease/cap-bundle construction before restart.
+- No Reply object or donated scheduling context is stranded or reused across a
+  lease epoch, quarantine, revoke, or restart; SchedControl is never delegated.
 - Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
 - Compatibility profiles may retain 26c endpoint-cap-only tickets only when docs and generated profile state explicitly say full cap bundles are disabled.
 - Fault/revoke timing evidence stays bounded for representative worker and driver fault cases; material regressions are classified as cap-revocation, evidence-export, restart-policy, or driver-runtime recovery overhead before production profiles depend on structured fault recovery.
 
 **Compiler touchpoints**
-- `coh-rtc` emits full cap-bundle ticket authority profiles, generated per-role cap inventories, revoke/recovery evidence, production enablement gates, generated badged fault endpoint records, terminal/quarantine policy, and bounded fault evidence paths.
+- `coh-rtc` emits full cap-bundle ticket authority profiles, generated per-role
+  cap inventories including SC/Reply/timeout ownership and scheduler
+  generation, revoke/recovery evidence, production enablement gates, generated
+  badged fault endpoint records, terminal/quarantine policy, and bounded fault
+  evidence paths. SchedControl is never emitted to a child bundle.
 - `coh-rtc` emits explicit profile-state distinctions for read-only projection, host-ticket-only actuation, endpoint-cap compatibility, full VM cap-bundle authority, and structured-fault containment so downstream milestones cannot inherit stronger VM authority claims by implication.
 - Generated snippets refresh `docs/WORKER_TICKETS.md`, `docs/SECURITY.md`, `docs/HARDWARE_BRINGUP.md`, `docs/INTERFACES.md`, and `docs/TEST_PLAN.md`.
 
 **Task Breakdown**
 ```
 Title/ID: m28e-full-cap-bundle-ticket-authority
-Goal: Complete cap-backed tickets by making production worker and driver tickets correspond to generated seL4 cap bundles for endpoints, notifications, frames, shared rings, MMIO, DMA, and fault handling.
+Goal: Complete cap-backed tickets by making production worker and driver tickets correspond to generated seL4 cap bundles for endpoints, notifications, scheduling contexts, Reply objects, timeout/fault endpoints, frames, shared rings, MMIO, and DMA.
 Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/root-task/src/ninedoor.rs, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, tools/coh-rtc/src/**, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md
 Changes:
-  - tools/coh-rtc/src/** — add generated per-role cap-bundle records for endpoint, notification, fault, shared-ring, frame, MMIO, DMA/shared-buffer, and revoke policy fields.
-  - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — construct child CSpaces/VSpaces from generated cap-bundle records and retain parent/origin caps for deterministic revoke.
+  - tools/coh-rtc/src/** — add generated per-role cap-bundle records for endpoint, notification, scheduling context, Reply object, timeout/fault endpoint, shared-ring, frame, MMIO, DMA/shared-buffer, scheduler generation, and revoke policy fields; keep SchedControl root-only.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — construct child CSpaces/VSpaces from generated cap-bundle records, retain parent/origin caps for deterministic revoke, and reconcile Reply/donated-SC ownership before object reuse.
   - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — reconcile ticket ledger state with live cap-bundle state and refuse metadata-only authority in production profiles.
   - apps/pi4-driver-runtime/src/** + crates/pi4-driver-abi/src/** — bind driver-runtime command/completion, MMIO, DMA, shared-buffer, IRQ notification, and fault handling to generated cap-bundle descriptors.
   - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — consume full role cap bundles where enabled while preserving the 26c endpoint-cap compatibility floor.
@@ -11292,7 +11455,9 @@ Commands:
   - scripts/check-generated.sh
 Checks:
   - Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
-  - Revoked tickets lose endpoint, notification, frame, shared-ring, MMIO, DMA/shared-buffer, and fault authority; stale invocations and stale ring turns fail deterministically.
+  - Revoked tickets lose endpoint, notification, SC, Reply, timeout/fault,
+    frame, shared-ring, MMIO, and DMA/shared-buffer authority; stale invocations,
+    donations, timeout events, and ring turns fail deterministically.
   - Recovery reconciles ticket ledger and CSpace/VSpace state so no active ticket exists without live caps and no live caps remain for terminal tickets.
 Deliverables:
   - Production-grade cap-backed ticket authority with generated seL4 cap bundles and evidence strong enough to answer the seL4 criticism that tickets are only application metadata.
@@ -11301,8 +11466,8 @@ Title/ID: m28e-structured-fault-lifecycle
 Goal: Convert worker and driver seL4 faults into structured lifecycle events that revoke stale authority and produce bounded evidence.
 Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/pi4-driver-runtime/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/coh/src/evidence.rs, tools/coh-rtc/src/**, docs/SECURITY.md, docs/INTERFACES.md, docs/TEST_PLAN.md
 Changes:
-  - tools/coh-rtc/src/** — emit generated badged fault endpoint records with role, instance, lease epoch, cap-bundle generation, terminal/quarantine policy, and bounded evidence paths.
-  - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — receive worker/driver fault IPC, record bounded evidence, revoke the affected cap bundle, and transition the lease to terminal or quarantined state.
+  - tools/coh-rtc/src/** — emit generated badged fault/timeout endpoint records with role, instance, lease epoch, scheduler/cap-bundle generation, terminal/quarantine policy, and bounded evidence paths.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — receive worker/driver fault and timeout IPC, record bounded evidence, recover or revoke Reply/donated-SC ownership, revoke the affected cap bundle, and transition the lease to terminal or quarantined state.
   - apps/root-task/src/hal/** + apps/pi4-driver-runtime/src/** — ensure driver faults cut off IRQ, shared-ring, MMIO, DMA/shared-buffer, and fault authority for the old epoch.
   - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — restart only through a fresh ticket/lease/cap-bundle path and refuse stale telemetry or receipts after a fault epoch.
   - apps/root-task/tests/fault_recovery_timing.rs — bounded timing checks for revoke, evidence export, stale-turn refusal, and fresh restart admission under representative worker/driver faults.
@@ -11319,7 +11484,9 @@ Commands:
   - scripts/check-generated.sh
 Checks:
   - Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
-  - Fault handling revokes old caps, rejects stale shared-ring turns and telemetry, and requires fresh lease/cap-bundle construction before restart.
+  - Fault/timeout handling revokes old caps, rejects stale Reply/donation,
+    timeout, shared-ring, and telemetry events, and requires fresh
+    lease/cap-bundle construction before restart.
   - Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
   - Fault/revoke timing remains bounded and is reported as VM authority recovery evidence, not Pi/QEMU network throughput proof.
 Deliverables:

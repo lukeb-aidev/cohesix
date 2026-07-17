@@ -12,7 +12,7 @@ Goal: Bind every applicable seL4 15 capability claim to current source, generate
 Inputs: seL4 Reference Manual 15.0.0, seL4 15.0.0 release notes and caveats, selected QEMU/Pi build trees, root-task/driver/Worker source, generated manifests, M26c/M26d audit ledgers.
 Changes:
   - docs/audit/M26D_SEL4_15_CAPABILITY_AUDIT.md — record used, intentionally excluded, defective, and later-gated facilities.
-  - docs/audit/M26D_MCS_DECISION.md — retain non-MCS profiles until the explicit admission gate can be met.
+  - docs/audit/M26D_MCS_DECISION.md — retain non-MCS only for 26d, record SMP+MCS as the selected 26e QEMU/Pi architecture, and define its hard target-acceptance and atomic-reversion gates.
   - docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md — state the root-task trust boundary and future split order without claiming unbuilt compartments.
 Commands: scripts/check-generated.sh; python3 scripts/sel4_profile.py validate --all
 Checks: No seL4 task, capability, scheduling, proof, DMA-isolation, or fault-containment claim exceeds the selected profile and observed target evidence.
@@ -45,7 +45,7 @@ outside the verified configuration.
 | SMP and TCB affinity | Selected QEMU/Pi operational profiles use four nodes and apply root-authority/driver affinity. General Worker and NineDoor operations remain in-process and do not have separate TCB affinity. seL4 15 SMP is supported but unverified. | Retain as the operational lane; never collapse it into verified-kernel evidence. |
 | QEMU GICv3 | The canonical production default is `out/sel4/profile-v2/qemu-smp-production`, rebuilt from the pinned v15 project, and passes source, cache, generated-config, dual-DTB, launcher, toolchain, causal-stamp, archive-capacity, and artifact validation. Build, release, regression, staged-test, and newcomer entrypoints consume and validate it by default. The five-stage target-qualified run at `out/test-plan/m26d-qemu-sel4-15-gap-audit` boots the linked image with `gic-version=3` and passes authenticated TCP and REST regressions. Preserved legacy GICv2 trees are explicit diagnostic inputs only. | Profile, consumer, and current QEMU runtime closure implemented; keep this evidence separate from Pi and formal-proof claims. |
 | Runtime domain schedule | Operational SMP profiles use one domain. The canonical wrapper omits the obsolete sel4test `KernelDomainSchedule` input and the validator rejects its reappearance. Preserved legacy trees still contain it. | Keep one domain and use wrapper-built trees for claims; do not normalize legacy caches by hand. |
-| MCS scheduling contexts, reply objects, timeout faults and SC donation | Not used. Current service-turn budgets are cooperative non-MCS policy. | Retain non-MCS in 26d; pending task `m27c-mcs-admission-experiment` owns any separately selectable experiment. |
+| MCS scheduling contexts, reply objects, timeout faults and SC donation | Not used in the accepted 26d build. Current service-turn budgets are cooperative non-MCS policy. | Retain non-MCS only through 26d. Pending tasks `m26e-mcs-abi-foundation` and `m26e-mcs-smp-target-acceptance` make four-core SMP+MCS the sole operational QEMU/Pi architecture; no runtime classic fallback is planned. |
 | Verified-configuration alignment | Operational production and diagnostic profiles are distinct SMP contracts; neither is represented as the tag-pinned AArch64 verified configuration. A separate pristine BCM2711 proof-eligibility build passes its static contract. | Retain the proof lane only as upstream configuration compatibility, explicitly not a Cohesix proof or operational boot claim. |
 | Hypervisor/VCPU | No guest-VM requirement exists in the active architecture. | Keep disabled in operational profiles. The proof-eligibility reference may use the upstream HYP configuration without making it the product profile. |
 | SMMU | No supported BCM2711 SMMU boundary exists in the selected profile. | Keep disabled and retain `bounded-no-iommu` wording. |
@@ -135,9 +135,13 @@ outside the verified configuration.
   revocation state needed for an executable task-object contract.
 - Full role/lease/epoch cap bundles and structured revoke/restart remain
   Milestone 28e work.
-- MCS activation is routed to `m27c-mcs-admission-experiment`; root-service and
-  Worker decomposition are routed to the ordered Milestone 26e tasks. Neither
-  is silently authorized by the phrase "use more seL4 features."
+- MCS activation and root-service/Worker decomposition are routed together to
+  the ordered Milestone 26e tasks. `m26e-mcs-abi-foundation` freezes the MCS
+  object/IPC/generated contract before child extraction, and
+  `m26e-mcs-smp-target-acceptance` requires exact four-core QEMU and fresh Pi
+  evidence before closure. Neither is silently authorized by the phrase "use
+  more seL4 features," and failure requires atomic code/configuration reversion
+  rather than a shipped non-MCS fallback.
 
 ## Parallel-lane reconciliation
 

@@ -43,6 +43,15 @@ claims and establishes the following future order. Pending Milestone 26e is the
 exact implementation owner; it remains inactive until 26d and the parallel
 CYW43/current-image lane close.
 
+Milestone 26e also owns the atomic transition to the one selected QEMU/Pi
+scheduler architecture: four-core SMP+MCS. Task `m26e-mcs-abi-foundation` must
+land before the child ABIs below freeze so scheduling-context, Reply, donation,
+timeout, core, admission, and revoke semantics are structural rather than a
+later retrofit. Task `m26e-mcs-smp-target-acceptance` runs after the real child
+topology exists and is a hard closure gate. No classic runtime fallback or
+dual-profile scheduler path is planned; an unforeseen failure requires
+reverting the atomic scheduler change set.
+
 ## Recommended split order
 
 1. **NineDoor parser/provider service**
@@ -71,7 +80,8 @@ are bootstrap/fatal-recovery authority and require a stronger resource and
 recovery model before delegation can reduce rather than duplicate trust.
 
 The common QEMU/Pi containment and no-regression owner is
-`m26e-root-tcb-target-proof`. The later production-wide role/lease/epoch cap
+`m26e-root-tcb-target-proof`; full-system temporal acceptance is owned by
+`m26e-mcs-smp-target-acceptance`. The later production-wide role/lease/epoch cap
 bundle and structured fault/restart lifecycle remain separate Milestone 28e
 tasks: `m28e-full-cap-bundle-ticket-authority` and
 `m28e-structured-fault-lifecycle`.
@@ -81,7 +91,12 @@ tasks: `m28e-full-cap-bundle-ticket-authority` and
 Every future service split must include, in one atomic milestone:
 
 - compiler-owned task, CSpace, VSpace, endpoint, notification, shared-frame,
-  scheduling, fault, and revoke records;
+  fault, and revoke records plus an MCS scheduling record declaring either a
+  bound active SC or an allowlisted passive donation chain. Active records
+  contain SC object/size, SchedControl core, budget, period,
+  refill/max-refill policy, priority/MCP, timeout/overrun action, consumed-time
+  evidence, and WCET/admission provenance; passive records contain allowed
+  donors/cores, Reply cardinality, timeout policy, and maximum donation depth;
 - an explicit capability matrix proving absence of ambient root authority;
 - bounded request/reply and pressure behavior with no unbounded queue;
 - replay, cancellation, shutdown, late-message, and fault semantics;
@@ -89,7 +104,9 @@ Every future service split must include, in one atomic milestone:
 - source tests plus target evidence that the selected image created and ran the
   child and observed both normal IPC and injected fault containment;
 - QEMU and fresh Pi evidence kept separate from host/model tests;
-- before/after TCB and latency measurements, with a rollback profile.
+- before/after TCB and latency measurements tied to the atomic change-set and
+  pre-change baseline; failure reverts the whole scheduler change rather than
+  selecting a compiled fallback.
 
 Until those gates pass, documentation must describe the root-owned service as
 trusted and must not draw it as an isolated seL4 task.

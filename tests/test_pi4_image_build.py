@@ -236,8 +236,8 @@ def test_pi4_image_build_keeps_dtb_policy_handoff_common() -> None:
     assert 'bootm ${coh_addr} ${coh_runtime_cpio_addr} ${coh_dtb_addr}' in source
 
 
-def test_pi4_image_build_does_not_echo_wifi_psk_to_serial() -> None:
-    """Wi-Fi PSK entry must stay inside the USB local console."""
+def test_pi4_image_build_does_not_echo_wifi_password_to_serial() -> None:
+    """Wi-Fi password entry must stay inside the USB local console."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     boot_template = source[
@@ -271,14 +271,19 @@ def test_pi4_image_build_does_not_echo_wifi_psk_to_serial() -> None:
         "else setenv stdin serial; fi; setenv stdout serial,vidconsole; "
         "setenv stderr serial,vidconsole'"
     ) in boot_template
-    assert "USB-only Wi-Fi credential entry; serial echo disabled" in boot_template
-    assert "Serial Wi-Fi password entry is disabled because U-Boot echoes input" in (
+    assert (
+        "Privacy notice: Wi-Fi network name and password are visible on this display; "
+        "they are hidden from serial output"
+    ) in boot_template
+    assert (
+        "Wi-Fi password entry is unavailable over serial because U-Boot echoes typed input"
+    ) in boot_template
+    assert 'askenv coh_wifi_psk_new "Wi-Fi password (leave blank for an open network): "' in (
         boot_template
     )
-    assert "coh_wifi_psk in ${coh_policy_file}" in boot_template
     assert "boot.cmd does not suppress serial echo during Wi-Fi secret entry" in source
     assert (
-        "boot.cmd does not collect replacement Wi-Fi PSKs in the protected "
+        "boot.cmd does not collect replacement Wi-Fi passwords in the protected "
         "USB-only prompt"
     ) in source
 
@@ -303,12 +308,16 @@ def test_pi4_image_build_serial_wifi_missing_policy_uses_simple_prompt() -> None
     assert "U-Boot policy missing:" not in boot_template
     assert "file-based policy recovery" not in boot_template
     assert "do not type PSK on serial" not in boot_template
-    assert "Serial Wi-Fi password entry is disabled because U-Boot echoes input" in (
-        wifi_capture
-    )
     assert (
-        "Stage coh_wifi_ssid and coh_wifi_psk in ${coh_policy_file} on the boot "
-        "partition, then reboot"
+        "Wi-Fi password entry is unavailable over serial because U-Boot echoes typed input"
+    ) in wifi_capture
+    assert (
+        "Connect a USB keyboard or create ${coh_policy_file} on the SD boot partition, "
+        "then restart"
+    ) in wifi_capture
+    assert "Existing Wi-Fi settings were not changed" in wifi_capture
+    assert (
+        "No Wi-Fi network is configured and local USB input is unavailable"
     ) in wifi_capture
     assert "setenv coh_menu_page interface" in wifi_capture
 
@@ -537,7 +546,7 @@ def test_pi4_image_build_bounds_and_validates_saved_policy() -> None:
         "wifi-psk-too-short",
     ):
         assert reason in policy_detect
-    assert "using manifest defaults" in policy_detect
+    assert "using default settings" in policy_detect
     assert "run coh_reset_policy" in policy_detect
 
 
@@ -556,7 +565,7 @@ def test_pi4_image_build_redacts_untrusted_wifi_ssid_from_output() -> None:
         if line.startswith("setenv coh_emit_policy_summary ")
     )
 
-    assert 'echo "[cohesix] wifi-ssid=<set>"' in summary
+    assert 'echo "[cohesix] Wi-Fi network: Configured (name hidden)"' in summary
     assert "wifi-ssid=${coh_wifi_ssid}" not in boot_template
 
 
@@ -584,6 +593,11 @@ def test_pi4_image_build_verifies_policy_before_reboot() -> None:
         for line in boot_template.splitlines()
         if line.startswith("setenv coh_prompt_root ")
     )
+    reset = next(
+        line
+        for line in boot_template.splitlines()
+        if line.startswith("setenv coh_confirm_reset ")
+    )
 
     assert "setenv coh_policy_persisted 0" in persist
     assert "env export -t -s ${coh_policy_max_size}" in persist
@@ -592,16 +606,22 @@ def test_pi4_image_build_verifies_policy_before_reboot() -> None:
     assert "fatload mmc 0:1 ${coh_policy_verify_addr}" in persist
     assert "setenv stdout nulldev; setenv stderr nulldev; if cmp.b" in persist
     assert "setenv coh_policy_persisted 1" in persist
-    assert "not rebooting" in persist
+    assert "not restarting" in persist
     assert "reset" not in persist
     assert (
         'if test "${coh_policy_persisted}" = "1"; then echo '
-        '"[cohesix] saved settings verified; rebooting"; reset'
+        '"[cohesix] Saved settings verified; restarting"; reset'
     ) in confirm
-    assert "save failed; review settings and retry" in confirm
-    assert "could not clear saved settings; reloading policy from SD" in root
-    assert "run coh_load_saved_policy" in root
-    assert "saved settings cleared; manifest defaults restored" in root
+    assert "Save failed; review settings and retry" in confirm
+    assert "setenv coh_menu_page reset" in root
+    assert "run coh_clear_saved_policy" not in root
+    assert "Reset saved settings?" in reset
+    assert "Confirm reset" in reset
+    assert "run coh_read_cancel_choice" in reset
+    assert 'askenv coh_choice "Select option [0]: "' in boot_template
+    assert "Could not reset saved settings; reloading settings from SD" in reset
+    assert "run coh_load_saved_policy" in reset
+    assert "Saved settings reset to defaults" in reset
 
 
 def test_pi4_image_build_wifi_credentials_are_replaceable_and_atomic() -> None:
@@ -624,16 +644,18 @@ def test_pi4_image_build_wifi_credentials_are_replaceable_and_atomic() -> None:
         if line.startswith("setenv coh_capture_wifi_credentials ")
     )
 
-    assert "Keep current Wi-Fi credentials" in wifi_setup
-    assert "Replace Wi-Fi credentials" in wifi_setup
-    assert "Back to interface selection" in wifi_setup
+    assert "Keep current Wi-Fi settings" in wifi_setup
+    assert "Change Wi-Fi network" in wifi_setup
+    assert "No Wi-Fi network is configured" in wifi_setup
+    assert "Enter Wi-Fi network" in wifi_setup
+    assert 'echo "  0. Back"' in wifi_setup
     assert "run coh_capture_wifi_credentials" in wifi_setup
     assert "askenv coh_wifi_ssid_new" in wifi_capture
     assert "askenv coh_wifi_psk_new" in wifi_capture
     assert wifi_capture.index('setenv coh_wifi_ssid "${coh_wifi_ssid_new}"') > (
         wifi_capture.index("run coh_end_wifi_secret_input")
     )
-    assert "existing credentials were not changed" in wifi_capture
+    assert "existing settings were not changed" in wifi_capture
     assert "setenv coh_wifi_ssid_new; setenv coh_wifi_psk_new" in wifi_capture
 
 
@@ -663,7 +685,7 @@ def test_pi4_image_build_menu_navigation_is_bounded_and_discardable() -> None:
     )
 
     assert 'while test "${coh_menu_running}" = "1"' in menu_loop
-    for page in ("root", "dhcp", "interface", "wifi", "static", "confirm"):
+    for page in ("root", "dhcp", "interface", "wifi", "static", "confirm", "reset"):
         assert f'"${{coh_menu_page}}" = "{page}"' in menu_loop
     assert "run coh_load_saved_policy; setenv coh_menu_page root" in dhcp
     assert "run coh_load_saved_policy; setenv coh_menu_page root" in confirm
@@ -676,9 +698,67 @@ def test_pi4_image_build_menu_navigation_is_bounded_and_discardable() -> None:
                 "setenv coh_wifi_setup ",
                 "setenv coh_static_setup ",
                 "setenv coh_confirm_prompt ",
+                "setenv coh_confirm_reset ",
             )
         ):
             assert "run coh_prompt_" not in line
+
+
+def test_pi4_image_build_menu_uses_consistent_operator_language() -> None:
+    """Menu labels must use familiar terms and one navigation convention."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    boot_template = source[
+        source.index('echo "[cohesix] pi4 autoboot script"') : source.index(
+            '\nEOF\n    sed -i \'\' "s/__COH_IMAGE__/'
+        )
+    ]
+    commands = {
+        line.split(" ", 2)[1]: line
+        for line in boot_template.splitlines()
+        if line.startswith("setenv coh_")
+    }
+
+    root = commands["coh_prompt_root"]
+    assert "Cohesix boot menu" in root
+    assert "Boot with saved settings" in root
+    assert "Boot with default settings" in root
+    assert "Change network settings" in root
+    assert "Boot logo: On (select to turn off)" in root
+    assert "Boot logo: Off (select to turn on)" in root
+    assert "Reset saved settings to defaults" in root
+    assert "Save settings and restart" in root
+    assert 'echo "  9. Advanced: Open U-Boot shell"' in root
+
+    for command in (
+        "coh_prompt_dhcp",
+        "coh_prompt_interface",
+        "coh_wifi_setup",
+        "coh_static_setup",
+        "coh_confirm_prompt",
+        "coh_confirm_reset",
+    ):
+        assert 'echo "  0.' in commands[command]
+        assert 'echo "  9. Advanced: Open U-Boot shell"' in commands[command]
+        assert 'test "${coh_choice}" = "9"' in commands[command]
+
+    assert 'test "${coh_choice}" = "  9"' in commands["coh_normalize_choice"]
+    assert "Automatic (DHCP)" in commands["coh_prompt_dhcp"]
+    assert "Manual (static IPv4)" in commands["coh_prompt_dhcp"]
+    assert "Ethernet (wired)" in commands["coh_prompt_interface"]
+    assert "Wi-Fi (wireless)" in commands["coh_prompt_interface"]
+    assert "Boot once without saving" in commands["coh_confirm_prompt"]
+
+    for obsolete in (
+        "DHCP ON",
+        "DHCP OFF",
+        "Wired Ethernet (GENET)",
+        "Wi-Fi (CYW43455)",
+        "Continue with existing config",
+        "Boot with manifest defaults",
+        "Exit to U-Boot prompt",
+    ):
+        assert obsolete not in boot_template
 
 
 def test_pi4_image_build_static_entry_has_validation_and_back_navigation() -> None:
@@ -696,8 +776,8 @@ def test_pi4_image_build_static_entry_has_validation_and_back_navigation() -> No
         if line.startswith("setenv coh_static_setup ")
     )
 
-    assert "Enter or replace static IPv4 settings" in static_setup
-    assert "Back to interface selection" in static_setup
+    assert "Enter manual IPv4 settings" in static_setup
+    assert 'echo "  0. Back"' in static_setup
     assert 'test "${coh_static_ip}" =~ "${coh_ipv4_text_regex}"' in static_setup
     assert (
         'test "${coh_static_prefix_len}" =~ "${coh_prefix_text_regex}"'

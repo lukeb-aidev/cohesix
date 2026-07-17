@@ -86,7 +86,7 @@ Options:
                              (default: 12)
   --console-ready-timeout <seconds>
                              Maximum extra time to wait for the Cohesix prompt,
-                             advancing the top-level U-Boot boot-options prompt
+                             advancing the top-level Cohesix boot menu
                              with its default choice when needed
                              (default: 60)
   --capture-seconds <n>      Delay after the final command before normalization
@@ -295,9 +295,9 @@ wait_for_console_ready() {
             return
         fi
         if [[ "${boot_options_advanced}" -eq 0 ]] \
-            && grep -q '\[cohesix\] Cohesix boot options' "${LOG_PATH}" \
+            && grep -q '\[cohesix\] Cohesix boot menu' "${LOG_PATH}" \
             && grep -q 'Select option \[1\]:' "${LOG_PATH}"; then
-            log "advancing Cohesix boot-options prompt with default selection"
+            log "advancing Cohesix boot menu with its displayed default selection"
             printf '1\r' > "${SERIAL_DEVICE}"
             boot_options_advanced=1
         fi

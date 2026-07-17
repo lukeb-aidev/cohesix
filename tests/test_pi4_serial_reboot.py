@@ -24,70 +24,92 @@ SPEC.loader.exec_module(pi4_serial_reboot)
 
 
 ROOT_MENU_SAVED = b"""
-[cohesix] Cohesix boot options
-[cohesix] Saved network settings detected
-[cohesix] mode=dhcp
-[cohesix] interface=wifi
-[cohesix] wifi-ssid=<redacted>
-  1. Continue with existing config
-  2. Configure networking
+[cohesix] Cohesix boot menu
+[cohesix] Saved network settings loaded
+[cohesix] IPv4: Automatic (DHCP)
+[cohesix] Network: Wi-Fi
+[cohesix] Wi-Fi network: Configured (name hidden)
+  1. Boot with saved settings
+  2. Change network settings
 Select option [1]:
 """
 
 ROOT_MENU_SAVED_WIRED = b"""
-[cohesix] Cohesix boot options
-[cohesix] Saved network settings detected
-[cohesix] mode=dhcp
-[cohesix] interface=wired
-  1. Continue with existing config
-  2. Configure networking
+[cohesix] Cohesix boot menu
+[cohesix] Saved network settings loaded
+[cohesix] IPv4: Automatic (DHCP)
+[cohesix] Network: Ethernet
+  1. Boot with saved settings
+  2. Change network settings
 Select option [1]:
 """
 
 ROOT_MENU_DEFAULTS = b"""
-[cohesix] Cohesix boot options
-[cohesix] No saved network settings; manifest defaults remain active
-  1. Boot with manifest defaults
-  2. Configure networking
+[cohesix] Cohesix boot menu
+[cohesix] Default network settings active
+  1. Boot with default settings
+  2. Change network settings
 Select option [1]:
 """
 
 DHCP_MENU = b"""
-[cohesix] Guided network setup
-[cohesix] Select address acquisition mode
-  1. DHCP ON (automatic address)
-  2. DHCP OFF (static IPv4)
-  3. Back to boot options
+[cohesix] Network setup (step 1 of 3)
+[cohesix] Choose IPv4 configuration
+  1. Automatic (DHCP)
+  2. Manual (static IPv4)
+  0. Back to boot menu
 Select option [1]:
 """
 
 INTERFACE_MENU = b"""
-[cohesix] Guided network setup
-[cohesix] Select active interface
-  1. Wired Ethernet (GENET)
-  2. Wi-Fi (CYW43455)
-  3. Back to DHCP selection
+[cohesix] Network setup (step 2 of 3)
+[cohesix] Choose network connection
+  1. Ethernet (wired)
+  2. Wi-Fi (wireless)
+  0. Back
 Select option [1]:
 """
 
 REVIEW_WIRED_DHCP = b"""
 [cohesix] Review network settings
-[cohesix] mode=dhcp
-[cohesix] interface=wired
-  1. Boot with these settings
-  2. Save settings and reboot
-  3. Edit settings
+[cohesix] IPv4: Automatic (DHCP)
+[cohesix] Network: Ethernet
+  1. Boot once without saving
+  2. Save settings and restart
+  3. Edit network settings
 Select option [1]:
 """
 
 REVIEW_WIFI_DHCP = b"""
 [cohesix] Review network settings
-[cohesix] mode=dhcp
-[cohesix] interface=wifi
-  1. Boot with these settings
-  2. Save settings and reboot
-  3. Edit settings
+[cohesix] IPv4: Automatic (DHCP)
+[cohesix] Network: Wi-Fi
+  1. Boot once without saving
+  2. Save settings and restart
+  3. Edit network settings
 Select option [1]:
+"""
+
+WIFI_MENU = b"""
+[cohesix] Network setup (step 3 of 3)
+[cohesix] Choose Wi-Fi network
+  1. Keep current Wi-Fi settings
+  0. Back
+Select option [1]:
+"""
+
+STATIC_MENU = b"""
+[cohesix] Network setup: manual IPv4
+  1. Enter manual IPv4 settings
+  0. Back
+Select option [1]:
+"""
+
+RESET_MENU = b"""
+[cohesix] Reset saved settings?
+  1. Confirm reset
+  0. Cancel
+Select option [0]:
 """
 
 
@@ -185,7 +207,7 @@ class NoReadyThenController(FakeController):
 
 
 def test_saved_wifi_uses_old_root_menu_option_one() -> None:
-    """Saved WiFi proof must use the old continue-with-existing-config path."""
+    """Saved Wi-Fi proof must use the saved-settings root path."""
 
     controller = FakeController()
 
@@ -528,23 +550,23 @@ def test_reboot_from_root_accepts_interleaved_attach_role_proof(
     assert ROOT_MENU_SAVED in snapshot
 
 
-def test_saved_wifi_refuses_manifest_defaults_when_policy_missing() -> None:
-    """WiFi proof must not silently boot manifest defaults after policy loss."""
+def test_saved_wifi_refuses_default_settings_when_policy_missing() -> None:
+    """Wi-Fi proof must not silently boot defaults after policy loss."""
 
     controller = FakeController()
 
-    with pytest.raises(RuntimeError, match="saved WiFi policy is not visible"):
+    with pytest.raises(RuntimeError, match="saved Wi-Fi policy is not visible"):
         pi4_serial_reboot.select_lane(controller, "wifi", ROOT_MENU_DEFAULTS)
 
     assert controller.sent == []
 
 
 def test_saved_wifi_refuses_saved_wired_policy() -> None:
-    """WiFi proof must not use option 1 when the saved policy is wired."""
+    """Wi-Fi proof must not use option 1 when the saved policy is wired."""
 
     controller = FakeController()
 
-    with pytest.raises(RuntimeError, match="saved network policy is not WiFi"):
+    with pytest.raises(RuntimeError, match="saved network policy is not Wi-Fi"):
         pi4_serial_reboot.select_lane(controller, "wifi", ROOT_MENU_SAVED_WIRED)
 
     assert controller.sent == []
@@ -568,8 +590,8 @@ def test_initial_menu_state_reads_current_menu_before_selecting_genet() -> None:
     assert controller.sent == ["2", "1", "1", "1"]
 
 
-def test_genet_uses_old_guided_menu_without_saving_policy() -> None:
-    """Genet proof uses DHCP and wired choices, then boots without saving."""
+def test_genet_uses_guided_menu_without_saving_policy() -> None:
+    """Ethernet proof uses DHCP and wired choices, then boots without saving."""
 
     controller = FakeController([DHCP_MENU, INTERFACE_MENU, REVIEW_WIRED_DHCP])
 
@@ -579,20 +601,69 @@ def test_genet_uses_old_guided_menu_without_saving_policy() -> None:
 
 
 def test_wifi_backs_out_of_dhcp_submenu_to_saved_root_menu() -> None:
-    """If the old menu is already in setup, WiFi returns to saved policy."""
+    """If the menu is already in setup, Wi-Fi returns to saved policy."""
 
     controller = FakeController([ROOT_MENU_SAVED])
 
     pi4_serial_reboot.select_lane(controller, "wifi", DHCP_MENU)
 
-    assert controller.sent == ["3", "1"]
+    assert controller.sent == ["0", "1"]
 
 
 def test_genet_edits_wifi_review_before_booting_wired() -> None:
-    """A stale WiFi review page is edited before selecting Genet DHCP."""
+    """A stale Wi-Fi review page is edited before selecting Ethernet DHCP."""
 
     controller = FakeController([DHCP_MENU, INTERFACE_MENU, REVIEW_WIRED_DHCP])
 
     pi4_serial_reboot.select_lane(controller, "genet", REVIEW_WIFI_DHCP)
 
     assert controller.sent == ["3", "1", "1", "1"]
+
+
+def test_genet_reselects_dhcp_from_an_existing_interface_page() -> None:
+    """An interface page may belong to manual mode, so DHCP is reselected."""
+
+    controller = FakeController([DHCP_MENU, INTERFACE_MENU, REVIEW_WIRED_DHCP])
+
+    pi4_serial_reboot.select_lane(controller, "genet", INTERFACE_MENU)
+
+    assert controller.sent == ["0", "1", "1", "1"]
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "expected"),
+    (
+        (WIFI_MENU, "wifi-setup"),
+        (STATIC_MENU, "static-setup"),
+        (RESET_MENU, "reset"),
+    ),
+)
+def test_menu_state_classifier_covers_every_submenu(
+    snapshot: bytes, expected: str
+) -> None:
+    """Serial automation recognizes every interactive menu page."""
+
+    assert pi4_serial_reboot.classify_menu_state(snapshot) == expected
+
+
+def test_wifi_backs_out_of_reset_confirmation_to_saved_root_menu() -> None:
+    """Cancel uses the same zero-key convention before a saved Wi-Fi boot."""
+
+    controller = FakeController([ROOT_MENU_SAVED])
+
+    pi4_serial_reboot.select_lane(controller, "wifi", RESET_MENU)
+
+    assert controller.sent == ["0", "1"]
+
+
+@pytest.mark.parametrize("snapshot", (WIFI_MENU, STATIC_MENU))
+def test_wifi_backs_out_of_nested_setup_pages_to_saved_root_menu(
+    snapshot: bytes,
+) -> None:
+    """Nested pages follow zero-key Back until the saved root state is reached."""
+
+    controller = FakeController([INTERFACE_MENU, DHCP_MENU, ROOT_MENU_SAVED])
+
+    pi4_serial_reboot.select_lane(controller, "wifi", snapshot)
+
+    assert controller.sent == ["0", "0", "0", "1"]

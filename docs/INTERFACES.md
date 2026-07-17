@@ -57,22 +57,41 @@ The import contract is:
   overrides and use selected-manifest defaults.
 
 File presence and saved-network state are deliberately distinct. A logo-only
-or cleared `cohesix.env` remains a valid file but produces the **Boot with
-manifest defaults** menu state. A coherent imported network tuple produces
-**Continue with existing config**. Back/discard transitions reload the file
-before returning to the root page, so working values cannot masquerade as
+or cleared `cohesix.env` remains a valid file but produces **Default network
+settings active** with the **Boot with default settings** action. A coherent
+imported network tuple produces **Saved network settings loaded** with **Boot
+with saved settings**. Back/discard transitions reload the file before
+returning to **Cohesix boot menu**, so working values cannot masquerade as
 persisted policy.
 
-The menu uses an iterative page dispatcher for root, address-mode, interface,
-Wi-Fi, static-address, and review pages. Existing Wi-Fi credentials can be kept
-or replaced. Secret entry is enabled only on the USB-keyboard/HDMI console;
-serial output is disabled during capture, and temporary replacement variables
-are not part of the export allowlist. SSIDs are also redacted from summaries so
-untrusted imported text cannot forge terminal or serial evidence. Save and
-clear operations export into a bounded buffer, write `cohesix.env`, verify its
-size, privately compare a readback copy, and set success only after exact
-agreement. Reset is never invoked after a failed export, write, size check,
-load, or comparison.
+The root menu exposes **Change network settings**, a stateful **Boot logo: On
+(select to turn off)** / **Boot logo: Off (select to turn on)** action, **Reset
+saved settings to defaults**, **Save settings and restart**, and **Advanced:
+Open U-Boot shell**. Reset has a separate **Reset saved settings?** confirmation
+page; `1` confirms, `0` cancels, and no persistent state changes before
+confirmation. Cancel is the Enter-key default. A confirmed reset writes a
+verified default policy rather than requiring deletion of `cohesix.env`.
+
+The menu uses an iterative page dispatcher for root, IPv4 configuration,
+network connection, Wi-Fi, manual IPv4, review, and reset-confirmation pages.
+Submenus consistently use `0` for **Back** or **Cancel** and `9` for
+**Advanced: Open U-Boot shell**. Operator-facing choices are **Automatic
+(DHCP)** / **Manual (static IPv4)** and **Ethernet (wired)** / **Wi-Fi
+(wireless)**. The review page distinguishes **Boot once without saving** from
+**Save settings and restart**; discard reloads persisted policy before returning
+to the root menu.
+
+Existing Wi-Fi settings can be kept or changed, and a reset followed by
+**Change network settings** creates a fresh saved policy for a different Wi-Fi
+network without a reflash. Credential entry is enabled only on the
+USB-keyboard/HDMI console. The display explicitly warns that the network name
+and password are visible on that display while serial output is disabled;
+temporary replacement variables are not part of the export allowlist. SSIDs
+are redacted from summaries so untrusted imported text cannot forge terminal or
+serial evidence. Save and reset operations export into a bounded buffer, write
+`cohesix.env`, verify its size, privately compare a readback copy, and set
+success only after exact agreement. Restart is never invoked after a failed
+export, write, size check, load, or comparison.
 
 At boot, selected non-empty overrides are projected into the staged DTB as
 `/chosen/cohesix,net-mode`, `cohesix,net-interface`,

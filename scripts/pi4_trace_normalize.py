@@ -36,6 +36,9 @@ WIFI_SECRET_REDACTIONS = (
     re.compile(r"(?i)(coh_wifi_psk=)([^ \t\r\n;]+)"),
     re.compile(r"(?i)(cohesix,wifi-psk=)([^ \t\r\n;]+)"),
     re.compile(r"(?i)(setenv\s+coh_wifi_psk\s+)([^;\r\n]+)"),
+    re.compile(
+        r"(?i)(Wi-Fi password \(leave blank for an open network\):\s*)(.*)"
+    ),
     re.compile(r"(?i)(Wi-Fi PSK \(blank for open network\):\s*)(.*)"),
 )
 TRACE_SEGMENT_RE = re.compile(
@@ -101,6 +104,7 @@ UBOOT_WIFI_POLICY_MISSING_MARKERS = (
     "has no saved wi-fi credentials",
     "serial wi-fi password entry is disabled because u-boot echoes input",
     "file-based policy recovery",
+    "no wi-fi network is configured and local usb input is unavailable",
 )
 BOOT_CHAIN_ROOT_MARKERS = (
     "u-boot ",
@@ -13668,9 +13672,23 @@ def uboot_menu_save_reset_slice(lines: list[str]) -> bool:
     """Return true for U-Boot menu settings saves that reset before Cohesix runs."""
 
     lowered = "\n".join(lines).lower()
+    saved = any(
+        marker in lowered
+        for marker in (
+            "[cohesix] saved settings to cohesix.env",
+            "[cohesix] saved and verified settings in cohesix.env",
+        )
+    )
+    restarting = any(
+        marker in lowered
+        for marker in (
+            "[cohesix] saved settings verified; restarting",
+            "resetting ...",
+        )
+    )
     return (
-        "[cohesix] saved settings to cohesix.env" in lowered
-        and "resetting ..." in lowered
+        saved
+        and restarting
         and "[cohesix:root-task] cohesix boot: root-task online" not in lowered
         and not any(marker in lowered for marker in BOOT_START_MARKERS)
         and not any(marker in lowered for marker in BOOT_CHAIN_CONTINUATION_MARKERS)
