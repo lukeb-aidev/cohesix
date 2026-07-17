@@ -39,11 +39,24 @@ The checked-in default and Pi 4 profiles currently declare the following:
 | WorkerLora | Model/session only | **Not executable** | Own Worker view plus bounded AI LoRA model receipts. It has no live target endpoint, separate root namespace, or file-backed LoRA lease. |
 
 No Worker role may be presented as an active target task until compiler IR is
-extended with the task-object contract and then accepts `implemented = true`
-for a selected manifest whose packaged image, live TCB/CSpace/VSpace,
-capability delivery, lifecycle handling, fault behavior, tests, and
-target-qualified milestone evidence agree. Current validation rejects that
-value.
+extended with a complete task-object contract and accepts
+`implemented = true` for the selected manifest. That value means the role is a
+statically configured executable candidate; it does not assert that a later
+target run has already passed. Operational and release claims additionally
+require separate exact-image QEMU and Pi acceptance records binding the kernel,
+resolved manifest, root image, Worker image, ABI version, and evidence pack.
+Current validation rejects `implemented = true`, and all current profiles
+therefore remain model/session-only.
+
+Pending Milestone 26e is the implementation owner that changes this as-built
+state: Heartbeat, GPU, and LoRA become mandatory executable roles with separate
+QEMU/Pi acceptance records, while WorkerBus alone remains model/session-only.
+Its planned receipt contract binds a specifically selected READY WorkerGpu to
+GPU lease grant/renew/release results and a specifically selected READY
+WorkerLora to PEFT export/import/activate/rollback results through versioned
+records on the existing host-ticket paths; all GPU and PEFT execution remains
+host-side. This paragraph is a plan reference, not evidence that the pending
+binaries or task objects already exist.
 
 ## Namespace views
 
@@ -158,8 +171,14 @@ Worker authority has two distinct layers:
 1. **Session authority.** A valid role, subject, ticket, lifecycle gate, and
    namespace scope authorize an operation at the control-plane layer.
 2. **seL4 invocation authority.** A future executable target role must receive
-   a live endpoint cap and lifecycle notification cap whose badges encode the
-   action, role, epoch, and event class.
+   a live Write-only output endpoint cap whose immutable badge identifies
+   `(role, slot, logical lease epoch, supervisor generation, cap generation)`
+   and a Read-only lifecycle
+   notification cap whose one-hot badges identify wake events. ABI action is a
+   validated message label, while sequence, generation, TTL, pressure, and
+   other structured data live in bounded control/completion records; badges do
+   not carry that data. The Worker's active scheduling context binds only to
+   its TCB, never to the notification.
 
 Current checked-in profiles implement only the first layer. They disable
 endpoint-cap and notification authority for every target Worker role. The

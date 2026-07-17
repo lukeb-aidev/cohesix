@@ -40,12 +40,12 @@ outside the verified configuration.
 | Untyped retype, CNodes, guarded CSpaces, mint/copy/delete/revoke | Used by root bootstrap and isolated physical-driver construction. | Retain; focused tests and target evidence remain authoritative. |
 | Separate TCB/VSpace/ASID/IPC-buffer construction | Used for manifest-declared physical-driver runtimes. General Worker roles are currently model/session scaffolding, not launched target tasks. | Preserve driver-task implementation; remove unsupported Worker-task claims and route root-service/Worker isolation to pending Milestone 26e. |
 | Endpoint IPC, notifications, IRQ delivery and badges | Used for root/driver paths. Generated Worker badge ranges are reserved metadata until a live Worker task receives and invokes the corresponding caps. | Require target invocation evidence before describing Worker authority as cap-backed. |
-| Fault endpoints | Root receives and decodes faults and suspends faulting driver TCBs. Full role/lease/epoch cap-bundle revocation, quarantine, and fresh-lease restart are not built. | Preserve the basic handler; route complete Worker/driver bundle lifecycle to Milestone 28e. |
+| Fault endpoints | Root receives and decodes faults and suspends faulting driver TCBs. General Workers are not yet live, and production Worker ticket/lease binding plus structured Worker/driver quarantine evidence are not built. | Preserve the current handler in 26d. Route complete live Worker bundles, MCS fault/Reply lanes, teardown, and linked-driver MCS containment to Milestone 26e; route only production Worker ledger binding, ticket-free driver-inventory projection, and structured quarantine/restart evidence to Milestone 28e. |
 | AArch64 page attributes and cache maintenance | The isolated-runtime loader now rejects W+X segments/pages, maps only validated read-only code executable, maps all non-code aliases XN, and unmaps executable frames' writable root aliases before TCB resume. | Source closure implemented with focused policy/order tests; target-qualified boot evidence remains separate. |
 | SMP and TCB affinity | Selected QEMU/Pi operational profiles use four nodes and apply root-authority/driver affinity. General Worker and NineDoor operations remain in-process and do not have separate TCB affinity. seL4 15 SMP is supported but unverified. | Retain as the operational lane; never collapse it into verified-kernel evidence. |
 | QEMU GICv3 | The canonical production default is `out/sel4/profile-v2/qemu-smp-production`, rebuilt from the pinned v15 project, and passes source, cache, generated-config, dual-DTB, launcher, toolchain, causal-stamp, archive-capacity, and artifact validation. Build, release, regression, staged-test, and newcomer entrypoints consume and validate it by default. The five-stage target-qualified run at `out/test-plan/m26d-qemu-sel4-15-gap-audit` boots the linked image with `gic-version=3` and passes authenticated TCP and REST regressions. Preserved legacy GICv2 trees are explicit diagnostic inputs only. | Profile, consumer, and current QEMU runtime closure implemented; keep this evidence separate from Pi and formal-proof claims. |
 | Runtime domain schedule | Operational SMP profiles use one domain. The canonical wrapper omits the obsolete sel4test `KernelDomainSchedule` input and the validator rejects its reappearance. Preserved legacy trees still contain it. | Keep one domain and use wrapper-built trees for claims; do not normalize legacy caches by hand. |
-| MCS scheduling contexts, reply objects, timeout faults and SC donation | Not used in the accepted 26d build. Current service-turn budgets are cooperative non-MCS policy. | Retain non-MCS only through 26d. Pending tasks `m26e-mcs-abi-foundation` and `m26e-mcs-smp-target-acceptance` make four-core SMP+MCS the sole operational QEMU/Pi architecture; no runtime classic fallback is planned. |
+| MCS scheduling contexts, reply objects, timeout faults and SC donation | Not used in the accepted 26d build. Current service-turn budgets are cooperative non-MCS policy, and linked-driver MCS cfg paths are stubs rather than runnable service loops. | Retain non-MCS only through 26d. Pending tasks `m26e-mcs-abi-foundation`, `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, and `m26e-mcs-smp-target-acceptance` make four-core SMP+MCS the sole operational QEMU/Pi architecture, add independent Worker/driver supervisors and exact faulted-call Reply recovery, and retain no runtime classic fallback. |
 | Verified-configuration alignment | Operational production and diagnostic profiles are distinct SMP contracts; neither is represented as the tag-pinned AArch64 verified configuration. A separate pristine BCM2711 proof-eligibility build passes its static contract. | Retain the proof lane only as upstream configuration compatibility, explicitly not a Cohesix proof or operational boot claim. |
 | Hypervisor/VCPU | No guest-VM requirement exists in the active architecture. | Keep disabled in operational profiles. The proof-eligibility reference may use the upstream HYP configuration without making it the product profile. |
 | SMMU | No supported BCM2711 SMMU boundary exists in the selected profile. | Keep disabled and retain `bounded-no-iommu` wording. |
@@ -133,13 +133,20 @@ outside the verified configuration.
 - Manifest validation now rejects any `implemented=true` Worker role until IR
   contains the image, TCB, CSpace, VSpace, IPC-buffer, stack, fault, and
   revocation state needed for an executable task-object contract.
-- Full role/lease/epoch cap bundles and structured revoke/restart remain
-  Milestone 28e work.
+- Complete Worker and linked-driver cap bundles, fault/Reply ownership, and
+  basic revoke/teardown belong to Milestone 26e. Milestone 28e adds production
+  Worker ticket/lease-to-bundle ledger binding, ticket-free driver-inventory
+  projection, structured quarantine evidence, fresh-ticket Worker restart, and
+  fresh-generation driver recovery.
 - MCS activation and root-service/Worker decomposition are routed together to
   the ordered Milestone 26e tasks. `m26e-mcs-abi-foundation` freezes the MCS
-  object/IPC/generated contract before child extraction, and
-  `m26e-mcs-smp-target-acceptance` requires exact four-core QEMU and fresh Pi
-  evidence before closure. Neither is silently authorized by the phrase "use
+  object/IPC/generated contract before child extraction,
+  `m26e-driver-runtime-mcs-port-and-cyw43-coexistence` replaces current driver
+  MCS stubs while freezing CYW43 behavior, and
+  `m26e-mcs-smp-target-acceptance` is a verification-only frozen-artifact gate
+  that requires positive exact-image CYW43 closure plus matching QEMU/Pi
+  Worker-component, root-TCB, and full-system records before closure or release
+  promotion. Neither is silently authorized by the phrase "use
   more seL4 features," and failure requires atomic code/configuration reversion
   rather than a shipped non-MCS fallback.
 

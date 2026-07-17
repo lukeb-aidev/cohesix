@@ -42,6 +42,10 @@ runtime fallback, compatibility mode, or selectable scheduler profile.
   and consumed-budget evidence are zero or false.
 - Root and driver paths use classic reply capabilities and do not allocate or
   configure SchedContext or Reply objects.
+- Linked-driver MCS cfg paths are nonfunctional stubs (`RuntimeWake::None` in
+  the runtime and an unsupported `wfe` trampoline in root), so an MCS-only
+  kernel requires an explicit shared driver scheduler/IPC port and a newly
+  hashed runtime archive; byte-identical payload preservation is impossible.
 - Cooperative service-turn limits bound root-task work but do not provide
   kernel-enforced CPU-time isolation.
 - General Worker roles are not currently launched target TCBs, so assigning
@@ -83,11 +87,44 @@ runtime rollback after acceptance.
    - Prove that every blocking Call/Recv/Reply path owns or receives the correct
      scheduling context and cannot strand donated authority.
    - Reserve independent active scheduling contexts and admitted CPU time for
-     root/Queen authority, emergency serial, and fault/fatal supervision.
+     distinct root/Queen-control, emergency-serial, fault/fatal-supervisor,
+     Worker-supervisor, and driver-supervisor TCBs. Several SC records do not
+     make the current single event-pump TCB independently schedulable.
+   - Generate bounded nonblocking root-control and root-fault handoff records,
+     separate Worker/driver supervisor wake notifications with disjoint one-hot
+     badge ranges, exact rights, and an acyclic critical-TCB fault graph.
+     Root-fault failure routes to root-emergency; root-emergency never handles
+     itself.
    - Default asynchronous network, IRQ/DPC, periodic Worker, and locality-bound
      work to dedicated active contexts. Permit passive donation only for
      compiler-allowlisted short synchronous paths with bounded call depth and
      complete Reply/timeout/revoke proof. Never delegate SchedControl.
+   - Give every first-generation Heartbeat/GPU/LoRA Worker one dedicated active
+     SC and prohibit normal Worker Call/Reply donation, including
+     `seL4_NBSendRecv`. Worker lifecycle notifications wake an already active
+     TCB; they do not carry structured data or supply a second scheduling model.
+     WorkerBus remains model/session-only.
+   - Use durable per-slot completion records plus the supervisor wake
+     notification for required READY/receipt results. Permit only droppable,
+     counted `NBSend` telemetry on the Write-only badged output endpoint; normal
+     Worker IPC has no blocking Send, Call, Reply, or donation path.
+   - Give child fault caps `Write + GrantReply`, the root-fault receiver a
+     Read-only cap and explicit Reply-lane cardinality, make ordinary Worker
+     faults terminal without Reply, and allow exactly one typed Reply only for
+     generated recoverable timeout cases.
+   - Port every linked driver to a real active-SC MCS receive/Reply/
+     notification loop. Driver work is notification-woken on the SC bound to
+     its TCB, never notification-funded or SC-bound to the notification. Root
+     command caps are `Write + GrantReply` without `Grant`; driver receive/IRQ
+     wait caps are Read-only and software signal caps are Write-only. A separate
+     driver supervisor owns retained containment and command-Reply recovery
+     caps so a driver fault during `Call` produces exactly one typed failure to
+     the blocked root caller, then the supervisor suspends the TCB to clear and
+     verify the independent fault Reply association before the runtime is
+     revoked. Preserve CYW43/SDIO ownership, state machine,
+     timing, retries, rings, recovery ordering, and error outcomes; retain the
+     classic artifact as comparator, emit a new MCS archive hash, and rerun
+     exact-image coexistence proof separately.
 3. **WCET and admission**
    - Measure the selected QEMU and Pi kernels rather than accepting platform
      default WCET constants as a Cohesix bound.
@@ -105,13 +142,22 @@ runtime rollback after acceptance.
      no ACK/ERR/END, driver, or operator-liveness regression.
    - Keep the retired 26d classic baseline, four-core QEMU, and fresh Pi results
      as separate evidence classes.
-   - Validate cold/warm boot, overload, timeout, fault, revoke/restart, SC leak,
-     CYW43 coexistence, per-core admission/reserves, and performance before 26e
-     closes.
+   - Validate cold/warm boot, overload, timeout, fault, faulted-driver-call
+     recovery, complete Worker
+     task-instance teardown, fresh supervisor-generation recreation, SC/Reply/
+     cap/mapping/record leaks, CYW43 coexistence under the new MCS driver hash,
+     all five critical root reserves, exact WorkerGpu/WorkerLora host-tool
+     receipt correlation, and performance before 26e closes. Final release
+     promotion consumes matching QEMU/Pi Worker-component, root-TCB, and
+     full-system records and their complete kernel/root/driver/CYW43/Worker hash
+     graph. Fresh-ticket Worker restart, ticket-free driver-inventory ledger
+     projection, and production quarantine evidence remain the distinct 28e
+     extension; drivers never receive ticket material.
 
 ## Acceptance and atomic reversion
 
-Pending Milestone 26e tasks `m26e-mcs-abi-foundation` and
+Pending Milestone 26e tasks `m26e-mcs-abi-foundation`,
+`m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, and
 `m26e-mcs-smp-target-acceptance` in
 [`docs/BUILD_PLAN.md`](../BUILD_PLAN.md#26e) own the transition. They update the
 version-pinned syscall/runtime layer, compiler IR, generated artifacts, kernel

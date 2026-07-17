@@ -125,10 +125,10 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [27d](#27d) | Operator-Lane Scheduler + Multi-Surface Responsiveness | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
-| [28b1](#28b1) | Provider Action Registry + Ecosystem Coexistence Conformance | Pending |
-| [28c](#28c) | Host-Side AI Coexistence: Delegated Runs, Durable Context, Provider Receipts | Pending |
+| [28b1](#28b1) | Host Integration Registry + Provider/Executor + Use-Case Conformance | Pending |
+| [28c](#28c) | Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT | Pending |
 | [28d](#28d) | MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later | Pending |
-| [28e](#28e) | VM Cap-Bundle Authority + Structured Fault Lifecycle | Pending |
+| [28e](#28e) | Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle | Pending |
 | [28f](#28f) | SwarmUI Desktop Workbench: Spectrum Shell + Live Hive Continuity | Pending |
 | [29](#29) | Edge Local Status (Pi 4 Host Tool) | Pending |
 | [29a](#29a) | Pi 4 Root-Shell Hardware Status (`hw-status`) | Pending |
@@ -1533,9 +1533,16 @@ Deliverables:
 ## Milestone 18 — Field Bus & Low-Bandwidth Sidecars (Host/Worker Pattern) <a id="18"></a> 
 [Milestones](#Milestones)
 
-**Status:** Complete. The bounded `m18-remove-hallucinated-lora-radio` defect
+**Status:** Reopened — the bounded `m18-remove-hallucinated-lora-radio` defect
 correction, discovered during the Milestone 26c documentation audit, closed on
-2026-07-15. The implemented MODBUS and DNP3 sidecar contract remains complete.
+2026-07-15, but the later production-surface audit found that the claimed live
+MODBUS/DNP3 delivery path is still only an in-memory model. `BusAdapter` returns
+`Delivered` while online without performing protocol I/O, and the MODBUS and
+DNP3 types are aliases over that queue. The compiler-declared namespace and
+bounded-spool model remain useful, but they are not live protocol integration
+evidence. This reopened scope is limited to completing the original host-side
+MODBUS/DNP3 promise; `worker-bus` remains the one intentionally model/session-
+only Worker role.
 Historical references that attached a radio subsystem to lowercase `lora`
 identifiers are invalid: Cohesix does not implement or target that subsystem.
 `LoRA`, `worker-lora`, and lowercase `lora` identifiers refer only to the AI
@@ -1544,7 +1551,7 @@ adapter/model lifecycle.
 ```text
 Title/ID: m18-remove-hallucinated-lora-radio
 Milestone: Milestone 18 — Field Bus & Low-Bandwidth Sidecars / reopened defect discovered by Milestone 26c README-linked documentation remediation
-Goal: Remove the fabricated radio subsystem attached to lora identifiers while preserving the implemented MODBUS/DNP3 sidecars and the root-owned AI LoRA receipt model.
+Goal: Remove the fabricated radio subsystem attached to lora identifiers while preserving the declared bounded MODBUS/DNP3 sidecar model for the separately reopened live-delivery task and the root-owned AI LoRA receipt model.
 Inputs: tools/coh-rtc/src/{ir.rs,codegen}, configs/root_task*.toml, apps/{sidecar-bus,worker-lora,nine-door,root-task}, scripts/cohsh/sidecar_integration.coh, README.md, docs/{GLOSSARY,INTERFACES,SECURITY,ROLES_AND_SCHEDULING,USE_CASES}.md, generated artifacts, current tests, immutable release snapshots.
 Changes:
   - tools/coh-rtc, source manifests, and generated artifacts — remove sidecars.lora, the /lora radio namespace, regional-band, transmit, duty-cycle, payload, and radio-tamper schema and outputs; retain AI LoRA worker-role and PEFT schema.
@@ -1575,7 +1582,7 @@ Commands:
   - cargo deny check advisories
 Checks:
   - Current source, manifests, generated artifacts, tests, scripts, and canonical docs contain no radio-specific region, transmission, duty-cycle, or radio-tamper behavior or claim under lora identifiers.
-  - sidecars.lora is rejected as an unknown manifest field; MODBUS/DNP3 sidecars still pass their existing bounded-spool and authority tests.
+  - sidecars.lora is rejected as an unknown manifest field; the MODBUS/DNP3 model still passes its bounded-spool and authority tests without those tests being labelled live protocol evidence.
   - The root-owned WorkerLora receipt model remains available without claiming an executable target role, and /queen/export/lora_jobs plus host PEFT policy remain unchanged.
   - Generated-artifact drift, focused tests, workspace checks, local links, Markdown structure, and GitHub Mermaid validation pass.
 Deliverables: Corrected compiler/runtime/docs suite, regenerated default-profile artifacts, regression evidence, and a release erratum without mutating historical release bundles.
@@ -1620,9 +1627,36 @@ driven by compiler-declared mounts and capability policies.
 
 **Historical completion boundary:** The MODBUS/DNP3 host-side framework,
 compiler-declared `/bus` contract, CLI regression coverage, and documentation
-remain accepted; Milestone 17 boundary remains
+remain accepted only as a contract/model baseline. They do not prove serial or
+TCP protocol delivery, remote acknowledgement, restart-safe replay, or live
+interoperability. Milestone 17 boundary remains
 `3e6faa33410af58ed8d1942ce58ab701a276b882`. The invalid radio-specific `lora`
-surface described above has been removed, so this milestone is closed again.
+surface described above has been removed; that radio-only defect is closed,
+while the live MODBUS/DNP3 delivery defect remains reopened as scoped above.
+
+```text
+Title/ID: m18-live-modbus-dnp3-sidecars
+Milestone: Milestone 18 — Field Bus & Low-Bandwidth Sidecars / reopened live-delivery defect discovered by the Milestone 28b1 production-surface audit
+Goal: Replace the in-memory online-delivery model with real bounded host-side MODBUS RTU/TCP and DNP3 client adapters while keeping WorkerBus model/session-only.
+Inputs: apps/sidecar-bus/**, apps/host-sidecar-bridge/**, tools/coh-rtc/src/**, configs/root_task*.toml, scripts/cohsh/sidecar_integration.coh, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md, docs/TEST_PLAN.md, and the 28b1 provider/integration registry contract.
+Changes:
+  - tools/coh-rtc/src/** + configs/root_task*.toml — generate exact MODBUS unit/register/coil maps and DNP3 outstation/object/variation maps, serial/TCP endpoint bounds, polling/deadline/reconnect policy, read actions, separately approved write/control allowlists, capability scopes, spool durability, and evidence requirements; reject free-form addresses, functions, objects, or control payloads.
+  - apps/sidecar-bus/** — add a host executable and real bounded MODBUS RTU/TCP and DNP3 client codecs/transports. `Delivered` is emitted only after the remote protocol acknowledgement; exception/status codes, timeout, disconnect, partial frame, duplicate, and reconnect map to typed Cohesix outcomes. No protocol stack or TCP listener enters the VM.
+  - apps/sidecar-bus/** — replace drain-before-ack with a crash-safe bounded WAL/spool carrying sequence, target, operation fingerprint, attempt state, acknowledgement, and deadletter status. Restart resumes unacknowledged entries without silently dropping or duplicating a write.
+  - apps/host-sidecar-bridge/** + NineDoor host projection — publish authenticated, versioned, TTL-bound read snapshots and approved terminal action receipts over the existing Secure9P/host-ticket surfaces; stale or absent links withdraw state instead of returning success.
+  - interoperability and packaging — add deterministic protocol simulators plus at least one live RTU/TCP and DNP3 interoperability transcript per supported host profile, negative safety/refusal cases, exact package manifests, hardened service definitions, and evidence-pack reconstruction.
+  - canonical docs and historical errata — describe the contract/model baseline separately from live provider acceptance and correct prior claims without mutating historical release snapshots.
+Commands:
+  - cargo test -p sidecar-bus --features modbus,dnp3
+  - cargo test -p host-sidecar-bridge
+  - cargo test -p coh-rtc
+  - scripts/ci/provider_conformance_run.sh --provider modbus --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m18-modbus
+  - scripts/ci/provider_conformance_run.sh --provider dnp3 --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m18-dnp3
+  - scripts/cohsh/run_regression_batch.sh
+  - scripts/check-generated.sh
+Checks: online delivery performs real protocol I/O and requires the matching remote acknowledgement; serial/TCP framing, exception/status mapping, reconnect, duplicate suppression, WAL recovery, bounds, authorization, read-only defaults, separately approved controls, namespace publication, and package manifests pass; absent or stale providers are typed unavailable; no mock, simulator, queue-only result, or WorkerBus model state can satisfy live provider or production use-case evidence.
+Deliverables: Real host-only MODBUS/DNP3 integrations, durable acknowledgement-aware delivery, exact live conformance evidence, and an explicitly model-only WorkerBus boundary.
+```
 
 **Use-case alignment**
 - Industrial IoT gateways (Edge §1) gain MODBUS integration without bloating the VM.
@@ -6011,7 +6045,21 @@ The next planned releases target official Raspberry Pi 4 bare-metal boot (`U-Boo
 ## Milestone 26 — Official Pi 4 Bring-up (U-Boot + Binary Image) <a id="26"></a> 
 [Milestones](#Milestones)
 
-**Status:** In Progress — pivoted on February 23, 2026 from UEFI `BOOTAA64.EFI` bring-up to the official upstream seL4 Raspberry Pi 4 flow (`U-Boot + binary image`).
+**Status:** In Progress — pivoted on February 23, 2026 from UEFI `BOOTAA64.EFI` bring-up to the official upstream seL4 Raspberry Pi 4 flow (`U-Boot + binary image`). The device-identity/attestation definition of done is reopened by `m26-device-identity-attestation-closure`; current deterministic measurement hashing is not TPM or DICE attestation and cannot unlock production ticket authority.
+
+**As-built attestation correction:** `apps/root-task/src/attest.rs` currently
+hashes the selected policy label and manifest fingerprint, labels that result
+`tpm` or `dice` from configuration, and then installs generated static ticket
+keys. It performs no TPM command, nonce-bound quote, device-bound DICE
+derivation, certificate/signature validation, secure-boot-chain measurement,
+or secret unsealing. The Pi profile also selects `tpm-or-dice` while declaring
+`secure_boot = false` and no TPM device. That output is useful reproducible
+measurement metadata only. It must be reported as `measurement_only`, never as
+attestation, and cannot satisfy the existing Milestone 26 attestation check or
+any downstream `coh attest`, ticket-sealing, release, or production-use-case
+claim. Planning this correction does not authorize edits to the parallel CYW43
+lane; implementation is sequenced after its exact-image surface is frozen and
+must re-prove the resulting root/image identity separately.
 
 **Why now (context):**  
 Upstream seL4 Pi 4 bring-up documentation originally used direct U-Boot image loading examples on `bcm2711`, not a UEFI handoff chain. Cohesix now follows the active staged U-Boot path: `scripts/pi4-image-build.sh` builds `seL4/build_UBOOT`, stages the seL4 binary image, driver-runtime CPIO, and padded DTB, then hands off with `bootm <image> <runtime-cpio> <dtb>`. This preserves deterministic control at the U-Boot prompt while matching the isolated runtime layout used by Milestone 26a/26b.
@@ -6068,9 +6116,20 @@ Deliver a **Pi firmware -> U-Boot -> seL4 image -> root-task** boot path on Rasp
   - Explicitly document that QEMU harness does not prove Pi 4 USB keyboard, HDMI, or GENET hardware behavior.
 
 - **Identity & attestation**
-  - Identity subsystem remains in root-task (TPM 2.0 or declared DICE fallback).
-  - Capability ticket seeds are sealed only after successful attestation.
-  - Attestation evidence bound to manifest fingerprint is appended to `/proc/boot` and exported via NineDoor.
+  - Root retains attestation policy and ticket-authority admission, while any
+    physical TPM transport follows the mandatory isolated-driver/HAL boundary.
+    A DICE mode is valid only when a device-bound CDI and signed certificate
+    chain are established before root-task; hashing public configuration in
+    root is not a DICE fallback.
+  - Capability ticket seeds are TPM-sealed or DICE-derived and become usable
+    only after the selected measured-boot policy and signed evidence validate.
+    Raw production seeds are never emitted into generated Rust, manifests,
+    images, logs, or release bundles.
+  - Versioned, nonce-bound evidence is bound to the exact boot, kernel, root,
+    resolved manifest, and image identities and projected through bounded
+    `/proc/attest/*` nodes over existing Secure9P/console transport semantics.
+    Measurement-only and unavailable states remain explicit and fail closed
+    when attestation is required.
 
 - **Schema & validation**
   - Introduce profile naming aligned to boot reality (`pi4-uboot-aarch64`), with a compatibility alias from `uefi-aarch64` permitted only during migration.
@@ -6122,7 +6181,7 @@ Deliver a **Pi firmware -> U-Boot -> seL4 image -> root-task** boot path on Rasp
 - `cohesix>` prompt appears on HDMI text output and accepts USB keyboard commands (`help`, `bi`, `caps`, `ping`) with unchanged parser semantics.
 - Command responses typed on USB keyboard are visible on HDMI and match serial transcript semantics.
 - Manifest fingerprint is printed and matches packaged hash.
-- If `hw.attestation.enabled=true`, attestation succeeds and evidence hash matches manifest fingerprint; if unavailable, boot aborts deterministically.
+- If `hw.attestation.required=true`, a real nonce-bound TPM2 Quote or device-bound DICE signature chain validates against the configured trust policy before ticket authority is published; measurement-only, replayed, stale, unsigned, wrong-boot, or unavailable evidence aborts deterministically. Merely matching a manifest hash is not attestation.
 - Milestone 26 runtime on Pi 4 emits deterministic no-NIC evidence and does not require TCP console reachability.
 - Root-task post-seL4 paths use HAL-only device access; no direct firmware-service assumptions in runtime code.
 - macOS QEMU U-Boot harness can execute U-Boot env/network commands for script validation; Pi 4 hardware remains authoritative for USB/HDMI/NIC proof and QEMU timing is not accepted as Pi hardware latency evidence.
@@ -6194,6 +6253,30 @@ Checks:
   - `hw.local_seat.required=true` fails fast when dependencies are unsatisfied.
 Deliverables:
   - Pi 4 local-seat evidence proving `cohesix>` command loop on USB keyboard + HDMI.
+
+---
+
+Title/ID: m26-device-identity-attestation-closure
+Milestone: Milestone 26 — Official Pi 4 Bring-up / reopened device-identity, attestation, and ticket-secret defect
+Goal: Replace configuration hashing presented as TPM/DICE evidence with real device-bound, freshness-protected attestation and prevent authority publication when no accepted trust root exists.
+Inputs: apps/root-task/src/{attest.rs,kernel.rs,ninedoor.rs}, apps/pi4-driver-runtime/**, tools/coh-rtc/src/**, configs/root_task*.toml, selected seL4/U-Boot/QEMU/Pi images, host secret and trust-anchor tooling, docs/ARCHITECTURE.md, docs/HARDWARE_BRINGUP.md, docs/INTERFACES.md, docs/SECURITY.md, docs/TEST_PLAN.md, and the frozen CYW43 image identity when implementation begins.
+Changes:
+  - tools/coh-rtc/src/** + configs/root_task*.toml — replace ambiguous `tpm-or-dice` selection with explicit `disabled|measurement_only|tpm2_quote|dice_evidence` implementation modes plus `required`, algorithms, bounded measurement/PCR policy, trust-anchor references, evidence/challenge limits, freshness window, ticket-key policy, and exact device/boot-chain prerequisites. Production generation rejects an attestation claim without a declared usable trust root, rejects DICE with no device-bound CDI chain, rejects TPM mode with no isolated TPM device contract, and rejects literal/static production ticket keys.
+  - apps/pi4-driver-runtime/** + HAL manifests — when TPM mode is selected, add the least-authority isolated TPM transport/runtime required for bounded TPM2 startup, PCR read/extend policy, quote, and sealed-object unseal. Root receives typed evidence/results only; it receives no direct physical bus/MMIO shortcut and no raw endorsement or storage key.
+  - boot/U-Boot handoff + apps/root-task/src/attest.rs — for DICE mode, consume a read-once, versioned, signed evidence descriptor rooted in a device-bound CDI/attestation key established before root-task. For TPM mode, request a TPM2 Quote over the generated PCR selection. Both evidence forms bind verifier nonce, boot/session id, monotonic/replay data, firmware/U-Boot/seL4 kernel/root/runtime archives/resolved-manifest/image hashes, algorithms, public-key/certificate chain, and signature.
+  - apps/root-task/src/ninedoor.rs + generated interface — add bounded `/proc/attest/{capabilities,status,challenge,evidence}` semantics. `challenge` accepts only an authenticated, rate-limited, fixed-schema nonce request; `evidence` returns the uniquely correlated signed result. This is an ephemeral evidence operation over existing transport/authority, not a general RPC or configuration mutation.
+  - ticket authority — replace generated static production role keys with TPM-sealed role material or DICE-domain-separated key derivation. Ticket publication occurs only after the selected measurement policy and signed chain validate; failure leaves ticket/network write authority unavailable while preserving the emergency serial failure report required by the profile.
+  - QEMU/Pi evidence — use a vTPM only as explicit QEMU virtual-device evidence and require real Pi hardware TPM or a genuine Pi device-bound DICE/secure-boot chain for Pi attestation acceptance. If neither exists, the Pi profile reports `measurement_only` or `unavailable`; it may boot only when attestation is not required and cannot make an attested-production claim.
+  - docs/tests/release — add enrollment/trust-anchor, rotation, nonce freshness, replay, wrong-PCR, wrong-image, wrong-key, expired-chain, TPM reset, DICE-chain, unavailable-device, secret-scan, and power-loss cases; historical deterministic hashes remain measurement fixtures and are never promoted.
+Commands:
+  - cargo test -p coh-rtc attestation
+  - cargo test -p root-task --tests attest
+  - cargo test -p pi4-driver-runtime --features tpm2
+  - scripts/check-generated.sh
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26-attestation-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26-attestation-pi4
+Checks: a fresh verifier nonce produces a valid TPM2 Quote or DICE signature chain bound to the exact accepted image and manifest; replay, public-data hash synthesis, missing CDI/TPM, wrong measurement, stale nonce, signature/chain failure, static key material, and fixture substitution fail before ticket publication; QEMU virtual evidence and Pi hardware/device-root evidence remain distinct; no CYW43 behavior or proof classification is edited.
+Deliverables: Honest measurement-versus-attestation states, real device-bound signed evidence, sealed/derived ticket authority, host-verifiable freshness, and separate QEMU/Pi acceptance records.
 
 ---
 
@@ -7096,8 +7179,9 @@ notifications, or MCS scheduling require a future explicitly authorized atomic
 task that also satisfies the 26d MCS and root-TCB decision gates. Milestone 26e
 owns root-service and Worker task isolation plus the SMP+MCS architecture and
 target acceptance; Milestone 27d validates mixed-load operator scheduling on
-that accepted architecture, and Milestone 28e owns full production cap bundles and structured fault
-lifecycle. Other accepted 26c QEMU/Pi evidence remains
+that accepted architecture, and Milestone 28e owns production Worker
+ticket/lease ledger binding, complete driver-inventory projection, and
+structured quarantine/evidence. Other accepted 26c QEMU/Pi evidence remains
 historical and is not invalidated by this correction.
 
 The original QEMU and Pi 4 closure remains accepted. QEMU closure is anchored
@@ -7124,8 +7208,9 @@ It does not substitute for current-image Milestone 26d Pi 4 revalidation.
 - Future Worker/root-task isolation and the one SMP+MCS QEMU/Pi transition must
   land and obtain target acceptance in Milestone 26e. Milestone 27c optimizes
   that accepted scheduler with core-local service buckets, Milestone 27d proves
-  mixed-load operator responsiveness on it, and Milestone 28e completes cap
-  bundles/fault lifecycle. Each requires its own post-behavior
+  mixed-load operator responsiveness on it, and Milestone 28e binds production
+  Worker ticket/lease ledgers, projects the already complete driver inventory,
+  and adds structured quarantine/evidence. Each requires its own post-behavior
   external-contract baseline.
 - The target-qualified staged runner is an enabling blocker, not merely closure polish. `scripts/ci/test_plan_run.sh --target qemu|pi4` and `scripts/ci/check_test_plan.sh` must exist and agree before cleanup or structural decomposition can start.
 - Humanization is evidence-first and mostly subtractive: delete generic boilerplate before rewriting, keep comments only for invariants/bounds/authority/failure behavior, and make the AI-fingerprint audit an independent gate.
@@ -7153,7 +7238,7 @@ Later phases may start only when earlier phase gates are complete for the touche
 | --- | --- | --- | --- |
 | 0 | Scope, ownership, blockers | `m26c-as-built-blocker-ledger`, `m26c-target-qualified-runner-baseline`, `m26c-refactor-map-and-risk-ratchet`, lane setup in `M26C_AGENT_HANDOFFS.md` | No unowned files, hidden blockers, missing target-qualified runner contract, missing sub-agent lanes, or unmeasured simplification targets. |
 | 1 | Documentation and provenance truth | `m26c-authoring-charter-and-header-rules`, `m26c-ai-fingerprint-authorship-review`, `m26c-markdown-inventory-and-disposition`, `m26c-mermaid-as-built-diagram-audit`, `m26c-docs-as-built-audit`, `m26c-runtime-boundary-and-semantic-parity-audit` | Inventories, drift ledger, AI-fingerprint audit, parity matrix, and generated-source dispositions are complete. |
-| 2 | Accepted runtime additions and superseded Worker proposals | Accepted: `m26c-pi-runtime-dma-proof-closure`, `m26c-dma-protection-profile-truth`, and the non-Worker baseline evidence. Inactive history: `m26c-worker-architecture-implementation`, `m26c-cap-backed-worker-endpoints`, `m26c-notification-backed-worker-lifecycle`, and `m26c-worker-driver-mcs-budget-evidence`. | Accepted Pi/runtime behavior remains compiler-declared and tested. Inactive Worker proposals supply no implementation claim; 26e owns Worker isolation and SMP+MCS, 27c owns later core-local optimization, and 28e owns full cap bundles. |
+| 2 | Accepted runtime additions and superseded Worker proposals | Accepted: `m26c-pi-runtime-dma-proof-closure`, `m26c-dma-protection-profile-truth`, and the non-Worker baseline evidence. Inactive history: `m26c-worker-architecture-implementation`, `m26c-cap-backed-worker-endpoints`, `m26c-notification-backed-worker-lifecycle`, and `m26c-worker-driver-mcs-budget-evidence`. | Accepted Pi/runtime behavior remains compiler-declared and tested. Inactive Worker proposals supply no implementation claim; 26e owns complete Worker isolation plus linked-driver SMP+MCS authority, 27c owns later core-local optimization, and 28e owns production Worker ledger binding, driver-inventory projection, and structured quarantine/evidence. |
 | 3 | Refactor safety gates | `m26c-characterization-gates-before-refactor`, `m26c-no-std-boundary-gates` | Cleanup-sensitive behavior and VM dependency closures are pinned before structural edits. |
 | 4 | Humanization and structural cleanup | `m26c-low-risk-surface-cleanup`, `m26c-host-tool-structural-cleanup`, `m26c-root-task-runtime-decomposition`, `m26c-hal-network-and-local-seat-decomposition` | Each cleanup wave is bisectable and starts only after its characterization artifact, preserved-contract list, owner, scorecard entry, and target test subset are recorded; risk-ratchet does not regress and HAL/no_std/protocol boundaries hold. |
 | 5 | Closure | `m26c-full-test-plan-qemu-and-pi4` | QEMU and Pi 4 staged Test Plan runs pass with target-qualified artifacts and no incomplete markers. |
@@ -7590,7 +7675,7 @@ Changes:
   - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — mint role/lease/epoch-badged endpoint caps for worker attach, control, telemetry, and revoke-sensitive receipt paths; retain the parent cap path needed to revoke derived lease caps.
   - apps/root-task/src/ninedoor.rs — reject worker attach, telemetry append, lease-renewal, and receipt paths when only ticket metadata is present and no matching badged endpoint cap was invoked.
   - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — replace metadata-only ticket presentation with endpoint-cap invocation in the worker loops while preserving bounded no_std behavior.
-  - tools/coh-rtc/src/** + generated snippets — add phase-1 cap-backed-ticket fields for endpoint badges, lease epochs, role scopes, revoke behavior, and explicit deferred full-cap-bundle status.
+  - tools/coh-rtc/src/** + generated snippets — add the historical proposal's phase-1 cap-backed-ticket fields for endpoint badges, lease epochs, role scopes, revoke behavior, and explicit deferred full-cap-bundle status. This design was never accepted; Milestone 26e now owns the complete live Worker bundle and Milestone 28e only adds production ticket/lease ledger binding.
   - docs/WORKER_TICKETS.md + docs/ROLES_AND_SCHEDULING.md + docs/SECURITY.md + docs/INTERFACES.md — document Cohesix tickets as audit records backed by badged endpoint caps for VM worker authority.
 Commands:
   - cargo test -p root-task --tests worker
@@ -7605,7 +7690,7 @@ Commands:
 Checks:
   - Forged ticket strings or stale ticket metadata without the corresponding badged endpoint cap cannot attach as a worker, renew a lease, emit accepted telemetry, or publish a valid receipt.
   - Revocation deletes or invalidates the derived endpoint caps and late invocations from the old lease epoch fail deterministically.
-  - Generated manifests and docs distinguish phase-1 endpoint-cap-backed tickets from the later full cap-bundle work.
+  - Historical generated manifests and docs would have distinguished phase-1 endpoint-cap-backed tickets from later work; active planning instead requires complete live bundles in Milestone 26e and production ledger binding in Milestone 28e.
   - Existing Secure9P grammar, console ACK/ERR/END behavior, and host-ticket schemas do not drift.
 Deliverables:
   - First-phase cap-backed VM worker ticket authority with concrete seL4 endpoint caps and negative tests, without overclaiming full frame/notification/DMA cap-bundle isolation.
@@ -7622,7 +7707,7 @@ Changes:
   - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — publish notification caps/badges to worker loops and signal lifecycle changes without introducing new protocols or namespace grammar.
   - apps/root-task/src/hal/** + apps/pi4-driver-runtime/src/** — keep driver IRQ delivery notification-backed and expose bounded evidence for notification badges and acknowledgement behavior.
   - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — wait on endpoint IPC plus notification delivery for lifecycle changes, and remove unbounded lifecycle polling from worker loops.
-  - docs/ROLES_AND_SCHEDULING.md + docs/SECURITY.md + docs/INTERFACES.md + docs/TEST_PLAN.md — document notification-backed lifecycle delivery, badge meanings, and the boundary between 26c lifecycle notifications and 28e full cap-bundle notification authority.
+  - docs/ROLES_AND_SCHEDULING.md + docs/SECURITY.md + docs/INTERFACES.md + docs/TEST_PLAN.md — document the historical notification-backed lifecycle proposal and badge meanings. This design was never accepted; Milestone 26e now owns complete lifecycle/completion notification authority and Milestone 28e only binds the accepted Worker bundle to production ticket/lease ledgers.
 Commands:
   - cargo test -p root-task --tests worker
   - cargo test -p root-task --tests notification
@@ -7636,7 +7721,7 @@ Checks:
   - Revoke, shutdown, lease-expiry, telemetry-pressure, and applicable IRQ events are delivered through generated notification caps/badges rather than unbounded lifecycle polling.
   - Worker loops block or yield deterministically while waiting for endpoint IPC or notification events and still handle lease expiry, revoke, telemetry backpressure, and shutdown.
   - Driver IRQ notification behavior remains HAL-owned and does not create a new polling path or direct IRQ bypass outside generated descriptors.
-  - Generated docs distinguish 26c notification-backed lifecycle signaling from 28e full notification cap-bundle authority.
+  - Historical generated docs would have distinguished the 26c notification proposal from later work; active planning instead requires complete lifecycle/completion notification authority in Milestone 26e and production ledger binding in Milestone 28e.
 Deliverables:
   - Event-driven worker and driver lifecycle signaling with seL4 notification objects, bounded tests, and no new Cohesix protocol surface.
 
@@ -8310,6 +8395,17 @@ userspace TCB in the security-first order recorded by
 `docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md` without mixing a system-model
 change into hardware bring-up.
 
+The same audit found a second trust-boundary problem that must close before the
+split can be accepted. Selected code can currently reach dummy time, a null
+serial backend, preseeded target `/host` state (`systemd=active`, NVIDIA
+`ok`/`42C`), mock 4090/4060 GPU entries, a spinning target `nine-door` binary,
+and bootstrap commands that answer with `stub`/`not implemented`. The host GPU
+bridge can also replace a missing or invalid live model registry with fixture
+models and an implicit active model. Those paths are useful only as explicit
+tests or developer simulations. They are prohibited from the 26e operational
+QEMU/Pi dependency closure and from all target, Worker, integration, release,
+and use-case evidence.
+
 MCS is the preferred Cohesix temporal-isolation architecture, not a feature
 checkbox or a throughput shortcut. Capability-controlled CPU time, enforced
 budget/period ceilings, timeout faults, explicit Reply objects, and consumed
@@ -8335,7 +8431,10 @@ be planned.
 - Reopened Milestone **26b** CYW43/SDIO reliability and current-image evidence
   closed or frozen behind an explicit accepted blocker. No 26e task may edit
   CYW43 timing, restart, packaging, or proof-classification logic while that
-  lane is active.
+  lane is active. An accepted blocker may authorize only deterministic
+  preparatory 26e work after the CYW43 surface is frozen; it cannot satisfy the
+  26e Pi component, full-system, or release gates. Those gates require positive
+  exact-image CYW43 closure and a matching MCS coexistence record.
 
 ### Goal
 
@@ -8349,8 +8448,16 @@ operator-visible contract explicit.
 
 ### Non-negotiable constraints
 
-- No new VM protocol, Secure9P verb, namespace root, console grammar, or
-  ACK/ERR/END shape. Every split uses a bounded compiler-generated internal ABI.
+- No new VM transport, Secure9P verb, namespace root, authority path, or
+  ACK/ERR/END shape. The one authorized grammar extension is a manifest-gated
+  `lora` target for the existing `/queen/ctl`/`cohsh spawn` operation so the
+  mandatory WorkerLora task can project existing PEFT lifecycle receipts. It
+  requires the normal schema-version, generated grammar, docs, and fixture
+  updates; it does not create a new verb or VM-side PEFT executor. The same
+  change adds `peft.export` to the existing generated host-ticket action
+  allowlist beside import/activate/rollback so all four PEFT use cases share one
+  bounded result-to-WorkerLora receipt path; that adds no VM path or transport.
+  Every split uses a bounded compiler-generated internal ABI.
 - Every child is pure Rust `no_std`, separately packaged, W^X-loaded, and given
   only generated TCB/CSpace/VSpace/IPC-buffer/stack/endpoint/notification/fault
   authority. There is no ambient root CSpace, catch-all namespace cap, or
@@ -8372,9 +8479,10 @@ operator-visible contract explicit.
 - Operational kernel contracts remain four-node, one-domain, non-hypervisor
   AArch64 profiles with MCS enabled. Milestone 26e does not introduce domain
   scheduling, VCPU/hypervisor support, or a second placement mechanism.
-- The root/Queen authority path, emergency serial, and fault supervisor retain
-  independent active scheduling contexts and reserved admitted CPU time. A
-  child never receives `SchedControl` authority.
+- The root/Queen authority path, emergency serial, fault supervisor, Worker
+  supervisor, and driver supervisor retain independent active scheduling
+  contexts and reserved admitted CPU time. A child never receives
+  `SchedControl` authority.
 - Dedicated active scheduling contexts are the default for asynchronous
   network ingress, periodic/event-driven Workers, IRQ/DPC work, locality-bound
   drivers, and authoritative mutation. Passive-server donation is allowed only
@@ -8385,44 +8493,422 @@ operator-visible contract explicit.
 - MCS budgets do not replace max-operations, max-bytes, max-completions, queue,
   backpressure, cancellation, or replay bounds; both kernel temporal authority
   and application service-turn bounds remain mandatory.
-- MCS work may not edit CYW43/SDIO timing, restart, packaging, state-machine, or
-  evidence-classification logic. Exact-image Pi MCS evidence must consume the
-  accepted/frozen CYW43 lane as an input and remain a separate proof class.
-- Milestone 26e supplies the minimum generated task-object, endpoint,
-  notification, fault, and deterministic revoke contract required to prove
-  executable isolation. Production-wide role/lease/epoch bundles covering all
-  worker/driver frames, rings, MMIO, DMA, quarantine, and fresh-lease restart
-  remain Milestone 28e work and must not be claimed here.
+- MCS work may change only the shared driver scheduler/IPC/runtime-init
+  scaffolding needed to make every accepted linked driver execute under MCS.
+  It may not change CYW43/SDIO ownership, protocol state machine, hardware
+  timing, deadlines, retries, recovery order, ring semantics, or error policy.
+  The accepted classic artifact is retained as an immutable behavioral
+  comparator; 26e emits a new MCS driver-runtime hash and reruns exact-image
+  CYW43 coexistence without reclassifying the separate CYW43 proof.
+- Every capability, mapping, scheduling context, Reply object, fault route, and
+  kernel object actually used by a 26e service, Worker, or linked driver belongs
+  to a complete 26e instance bundle and teardown/containment path. No live 26e
+  child may depend on
+  Milestone 28e to become safely revocable. Milestone 28e binds these already
+  complete Worker bundles to production ticket/lease ledgers, projects the
+  already complete driver authority inventory into production ledgers, and
+  adds structured quarantine/evidence plus fresh-ticket Worker restart; it does
+  not finish basic Worker or driver isolation, authority, or revocation.
+- Static executable configuration and operational acceptance are distinct.
+  `implemented = true` means a selected manifest has a complete compiler-valid
+  executable task contract; it does not assert that later QEMU or Pi evidence
+  has passed. Release claims require a separate exact-image acceptance record
+  keyed by target, kernel configuration, resolved manifest, root image, MCS
+  driver archive and manifest, CYW43 coexistence record, Worker archive, Worker
+  image manifest, Worker image, role, ABI version, and evidence-pack identity.
 - Host/model tests, QEMU execution, fresh Pi execution, transport proof, and
   benchmark evidence remain separate classes.
+- Every workspace binary, library surface, feature/profile fallback, generated
+  namespace, host/provider adapter, example, playbook, proof source, package,
+  release asset, and tracked README is recorded in one generated implementation
+  inventory. Implementation class and observed mode are separate. The allowed
+  classes are `production_live`, `model_only`, `host_model`, `test_fixture`,
+  `diagnostic`, `contract_only`, `not_enabled`, `deferred`, and `retired`;
+  observed modes remain `unknown|missing|disabled|fixture|mock|dry-run|live`.
+  Only `worker-bus` may be `model_only` in a selected Cohesix profile. An
+  explicit test fixture may remain in source, but no operational build may
+  select it or fall back to it after a live-path error.
+- Operational QEMU and Pi profiles require generated virtual-counter truth,
+  real serial/emergency output, and typed service/provider state. Dummy or
+  read-count clocks, hard-coded timer-frequency fallback, inert timer bypass,
+  null/no-op serial, compiled spin-stub entrypoints, fabricated host/GPU/model
+  state, client-authored receipts, and synthetic evidence are fatal selection
+  errors rather than degraded operation.
 
 ### Selected MCS topology
 
 - Root/Queen authoritative mutation, fault/fatal supervision, and emergency
-  serial use separate active SCs with generated per-core reserves; none depends
-  on a child or caller donation for progress.
+  serial execute on distinct generated TCBs with distinct active SCs and
+  per-core reserves; assigning several SC records to the current single event
+  pump is invalid. A dedicated Worker-supervisor TCB/SC owns Worker IPC and
+  lifecycle progress, and a separate driver-supervisor TCB/SC owns linked-driver
+  command-Reply recovery, containment anchors, and restart admission, so Queen
+  policy, the fault supervisor, and emergency serial never block on or donate
+  time to a Worker or faulted driver.
+- Root-control and root-fault hand work to the Worker supervisor through two
+  separate generated bounded single-producer/single-consumer record sets plus
+  one supervisor-bound wake notification. The supervisor also owns the only
+  Read cap to the Worker telemetry endpoint. Root-control request, root-fault
+  teardown, and per-slot durable-completion signal caps use distinct one-hot
+  bits from a reserved notification-badge range that cannot overlap endpoint
+  identity badges. The supervisor decodes coalesced bitsets, drains every
+  indicated record to its sequence watermark, and returns bounded busy/refusal
+  rather than blocking a critical producer. Fault handoff has one reserved
+  mailbox per admitted child and cannot be dropped.
+- Root-fault hands each linked-driver fault to the driver supervisor through a
+  separate per-runtime reserved record plus a driver-supervisor-bound wake
+  notification. The driver supervisor owns the retained origin/recovery caps,
+  per-runtime command-Reply record, and least authority needed to suspend,
+  reply-fail, revoke, contain, and readmit that runtime; it receives no
+  SchedControl or device-policy authority. Worker and driver supervisor badge,
+  record, and notification domains are disjoint.
+- The critical-TCB fault graph is generated and acyclic: service, Worker,
+  driver, root-control, Worker-supervisor, and driver-supervisor faults route to root-fault;
+  root-fault failure routes to the minimal root-emergency terminal handler; and
+  root-emergency itself has no self/cyclic handler and fails stop if it faults.
+  Faulting a handler can never recurse into the same TCB or strand the only
+  critical scheduling reserve.
 - The synchronous NineDoor parser/provider child is passive and caller-funded.
   Its allowed donors, Reply objects, call depth, timeout path, and SC return are
   generated. Any autonomous provider drain uses a separate admitted active SC.
 - TCP/smoltcp owns an active SC because receive, retransmission, and protocol
   timers require autonomous progress. A separately isolated pure request parser
   may be passive only if its donation chain is compiler-validated.
-- Serial and USB input/IRQ work use notification-backed active SCs. Synchronous
-  driver commands may use same-core passive donation, while IRQ/DPC or other
-  work with no caller uses an admitted active SC. Locality-bound drivers may not
-  accept cross-core donation.
-- CYW43/SDIO synchronous bus operations may be caller-funded, IRQ/DPC work uses
-  active notification time, and bootstrap/recovery uses a bounded resumable
-  maintenance SC. These changes begin only after the current CYW43 lane closes
-  or is explicitly frozen and may not rewrite its accepted timing/state logic.
-- `worker-heart` uses a small periodic active SC. GPU/LoRA receipt handling is
-  passive where synchronous, with a minimal active notification SC only for
-  lifecycle work. Telemetry/persistence drains use capped low-priority active
-  SCs. HDMI draws are caller-funded; autonomous refresh, if enabled, uses a
-  separate capped background SC.
-- Nonblocking send paths never claim donation. Every executable path is
-  classified as active/periodic, notification-funded, or synchronous
-  caller-funded IPC, with one generated owner for its time authority.
+- Serial, USB, and every physical driver runtime retain generated dedicated
+  active SCs during 26e. The shared driver command/Reply and runtime-init paths
+  are ported explicitly to the seL4 15 MCS ABI, but passive driver donation and
+  CYW43/SDIO behavioral changes are prohibited. IRQ/DPC and other autonomous
+  work is notification-woken and always executes on the active SC bound to the
+  driver TCB, never to a notification; locality-bound paths may not accept
+  cross-core donation. Root command caps are exact `Write + GrantReply`
+  capabilities with no `Grant`; driver receive caps are Read-only. Driver IRQ
+  wait caps are Read-only, root/software signal caps are Write-only, and IRQ,
+  command, completion, and fault badges occupy generated disjoint domains.
+- Every 26e general Worker uses one small dedicated active SC bound directly to
+  its TCB. `worker-heart` blocks on generated timer/lifecycle wakeups;
+  `worker-gpu` and `worker-lora` block when no receipt or lifecycle work is
+  pending. General Worker IPC uses no SC donation in 26e. The former
+  passive-receipt plus active notification-SC proposal is rejected because it
+  did not define a realizable one-TCB SC receive/return state machine.
+- Telemetry/persistence drains use capped low-priority active SCs. HDMI draws
+  may be caller-funded; autonomous refresh, if enabled, uses a separate capped
+  background SC.
+- Every executable path is classified as active/periodic,
+  notification-woken, or synchronous caller-funded IPC, with one generated
+  owner for its time authority. A plain nonblocking send does not imply
+  donation, and `seL4_NBSendRecv` is prohibited from the Worker ABI because it
+  can donate an SC.
+
+### Worker execution contract
+
+#### Required role matrix and capacity
+
+- 26e closure requires at least one executable `worker-heartbeat`, one
+  executable receipt-only `worker-gpu`, and one executable receipt-only
+  `worker-lora` on both four-core QEMU and fresh Pi 4. `worker-gpu` receives no
+  CUDA, NVML, MMIO, DMA, or raw GPU authority; hardware access remains in
+  `gpu-bridge-host`.
+- `worker-lora` projects bounded receipts for the existing PEFT export, import,
+  activate, and rollback lifecycle and `/queen/export/lora_jobs` references. It
+  never trains, imports adapter bytes, loads a model, executes inference, owns a
+  registry, or becomes the PEFT source of truth; those actions remain host-side.
+- Receipt-bearing GPU and PEFT actions continue to use the existing
+  `/host/tickets/spec` and `/host/tickets/status|deadletter` paths. The generated
+  bounded `host-ticket/v2` request adds required `operation_id`, `subject_ref`,
+  `receipt_worker_role`, `receipt_worker_id`, and opaque
+  `receipt_supervisor_generation` and `receipt_cap_generation` fields; the matching
+  `host-ticket-result/v2` echoes those fields, adds root-authoritative
+  `resolved_worker_slot` and `resolved_lease_epoch`, and adds a required
+  canonical `result_digest`, defined as SHA-256 over the generated canonical
+  serialization of every result field except `result_digest` itself. The
+  echoed public binding plus the resolved fields names the same immutable
+  five-part Worker identity used by the supervisor; no host consumer infers
+  slot or epoch from a public id string. Version 1 remains valid
+  for host actions that request no VM Worker receipt, but a receipt-bearing
+  action must use version 2 and unknown, omitted, cross-role, or oversized
+  fields fail closed. The compiler emits accepted request/result schema sets and
+  an `(action, receipt_mode) -> required schema` matrix: `receipt_mode=none`
+  uses version 1; `receipt_mode=worker` is permitted only for the three GPU
+  lease and four PEFT actions and requires version 2. Receipt-bearing version 2
+  is local-hive-only in 26e: federation/relay fields are rejected, while the
+  existing version-1 federated key and relay behavior remain unchanged. Before
+  ticket execution, the host client must explicitly select a matching READY
+  Worker or spawn one through the existing `/queen/ctl` path and wait for READY;
+  the ticket agent never chooses a generic or merely configured Worker
+  implicitly. When the version-2 spec is appended, root independently validates
+  READY, resolves the public binding to the exact live `(role, slot, logical
+  lease epoch, supervisor generation, cap generation)` tuple, and pins that
+  immutable tuple in the admitted ticket record before the host executor may
+  claim it. Caller-supplied bytes never become executable input directly:
+  root's existing read-only `/host/tickets/spec.snapshot` projection emits the
+  canonical admitted version-2 record with an admission sequence, exact
+  validated action args, and root-only resolved slot/lease-epoch fields. The
+  agent claims only that normalized root-owned projection and rejects a raw,
+  unadmitted, missing-sequence, or caller-forged enrichment. Version-1
+  compatibility remains separately classified and cannot be mistaken for an
+  admitted Worker receipt action.
+- `worker-gpu` has one concrete receipt contract for existing
+  `gpu.lease.grant`, `gpu.lease.renew`, and `gpu.lease.release` terminal results.
+  Root maps the action code, confirmed/rejected outcome, receipt sequence, exact
+  Worker identity, and SHA-256 digests of the idempotency key, operation id,
+  lease/device `subject_ref`, and canonical result into the fixed-size
+  `GPU_LEASE_RECEIPT` supervisor record. `succeeded` maps to `confirmed`;
+  `failed` or `expired` maps to `rejected`; nonterminal states produce no Worker
+  completion. WorkerGpu publishes the matching durable completion and bounded
+  `worker-gpu-receipt/v1` record through
+  `/shard/<label>/worker/<id>/telemetry`, but never receives a lease credential
+  or GPU cap. Version-2 lease actions never use the current compatibility
+  executor's implicit `/queen/ctl` spawn-on-grant or kill-on-release behavior:
+  the host client selects/spawns and waits for the receipt Worker before the
+  ticket, while grant/renew/release map only to the existing lease-control
+  operation (`release` uses the generated release/preempt form). The terminal
+  lease result reaches the still-live Worker before any separately authorized
+  Worker teardown. Version-1 compatibility behavior is classified separately
+  and cannot satisfy this receipt contract.
+- The generated host-action allowlist adds `peft.export` beside existing
+  `peft.import`, `peft.activate`, and `peft.rollback`. Root maps those four
+  terminal version-2 results through the same fixed digest/identity envelope and
+  the `PEFT_RECEIPT` label; WorkerLora publishes the corresponding durable
+  confirmed/rejected completion and bounded `worker-lora-receipt/v1` record
+  through `/shard/<label>/worker/<id>/telemetry`. This is an additive
+  action/schema version on existing paths, not a new VM verb, transport,
+  namespace, or execution plane.
+- The supervisor retains each immutable terminal receipt result for one
+  generated bounded idempotency window keyed by role, supervisor generation,
+  cap generation, ticket-id digest, operation-id digest, and idempotency-key digest.
+  Same-key/same-result replay for the same still-live Worker returns the same
+  receipt sequence. Divergent duplicates fail; after Worker teardown the cached
+  version-2 result remains readable as `stale` host evidence on the existing
+  `/host/tickets/status|deadletter` projections and in evidence timelines, but
+  is never republished under a removed Worker path, rebound, or delivered to a
+  new generation. A new Worker requires a newly bound operation.
+  Disconnected/direct-local GPU or PEFT work remains host-only and emits no VM
+  receipt.
+- For the seven receipt-bearing version-2 actions, `host-ticket-agent` holds a
+  local single-agent lock/fence and durably writes a bounded pre-execution
+  journal containing the accepted schema/action, full root-resolved Worker
+  tuple, action fingerprint, idempotency key, and provider fence before any
+  side effect. It persists `prepared`, `executing`, canonical provider result,
+  result-published, and terminal/cursor state in crash-safe order. Recovery
+  never blindly repeats an ambiguous side effect: it uses the action's
+  generated provider idempotency key or bounded observe/reconcile operation and
+  dead-letters an action whose outcome cannot be established. Crash injection
+  before and after every journal, provider, result, Worker-receipt, and cursor
+  boundary proves same-operation recovery cannot mint a second GPU lease,
+  apply a PEFT transition twice, or deliver divergent Worker receipts. This is
+  narrow local version-2 safety, not exactly-once federation; general version-1
+  provider durability and relay recovery remain Milestones 28b/28b1 work.
+- Only `worker-bus` remains explicitly model/session-only in 26e. It may not be
+  packaged, marked `implemented = true`, or counted toward executable-role
+  closure without a later, separately named BUILD_PLAN task that supplies its
+  target binary, interface contract, and QEMU/Pi evidence.
+- Namespace/model capacity and executable kernel-object capacity are separate
+  generated bounds. The manifest declares per-role executable slot counts and
+  a maximum simultaneous role mix; generation fails if the worst-case mix
+  exceeds admitted TCB, CNode, VSpace/page-table, ASID, frame, endpoint,
+  notification, fault/timeout, Reply, SC, CSpace-slot, untyped-memory, or
+  per-core CPU budgets. Fault-registry capacity is generated from every admitted
+  TCB, and registration failure is fatal rather than silently ignored.
+- Executable slots use compiler-bounded supervisor-owned resource pools. A
+  spawn fails closed when no admitted role slot remains; the much larger
+  namespace model capacity does not imply that the kernel can launch that many
+  tasks.
+
+#### Worker task ABI v1, identity, and notifications
+
+- A shared `worker-task-abi/v1` is versioned, pointer-free, fixed-size, and
+  `no_std`. Its generated matrix names every endpoint/notification object,
+  holder, CSpace slot, rights mask, permitted syscall, message label, word/frame
+  bound, direction, maximum one in-flight control operation per slot, memory
+  ordering rule, timeout, cancellation, replay, and late-completion outcome.
+  `extraCaps` is zero and unexpected labels, lengths, caps, sequences, epochs,
+  generations, or child-produced values fail closed.
+- The ABI is only an internal typed projection of existing mounted
+  namespace/file-and-event semantics. It introduces no host RPC or parallel
+  policy plane: root/NineDoor validates child output, Queen retains policy and
+  authoritative ordering, and no authoritative transaction is held open across
+  Worker IPC.
+- Each live instance has an immutable compiler-generated identity tuple
+  `(role, slot, lease_epoch, supervisor_generation, cap_generation)`. In 26e, `lease_epoch` is logical
+  lifecycle/session metadata used for stale-instance rejection; it is not yet
+  a claim that a production ticket is bound one-to-one to the live cap bundle.
+  Milestone 28e adds that production ledger binding. A Worker-to-supervisor endpoint
+  cap is minted once with a badge that uniquely resolves that tuple; ABI action
+  is carried by a validated message label, never by synthesizing a new badge at
+  send time. Standard-fault and timeout-fault badges also identify the complete
+  tuple and fault class. Hard-coded CPtrs, badge bases, instances, epochs,
+  generations, clocks, or synthetic identities are prohibited.
+- Badge fields and generations fail closed on overflow. A slot cannot reuse an
+  identity until admission is closed, every old descendant is revoked, all
+  mappings, notification state, completion records, and fault/Reply/SC
+  relationships are gone, and the supervisor proves zero old-generation
+  activity. Normal Worker IPC has no blocking endpoint send queue to cancel;
+  generation gates every durable record and droppable `NBSend`. Exhausted
+  generation space quarantines the slot until a full reset or a wider generated
+  format is deployed.
+- Each slot owns a lifecycle notification. Signal-cap badges are distinct
+  one-hot event bits; the generator rejects zero, overlapping, multi-bit, or
+  OR-aliasing values. Receivers decode a bitset because seL4 ORs and coalesces
+  pending signals. Generated precedence is `revoke > shutdown > lease-expired >
+  pressure > timer-wake`.
+- Notifications are wakeups only. Lease epoch, TTL, timestamp, pressure,
+  sequence, generation, and command data live in a bounded generation-stamped
+  control record published with release/acquire ordering. Repeated, combined,
+  coalesced, and missing-signal tests are mandatory.
+- Normal Worker ABI v1 control does not use `Send`, `Call`, `NBSendRecv`, Reply
+  objects, or SC donation. Root publishes one bounded control record and
+  signals the per-slot lifecycle notification. Required READY, operation, and
+  receipt results use a per-slot generation-stamped durable completion record
+  published release/consumed acquire, followed by the slot's one-hot signal on
+  the supervisor-bound wake notification. Coalescence is safe because only one
+  control operation is in flight per slot and the supervisor drains through
+  the published sequence. The identity-badged output endpoint is Write-only in
+  the Worker and carries only bounded `NBSend` telemetry that is explicitly
+  droppable and counted; the supervisor endpoint cap is Read-only, and neither
+  cap has `Grant` or `GrantReply`.
+- The Worker lifecycle-notification cap is Read-only in the Worker; every
+  supervisor signal cap is Write-only. The Worker active SC is bound only to
+  its TCB, never to a notification. The generator rejects broader rights,
+  wrong-direction caps, notification-bound SCs, overlapping endpoint/
+  notification badge domains, any normal Worker Reply object, or any blocking
+  Worker send syscall.
+- Standard and timeout fault caps installed for a child are exact-identity
+  badged `Write + GrantReply` caps to the generated root-fault receive endpoint;
+  root-fault holds the only Read cap and supplies its single-owner Reply object
+  on `Recv` before decoding the fault. Reply cardinality equals the generated
+  number of concurrent fault-receive lanes and an object cannot be reused while
+  associated. Ordinary Worker faults are terminal: root-fault suspends the TCB,
+  relies on the version-pinned MCS Suspend association-clear contract, never
+  invokes Reply, verifies the Reply lane is reusable, and signals the reserved
+  supervisor teardown mailbox. Only a generated allowlisted recoverable
+  timeout may apply its bounded budget/replenishment policy and issue exactly
+  one typed reply; every other timeout is terminal. Success, terminal,
+  recoverable, handler-fault, and concurrent-fault tests prove Reply/SC
+  ownership and the acyclic fault graph.
+
+#### Image, readiness, lifecycle, and teardown
+
+- Worker images build first. The build validates ELF class/machine, entrypoint,
+  relocation policy, load bounds, W^X segments, stack guard, IPC-buffer
+  alignment, initial registers/TLS, and content digest before compiling root's
+  generated expectations. QEMU and Pi package a deterministic additive
+  `cohesix-worker-images.cpio`, including Heartbeat, GPU, and LoRA; it is not
+  appended to or substituted for the
+  CYW43/SDIO `cohesix-driver-runtimes.cpio` and is bound separately into exact
+  image identity and the `< 4 MiB` rootfs gate.
+- A sealed runtime-init descriptor supplies role, slot, epoch, supervisor
+  generation, cap generation,
+  image digest, CPtr table, mapped-frame inventory, virtual addresses, SC/core/
+  budget/period, notification bits, and fault identities. Each target entrypoint
+  consumes that descriptor and blocks in real seL4 IPC/wait paths; hard-coded
+  CPtr `1`, synthetic time, and busy-spin lifecycle loops do not qualify.
+- Spawn is transactional:
+  `free -> allocated -> image-verified -> mapped -> configured -> admitted ->
+  resumed -> ready`. A successful `/queen/ctl` write acknowledges admission to
+  the bounded supervisor queue, not `ready`; the reserved Worker id may expose a
+  non-authoritative starting state, but namespace and telemetry publication
+  begin only after a valid READY record from the exact
+  role, slot, epoch, supervisor generation, cap generation, and image. `ATTACH` remains session authority
+  and never creates a task.
+- Kill, shutdown, fault, and construction failure use one idempotent teardown:
+  close admission; publish and signal generation-stamped shutdown; wait only the
+  generated grace bound; suspend the TCB; clear durable records/notification
+  state; resolve fault Reply state; unbind notification and SC; unmap and invalidate
+  every private/shared frame; revoke every derived endpoint, notification,
+  fault/timeout, Reply, SC, frame, CSpace, and VSpace cap from supervisor-owned
+  anchors; delete final child caps and objects; verify zero old-generation caps,
+  mappings, pending records/signals, Replies, SC bindings, blocking send queues,
+  or execution; then reclaim the
+  slot and advance generation.
+- Fresh supervisor-generation recreation repeats full allocation, image
+  verification, configuration, admission, and READY. It never resumes a
+  faulted TCB or reuses stale caps. Milestone 28e later adds fresh-ticket/lease
+  binding; it is not required to make this 26e teardown safe.
+
+### Host integration and use-case acceptance contract
+
+Executable Worker tasks are necessary but not sufficient for a usable Cohesix
+system. The repository already contains real host implementations for
+CUDA/NVML inventory, direct and REST-backed FUSE, basic systemd/Docker/Kubernetes
+observation and ticket actions, GPU leases, PEFT file lifecycle, gateway/REST,
+Python, SwarmUI, federation, evidence, and release tooling. That does **not**
+make the complete integration set production-proven: current coverage mixes
+live adapters with mock/dry-run fixtures; host-ticket PEFT export and live
+Worker receipt correlation are absent; PEFT transactions and provenance are
+incomplete; and production provider conformance, identity mapping, deployment
+profiles, Prometheus/OpenTelemetry, broader industry bridges, NeMo, MCP, and
+A2A remain later work.
+
+Milestone 26e therefore freezes a compiler-owned
+`host-integration-dependency/v1` graph before host tools are updated for real
+Workers. It is dependency metadata over existing generated paths, actions, and
+schemas, not a second provider-action registry or a new authority plane. Every
+record names the integration id and implementation owner, host OS/architecture
+and deployment profile, dependent Worker roles and documented use cases,
+existing namespace/action/schema references, allowed/required modes and observed
+`unknown`, `missing`, `disabled`, `fixture`, `mock`, `dry-run`, or `live` state,
+plus explicit unavailable/future ownership, auth/secret-reference posture,
+timeouts/retries/cancellation/idempotency/fencing, readiness and degraded-state
+semantics, required package/artifact hashes, evidence lane, and owning
+milestone. Milestone 28b1 extends these same records into the complete provider
+action and production coexistence registry; it may not create a parallel
+catalogue.
+
+Each selected dependency has exactly one acceptance obligation:
+
+- `role_required`: failure prevents the dependent executable Worker role from
+  being accepted. Mock, dry-run, skipped, or inferred readiness never satisfies
+  it.
+- `release_required`: failure prevents a release from advertising or packaging
+  that host surface, but does not turn a healthy Worker task into a faulted
+  task.
+- `use_case_required`: failure prevents only the named use case or built-in
+  playbook from being promoted beyond its proven support level.
+- `optional` or `future`: the integration must return a deterministic
+  `unavailable`, `not_enabled`, or `future_milestone` state and cannot be used
+  implicitly as acceptance evidence.
+
+The 26e dependency floor separates a live Worker runtime path from the external
+provider and product projections that later use it:
+
+| Integration family | 26e acceptance obligation | Dependent role or release claim | Later production ownership |
+| --- | --- | --- | --- |
+| Direct `cohsh` control/observation, root Worker supervisor, shared evidence validator, and release verification | `role_required` with `live` QEMU and Pi target modes | Heartbeat, GPU, and LoRA runtime acceptance | Milestone 28e later binds production ticket/lease ledgers to the already accepted task bundle. |
+| `host-ticket-agent` v2 result-to-root-to-Worker receipt path | `role_required` with a bounded fixture provider result for each generated GPU and PEFT action; this proves the live VM path, not the external side effect | WorkerGpu and WorkerLora runtime acceptance | Milestones 28b/28b1 add crash-safe production execution, writer fencing, and live provider conformance. |
+| `coh`, console/direct transport, `hive-gateway`, REST/OpenAPI, Python, SwarmUI, and the `coh-status` library/offline fixtures | `release_required` compatibility and false-promotion tests; optional projections preserve or lower the source claim and cannot block otherwise valid direct runtime proof | Packaged host projections of all three roles | Milestone 28b adds delegated multi-caller hardening; 28b1 adds production identity/read-visibility and deployment profiles; Milestone 29 adds the standalone `coh-status` CLI. |
+| `gpu-bridge-host`, real NVML/CUDA inventory, GPU executor/device-isolation behavior, telemetry, and lease side effects | `use_case_required`; 26e proves only all three result labels through the live receipt path and classifies mock/dry-run/live provider availability separately | GPU Flight Deck and GPU-backed playbooks | Milestone 28b1 supplies live provider/version/package and external-executor conformance; 28c adds governed inference-provider run contracts, not GPU authority to the VM. |
+| PEFT/model-registry export/import/activate/rollback provider transactions, training/evaluation/scanning, runtime reload, and canary health | `use_case_required`; 26e proves all four action/result shapes through WorkerLora but cannot promote a real PEFT data plane from fixture results | Model rollout, Private LoRA Foundry, and PEFT-backed playbooks | Milestone 28c owns transactional host lifecycle, provenance, framework/training/evaluation adapters, runtime-reload receipts, and production AI-use-case acceptance. |
+| `coh mount` direct and REST FUSE, including Linux FUSE and packaged macOS MacFUSE where advertised | `release_required` compatibility for canonical `/shard` paths and `use_case_required` for live mounted-namespace workflows; never a Worker readiness source | Host filesystem clients | Milestone 28b1 adds live package/deployment conformance and delegated read visibility. |
+| systemd, Docker, and Kubernetes status plus the currently generated allowlisted ticket actions | `use_case_required`; 26e preserves compatibility and classifies the current primitive, but cannot promote action-airlock/self-healing/playbook claims from mocks or basic command adapters | Agent Action Airlock, Self-Healing Edge Swarm, and selected built-in playbooks | Milestones 28b/28b1 add delegated identity, writer fencing, live-safe and negative conformance, rollback/fail-safe policy, and packaging before production promotion. |
+| Evidence packs/timelines, SIEM NDJSON, CAS/model-artifact refs, and release bundles | `release_required` schema/projection compatibility; Worker and integration evidence stays distinct from target task evidence and secrets remain redacted | All release and audit claims | Milestone 28b1 adds live package conformance, Prometheus/OpenTelemetry, and provider-wide evidence reconstruction. |
+| Host-ticket federation and fleet fan-in | `use_case_required`; version-2 Worker receipts remain local-hive-only in 26e and cannot be relayed or rebound | Multi-Hive Mission Control | Milestones 28b/28b1 provide production delegated identity, provider conformance, and deployment posture. |
+| MODBUS/DNP3/other sidecars and WorkerBus session/model state | Regression-only in 26e; no provider `ready` record may parse as executable Worker readiness | No executable 26e Worker role; WorkerBus remains model-only | Reopened Milestone 18 supplies real MODBUS/DNP3 host protocol I/O and durable acknowledgement; Milestone 28b1 registers, packages, and proves it while later industry providers remain explicitly unavailable until implemented. |
+| General CUDA jobs, model training/inference runtime adapters, NeMo, MCP, A2A, Prometheus/OpenTelemetry, and not-yet-built industry providers | `future`; the matrix must name the owning milestone and reject production claims now | Use-case-specific external data planes, not the VM Worker task contract | Milestones 28b1, 28c, 28d, and 29b as explicitly assigned. |
+
+The generated graph covers all six scenarios in `docs/USE_CASES.md`, every
+built-in `cohesix-playbook` id, and every host integration or host-facing binary
+advertised by canonical docs or release manifests. A selected role, release
+surface, use case, or playbook with an unclassified or unsatisfied transitive
+dependency fails generation or promotion. Host availability never promotes a
+Worker to READY, and Worker task evidence never promotes an external provider
+to live or production-conformant.
+
+Integration evidence uses `cohesix-worker-integration-evidence/v1` with
+`record_kind=worker-integration`, exactly one dependency row, and an observed
+mode from `unknown|missing|disabled|fixture|mock|dry-run|live`. Each bounded
+record names its target session when applicable, dependency-graph and
+selected-manifest hashes, host profile/OS/architecture, component/provider and
+package versions, action/observation/receipt outcomes, artifact hashes,
+redacted raw-evidence hashes, PASS/FAIL, and blockers. Only exact `live`
+satisfies a row whose required mode is live. QEMU and Pi Worker component
+records contain a sorted bounded list of only the exact role-required
+integration records they consume; optional projection and later use-case rows
+remain separate and cannot block or promote runtime acceptance. The six-record
+Worker-runtime release graph remains top-level-stable, but validation
+recursively checks its required integration rows and rejects a wrong-mode,
+wrong-host, stale, missing, or mismatched dependency. It is not general
+use-case release acceptance; Milestone 28b1 emits that only after joining every
+required live provider, authority, package, recovery, and evidence row.
 
 ### Definition of done
 
@@ -8435,11 +8921,36 @@ operator-visible contract explicit.
   WCET/admission provenance; passive records contain allowed donor SCs/cores,
   Reply-object cardinality, timeout/recovery policy, and maximum donation depth.
   Invalid or incomplete executable-task declarations fail closed.
+- The exact heartbeat/GPU/LoRA role matrix is executable on both targets;
+  zero-role or host/model-only closure is impossible. Static
+  executable-contract state and exact-target acceptance records remain
+  distinct, and public/release wording never promotes a candidate image from
+  host tests alone.
+- Host tools consume one generated Worker state contract with independent
+  transport/action, declaration, lifecycle, artifact, receipt, and proof axes.
+  No shared `status` or `accepted` boolean may collapse request admission,
+  `implemented = true`, READY, receipt confirmation, artifact verification,
+  host-model evidence, QEMU evidence, fresh-Pi evidence, or release acceptance.
+  Rust host consumers share one bounded validator; Python and UI consumers use
+  the same generated schemas and conformance vectors.
+- The generated host-integration dependency graph contains every documented
+  use case, built-in playbook, advertised host surface, and host-facing release
+  binary with no unowned dependency. Heartbeat has a live control/telemetry/
+  evidence path; GPU has a live three-action result-to-Worker receipt path; and
+  LoRA has a live four-action result-to-Worker receipt path. External CUDA/NVML,
+  PEFT/training/runtime-reload, FUSE, systemd, Docker, Kubernetes, federation,
+  SIEM, sidecar, and optional provider rows retain their independent observed
+  modes and milestone owners. A fixture may prove only the 26e VM receipt path;
+  mock/dry-run/fixture evidence cannot satisfy a later live provider or
+  production use-case row.
 - NineDoor parser/provider, TCP/smoltcp, and enabled Worker execution occur in
   restricted child VSpaces in the required order, with the superseded root
   implementation path removed or profile-disabled rather than duplicated.
-- Injected child faults are attributed, suspended, boundedly revoked, and
-  prevented from mutating authoritative state or reusing stale mappings.
+- Injected child faults are attributed to role/slot/epoch/supervisor-generation/
+  cap-generation, handled by
+  the independent fault-supervisor TCB, and followed by complete bounded
+  instance teardown. Old generations cannot mutate authoritative state, retain
+  a mapping, strand a Reply/SC, or publish late telemetry.
 - Four-core QEMU transcripts preserve deterministic authority order and
   existing protocol fixtures. Fresh Pi proof preserves serial, local-seat, TCP,
   driver, and fatal-status liveness with boot/image identity.
@@ -8464,6 +8975,7 @@ Inputs: seL4 Reference Manual v15.0.0, tag-pinned seL4 15 headers/caveats, confi
 Changes:
   - crates/sel4-sys/** + crates/sel4-runtime/** — add version-pinned SchedContext, SchedControl, Reply, timeout-fault, `Consumed`, `YieldTo`, TCB setup, receive, call, reply, and reply-receive bindings with ABI/negative tests; remove classic reply/scheduling behavior from the QEMU/Pi operational VM closure.
   - configs/sel4/profiles.toml + profile tooling — make the four-node QEMU and Pi production/diagnostic runtime contracts MCS-only, validate `KernelIsMCS`, object sizes, cores, and generated headers, and provide no non-MCS runtime-eligible counterpart.
+  - selected seL4 profiles + apps/root-task/src/{arch/aarch64/timer.rs,kernel.rs,userland/mod.rs} — require `KernelArmExportVCNTUser`/`CONFIG_EXPORT_VCNT_USER` and generated `TIMER_CLOCK_HZ` for both operational targets, include the architected-counter backend in `release-qemu` as well as Pi, remove the hard-coded frequency default, and make missing/zero counter truth or timer initialization fatal. `DummySoftTimer`, `bypass-timers`, and `bypass-timers-ipc` remain explicit host/bring-up fixtures only and are rejected from runtime-eligible feature closures and evidence.
   - tools/coh-rtc/src/** + generated artifacts — require each live TCB to declare either a bound active scheduling context or a compiler-validated passive donation chain. Active records carry SC object/size, SchedControl core, budget, period, refill/max-refill policy, priority/MCP, timeout/overrun policy, consumed-time evidence, and WCET/admission provenance; passive records carry allowed donor SCs/cores, Reply-object cardinality, timeout policy, and maximum donation depth.
   - apps/root-task/src/sel4/** + focused probe child — allocate/bind MCS objects only through BootInfo/untyped authority and prove active execution, passive donation and return, timeout-fault routing, Reply ownership, budget exhaustion/replenishment, consumed time, and four-core SC placement before broad extraction begins.
   - docs/ROLES_AND_SCHEDULING.md + docs/TEST_PLAN.md — define the selected MCS topology, offline admission calculation, evidence schema, and explicit whole-change-reversion rule.
@@ -8476,16 +8988,92 @@ Commands:
   - scripts/check-generated.sh
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-mcs-foundation-qemu
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-mcs-foundation-pi4
-Checks: both operational contracts are four-node MCS with no runtime-eligible classic profile; every active probe TCB has an admitted SC/core/budget/period and every passive probe has an allowlisted donor/Reply/timeout chain; Reply/donation ownership returns on success, timeout, cancellation, and fault; root emergency/fault work retains independent time; a failed QEMU or Pi gate stops 26e and requires atomic source/configuration reversion.
+Checks: both operational contracts are four-node MCS with no runtime-eligible classic profile; each uses the selected build's exported virtual counter and exact generated frequency with no dummy, bypass, read-count, or hard-coded fallback; every active probe TCB has an admitted SC/core/budget/period and every passive probe has an allowlisted donor/Reply/timeout chain; Reply/donation ownership returns on success, timeout, cancellation, and fault; root emergency/fault work retains independent time; a failed QEMU or Pi gate stops 26e and requires atomic source/configuration reversion.
 Deliverables: One MCS-only QEMU/Pi scheduling ABI and compiler contract, minimal target evidence, and a stable foundation for every later 26e child.
+
+Title/ID: m26e-production-surface-truth-and-stub-retirement
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / production surface truth and mock-stub retirement
+Goal: Inventory every reachable implementation surface, retain useful mocks only as explicit fixtures, and make the selected QEMU/Pi/runtime-release closure free of silent mock, stub, no-op, dummy, synthetic, or placeholder behavior.
+Inputs: `m26e-mcs-abi-foundation`, Cargo.toml and all workspace Cargo metadata/targets/features, apps/**, crates/**, tools/**, configs/**, scripts/**, all tracked README/docs/generated snippets, release manifests/assets, current build/package scripts, and the frozen CYW43 source/artifact boundary.
+Changes:
+  - tools/coh-rtc/src/** + configs/implementation_surfaces.toml + configs/generated/implementation_surface_inventory.json — generate and validate `cohesix-implementation-surface-inventory/v1`. Each workspace member, binary, feature/profile, selected entrypoint, namespace seed, provider/action, host adapter, Python/example/playbook, proof source, package/release asset, and public claim has exactly one implementation class, owner, milestone, production reachability, selection source, package disposition, evidence requirement, and current observed mode. Only WorkerBus may be `model_only`; unclassified, duplicate, or production-reachable fixture/stub entries fail generation.
+  - scripts/ci/check_implementation_surfaces.py + tests — scan source/config/build/release/docs for compiled spin stubs, `Ok(())` no-op provider success, dummy/null/bypass fallbacks, mock/default fixture selection, fabricated identities/state, placeholder credentials/private keys, client-authored proof, and public claims missing an inventory row. The scanner is an inventory/drift guard, not a keyword-only assertion; explicitly registered test fixtures remain legal.
+  - apps/root-task/src/{kernel.rs,userland/mod.rs,serial/**,console/**,uart/**,trace.rs} — make missing operational serial or real time a fatal profile/construction error; keep emergency serial live; remove/profile-exclude the null serial and dummy/bypass clock from target closures; ensure early help exposes only implemented pre-auth diagnostics; return a typed authorization/unavailable refusal for pre-auth reboot instead of a stub; eliminate duplicate legacy bootstrap entrypoints from selected artifacts; and remove the unused `TraceSink::Ipc` alias unless it is wired to the generated bounded service IPC and proven as such.
+  - apps/root-task/src/ninedoor.rs + generated host/GPU contracts — operational target state starts `unavailable source=none`, with no predefined units, nodes, temperatures, GPUs, models, lease, or active model. Populate it only from authenticated, versioned, sequence/epoch/time/TTL/manifest-bound host snapshots; atomically replace a provider generation, reject stale/forged snapshots, and withdraw expired data. Explicit dev-virt/mock profiles may retain clearly labelled fixture topology that never produces live evidence.
+  - apps/gpu-bridge-host/** — live mode requires a validated real registry/CAS source or publishes an explicit empty/unavailable registry; invalid/missing state never installs fixture models or selects the first model as active. Model/source identity, sequence, epoch, observation time, TTL, manifest/CAS/base-adapter compatibility, activation generation, and receipt are explicit. Placeholder auth fails before connection outside explicit fixture mode.
+  - binary/workspace disposition — stop building or staging the current spinning target `nine-door` binary; the later `nine-door-runtime` child is the only selected target namespace-service image. Make the host NineDoor crate library-only unless 28b1 supplies a real bounded host-service use case. Remove the unused all-mock `domain-intents` crate from the Cohesix workspace/release (optionally preserving deterministic records under test fixtures) rather than inventing media/finance authority. Label `coh-status` deferred to Milestone 29, not implemented.
+  - packaging/release gate — replace non-empty-directory and wildcard-copy acceptance with the inventory's exact expected-artifact set for 26e runtime releases; reject unexpected/missing/wrong-kind/wrong-architecture/wrong-hash binaries, compiled stubs, mock-only configuration, placeholder tokens, private fixture signing keys, synthetic proof, and historical assets presented as current. Historical releases remain immutable and receive errata only.
+  - docs — correct nested crate READMEs and all current docs to distinguish `production_live`, fixture, host-model, diagnostic, deferred, and retired surfaces; current code/package state, not milestone prose, determines the initial row.
+Commands:
+  - cargo test -p coh-rtc implementation_surface
+  - python3 scripts/ci/check_implementation_surfaces.py --inventory configs/generated/implementation_surface_inventory.json
+  - cargo test -p root-task --tests production_fallbacks
+  - cargo test -p gpu-bridge-host
+  - scripts/cohesix-build-run.sh --clean --no-run --cargo-target aarch64-unknown-none
+  - scripts/release_bundle.sh --check-manifest
+  - scripts/check-generated.sh
+Checks: operational QEMU/Pi feature and package closures contain real time/serial and no null, dummy, bypass, spin-stub, preseeded host/GPU/model state, implicit active model, fixture key/token, client-authored proof, or automatic live-to-mock fallback; expired provider state becomes unavailable; explicit fixtures still pass isolated tests; WorkerBus is the only model-only role; every other non-live surface is fixture/diagnostic/contract/not-enabled/deferred/retired with an exact owner and cannot satisfy target, integration, release, attestation, or use-case evidence; no CYW43 source, timing, state machine, or proof classification changes.
+Deliverables: Compiler-owned production-surface inventory, fail-closed operational profiles, truthful target namespace state, exact release selection, and no ambiguous mock/stub functionality.
+
+Title/ID: m26e-worker-resource-admission-critical-tcbs
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / executable-slot admission and critical root TCB reserves
+Goal: Prove the complete kernel-object, memory, CSpace, and per-core time budget for every executable slot while creating independent root-control, fault, emergency, Worker-supervisor, and driver-supervisor progress domains.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-production-surface-truth-and-stub-retirement`, selected seL4 15 generated headers/object sizes, BootInfo/untyped inventory, apps/root-task/src/hal/**, apps/root-task/src/kernel.rs, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
+Changes:
+  - tools/coh-rtc/src/** + configs/root_task*.toml — separate namespace/model capacity from per-role executable slots; declare allowed role mixes, fixed core placement, TCB/CNode/VSpace/page-table/ASID/frame/endpoint/notification/fault/timeout/Reply/SC/CSpace-slot/untyped costs, budget/period/deadline/refill/priority/MCP/blocking/jitter/WCET inputs, and fail-closed per-core response-time/admission results.
+  - apps/root-task/src/hal/** + generated records — reserve compiler-bounded per-slot untyped/CSpace pools and supervisor-owned revoke anchors without changing the existing isolated driver-runtime constructor or allocator contract.
+  - apps/root-task/src/kernel.rs + apps/root-task/src/sel4/** — create distinct `root-control`, `root-fault`, `root-emergency`, `root-worker-supervisor`, and `root-driver-supervisor` TCBs with distinct active SCs and least-authority CSpace views; no reserve is a Worker or driver donor.
+  - apps/root-task/src/kernel.rs + tools/coh-rtc/src/** — generate the bounded root-control-to-Worker-supervisor queue, per-admitted-Worker root-fault teardown mailboxes, Worker-supervisor wake notification, per-runtime root-fault-to-driver-supervisor records, driver-supervisor wake notification, reserved disjoint notification-badge ranges, exact Read/Write rights, one-hot signal caps, backpressure/refusal policy, and coalesced drain precedence. Critical producers never block on a supervisor and fault handoff cannot be dropped.
+  - apps/root-task/src/sel4/** + tools/coh-rtc/src/** — generate one acyclic critical-TCB fault graph and exact MCS receive lanes: child fault caps are badged `Write + GrantReply`, root-fault receive caps are Read-only, each receive lane owns one Reply object, ordinary Worker faults suspend/terminate without Reply, only allowlisted timeout faults may reply once, driver faults route to the independent driver supervisor for command-Reply failure and containment, root-fault failure routes to root-emergency, and root-emergency failure is fail-stop rather than self/cyclic recovery.
+  - apps/root-task/src/kernel.rs + tools/coh-rtc/src/** — size the fault registry from every admitted service, Worker, driver, and critical root TCB and propagate duplicate/overflow registration as a fatal construction error.
+  - docs/ROLES_AND_SCHEDULING.md + docs/TEST_PLAN.md — publish executable-slot/resource arithmetic, per-core reserves, response-time inputs, and allocation-failure gates separately from model capacity.
+Commands:
+  - cargo test -p coh-rtc worker_admission
+  - cargo test -p root-task --test worker_resource_admission
+  - cargo test -p root-task --test worker_fault_registry
+  - cargo test -p root-task --test critical_tcb_reserves
+  - cargo test -p root-task --test critical_tcb_handoff
+  - cargo test -p root-task --test driver_supervisor_handoff
+  - cargo test -p root-task --test mcs_fault_lanes
+  - scripts/check-generated.sh
+Checks: the maximum generated role mix fits exact selected-kernel object/untyped/CSpace/page and per-core time bounds; every critical duty runs on the named TCB/SC; Worker and driver handoff queues, mailboxes, badge ranges, cap rights, Reply cardinality, terminal/recoverable fault transitions, and the acyclic fault graph match generated truth under coalescence, saturation, simultaneous faults, handler fault, and allocation failure; no registration or construction error is ignored; model capacity cannot overcommit executable slots. This admission task does not edit driver-runtime or CYW43 behavior; the following driver-port task owns the required MCS rebuild.
+Deliverables: Compiler-proven executable resource pools, generated fault capacity, and independent temporal reserves required before any 26e child is trusted to run.
+
+Title/ID: m26e-driver-runtime-mcs-port-and-cyw43-coexistence
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / linked-driver MCS port and behavioral coexistence proof
+Goal: Replace the current MCS driver stubs with the real seL4 15 MCS command, Reply, notification, fault, active-SC, and faulted-call recovery paths for every linked Pi driver while preserving CYW43/SDIO behavior and re-proving it under the new binary identity.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, crates/pi4-driver-abi/**, apps/pi4-driver-runtime/**, apps/root-task/src/kernel.rs, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, configs/root_task_pi4_uboot_aarch64.toml, scripts/cohesix-build-run.sh, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, the accepted classic driver archive/hash and exact CYW43 evidence, and selected QEMU/Pi MCS generated headers.
+Changes:
+  - crates/pi4-driver-abi/** + tools/coh-rtc/src/** — add/version the scheduler-specific runtime-init fields and generated cap/slot inventory required for active SCs, per-runtime command Reply objects, separate standard/timeout fault Reply lanes, command endpoints, IRQ/DPC notifications, one-way completion wakes, containment anchors, and at most one in-flight root command per runtime without changing device command/completion ring semantics. Root command caps are `Write + GrantReply` with no `Grant`; driver receive and IRQ-wait caps are Read-only; software signal/completion caps are Write-only; SCs bind only to driver TCBs; and command, IRQ, completion, and fault badge domains are disjoint.
+  - apps/root-task/src/hal/driver_task.rs + apps/root-task/src/sel4/** — replace the MCS `wfe`/unsupported trampoline with generated construction and dispatch. Every linked runtime gets one admitted active SC on its generated core; synchronous root commands use the active server's MCS `Recv` with the exact supervisor-owned command Reply object and reply exactly once, while existing one-way bootstrap/background turns remain nonblocking ring/notification operations with no Reply or donated SC.
+  - apps/pi4-driver-runtime/** — implement the MCS receive/Reply loop for serial, USB, HDMI, GENET, CYW43, SDIO, and PCIe images; keep the active SC bound to the TCB rather than a notification, make IRQ/DPC work notification-woken on that same admitted SC, validate runtime-init identity/cap rights, and remove `RuntimeWake::None`/unsupported MCS paths. No runtime receives SchedControl or ticket material.
+  - apps/root-task/src/kernel.rs + apps/root-task/src/hal/driver_task.rs — make `root-driver-supervisor` the sole driver-containment and command-Reply recovery owner. It retains least-authority origin/recovery/TCB caps and per-runtime in-flight command state. If a driver faults during `Call`, root-fault only publishes the separate fault record and wakes the driver supervisor. The supervisor closes command admission, uses the retained command Reply cap to return exactly one typed failure to the blocked caller, verifies that command association is clear, suspends the driver TCB to clear the independent fault Reply association, verifies both associations are clear, revokes the old runtime generation, and only then permits reconstruction. The normal driver and recovery paths are mutually exclusive, so neither Reply object can be reused or answered twice.
+  - CYW43/SDIO behavioral guard — freeze ownership, register/wire ordering, DPC/foreground fairness, deadlines, virtual-counter timing, retry ceilings, pair-restart cuts, completion-ring layout, IRQ ack/mask rules, and error classification. Compare generated constants and normalized state-machine traces against the accepted classic artifact; any semantic delta is a blocker rather than an MCS adaptation.
+  - scripts/cohesix-build-run.sh + scripts/pi4-image-build.sh + evidence identity — build a new deterministic MCS `cohesix-driver-runtimes.cpio`, record every component hash plus the immutable classic comparator hash, and bind the new archive to exact QEMU/Pi image identity. Do not merge the Worker archive or reclassify historical/current CYW43 evidence.
+  - docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md + docs/audit/M26D_MCS_DECISION.md — document the MCS driver command/Reply ownership, behavior-freeze boundary, new artifact identity, and separate exact-image coexistence gate.
+Commands:
+  - cargo test -p pi4-driver-abi -p pi4-driver-runtime
+  - cargo test -p root-task --tests driver_task
+  - cargo test -p root-task --test driver_task_mcs
+  - cargo test -p root-task --test driver_faulted_call_recovery
+  - cargo build --locked --release --target aarch64-unknown-none -p pi4-driver-runtime
+  - scripts/cohesix-build-run.sh --clean --no-run --cargo-target aarch64-unknown-none
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --clean
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-driver-mcs-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-driver-mcs-pi4
+  - scripts/check-generated.sh
+Checks: every linked runtime reaches real MCS Recv/service/Reply or notification-woken progress with the generated TCB-bound active SC/core and no unsupported stub; exact endpoint/notification rights and disjoint badge domains match generated truth; synchronous, one-way, IRQ/DPC, timeout, fault-before/during/after-command, caller-cancellation, restart, and command-versus-fault Reply tests return one normal or typed-failure result, preserve ownership, and leave no blocked caller, SC, Reply association, stale recovery cap, or old-generation authority; the new archive differs only within the authorized shared MCS scheduler/IPC/runtime-init surface; normalized CYW43/SDIO traces, constants, ordering, timing, retries, rings, error outcomes, DHCP/raw TCP/cohsh behavior, and operator-liveness gates match the accepted contract on the new exact Pi image; an accepted CYW43 blocker permits preparatory work only and cannot produce this task's Pi PASS; classic comparator, new MCS driver, Worker, QEMU, Pi, and CYW43 evidence remain distinct.
+Deliverables: Real active-SC MCS linked drivers, a newly hash-bound driver archive, immutable classic comparison evidence, and exact-image CYW43 coexistence proof with no behavioral rewrite.
 
 Title/ID: m26e-ninedoor-service-isolation
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / NineDoor parser-provider isolation
 Goal: Move untrusted target namespace parsing and provider projection behind a bounded restricted seL4 child without moving Queen policy authority.
-Inputs: apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/nine-door/src/**, tools/coh-rtc/src/**, configs/root_task*.toml, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-production-surface-truth-and-stub-retirement`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/nine-door/src/**, crates/secure9p-transport/**, tools/coh-rtc/src/**, configs/root_task*.toml, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md.
 Changes:
   - tools/coh-rtc/src/** + configs/root_task*.toml — add compiler-owned service-image, TCB, CSpace, VSpace, IPC-buffer, stack, endpoint, shared-frame, MCS scheduling-context/Reply/donation/timeout, fault-badge, and revoke records for the target namespace service.
   - apps/nine-door-runtime/** — add a pure-Rust `no_std` child image that parses bounded namespace requests and returns typed prepared operations over the generated internal ABI.
+  - crates/secure9p-transport/** — replace the empty scaffold with the bounded transport-neutral request/response, partial-frame, close, backpressure, and cancellation traits actually consumed by the in-process host adapter and the generated seL4 endpoint/shared-frame adapter. It provides no target TCP listener. Migrate named consumers and prove revoke/short-frame/queue-full behavior; if the final child ABI cannot use this layer without duplicating semantics, remove the crate and its public claim atomically instead of retaining contract-only scaffolding.
+  - apps/nine-door/src/{main.rs,kernel.rs,lib.rs} + scripts/cohesix-build-run.sh — remove/profile-exclude the host print-and-exit and target spin-loop binaries from selected packages; stage `nine-door-runtime` under its generated image identity. Keep `apps/nine-door` as the host library/fixture provider unless a later registered host-service use case owns a real executable.
   - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — retain policy and authoritative mutation in root, replace in-root untrusted parsing for enabled profiles with bounded child IPC, and delete/profile-disable the duplicate parser path.
   - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURITY.md — document the new target child separately from host NineDoor and preserve the no in-VM 9P/TCP-listener rule.
 Commands:
@@ -8494,13 +9082,13 @@ Commands:
   - cargo test -p nine-door
   - cargo check -p nine-door-runtime --target aarch64-unknown-none
   - scripts/check-generated.sh
-Checks: malformed and over-limit requests are contained in the child; root receives only typed bounded operations; the passive donor/Reply/timeout chain returns its SC on success, denial, timeout, cancellation, and child fault; namespace, Secure9P, console, replay, and error fixtures do not drift; no broad namespace, SchedControl, or root CSpace authority reaches the child.
+Checks: malformed and over-limit requests are contained in the child; root receives only typed bounded operations; the passive donor/Reply/timeout chain returns its SC on success, denial, timeout, cancellation, and child fault; partial-frame, backpressure, close, and revoke behavior passes through the real shared transport boundary; the selected archive contains `nine-door-runtime` and no print-and-exit/spin stub; namespace, Secure9P, console, replay, and error fixtures do not drift; no broad namespace, target TCP listener, SchedControl, or root CSpace authority reaches the child.
 Deliverables: Executable target namespace service with generated least-authority objects, bounded IPC, fault containment, and unchanged external semantics.
 
 Title/ID: m26e-console-network-service-isolation
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / TCP console-network isolation
 Goal: Move TCP framing, authentication parsing, and smoltcp packet handling into a restricted child while preserving root-owned operator policy and emergency surfaces.
-Inputs: apps/root-task/src/net/**, apps/root-task/src/console/**, apps/root-task/src/event/**, apps/root-task/src/serial/**, apps/root-task/src/hal/**, tools/coh-rtc/src/**, docs/SECURITY.md, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, `m26e-ninedoor-service-isolation`, apps/root-task/src/net/**, apps/root-task/src/console/**, apps/root-task/src/event/**, apps/root-task/src/serial/**, apps/root-task/src/hal/**, tools/coh-rtc/src/**, docs/SECURITY.md, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
 Changes:
   - tools/coh-rtc/src/** + generated artifacts — add the console/network service image, object inventory, endpoint/notification badges, bounded packet/request frames, active MCS scheduling context, Reply/timeout records, fault, shutdown, and revoke policy.
   - apps/console-network-runtime/** — add a pure-Rust `no_std` smoltcp/TCP/authentication child using only the generated network-service ABI and admitted virtual/driver transport caps.
@@ -8514,31 +9102,166 @@ Commands:
 Checks: malformed packets/auth frames fault or fail inside the child; its active SC stays inside generated budget/period and timeout policy; root policy cannot be bypassed; TCP load and child failure never consume the independent root/emergency/fault reserves or starve serial/local-seat/fatal output; no second listener or root-owned physical NIC path appears.
 Deliverables: Restricted console/network child with bounded transport IPC, preserved operator semantics, and containment evidence.
 
-Title/ID: m26e-worker-supervisor-child-isolation
-Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / executable Worker substrate
-Goal: Replace model-only target Worker claims with separately packaged, supervised Worker child tasks only for roles whose full generated task-object contract is present.
-Inputs: apps/worker-heart/**, apps/worker-gpu/**, apps/worker-lora/**, apps/root-task/src/worker_authority.rs, apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, tools/coh-rtc/src/**, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/WORKER_TICKETS.md, docs/GPU_NODES.md.
+Title/ID: m26e-worker-abi-identity-notifications
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / Worker task ABI v1 and exact executable-role matrix
+Goal: Freeze one pointer-free namespace-projection ABI, collision-free instance identity, seL4-correct notification contract, and non-vacuous Heartbeat/GPU/LoRA role matrix before any Worker image or supervisor depends on it.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, apps/worker-heart/**, apps/worker-gpu/**, apps/worker-lora/**, apps/root-task/src/worker_authority.rs, tools/coh-rtc/src/**, configs/root_task*.toml, docs/INTERFACES.md, docs/ROLES_AND_SCHEDULING.md, docs/USERLAND_AND_CLI.md, docs/WORKER_TICKETS.md, docs/GPU_NODES.md.
 Changes:
-  - tools/coh-rtc/src/** + configs/root_task*.toml — extend executable Worker IR with image identity, TCB/CSpace/VSpace/IPC-buffer/stack, role/epoch-badged endpoint, lifecycle notification, shared frames, MCS scheduling-context/Reply/timeout/donation policy, fault, shutdown, and deterministic revoke records.
-  - apps/root-task/src/worker_authority.rs + lifecycle/event code — load and supervise declared Worker images, retain parent caps required for bounded revoke, reject metadata-only authority, and keep Queen decisions serialized.
-  - apps/worker-heart/** + apps/worker-gpu/** + apps/worker-lora/** — consume only delivered role authority, emit bounded telemetry/receipts, handle notification/fault/shutdown paths, and keep CUDA/NVML/training/inference host-side.
-  - generated artifacts + canonical Worker docs — set `implemented=true` only for roles that pass the complete selected-profile task-object and target-evidence gate; leave every other role model-only.
+  - crates/worker-task-abi/** — add `worker-task-abi/v1` runtime-init, identity, bounded control/completion, READY, telemetry/receipt, shutdown, standard-fault, timeout-fault, and evidence records with fixed layouts, explicit version/length/sequence/epoch/generation fields, release/acquire rules, and no pointers or extra caps. Define exact `GPU_LEASE_RECEIPT` and `PEFT_RECEIPT` labels/records carrying the generated action code, confirmed/rejected outcome, receipt sequence, full Worker identity, and fixed SHA-256 idempotency/operation/subject/result digests, plus their bounded `worker-gpu-receipt/v1` and `worker-lora-receipt/v1` canonical telemetry encodings.
+  - tools/coh-rtc/src/** + configs/root_task*.toml — generate immutable `(role, slot, lease_epoch, supervisor_generation, cap_generation)` endpoint/fault identities; lifecycle and supervisor-wake notification objects; reserved disjoint endpoint/notification badge ranges; per-slot one-hot lifecycle/completion bits and precedence; per-slot durable control/completion records; exact holders/slots/rights/syscalls; one active Worker SC bound only to its TCB; zero normal-IPC blocking Send/Call/Reply/donation depth; standard/timeout fault caps with `Write + GrantReply`; root-fault Read caps and Reply-lane cardinality; per-role slots/images; accepted host-ticket request/result schema sets; the action/receipt-mode version matrix; root-pinned version-2 Worker bindings; and Heartbeat/GPU/LoRA `implemented = true` candidate contracts while WorkerBus remains model-only.
+  - tools/coh-rtc/src/** + evidence schema — distinguish model-only, configured executable, QEMU-accepted, Pi-accepted, Worker-runtime-release-accepted, and production-use-case-accepted states; define strict, non-interchangeable `cohesix-worker-observation/v1` (`record_kind=observation`), `cohesix-worker-integration-evidence/v1` (`record_kind=worker-integration`), `cohesix-worker-task-evidence/v1` (`record_kind=target-component`), `cohesix-root-tcb-acceptance/v1` (`record_kind=root-tcb`), `cohesix-mcs-smp-system-acceptance/v1` (`record_kind=full-system`), and `cohesix-worker-release-acceptance/v1` (`record_kind=release`, scope `worker-runtime`) schemas with per-kind required/forbidden field matrices. Exact-target component records key the sorted exact role-required Worker-integration rows plus target/kernel/resolved-manifest/root/MCS-driver-archive/MCS-driver-manifest/CYW43-coexistence-record/Worker-archive/Worker-image-manifest/Worker-image/ABI/evidence hashes; the release record contains exactly six matching component/root/system record references plus the recursively cross-checked runtime artifact/integration graph. No consumer infers record kind, `implemented = true` never depends on later hardware proof, and the runtime release record cannot be parsed as a production use-case acceptance record.
+  - docs/INTERFACES.md + docs/USERLAND_AND_CLI.md + generated grammar/fixtures — add the manifest-gated `lora` value to the existing spawn operation and `peft.export` to the existing host-ticket action enum/allowlist; define strict per-action version-2 request/result schemas on the existing host-ticket paths with exact argument sets/bounds, `operation_id`, `subject_ref`, receipt Worker role/id/supervisor-generation/cap-generation, root-resolved Worker slot/lease epoch, and canonical `result_digest`; reject unknown args, free-form host paths, symlink/traversal PEFT inputs, ungenerated GPU/device ids, and cross-subject bindings before dispatch; publish the accepted-schema sets and action/receipt-mode matrix; retain version 1 only for actions requesting no Worker receipt; reject federation fields for receipt-bearing version 2; keep `ATTACH` non-instantiating; and map validated terminal GPU/PEFT results through the generated supervisor records and exact receipt labels without a new VM verb, namespace, or executor.
+  - docs/ROLES_AND_SCHEDULING.md + docs/WORKER_TICKETS.md + docs/GPU_NODES.md + docs/TEST_PLAN.md — define exact rights, capacity, identity, coalescing, durable completion, terminal-versus-recoverable fault, PEFT idempotency/receipt, and acceptance-state contracts.
 Commands:
-  - cargo test -p coh-rtc
-  - cargo test -p root-task --tests worker
+  - cargo test -p worker-task-abi
+  - cargo check -p worker-task-abi --target aarch64-unknown-none
+  - cargo test -p coh-rtc worker_task
+  - cargo test -p root-task --test worker_contract
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+Checks: duplicate/overlapping badge domains, zero or multi-bit notification events, OR aliases, role/slot/epoch/supervisor-generation/cap-generation overflow, unknown or action-incompatible ABI/host-ticket schema versions, unknown/oversized/action-incompatible args, free-form or escaping host paths, missing root-resolved slot/lease epoch, missing/cross-role/non-READY receipt bindings, federated/relayed version-2 receipts, post-admission Worker rebinding, extra caps, unbounded frames, broadened or reversed cap rights, SC-to-notification binding, normal Worker Send/Call/Reply/donation, missing durable completion, invalid fault `GrantReply`/Reply cardinality, missing Heartbeat/GPU/LoRA contracts, executable WorkerBus, and circular evidence-dependent `implemented` validation all fail closed; every WorkerGpu record maps exactly one terminal `gpu.lease.grant|renew|release` result, every WorkerLora record maps exactly one terminal `peft.export|import|activate|rollback` result, and both prove id/ticket/idempotency/digest/generation/replay behavior without granting host execution, credential, model, or device authority.
+Deliverables: Compiler-owned Worker ABI v1, exact mandatory role matrix, additive LoRA spawn value, and exact-image acceptance schema.
+
+Title/ID: m26e-worker-image-pipeline-loader
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / content-addressed Worker images and generic least-authority child loader
+Goal: Build, validate, package, hash, and load the three mandatory Worker images before root compilation without repackaging or modifying the newly accepted 26e MCS driver archive.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, `m26e-worker-abi-identity-notifications`, apps/worker-heart/**, apps/worker-gpu/**, apps/worker-lora/**, apps/root-task/build.rs, apps/root-task/src/hal/**, scripts/cohesix-build-run.sh, scripts/pi4-image-build.sh, scripts/ci/size_guard.sh, generated Worker ABI/slot records, and the newly hash-bound MCS driver/CYW43 coexistence identity.
+Changes:
+  - apps/worker-heart/** + apps/worker-gpu/** + apps/worker-lora/** — provide real `no_std` target binaries and linker contracts that consume only the sealed runtime-init descriptor, issue READY, block on real IPC/notifications, use admitted time, and remove hard-coded CPtrs, synthetic identity/time, and spin loops; LoRA emits bounded PEFT lifecycle receipts and never trains, imports, loads, activates, rolls back, or infers itself.
+  - scripts/worker_image_manifest.py + tests — validate AArch64 ELF class/machine, entrypoint, relocation/load span, W^X segments, stack/IPC bounds, canonical stripped bytes, role/ABI identity, content hashes, duplicate names, and tampering.
+  - scripts/cohesix-build-run.sh + scripts/pi4-image-build.sh + apps/root-task/build.rs — add `worker-heart`, `worker-gpu`, and `worker-lora` explicitly to the target Worker build/staging inventory, build Workers first, create a deterministic separate `cohesix-worker-images.cpio` plus `cohesix-worker-image-manifest/v1`, then compile root with generated target-qualified digest expectations. A selected executable role missing from the build list, staged directory, archive, or manifest fails instead of being silently skipped. Do not append to, rename, reorder, or reinterpret `cohesix-driver-runtimes.cpio`, `COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD`, or its seven-driver evidence fields.
+  - apps/root-task/src/hal/** — add an additive HAL-backed generic W^X child-image planner/loader for generated Worker records without refactoring or duplicating the MCS-ported physical driver-runtime loader and ABI path.
+  - exact-image/release metadata — bind the Worker archive, Worker image-manifest, and per-image hashes separately into QEMU and Pi identity and preserve the rootfs `< 4 MiB` guard.
+Commands:
+  - cargo build --locked --release --target aarch64-unknown-none -p worker-heart -p worker-gpu -p worker-lora
+  - cargo test -p root-task --test worker_image_loader
+  - python3 -m pytest -q tests/test_worker_image_pipeline.py tests/test_pi4_image_build.py
+  - scripts/cohesix-build-run.sh --clean --no-run --cargo-target aarch64-unknown-none
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --clean
+  - scripts/ci/size_guard.sh out/cohesix/cohesix-system.cpio
+Checks: root builds only after all three canonical image hashes exist; the exact archive and manifest contain Heartbeat/GPU/LoRA and no WorkerBus; wrong architecture, W+X, bad entry/load bounds, stale/tampered hash, missing LoRA binary, malformed runtime-init bounds, or rootfs overflow fail; QEMU/Pi Worker archives are target-qualified; this task leaves the input MCS driver archive/hash, CYW43/SDIO behavior, inventory, timing, restart, and evidence classification unchanged.
+Deliverables: Deterministic separately packaged Worker images, target-qualified image manifest, and reusable least-authority Worker loader without a driver/CYW43 packaging refactor.
+
+Title/ID: m26e-worker-supervisor-child-isolation
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / transactional executable Worker supervision
+Goal: Replace model-only target claims with real Heartbeat/GPU/LoRA child tasks whose spawn, READY, operation, shutdown, fault, teardown, and fresh-generation recreation are atomic and authority-safe.
+Inputs: `m26e-worker-resource-admission-critical-tcbs`, `m26e-worker-abi-identity-notifications`, `m26e-worker-image-pipeline-loader`, apps/root-task/src/worker_authority.rs, apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, apps/root-task/src/ninedoor.rs, apps/worker-heart/**, apps/worker-gpu/**, apps/worker-lora/**, generated slot/image records, canonical Worker docs.
+Changes:
+  - apps/root-task/src/worker_authority.rs + lifecycle/event code — implement the generated free/allocate/verify/map/configure/admit/resume/READY state machine, reserve ids before READY without publishing live authority, validate every child record, and serialize Queen decisions without blocking root-control, root-fault, or root-emergency TCBs.
+  - apps/root-task/src/ninedoor.rs + console projection — make accepted spawn acknowledge bounded queue admission, add the generated LoRA spawn target, expose bounded starting/live/closing/faulted/terminal state, stop new authority immediately on kill, and preserve `ATTACH` as session-only.
+  - supervisor completion/fault handling — drain generated per-slot durable READY/operation/receipt records from the supervisor-wake notification, validate sequence/identity/digest, preserve one-in-flight semantics, count droppable telemetry, receive nonblocking critical-TCB handoffs, and keep fault Reply ownership in root-fault until its terminal or allowlisted-recoverable decision completes.
+  - supervisor teardown — close admission, signal one-hot shutdown, enforce the grace bound, suspend, clear durable records and notification state, resolve fault Replies, unbind notification/SC, unmap/scrub frames, revoke descendants from retained anchors, delete child objects, prove zero old-generation authority and no blocking-send path, reclaim the slot, and advance generation before reuse.
+  - apps/worker-heart/** + apps/worker-gpu/** + apps/worker-lora/** — validate init/control records, publish durable READY/completion/receipt records before signaling, produce only explicitly droppable endpoint telemetry, honor coalesced lifecycle precedence, block when idle, and reject late/stale generations; WorkerLora maps the four PEFT result actions exactly and only WorkerBus remains model-only.
+  - generated artifacts + canonical Worker docs — use `implemented = true` only for complete static executable contracts and describe acceptance-pending versus exact-target-accepted state separately.
+Commands:
+  - cargo test -p root-task --test worker_ipc
+  - cargo test -p root-task --test worker_supervisor
+  - cargo test -p root-task --test worker_notification
+  - cargo test -p root-task --test worker_fault_lifecycle
   - cargo test -p worker-heart -p worker-gpu -p worker-lora
   - cargo check -p worker-heart -p worker-gpu -p worker-lora --target aarch64-unknown-none
   - scripts/check-generated.sh
-Checks: each enabled Worker is a real restricted child with live badged IPC, lifecycle notification, and its generated active or passive MCS topology; forged metadata, wrong role/epoch badges, stale calls, late telemetry, stranded Reply/donated-SC state, budget overrun, and post-revoke activity fail deterministically; model-only roles remain non-executable.
-Deliverables: Honest executable Worker substrate that satisfies the Milestone 26d task-object gate without claiming the broader Milestone 28e production cap-bundle lifecycle.
+Checks: ring/control saturation, duplicate sequence, forged role/slot/epoch/supervisor-generation/cap-generation, two same-role instances, coalesced notifications, durable-completion publish/signal races, READY timeout, construction failure at every phase, ordinary terminal fault, allowlisted timeout recovery, fault before READY/during IPC, attempted forbidden blocking send, dropped telemetry, late completion/receipt, kill/fault repetition, generation exhaustion, and repeated maximum-slot churn fail or recover deterministically with no orphan namespace state, cap, mapping, pending record/signal, Reply, SC, or executable TCB; PEFT export/import/activate/rollback receipts prove the exact host-ticket-result-to-supervisor-to-WorkerLora mapping without moving host work into the VM.
+Deliverables: Real transactional Heartbeat/GPU/LoRA tasks and complete per-instance 26e containment/reclamation; WorkerBus remains honestly model-only.
+
+Title/ID: m26e-host-integration-dependency-contract
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / generated host-integration and use-case dependency contract
+Goal: Inventory every advertised host integration and use case, generate its transitive Worker/provider/release dependencies and acceptance obligation, and prevent a Worker, release, use case, or playbook from being promoted while a required host path is mock-only, missing, or unowned.
+Inputs: `m26e-production-surface-truth-and-stub-retirement`, `m26e-worker-abi-identity-notifications`, `m26e-worker-supervisor-child-isolation`, Cargo.toml, configs/root_task*.toml, configs/generated/implementation_surface_inventory.json, tools/coh-rtc/src/**, apps/cohsh/**, apps/coh/**, apps/coh-status/**, apps/hive-gateway/**, crates/cohesix-rest/**, apps/swarmui/**, tools/cohesix-py/**, apps/gpu-bridge-host/**, crates/host-cuda/**, apps/host-ticket-agent/**, apps/host-sidecar-bridge/**, apps/sidecar-bus/**, apps/cas-tool/**, scripts/release_bundle.sh, docs/USE_CASES.md, docs/HOST_TOOLS.md, docs/HOST_API.md, docs/GPU_NODES.md, docs/PYTHON_SUPPORT.md, docs/INTERFACES.md, docs/TEST_PLAN.md, and current release manifests.
+Changes:
+  - tools/coh-rtc/src/** + configs/root_task*.toml — add compiler-owned `host-integration-dependency/v1` records that reference existing generated namespace paths, host-ticket actions, schemas, and authority rather than redefining them. Require integration id/owner, host profiles, dependent Worker roles/use cases/playbooks, `role_required|release_required|use_case_required|optional|future` obligation, required/allowed observed modes, unavailable/future ownership, auth/secret refs, timeout/retry/cancel/idempotency/fencing posture, readiness/degraded semantics, package/artifact requirements, evidence lane, and owning milestone.
+  - tools/coh-rtc/src/codegen/** + configs/generated/** + docs/snippets/** — extend the implementation-surface inventory with one bounded dependency graph and conformance vectors consumed by Rust/Python/REST/UI/release tools. Include every host-facing workspace binary and library API presented as a product surface, every host integration named by any tracked README/canonical doc/help/example, all six `docs/USE_CASES.md` scenarios, and every built-in `cohesix-playbook` id; fail generated-drift checks when an advertised surface is missing, hand-classified elsewhere, or reaches a live row through a fixture/model/no-op dependency.
+  - crates/cohesix-worker-evidence/** + schemas — add strict validation for `cohesix-worker-integration-evidence/v1` (`record_kind=worker-integration`) and a sorted bounded reference list on target-component evidence. Each record covers exactly one dependency row and binds its observed `unknown|missing|disabled|fixture|mock|dry-run|live` mode to the exact dependency graph, manifest, component/config/artifact hashes, optional QEMU or Pi target session, host profile/OS/architecture, provider/package versions, action/observation/receipt outcomes, redacted raw evidence, PASS/FAIL, and blockers without containing secrets or becoming Worker READY evidence.
+  - configs/host_integration_acceptance.toml + scripts/ci/host_integration_run.sh + scripts/ci/check_host_integration_inventory.py + tests/test_host_integration_run.py — create the matrix-only, fixture/mock/dry-run/live, projection-compatibility, and release validation lanes plus their schema, tamper, mode-substitution, missing-owner, and secret-redaction tests. The mandatory 26e live target-session rows are `worker-control`, `gpu-receipt-path`, and `peft-receipt-path`; external GPU/PEFT provider rows remain separately observed and cannot be promoted from the receipt fixture. Advertised FUSE, systemd, Docker, Kubernetes, federation, SIEM/evidence, sidecar, CAS/artifact, and packaging surfaces receive their exact release/use-case obligation and deterministic unavailable behavior. Later NeMo, MCP/A2A, Prometheus/OpenTelemetry, general inference/training, and unbuilt industry providers are explicit future records, never silent omissions.
+  - docs/USE_CASES.md + docs/HOST_TOOLS.md + docs/GPU_NODES.md + docs/PYTHON_SUPPORT.md + docs/TEST_PLAN.md — generate or embed the dependency/support-level table and define that executable-Worker proof, provider availability, package presence, mock/dry-run success, and use-case promotion are independent states.
+Commands:
+  - cargo test -p coh-rtc host_integration
+  - cargo test -p cohesix-worker-evidence
+  - python3 scripts/ci/check_host_integration_inventory.py
+  - python3 -m pytest -q tests/test_host_integration_run.py
+  - scripts/ci/host_integration_run.sh --matrix configs/host_integration_acceptance.toml --matrix-only --state-dir out/host-integration/m26e-matrix
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+Checks: Duplicate ids, unknown action/path/schema refs, missing owners, unclassified host binaries/docs/playbooks, circular dependencies, a role-required integration with no live runtime lane, fixture/mock/dry-run satisfying a provider-live row, a release-required surface with no package/evidence rule, a use case promoted with an unsatisfied dependency, a future provider selected as live, secret-bearing evidence, and host/provider readiness interpreted as Worker READY all fail deterministically; the resulting graph assigns every integration gap to 26e, 28b/28b1, 28c, 28d, 28e, 28f, or 29b with no ambiguous deferral.
+Deliverables: One compiler-owned host-integration/use-case dependency graph, exhaustive inventory guard, strict per-row Worker-integration evidence schema, and exact milestone ownership for every dependency needed by fully functional Workers and their documented use cases.
+
+Title/ID: m26e-host-worker-integration
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / protocol-faithful host integration for real Workers
+Goal: Make Cohesix host tools and every mandatory 26e host-integration lane discover, start, observe, correlate, execute, package, and evidence real Heartbeat/GPU/LoRA Workers through existing Secure9P/console projections with one generated state/dependency contract, no new authority plane, and no VM-local GPU/PEFT execution.
+Inputs: `m26e-production-surface-truth-and-stub-retirement`, `m26e-worker-abi-identity-notifications`, `m26e-worker-image-pipeline-loader`, `m26e-worker-supervisor-child-isolation`, `m26e-host-integration-dependency-contract`, Cargo.toml, configs/root_task*.toml, configs/host_integration_acceptance.toml, crates/worker-task-abi/**, crates/cohsh-core/**, crates/cohesix-rest/**, apps/cohesix-proto/**, apps/nine-door/**, apps/cohsh/**, apps/coh/**, apps/coh-status/**, apps/gpu-bridge-host/**, crates/host-cuda/**, apps/host-ticket-agent/**, apps/host-sidecar-bridge/**, apps/sidecar-bus/**, apps/cas-tool/**, apps/hive-gateway/**, apps/swarmui/**, tools/cohesix-py/**, tools/swarmui-ui-tests/**, tools/coh-rtc/src/**, resources/openapi/hive-gateway.yaml, scripts/cohsh/**, scripts/ci/host_integration_run.sh, scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, scripts/release_bundle.sh, docs/USE_CASES.md, docs/HOST_TOOLS.md, docs/HOST_API.md, docs/GPU_NODES.md, docs/PYTHON_SUPPORT.md, docs/BENCHMARKS.md, docs/TEST_PLAN.md, docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md, generated Worker image manifests, and the accepted 26e MCS driver/CYW43 coexistence identities by immutable hash/reference only.
+Changes:
+  - Cargo.toml + crates/cohesix-worker-evidence/** — add a host-only bounded parser/validator shared by Rust host consumers. It represents transport/action outcome separately from declaration (`model-only` or `executable`), lifecycle (`absent`, `queued`, `starting`, `ready`, `closing`, `faulted`, or `terminal`), artifact (`missing`, `verified`, or `mismatch`), receipt (`none`, `pending`, `confirmed`, `rejected`, or `stale`), integration obligation/observed mode, and execution proof (`none`, `host-model`, `qemu`, or `fresh-pi`). It validates record kind and its required/forbidden field matrix, role, public instance id, slot, logical lease epoch, supervisor generation, cap generation, receipt sequence, ABI/schema version, target class, dependency-graph and Worker-integration record hashes, kernel/root/driver/CYW43/Worker archive/image-manifest/image hashes, record bounds, duplicate identity, and stale generation without exposing raw badges, CPtrs, capability values, or secrets. Worker-runtime release eligibility is derived separately from artifact state plus satisfied role/release compatibility rows and the matching QEMU/Pi component, root-TCB, and full-system acceptance graph; a missing or mismatched kind/hash/schema/target/evidence layer is a typed failure, never a downgraded proof class, and this release status never implies production use-case acceptance.
+  - apps/cohesix-proto/src/lib.rs — provide stable canonical role labels, strict parse/round-trip behavior, and `ALL_ROLES`; preserve `Role::Worker` compatibility as canonical `worker-heartbeat`. WorkerBus recognition never implies executability, and profile-dependent declaration/lifecycle/receipt/proof state does not enter this protocol-label crate.
+  - tools/coh-rtc/src/** + generated clients/docs — generate the executable-role matrix, host-integration dependency graph, Worker ABI/evidence schema versions, maximum live tasks, canonical sharded telemetry template, legacy-alias gate, lifecycle vocabulary, receipt bounds, archive identity, and proof vocabulary from the selected profile. Rust, Python, REST, and UI consumers use the same generated JSON schemas and conformance vectors; direct-TCP local manifests remain expectations, while remote declarations come from bounded remote metadata and proof comes only from hash-matched Worker plus per-row Worker-integration evidence.
+  - crates/cohsh-core/** + apps/cohsh/** + scripts/cohsh/** — support `lora`/`worker-lora` in the existing spawn/kill flow through `/queen/ctl`, keep WorkerBus target spawn deterministically rejected as model-only, discover canonical sharded Worker paths, render queued/starting/ready/closing/faulted/terminal separately, and never treat a successful control write as READY. Ticket mint/attach for WorkerBus remains session/model authority and never task-creation proof; help, generated grammar, transcripts, and ACK/ERR/END fixtures land together.
+  - apps/coh/** — preserve existing GPU/PEFT transport or host-action `status` meanings and add independent declaration, lifecycle, artifact, receipt, and proof fields. Connected receipt-bearing GPU lease and PEFT flows explicitly select or spawn the matching WorkerGpu/WorkerLora, wait for READY within the generated bound, submit the strict version-2 record on the existing host-ticket path, and correlate grant/renew/release or export/import/activate/rollback terminal results with bounded Worker receipt ids and canonical telemetry paths. Direct/local flows remain host-only; a successful write advances only to queued/request-admitted, never READY or target-accepted.
+  - apps/root-task/src/ninedoor.rs + apps/host-ticket-agent/src/{claim,lib,main,status,wal}.rs — make root's existing `spec.snapshot` the canonical enriched version-2 admitted projection and forbid execution from raw request bytes. Add the local single-agent lock/fence and crash-safe version-2 `prepared -> executing -> provider-result-persisted -> result-published -> terminal/cursor` journal for exactly the seven receipt-bearing GPU/PEFT actions, with action-specific observe/reconcile recovery. Separate v2 Worker lifecycle from GPU lease lifecycle so grant/renew/release never implicitly spawn/kill the receipt Worker and release/preempt result delivery precedes any independent teardown. Preserve version-1 behavior as a separately classified compatibility input; do not claim its general provider/federation durability is repaired here.
+  - apps/host-ticket-agent/src/** + provider executor helpers — replace every byte-indexed `str[..N]` output/error truncation touched by the v2 path with a shared UTF-8-boundary-safe bounded encoder; add multibyte, exact-boundary, oversized, provider-error, journal-recovery, and receipt-output tests so untrusted non-ASCII text cannot panic the agent or an executor.
+  - apps/coh/src/evidence.rs + apps/coh/src/evidence_timeline.rs — discover generated canonical paths; validate Worker image identity, lifecycle, receipts, integration obligations/observed modes, and exact-target evidence; emit `cohesix-worker-observation/v1` for live/host-model observations and import but never synthesize the distinct worker-integration, target-component, root-TCB, full-system, or release records; and keep host, host-model, integration, QEMU, fresh-Pi, runtime-release, production-use-case, GPU, PEFT, provider, and CYW43 evidence separate. Missing or mismatched target or required integration evidence produces no proof and a typed blocker, never a degraded PASS.
+  - crates/host-cuda/** + apps/gpu-bridge-host/** — retain deterministic NVML-to-CUDA discovery/fallback and publish the existing GPU/model/LoRA snapshots with bounded generated operation, lease, model, and exact version-2 WorkerGpu receipt correlation when a receipt-bearing lease action names one. Classify mock/demo catalogs as `host-model`, zero-device/unavailable probes explicitly, and real NVML/CUDA inventory as provider `live`; a missing, malformed, unsafe, or unreadable live model registry yields explicit empty/unavailable state and never falls back to the demo catalog or implicitly activates the first model. Live TCP/REST publication resolves a non-placeholder secret reference before connection. The 26e role gate injects bounded provider results to prove all three result-to-Worker paths but does not promote inventory, publication, or a fixture result into GPU execution/device-isolation proof. Keep CUDA, NVML, model registry, adapter bytes, training, activation, and inference host-side; never call an internal Worker endpoint, derive READY from bridge publication, grant hardware caps, or imply that receipt-only WorkerGpu performs GPU work. Milestone 28b1 owns live GPU provider/executor conformance.
+  - apps/coh/src/peft/** + apps/host-ticket-agent/** — add `peft.export` through the existing bounded `coh` export helper and generated action allowlist; consume only root-admitted, exact-READY-Worker-pinned, local-hive version-2 records for all three GPU lease and all four PEFT actions; and produce the canonical immutable result digest. Make the local version-2 executor safe enough to prove every receipt path: confine canonical registry/export paths, reject symlinks/traversal, lock per registry/active pointer, use unique bounded temporary files with file/directory sync plus atomic rename where supported, preserve the prior active pointer until commit, record recoverable partial host/VM publish state, and verify adapter/manifest/base-model/job hashes before import or activation. Distinguish host action completion, VM request admission, Worker READY, Worker receipt confirmation/rejection/stale state, timeout, terminal fault, artifact identity, and target proof while preserving version-1 uncorrelated/federated action-result semantics. Executors use only the root-admitted canonical record, existing console/Secure9P paths, the v2 pre-execution journal, and bounded observation; disconnected/local direct work stays explicitly host-only and never synthesizes a Worker receipt. These fixture/local transaction tests do not provide the production PEFT registry, training, evaluation, scanning, runtime-reload, or provenance acceptance owned by Milestone 28c.
+  - apps/coh/src/mount.rs + generated `coh.mount` policy + release packaging/tests — add canonical sharded Worker roots and bounded dynamic Worker entries to the FUSE allowlist instead of relying on the legacy `/worker` root; run real direct-console and REST-backed Worker telemetry/receipt append/read/unmount/cleanup smokes through FUSE 3 on supported Linux packages and MacFUSE on advertised macOS packages. Resolve the current REST-backed write `EINVAL` limitation without broadening append-only offsets or target policy. Verify generated mount allowlists, dynamic telemetry bounds, request-auth, one-gateway-mount locking, disconnect behavior, and no generic POSIX create/rename/delete semantics; `--mock`, mount-directory creation, or library presence alone is not FUSE acceptance and a mount never supplies Worker readiness.
+  - apps/host-sidecar-bridge/** + apps/host-ticket-agent/src/executors/{systemd,docker,k8s}.rs + tools/cohesix-py/cohesix/integrations.py — preserve current schemas/actions and prove they do not drift or masquerade as Worker state while the dependency matrix classifies them as current primitives/integration patterns. Mock, probe, or basic command-adapter success cannot promote an action-airlock, self-healing, Kubernetes, systemd, or Docker use case. Milestones 28b/28b1 own delegated identity, writer fencing, disposable live-safe and negative fixtures, full provider/version conformance, rollback/fail-safe policy, and installable production deployment profiles; 26e must name those blockers rather than silently substituting mock data.
+  - host federation, SIEM/evidence, CAS/artifact, sidecar, and release surfaces — attach every shipped surface to its generated obligation and evidence lane. Preserve version-1 federation/fleet compatibility tests while classifying current action-completion as non-promotable until the later owner proves true pre-forward write-ahead persistence, enforced relay timeout, no pending-entry eviction, source-visible terminal receipt correlation, live metrics, and writer fencing; reject version-2 Worker receipt relay outright in 26e. Prove SIEM and evidence output is bounded/redacted/reconstructable, hash CAS/model refs without packaging payload secrets, and prove sidecar/provider readiness cannot parse as Worker READY. Optional or future integrations produce explicit unavailable/future records.
+  - apps/hive-gateway/** + crates/cohesix-rest/** + resources/openapi/hive-gateway.yaml — add optional declaration-only `WorkerRuntimeBounds` to the existing bounds response: role matrix, ABI/schema version, maximum live tasks, canonical telemetry template, and legacy-alias gate. Absence means `unknown`, never model-only. Add optional gateway `backend_class` (`host-model`, `console-projection`, or `unknown`) to status; even `console-projection` proves no target class. Add an explicit bounded `--worker-acceptance-evidence <path>`/generated-config import for a local evidence record or release-bundle acceptance file: require a size-bounded canonical regular file under the explicit operator/release root with no symlink traversal, validate its `record_kind`, complete hashes, target, and schema through `cohesix-worker-evidence`, then expose only a redacted optional `worker_acceptance` summary on the existing status response. Absence or validation failure yields no proof and a typed diagnostic. Live lifecycle/receipts stay on existing LS/CAT/TAIL namespace projections. Add canonical `/shard` post-control cache invalidation and backward-compatible absence tests; add no Worker REST action, direct Worker RPC, authority-bearing route, or optimistic success state.
+  - apps/swarmui/** + tools/swarmui-ui-tests/** — stop inferring Worker roles from id prefixes or defaulting generic `worker-*` ids to Heartbeat. Render declaration, lifecycle, receipt, artifact, and proof separately from structured generated data; consume proof only from the gateway's shared-validator-backed optional `worker_acceptance` summary; version and migrate older model-only replay/snapshot fixtures so absent fields never default to READY; keep unrelated workbench redesign in Milestone 28f.
+  - tools/coh-rtc/src/codegen/cohesix_py.rs + tools/cohesix-py/cohesix/generated.py — generate Worker declarations, ABI/host-ticket/evidence schema versions, maximum live tasks, sharding data, receipt bounds, and `/shard` mount permission. Add a typed bounded `cohesix/worker.py`; add existing-path `worker_spawn`, `worker_observe`, and bounded `worker_wait` APIs for Heartbeat/GPU/LoRA; reject WorkerBus spawn; and retain existing GPU lease entrypoints as compatibility wrappers over the same generated control and ticket projections.
+  - tools/cohesix-py/cohesix/client.py + receipts.py + evidence.py — add grant/renew/release WorkerGpu and export/import/activate/rollback WorkerLora receipt consumers that explicitly bind a READY Worker through the existing host-ticket path while keeping `execution_location=host`; wait for and validate the root-admitted request, lease/Worker identity, terminal provider result, canonical result digest, Worker receipt, target manifest/image identity, and evidence reference. A successful append, local ACK, subprocess exit, local argument summary, unknown manifest, or `/proc` snapshot may be recorded only as a client transcript/observation and is never named or serialized as the authoritative receipt. Never invent or rebind a VM receipt when disconnected or after Worker teardown.
+  - tools/cohesix-py/cohesix/backends.py + orchestration.py + playbooks.py + tests/examples/docs — classify MockBackend as `host-model`, REST from gateway `backend_class`, and TCP/filesystem as projection/unknown; model Heartbeat/GPU/LoRA lifecycle/receipts and reject WorkerBus in mocks; keep high-count playbooks explicitly control-model rather than task-creation proof; expose the typed API and host-only PEFT boundary.
+  - apps/nine-door/src/host/** + Hive Gateway mock — mirror the generated Heartbeat/GPU/LoRA grammar and structured lifecycle/receipt records for compatibility tests, reject WorkerBus spawn, and mark every mock Worker `host-model`. Generic provider records such as `/host/... state=ready` cannot parse as Worker READY and mocks claim no image/task/MCS/fault/QEMU/Pi execution.
+  - apps/host-sidecar-bridge/** + apps/sidecar-bus/** — keep provider/link readiness and WorkerBus session/model state independent of executable Worker lifecycle. These are regression-only surfaces in 26e: add no task-creation path, and prove their `ready`/linked/provider records cannot parse as Worker READY or target proof.
+  - apps/coh-status/src/lib.rs + read-only tests — keep 26e to the existing library/replay surface: consume the shared Worker validator and generated canonical paths, replace the current generic `/queen/ctl`/legacy-`/worker` transcript with read-only canonical `/shard` and evidence fixtures, and prove no authority command or inferred proof exists. Do not add or claim a live `coh-status` binary here; Milestone 29 owns that standalone read-only CLI.
+  - scripts/rest_perf_harness.py + tests/test_rest_perf_harness.py — add explicit `host-model` and `executable` population modes. Synthetic high-count workloads remain host-model; executable mode obeys generated `max_live_tasks`, discovers real structured READY instances through canonical `/shard` paths, forbids synthetic id expansion, records requested/discovered/READY populations plus backend/proof class, and calls a control write `admitted` rather than `accepted`. Starting QEMU alone never yields QEMU proof.
+  - scripts/cohesix-build-run.sh + scripts/ci/host_integration_run.sh + scripts/release_bundle.sh — add `host-ticket-agent` and every selected-profile host tool explicitly to source-build/staging lists; execute selected target-session dependency rows and emit strict Worker-integration records; add verification-only `--verify-worker-acceptance`, Worker QEMU/Pi component, root-TCB QEMU/Pi, and full-system QEMU/Pi evidence inputs. Generate an exact named host-tool/image/evidence manifest and require externally supplied host-tool directories to match it; a missing required binary, Worker image, schema, or evidence file fails rather than being silently skipped or accepted because the directory is non-empty. Hash-validate the dependency graph and every role/release-required integration record plus `cohesix-worker-images.cpio`, its image manifest, ABI versions, MCS driver archive/manifest, CYW43 coexistence record, and every target acceptance input for selected executable 26e profiles. Packaging alone yields artifact `verified` and execution proof `none`; it may report Worker-runtime release eligibility only after the matching integration/component/root/system graph exists, and it cannot emit the final release-accepted record before `m26e-mcs-smp-target-acceptance` or copy stale evidence onto a different host profile, provider, kernel, root image, driver archive, Worker archive, manifest, dependency graph, or CYW43 record.
+  - canonical host/Worker/PEFT/interface/release docs and fixtures — document the shared state axes, existing-authority projections, host-only GPU/PEFT boundary, canonical sharded paths, evidence promotion, replay migration, and release requirements. No CYW43/SDIO timing, state-machine, restart, packaging, image-build, trace-normalization, or proof-classification file may be edited; this task consumes only its frozen artifact identity.
+Commands:
+  - cargo test -p cohesix-worker-evidence
+  - cargo test -p nine-door -p coh-status
+  - cargo test -p cohsh-core -p cohsh
+  - cargo test -p host-cuda
+  - cargo test -p coh --features fuse,nvml
+  - cargo test -p gpu-bridge-host -p host-ticket-agent -p hive-gateway -p cohesix-rest
+  - cargo test -p host-sidecar-bridge -p sidecar-bus
+  - cargo test -p cohesix-proto
+  - cargo check -p swarmui --bin swarmui
+  - cargo test -p swarmui --tests
+  - python3 scripts/ci/check_swarmui_dependencies.py
+  - npm --prefix tools/swarmui-ui-tests test
+  - python3 -m pytest -q tools/cohesix-py/tests
+  - python3 -m pytest -q tests/test_rest_perf_harness.py tests/test_release_bundle.py tests/test_worker_task_evidence.py tests/test_worker_image_pipeline.py
+  - scripts/cohsh/run_regression_batch.sh
+  - cargo test -p coh-rtc
+  - scripts/ci/host_integration_run.sh --matrix configs/host_integration_acceptance.toml --target qemu --required-for worker-runtime --state-dir out/host-integration/m26e-qemu
+  - scripts/ci/host_integration_run.sh --matrix configs/host_integration_acceptance.toml --target pi4 --required-for worker-runtime --state-dir out/host-integration/m26e-pi4
+  - scripts/check-generated.sh
+Checks: Heartbeat/GPU/LoRA use the existing spawn, kill, namespace, console, policy, and ticket paths, while WorkerBus target spawn returns an existing-form deterministic model-only error; every host surface agrees on role, public instance id, slot, epoch, supervisor generation, cap generation, lifecycle, receipt, artifact, integration obligation/observed mode, execution proof, and separately derived runtime-release versus production-use-case state; control ACK proves only admission, `implemented = true` only executable declaration, READY only live runtime state, host-model only modelling, and QEMU/fresh-Pi proof only matching evidence; absent REST bounds mean unknown and gateway connection/QEMU launch never imply proof; generic ids are never inferred to be Heartbeat; GPU lease ACTIVE, bridge publication, ticket success, PEFT completion, FUSE mount, provider `ready`, package presence, or mocks cannot independently promote READY or target proof; connected GPU grant/renew/release and PEFT export/import/activate/rollback fixtures obtain the exact bounded WorkerGpu/WorkerLora confirmed/rejected/stale receipts without moving host hardware/registry/training/inference authority; mandatory live `worker-control`, `gpu-receipt-path`, and `peft-receipt-path` target-session rows pass, while every advertised FUSE/systemd/Docker/Kubernetes/federation/SIEM/CAS/sidecar/release/provider surface records its exact current mode and later blocker rather than being promoted by compatibility; canonical `/shard` invalidation, sharding, version-1/version-2 accepted-schema matrices, local-only v2 rejection, root-pinned admitted projections, crash-safe v2 journal recovery, replay retention on existing host-ticket status/deadletter paths, validated gateway evidence-file import, SwarmUI proof sourcing, and ACK/ERR/END fixtures pass; absent, wrong-kind, stale, forged, duplicate, late, oversized, wrong-role, wrong-generation, wrong-host-profile, wrong-provider-mode, wrong-target, wrong-ABI, hash-mismatched, mode-substituted, and secret-bearing records fail deterministically; release artifacts expose no ticket, host secret, raw badge, CPtr, or capability value; no CYW43 behavioral contract or evidence classification changes.
+Deliverables: One generated protocol-faithful host Worker state/dependency contract; target-session per-row Worker-integration evidence; LoRA support across all four Cohesix PEFT receipt actions and Rust/Python/REST/UI compatibility projections; exact GPU/PEFT result-to-Worker correlation; canonical FUSE `/shard` compatibility; crash-safe local v2 execution; honest current modes for every shipped/future host surface; hash-bound Worker-runtime release inputs; and host tools ready for the separate exact QEMU/fresh-Pi promotion gate without claiming production provider/use-case completion.
+
+Title/ID: m26e-worker-target-evidence-promotion
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / exact QEMU and Pi Worker acceptance
+Goal: Emit separate QEMU-accepted and Pi-accepted component records for the three configured executable roles only after exact-image evidence proves real IPC, faults, complete teardown, and fresh-generation recreation; do not promote release acceptance yet.
+Inputs: all preceding 26e Worker tasks including `m26e-host-worker-integration`, matching live `worker-control`, `gpu-receipt-path`, and `peft-receipt-path` Worker-integration records for each target, selected QEMU/Pi SMP+MCS builds and manifests, positive exact-image CYW43 closure plus the matching 26e MCS-driver coexistence record, scripts/ci/test_plan_run.sh, scripts/pi4_gate_proof.sh, exact image identities, docs/TEST_PLAN.md, canonical Worker/security/interface docs.
+Changes:
+  - scripts/worker_task_evidence.py + tests/test_worker_task_evidence.py + docs/TEST_PLAN.md — create the emitter/validator and tamper/mode/hash/target tests for `cohesix-worker-task-evidence/v1` with `record_kind=target-component`, exactly one proof target/class, a sorted bounded list of the three exact live role-required Worker-integration records, source/resolved-manifest/kernel/root/MCS-driver-archive/MCS-driver-manifest/CYW43-coexistence-record/Worker-archive/Worker-image-manifest/Worker-image hashes, role/slot/epoch/supervisor-generation/cap-generation/badge/core/SC/object inventories, bounded event outcomes, raw-artifact hashes, PASS/FAIL, and blockers.
+  - QEMU target gate — prove all three mandatory roles through the direct target authority/observation path, including Heartbeat progress, fixture-backed but live root-to-Worker GPU grant/renew/release confirmed/rejected/stale receipts, and LoRA export/import/activate/rollback confirmed/rejected/stale receipts; also prove two same-role instances, maximum-slot refusal, bounded control/receipt paths, combined notifications, durable-completion publish/signal ordering, budget exhaustion/timeout attribution, fault before READY/during IPC, forbidden-blocking-send refusal, stale-record revocation, no post-revoke activity/leak, and fresh generation under four-core SMP+MCS. Rust/Python/REST/UI/FUSE compatibility records are separate projections and cannot raise or block this runtime claim unless an explicit release profile independently requires them.
+  - fresh Pi target gate — prove the identical direct runtime and receipt-path matrix on the exact flashed/booted image while preserving serial, local-seat, TCP, fatal, driver, and Queen liveness; require positive exact-image CYW43 closure plus the matching MCS coexistence record by immutable artifact/hash without merging proof classes. An accepted CYW43 blocker cannot produce Pi component PASS, and no host integration record can substitute for Pi execution.
+  - generated/docs gate — publish only separate QEMU/Pi component acceptance records and update as-built role wording only when the selected exact hashes pass; missing target evidence cannot degrade to host/model PASS, and this task cannot emit `release-accepted`.
+Commands:
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-worker-qemu
+  - python3 scripts/worker_task_evidence.py validate --target qemu --evidence out/test-plan/m26e-worker-qemu/worker-task-evidence.json
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-worker-pi4
+  - python3 scripts/worker_task_evidence.py validate --target pi4 --evidence out/test-plan/m26e-worker-pi4/worker-task-evidence.json
+  - scripts/check-generated.sh
+Checks: Heartbeat/GPU/LoRA each reach READY and complete their exact role contract on both exact targets through direct `cohsh` control/observation, root-admitted host-ticket v2 records, the host-ticket agent's crash-safe local receipt path, and the shared evidence validator; GPU grant/renew/release and PEFT export/import/activate/rollback receipt fixtures correlate with the complete root-resolved Worker identity/result digests without moving host execution or proving the external provider; confirmed/rejected/stale/replay behavior is deterministic across teardown; fault/timeout/revoke identity is unambiguous; combined notification, durable completion, stale-generation, and no-blocking-send tests pass; complete teardown leaves zero caps/mappings/pending records/signals/Replies/SCs/execution; recreation uses a fresh supervisor generation; operator and MCS-driver liveness hold; WorkerBus remains model-only; configured, queued, READY, host-model, projection compatibility, QEMU-only, or Pi-only state cannot satisfy runtime release acceptance, and runtime release acceptance cannot satisfy a production use-case row.
+Deliverables: Separate exact QEMU and fresh-Pi Worker component evidence/acceptance records closing the Milestone 26d general-Worker execution-truth gap without premature release promotion.
 
 Title/ID: m26e-root-tcb-target-proof
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / target containment and regression proof
 Goal: Prove the ordered service/Worker split reduces root authority and preserves deterministic QEMU/Pi behavior under normal, pressure, and injected-fault conditions.
-Inputs: selected generated profiles and images, scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, docs/TEST_PLAN.md, docs/BENCHMARKS.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
+Inputs: `m26e-worker-target-evidence-promotion`, selected generated profiles and images, scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, docs/TEST_PLAN.md, docs/BENCHMARKS.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
 Changes:
-  - root-task/service/Worker tests — add cap-inventory, W^X, IPC-bound, wrong-badge, stale-frame, fault-injection, revoke, shutdown, replay, cancellation, and pressure coverage for every split child.
-  - scripts/ci/test_plan_run.sh + docs/TEST_PLAN.md — add separate host/model, QEMU execution, fresh Pi execution, operator-liveness, and fault-containment gates.
+  - root-task/service/Worker tests — add critical-TCB reserve, cap-inventory, W^X, IPC-bound, wrong-badge, notification-coalescence, stale-frame, fault-injection, complete teardown, fresh-generation recreation, shutdown, replay, cancellation, and pressure coverage for every split child.
+  - scripts/ci/test_plan_run.sh + docs/TEST_PLAN.md — add separate host/model, QEMU execution, fresh Pi execution, operator-liveness, and fault-containment gates; emit separate `cohesix-root-tcb-acceptance/v1` QEMU/Pi records with `record_kind=root-tcb`, exactly one target, and bindings to the exact kernel, root, MCS driver archive/manifest, CYW43 coexistence record, Worker archive/image manifest/images, generated topology, raw evidence hashes, and observed critical-TCB/cap/SC/Reply inventories.
   - docs/BENCHMARKS.md + evidence packs — archive before/after TCB inventory, authority matrices, latency, pressure, and same-harness QEMU/Pi results with atomic change-set and pre-change baseline identity.
 Commands:
   - cargo fmt --all -- --check
@@ -8549,17 +9272,18 @@ Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-root-tcb-qemu
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-root-tcb-pi4
   - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26e-root-tcb-qemu
-Checks: generated and observed cap/SC/Reply inventories agree; each child runs in the selected image, contains injected faults and timeouts, loses stale authority, returns or revokes donated time, and cannot bypass serialized policy; QEMU and fresh Pi evidence preserve console/network/driver/operator behavior and separated proof lanes; the accepted split measurably reduces root authority without an unbounded latency, temporal-reserve, or TCB regression.
-Deliverables: Reviewable target evidence closing the reopened Milestone 25 root-service/Worker task-isolation claims and establishing the prerequisite for Milestone 28e.
+Checks: generated and observed cap/SC/Reply inventories agree; root-control, root-fault, root-emergency, root-worker-supervisor, and root-driver-supervisor each retain independent admitted progress; each child runs in the selected image, contains injected faults/timeouts, completes its 26e teardown/containment, loses stale authority, returns or revokes any service-only donated time, and cannot bypass serialized policy; QEMU and fresh Pi evidence preserve console/network/driver/operator behavior and separated proof lanes; the accepted split measurably reduces root authority without an unbounded latency, temporal-reserve, or TCB regression; each root-TCB acceptance record validates only against the exact immutable artifacts it names.
+Deliverables: Separate hash-bound QEMU/Pi root-TCB acceptance records closing the reopened Milestone 25 root-service/Worker task-isolation claims and establishing the prerequisite for final 26e and Milestone 28e acceptance.
 
 Title/ID: m26e-mcs-smp-target-acceptance
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / full-system SMP+MCS target acceptance
-Goal: Accept the single four-core SMP+MCS operational architecture on QEMU and Pi 4 using the real root, service, Worker, and driver topology under normal, overload, timeout, fault, restart, and operator-liveness conditions.
-Inputs: `m26e-mcs-abi-foundation`, all enabled 26e child images and generated task records, configs/sel4/profiles.toml, configs/root_task*.toml, scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, docs/ROLES_AND_SCHEDULING.md, docs/TEST_PLAN.md, docs/BENCHMARKS.md, docs/audit/M26D_MCS_DECISION.md.
+Goal: Accept the single four-core SMP+MCS operational architecture on QEMU and Pi 4 using the real root, service, Worker, and driver topology under normal, overload, timeout, fault, complete task teardown, fresh-generation recreation, and operator-liveness conditions, as a verification-only gate over the frozen artifacts produced by preceding 26e implementation tasks.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, `m26e-worker-target-evidence-promotion`, `m26e-root-tcb-target-proof`, all enabled 26e child images and generated task records, separate matching QEMU/Pi Worker component records, separate matching QEMU/Pi root-TCB acceptance records, positive exact-image CYW43 closure plus matching MCS coexistence record, configs/sel4/profiles.toml, configs/root_task*.toml, scripts/worker_task_evidence.py, scripts/release_bundle.sh, scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, tests/test_release_bundle.py, docs/ROLES_AND_SCHEDULING.md, docs/TEST_PLAN.md, docs/BENCHMARKS.md, docs/audit/M26D_MCS_DECISION.md.
 Changes:
-  - tools/coh-rtc/src/** + selected manifests — compute and fail closed on per-core admitted demand, reserve root/emergency/fault time, validate active/passive and Reply/donation topology, bind every live SC to its declared SchedControl core, and reject cross-core donation for locality-bound tasks.
-  - apps/root-task/src/** + child runtimes — apply only generated SMP+MCS policy, preserve Reply/donated-SC ownership across normal, timeout, cancel, fault, and revoke paths, decode timeout faults, and expose bounded consumed/budget/overrun evidence.
-  - configs/sel4/profiles.toml + build/release consumers — make the accepted four-core MCS contracts the sole runtime/release profiles for QEMU and Pi 4; remove non-MCS switches, compatibility profiles, and fallback selection from operational paths.
+  - final artifact-freeze gate — make no runtime, generated-policy, manifest, kernel-profile, or image change in this task. Validate that the MCS-only profiles, per-core admission, five critical root reserves, active/passive/Reply topology, child runtimes, and exact kernel/root/MCS-driver/CYW43/Worker-archive/Worker-image-manifest/Worker-image identities are unchanged from the preceding component and root-TCB records. Any hash or generated-output drift sends execution back to the owning implementation task and requires all affected evidence to be rerun before promotion.
+  - scripts/ci/test_plan_run.sh + scripts/worker_task_evidence.py — run the complete frozen topology on each target, then emit separate `cohesix-mcs-smp-system-acceptance/v1` QEMU/Pi records with `record_kind=full-system`, exactly one target, and bindings to the exact Worker component record, root-TCB record, kernel/root images, MCS driver archive/manifest, positive CYW43 coexistence record, Worker archive/image manifest/images, ABI schemas, full-system raw evidence, admission totals, timeout/fault/Reply outcomes, and performance/liveness results.
+  - configs/sel4/profiles.toml + build/release validators — verify that the already-produced four-core MCS contracts are the sole runtime/release profiles for QEMU and Pi 4 and that no non-MCS switch, compatibility profile, or fallback selection remains; do not modify the profile here.
+  - scripts/worker_task_evidence.py + scripts/release_bundle.sh + tests/test_release_bundle.py — create/extend release promotion tests and, only after both full-system records validate, consume all six immutable QEMU/Pi Worker-component, root-TCB, and full-system records; recursively cross-check their role-required Worker-integration rows and complete artifact/evidence hash graph including the Worker image manifest; emit the `release-accepted` `cohesix-worker-release-acceptance/v1` record with `record_kind=release`, explicit scope `worker-runtime`, no singular target field, and exactly those six references; and exercise release verification. Missing either target or evidence layer, missing/wrong-mode integration row, QEMU-only/Pi-only proof, stale hashes, wrong kernel/root/driver/Worker image or Worker image manifest, wrong ABI/resolved-manifest/CYW43 record, or artifact-only packaging fails closed. This record cannot satisfy the Milestone 28b1 production use-case release schema.
   - docs/ROLES_AND_SCHEDULING.md + docs/TEST_PLAN.md + docs/BENCHMARKS.md + evidence packs — record WCET/admission inputs, per-core totals/reserves, full topology, exact build/image identity, timeout/fault/restart results, operator-liveness results, and performance deltas without overstating upstream AArch64 or SMP verification.
 Commands:
   - cargo test -p sel4-sys -p sel4-runtime
@@ -8572,8 +9296,13 @@ Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-mcs-smp-qemu
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-mcs-smp-pi4
   - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26e-mcs-smp-qemu
-Checks: every active TCB has an admitted MCS budget/period/core, every passive TCB has a bounded allowlisted donor/Reply/timeout chain to an admitted active context, and all paths preserve correct ownership; aggregate demand preserves root/emergency/fault reserves; four-core QEMU and fresh Pi pass cold/warm boot, mixed load, budget exhaustion, timeout, fault, revoke/restart, SC-leak, operator-liveness, protocol-regression, and same-harness performance gates; no operational classic scheduler path or profile remains. Any failure blocks closure and requires whole-change source/configuration reversion rather than a shipped fallback.
-Deliverables: One target-qualified SMP+MCS scheduling architecture for QEMU and Pi 4 with no runtime scheduler rollback path.
+  - python3 scripts/worker_task_evidence.py validate-system --target qemu --worker out/test-plan/m26e-worker-qemu/worker-task-evidence.json --root out/test-plan/m26e-root-tcb-qemu/root-tcb-acceptance.json --run out/test-plan/m26e-mcs-smp-qemu --out out/test-plan/m26e-mcs-smp-qemu/system-acceptance.json
+  - python3 scripts/worker_task_evidence.py validate-system --target pi4 --worker out/test-plan/m26e-worker-pi4/worker-task-evidence.json --root out/test-plan/m26e-root-tcb-pi4/root-tcb-acceptance.json --run out/test-plan/m26e-mcs-smp-pi4 --out out/test-plan/m26e-mcs-smp-pi4/system-acceptance.json
+  - python3 scripts/worker_task_evidence.py promote-release --worker-qemu out/test-plan/m26e-worker-qemu/worker-task-evidence.json --worker-pi4 out/test-plan/m26e-worker-pi4/worker-task-evidence.json --root-qemu out/test-plan/m26e-root-tcb-qemu/root-tcb-acceptance.json --root-pi4 out/test-plan/m26e-root-tcb-pi4/root-tcb-acceptance.json --system-qemu out/test-plan/m26e-mcs-smp-qemu/system-acceptance.json --system-pi4 out/test-plan/m26e-mcs-smp-pi4/system-acceptance.json --out out/test-plan/m26e-mcs-smp/worker-release-acceptance.json
+  - scripts/release_bundle.sh --verify-worker-acceptance --worker-qemu-evidence out/test-plan/m26e-worker-qemu/worker-task-evidence.json --worker-pi4-evidence out/test-plan/m26e-worker-pi4/worker-task-evidence.json --worker-root-qemu-evidence out/test-plan/m26e-root-tcb-qemu/root-tcb-acceptance.json --worker-root-pi4-evidence out/test-plan/m26e-root-tcb-pi4/root-tcb-acceptance.json --worker-system-qemu-evidence out/test-plan/m26e-mcs-smp-qemu/system-acceptance.json --worker-system-pi4-evidence out/test-plan/m26e-mcs-smp-pi4/system-acceptance.json
+  - python3 -m pytest -q tests/test_release_bundle.py tests/test_worker_task_evidence.py
+Checks: every active TCB has an admitted MCS budget/period/core, every passive service TCB has a bounded allowlisted donor/Reply/timeout chain to an admitted active context, every Worker has a dedicated active SC and zero normal-IPC donation, every linked driver uses its admitted MCS path, and all paths preserve correct ownership; aggregate demand preserves the root-control, root-fault, root-emergency, root-worker-supervisor, and root-driver-supervisor reserves; four-core QEMU and fresh Pi pass cold/warm boot, mixed load, budget exhaustion, timeout, fault, faulted-driver-call recovery, complete Worker task-instance teardown, fresh supervisor-generation recreation, SC/Reply/cap/mapping/record leak, operator-liveness, protocol-regression, GPU/PEFT receipt, positive CYW43 behavioral-coexistence, and same-harness performance gates; release promotion binds all six records and their complete artifact graph and rejects every missing, one-sided, stale, or mismatched input; no implementation or artifact changes occur after component evidence, and no operational classic scheduler path or profile remains. Any failure blocks closure and requires whole-change source/configuration reversion rather than a shipped fallback.
+Deliverables: One target-qualified SMP+MCS scheduling architecture for QEMU and Pi 4, final `cohesix-worker-release-acceptance/v1` evidence, and no runtime scheduler rollback path.
 ```
 
 ---
@@ -9097,9 +9826,11 @@ Deliverables:
 
 ### Prerequisite
 - Before executable Worker service buckets may be enabled, Milestone 26e task
-  `m26e-worker-supervisor-child-isolation` must be complete for the selected
-  profile, including applied Worker scheduling and notification-lifecycle
-  evidence. Model-only roles remain excluded.
+  `m26e-worker-supervisor-child-isolation`, `m26e-host-worker-integration`, and
+  `m26e-worker-target-evidence-promotion` must be complete for the selected
+  profile, including applied Worker scheduling, coalesced-notification,
+  complete-teardown, host-receipt, and exact-target evidence. WorkerBus remains
+  model-only and excluded.
 - Milestone 26e task `m26e-mcs-smp-target-acceptance` must be complete for both
   QEMU and Pi 4. Milestone 27c consumes that single SMP+MCS architecture and may
   not add a scheduler switch, classic compatibility profile, or fallback path.
@@ -9533,7 +10264,7 @@ Deliverables: Repeatable validation for Cohesix multi-surface responsiveness.
 **Why now (operator & adoption):**  
 After Milestones 26b, 26c, 26d, 27, 27b, 27c, and 27d close, Cohesix should have the Pi 4 isolated runtime benchmark baseline, refreshed seL4 baseline, persistence evidence, formal-verification claim register, core-local SMP service-bucket evidence, and operator-lane pressure evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
 
-**As-built alignment note:** `coh evidence pack` and `coh evidence timeline` already exist and are reused here. `coh inspect`, a first-class trace diagnostics command, `coh diff`, `coh attest`, and any `coh bundle` alias are not implemented as of the 26c planning audit and must be added as thin, read-only projections over existing file-shaped state and evidence packs.
+**As-built alignment note:** `coh evidence pack` and `coh evidence timeline` already exist and are reused here. `coh inspect`, a first-class trace diagnostics command, `coh diff`, `coh attest`, and any `coh bundle` alias are not implemented as of the 26c planning audit and must be added as thin, read-only projections over existing file-shaped state and evidence packs. `cohsh --record-trace` and `--replay-trace` currently hard-reject every transport except the in-process mock, so fixture replay is real but live canonical capture is not. Likewise, Milestone 28 may verify an attestation only after `m26-device-identity-attestation-closure` supplies signed, freshness-bound evidence; the current public-data measurement hash is not a positive fixture.
 
 This milestone delivers a small, opinionated set of host-side utilities that read existing file-shaped state and artifacts. They do not mutate system state, do not self-heal, and do not bypass policy.
 
@@ -9566,6 +10297,9 @@ All tools must be:
 - No in-VM UI or interactive tooling
 - No new protocols or transports
 - No mutation of authority, policy, or state
+- No persistent mutation of authority, policy, or state. A bounded authenticated
+  attestation nonce request to the versioned ephemeral challenge node defined
+  by Milestone 26 is permitted; it cannot alter policy or grant authority.
 - No dependency on POSIX filesystem semantics inside the VM
 - No second trace recorder/replayer distinct from the existing `cohsh-core` trace stack
 - No second bundle/evidence artifact format distinct from `coh evidence pack`
@@ -9600,12 +10334,14 @@ Exit codes:
 
 ---
 
-### 2) `trace` — Canonical Trace Consumption
+### 2) `trace` — Canonical Live Capture and Consumption
 
 **Purpose:**  
 Consume the existing deterministic trace format for debugging, testing, and operator diagnostics without defining a parallel recorder.
 
 Capabilities:
+- Record bounded canonical traces through the real TCP and REST/console
+  projection transports without changing their requests or responses
 - Reuse `.trace` artifacts emitted by the existing `cohsh` / `cohsh-core` stack
 - Correlate traces with relevant `/proc/*` and evidence-pack state when available
 - Replay traces against:
@@ -9615,6 +10351,8 @@ Capabilities:
 
 Constraints:
 - No live mutation during replay
+- Authentication exchanges, raw tickets, secret-bearing payload fields, and
+  host credentials are omitted or schema-redacted before persistence
 - Byte-identical ACK/ERR ordering required
 - No second trace grammar, schema, or recorder is introduced by this milestone
 
@@ -9676,10 +10414,17 @@ Output:
 Verify device identity and boot provenance.
 
 Capabilities:
-- Parse TPM / DICE evidence from `/proc/attest`
+- Submit a bounded fresh nonce through the Milestone 26 ephemeral challenge
+  node and parse the uniquely correlated TPM2 Quote or DICE evidence from
+  `/proc/attest`
 - Verify manifest fingerprint binding
-- Validate against provided trust anchors
+- Validate certificate/signature chain, nonce, boot/session identity,
+  measurement selection, exact artifact hashes, freshness/replay data, and
+  configured trust anchors
 - Emit clear PASS / FAIL + reason
+
+`measurement_only`, unsigned hashes, virtual TPM evidence presented as Pi
+hardware, and unavailable trust roots always produce a non-attested result.
 
 This command is binary by design and suitable for CI and compliance workflows.
 
@@ -9714,8 +10459,9 @@ This command is binary by design and suitable for CI and compliance workflows.
 - Audit ledger consistency checks across blockers, exceptions, findings, and risk baseline files
 - Bounded command-latency checks for `inspect`, `diff`, `attest`, and evidence-pack reads over representative live and offline artifacts. This is a host-tool microbenchmark gate, not a QEMU/Pi throughput rerun.
 - Tools must operate correctly against:
-  - QEMU single-core
-  - QEMU multicore
+  - the accepted four-core QEMU SMP+MCS profile
+  - retired single-core QEMU evidence bundles only as offline parser/
+    compatibility fixtures, never as an operational target or proof source
   - Pi 4 boot profile (where applicable)
 
 ---
@@ -9751,6 +10497,31 @@ After Milestone 28:
 
 ## Task Breakdown
 ```
+Title/ID: m28-live-trace-capture
+Milestone: Milestone 28 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest / live canonical trace capture
+Goal: Make the existing bounded trace format record real TCP and REST/console-projection sessions while keeping replay offline, deterministic, and non-mutating.
+Inputs: apps/cohsh/src/{main.rs,trace.rs,transport/**}, crates/cohsh-core/src/trace.rs, apps/coh/src/**, apps/hive-gateway/**, existing trace fixtures/policy, docs/USERLAND_AND_CLI.md, docs/SECURITY.md, docs/TEST_PLAN.md.
+Changes:
+  - crates/cohsh-core + apps/cohsh — wrap live TCP and REST transports with the existing recorder, preserve partial-stream/disconnect/reconnect boundaries, bind the header to schema, backend class, target/session id, manifest/image identity, capture time, and policy hash, and enforce generated byte/frame/duration limits with atomic finalization.
+  - redaction — omit authentication frames and apply generated field-aware redaction before bytes reach disk; raw tickets, placeholder/real auth tokens, secret refs, host credentials, and secret-bearing control payloads are never recoverable from a trace. Redaction metadata is authenticated as part of the trace header/digest.
+  - replay — keep replay transport-free and non-mutating, reject tamper/wrong-policy/oversize/secret-bearing input, and preserve byte-identical post-redaction ACK/ERR/END order across cohsh, SwarmUI, and shared read-only consumers.
+  - public docs/tests — distinguish fixture, captured-QEMU, captured-Pi, and captured-host-projection traces and stop describing mock-only recordings as live artifacts.
+Commands: cargo test -p cohsh-core && cargo test -p cohsh && scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28-live-trace-qemu
+Checks: real TCP and REST sessions produce bounded, identity-bound, atomically complete canonical traces; disconnect/reconnect and truncated captures are explicit; secret canaries never appear; replay is byte-stable and emits no writes; mock traces remain fixtures and cannot satisfy live target evidence.
+Deliverables: One canonical trace recorder usable on real transports and one honest replay/evidence classification.
+
+Title/ID: m28-attestation-verifier
+Milestone: Milestone 28 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest / signed attestation verification
+Goal: Implement `coh attest` as a real verifier of the Milestone 26 device-bound evidence contract rather than a manifest-hash comparison.
+Inputs: accepted `m26-device-identity-attestation-closure` schema/evidence, apps/coh/**, shared evidence/attestation parser crate, trust-anchor inputs, QEMU vTPM and Pi hardware/device-root fixtures, docs/SECURITY.md, docs/TEST_PLAN.md.
+Changes:
+  - shared host attestation core + apps/coh — generate a cryptographically random bounded nonce, submit the authenticated ephemeral challenge, correlate the response, parse TPM2 Quote or DICE evidence, validate algorithms/chain/signature/nonce/measurements/boot id/artifact identities/freshness/replay counter, and return stable machine-readable PASS/FAIL/UNAVAILABLE reasons.
+  - evidence/bundle/diff — retain signed raw evidence only within generated bounds, record its digest and trust-policy id, redact enrollment metadata as configured, and keep QEMU virtual-device, Pi device-root, offline fixture, measurement-only, and unavailable classes distinct.
+  - negative/conformance tests — replayed nonce, wrong PCR/manifest/image/kernel/root, wrong AK/DICE chain, expired or revoked trust anchor, malformed size, unsupported algorithm, measurement-only substitution, virtual-to-Pi proof substitution, and missing device all fail closed.
+Commands: cargo test -p coh --test attest && cargo test -p coh --test evidence_pack && scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28-attest-qemu && scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m28-attest-pi4
+Checks: `coh attest` accepts only a fresh signed chain matching the exact target and configured trust policy; a matching public manifest hash alone never passes; no challenge grants or mutates authority; failure reasons and offline verification are deterministic.
+Deliverables: Shared cryptographic verifier reused by evidence packs, SwarmUI, and later `coh-status` without a second attestation vocabulary.
+
 Title/ID: m28-audit-ledger-refresh
 Goal: Refresh audit blockers, exceptions, findings, and risk baselines so later hardening milestones cite current state.
 Inputs: docs/audit/, scripts/check-generated.sh, docs/BUILD_PLAN.md, current evidence-pack schema.
@@ -9786,7 +10557,7 @@ This milestone closes those gaps using existing as-built mechanisms (`hive-gatew
 
 **As-built alignment note:** The current REST gateway requires a gateway request-auth token for mutating routes, but REST writes still execute through the gateway's configured role/ticket rather than a delegated per-request capability ticket. Host-ticket idempotency by `id + idempotency_key` and relay dedupe exist, but writer-epoch fencing and strict Queen intent dedupe are not yet implemented. Milestone 28b hardens those specific gaps; it must not present current request-auth, relay dedupe, or host-ticket idempotency as delegated REST identity or failover fencing. Because the current upstream console session still authenticates as the gateway role/ticket, 28b must also distinguish **gateway-enforced caller delegation** from any future **VM-verified caller identity** claim.
 
-**Sequencing note:** Milestone 28b closes the host/gateway authority floor required by the Milestone 28b1 coexistence gate and by Milestones 28c, 28d, and 29b. Full VM cap-bundle authority and structured worker/driver fault lifecycle are split into Milestone 28e so the host actuation floor can ship and be audited without bundling every seL4 cap-bundle conversion into the same atomic gate.
+**Sequencing note:** Milestone 28b closes the host/gateway authority floor required by the Milestone 28b1 coexistence gate and by Milestones 28c, 28d, and 29b. Milestone 26e already owns complete live Worker/driver cap authority and basic containment. Production Worker ticket/lease ledger binding, complete driver-inventory projection, and structured worker/driver quarantine evidence are split into Milestone 28e so the host actuation floor can ship without bundling that production ledger work into the same atomic gate.
 
 ---
 
@@ -9800,7 +10571,7 @@ Strengthen authority and failover guarantees while preserving current transport 
 6. Establish the mandatory authority floor for Milestone 28b1 provider conformance, Milestone 28c host-side AI actuation, and Milestone 29b AI namespace projections.
 7. Harden host-ticket execution so target/arg validation and replay durability are strong enough for host side effects.
 8. Harden host bridge and debug surfaces that can otherwise bypass the authority story: GPU bridge authentication/frame bounds and root-console memory diagnostics.
-9. Leave full worker/driver cap-bundle authority and structured fault lifecycle as the explicit Milestone 28e follow-on, not a hidden prerequisite inside the host/gateway write-safety gate.
+9. Leave production Worker ticket/lease ledger binding, complete driver-inventory projection, and structured quarantine/evidence as the explicit Milestone 28e follow-on, not a hidden prerequisite inside the host/gateway write-safety gate or a reason to deny accepted 26e live cap authority.
 
 ---
 
@@ -9873,9 +10644,16 @@ As-built leverage:
 
 Implementation requirements:
 - Replace literal ticket secrets and fixture CAS signing key usage in production manifests with secret references.
+- Reject placeholder credentials in every live client/provider, including
+  SwarmUI and the GPU bridge, before any connection is attempted. Warning-only
+  acceptance is fixture behavior, not a production degradation mode.
 - `coh-rtc` rejects release profiles that include:
   - fixture signing key paths,
   - bootstrap/default secret literals.
+- Release assembly never copies a private fixture signing key or wildcard host
+  directory; selected bundles contain only the exact generated artifact set
+  and public verification material. Historical release snapshots remain
+  immutable but their insecure examples receive current errata.
 - Host tooling/docs define deterministic env/file resolution order for ticket secrets and CAS signing keys.
 - Add rotation tests proving key rollover works without protocol changes.
 
@@ -9929,23 +10707,32 @@ As-built leverage:
 
 ---
 
-### 8) VM Cap-Bundle/Fault Follow-on Boundary
+### 8) Production Ledger/Quarantine Follow-on Boundary
 **Purpose:** Keep 28b atomic around host/gateway authority while preserving the required VM authority hardening path.
 
 Implementation requirements:
 - Milestone 28b must emit generated profile gates and documentation that distinguish:
   - host tickets, REST delegated tickets, and provider/PEFT tickets as host authority records;
-  - a future, separately completed endpoint-cap-backed VM Worker phase as the
-    compatibility floor; the reopened 26c task or an explicit successor may
-    supply it, but current model-only roles do not;
-  - full worker/driver seL4 cap bundles and structured fault lifecycle as Milestone 28e requirements.
-- Target profiles must fail validation if they claim full cap-bundle ticket authority or structured worker/driver fault containment before Milestone 28e evidence exists.
-- Milestones 28c, 28d, and 29b may depend on 28b host/gateway delegated identity, idempotency, fencing, audit/replay, and host-ticket durability, but must not cite full cap-bundle or fault-lifecycle closure until Milestone 28e is complete.
+  - model/session-only roles with no VM authority;
+  - the complete isolated Heartbeat/GPU/LoRA task-instance authority accepted by
+    Milestone 26e, including basic fault containment and teardown but not
+    production ticket/lease binding;
+  - production Worker ticket/lease binding, projection of the already complete
+    applicable driver MMIO/DMA/shared-ring inventory, and structured quarantine/evidence as
+    Milestone 28e requirements.
+- Target profiles must fail validation if they claim production ticket/lease
+  cap-bundle binding or structured production fault/quarantine evidence before
+  Milestone 28e evidence exists. They may describe accepted 26e isolated-task
+  authority only with the exact 26e acceptance records.
+- Milestones 28c, 28d, and 29b may depend on 28b host/gateway delegated identity,
+  idempotency, fencing, audit/replay, and host-ticket durability, and may consume
+  accepted 26e Worker behavior where explicitly needed, but must not cite 28e
+  production VM ticket/lease binding or quarantine closure before 28e completes.
 
 As-built leverage:
-- Reuse 26c endpoint-cap terminology, current Worker scheduling metadata,
-  current driver applied-scheduling evidence, and 28b audit/replay profile
-  gates without overclaiming full seL4 cap-bundle authority.
+- Reuse the accepted 26e isolated-task/acceptance terminology, current driver
+  applied-scheduling evidence, and 28b audit/replay profile gates without
+  overclaiming 28e production ticket/lease binding.
 
 ---
 
@@ -9989,7 +10776,10 @@ Implementation requirements:
 - Host ticket crash/restart tests prove no silent duplicate host side effects after an executor succeeds but status writeback fails.
 - `gpu-bridge-host` rejects placeholder auth in live mode and refuses oversized peer frames before allocation.
 - Root-console arbitrary memory diagnostics are unavailable in release/production profiles or constrained to HAL-classified diagnostic ranges.
-- Generated profiles and docs do not claim full worker/driver cap-bundle authority or structured fault containment until Milestone 28e evidence exists.
+- Generated profiles and docs may claim exact accepted 26e Worker/driver live
+  cap authority and basic containment only with matching 26e evidence; they do
+  not claim production Worker ticket/lease binding, complete driver-inventory
+  ledger projection, or structured quarantine evidence until 28e exists.
 - Milestone 28c host-side AI control cannot be enabled in target profiles unless delegated REST identity, writer-epoch fencing, and audit/replay requirements are all active.
 - Regression pack passes unchanged in compatibility mode; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
 - Gateway authority benchmark evidence shows delegated REST identity, idempotency, writer-epoch refusal, and audit/replay emission stay bounded; any material status/read or write-path regression is classified before downstream MCP/A2A or AI host-control milestones depend on the gateway.
@@ -10007,7 +10797,7 @@ Implementation requirements:
   - host-ticket provider target/arg grammars and execution WAL policy,
   - live host-bridge auth and frame-length limits,
   - profile-gated debug diagnostic policy,
-  - deferred full-cap-bundle and structured-fault profile gates consumed by Milestone 28e,
+  - deferred production Worker ticket/lease, driver-inventory projection, and structured-quarantine profile gates consumed by Milestone 28e,
   - provider-registry and host-AI enablement dependency gates consumed by Milestone 28b1, Milestone 28c, and Milestone 29b.
 - Generated snippets refreshed in:
   - `docs/INTERFACES.md`
@@ -10050,19 +10840,24 @@ Changes:
   - apps/host-ticket-agent/src/spec.rs — add writer_epoch validation to host-ticket schemas.
   - apps/host-ticket-agent/src/relay.rs — enforce stale epoch rejection and WAL replay ordering by epoch.
   - apps/host-ticket-agent/src/status.rs — expose bounded epoch/fence counters for evidence and diagnostics.
+  - scripts/failover_watchdog.py — make production cutover a durable transaction: verify old-writer fence, promote the new writer epoch, require uniquely correlated terminal receipts, then and only then change routing/symlink state; missing hooks, optional fencing, ambiguous receipt, failed post-cutover health, or rollback uncertainty enters fail-safe stopped state rather than silently continuing.
+  - docs/FAILOVER.md — describe the current optional-hook path as development-only until this gate passes and make fencing/promotion mandatory in production.
 Commands: cargo test -p host-ticket-agent && cargo test -p tests --test failover
-Checks: Stale writer epoch intents are rejected deterministically and deadlettered; promoted epoch resumes writes.
+Checks: Stale writer epoch intents are rejected deterministically and deadlettered; the old writer is proven fenced before the promoted epoch can resume writes or routing changes; crash/restart at every cutover boundary converges to one writer or fail-safe stop; absent hooks never count as successful production fencing.
 Deliverables: Explicit, verifiable writer fencing for active/standby failover.
 
 Title/ID: m28b-production-secret-profile
 Goal: Remove fixture/default secrets from release-grade manifests and enforce secret-reference policy.
-Inputs: configs/root_task.toml, tools/coh-rtc, docs/SECURITY.md
+Inputs: configs/root_task.toml, tools/coh-rtc, apps/swarmui, apps/gpu-bridge-host, scripts/release_bundle.sh, release manifests/docs, docs/SECURITY.md
 Changes:
   - tools/coh-rtc/src/validate.rs — reject fixture key paths and bootstrap/default secret literals in production profiles.
   - configs/root_task.toml — introduce secret-reference fields for ticket and CAS signing material.
-  - scripts/ci/due_diligence_gate.sh — extend hardcoded-secret checks to generated manifests/profiles.
-Commands: cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json && scripts/ci/due_diligence_gate.sh
-Checks: Production profile generation fails on fixture/default secrets and passes with secret references.
+  - apps/swarmui/src/lib.rs + tests — reject `changeme` and every generated placeholder before live TCP connection; permit fixture credentials only in an explicit mock/replay constructor and invert the warning-only success regression.
+  - apps/gpu-bridge-host/** + other live host clients — use the shared secret-reference resolver and reject placeholder or missing live credentials before transport setup.
+  - scripts/release_bundle.sh + release docs — remove the fixture CAS private key and placeholder-token examples, include only public verification material, and scan exact bundle contents for private-key/token canaries. Do not mutate historical release directories; publish current errata and reject them as current templates.
+  - scripts/ci/due_diligence_gate.sh — extend hardcoded-secret checks to generated manifests/profiles, all tracked examples/READMEs, package manifests, and assembled release contents.
+Commands: cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json && cargo test -p swarmui --test tcp_console_warning && cargo test -p gpu-bridge-host && scripts/ci/due_diligence_gate.sh && scripts/release_bundle.sh --check-manifest
+Checks: Production profile generation and release assembly fail on fixture/default/private keys, placeholder tokens, warning-only live clients, or unreferenced secret literals and pass only with scoped secret references/public verification material.
 Deliverables: Release-manifest secret hygiene is compiler-enforced, not convention-only.
 
 Title/ID: m28b-audit-replay-production-default
@@ -10114,16 +10909,16 @@ Checks: Production console cannot read arbitrary memory; bring-up diagnostics ar
 Deliverables: Debug memory access is no longer an unbounded operator surface.
 
 Title/ID: m28b-deferred-vm-authority-gates
-Goal: Add explicit validation/docs gates that reserve full worker/driver cap-bundle and structured-fault claims for Milestone 28e.
+Goal: Add explicit validation/docs gates that separate model-only, accepted 26e isolated-task authority, and 28e production ticket/lease plus driver-bundle/quarantine claims.
 Inputs: tools/coh-rtc/src/**, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/BUILD_PLAN.md.
 Changes:
-  - tools/coh-rtc/src/** — profile flags for 26c endpoint-cap compatibility, 28b host-authority readiness, and 28e full-cap-bundle/fault-lifecycle closure.
-  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/TEST_PLAN.md — document that full cap bundles and structured fault containment remain pending until 28e evidence exists.
+  - tools/coh-rtc/src/** — profile states for model/session-only roles, accepted 26e isolated-task and linked-driver authority, 28b host-authority readiness, and 28e production Worker ticket/lease binding plus driver-inventory/structured-quarantine closure; no active endpoint-only compatibility tier.
+  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/TEST_PLAN.md — document that 26e already owns complete Worker task containment and linked-driver authority while production Worker ledger binding, driver-inventory projection, and structured quarantine remain pending until 28e evidence exists.
 Commands:
   - cargo test -p coh-rtc
   - scripts/check-generated.sh
 Checks:
-  - Profiles cannot claim full worker/driver cap-bundle or structured fault lifecycle authority from 28b alone.
+  - Profiles cannot claim 28e production Worker ticket/lease binding, driver-inventory ledger projection, or structured quarantine authority from 28b alone, and cannot reduce executable 26e Worker/driver authority to endpoint-only metadata compatibility.
 Deliverables:
   - Honest dependency gate for 28c/28d/29b host actuation work and 28e VM authority closure.
 
@@ -10152,29 +10947,38 @@ After Milestone 28b:
 - Release profiles enforce key hygiene and enable audit-grade reconstruction by default.
 - Production coexistence is still not complete until Milestone 28b1 turns the hardened authority floor into provider schemas, identity mapping, deployment artifacts, and conformance evidence.
 - Host-side AI supervisors gain no special bypass: they inherit delegated identity, idempotency, fencing, and audit/replay before any live actuation is allowed.
-- Worker/driver full cap-bundle authority and structured fault lifecycle remain explicitly pending for Milestone 28e rather than being buried inside the host/gateway authority floor.
+- Production Worker ticket/lease bundle binding, projection of the already
+  complete applicable driver MMIO/DMA/shared-ring inventory, and structured quarantine/evidence remain
+  explicitly pending for Milestone 28e rather than being buried inside the
+  host/gateway authority floor; complete basic Worker task containment already
+  belongs to 26e.
 
-## Milestone 28b1 — Provider Action Registry + Ecosystem Coexistence Conformance <a id="28b1"></a>
+## Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance <a id="28b1"></a>
 [Milestones](#Milestones)
 
 **Why now (coexistence floor):**
 Milestone 25g delivered the host-ticket mechanism and high-value adapters. Milestone 28b makes writes attributable, replay-safe, fenced, durable, and audit-first. The remaining adoption gap is broader: Cohesix needs one compiler-owned provider/action contract, real conformance evidence for each ecosystem it claims to coexist with, and installable host-side deployment shapes that do not smuggle new authority or heavy stacks into the VM. This milestone turns the hardened authority floor into a production coexistence gate before AI run control, MCP/A2A, or AI namespace work can depend on those providers.
 
-**As-built alignment note:** Current host tools already project GPU/CUDA inventory, PEFT/model lifecycle, host sidecar state, host tickets, REST gateway access, evidence packs, and SIEM exports. Kubernetes, systemd, Docker, NVIDIA/CUDA/NVML, PEFT, and federation flows have useful fixtures and mock/dry-run coverage. Cohesix does **not** yet have one generated provider action registry shared by host-ticket-agent, REST, Python, MCP/A2A, docs, and tests; it does not have an ecosystem-wide conformance matrix; and it does not have production install bundles, identity-federation mappings, Prometheus/OpenTelemetry projections, or a use-case evidence matrix that separates supported, mock-only, and explicitly unsupported integrations.
+**As-built alignment note:** Current host tools already project some live GPU/CUDA/NVML inventory, host-side PEFT/model lifecycle files, host sidecar state, host tickets, REST gateway access, evidence packs, and SIEM exports. Kubernetes, systemd, Docker, launchd/macOS, NVIDIA/CUDA/NVML/MIG, Apple GPU runtimes, PEFT, FUSE, federation, and sidecar flows have an uneven mix of real commands, fixtures, mock/dry-run coverage, and known production gaps. In particular, current GPU publication is not GPU execution/device-isolation proof; MIG exists only in the Python mock; `coh run` and the vadd/matmul job path execute locally or synthesize status without binding CUDA; live model publication can fall back to fixture models and an implicit active model; Python can author its own “receipts”; PEFT examples create literal fake adapter bytes; FUSE does not yet prove the canonical `/shard` view on every supported host; federation is not yet a durable end-to-end receipt relay; systemd/Kubernetes/NVIDIA “discovery” can read target-preseeded topology; Jetson/network providers are success no-ops; MODBUS/DNP3 delivery is an in-memory model; all nine built-in playbooks stop after generic control writes/probes; SwarmUI's Playwright lane injects a fake Tauri bridge; and evidence/SIEM/release helpers do not yet provide one strict proof and package boundary. Cohesix therefore does **not** yet have one generated integration dependency and provider/action contract shared by host-ticket-agent, REST, Python, FUSE, UI, MCP/A2A, docs, packaging, release checks, and tests. It also lacks ecosystem-wide live conformance, production install bundles, identity-federation mappings, Prometheus/OpenTelemetry projections, and a use-case evidence matrix that separates executable-Worker proof from real external execution.
+
+Milestone 26e freezes the compiler-owned `host-integration-dependency/v1` graph and proves direct executable Worker control plus fixture-backed GPU and PEFT result-to-Worker receipt paths. This milestone extends that same graph; it must not create a parallel hand-maintained catalog. A 26e `worker-runtime` release is a prerequisite for any use-case row that names an executable Worker, but it is not by itself production provider, data-plane, or use-case acceptance.
 
 **Prerequisites**
 - Milestone **28** completed for read-only inspect, attest, evidence, and audit-ledger refresh.
 - Milestone **28b** completed for delegated REST identity, idempotent intents, writer-epoch fencing, production audit/replay defaults, host-ticket durable execution, live bridge auth/frame caps, and production debug gates.
-- Milestone **25g** and **25h** remain feature-complete inputs, but production coexistence claims must cite this milestone's conformance evidence, not only the earlier ticket/relay implementation.
+- Milestone **26e** completed for executable Heartbeat/GPU/LoRA Workers, strict version-2 Worker action/result schemas, crash-safe local result delivery, and accepted QEMU/Pi Worker integration evidence.
+- Milestone **25g** and **25h** remain compatibility inputs, but their earlier ticket/relay implementation is not production coexistence proof. Federation timeout, WAL ordering, pending retention, and terminal-receipt return must pass this milestone's conformance gate before federation may be enabled in a production use-case row.
+- Milestone **27** is additionally required for any use-case row that claims VM restart persistence. Milestone **28e** is additionally required for any row that claims production ticket/lease binding to a live deployed Worker bundle.
 
 **Goal**
 Define and prove the production coexistence contract:
-1. Generate one provider/action registry from compiler IR and use it everywhere host-side actuation is described, validated, displayed, or exposed.
+1. Extend the 26e integration dependency graph with one provider/action and integration-surface registry from compiler IR, and use it everywhere host-side actuation or projection is described, validated, displayed, packaged, or exposed.
 2. Map enterprise, Kubernetes, and host identities into delegated Cohesix tickets without making an identity provider part of the VM TCB.
-3. Prove provider conformance for systemd, Docker, Kubernetes, NVIDIA/CUDA/NVML, PEFT/model registry, SIEM, Prometheus/OpenTelemetry, and staged OT/industry sidecars.
-4. Package gateway, host-ticket-agent, sidecar bridges, GPU bridge, evidence exporters, and doctor checks as installable host-side bundles for realistic coexistence deployments.
-5. Add a use-case evidence matrix so docs cannot claim an ecosystem integration without code, generated policy, tests, deployment instructions, and evidence-pack reconstruction.
-6. Classify every ecosystem-facing read projection as public, delegated-ticket scoped, or admin-only before REST, MCP, A2A, FUSE, Python, or UI clients can expose it.
+3. Prove provider and external-executor conformance for systemd, launchd, Docker, Kubernetes, NVIDIA/CUDA/NVML/MIG, optional Apple MPS/MLX/Metal execution, real bounded GPU workloads, PEFT/model registry, inference reload, Jetson/network state, SIEM, Prometheus/OpenTelemetry, federation, and live OT/industry sidecars.
+4. Prove the non-provider surfaces that complete a workflow: direct console/`cohsh`, REST/gateway, FUSE, Python, SwarmUI, federation/fleet, CAS, evidence/release, telemetry/exporters, and Jetson/network sidecars.
+5. Package gateway, host-ticket-agent, sidecar bridges, GPU bridge, evidence exporters, exact Worker-compatible schemas, and doctor checks as installable host-side bundles for realistic coexistence deployments.
+6. Turn every shipped built-in playbook into a generated `preflight -> admit -> execute -> observe -> verify -> recover` workflow with explicit node topology and named provider/data-plane owners, then add a use-case evidence matrix so no public scenario, demo, or runbook can claim an ecosystem integration without executable-Worker tier, external executor/data-plane owner, generated policy, tests, deployment instructions, failure recovery, and evidence-pack reconstruction. Missing deployment-supplied domain executors return typed unavailable; generic schedule/lease/export writes never constitute workflow success.
+7. Classify every ecosystem-facing read projection as public, delegated-ticket scoped, or admin-only before REST, MCP, A2A, FUSE, Python, or UI clients can expose it.
 
 **Non-Goals (Explicit)**
 - No in-VM Kubernetes, Docker, systemd, CUDA/NVML, PEFT, NeMo, Prometheus, OpenTelemetry, DICOM, CCSDS, MODBUS, CAN, DNP3, IEC-104, or other ecosystem runtime.
@@ -10186,14 +10990,22 @@ Define and prove the production coexistence contract:
 
 ## Deliverables
 
-### 1) Generated provider action registry
-**Purpose:** Make provider actions one compiler-owned contract instead of a set of hand-aligned adapters.
+### 1) Generated provider action and integration-surface registry
+**Purpose:** Extend the 26e dependency graph so provider actions and all workflow-facing host surfaces have one compiler-owned contract instead of hand-aligned adapters.
 
 Implementation requirements:
 - Extend `coh-rtc` with `providers.*` IR for:
   - provider id, version, enablement profile, action names, target selectors, dry-run/live mode, idempotency requirements, writer-epoch requirements, policy approval requirements, receipt schema, redaction rules, and evidence refs.
-  - initial families: `systemd`, `docker`, `k8s`, `nvidia`, `gpu.lease`, `peft`, `model_registry`, `siem`, `prometheus`, `otel`, `modbus`, `dnp3`, `can`, `iec104`, `dicom`, and `ccsds`.
+  - initial families: `systemd`, `launchd`, `docker`, `k8s`, `nvidia`, `cuda`, `nvml`, `mig`, `apple_ml`, `jetson`, `network`, `gpu.lease`, `gpu.workload`, `peft`, `model_registry`, `mac_release`, `endpoint_compliance`, `siem`, `prometheus`, `otel`, `modbus`, `dnp3`, `can`, `iec104`, `dicom`, and `ccsds`.
   - optional future families may be reserved but must generate unavailable status until an implementation and tests exist.
+- Extend the same IR with `integration_surfaces.*` records for:
+  - `direct_console`, `cohsh`, `coh`, `host_ticket_agent`, `hive_gateway`, `rest`, `fuse_direct`, `fuse_rest`, `python_sdk`, `swarmui`, `federation`, `fleet`, `gpu_bridge`, `host_sidecar`, `cas`, `evidence`, `release_bundle`, `siem`, `prometheus`, `otel`, `jetson`, and `network`;
+  - surface owner, transport/topology, read/write posture, required provider actions, required Worker roles and evidence tier, identity/secret requirements, durability owner, package artifacts, conformance runner, and explicit `live`, `fixture`, `mock`, `dry_run`, `disabled`, `missing`, or `unknown` observed mode;
+  - `jetson` and `network` have real host-native read providers when selected:
+    bounded Jetson board/JetPack/power/thermal/clock/CUDA observations and
+    bounded macOS/Linux interface/link/address/route/error-counter snapshots.
+    Unsupported hosts return typed unavailable; no-op success is prohibited.
+- Each 28b1 record extends a stable 26e integration row and preserves its `integration_id`; a provider or surface may not silently replace, rename, or weaken the 26e role-required receipt rows.
 - Generate or check the registry for:
   - `host-ticket-agent` validators/executors,
   - `coh` and `cohsh` host-tool help,
@@ -10202,6 +11014,7 @@ Implementation requirements:
   - later MCP tool schemas and A2A skill schemas,
   - docs snippets and test fixtures.
 - Reject provider actions with free-form shell commands, arbitrary host paths, raw provider credentials, unbounded payloads, or target grammars that cannot be validated before executor dispatch.
+- Fail generation when a public scenario, playbook, demo, runbook, package, or host binary references an unregistered provider/surface, or when an enabled surface lacks an exact package artifact and conformance owner.
 
 ### 2) Ecosystem conformance matrix
 **Purpose:** Distinguish real coexistence from mock-only or aspirational support.
@@ -10216,17 +11029,39 @@ Implementation requirements:
   - expected receipt fields,
   - evidence-pack reconstruction path,
   - failure and rollback behavior.
+- Add the corresponding integration-surface columns for topology/transport, required Worker evidence tier, external executor or data-plane owner, identity/secrets, durability/retention, packaging, recovery/fail-safe behavior, and read projection.
 - Minimum acceptance families:
   - systemd status/start/stop/restart,
+  - launchd status/start/stop/kickstart plus macOS package/service identity,
   - Docker status/stop/restart,
   - Kubernetes cordon/drain/lease-sync/RBAC-to-ticket translation,
-  - NVIDIA/CUDA/NVML inventory and GPU lease projection,
-  - PEFT/model registry import/activate/rollback receipts,
+  - NVIDIA/CUDA/NVML physical and MIG inventory, parent/child topology and generation, GPU lease projection, separately from GPU execution/device isolation,
+  - bounded GPU workload submit/cancel/observe against an allowlisted host CUDA executor, with exact physical/MIG lease binding and no arbitrary shell/inline code,
+  - optional Apple-Silicon MPS/MLX/Metal provider/executor profiles for playbooks that explicitly select local Apple GPU execution; Mac controller/remote-CUDA profiles never probe local NVML,
+  - PEFT/model registry export/import/activate/rollback receipts, separately from training, evaluation, scanning, and inference-runtime reload,
   - SIEM export,
   - Prometheus/OpenTelemetry read-only export,
-  - MODBUS/DNP3 read-only sidecar parity from Milestone 18,
+  - live MODBUS/DNP3 provider conformance from reopened Milestone 18, with read-only defaults and separately approved write/control actions,
   - CAN/IEC-104/DICOM/CCSDS explicitly staged as read-only or not-enabled until their bridge contracts land.
 - Unsupported providers must produce deterministic `not_enabled` or `not_implemented` diagnostics; silent omission is not acceptable for documented use cases.
+
+### 2a) External executor and data-plane conformance
+**Purpose:** Ensure a receipt describes an observed external outcome, not merely a successful host-tool call.
+
+Implementation requirements:
+- Define generated conformance contracts for external executors/data planes that remain outside the Cohesix TCB:
+  - `gpu_executor`: selected physical or MIG device identity and topology generation, memory and stream admission, lease epoch/TTL, revoke/preempt behavior, device/context isolation, allowlisted artifact/entrypoint, observed start/finish/failure/cancel, CAS output hashes, and correlation to the exact WorkerGpu/provider receipt;
+  - `peft_pipeline`: artifact export, training/fine-tuning handoff, evaluation thresholds, safety/format scan, content-addressed import, atomic activation, inference-runtime reload/canary, and rollback, correlated to the exact WorkerLora receipt;
+  - `service_executor`: systemd/Docker/Kubernetes target identity, admission/fencing, observed terminal state, timeout, and recovery;
+  - `federation_relay`: WAL-before-forward, enforced timeout, non-evictable pending intent, target terminal receipt return, source correlation, and recovery after process restart.
+- Provider discovery and publication are separate from execution. Live NVML/CUDA inventory, `/gpu/models`, or a successful lease projection cannot satisfy `gpu_executor`; local PEFT filesystem mutation cannot satisfy training, evaluation, scan, or runtime reload.
+- Production GPU workload actions are generated `submit|cancel|observe` records
+  over the existing host-ticket authority. They accept bounded CAS/artifact and
+  entrypoint references, never free-form commands or inline arbitrary PTX;
+  direct `subprocess.run`, `echo ok`, vadd/matmul descriptor synthesis, and
+  status breadcrumbs remain diagnostics/fixtures and cannot satisfy execution.
+- A use case may remain `integration_pattern`, `fixture`, `mock`, `dry_run`, or `not_enabled` without a reference executor. It may become `production_proven` only when a named external executor/data-plane implementation, deployment profile, failure/recovery tests, and live evidence are shipped or explicitly supplied and accepted by the conformance runner.
+- Milestone 28c owns the production PEFT/training/evaluation/reload transaction. This milestone owns the common executor schema, system/GPU/provider conformance, federation closure, and the fail-closed classification used by every use case.
 
 ### 3) Read visibility classification
 **Purpose:** Ensure read-only projections do not leak cross-caller state.
@@ -10257,25 +11092,59 @@ Implementation requirements:
   - Linux/systemd edge node,
   - GPU host/Jetson-compatible host sidecar mode,
   - Kubernetes-adjacent gateway/agent deployment using Helm, Kustomize, or plain YAML.
-- Packages may install `hive-gateway`, `host-ticket-agent`, `host-sidecar-bridge`, `gpu-bridge-host`, evidence exporters, and doctor checks; they must not add VM services or in-VM ecosystem stacks.
+- Each profile has an exact generated artifact manifest rather than a non-empty-directory check. As applicable it names `coh`, `cohsh`, `hive-gateway`, `host-ticket-agent`, `host-sidecar-bridge`, `sidecar-bus`, `gpu-bridge-host`, FUSE helpers, CAS/evidence/export tools, Python extras, OpenAPI, generated provider/integration registries, service manifests, and doctor checks; a selected missing or wrong-version artifact fails packaging.
+- Each artifact is checked for expected type, target architecture, version,
+  digest, feature/provider registry, and signature/SBOM membership; unexpected
+  files are rejected. Python ships from a clean wheel/sdist manifest rather
+  than a recursive source-tree copy. Private fixture keys, placeholder tokens,
+  mock-only data, compiled stub binaries, and unregistered executables are
+  forbidden.
 - Systemd units, launchd examples, container manifests, and Kubernetes manifests must run with least privilege, explicit secret refs, loopback-by-default network posture, and documented non-loopback risk overrides.
+- FUSE packages must prove the canonical `/shard/<label>/worker/<id>/...` namespace through both direct and REST backends on each supported host; a legacy `/worker` allowlist or documented macOS write `EINVAL` is not production acceptance.
+- Kubernetes packages must define service-account/RBAC mapping, secret refs, readiness/liveness, disruption/restart behavior, writer fencing, and exactly-once ticket recovery; systemd and container packages must provide equivalent identity, secret, restart, and state-directory ownership.
+- Hardened units/manifests exist for every selected gateway, ticket agent, GPU
+  bridge/executor, sidecar, bus provider, and exporter; the current single
+  minimally configured gateway unit cannot satisfy a deployment profile.
+- Offline release documentation must not depend on CDN assets. The OpenAPI document and any Swagger/viewer assets are bundled or the offline viewer is disabled with a deterministic local alternative.
 - `coh doctor` reports installed provider status, missing optional providers, auth configuration, ticket scope, registry version, evidence export availability, and packaging drift.
 
 ### 6) Observability and compliance projections
 **Purpose:** Fit existing monitoring/compliance systems without replacing them.
 
 Implementation requirements:
+- Extract one schema-versioned evidence/receipt validator shared by Rust host
+  tools, the Python SDK, SwarmUI, release checks, CI, and exporters. It verifies
+  the evidence manifest, file hashes, signatures/attestations when configured,
+  identity and manifest bindings, sequence/epoch/TTL, chronology, and the
+  ticket -> admission -> Worker/provider/executor -> terminal-result graph.
+  File presence, non-zero size, a local command transcript, or a client-created
+  JSON object cannot satisfy an authoritative receipt or evidence check.
 - Prometheus and OpenTelemetry exporters are host-side read-only projections from `/proc`, audit, replay, telemetry, provider receipts, and evidence-pack summaries.
 - SIEM exports remain bounded, redacted, schema-versioned JSONL/NDJSON with stable field names.
-- Exporters must not expose raw tickets, secret refs, provider credentials, large payloads, PHI, model weights, gradients, or prompt transcripts unless a documented profile explicitly authorizes the field and redaction policy.
+- Exporters consume only records accepted by the shared validator and preserve
+  source identity, cursor, registry/schema version, and authoritative/non-
+  authoritative classification. Malformed, unverifiable, stale, or partially
+  correlated records are rejected or emitted to a bounded diagnostic lane,
+  never silently upgraded.
+- SIEM delivery has a generated field allowlist and redaction/hash policy plus
+  a durable bounded cursor/WAL, TLS and credential references, retry/backoff,
+  backpressure, deadletter handling, and destination acknowledgement receipts.
+  A copied local file is fixture evidence, not live SIEM delivery proof.
+- Exporters must not expose raw tickets, ticket payloads, secret refs, provider credentials, large payloads, PHI, model weights, gradients, or prompt transcripts unless a documented profile explicitly authorizes the field and redaction policy.
 - Evidence packs include provider registry version, conformance matrix snapshot, identity-mapping decision refs, packaging profile, exporter schema version, and provider receipt correlation.
 
 ### 7) OT and industry sidecar staging
 **Purpose:** Keep industrial/health/science integrations as host-side bridges with explicit safety posture.
 
 Implementation requirements:
-- MODBUS, DNP3, CAN, IEC-104, DICOM, and CCSDS adapters are host-side sidecars only.
-- Read-only inventory/status/event capture must land before write/control actions.
+- MODBUS and DNP3 use the real host-only codecs, transports, durable
+  acknowledgement-aware spool, target maps, and safety allowlists delivered by
+  reopened Milestone 18; 28b1 registers, packages, and proves those exact
+  implementations instead of adding read-only aliases or a second bridge.
+- CAN, IEC-104, DICOM, and CCSDS adapters remain host-side sidecars only and
+  stay explicitly `not_implemented` until their real bounded bridge contract,
+  package, and conformance lane land.
+- Read-only inventory/status/event capture must land before write/control actions for each provider family.
 - Any write-capable action requires a separate provider action, explicit policy approval, target grammar, safety interlock description, dry-run fixture, live-safe refusal case, and evidence-pack reconstruction.
 - DICOM and other sensitive-domain adapters must default to metadata and evidence refs only; raw PHI or large payload publication is disabled unless a later profile explicitly approves the redaction and retention model.
 
@@ -10283,12 +11152,11 @@ Implementation requirements:
 **Purpose:** Prevent documentation from outrunning implementation.
 
 Implementation requirements:
-- Add a generated or checked `docs/USE_CASES` mapping table that classifies each use case as:
-  - implemented and production-proven,
-  - mock/dry-run only,
-  - read-only only,
-  - explicitly not enabled,
-  - future milestone.
+- Generate stable `use_case_id` rows and check every public claim source, including `README.md`, `docs/USE_CASES.md`, `docs/HOST_TOOLS.md`, `docs/GPU_NODES.md`, `docs/PYTHON_SUPPORT.md`, `docs/HOST_API.md`, `docs/INTERFACES.md`, `docs/API_GUIDELINES.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/TEST_PLAN.md`, every post-Milestone-24 activity/runbook in this plan, release documentation, OpenAPI examples, and all built-in Python playbooks.
+- The initial inventory must include the six AI Hive scenarios; all nine built-in playbooks (`mac-release-factory`, `mac-private-peft-grid`, `mac-endpoint-compliance`, `jetson-traffic-safety`, `jetson-manufacturing-safety`, `jetson-critical-infra`, `mixed-closed-loop-ai-factory`, `mixed-medical-edge-ai`, and `mixed-logistics-digital-twin`); the Security Evidence, Operator-First, LeJEPA, and Jetson Gesture Language activities; and Milestone 18 industrial patterns.
+- Classify each row as exactly one of `current_primitive`, `integration_pattern`, `workflow_template`, `mock_only`, `read_only`, `not_enabled`, `planned`, or `production_proven`. A playbook that runs against a mock backend remains `workflow_template` or `mock_only`, never `production_proven`.
+- Each row records milestone prerequisites; target/profile; Worker tier (`model_or_session`, `m26e_executable`, or `m28e_production_bundle`); topology/transport; required host tools and exact package artifacts; provider actions and read surfaces; external executor/data-plane owner; authority/identity/secret refs; durability/retention owner; rollback/recovery/fail-safe behavior; observability/evidence; and proof class.
+- Conditional validation is fail-closed: a row claiming an executable Worker requires accepted 26e target evidence; restart-persistent VM state requires Milestone 27; a production ticket/lease bound to a deployed Worker requires Milestone 28e; and a PEFT training-to-runtime claim requires the Milestone 28c transaction.
 - Each production-proven row must link to:
   - provider registry action(s),
   - delegated authority requirement,
@@ -10297,7 +11165,18 @@ Implementation requirements:
   - observability/export surface,
   - failure-mode fixture,
   - evidence-pack reconstruction path.
-- Release gates fail if public docs claim production coexistence for an ecosystem without registry, tests, packaging, identity/security posture, and evidence matrix entries.
+- Every shipped built-in playbook must resolve to a generated staged workflow
+  with explicit `preflight`, `admit`, `execute`, `observe`, `verify`, and
+  `recover` nodes; each node names its host, target hive, Worker role when any,
+  provider action, external data-plane owner, input/output refs, timeout,
+  cancellation/idempotency rule, and authoritative terminal evidence. The Mac
+  controller, remote CUDA/Jetson nodes, optional local Apple GPU executor, and
+  deployment-supplied domain applications must never be inferred from the
+  machine running the CLI. Missing executors or applications yield typed
+  unavailable and cannot be replaced by a successful generic schedule, lease,
+  export, or probe.
+- Scan commands, YAML, unit files, examples, and runbooks for credentials or tokens in argv, manifests, logs, or evidence; use secret refs, protected files, stdin, or platform secret stores instead.
+- Release gates fail if any public surface claims production coexistence without the exact integration graph rows, generated policy, executable-Worker tier, live external executor where required, tests, package manifest, identity/security posture, failure recovery, and evidence reconstruction.
 
 ### 9) Provider/exporter performance guard
 **Purpose:** Prove provider conformance, read-visibility checks, identity mapping, and exporter projections remain bounded without turning coexistence validation into a full runtime throughput gate.
@@ -10313,35 +11192,47 @@ Implementation requirements:
 - `cargo test -p coh`
 - `cargo test -p cohsh`
 - `cargo test -p hive-gateway`
+- `cargo test -p gpu-bridge-host -p host-cuda -p host-sidecar-bridge -p sidecar-bus`
 - `python -m pytest tools/cohesix-py/tests/test_integrations.py`
+- `python -m pytest tools/cohesix-py/tests/test_evidence_receipts.py`
+- `python -m pytest tools/cohesix-py/tests/test_playbooks.py`
 - `scripts/check-generated.sh`
+- `scripts/ci/check_host_integration_inventory.py --registry configs/generated/host_integration_dependency.json`
 - `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1`
+- `scripts/ci/provider_conformance_run.sh --native-providers --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1-native`
+- `scripts/ci/provider_conformance_run.sh --provider gpu.workload --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1-gpu-workload`
 - `scripts/ci/provider_conformance_run.sh --perf-only --matrix configs/provider_conformance.toml --state-dir out/bench/m28b1-provider-overhead`
+- `scripts/ci/use_case_gate.sh --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28b1`
 - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28b1-coexistence`
 
 **Checks (Definition of Done)**
-- Provider actions are generated or checked from one registry; host-ticket-agent, REST/OpenAPI docs, Python defaults, host tools, and later MCP/A2A schema inputs cannot drift independently.
+- Provider actions and integration surfaces extend the 26e dependency graph; host-ticket-agent, REST/OpenAPI docs, FUSE, Python defaults, SwarmUI, packages, host tools, and later MCP/A2A schema inputs cannot drift independently.
 - Every REST/Python/FUSE/UI read projection is classified as public, ticket-scoped, or admin-only; cross-caller ticket, provider, evidence, audit, replay, and identity reads fail deterministic negative tests.
 - Invalid provider target, action, argument, auth, writer epoch, idempotency key, dry-run/live-mode, or identity claim fails before executor dispatch.
 - Every documented production provider has mock, dry-run, negative, and at least one live-safe conformance path or an explicit not-enabled status.
+- GPU discovery/publication and GPU execution/device isolation are separately evidenced; PEFT filesystem lifecycle and the full export/train/evaluate/scan/import/activate/reload transaction are separately evidenced; neither may borrow the other's proof.
+- FUSE proves canonical `/shard` behavior and supported-host read/write/error semantics; federation proves WAL-before-forward, enforced timeout, retained pending intent, target terminal receipt return, and restart recovery; selected Jetson/network providers return real bounded host-native observations, while unsupported profiles return typed unavailable and no no-op can report success.
 - Kubernetes RBAC, OIDC/JWT, SPIFFE, and local-host subject mappings produce bounded delegated ticket scopes and deterministic audit lines.
 - Packaging artifacts deploy only host-side tools and preserve loopback defaults, least privilege, secret references, and delegated-ticket write requirements.
-- Prometheus/OpenTelemetry/SIEM outputs are read-only, bounded, redacted, schema-versioned, and reconstructable from Cohesix evidence without becoming authority.
+- Prometheus/OpenTelemetry/SIEM outputs are read-only, bounded, redacted, schema-versioned, source-correlated, and reconstructable from validator-accepted Cohesix evidence without becoming authority; live SIEM delivery additionally proves durable cursor/WAL, retry/backpressure/deadletter, TLS/credential refs, and destination acknowledgement.
 - OT/industry sidecars remain host-only, read-only-first, and profile-gated; write-capable actions are refused unless explicitly admitted by provider policy and approval flow.
 - Evidence packs include provider registry, conformance matrix, identity-mapping refs, packaging profile, exporter schemas, and provider receipts.
+- Every public scenario, playbook, demo, runbook, and example has one stable use-case row. A row can reach `production_proven` only when its Worker tier, provider/surface modes, external executor, package artifacts, authority, recovery, and live evidence all satisfy the generated graph.
 - Provider/exporter performance evidence shows registry lookup, validation/refusal, identity mapping, receipt rendering, and exporter projection remain bounded; material regressions are classified as host provider overhead, gateway/auth overhead, or evidence-pack size overhead before 28c/28d/29b depend on the coexistence registry.
 - `docs/USE_CASES.md`, `docs/HOST_TOOLS.md`, `docs/API_GUIDELINES.md`, `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and `docs/TEST_PLAN.md` describe support levels exactly as proven.
 
 **Compiler touchpoints**
-- `coh-rtc` emits provider registry artifacts, provider availability snippets, provider action schemas, read visibility classes, identity-mapping bounds, conformance matrix defaults, exporter schema bounds, and package profile metadata.
+- `coh-rtc` extends `host-integration-dependency/v1` and emits provider registry artifacts, integration-surface records, external-executor contracts, stable use-case rows, provider availability snippets, provider action schemas, read visibility classes, identity-mapping bounds, conformance matrix defaults, exporter schema bounds, and exact package profile metadata.
+- `coh-rtc` also emits native discovery-source/TTL contracts, GPU physical/MIG topology and workload-action bounds, authoritative receipt/evidence correlation schemas, exporter delivery/redaction policy, and generated playbook DAG/topology/recovery records; clients may format these records but cannot define parallel truth.
 - Manifest validation rejects enabled provider actions without target grammar, authority scope, idempotency policy, receipt schema, redaction policy, and evidence mapping.
-- Generated docs distinguish production-proven, mock-only, read-only-only, not-enabled, and future integrations.
+- Generated docs distinguish current primitives, integration patterns, workflow templates, mock-only, read-only, not-enabled, planned, and production-proven integrations without conflating executable Workers with external execution.
 
 ## Task Breakdown
 ```
 Title/ID: m28b1-provider-action-registry
-Goal: Create the compiler-owned provider/action registry used by host tickets, REST/OpenAPI docs, Python, host tools, and later MCP/A2A schemas.
-Inputs: tools/coh-rtc, apps/host-ticket-agent, apps/coh, apps/cohsh, docs/INTERFACES.md, docs/HOST_API.md.
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-provider-action-registry
+Goal: Extend the 26e integration dependency graph with the compiler-owned provider/action registry used by host tickets, REST/OpenAPI docs, Python, host tools, and later MCP/A2A schemas.
+Inputs: configs/generated/host_integration_dependency.json, tools/coh-rtc, apps/host-ticket-agent, apps/coh, apps/cohsh, docs/INTERFACES.md, docs/HOST_API.md.
 Changes:
   - tools/coh-rtc/src/ir.rs — `providers.*` schema for action names, targets, modes, authority, receipts, redaction, and evidence refs.
   - tools/coh-rtc/src/codegen/{docs,rust}.rs — generated provider registry artifacts and snippets.
@@ -10351,7 +11242,115 @@ Commands: cargo test -p coh-rtc && cargo test -p host-ticket-agent && cargo test
 Checks: Provider action schemas cannot drift between executor validation, host tools, docs, and future gateway protocol schema inputs.
 Deliverables: Single source of truth for host-side ecosystem action semantics.
 
+Title/ID: m28b1-integration-surface-registry
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-integration-surface-registry
+Goal: Register every host projection, package, and workflow dependency against the same integration graph as provider actions and executable Workers.
+Inputs: m26e-production-surface-truth-and-stub-retirement, m26e-host-integration-dependency-contract, configs/generated/{implementation_surface_inventory,host_integration_dependency}.json, all Cargo targets/features, Python packages/examples, scripts, nested READMEs, canonical/generated docs, release assets, resources/openapi/hive-gateway.yaml, packaging, and scripts/release_bundle.sh.
+Changes:
+  - tools/coh-rtc/src/ir.rs + tools/coh-rtc/src/codegen/{docs,rust}.rs — `integration_surfaces.*` schema and generated surface/package/dependency records.
+  - configs/host_integration_acceptance.toml — extend stable 26e ids with 28b1 provider, surface, executor, package, and proof obligations.
+  - scripts/ci/check_host_integration_inventory.py — consume the 26e implementation-surface inventory and inspect host binaries and libraries exposed as products, projections, packages, Python APIs/examples, scenarios, playbooks, demos, runbooks, generated files, nested READMEs, and release assets; fail on unregistered, silently omitted, production-reachable fixture/stub/no-op, or unowned surfaces.
+  - docs/HOST_TOOLS.md + docs/INTERFACES.md — generated availability and trust-boundary tables.
+Commands: cargo test -p coh-rtc && scripts/ci/check_host_integration_inventory.py --registry configs/generated/host_integration_dependency.json && scripts/check-generated.sh
+Checks: Direct console, REST, FUSE, Python, SwarmUI, federation, fleet, CAS, evidence/release, telemetry/exporters, GPU/sidecar bridges, and Jetson/network surfaces have explicit owners, modes, packages, Worker tiers, and conformance lanes; no-op adapters, mock-only examples, retired binaries, or undocumented library entrypoints cannot report live or enter a production package.
+Deliverables: Exhaustive compiler-owned host integration inventory extending the 26e graph.
+
+Title/ID: m28b1-public-surface-live-mode-gate
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-public-surface-live-mode-gate
+Goal: Ensure every public host command, example, report, service, and package declares its real execution/proof mode and can never fall through from live operation to a fixture.
+Inputs: m26e-production-surface-truth-and-stub-retirement, m28b1-integration-surface-registry, generated implementation/integration inventories, apps/{coh,cohsh,hive-gateway,host-ticket-agent,host-sidecar-bridge,gpu-bridge-host,swarmui}/**, tools/cohesix-py/**, scripts/cohsh/run_demo.coh, demo/**, all public READMEs/docs/examples, service definitions, scripts/release_bundle.sh.
+Changes:
+  - generated surface metadata — project every public entrypoint onto the existing implementation/observed/proof classes, including explicit fixture/host-model/dry-run, live-host, live-QEMU, live-Pi, unavailable, deferred, and retired states; do not invent a second authority or evidence vocabulary.
+  - host CLI/service selection — production/default invocations require an explicit generated live profile/endpoint or fail typed unavailable. Mock backends require an explicit flag and fixture-capable build/profile; remove `cohsh`'s implicit mock default and environment-only mock switches such as a service silently honoring `HIVE_GATEWAY_MOCK` in a production unit.
+  - public examples/demos — move queue/status fabrication such as `scripts/cohsh/run_demo.coh` and fake PEFT adapter assets into clearly named fixtures, or replace the public path with the real ticket -> admission -> provider/executor -> Worker terminal flow owned by 28b1/28c. Every output/report embeds mode, source identity, graph version, and proof class.
+  - package/docs gate — exclude fixture keys, placeholder credentials, synthetic topology/artifacts, test-only binaries, retired stubs, and mock-only examples from live packages; nested READMEs/help/current release docs describe the selected implementation mode and exact owner. Historical releases remain immutable and receive current errata only.
+  - scripts/ci/check_public_surface_modes.py — scan compiled feature closures, CLI defaults/help, environment selection, examples, reports, service manifests, docs, and release contents against the generated inventories.
+Commands: cargo test -p coh -p cohsh -p hive-gateway -p host-ticket-agent -p host-sidecar-bridge -p gpu-bridge-host && python -m pytest tools/cohesix-py/tests && python3 scripts/ci/check_public_surface_modes.py --implementation configs/generated/implementation_surface_inventory.json --integrations configs/generated/host_integration_dependency.json && scripts/release_bundle.sh --check-manifest
+Checks: No release/default command or service starts a mock backend implicitly; no fixture, fabricated state, client-authored receipt, placeholder credential, mock-only demo, or synthetic artifact can produce a live-host/QEMU/Pi or production-use-case record; explicit fixture/dry-run lanes remain deterministic and useful.
+Deliverables: Fail-closed public mode selection and packaging, with retained mocks visibly and mechanically isolated from live Cohesix claims.
+
+Title/ID: m28b1-external-executor-conformance
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-external-executor-conformance
+Goal: Prove that provider receipts correlate to observed external effects rather than discovery, publication, or command dispatch alone.
+Inputs: provider/integration registries, apps/host-ticket-agent, apps/gpu-bridge-host, crates/host-cuda, PEFT/model-registry tools, systemd/Docker/Kubernetes fixtures, scripts/ci/provider_conformance_run.sh, m26e Worker integration evidence.
+Changes:
+  - tools/coh-rtc/src/ir.rs — generated GPU, PEFT pipeline, service executor, and federation relay conformance contracts.
+  - apps/host-ticket-agent/src/providers/ — strict observed-result correlation for systemd, launchd, Docker, Kubernetes, GPU, and declared external executors; discovery or dispatch success alone is non-terminal.
+  - apps/gpu-bridge-host/** + crates/host-cuda/** — execute generated bounded workload actions on the exact admitted physical/MIG device and topology generation, and return observed cancellation/revocation/terminal state plus CAS output hashes; GPU hardware access remains in `gpu-bridge-host`.
+  - scripts/ci/provider_conformance_run.sh — separate discovery/publication, dispatch, terminal outcome, isolation, timeout, revoke, restart, and recovery evidence.
+  - docs/GPU_NODES.md + docs/HOST_TOOLS.md — distinguish live inventory, lease projection, execution, isolation, and Worker receipt proof.
+Commands: cargo test -p host-ticket-agent && cargo test -p gpu-bridge-host && scripts/ci/provider_conformance_run.sh --executors-only --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1-executors
+Checks: Live GPU execution names the device/MIG instance, topology generation, memory/stream admission, isolation, lease epoch/TTL, revoke/cancel, output refs, and observed terminal result; service executors prove fenced terminal state; PEFT pipeline rows remain integration-pattern/not-enabled until 28c supplies the full transaction.
+Deliverables: Fail-closed external execution evidence tied to exact Worker receipts.
+
+Title/ID: m28b1-native-provider-discovery-and-actions
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-native-provider-discovery-and-actions
+Goal: Replace target-preseeded topology and success no-ops with real bounded host-native discovery and terminal action observation for every selected host provider.
+Inputs: provider/integration registries, apps/host-sidecar-bridge/**, apps/host-ticket-agent/**, tools/cohesix-py/cohesix/integrations.py, apps/gpu-bridge-host/**, macOS launchd/Xcode tooling, Linux systemd/Docker/Kubernetes APIs, Jetson host interfaces, docs/HOST_TOOLS.md, docs/USE_CASES.md.
+Changes:
+  - host provider implementations — read systemd, launchd, Docker, Kubernetes, NVIDIA/CUDA/NVML, Jetson board/JetPack/power/thermal/clock, and macOS/Linux network interface/link/address/route/error-counter state from the selected host's native bounded APIs or allowlisted structured utilities; never treat target-preseeded `/host` data as discovery input.
+  - apps/host-ticket-agent/** — execute only generated allowlisted actions, bind the exact native target and writer/idempotency fence, observe the provider's terminal state, and emit an authoritative provider result; command exit alone is not success.
+  - macOS providers — add launchd lifecycle, explicit Mac-controller versus remote-CUDA/Jetson versus optional local-Apple-GPU topology, Xcode build/test/archive plus codesign/notary/App Store Connect release steps, and endpoint-compliance observation through generated credential/secret refs. A Mac controller does not probe local NVML unless a local NVIDIA provider is explicitly selected.
+  - provider snapshot publication — publish authenticated versioned source/sequence/epoch/time/TTL records into the target's generated host snapshot interface; expiry or source failure withdraws state instead of retaining a healthy fixture.
+  - conformance — run macOS-native, Linux/systemd, Kubernetes, NVIDIA GPU, and Jetson/network live lanes where selected; unsupported provider/host combinations return typed unavailable.
+Commands: cargo test -p host-ticket-agent && cargo test -p host-sidecar-bridge && python -m pytest tools/cohesix-py/tests/test_integrations.py && scripts/ci/provider_conformance_run.sh --native-providers --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1-native
+Checks: No selected provider reports success from `Ok(())`, target-preseeded data, a fixture, or command dispatch alone; each live state/action names its native source, target identity, observation time/TTL, terminal outcome, and authoritative receipt, and stale state becomes unavailable.
+Deliverables: Real host-native discovery/action providers for the advertised macOS, Linux, Kubernetes, NVIDIA, Jetson, and network profiles.
+
+Title/ID: m28b1-gpu-workload-and-mig-executor
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-gpu-workload-and-mig-executor
+Goal: Replace synthetic GPU job status and mock-only MIG topology with a real bounded CUDA executor and exact physical/MIG lease enforcement in `gpu-bridge-host`.
+Inputs: provider/executor registries, apps/gpu-bridge-host/**, crates/host-cuda/**, apps/host-ticket-agent/**, apps/coh/src/{gpu.rs,run.rs}, CAS tools, accepted WorkerGpu v2 receipt path, live NVIDIA/MIG test hosts, docs/GPU_NODES.md, docs/SECURITY.md.
+Changes:
+  - crates/host-cuda/** + apps/gpu-bridge-host/** — enumerate live NVML MIG GPU/compute instances with parent/child UUIDs, profile, memory, placement, and topology generation; fence stale generations and bind lease/execution to the exact physical device or MIG instance.
+  - apps/gpu-bridge-host/** — implement generated bounded `gpu.workload.submit|cancel|observe` execution for allowlisted CAS artifacts/entrypoints, including memory/stream admission, context/process isolation, deadline, lease TTL/epoch, revoke/preempt, cancellation, CUDA failure mapping, output CAS hashes, and one correlated terminal provider/WorkerGpu record. CUDA/NVML access remains exclusively in this host tool.
+  - apps/host-ticket-agent/** + generated local provider ABI — validate the Cohesix ticket/action and forward the admitted request to `gpu-bridge-host` through a compiler-declared authenticated bounded host-local transport; it cannot submit raw commands, inline PTX, arbitrary paths, or bypass lease/MIG fencing.
+  - apps/coh/src/{gpu.rs,run.rs} — expose the generated workload lifecycle and classify plain local subprocess execution separately as a non-authoritative host operation report; `echo ok`, vadd/matmul descriptors, breadcrumbs, or a successful lease cannot satisfy GPU execution.
+  - conformance/evidence — prove real vector-add and matrix-multiply reference workloads plus cancel, timeout, revoke, OOM, stale-MIG-generation, wrong-device, bridge restart, and output-hash cases on physical and MIG-capable profiles where advertised.
+Commands: cargo test -p host-cuda && cargo test -p gpu-bridge-host && cargo test -p host-ticket-agent && cargo test -p coh --test gpu_workload && scripts/ci/provider_conformance_run.sh --provider gpu.workload --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1-gpu-workload
+Checks: A live GPU result is impossible without observed CUDA execution on the exact lease-bound physical/MIG target and generation, and reconstructs admission, isolation, cancellation/revoke, outputs, terminal status, and exact WorkerGpu correlation; fixture descriptors remain test-only.
+Deliverables: Real CUDA/MIG workload execution and evidence, distinct from discovery, model publication, and lease projection.
+
+Title/ID: m28b1-authoritative-receipt-and-evidence-core
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-authoritative-receipt-and-evidence-core
+Goal: Stop clients from manufacturing receipts and make every host/UI/export/release proof consumer validate the same authoritative result graph.
+Inputs: root-admitted ticket/action and Worker v2 records, provider/executor terminal records, apps/coh/src/{gpu.rs,run.rs,evidence.rs,evidence_timeline.rs}, tools/cohesix-py/cohesix/{client.py,receipts.py}, apps/hive-gateway/**, apps/swarmui/**, release/CI evidence checks, schemas/fixtures/docs.
+Changes:
+  - shared host evidence/receipt crate — parse and verify schema/version, canonical bytes, manifest and component hashes, configured signature/attestation chain, source identity, ticket/subject/action/idempotency/writer epoch, target manifest, sequence/epoch/TTL, Worker/provider/executor correlation, terminal uniqueness, and chronology with bounded inputs and typed errors.
+  - apps/coh/** + tools/cohesix-py/** — consume root-admitted and Worker/provider/executor terminal records as authoritative receipts. Rename locally assembled ACK/argument/snapshot summaries to a versioned non-authoritative operation report; they cannot use a receipt schema, enter an authoritative evidence graph, or promote a use case. Apply the required schema/fixture/docs migration atomically.
+  - apps/hive-gateway/** + apps/swarmui/** + exporters/release/CI — use the shared Rust implementation or generated language-neutral conformance vectors; reject missing, stale, forged, partially correlated, duplicate-terminal, wrong-manifest, or client-created records consistently.
+  - apps/coh/src/evidence.rs + evidence timeline — hash every included file, bind the implementation/provider/use-case graph versions, record authoritative versus derived artifacts, and verify the complete graph before an evidence pack is accepted or exported.
+Commands: cargo test -p coh --test receipts && cargo test -p coh --test evidence_pack && cargo test -p hive-gateway && cargo test -p swarmui && python -m pytest tools/cohesix-py/tests/test_evidence_receipts.py && scripts/ci/provider_conformance_run.sh --evidence-only
+Checks: Rust, Python, REST/UI, CI, release, and exporter vectors agree byte-for-byte; no local transcript, arguments, file-presence check, or client JSON can pass as an authoritative receipt; every accepted terminal result has one validated causal chain to admitted authority and exact target/provider/Worker/executor identity.
+Deliverables: One strict authoritative receipt/evidence core and an honest separately named local operation-report format.
+
+Title/ID: m28b1-federation-conformance
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-federation-conformance
+Goal: Close federation durability and receipt-correlation gaps before multi-hive workflows can be production-proven.
+Inputs: apps/host-ticket-agent, its relay/WAL modules, federation manifests/fixtures, provider/integration registries, docs/SECURITY.md, docs/TEST_PLAN.md.
+Changes:
+  - apps/host-ticket-agent/src/relay/** + apps/host-ticket-agent/src/wal/** — WAL-before-forward, enforced deadlines, non-evictable pending intents, target terminal receipt return, source correlation, and restart replay/fencing. `sidecar-bus` remains the Milestone 18 field-bus provider and is not the federation authority owner.
+  - scripts/ci/provider_conformance_run.sh — federation fault injection for timeout, disconnect, duplicate, target refusal, full queue, and process restart.
+  - docs/INTERFACES.md + docs/SECURITY.md — terminal receipt, durability, and fail-closed federation contract.
+Commands: cargo test -p host-ticket-agent && scripts/ci/provider_conformance_run.sh --provider federation --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1-federation
+Checks: No intent is forwarded before durable WAL, no pending entry is evicted, configured timeout is enforced, and the source receives the uniquely correlated target terminal receipt after normal and restart paths.
+Deliverables: Federation may be enabled only with durable, replay-safe, end-to-end receipt evidence.
+
+Title/ID: m28b1-live-reference-workflows
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-live-reference-workflows
+Goal: Replace generic-write/probe playbook endings with complete generated workflows and explicit host/target/data-plane topology for every shipped built-in playbook.
+Inputs: provider/integration/use-case registries, tools/cohesix-py/cohesix/{playbooks.py,playbook_cli.py}, tools/cohesix-py/examples/use_case_playbook.py, all nine built-in playbooks, GPU/MIG executor, native providers, deployment packages, evidence core, docs/USE_CASES.md.
+Changes:
+  - tools/coh-rtc/src/** + generated playbook records — define bounded staged DAG nodes for `preflight`, `admit`, `execute`, `observe`, `verify`, and `recover`, including controller host, target hive/node, Worker role, provider action, external application/data-plane owner, refs, deadline, cancellation/idempotency/fencing, compensation, and authoritative evidence.
+  - tools/cohesix-py/cohesix/playbooks.py — implement those generated stages for `mac-release-factory`, `mac-private-peft-grid`, `mac-endpoint-compliance`, all three Jetson workflows, and all three mixed-fleet workflows. Mac release uses launchd/Xcode/codesign/notary/App Store Connect providers; Mac PEFT selects remote CUDA or an explicit Apple provider; Jetson/medical/safety/logistics domain applications are named signed deployment dependencies and return typed unavailable when absent.
+  - tools/cohesix-py/examples/** — keep mock/dry-run examples as explicit workflow fixtures and add live configuration examples that reference secret stores and deployment manifests, never embedded credentials or synthetic terminal records.
+  - recovery/evidence tests — inject provider, Worker, gateway, network, executor, and verification failures at each stage and prove bounded cancel/compensate/retry behavior plus one reconstructable terminal result.
+Commands: python -m pytest tools/cohesix-py/tests/test_playbooks.py && python -m cohesix.playbook_cli --list && scripts/ci/provider_conformance_run.sh --playbooks --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1-playbooks && scripts/ci/use_case_gate.sh --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28b1-playbooks
+Checks: Every shipped playbook traverses the generated stages in live mode, names every node and external owner, and fails closed when a provider/application/evidence dependency is missing; schedule, lease, export, probe, or local mock success cannot become workflow success.
+Deliverables: Nine complete, topology-explicit, fail-closed host workflows with mock fixtures and real-provider acceptance lanes kept distinct.
+
 Title/ID: m28b1-ecosystem-conformance-matrix
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-ecosystem-conformance-matrix
 Goal: Add provider conformance fixtures and evidence lanes for production coexistence claims.
 Inputs: configs/provider_conformance.toml, scripts/ci/, docs/TEST_PLAN.md, docs/USE_CASES.md.
 Changes:
@@ -10364,6 +11363,7 @@ Checks: Every claimed production provider has passing conformance evidence or an
 Deliverables: Production coexistence matrix tied to release evidence.
 
 Title/ID: m28b1-read-visibility-classes
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-read-visibility-classes
 Goal: Classify every ecosystem-facing read projection before multi-caller REST, Python, FUSE, MCP, A2A, or UI clients expose it.
 Inputs: tools/coh-rtc, apps/hive-gateway, apps/coh, apps/cohsh, apps/swarmui, docs/SECURITY.md, docs/API_GUIDELINES.md.
 Changes:
@@ -10376,6 +11376,7 @@ Checks: Cross-caller ticket, provider receipt, evidence, audit/replay, task, and
 Deliverables: Read-only ecosystem projections are scoped with the same rigor as writes.
 
 Title/ID: m28b1-identity-mapping
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-identity-mapping
 Goal: Map external identities into delegated Cohesix tickets without adding an identity provider to the VM.
 Inputs: apps/hive-gateway, apps/coh, tools/cohesix-py, tools/coh-rtc, docs/SECURITY.md.
 Changes:
@@ -10388,53 +11389,67 @@ Checks: Forged, expired, wrong-audience, overbroad, or unmapped claims fail befo
 Deliverables: Enterprise identity coexistence without expanding the VM TCB.
 
 Title/ID: m28b1-packaging-deployment-profiles
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-packaging-deployment-profiles
 Goal: Ship least-privilege host-side deployment shapes for real coexistence environments.
-Inputs: scripts/install/, packaging/, apps/hive-gateway, apps/host-ticket-agent, apps/host-sidecar-bridge, apps/gpu-bridge-host, apps/coh.
+Inputs: m28b1-public-surface-live-mode-gate, scripts/install/, packaging/, apps/hive-gateway, apps/host-ticket-agent, apps/host-sidecar-bridge, apps/sidecar-bus, apps/gpu-bridge-host, apps/coh, apps/cohsh, FUSE helpers, Python package/extras, resources/openapi/hive-gateway.yaml, scripts/release_bundle.sh, docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md.
 Changes:
   - packaging/systemd/ — hardened unit templates for gateway, ticket agent, sidecar bridge, GPU bridge, and exporters.
   - packaging/launchd/ — macOS operator launchd examples.
   - packaging/k8s/ — Helm/Kustomize or plain YAML for gateway/agent sidecar deployments.
+  - packaging/manifests/ — generated exact artifact type/architecture/version/digest/signature/SBOM/config/schema/secret-ref manifests and unexpected-file refusal for every selected deployment profile.
+  - Python packaging — build and inspect clean wheel/sdist artifacts from an explicit package manifest; never recursively copy the source tree, tests, caches, fixture keys, or local credentials into a release.
+  - FUSE packaging/tests — canonical `/shard` parity for direct and REST mounts, supported-host read/write/error behavior, and no legacy-only allowlist.
+  - resources/openapi/ + scripts/release_bundle.sh — self-contained offline OpenAPI and docs assets; selected missing binaries/assets fail closed.
   - apps/coh/src/doctor.rs — provider registry, package profile, auth, secret-ref, and exporter health checks.
   - docs/HOST_TOOLS.md — install and risk guidance for each deployment profile.
-Commands: cargo test -p coh --test doctor && scripts/ci/provider_conformance_run.sh --packaging-only
-Checks: Packages install only host-side tools, preserve least privilege and loopback defaults, and report optional missing providers deterministically.
+Commands: cargo test -p coh --test doctor && scripts/ci/provider_conformance_run.sh --packaging-only && scripts/release_bundle.sh --check-manifest
+Checks: Packages install only the exact registered host-side artifacts, preserve least privilege and loopback defaults, prove direct/REST FUSE `/shard` parity, contain self-hosted docs assets, fail on missing, unexpected, wrong-kind/architecture/version/digest/signature/SBOM artifacts, contain no private fixture key or compiled stub, and report optional missing providers deterministically.
 Deliverables: Repeatable host deployment profiles that coexist with existing systems instead of replacing them.
 
 Title/ID: m28b1-observability-exporters
-Goal: Add host-side Prometheus/OpenTelemetry/SIEM projection adapters over existing evidence and telemetry.
-Inputs: apps/coh, apps/hive-gateway, docs/HOST_TOOLS.md, docs/SECURITY.md, docs/TEST_PLAN.md.
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-observability-exporters
+Goal: Add host-side Prometheus/OpenTelemetry/SIEM projections that consume strictly validated authoritative evidence and provide production delivery semantics without becoming authority.
+Inputs: m28b1-authoritative-receipt-and-evidence-core, apps/coh, apps/hive-gateway, tools/cohesix-py, release/CI evidence checks, provider/integration registries, docs/HOST_TOOLS.md, docs/SECURITY.md, docs/TEST_PLAN.md.
 Changes:
+  - shared host evidence/receipt core — consume only validator-accepted records and preserve authoritative/derived classification, source identity, cursor, and graph/schema versions across all exporter projections.
   - apps/coh/src/export/prometheus.rs — bounded read-only metrics projection.
   - apps/coh/src/export/otel.rs — bounded OpenTelemetry projection.
-  - apps/coh/src/export/siem.rs — schema-versioned SIEM export reuse/extension.
+  - apps/coh/src/export/siem.rs — generated field allowlist/redaction/hash policy plus durable cursor/WAL, TLS/credential refs, retry/backoff, backpressure, deadletter, and destination acknowledgement receipts.
+  - tools/cohesix-py/** + release/CI checks — consume the shared validation vectors and reject file-presence, client-authored JSON, or locally reconstructed transcripts as authoritative proof.
   - docs/HOST_TOOLS.md + docs/SECURITY.md — redaction and authority posture.
 Commands: cargo test -p coh --test export && scripts/ci/provider_conformance_run.sh --observability-only
-Checks: Exporters are read-only, bounded, redacted, schema-versioned, and reconstructable from evidence packs.
+Checks: Exporters accept only validator-approved records, are read-only, bounded, redacted, schema-versioned, and reconstructable from evidence packs; SIEM live mode survives disconnect/restart without loss or unbounded duplication and proves destination acknowledgement, while raw tickets/payloads never leave the allowlist.
 Deliverables: Observability coexistence without in-VM monitoring stacks.
 
 Title/ID: m28b1-industry-sidecar-contracts
-Goal: Stage OT, healthcare, and science sidecars as host-only, read-only-first provider families.
-Inputs: apps/host-sidecar-bridge, tools/coh-rtc, docs/USE_CASES.md, docs/SECURITY.md.
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-industry-sidecar-contracts
+Goal: Integrate the real Milestone 18 field-bus providers and stage later OT, healthcare, and science sidecars as host-only, read-only-first families without aliases or fake delivery.
+Inputs: reopened Milestone 18 live MODBUS/DNP3 evidence, apps/sidecar-bus, apps/host-sidecar-bridge, tools/coh-rtc, docs/USE_CASES.md, docs/SECURITY.md.
 Changes:
-  - apps/host-sidecar-bridge/src/providers/ — read-only contracts for MODBUS, DNP3, CAN, IEC-104, DICOM metadata, and CCSDS telemetry.
+  - apps/sidecar-bus/** + provider registry — package and prove the exact real MODBUS RTU/TCP and DNP3 codecs/transports, generated target maps/allowlists, durable acknowledgement-aware spool, typed protocol failures, and separately approved write/control actions from reopened Milestone 18.
+  - apps/host-sidecar-bridge/src/providers/ — real bounded read-only contracts for CAN, IEC-104, DICOM metadata, and CCSDS telemetry only when implemented; otherwise emit typed `not_implemented` and ship no alias/no-op provider.
   - tools/coh-rtc/src/ir.rs — provider gating and write-action refusal defaults for safety-critical sidecars.
   - docs/SECURITY.md + docs/INTERFACES.md — read-only-first and sensitive-data redaction posture.
 Commands: cargo test -p host-sidecar-bridge && cargo test -p coh-rtc
-Checks: Protocol code stays host-side, reads are bounded and redacted, and write-capable actions are unavailable until a later profile explicitly admits them.
+Checks: Protocol code stays host-side; a MODBUS/DNP3 `Delivered` result has a remote protocol acknowledgement and durable terminal record; later provider families cannot report live until real I/O, bounded reads, redaction, packaging, and conformance exist; write-capable actions require exact policy admission.
 Deliverables: Clear bridge contracts for broader industry coexistence without TCB expansion.
 
 Title/ID: m28b1-use-case-release-gate
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-use-case-release-gate
 Goal: Prevent public use-case claims from exceeding implementation and evidence.
-Inputs: docs/USE_CASES.md, docs/BUILD_PLAN.md, docs/TEST_PLAN.md, provider registry artifacts, evidence packs.
+Inputs: m28b1-public-surface-live-mode-gate, m28b1-live-reference-workflows, m28b1-authoritative-receipt-and-evidence-core, README.md, docs/USE_CASES.md, docs/HOST_TOOLS.md, docs/GPU_NODES.md, docs/PYTHON_SUPPORT.md, docs/HOST_API.md, docs/INTERFACES.md, docs/API_GUIDELINES.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/BUILD_PLAN.md post-M24 activities, tools/cohesix-py/cohesix/playbooks.py, resources/openapi/hive-gateway.yaml, packaging, scripts/release_bundle.sh, provider/integration registries, executable Worker evidence, external-executor evidence, evidence packs.
 Changes:
-  - docs/USE_CASES.md — support-level matrix for each use case and ecosystem.
-  - scripts/ci/use_case_gate.sh — validate docs links to provider registry, conformance evidence, packaging, identity, observability, and failure fixtures.
+  - tools/coh-rtc/src/ir.rs + generated docs — stable use-case rows with proof class, Worker tier, topology, host tools, provider/surface dependencies, external executor/data plane, authority/secrets, durability/recovery, package, and evidence obligations.
+  - docs/USE_CASES.md — checked support-level matrix covering all six scenarios, all nine built-in playbooks, Milestone 18 patterns, and all post-M24 demo/runbook activities.
+  - scripts/ci/use_case_gate.sh — inventory every public claim source, validate conditional 26e/27/28c/28e dependencies, scan examples/manifests for argv or embedded secrets, and require exact integration/evidence/package links.
+  - generated playbook records — consume the accepted `m28b1-live-reference-workflows` DAG/evidence records and reject missing stages, controller/target topology, provider/data-plane ownership, recovery, or authoritative terminal correlation.
   - apps/coh/src/evidence.rs — include provider registry and conformance snapshots in evidence packs.
-Commands: scripts/ci/use_case_gate.sh && cargo test -p coh --test evidence_pack
-Checks: Release docs cannot claim production coexistence without matching generated policy, tests, deployment profile, and evidence reconstruction.
+Commands: scripts/ci/use_case_gate.sh --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28b1 && cargo test -p coh --test evidence_pack
+Checks: No scenario, playbook, demo, runbook, example, OpenAPI description, or release document can claim production coexistence without the exact Worker tier, provider/surface modes, external executor, node topology, generated policy, tests, deployment profile, authority/recovery posture, and evidence reconstruction; generic control-write or probe success cannot skip workflow stages.
 Deliverables: Cohesix adoption claims stay honest and auditable.
 
 Title/ID: m28b1-provider-exporter-performance
+Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-provider-exporter-performance
 Goal: Add targeted provider/exporter timing evidence without requiring a full Pi/QEMU throughput benchmark.
 Inputs: configs/provider_conformance.toml, scripts/ci/provider_conformance_run.sh, docs/BENCHMARKS.md, docs/TEST_PLAN.md.
 Changes:
@@ -10448,11 +11463,12 @@ Deliverables: Provider/exporter overhead evidence for downstream AI and gateway 
 ## Outcome
 After Milestone 28b1:
 - Cohesix has a production coexistence contract, not only individual host adapters.
-- Provider action semantics are compiler-owned and shared by host tickets, REST, Python, docs, tests, and later MCP/A2A schemas.
+- Provider actions, integration surfaces, exact package contents, external-executor obligations, and public use-case claims extend one compiler-owned graph shared by host tickets, REST, FUSE, Python, SwarmUI, docs, tests, release tooling, and later MCP/A2A schemas.
 - Existing ecosystems stay outside the VM TCB while still gaining delegated authority, receipts, evidence, deployment profiles, identity mapping, and observability exports.
-- AI run control and MCP/A2A interop can build on proven provider schemas instead of inventing their own action catalogs.
+- Executable Worker proof remains distinct from CUDA/NVML discovery, real GPU execution/isolation, PEFT training/reload, and service/federation side effects; each production use case names and proves every required layer.
+- AI run control and MCP/A2A interop can build on proven provider and integration schemas instead of inventing action catalogs or silently treating mock workflows as live.
 
-## Milestone 28c — Host-Side AI Coexistence: Delegated Runs, Durable Context, Provider Receipts <a id="28c"></a>
+## Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT <a id="28c"></a>
 [Milestones](#Milestones)
 
 **Why now (bridge):**
@@ -10461,13 +11477,14 @@ Milestone 28b makes writes attributable, replay-safe, fenced, and audit-first. M
 2. Long-context cost is dominated by repeated prefill, duplicated prompt state, and lossy summarization.
 3. The highest-leverage fix is to keep durable run state, retrieval manifests, approvals, and evidence outside the live prompt, then route each run to the right host-side inference strategy under ticketed authority.
 
-This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, provider action registry, evidence packs, GPU leases, telemetry ingest, Python playbooks) to prove that model without adding VM AI roots yet.
+This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, the 28b1 provider/integration graph, evidence packs, GPU leases, telemetry ingest, Python playbooks) and the accepted 26e executable Worker/receipt substrate to prove that model without adding VM AI roots yet.
 
-**As-built alignment note:** Python orchestration currently provides typed schedule, lease, export, host-ticket, federation, and Kubernetes coexistence helpers over existing control files. That substrate is useful leverage, but it is not yet the AI run/task graph envelope, checkpoint model, context-budget contract, prefix/hotset lifecycle, or NeMo provider family described here. Milestone 28c extends the host-ticket/evidence model; it must not re-label existing generic orchestration helpers as completed AI run control.
+**As-built alignment note:** Python orchestration currently provides typed schedule, lease, export, host-ticket, federation, and Kubernetes coexistence helpers over existing control files. Cohesix also has host-side PEFT filesystem helpers and, after 26e, an executable WorkerLora receipt path. Those substrates are useful leverage, but they are not yet the AI run/task graph envelope, checkpoint model, context-budget contract, prefix/hotset lifecycle, NeMo provider family, or production PEFT transaction described here. In particular, no existing mock playbook, local registry mutation, `/gpu/models` publication, or WorkerLora receipt proves training, evaluation, artifact scanning, inference-runtime reload, or rollback. Milestone 28c extends the 28b1 integration/use-case graph; it must not re-label generic orchestration or 26e fixture receipts as completed AI run control.
 
 **Prerequisites**
 - Milestone **28b** completed for delegated REST identity, idempotency, writer-epoch fencing, host-ticket durable execution, audit/replay defaults, and production secret/debug gates.
-- Milestone **28b1** completed for provider action registry, read visibility classification, provider conformance, identity mapping, packaging profiles, observability exports, and use-case evidence matrix.
+- Milestone **26e** completed for executable WorkerLora and strict, crash-safe version-2 PEFT result-to-Worker receipts on QEMU and Pi 4.
+- Milestone **28b1** completed for the extended provider/integration graph, external-executor contract, read visibility classification, provider conformance, identity mapping, packaging profiles, observability exports, and exhaustive use-case evidence matrix.
 
 **Goal**
 Add a host-side AI run substrate that lets external supervisors and agent frameworks coordinate long-context workflows through delegated tickets and existing host-ticket flows while preserving Cohesix's single-writer, append-only, audit-first discipline:
@@ -10477,15 +11494,13 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 4. Reuse warmed prefixes and hotsets across related runs within bounded quotas and TTLs.
 5. Expose TTFT, decode, cache-hit, and resume metrics as first-class evidence.
 6. Represent multi-agent work as explicit task graphs and handoffs, not as an opaque shared transcript or hidden message bus.
-7. Verify Worker implementation boundaries before AI supervisors depend on
-   Worker claims: current roles are session/model-only, and AI supervisors may
-   reference target Worker behavior only if the reopened execution, cap,
-   notification, scheduling, fault, and revocation gates have since closed with
-   generated and target-qualified evidence.
-8. Make PEFT/model registry import, activation, rollback, and provider receipts transactionally auditable before AI run control treats them as dependable actuation.
+7. Consume the accepted 26e executable WorkerHeart/WorkerGpu/WorkerLora contracts without weakening their image, capability, notification, MCS scheduling, fault, revocation, QEMU, or Pi evidence requirements; `ATTACH` remains session-only and is never substituted for task creation.
+8. Deliver the complete host-side PEFT lifecycle—export, data/base-model provenance, train/fine-tune, evaluate, scan, import, activate, inference-runtime reload/canary, and rollback—with crash-safe transactions and exact WorkerLora receipt correlation before AI run control treats it as dependable actuation.
+9. Re-evaluate and promote the 28b1 AI/PEFT use-case rows only from live external-provider, executable-Worker, package, recovery, and evidence records; mock/dry-run playbooks remain workflow templates.
 
 **Non-Goals (Explicit)**
 - No in-VM transformer kernels, sparse-attention implementations, KV-compression implementations, or CUDA/NVML changes.
+- No in-VM model weights, datasets, training/evaluation/scanning frameworks, inference runtime, or adapter-byte transfer. WorkerLora validates bounded lifecycle work and records correlated receipts; all PEFT data-plane work remains in the declared host executor.
 - No direct many-agent writes to raw `/queen/ctl`; multi-agent host automation writes through delegated REST and/or `/host/tickets/spec`.
 - No active/active multi-queen control for one logical hive.
 - No live AI, PEFT, NeMo, Kubernetes, Docker, systemd, CUDA/NVML, or model-registry mutation from Python, adapters, playbooks, or framework integrations unless it appends a validated host ticket and is executed by `host-ticket-agent` under the generated provider action registry.
@@ -10495,7 +11510,11 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 - No opaque prompt transcript as the source of truth for agent state, approvals, retrieval, or tool output.
 - No hidden inter-agent mailbox or side-channel coordination surface outside delegated tickets, durable artifacts, and existing evidence flows.
 - No NeMo-specific control plane, namespace grammar, or provider lock-in semantics; NeMo support must remain an optional host-side provider family under the same Cohesix authority/evidence contract as other backends.
-- No claim that VM worker-gpu, worker-lora, or worker-heart kernel binaries are full task implementations unless they attach, consume scoped tickets, service the documented lease/telemetry loop, and have tests/evidence matching the documentation.
+- No claim that VM worker-gpu, worker-lora, or worker-heart kernel binaries are
+  full task implementations unless their selected executable contracts and
+  exact QEMU/Pi task evidence are accepted under 26e. `ATTACH` remains
+  session-only and does not instantiate a task. Claims that a production ticket
+  or lease is bound one-to-one to that live bundle additionally require 28e.
 
 **Deliverables**
 
@@ -10601,10 +11620,16 @@ As-built leverage:
 
 Implementation requirements:
 - Audit worker-heart, worker-gpu, and worker-lora kernel entrypoints against README, GPU, worker-ticket, role/scheduling, and interface docs.
-- Verify whether each Worker role remains session/model-only or has acquired a
-  selected executable contract. For any executable role, require live ticket
-  attach, lease/telemetry, notification-backed shutdown/revoke, cap-backed
-  endpoint authority, applied scheduling, fault, and revocation evidence.
+- Verify each Heartbeat/GPU/LoRA role against its accepted 26e executable
+  image/READY/IPC or durable-completion, lifecycle notification, complete
+  teardown/revoke, cap-backed endpoint, applied MCS scheduling, fault, and
+  exact-target evidence. Model/session helpers remain separately classified,
+  WorkerBus remains model-only, and task creation is never inferred from
+  `ATTACH`.
+- If a host-side AI flow claims production ticket/lease-to-bundle authority,
+  require 28e production ledger evidence as an additional gate; otherwise it
+  may consume accepted 26e task behavior only as explicitly classified target
+  evidence.
 - Add tests that prevent future docs from claiming worker spawn/lease semantics not backed by code and generated manifest truth.
 - Host-side AI run envelopes must reference host-ticket/provider receipts, not undocumented VM worker behavior.
 
@@ -10613,15 +11638,33 @@ As-built leverage:
 
 ---
 
-### 7) PEFT/Model Registry Transaction and Provenance Closure
-**Purpose:** Make model/adapter activation safe enough for AI run control and PEFT reviewers without moving ML runtimes into the VM.
+### 7) Production PEFT Pipeline, Registry Transaction, and Provenance Closure
+**Purpose:** Support every declared PEFT/LoRA use case through one crash-safe host transaction without moving ML runtimes or artifacts into the VM.
 
 Implementation requirements:
-- Add registry locking, canonical-path confinement, symlink rejection or explicit canonicalization policy, unique temp files, fsync/rename ordering, and rollback-safe activation records.
-- Validate adapter metadata, model id, LoRA id, artifact hashes, source job refs, and optional signature/provenance refs before import or activation.
-- Activation must record both host-registry state and VM `/gpu/models/*` publish/ack state so partial activation is visible and recoverable.
-- Evidence packs must include bounded PEFT registry transaction receipts and activation/rollback provenance, redacted where needed.
-- Direct PEFT/NeMo/provider activation remains host-side and ticket-scoped; Cohesix records authority/evidence, not training internals.
+- Define one generated, phase-journaled transaction for `export`, `train`, `evaluate`, `scan`, `import`, `activate`, `runtime_reload`, `canary`, and `rollback`. Every phase has an idempotency key, input/output CAS refs, provider/executor identity, deadline, terminal receipt, recovery rule, and exact run/task/WorkerLora correlation.
+- Validate base-model identity/license ref, dataset snapshot/provenance/consent refs, adapter/LoRA configuration, framework/provider profile, model and LoRA ids, artifact formats and hashes, training/evaluation metrics, threshold policy, safety/format scan, source job refs, signatures/attestations where configured, and target inference-runtime compatibility before promotion.
+- Add registry locking, canonical-path confinement, symlink rejection, unique same-filesystem temp files, file and directory fsync/rename ordering, compare-and-swap activation generation, and rollback-safe activation records. Crash/restart recovery resumes or compensates from the phase journal without duplicating training, import, activation, or Worker receipts.
+- Ship bounded host executor adapters for at least one fully tested open PEFT path and the generic generated provider contract; optional Hugging Face PEFT/TRL and NeMo customization adapters use the same receipt schema. No adapter may accept arbitrary shell, unrestricted paths, raw credentials, or unvalidated framework arguments.
+- Ship a real CUDA reference profile using a supported open PEFT training stack
+  and a real compatible inference runtime. If a use case advertises local Apple
+  Silicon training or inference, ship an equivalent bounded MPS/MLX/Metal
+  profile and conformance lane; otherwise that use case must name a remote
+  CUDA/Jetson executor explicitly and local Apple execution remains
+  unavailable. Provider selection is topology, not an implicit property of the
+  CLI host.
+- Training/evaluation/scanning outputs are content-addressed host artifacts. Only bounded metadata, hashes, metrics summaries, status, and refs cross Cohesix control surfaces; adapter bytes, datasets, gradients, weights, and prompt/training corpora never enter the VM or general telemetry.
+- Activation records host-registry generation, `/gpu/models/*` publication/ack, inference-runtime reload/canary observation, WorkerLora receipt, and rollback target as one recoverable transaction. Publication alone is not activation; activation alone is not a successful runtime reload.
+- Negative/live tests cover bad provenance, unsupported base/runtime combinations, path traversal/symlink races, corrupt or oversized artifacts, failed training/evaluation/scan, lost ticket agent, duplicate result, host crash at every phase boundary, partial publish, failed reload/canary, lease expiry/revocation, and rollback after process restart.
+- Evidence packs include the bounded phase journal, registry generations, provider/executor receipts, evaluation/scan decisions, activation/canary/rollback results, CAS refs, and exact WorkerLora correlation, redacted where needed.
+- Public examples and live playbooks must obtain adapter artifacts from the
+  declared executor and verify their framework/base-model compatibility,
+  provenance, signature/hash, evaluation, scan, and runtime behavior. Literal
+  `adapter-bytes`, synthetic metrics, fabricated job ids, and local client-
+  authored receipts are permitted only in explicitly named test fixtures and
+  cannot enter a live package or use-case proof.
+- Update the 28b1 integration and use-case rows for Model Rollout, Private LoRA Foundry, `mac-private-peft-grid`, closed-loop AI factory, medical/Jetson demos, Operator-First, LeJEPA, Gesture Language, and any other PEFT consumer. A row remains non-production until its named executor/framework, target runtime, package, secrets, recovery, and live evidence pass.
+- Direct PEFT/NeMo/provider activation remains host-side and ticket-scoped; Cohesix records authority/evidence and bounded lifecycle state, not training internals.
 
 As-built leverage:
 - Reuse `coh peft`, `/gpu/models`, host-ticket-agent, evidence timeline, and Milestone 28b audit/replay defaults.
@@ -10670,6 +11713,8 @@ As-built leverage:
 - `cohesix-playbook --playbook long-context-agent-factory --dry-run --mock --metrics-out out/bench/m28c-ai-run-cost.json`
 - `cargo test -p worker-gpu && cargo test -p worker-lora && cargo test -p worker-heart`
 - `cargo test -p coh --test peft && cargo test -p coh --test peft_registry_transactions`
+- `scripts/ci/provider_conformance_run.sh --provider peft --live-reference --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28c-peft-live`
+- `scripts/ci/use_case_gate.sh --promote-milestone 28c --only peft --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28c-peft-live`
 
 **Checks (Definition of Done)**
 - Multi-agent host workflows never require an undifferentiated shared Queen writer.
@@ -10679,8 +11724,11 @@ As-built leverage:
 - Prefix cache hits and misses are explainable from bounded eligibility/invalidation fields rather than hidden provider behavior.
 - Strategy selection and long-context cost metrics are observable per run/step.
 - High-risk live AI mutations remain policy-gated and ticket-scoped.
-- Worker-role documentation and generated snippets match actual kernel/host implementation boundaries; no AI task depends on undocumented VM worker behavior.
-- PEFT/model registry import, activation, and rollback are transactional, provenance-recorded, and recoverable after partial host/VM publish failure.
+- Worker-role documentation and generated snippets consume the accepted 26e executable contracts and match actual kernel/host implementation boundaries; no AI task depends on undocumented VM Worker behavior or a session-only `ATTACH`.
+- PEFT export, train, evaluate, scan, import, activation, inference-runtime reload/canary, and rollback are one idempotent, crash-recoverable, provenance-complete host transaction with exact WorkerLora receipts; publication or a registry rename alone cannot pass.
+- At least one open PEFT executor and target inference runtime pass live end-to-end conformance. Other framework/provider families remain explicitly integration-pattern, mock, dry-run, or not-enabled until they pass the same generated contract.
+- Every declared PEFT/LoRA consumer resolves to a named live reference topology and complete transaction; CUDA is shipped as the baseline real provider, local Apple execution is real and packaged wherever advertised, and otherwise the Mac playbook names a remote CUDA/Jetson executor. Literal adapter bytes, synthetic metrics/job ids, and client-authored receipts remain fixture-only and cannot pass.
+- Every AI/PEFT scenario, playbook, and post-M24 activity is reclassified in the 28b1 use-case matrix from actual executor, Worker, package, recovery, and evidence records; no mock workflow is promoted by documentation alone.
 - Optional NeMo support remains host-side, ticket-scoped, writer-fenced, and evidence-backed; disabling NeMo leaves the baseline 28c substrate intact.
 - The same Cohesix run envelope and evidence model works against NeMo and at least one alternate provider family, proving NeMo support adds governed lifecycle value rather than vendor-specific lock-in.
 - Guardrail and evaluator receipts can gate live promotion or actuation decisions deterministically in dry-run/mock tests before any real provider mutation is allowed.
@@ -10688,12 +11736,13 @@ As-built leverage:
 - No new in-VM listeners, runtime, or control protocols are introduced.
 
 **Compiler touchpoints**
-- `coh-rtc` emits generated host-tool defaults for AI run envelope limits, task-graph/handoff bounds, context budget ceilings, retrieval-manifest and artifact-ref bounds, prefix/hotset TTLs, and metrics bounds under the existing host policy/codegen path.
+- `coh-rtc` emits generated host-tool defaults for AI run envelope limits, task-graph/handoff bounds, context budget ceilings, retrieval-manifest and artifact-ref bounds, prefix/hotset TTLs, metrics bounds, and the phase-journaled PEFT executor/transaction contract under the existing host policy/codegen path.
 - Manifest validation rejects AI host-control enablement when Milestone 28b delegated identity or audit/replay requirements are disabled in the target profile.
 - Manifest validation rejects AI host-control enablement when Milestone 28b1 provider registry, read visibility, identity mapping, provider conformance, or use-case evidence requirements are missing for a side-effecting provider action.
 - Live provider mutation tests prove Python adapters, framework adapters, NeMo helpers, PEFT flows, Kubernetes helpers, Docker helpers, and systemd helpers cannot bypass `/host/tickets/spec`, `host-ticket-agent`, generated provider action validation, delegated ticket scope, idempotency, writer epoch, and evidence receipts.
 - Manifest/docs validation rejects worker-role claims that exceed the current code/generated worker implementation boundary.
-- `coh-rtc` emits PEFT/model registry transaction/provenance bounds consumed by host tools and evidence exports.
+- `coh-rtc` emits PEFT/model registry transaction/provenance bounds, allowed framework/provider profiles, artifact/ref formats, evaluation/scan gates, runtime reload/canary requirements, recovery rules, WorkerLora correlation, and use-case promotion obligations consumed by host tools and evidence exports.
+- Generated PEFT profiles also declare execution topology, CUDA or Apple provider/runtime compatibility, exact package extras, live-reference dataset/base-model licences and hashes, and whether a use case is unavailable when its external domain application is absent.
 - `coh-rtc` additionally emits optional provider-family policy for NeMo capability probes, action allowlists, endpoint/auth refs, deployment/evaluation/guardrail bounds, and alternate-provider parity requirements.
 - Canonical interface/architecture docs refreshed in:
   - `docs/INTERFACES.md`
@@ -10707,6 +11756,7 @@ As-built leverage:
 **Task Breakdown**
 ```
 Title/ID: m28c-ai-run-envelopes
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-ai-run-envelopes
 Goal: Add typed host-side AI run/task/step envelopes with explicit handoff, dependency, and context-budget contracts.
 Inputs: tools/cohesix-py/cohesix/orchestration.py, tools/cohesix-py/cohesix/playbooks.py, docs/PYTHON_SUPPORT.md, docs/SECURITY.md
 Changes:
@@ -10719,6 +11769,7 @@ Checks: Invalid budget/policy combinations fail before writes; dry-run outputs s
 Deliverables: Host-side AI runs become explicit, typed, replay-addressable, and suitable for delegated multi-agent coordination without hidden state.
 
 Title/ID: m28c-host-ticket-ai-actions
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-host-ticket-ai-actions
 Goal: Extend the host ticket plane with bounded AI control actions for inference runs, checkpoints, and prefix lifecycle.
 Inputs: apps/host-ticket-agent, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md
 Changes:
@@ -10732,6 +11783,7 @@ Checks: AI host tickets stay idempotent, allowlist-gated, and stale-writer safe;
 Deliverables: `/host/tickets/spec` becomes the canonical AI actuation path before 29b VM roots exist.
 
 Title/ID: m28c-ai-evidence-checkpoints
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-ai-evidence-checkpoints
 Goal: Extend evidence pack/timeline flows to reconstruct AI runs from checkpoints, receipts, and cost telemetry.
 Inputs: apps/coh/src/evidence.rs, apps/coh/src/evidence_timeline.rs, apps/coh/tests/evidence_pack.rs, apps/coh/tests/evidence_timeline.rs, docs/TEST_PLAN.md
 Changes:
@@ -10743,6 +11795,7 @@ Checks: Evidence-only reconstruction preserves authoritative constraints, handof
 Deliverables: Long-context AI runs become auditable and resumable without prompt archaeology or transcript dependence.
 
 Title/ID: m28c-ai-policy-and-metrics
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-ai-policy-and-metrics
 Goal: Generate host defaults and bounded metrics for AI context budgets, prefix reuse, and run efficiency.
 Inputs: tools/coh-rtc, configs/root_task.toml, apps/coh/src/telemetry.rs, tools/cohesix-py/cohesix/generated.py, docs/PYTHON_SUPPORT.md, docs/TEST_PLAN.md
 Changes:
@@ -10758,6 +11811,7 @@ Checks: Generated defaults bound AI runs consistently across CLI/Python flows; c
 Deliverables: Context budgets, retrieval/offload bounds, and efficiency metrics are compiler-aligned rather than ad hoc.
 
 Title/ID: m28c-framework-adapters
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-framework-adapters
 Goal: Provide host-side reference adapters that let external supervisors coexist with Cohesix through delegated tickets, checkpoints, and evidence exports.
 Inputs: tools/cohesix-py/cohesix/integrations.py, tools/cohesix-py/examples/, docs/PYTHON_SUPPORT.md, docs/HOST_TOOLS.md
 Changes:
@@ -10769,31 +11823,62 @@ Checks: Reference adapters use delegated tickets, explicit handoff/checkpoint re
 Deliverables: Cohesix remains the authority/evidence layer beneath supervisor frameworks instead of becoming one.
 
 Title/ID: m28c-worker-boundary-closure
-Goal: Verify Worker role documentation, generated snippets, and AI run references against the as-built Worker boundary selected when 28c begins.
-Inputs: apps/worker-heart, apps/worker-gpu, apps/worker-lora, docs/GPU_NODES.md, docs/WORKER_TICKETS.md, docs/ROLES_AND_SCHEDULING.md, docs/INTERFACES.md
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-worker-boundary-closure
+Goal: Verify Worker role documentation, generated snippets, and AI run references consume the accepted 26e executable Worker boundary without replacing it with session/model state.
+Inputs: accepted 26e Worker image/ABI/QEMU/Pi component and integration records, the 28b1 provider/integration/use-case graph, and, only for production ticket/lease-to-bundle claims, accepted 28e ledger evidence; apps/worker-heart, apps/worker-gpu, apps/worker-lora, docs/GPU_NODES.md, docs/WORKER_TICKETS.md, docs/ROLES_AND_SCHEDULING.md, docs/INTERFACES.md
 Changes:
-  - apps/worker-heart/src/kernel.rs + apps/worker-gpu/src/kernel.rs + apps/worker-lora/src/lib.rs — classify helper/model behavior separately from any selected executable image and verify every enabled target contract against live capability, notification, scheduling, fault, and revocation evidence.
-  - docs/GPU_NODES.md + docs/WORKER_TICKETS.md + docs/ROLES_AND_SCHEDULING.md — describe Worker roles exactly as built, separating current session/model roles, any later proven VM tasks, and host GPU/PEFT execution.
+  - apps/worker-heart/src/kernel.rs + apps/worker-gpu/src/kernel.rs + apps/worker-lora/src/lib.rs — verify every enabled executable target contract against the accepted capability, notification, MCS scheduling, fault, revocation, and exact-target evidence; keep model/session helpers clearly non-authoritative.
+  - docs/GPU_NODES.md + docs/WORKER_TICKETS.md + docs/ROLES_AND_SCHEDULING.md — describe executable Worker roles exactly as built while separating Worker lifecycle/receipts from host GPU/PEFT execution and session-only `ATTACH`.
   - tools/coh-rtc/src/validate.rs — reject generated worker-spawn claims that do not match enabled worker implementation status.
   - apps/root-task/tests/worker_docs_alignment.rs — guard documented worker paths and generated role state against implementation drift.
 Commands: cargo test -p worker-heart && cargo test -p worker-gpu && cargo test -p worker-lora && cargo test -p root-task --test worker_docs_alignment
-Checks: Docs neither overclaim nor undercut Worker behavior; session/model roles remain explicit, and every executable-role claim used by AI run control is backed by code, generated manifest state, target-created objects, cap-backed authority, notification lifecycle, applied scheduling, fault/revocation evidence, and tests.
+Checks: Docs neither overclaim nor undercut Worker behavior; executable roles and session-only `ATTACH` remain explicit; every executable-task claim used by AI run control is backed by code, generated manifest state, target-created objects, cap-backed authority, durable completion/notification lifecycle, applied MCS scheduling, complete fault/revocation evidence, exact QEMU/Pi records, and tests; only production ticket/lease-to-bundle claims require and cite 28e.
 Deliverables: Host-side AI orchestration has an honest worker boundary and cannot cite undocumented or stale worker semantics.
 
 Title/ID: m28c-peft-registry-transactions
-Goal: Make PEFT/model registry import, activation, rollback, and evidence receipts transactional and provenance-complete.
-Inputs: apps/coh/src/peft, apps/coh/src/evidence.rs, apps/host-ticket-agent, docs/GPU_NODES.md, docs/SECURITY.md, docs/TEST_PLAN.md
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-peft-registry-transactions
+Goal: Make the complete PEFT export/train/evaluate/scan/import/activate/runtime-reload/canary/rollback lifecycle transactional, provenance-complete, and WorkerLora-correlated.
+Inputs: accepted 26e WorkerLora receipt path, m28b1-authoritative-receipt-and-evidence-core, 28b1 PEFT/external-executor/use-case rows, apps/coh/src/peft, apps/coh/src/evidence.rs, apps/host-ticket-agent, apps/gpu-bridge-host, tools/cohesix-py, CAS/evidence tools, docs/GPU_NODES.md, docs/SECURITY.md, docs/TEST_PLAN.md
 Changes:
-  - apps/coh/src/peft/mod.rs — registry lock, canonical-path confinement, unique temp files, fsync/rename ordering, adapter metadata validation, and rollback-safe transaction records.
-  - apps/coh/src/peft/activate.rs — record host-registry state and VM `/gpu/models/*` publish/ack state as one recoverable activation transaction.
-  - apps/host-ticket-agent/src/executors/peft.rs — require transaction/provenance receipts for `peft.import|activate|rollback` actions.
-  - apps/coh/src/evidence.rs + apps/coh/src/evidence_timeline.rs — include bounded PEFT transaction, provenance, activation, and rollback receipts.
-  - docs/GPU_NODES.md + docs/SECURITY.md + docs/TEST_PLAN.md — document PEFT transaction/provenance requirements and partial-failure recovery tests.
-Commands: cargo test -p coh --test peft && cargo test -p coh --test peft_registry_transactions && cargo test -p host-ticket-agent
-Checks: Partial import/activation failure is recoverable and visible; adapter provenance and hashes are verified before activation; evidence reconstructs host and VM publish state without relying on prompt transcripts.
-Deliverables: PEFT/model lifecycle becomes a governed host-side actuation path suitable for 28c AI run control.
+  - tools/coh-rtc/src/ir.rs + generated provider/integration records — bounded PEFT phase schemas, artifact/provenance refs, provider/framework profiles, evaluation/scan gates, runtime compatibility, recovery, and WorkerLora correlation.
+  - apps/coh/src/peft/mod.rs — phase journal, registry lock, canonical-path/symlink confinement, unique same-filesystem temp files, file/directory fsync and rename ordering, CAS artifacts, metadata validation, compare-and-swap generations, and rollback-safe transaction records.
+  - apps/coh/src/peft/activate.rs — correlate registry generation, `/gpu/models/*` publish/ack, inference-runtime reload/canary observation, WorkerLora receipt, and rollback target as one recoverable activation transaction.
+  - apps/host-ticket-agent/src/executors/peft.rs — execute generated `peft.export|train|evaluate|scan|import|activate|runtime_reload|canary|rollback` phases through named host providers with crash-safe idempotency and exact 26e WorkerLora result delivery.
+  - tools/cohesix-py/cohesix/integrations.py — bounded reference adapter for at least one open PEFT executor plus optional Hugging Face PEFT/TRL and NeMo provider profiles under the same schema; never arbitrary shell or paths.
+  - apps/coh/src/evidence.rs + apps/coh/src/evidence_timeline.rs — include bounded phase journal, provenance, evaluation/scan, activation/reload/canary/rollback, CAS, provider, and WorkerLora receipts.
+  - docs/GPU_NODES.md + docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md + docs/USE_CASES.md + docs/SECURITY.md + docs/TEST_PLAN.md — document the full transaction, host/VM data boundary, package/provider requirements, failure recovery, and use-case promotion.
+Commands: cargo test -p coh --test peft && cargo test -p coh --test peft_registry_transactions && cargo test -p host-ticket-agent && python -m pytest tools/cohesix-py/tests/test_integrations.py -k peft && scripts/ci/provider_conformance_run.sh --provider peft --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28c-peft
+Checks: A live reference path completes every phase with verified provenance, thresholds, scan, CAS refs, runtime observation, exact WorkerLora receipt, and evidence; injected crash/timeout/duplicate/revocation/partial-publish/reload failure at every phase boundary resumes or compensates without duplicate effects; unsupported providers stay non-production.
+Deliverables: Every declared PEFT/LoRA use case has one governed host-side transaction suitable for production AI run control.
+
+Title/ID: m28c-live-peft-reference-paths
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-live-peft-reference-paths
+Goal: Replace synthetic PEFT examples with packaged live training-to-runtime reference paths that cover every declared LoRA/PEFT use case and preserve the real WorkerLora boundary.
+Inputs: m28c-peft-registry-transactions, m28b1-public-surface-live-mode-gate, m28b1-gpu-workload-and-mig-executor, m28b1-live-reference-workflows, tools/cohesix-py/examples/peft_roundtrip.py, tools/cohesix-py/cohesix/{integrations.py,playbooks.py}, provider/package registries, CUDA and optional Apple ML provider hosts, reference base models/dataset manifests, supported inference runtimes, accepted WorkerLora evidence.
+Changes:
+  - CUDA reference profile — package and pin a bounded open PEFT training/evaluation stack, base-model and dataset manifest, adapter format, scanner, and compatible inference runtime; execute the full export/train/evaluate/scan/import/activate/reload/canary/rollback transaction through generated host tickets and the live GPU executor.
+  - Apple reference profile — when local Apple PEFT is advertised, package and pin the corresponding MPS/MLX/Metal training/inference path under the same phase/receipt contract; otherwise generated topology selects an explicit remote CUDA/Jetson executor and reports local Apple execution unavailable.
+  - tools/cohesix-py/examples/peft_roundtrip.py — separate explicit mock fixture mode from live mode. Live mode consumes a genuine executor-produced adapter and measured metrics, validates provenance/signature/hash/framework/base/runtime compatibility, and never writes literal adapter bytes or authors its own authoritative receipt.
+  - tools/cohesix-py/cohesix/playbooks.py + use-case graph — bind Model Rollout, Private LoRA Foundry, `mac-private-peft-grid`, closed-loop factory, medical/Jetson, Operator-First, LeJEPA, Gesture Language, and every other declared PEFT consumer to a named executor/framework/runtime/package/recovery/evidence profile. A missing domain application or runtime is typed unavailable, not simulated.
+  - packages/tests/evidence — ship exact Python/provider extras and model/runtime compatibility metadata; use small licensable reference inputs for deterministic functional tests, plus selected live-provider acceptance evidence and crash/failure injection at every phase.
+Commands: python -m pytest tools/cohesix-py/tests/test_integrations.py -k peft && python -m pytest tools/cohesix-py/tests/test_playbooks.py -k peft && scripts/ci/provider_conformance_run.sh --provider peft --live-reference --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28c-peft-live && scripts/ci/use_case_gate.sh --promote-milestone 28c --only peft --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28c-peft-live
+Checks: Each declared PEFT/LoRA use-case row resolves to and passes a complete genuine adapter lifecycle on its named supported topology; adapter bytes, metrics, evaluation/scan results, reload/canary, rollback, CAS hashes, provider identity, and WorkerLora terminal record are observed and correlated; mock artifacts and synthetic metrics remain isolated fixtures and cannot satisfy release acceptance.
+Deliverables: Real packaged CUDA and, where advertised, Apple PEFT reference paths plus live evidence for every declared LoRA/PEFT integration.
+
+Title/ID: m28c-ai-use-case-promotion
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-ai-use-case-promotion
+Goal: Promote AI and PEFT scenarios only when their complete executable-Worker, provider, data-plane, package, recovery, and evidence chains are live.
+Inputs: m28c-peft-registry-transactions, m28c-live-peft-reference-paths, AI run/checkpoint/provider tasks, configs/generated/use_case_evidence.json, all 28b1 AI/PEFT rows, live conformance records, release manifests.
+Changes:
+  - scripts/ci/use_case_gate.sh — 28c promotion mode for AI run and PEFT pipeline dependencies, including reference executor/runtime and exact WorkerLora receipt evidence.
+  - docs/USE_CASES.md + post-M24 activity blocks — generated maturity classifications for Model Rollout, Private LoRA Foundry, built-in PEFT playbooks, Operator-First, LeJEPA, Gesture Language, and every other AI/PEFT consumer.
+  - apps/coh/src/evidence.rs — bind use-case id and dependency-graph hash to AI/PEFT evidence packs.
+Commands: scripts/ci/use_case_gate.sh --promote-milestone 28c --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28c && cargo test -p coh --test evidence_pack
+Checks: A mock/dry-run workflow, registry-only mutation, model publication, or Worker receipt alone cannot promote a use case; each production row reconstructs the full live chain and exact failure recovery.
+Deliverables: Public AI/PEFT claims are machine-gated by actual end-to-end implementation.
 
 Title/ID: m28c-nemo-capability-probes
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-nemo-capability-probes
 Goal: Detect and classify optional NeMo runtime capabilities without making NeMo the source of truth.
 Inputs: tools/cohesix-py/cohesix/integrations.py, tools/cohesix-py/cohesix/generated.py, docs/PYTHON_SUPPORT.md, docs/HOST_TOOLS.md
 Changes:
@@ -10805,6 +11890,7 @@ Checks: Capability probes are read-only, bounded, deterministic, and return the 
 Deliverables: Cohesix can reason about NeMo availability and profile shape before choosing provider strategy or issuing any host-ticket mutation.
 
 Title/ID: m28c-nemo-provider-family
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-nemo-provider-family
 Goal: Add NeMo-backed provider adapters under the same delegated ticket, checkpoint, and evidence contract as other AI backends.
 Inputs: apps/host-ticket-agent/src/executors/infer.rs, tools/cohesix-py/cohesix/orchestration.py, docs/ARCHITECTURE.md, docs/INTERFACES.md
 Changes:
@@ -10816,6 +11902,7 @@ Checks: NeMo-backed actions are idempotent, allowlist-gated, writer-fenced, and 
 Deliverables: NeMo becomes an optional provider family beneath Cohesix rather than a special-case control plane.
 
 Title/ID: m28c-nemo-guardrails-and-eval
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-nemo-guardrails-and-eval
 Goal: Make NeMo guardrail and evaluator results first-class policy receipts that can gate live AI actions.
 Inputs: apps/coh/src/evidence.rs, apps/coh/src/evidence_timeline.rs, tools/cohesix-py/cohesix/playbooks.py, docs/SECURITY.md, docs/TEST_PLAN.md
 Changes:
@@ -10827,6 +11914,7 @@ Checks: Guardrail/evaluator receipts are durable, redacted where needed, correla
 Deliverables: NeMo safety and evaluation add operational value to Cohesix instead of existing as unaudited provider-side metadata.
 
 Title/ID: m28c-nemo-policy-and-parity
+Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-nemo-policy-and-parity
 Goal: Enforce that optional NeMo support remains governed, bounded, and more valuable than direct backend-specific alternatives.
 Inputs: tools/coh-rtc/src/ir.rs, tools/coh-rtc/src/validate.rs, tools/cohesix-py/cohesix/generated.py, docs/BUILD_PLAN.md, docs/HOST_TOOLS.md
 Changes:
@@ -10841,6 +11929,8 @@ Deliverables: NeMo support is compiler-governed, optional, and demonstrably cros
 ## Outcome
 After Milestone 28c:
 - Cohesix is positioned as the trusted actuation, evidence, and governance layer beneath agent frameworks.
+- WorkerLora participates as an executable, MCS-scheduled, receipt-bearing Cohesix task while datasets, frameworks, training/evaluation, adapters, weights, and inference runtimes remain in named host executors outside the TCB.
+- Every declared PEFT lifecycle is covered by one crash-safe export/train/evaluate/scan/import/activate/runtime-reload/canary/rollback transaction, and public AI/PEFT use-case maturity is generated from its live evidence rather than examples.
 - Long-context AI runs stop treating the prompt as the sole system of record.
 - Attention strategy becomes a schedulable, measurable host-side concern instead of a hidden model-side accident.
 - Delegation, retrieval admission, cache eligibility, and handoff lineage become explicit artifacts rather than implicit prompt behavior.
@@ -10851,7 +11941,7 @@ After Milestone 28c:
 [Milestones](#Milestones)
 
 **Why now (ecosystem boundary):**
-Milestone 28b gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 28b1 provides the generated provider action registry, read visibility classes, identity mappings, conformance matrix, and deployment posture that gateway protocol projections must consume. Milestone 28c defines the host-side AI/provider model for delegated runs, PEFT/model lifecycle, optional NeMo providers, GPU leases, and evidence receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane or a new VM grammar to satisfy them.
+Milestone 28b gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 28b1 provides the generated provider/action and integration-surface graph, read visibility classes, identity mappings, external-executor conformance, package manifests, and use-case evidence rows that gateway protocol projections must consume. Milestone 28c defines the host-side AI/provider model and complete PEFT lifecycle for delegated runs, optional NeMo providers, GPU leases, and evidence receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane or a new VM grammar to satisfy them.
 
 MCP support belongs inside or immediately beside `hive-gateway` because the gateway is already the host-only multiplexer over existing Cohesix file semantics. This milestone makes MCP a client-facing projection over the same `LS`, `CAT`, `TAIL`, and `ECHO` paths, plus the existing `/host/tickets/spec` actuation lane. It is not a new runtime, not an in-VM endpoint, and not an excuse to expose `systemctl`, `docker`, `kubectl`, CUDA, PEFT, or NeMo APIs directly to an agent.
 
@@ -10859,7 +11949,7 @@ A2A belongs in the same gateway milestone only as a companion agent-delegation f
 
 **As-built alignment note:** There is no MCP server or A2A facade in `hive-gateway` today. Current gateway behavior is REST/OpenAPI over `LS`/`CAT`/`ECHO`, and the host ecosystem already has bounded providers for CUDA/NVIDIA discovery, GPU leases, PEFT, systemd, Docker, and K8s through Cohesix host tools and `/host/tickets/*`. `coh mount --rest-url` already mounts through `hive-gateway` and is the primary FUSE path for the live Cohesix namespace; Milestone 28d must not rebuild that through MCP or A2A. Milestone 28d adds MCP-compatible and A2A-compatible surfaces only after those existing flows are the implementation substrate. Older prose must not claim MCP or A2A support until the gateway exposes lifecycle/discovery/execution/authorization/conformance evidence for the relevant protocol.
 
-**Sequencing note:** Milestone 28d is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded reads, with every resource classified by the Milestone 28b1 visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 28b1 provider action registry, 28b delegated authority floor, and 28c run/checkpoint/evidence model are proven. No mutating MCP/A2A path can be accepted solely because read-only MCP conformance passes. Any mutating MCP/A2A path that claims production VM worker or driver authority must also cite the Milestone 28e cap-bundle and structured-fault evidence; host-ticket-only and read-only projections must not claim that authority.
+**Sequencing note:** Milestone 28d is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded reads, with every resource classified by the Milestone 28b1 visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 28b1 provider/integration graph, 28b delegated authority floor, and 28c run/checkpoint/evidence model are proven. A projected tool/skill is omitted or reports typed unavailable when any required provider, surface, external executor, Worker tier, or package row is not accepted. No mutating MCP/A2A path can be accepted solely because read-only protocol conformance passes, and protocol conformance cannot promote the underlying use case. A path may cite matching 26e evidence for live Worker/driver authority; if it additionally claims production Worker ticket/lease binding, complete driver-inventory projection, or structured quarantine/restart, it must cite the corresponding Milestone 28e evidence. Host-ticket-only and read-only projections must not claim either class by implication.
 
 **Goal**
 Expose Cohesix to MCP clients through standard MCP server primitives and to A2A peers through task/artifact protocol primitives while preserving Cohesix's existing grammar and authority model:
@@ -10870,7 +11960,8 @@ Expose Cohesix to MCP clients through standard MCP server primitives and to A2A 
 5. The shared `cohsh-core` console grammar, NineDoor semantics, and generated manifest bounds remain byte-stable.
 6. `coh mount --rest-url` remains the canonical gateway-backed namespace mount; any MCP-backed mount mode is a read-only MCP resource/catalog view for MCP-admitted context, not a replacement write path.
 7. A2A Agent Cards, messages, tasks, artifacts, and streaming updates are projections of 28c run/checkpoint/evidence records and existing host-ticket receipts, not a separate scheduler or agent memory.
-8. Read-only MCP/A2A conformance is an ecosystem compatibility claim, not a write-authority claim. Mutating protocol evidence must name the delegated-ticket, provider-action, idempotency, writer-epoch, audit/replay, and, where applicable, 28e VM cap-bundle prerequisites it consumes.
+8. Read-only MCP/A2A conformance is an ecosystem compatibility claim, not a write-authority claim. Mutating protocol evidence must name delegated-ticket, provider-action, idempotency, writer-epoch, audit/replay, matching 26e live-task evidence where VM execution is claimed, and 28e production-ledger/quarantine evidence only where those stronger claims are made.
+9. Tool/resource/prompt and Agent Card/skill availability derives from the accepted 28b1 integration and use-case rows; MCP/A2A never upgrades a mock, dry-run, integration-pattern, or not-enabled workflow into production support.
 
 **Non-Goals (Explicit)**
 - No in-VM MCP endpoint, MCP listener, MCP filesystem root, or MCP-specific root-task parser.
@@ -10937,12 +12028,13 @@ Implementation requirements:
 - Mutating or side-effect-capable tools must produce existing Cohesix writes only:
   - `cohesix.host_ticket.submit` appends a validated `host-ticket/v1` line to `/host/tickets/spec`.
   - `cohesix.gpu.lease_grant`, `cohesix.gpu.lease_renew`, and `cohesix.gpu.lease_release` map to existing GPU lease actions.
-  - `cohesix.peft.import`, `cohesix.peft.activate`, and `cohesix.peft.rollback` map to existing PEFT ticket/action flows and 28c transaction receipts.
+  - `cohesix.peft.export`, `cohesix.peft.import`, `cohesix.peft.activate`, and `cohesix.peft.rollback` map to existing PEFT ticket/action flows and 28c transaction receipts.
   - `cohesix.nemo.probe`, `cohesix.nemo.infer`, `cohesix.nemo.guardrails`, and `cohesix.nemo.evaluate` map to 28c optional provider actions or deterministically return unavailable when NeMo is not enabled.
   - `cohesix.k8s.cordon`, `cohesix.k8s.drain`, and `cohesix.k8s.lease_sync` map to existing K8s host-ticket actions.
   - `cohesix.systemd.status_check`, `cohesix.systemd.start`, `cohesix.systemd.stop`, and `cohesix.systemd.restart` map to existing systemd host-ticket actions.
   - `cohesix.docker.status_check`, `cohesix.docker.stop`, and `cohesix.docker.restart` map to existing Docker host-ticket actions.
-- MCP tool schemas and A2A skill schemas must derive from a shared manifest/provider action registry. Provider action names, target selectors, dry-run flags, idempotency keys, and receipt fields must not be hand-maintained separately for the two protocols.
+- MCP tool schemas and A2A skill schemas must derive from the shared manifest/provider action and integration-surface registry. Provider action names, target selectors, dry-run flags, idempotency keys, receipt fields, Worker tier, external-executor requirement, and availability state must not be hand-maintained separately for the two protocols.
+- Discovery omits or marks typed unavailable any operation whose 28b1/28c dependency row is not accepted in the selected profile. A client cannot select `live` mode to override missing provider/executor evidence.
 - Every tool schema must be generated or checked against manifest/provider policy:
   - bounded string lengths,
   - explicit enum values for actions and providers,
@@ -10962,7 +12054,7 @@ As-built leverage:
 Implementation requirements:
 - Add prompt templates that assemble existing tools/resources for common Cohesix tasks:
   - CUDA capacity triage before a GPU lease,
-  - PEFT import/promotion/rollback review,
+  - PEFT export/import/promotion/rollback review,
   - NeMo provider readiness and guardrail/evaluator receipt review,
   - K8s cordon/drain with lease and evidence checks,
   - systemd service recovery with Docker workload status,
@@ -10985,7 +12077,7 @@ Implementation requirements:
 - Pin one accepted binding/revision mapping in generated policy. JSON-RPC, HTTP+JSON, and gRPC method or endpoint names must not be mixed across protocol revisions, and fixtures must be regenerated when that mapping changes.
 - Publish an Agent Card from `/.well-known/agent-card.json` when A2A is enabled; alternate generated paths may exist only as additional configured aliases. The card must advertise only enabled Cohesix skills, authentication requirements, endpoint interfaces, and safe capability summaries; it must not expose raw tickets, secrets, host paths, or executor internals.
 - Provide the authenticated extended Agent Card endpoint only when policy enables it, and ensure the extended card obeys stricter access checks than the public discovery card.
-- A2A skills map to the same real-world operational families as MCP tools: CUDA/GPU inventory and leases, PEFT import/activate/rollback, optional NeMo probe/infer/guardrail/evaluator actions, K8s cordon/drain/lease sync, systemd status/start/stop/restart, Docker status/stop/restart, and evidence/timeline inspection.
+- A2A skills map to the same real-world operational families as MCP tools: CUDA/GPU inventory and leases, PEFT export/import/activate/rollback, optional NeMo probe/infer/guardrail/evaluator actions, K8s cordon/drain/lease sync, systemd status/start/stop/restart, Docker status/stop/restart, and evidence/timeline inspection.
 - A2A `SendMessage` and `SendStreamingMessage` operations (or the exact generated equivalents for the pinned binding/revision) create or resume 28c run/task envelopes only after fixed skill/action/input schema validation. Free-form natural language is never translated directly into host execution.
 - A2A `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`, push-notification configuration, and streaming update operations (or their generated binding equivalents) are projections of existing run/checkpoint/evidence records, host-ticket receipt state, and gateway audit state. Cancellation may append a validated Cohesix cancel/control request when one exists; it must not kill provider executors directly.
 - A2A artifacts are bounded, redacted references to evidence packs, timelines, checkpoint summaries, provider receipts, and MCP/Cohesix resource refs. Large files, secrets, raw ticket material, and provider credentials are never embedded in artifacts.
@@ -11127,9 +12219,10 @@ As-built leverage:
 - Every MCP read maps to existing `LS`, `CAT`, or `TAIL`; every MCP write maps to existing `ECHO` into a documented Cohesix control file or `/host/tickets/spec`.
 - Every A2A task maps to an existing 28c run/checkpoint/evidence record and, when mutating, an existing Cohesix host-ticket/control action. No A2A message text or metadata becomes authorization.
 - Read-only MCP acceptance passes before mutating MCP tools or A2A task creation are enabled in the milestone evidence path.
-- Read-only MCP acceptance is not sufficient evidence for mutating tools, A2A task creation, provider action execution, or production VM worker/driver authority. Each mutating acceptance artifact must name the 28b, 28b1, 28c, and, when VM worker/driver authority is claimed, 28e evidence it depends on.
+- Read-only MCP acceptance is not sufficient evidence for mutating tools, A2A task creation, provider action execution, or VM Worker/driver authority. Each mutating acceptance artifact must name its 28b/28b1/28c authority inputs, matching 26e live-task evidence where applicable, and 28e evidence only for production Worker ledger binding, complete driver-inventory projection, or structured quarantine/restart claims.
 - Read-only MCP and A2A artifact/resource acceptance includes negative tests for public, ticket-scoped, and admin-only read visibility; ticket/provider/evidence/audit reads for the wrong delegated identity fail before payload construction.
-- MCP tool schemas and A2A skill schemas are generated from the same provider action registry; parity tests fail if CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, or evidence actions drift between protocols.
+- MCP tool schemas and A2A skill schemas are generated from the same provider/integration graph; parity tests fail if CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, FUSE/read projection, federation, evidence, Worker tier, external-executor requirement, or availability state drifts between protocols.
+- MCP/A2A discovery and execution respect the selected use-case row. Missing live dependencies yield omission or typed unavailable/refused results, and protocol success never changes the row's maturity classification.
 - No MCP tool directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
 - No A2A skill directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
 - CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker scenarios have deterministic mock tests and at least one live-safe dry-run/conformance transcript.
@@ -11162,7 +12255,7 @@ As-built leverage:
   - redaction and evidence-export flags.
 - Manifest validation rejects MCP enablement when Milestone 28b delegated write identity or required audit/replay/fencing prerequisites are disabled for mutating tools.
 - Manifest validation rejects NeMo MCP tools unless the 28c optional NeMo provider family and parity checks are enabled.
-- `coh-rtc` emits a protocol-neutral `gateway.provider_actions.*` projection derived solely from the Milestone 28b1 `providers.*` registry for every provider operation exposed through MCP tools or A2A skills, including action ids, target schema refs, dry-run support, idempotency requirements, writer-epoch requirements, receipt schema refs, and evidence-export behavior. It is generated compatibility metadata, not a second action registry or authority source.
+- `coh-rtc` emits protocol-neutral `gateway.provider_actions.*` and `gateway.integration_surfaces.*` projections derived solely from the Milestone 28b1 graph for every operation exposed through MCP tools or A2A skills, including action ids, target schema refs, dry-run support, idempotency requirements, writer-epoch requirements, receipt schema refs, Worker/executor/package dependencies, observed availability, use-case refs, and evidence-export behavior. They are generated compatibility metadata, not a second registry or authority source.
 - Manifest validation rejects any MCP tool or A2A skill whose provider action mapping is absent from the shared registry or whose schema diverges between the two protocol projections.
 - `coh-rtc` emits `gateway.a2a.*` policy:
   - enabled endpoint/binding,
@@ -11214,15 +12307,16 @@ Checks: A2A revision/binding mappings are compiler-owned and internally consiste
 Deliverables: Generated A2A gateway policy, Agent Card metadata, and validation gates.
 
 Title/ID: m28d-provider-action-registry-projection
-Goal: Consume the Milestone 28b1 provider action registry so MCP tools and A2A skills cannot define independent action schemas.
-Inputs: tools/coh-rtc, apps/hive-gateway, apps/host-ticket-agent, crates/host-cuda, docs/INTERFACES.md, docs/HOST_API.md.
+Milestone: Milestone 28d — MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later / m28d-provider-action-registry-projection
+Goal: Consume the Milestone 28b1 provider/integration and use-case graph so MCP tools and A2A skills cannot define independent schemas or availability claims.
+Inputs: tools/coh-rtc, apps/hive-gateway, apps/host-ticket-agent, crates/host-cuda, configs/generated/host_integration_dependency.json, configs/generated/use_case_evidence.json, docs/INTERFACES.md, docs/HOST_API.md.
 Changes:
-  - tools/coh-rtc/src/validate.rs — reject MCP/A2A projections that reference undeclared 28b1 provider actions or drift from generated target/receipt/read-visibility schemas.
-  - apps/hive-gateway/src/actions/registry.rs — generated 28b1 provider action registry view consumed by MCP tools, A2A skills, evidence mapping, and security checks.
-  - apps/hive-gateway/tests/gateway_action_registry.rs — parity fixtures proving MCP and A2A expose the same allowed actions, bounds, receipt refs, and refusal semantics where the same provider operation exists.
+  - tools/coh-rtc/src/validate.rs — reject MCP/A2A projections that reference undeclared 28b1 actions/surfaces or drift from target, receipt, read-visibility, Worker, executor, package, use-case, or observed-mode records.
+  - apps/hive-gateway/src/actions/registry.rs — generated 28b1 provider/integration view consumed by MCP tools, A2A skills, evidence mapping, availability reporting, and security checks.
+  - apps/hive-gateway/tests/gateway_action_registry.rs — parity fixtures proving MCP and A2A expose the same allowed actions, bounds, dependency availability, receipt refs, and refusal semantics where the same provider operation exists.
 Commands: cargo test -p coh-rtc && cargo test -p hive-gateway --test gateway_action_registry && scripts/check-generated.sh
-Checks: Provider action metadata is generated once by 28b1, remains protocol-neutral, and rejects action drift between MCP tools, A2A skills, host-ticket lines, read visibility classes, and evidence receipts.
-Deliverables: Gateway protocol projection and parity tests for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence operations without a second registry.
+Checks: Provider/integration metadata is generated once by 28b1, remains protocol-neutral, omits or types unavailable missing dependencies, and rejects drift between MCP tools, A2A skills, host-ticket lines, read visibility, use-case maturity, and evidence receipts.
+Deliverables: Gateway protocol projection and parity tests for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, federation, FUSE/read surfaces, and evidence operations without a second registry.
 
 Title/ID: m28d-gateway-mcp-transport
 Goal: Implement MCP lifecycle and stdio/Streamable HTTP transport in `hive-gateway`.
@@ -11350,16 +12444,29 @@ After Milestone 28d:
 - All side effects still flow through Cohesix tickets, files, policy, audit, and evidence.
 - The VM grammar, Secure9P semantics, and generated manifest authority remain unchanged.
 
-## Milestone 28e — VM Cap-Bundle Authority + Structured Fault Lifecycle <a id="28e"></a>
+## Milestone 28e — Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle <a id="28e"></a>
 [Milestones](#Milestones)
 
-**Why now (VM authority closure):** Milestone 28b makes host/gateway writes attributable, idempotent, fenced, durable, and audit-first. The remaining VM-side authority concern is separate: production worker and linked-driver tickets must correspond to generated seL4 cap bundles, and faults must revoke stale authority with bounded evidence. This milestone closes that seL4-facing gap without delaying the host actuation floor that 28c and 28d need.
+**Why now (production authority binding):** Milestone 26e already creates,
+contains, faults, completely tears down, and recreates the full minimum task
+bundle for every executable Heartbeat/GPU/LoRA Worker. Milestone 28b makes
+host/gateway writes attributable, idempotent, fenced, durable, and audit-first.
+The remaining VM-side production concern is to bind those proven Worker bundles
+to production ticket/lease ledgers, project the already complete linked-driver
+authority inventory through manifest runtime-instance ledgers, and add
+quarantine policy plus bounded evidence. Drivers never receive or own tickets.
+This milestone closes that ledger/projection gap; it does not retroactively
+supply security properties needed by live 26e Worker or driver tasks.
 
 **Prerequisites**
 - Milestone **26e**, including
-  `m26e-worker-supervisor-child-isolation` and `m26e-root-tcb-target-proof`,
-  completed for every executable Worker role with live badged endpoint caps,
-  lifecycle/fault evidence, and negative metadata-only ticket tests. The
+  `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`,
+  `m26e-worker-supervisor-child-isolation`, `m26e-host-worker-integration`,
+  `m26e-worker-target-evidence-promotion`, and `m26e-root-tcb-target-proof`,
+  completed for Heartbeat/GPU/LoRA with complete instance bundles, live badged
+  telemetry IPC, durable completion, full teardown, fresh supervisor-generation
+  recreation, host integration, and exact QEMU/Pi evidence; linked drivers have
+  complete MCS authority and containment inventories. The
   inactive historical `m26c-cap-backed-worker-endpoints` proposal and current
   model-only profiles do not satisfy this prerequisite.
 - Milestone 26e task `m26e-mcs-smp-target-acceptance` completed; all cap bundles
@@ -11367,29 +12474,77 @@ After Milestone 28d:
   scheduler architecture.
 - Milestone **26d** seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
 - Milestone **28b** completed, including audit/replay defaults and generated gates that distinguish host authority records from VM cap-backed tickets.
+- Milestone **28b1** completed for the provider/integration dependency graph, external-executor classifications, exact package manifests, and stable use-case rows that will consume production Worker-bundle bindings. A PEFT/AI row additionally requires the applicable Milestone **28c** live pipeline evidence.
 
-**Production authority gate:** Milestone 28e is mandatory for any production profile that claims VM worker or linked-driver authority is represented by live seL4 cap bundles, including AI namespace projections, MCP/A2A task projections, provider projections, and driver-runtime control paths. Read-only profiles, host-ticket-only profiles, and gateway projections may proceed without 28e only when their generated profile state and docs explicitly avoid VM cap-bundle or structured-fault claims.
+**Production authority gate:** Accepted 26e evidence is sufficient to claim the
+matching live Worker/driver cap bundles and basic containment. Milestone 28e is
+additionally mandatory only when a production profile claims one-to-one Worker
+ticket/lease-to-bundle ledger binding, complete driver-inventory ledger
+projection, structured quarantine/evidence, or fresh-ticket Worker restart.
+Read-only, host-ticket-only, gateway, and accepted 26e task/driver projections
+may proceed without 28e when they avoid those stronger production-ledger claims.
+When 28e is selected, it extends the existing `host-integration-dependency/v1`
+and use-case records with `m28e_production_bundle` evidence; it does not create a
+separate lifecycle catalog or promote provider/external-executor support by
+itself.
 
 **Goal**
-Complete production VM authority by making worker and driver tickets correspond to generated seL4 cap bundles and by converting worker/driver faults into structured lifecycle events.
+Bind production Worker tickets/leases one-to-one to accepted live seL4 bundles;
+project each already-complete driver bundle through manifest runtime-instance,
+scheduler, supervisor, and cap-generation ledgers without inventing driver
+tickets; and convert already-contained Worker/driver faults into structured
+terminal/quarantine evidence with fresh-ticket Worker restart and fresh driver
+runtime-generation recovery policy. Publish those bindings into the shared
+integration/use-case evidence graph so host tools can distinguish a 26e
+executable Worker from a 28e production-bound bundle without inferring either
+from a ticket, provider receipt, or UI state.
 
 **Non-Goals (Explicit)**
 - No change to REST delegated identity, host-ticket action semantics, MCP/A2A protocol surfaces, or AI run control.
 - No new VM protocol, console grammar, Secure9P verb, or root-owned physical-driver path.
 - No claim that host tickets, REST delegated tickets, provider tickets, or PEFT receipts are seL4 cap-backed unless a generated VM projection explicitly maps them to live caps.
+- No driver ticket or lease material. Host/provider tickets may authorize a
+  root-projected driver action, but a driver runtime receives only its generated
+  manifest identity, runtime generation, resource descriptors, and MCS/IPC caps.
+- No second Worker constructor, CSpace/VSpace loader, scheduler architecture,
+  basic fault endpoint, or revocation path. 28e reuses the accepted 26e
+  supervisor bundle and teardown implementation.
+- No CYW43/SDIO timing, retry, state-machine, restart, packaging, ownership, or
+  evidence-classification change. Driver authority may be ledger-bound only as
+  already generated and accepted.
 
 **Deliverables**
-- Generated per-role cap-bundle records for endpoint caps, notification caps,
-  fault/timeout endpoint caps, scheduling-context caps, Reply objects,
-  shared-ring frames, allowed data frames, declared MMIO frames, and
-  DMA/shared-buffer frames where applicable. SchedControl remains root-only.
-- Root-task constructs per-role child CSpaces/VSpaces from generated bundle records and never hands out catch-all root authority, broad namespace authority, or undeclared frame caps.
-- Revocation deletes/revokes derived caps, cancels or recovers Reply/donated-SC
-  ownership, and makes late invocations, stale timeout events, stale shared-ring
-  turns, and stale telemetry writes fail deterministically.
-- Every production worker and driver TCB receives a generated badged fault endpoint whose badge identifies role, instance, lease epoch, and cap-bundle generation.
-- Root-task records bounded fault evidence, revokes the affected cap bundle, marks the lease terminal or quarantined, and refuses late telemetry, shared-ring turns, or receipts from the old epoch.
-- Restart is allowed only through a new ticket/lease/cap-bundle path; fault recovery must not silently reuse stale caps, stale DMA mappings, or stale shared rings.
+- Generated production binding records map each active Worker ticket/lease,
+  role, slot, lease epoch, supervisor generation, scheduler generation, and
+  fault identity to exactly one accepted 26e instance bundle. WorkerBus remains
+  model-only and has no production VM bundle.
+- Generated driver records map manifest runtime identity plus runtime,
+  scheduler, supervisor, and cap-bundle generations to the already accepted
+  endpoint, notification, fault/timeout, SC/Reply, IRQ, shared-ring, data-frame,
+  MMIO, DMA, and shared-buffer authority applicable to each linked runtime.
+  They contain no ticket/lease credential, and SchedControl remains root-only.
+- Root-task reuses the sole 26e constructor/teardown and retained origin caps;
+  it never creates a parallel Worker CSpace/VSpace path or hands out catch-all
+  root, namespace, frame, device, or scheduling authority.
+- Production fault handling records bounded evidence, invokes the complete
+  26e Worker teardown or accepted driver containment path, marks the exact
+  Worker ticket/lease or driver manifest-runtime ledger entry terminal or
+  quarantined, and rejects late IPC, timeout events, ring turns, telemetry, and
+  receipts from the old ledger generation.
+- Worker restart is allowed only through a new ticket, lease epoch, supervisor
+  generation, and cap-bundle binding. Driver recovery uses a fresh admitted
+  manifest runtime/cap generation and the accepted containment/reconstruction
+  path, never a ticket. Neither may silently reuse a stale TCB, cap, Reply
+  relationship, SC, DMA mapping, shared frame, or ring.
+- Emit `worker-bundle-binding` integration evidence for Heartbeat/GPU/LoRA with
+  target/image/manifest hashes, ticket/lease identity, Worker slot, lease epoch,
+  supervisor/scheduler/cap generations, terminal/quarantine state, and the
+  corresponding 26e component/integration evidence refs. Provider/executor
+  results remain separate referenced records.
+- Re-evaluate only the use-case rows that explicitly require
+  `m28e_production_bundle`. A live 28e binding cannot promote a row whose CUDA,
+  PEFT, FUSE, Kubernetes, federation, package, identity, recovery, or other
+  host dependency is missing or non-live.
 
 **Commands**
 - `cargo test -p root-task --tests cap_bundle`
@@ -11407,43 +12562,82 @@ Complete production VM authority by making worker and driver tickets correspond 
 - `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m28e-pi4-cap-bundles`
 
 **Checks (DoD)**
-- Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
-- Production profiles that expose AI, MCP/A2A, provider, or driver-runtime projections fail validation if they claim VM worker/driver cap-bundle authority or structured-fault containment without the generated 28e cap-bundle and fault-lifecycle evidence.
-- Read-only and host-ticket-only profiles remain valid without 28e only when generated profile state, docs, and evidence packs explicitly state that VM worker/driver cap-bundle authority is not claimed.
-- Revoked tickets lose endpoint, notification, scheduling-context, Reply,
-  timeout/fault, frame, shared-ring, MMIO, and DMA/shared-buffer authority;
-  stale invocations, timeout events, donations, and ring turns fail
-  deterministically.
-- Recovery reconciles ticket ledger and CSpace/VSpace state so no active ticket exists without live caps and no live caps remain for terminal tickets.
-- Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
-- Fault handling revokes old caps, rejects stale shared-ring turns and telemetry, and requires fresh lease/cap-bundle construction before restart.
-- No Reply object or donated scheduling context is stranded or reused across a
-  lease epoch, quarantine, revoke, or restart; SchedControl is never delegated.
+- Production Worker ticket/lease profiles fail generation if any executable
+  Worker metadata scope lacks the corresponding one-to-one accepted live-bundle
+  binding. Complete driver-inventory profiles fail if any admitted manifest
+  runtime lacks its generation-keyed accepted inventory; no driver ticket is
+  generated or delivered.
+- Production profiles that expose AI, MCP/A2A, provider, or driver-runtime
+  projections may cite matching accepted 26e live authority, but fail if they
+  claim 28e Worker ledger binding, complete driver-inventory projection, or
+  structured quarantine without the corresponding 28e evidence.
+- Host tools, REST/FUSE/Python/UI/MCP/A2A projections, release manifests, and
+  use-case rows consume the same generated 28e bundle-binding record and cannot
+  synthesize production Worker state from tickets, model entries, registry
+  publication, or provider receipts.
+- Revoked Worker tickets lose their bound endpoint, notification,
+  scheduling-context, timeout/fault cap, frame, and shared authority. The
+  root-fault-owned Reply lane is not Worker-ticket authority; any association
+  for the faulting generation is resolved separately before reuse.
+  Quarantined driver runtime generations lose endpoint, notification, SC/Reply,
+  timeout/fault, ring, frame, IRQ, MMIO, DMA, and shared-buffer authority;
+  stale invocations, timeout events, and ring turns fail deterministically.
+- Recovery reconciles Worker ticket/lease ledgers and ticket-free driver
+  manifest-runtime ledgers with the existing 26e object state so no active
+  Worker ticket exists without exactly one live Worker bundle, no admitted
+  driver ledger entry lacks its exact live bundle, and neither kind of bundle
+  remains after its ledger entry becomes terminal.
+- Fault badges deterministically identify the Worker role/instance/logical lease
+  epoch/cap-bundle generation or the driver role/manifest-runtime instance/
+  runtime generation/cap-bundle generation, without treating a driver as a
+  ticket subject.
+- Fault handling revokes old caps, rejects stale shared-ring turns and
+  telemetry, and requires fresh Worker ticket/lease binding or fresh admitted
+  driver runtime generation before restart/recovery.
+- No root-fault or driver-command Reply association, and no donated scheduling
+  context, is stranded or reused across a lease epoch, quarantine, revoke, or
+  restart; SchedControl is never delegated.
 - Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
-- Compatibility profiles may retain 26c endpoint-cap-only tickets only when docs and generated profile state explicitly say full cap bundles are disabled.
+- Within a profile claiming 28e production-ledger authority, an executable
+  Worker has no metadata-only or 26c endpoint-only fallback. A valid 26e-only
+  executable profile remains a distinct supported tier when it makes no 28e
+  ticket/lease-ledger or quarantine claim. The only non-executable state is
+  explicitly model/session-only; it cannot claim live VM caps, faults, or
+  Worker receipts.
 - Fault/revoke timing evidence stays bounded for representative worker and driver fault cases; material regressions are classified as cap-revocation, evidence-export, restart-policy, or driver-runtime recovery overhead before production profiles depend on structured fault recovery.
 
 **Compiler touchpoints**
-- `coh-rtc` emits full cap-bundle ticket authority profiles, generated per-role
-  cap inventories including SC/Reply/timeout ownership and scheduler
-  generation, revoke/recovery evidence, production enablement gates, generated
-  badged fault endpoint records, terminal/quarantine policy, and bounded fault
-  evidence paths. SchedControl is never emitted to a child bundle.
-- `coh-rtc` emits explicit profile-state distinctions for read-only projection, host-ticket-only actuation, endpoint-cap compatibility, full VM cap-bundle authority, and structured-fault containment so downstream milestones cannot inherit stronger VM authority claims by implication.
+- `coh-rtc` emits production ticket/lease bindings to accepted 26e Worker
+  bundle templates and separate ticket-free manifest-runtime bindings to
+  complete generated driver inventories including SC/Reply/timeout/MMIO/DMA
+  ownership, scheduler/supervisor/runtime generations,
+  revoke/recovery evidence, production enablement gates, terminal/quarantine
+  policy, and bounded fault evidence paths. SchedControl is never emitted to a
+  child bundle.
+- `coh-rtc` emits explicit profile-state distinctions for read-only projection,
+  host-ticket-only actuation, model/session-only roles, 26e isolated-task
+  and linked-driver authority, 28e production Worker ticket/lease binding,
+  complete driver-inventory projection, and structured quarantine. No active
+  profile consumes the inactive 26c endpoint-only proposal as a compatibility
+  floor or treats a driver as a ticket subject.
+- `coh-rtc` extends the 28b1 integration/use-case graph with generated 28e
+  Worker-bundle binding and quarantine evidence requirements; it never changes
+  provider/external-executor observed mode or use-case maturity without all
+  other dependency rows passing.
 - Generated snippets refresh `docs/WORKER_TICKETS.md`, `docs/SECURITY.md`, `docs/HARDWARE_BRINGUP.md`, `docs/INTERFACES.md`, and `docs/TEST_PLAN.md`.
 
 **Task Breakdown**
 ```
-Title/ID: m28e-full-cap-bundle-ticket-authority
-Goal: Complete cap-backed tickets by making production worker and driver tickets correspond to generated seL4 cap bundles for endpoints, notifications, scheduling contexts, Reply objects, timeout/fault endpoints, frames, shared rings, MMIO, and DMA.
-Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/root-task/src/ninedoor.rs, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, tools/coh-rtc/src/**, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md
+Title/ID: m28e-production-worker-ticket-driver-inventory
+Milestone: Milestone 28e — Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle / production live-bundle ledger binding
+Goal: Bind each production Worker ticket/lease to exactly one accepted 26e live bundle and project each accepted driver bundle through a ticket-free manifest-runtime ledger without reconstructing either task path or retaining metadata-only compatibility authority.
+Inputs: accepted 26e Worker and linked-driver bundle/inventory/integration evidence records, 28b1 host-integration and use-case registries, apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/root-task/src/ninedoor.rs, tools/coh-rtc/src/**, scripts/ci/use_case_gate.sh, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md
 Changes:
-  - tools/coh-rtc/src/** — add generated per-role cap-bundle records for endpoint, notification, scheduling context, Reply object, timeout/fault endpoint, shared-ring, frame, MMIO, DMA/shared-buffer, scheduler generation, and revoke policy fields; keep SchedControl root-only.
-  - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — construct child CSpaces/VSpaces from generated cap-bundle records, retain parent/origin caps for deterministic revoke, and reconcile Reply/donated-SC ownership before object reuse.
-  - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — reconcile ticket ledger state with live cap-bundle state and refuse metadata-only authority in production profiles.
-  - apps/pi4-driver-runtime/src/** + crates/pi4-driver-abi/src/** — bind driver-runtime command/completion, MMIO, DMA, shared-buffer, IRQ notification, and fault handling to generated cap-bundle descriptors.
-  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — consume full role cap bundles where enabled while preserving the 26c endpoint-cap compatibility floor.
-  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — document full cap-bundle semantics, production profile gates, revoke/recovery behavior, and negative tests.
+  - tools/coh-rtc/src/** — bind production Worker tickets/leases to the complete accepted 26e endpoint, lifecycle/completion notification, active SC, standard/timeout fault, frame, image, supervisor-generation, and revoke inventory. Separately project each accepted driver endpoint/notification/SC/Reply/fault/ring/frame/IRQ/MMIO/DMA/shared-buffer inventory by manifest runtime identity and generation; generate no driver ticket/lease field and keep SchedControl root-only.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — reuse the sole 26e Worker constructor, driver admission/containment path, origin caps, and complete teardown; attach Worker live-bundle identity to the production ticket ledger and driver live-bundle identity to the manifest-runtime ledger without creating a second CSpace/VSpace, runtime descriptor, or scheduler path.
+  - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — reconcile Worker ticket ledgers and driver manifest-runtime ledgers with accepted live bundle state, refuse metadata-only production authority, and ensure host/provider tickets authorize only root-projected driver actions rather than entering a driver descriptor.
+  - tools/coh-rtc/src/codegen/** + scripts/ci/use_case_gate.sh — emit and consume 28e `worker-bundle-binding` integration evidence and promote only use-case rows whose remaining host/provider/executor/package dependencies also pass.
+  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — document separate Worker-ticket and ticket-free driver-ledger semantics, production profile gates, revoke/recovery behavior, and negative tests. `pi4-driver-abi`, `pi4-driver-runtime`, and Worker source are regression inputs only and are not changed by this task.
 Commands:
   - cargo test -p root-task --tests cap_bundle
   - cargo test -p pi4-driver-abi
@@ -11453,23 +12647,23 @@ Commands:
   - cargo test -p worker-lora
   - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
+  - scripts/ci/use_case_gate.sh --promote-milestone 28e --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28e
 Checks:
-  - Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
-  - Revoked tickets lose endpoint, notification, SC, Reply, timeout/fault,
-    frame, shared-ring, MMIO, and DMA/shared-buffer authority; stale invocations,
-    donations, timeout events, and ring turns fail deterministically.
-  - Recovery reconciles ticket ledger and CSpace/VSpace state so no active ticket exists without live caps and no live caps remain for terminal tickets.
+  - Production Worker ticket profiles fail if any executable Worker lacks a one-to-one accepted live-bundle binding; driver-inventory profiles fail if any admitted manifest runtime lacks its generation-keyed complete accepted inventory; any generated/delivered driver ticket field fails validation.
+  - Revoked Worker tickets lose their exact bound authority; quarantined driver runtime generations lose their exact endpoint/notification/SC/Reply/fault/ring/frame/IRQ/MMIO/DMA/shared authority; stale invocations, timeout events, and ring turns fail deterministically.
+  - Recovery reconciles both ledger kinds with existing object state so no active Worker ticket or admitted driver generation lacks exactly one live bundle and no terminal entry retains one.
+  - Host projections consume the exact binding record, and no use case is promoted by a Worker binding when any independent host integration row is missing, fixture, mock, dry-run, disabled, unknown, or otherwise below its required mode.
 Deliverables:
-  - Production-grade cap-backed ticket authority with generated seL4 cap bundles and evidence strong enough to answer the seL4 criticism that tickets are only application metadata.
+  - Production-grade Worker cap-backed ticket authority plus a complete ticket-free driver inventory projection, both bound to the already accepted 26e seL4 bundles.
 
 Title/ID: m28e-structured-fault-lifecycle
-Goal: Convert worker and driver seL4 faults into structured lifecycle events that revoke stale authority and produce bounded evidence.
-Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/pi4-driver-runtime/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/coh/src/evidence.rs, tools/coh-rtc/src/**, docs/SECURITY.md, docs/INTERFACES.md, docs/TEST_PLAN.md
+Milestone: Milestone 28e — Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle / structured quarantine and fresh-generation restart
+Goal: Project already-contained Worker and driver seL4 faults into Worker ticket/lease quarantine or ticket-free driver runtime quarantine, bounded evidence, fresh-ticket Worker restart, and fresh-generation driver recovery without duplicating 26e containment.
+Inputs: accepted 26e Worker teardown and driver containment interfaces/evidence, apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/coh/src/evidence.rs, tools/coh-rtc/src/**, docs/SECURITY.md, docs/INTERFACES.md, docs/TEST_PLAN.md
 Changes:
-  - tools/coh-rtc/src/** — emit generated badged fault/timeout endpoint records with role, instance, lease epoch, scheduler/cap-bundle generation, terminal/quarantine policy, and bounded evidence paths.
-  - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — receive worker/driver fault and timeout IPC, record bounded evidence, recover or revoke Reply/donated-SC ownership, revoke the affected cap bundle, and transition the lease to terminal or quarantined state.
-  - apps/root-task/src/hal/** + apps/pi4-driver-runtime/src/** — ensure driver faults cut off IRQ, shared-ring, MMIO, DMA/shared-buffer, and fault authority for the old epoch.
-  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — restart only through a fresh ticket/lease/cap-bundle path and refuse stale telemetry or receipts after a fault epoch.
+  - tools/coh-rtc/src/** — extend accepted 26e Worker fault/timeout identity with production ticket, logical lease epoch, scheduler/supervisor/cap-bundle generation, and extend driver identity separately with manifest runtime instance/runtime generation/scheduler/supervisor/cap-bundle generation; generate terminal/quarantine policy and bounded evidence paths without a driver ticket field.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — consume existing worker/driver fault and timeout IPC, record bounded production evidence, invoke the existing complete Worker teardown or accepted driver containment, resolve fault/driver Reply ownership, and transition the exact Worker-ticket or driver-runtime ledger entry to terminal/quarantined state.
+  - apps/root-task/src/hal/** — invoke the accepted driver containment cut-off for IRQ, shared-ring, MMIO, DMA/shared-buffer, fault, and old-generation authority, then admit recovery only through a fresh manifest runtime generation. Do not edit the driver ABI/runtime or CYW43 behavior.
   - apps/root-task/tests/fault_recovery_timing.rs — bounded timing checks for revoke, evidence export, stale-turn refusal, and fresh restart admission under representative worker/driver faults.
   - apps/coh/src/evidence.rs + docs/SECURITY.md + docs/INTERFACES.md + docs/TEST_PLAN.md — include bounded fault lifecycle records in evidence exports and document restart/quarantine semantics.
 Commands:
@@ -11483,14 +12677,15 @@ Commands:
   - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
 Checks:
-  - Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
-  - Fault/timeout handling revokes old caps, rejects stale Reply/donation,
-    timeout, shared-ring, and telemetry events, and requires fresh
-    lease/cap-bundle construction before restart.
+  - Fault badges deterministically identify either the faulting Worker role/instance/logical lease epoch/cap-bundle generation or driver role/manifest-runtime instance/runtime generation/cap-bundle generation.
+  - Fault/timeout handling completes the applicable existing containment,
+    rejects stale Reply/donation, timeout, shared-ring, telemetry, and receipt
+    events, and requires a fresh Worker ticket/lease/supervisor-generation/
+    bundle binding or fresh admitted driver runtime generation before recovery.
   - Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
   - Fault/revoke timing remains bounded and is reported as VM authority recovery evidence, not Pi/QEMU network throughput proof.
 Deliverables:
-  - Production fault lifecycle evidence that lets seL4 reviewers audit how Cohesix contains and recovers from faulty workers and drivers.
+  - Production fault lifecycle evidence that lets seL4 reviewers audit Worker ticket quarantine and ticket-free driver runtime quarantine/recovery separately.
 ```
 
 
@@ -11499,7 +12694,7 @@ Deliverables:
 
 **Why now (operator workflow):** Milestone 20c/20d proved SwarmUI as a host-only, ticket-scoped UI and PixiJS Live Hive renderer. Milestone 24e added REST/gateway mode so SwarmUI can share the sole console client through `hive-gateway`. Milestone 28 gives Cohesix the read-only inspect, trace, bundle/evidence, diff, and attest substrate operators need. The remaining UI gap is workflow shape: SwarmUI is still organized like a dense dashboard instead of a desktop operator workbench. This milestone redesigns the presentation layer around familiar desktop navigation, Spectrum Web Components, deterministic evidence workflows, and the existing PixiJS Live Hive canvas without changing Cohesix authority or protocol semantics.
 
-**As-built alignment note:** Current SwarmUI is a Tauri host UI with Rust-owned transport/session/cache/replay semantics, vendored Spectrum Web Components, and a PixiJS Live Hive renderer. Existing generated SwarmUI defaults still use `/worker` roots while the canonical worker namespace is `/shard/<label>/worker/<id>/telemetry` with `/worker/<id>/telemetry` available only when `sharding.legacy_worker_alias = true`. This milestone must present both correctly and must not hard-code legacy aliases as the future namespace shape.
+**As-built alignment note:** Current SwarmUI is a Tauri host UI with Rust-owned transport/session/cache/replay semantics, vendored Spectrum Web Components, and a PixiJS Live Hive renderer. Existing generated SwarmUI defaults still use `/worker` roots while the canonical worker namespace is `/shard/<label>/worker/<id>/telemetry` with `/worker/<id>/telemetry` available only when `sharding.legacy_worker_alias = true`. Current read models can also infer role/lifecycle from ids or model/session state rather than carrying independent generated declaration, executable lifecycle, receipt, and proof axes. The current Playwright suite injects a fake Tauri invoke bridge before every frontend test, including Live Hive, so it proves a valuable deterministic UI fixture but not the packaged native application, Rust command bridge, gateway authentication, or a live accepted QEMU session. This milestone must present canonical paths and those axes correctly; it must not hard-code legacy aliases or synthesize an executable/production Worker from labels, tickets, GPU/model publication, PEFT registry state, UI cache, or fake bridge responses.
 
 **Prerequisites**
 - Milestone **20c** complete for SwarmUI Tauri, ticket-scoped sessions, transcript parity, and bounded offline cache.
@@ -11507,6 +12702,8 @@ Deliverables:
 - Milestone **24e** complete for REST/gateway mode so desktop multi-tool workflows use `hive-gateway` rather than direct concurrent TCP clients.
 - Milestone **28** complete for shared read-only inspect, trace, evidence-pack/timeline, diff, and attest internals reused by the workbench.
 - Milestone **28b** is required before enabling any new delegated mutating REST workflow beyond existing console-projected `LS`/`CAT`/`ECHO` semantics. Before 28b, mutating desktop affordances may only render command previews, transcript proof, or existing console-compatible actions already admitted by the active profile.
+- Milestone **28b1** is required for generated integration-surface availability, read visibility, exact package contents, and use-case maturity shown by the workbench. Matching 26e evidence is required to display an executable Worker badge; matching 28e evidence is additionally required for production bundle/quarantine status.
+- `m28b1-authoritative-receipt-and-evidence-core` is required before a native UI lane may display a receipt/evidence-backed live state; frontend fixtures remain non-authoritative.
 
 **Goal**
 Redesign SwarmUI into a desktop-style operator workbench that uses Spectrum for shell chrome, controls, forms, menus, dialogs, status, and workflow affordances while retaining PixiJS/Live Hive as the primary high-performance visualization surface. The UI must make Secure9P namespaces, evidence packs, replay, tickets, policy gates, and gateway state navigable through familiar desktop patterns without introducing a new authority plane.
@@ -11579,9 +12776,14 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 - Live Hive desktop integration:
   - preserve PixiJS renderer and replay fixtures;
   - update canvas framing, toolbar, inspector, worker selection, canonical shard path display, and `No telemetry yet` remediation flow.
+  - render declaration, session, executable lifecycle, provider receipt, external-executor result, 26e target proof, and optional 28e production-binding/quarantine as separate fields. Missing or mock integration rows display their generated mode and never collapse into a generic healthy/ready badge.
 - UI performance gate:
   - add deterministic source and release-bundle checks for Live Hive frame cadence, pending-event backlog, inactive-view polling, replay rendering, and layout thrash under fixture load;
   - record UI render/backlog metrics separately from REST or Pi hardware performance; UI regressions do not reopen driver/runtime performance unless the transcript or gateway evidence shows backend slowdown.
+- Native application integration gate:
+  - retain the injected-Tauri Playwright suite as the fast deterministic frontend fixture lane, but add a separately labelled packaged native-Tauri lane that launches the real Rust/WebView command bridge and connects through an authenticated `hive-gateway` to an accepted QEMU image;
+  - exercise login/secret-ref refusal, canonical `/shard` browsing, executable/model-only Worker distinctions, authoritative provider/Worker receipts, Live Hive updates/backpressure, disconnect/reconnect, replay/offline isolation, and clean shutdown without injecting `window.__TAURI__`, canned command replies, or target topology;
+  - run the same lane against the release-bundle application and bind results to app, gateway, registry, and QEMU image identities.
 - Documentation updates:
   - `docs/USERLAND_AND_CLI.md` describes the SwarmUI desktop workbench, Spectrum/PixiJS split, namespace navigation, evidence desk, replay desk, and non-goals.
   - `docs/INTERFACES.md` records that the UI remains a projection of existing Secure9P/console/evidence/replay semantics.
@@ -11603,6 +12805,7 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 - `cd tools/swarmui-ui-tests && npx playwright install webkit`
 - `cd tools/swarmui-ui-tests && npm test`
 - `cd tools/swarmui-ui-tests && npm test -- --grep live-hive-performance`
+- `scripts/ci/swarmui_native_e2e.sh --target qemu --state-dir out/swarmui-native/m28f`
 - `SWARMUI_RELEASE_DIR=../../releases/<latest> npm test` from `tools/swarmui-ui-tests` during release-bundle validation.
 
 **Checks (DoD)**
@@ -11614,14 +12817,17 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 - Evidence Desk invokes/reuses canonical evidence-pack and timeline internals and never serializes a UI-specific pack format or raw auth tokens/tickets.
 - Replay Desk rejects tampered traces and oversized artifacts, disables network access in offline/replay mode, and reconstructs Live Hive state from trace/CBOR/evidence artifacts only.
 - Ticket/Policy Desk shows status and denials without granting new authority; any write-capable affordance is explicitly gated by active profile/milestone state and emits transcript proof.
+- Worker/provider/use-case state comes from the generated 28b1 graph and correlated evidence records. UI ids, labels, tickets, `/gpu/models`, PEFT registry entries, telemetry, or cached snapshots cannot independently create executable, live-provider, production-bundle, or production-use-case status.
 - Direct TCP mode clearly warns about single-client console ownership; REST/gateway mode presents gateway health, request-auth state, and backpressure counters before operators tune publish rates.
 - No hidden polling or background watchers run when a workbench view is inactive, stopped, or offline; Live Hive polling remains bounded by generated defaults.
 - Playwright desktop and narrow screenshots are updated intentionally, with checks for nonblank PixiJS canvas, visible legends/status, text fit, no overlapping controls, keyboard/focus behavior, and accessible labels.
 - Live Hive UI performance evidence records frame cadence, pending/backlog bounds, inactive-view polling state, and replay render stability for source and release-bundle runs; failures are fixed in the UI/render loop unless backend transcript evidence proves a runtime regression.
 - Release-bundle UI tests pass against the latest bundle assets, not only source files.
+- The native-Tauri source and release lanes use the actual packaged app, Rust command bridge, authenticated gateway, and accepted QEMU image; placeholder auth fails before connection, injected/canned bridge state is absent, and identity-bound evidence covers namespace, Worker/integration truth, Live Hive pressure/reconnect, replay isolation, and shutdown.
 
 **Compiler touchpoints**
 - `coh-rtc` remains the source for SwarmUI path roots, cache limits, trace limits, Live Hive frame/LOD limits, line caps, ticket scope, and any new desktop-workbench defaults.
+- `coh-rtc` generates SwarmUI views of 28b1 integration/use-case rows and 26e/28e Worker evidence axes; frontend code may format but not reclassify them.
 - If additional UI roots, Spectrum component allowlists, evidence-desk defaults, replay-desk defaults, or workbench view limits are needed, add manifest IR and regenerate `apps/swarmui/src/generated.rs`, `docs/snippets/swarmui_defaults.md`, docs snippets, and tests in the same change.
 - Generated docs must be refreshed before implementation patches land; stale embedded snippets in `docs/USERLAND_AND_CLI.md` or other canonical docs block merge.
 
@@ -11644,6 +12850,22 @@ Checks:
   - No protocol, ACK, path, ticket, or evidence semantics change in this task.
 Deliverables:
   - Clean scope baseline for the SwarmUI desktop redesign.
+
+Title/ID: m28f-integration-truth-model
+Milestone: Milestone 28f — SwarmUI Desktop Workbench: Spectrum Shell + Live Hive Continuity / m28f-integration-truth-model
+Goal: Replace inferred Worker/provider health with generated declaration, lifecycle, receipt, executor, proof, and use-case axes.
+Inputs: 28b1 host-integration/use-case registries, accepted 26e Worker evidence, optional 28e production binding/quarantine evidence, apps/swarmui/src/**, apps/swarmui/frontend/hive/**, replay fixtures.
+Changes:
+  - apps/swarmui/src/** — parse and correlate generated integration/use-case rows plus 26e/28e evidence without deriving role or maturity from ids, model/session entries, tickets, or telemetry.
+  - apps/swarmui/frontend/hive/** + inspector views — render declaration, session, executable lifecycle, provider receipt, external outcome, target proof, production binding, quarantine, and use-case maturity independently.
+  - apps/swarmui/tests/** + tools/swarmui-ui-tests/** — negative fixtures for model-only sessions, mock providers, stale receipts, mismatched target proof, absent 28e binding, and cached/replay state.
+Commands:
+  - cargo test -p swarmui
+  - cd tools/swarmui-ui-tests && npm test -- --grep integration-truth
+Checks:
+  - No UI path synthesizes executable Worker, live provider/executor, production bundle, or production use-case state; absent/stale/mismatched evidence is visible and deterministic in live and replay modes.
+Deliverables:
+  - SwarmUI communicates the real end-to-end integration state without collapsing independent proof layers.
 
 Title/ID: m28f-spectrum-desktop-shell
 Goal: Rebuild SwarmUI chrome around Spectrum-backed desktop primitives and split the frontend into maintainable workbench modules while preserving backend protocol semantics.
@@ -11720,9 +12942,29 @@ Checks:
 Deliverables:
   - Live Hive preserved as the high-performance visualization inside the desktop workbench.
 
+Title/ID: m28f-native-tauri-live-e2e
+Milestone: Milestone 28f — SwarmUI Desktop Workbench: Spectrum Shell + Live Hive Continuity / m28f-native-tauri-live-e2e
+Goal: Prove the real packaged Tauri application, Rust command bridge, authenticated gateway, and accepted QEMU runtime work together without injected frontend responses.
+Inputs: m28b1-authoritative-receipt-and-evidence-core, accepted QEMU image/evidence, apps/swarmui/{src,src-tauri,frontend,tauri.conf.json}, apps/hive-gateway, generated integration/use-case registries, tools/swarmui-ui-tests fixture lane, release application bundle, docs/TEST_PLAN.md.
+Changes:
+  - scripts/ci/swarmui_native_e2e.sh + native harness — build/launch the real Tauri app and gateway, provision auth through secret refs, bind exact app/gateway/registry/QEMU identities, drive the actual WebView-to-Rust command path, collect bounded logs/screenshots/evidence, and terminate all processes deterministically.
+  - native scenarios — validate placeholder/missing auth refusal, canonical `/shard` navigation, model-only versus executable Worker rendering, authoritative and stale/mismatched receipt handling, Live Hive state/pressure/backpressure, disconnect/reconnect, replay/offline network isolation, and clean shutdown against accepted QEMU state.
+  - tools/swarmui-ui-tests/** — retain injected Tauri responses only in the explicitly classified frontend fixture lane; make test output and evidence metadata state `fixture` versus `native_live`, and forbid fixture output from satisfying this task or release acceptance.
+  - release gate — repeat the native scenarios from the packaged SwarmUI/gateway artifacts with offline assets and exact manifest verification.
+Commands:
+  - cargo test -p swarmui
+  - scripts/ci/swarmui_native_e2e.sh --target qemu --state-dir out/swarmui-native/m28f-source
+  - scripts/ci/swarmui_native_e2e.sh --target qemu --release-dir releases/<latest> --state-dir out/swarmui-native/m28f-release
+Checks:
+  - No native-live scenario injects `window.__TAURI__`, canned invoke replies, fake topology, placeholder credentials, or fixture receipts.
+  - Source and packaged lanes exercise the same real command/session/reconnect/evidence paths and bind every result to immutable app, gateway, registry, and QEMU identities.
+  - The deterministic Playwright fixture lane remains fast and useful but cannot promote native integration or release status.
+Deliverables:
+  - Native SwarmUI integration evidence across the actual application, host gateway, and Cohesix runtime.
+
 Title/ID: m28f-release-bundle-ui-regression
 Goal: Prove the redesigned workbench works from source and the latest release bundle without hidden runtime or asset assumptions.
-Inputs: tools/swarmui-ui-tests/**, releases/<latest>/ui/swarmui/**, apps/swarmui/frontend/**, docs/TEST_PLAN.md
+Inputs: m28f-native-tauri-live-e2e, tools/swarmui-ui-tests/**, releases/<latest>/ui/swarmui/**, apps/swarmui/frontend/**, docs/TEST_PLAN.md
 Changes:
   - tools/swarmui-ui-tests/** — add desktop workbench regression coverage for dock, tabs, namespace explorer, evidence desk, replay desk, Live Hive, console, and dialogs.
   - docs/TEST_PLAN.md — update SwarmUI UI regression commands and screenshot policy.
@@ -11733,8 +12975,9 @@ Commands:
   - cd tools/swarmui-ui-tests && npm test -- --grep live-hive-performance
   - cd tools/swarmui-ui-tests && SWARMUI_RELEASE_DIR=../../releases/<latest> npm test
   - cd tools/swarmui-ui-tests && SWARMUI_RELEASE_DIR=../../releases/<latest> npm test -- --grep live-hive-performance
+  - scripts/ci/swarmui_native_e2e.sh --target qemu --release-dir releases/<latest> --state-dir out/swarmui-native/m28f-release
 Checks:
-  - Source and release-bundle UI tests pass with deterministic fixtures.
+  - Source and release-bundle frontend tests pass with deterministic fixtures, and the separate native release lane passes without injected bridge state.
   - Screenshots are intentionally updated and stable.
   - Release bundle includes all Spectrum, icon, font, and PixiJS assets needed for offline operation.
   - Source and release-bundle Live Hive performance checks record frame cadence, pending/backlog bounds, inactive-view polling state, and replay stability separately from backend REST/Pi performance.
@@ -11828,17 +13071,18 @@ Deliverables:
   - Shared read-only snapshot core with no duplicate parsers.
 
 Title/ID: m29-attest-verify
-Goal: Verify TPM attestation parsing parity with the shared host-tool stack.
-Inputs: /proc/attest outputs, shared attestation helpers.
+Goal: Verify nonce-bound TPM2 Quote or DICE evidence with the same trust policy as the shared host-tool stack; never treat a manifest hash as attestation.
+Inputs: accepted m26-device-identity-attestation-closure evidence, `/proc/attest/{capabilities,status,challenge,evidence}`, trust anchors/reference measurements/revocation policy, shared attestation helpers, cached offline evidence.
 Changes:
-  - apps/coh-status/src/attest.rs — verify manifest fingerprint against cached reference.
-  - shared attestation verifier reused by `coh inspect` / `coh attest` where applicable.
+  - apps/coh-status/src/attest.rs — generate/consume a bounded challenge and verify evidence type, signature/certificate or DICE chain, nonce freshness, device identity, selected target/manifest/component measurements, policy/profile, clock/reset/restart state where present, and revocation/expiry against configured trust material.
+  - shared attestation verifier reused by `coh inspect` / `coh attest` where applicable; measurement-only and unavailable modes remain explicit and cannot satisfy an authenticated-device gate.
+  - offline mode — verify a previously captured evidence/challenge/reference bundle without implying current freshness; label it historical with capture identity/time.
 Commands:
   - cargo test -p coh-status --test attest
 Checks:
-  - Malformed attestation rejected with ERR; valid attestation matches manifest hash identically to the shared verifier.
+  - Forged signatures/chains, replayed or wrong nonces, wrong device/manifest/measurement/profile, expired/revoked trust, unsupported evidence, and measurement-only input are rejected identically by `coh-status`, `coh inspect`, and `coh attest`; valid TPM2/DICE evidence is identity- and freshness-bound, and offline results are never presented as live.
 Deliverables:
-  - Verified attestation workflow documented; regression outputs stored.
+  - Verified live and clearly labelled offline attestation workflows documented; regression outputs stored.
 
 Title/ID: m29-readonly-regressions
 Goal: Replace generic convergence fixtures with `coh-status`-specific read-only flows.
@@ -11969,7 +13213,7 @@ Deliverables: Repeatable host and Pi 4 validation for `hw-status`.
 [Milestones](#Milestones)
 
 **Why now (positioning):**  
-Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28b1 proves the provider coexistence registry and evidence contract, Milestone 28c proves the host-side AI operating model first: delegated agent authority, durable checkpoints/evidence, explicit context budgets, and host-ticket-based actuation. Milestone 28d then proves that standard MCP clients and A2A peers can consume those semantics through `hive-gateway` without a new Cohesix grammar. The next strategic step is to make that AI fleet state legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS or creating a second executor.
+Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28b1 proves the shared provider/integration/use-case graph, Milestone 28c proves the host-side AI operating model and complete PEFT transaction first, and Milestone 28d proves that standard MCP clients and A2A peers can consume those semantics through `hive-gateway` without a new Cohesix grammar. The next strategic step is to make that proven AI fleet state legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS, creating a second executor, or exposing a namespace path whose external dependencies are missing.
 
 **Goal**  
 Add a manifest-defined, role-scoped AI control namespace that lets operators and automation inspect and drive AI lifecycle state through existing Secure9P semantics. This milestone is limited to **control-plane surfaces only**: no in-VM application runtime, no general UI stack, no mutable POSIX-like filesystem, and no new transport or RPC model.
@@ -11978,10 +13222,10 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 
 ### Prerequisites
 - Milestone **28b** completed (delegated REST identity, idempotent queen intents, writer-epoch fencing, audit/replay baseline).
-- Milestone **28b1** completed (provider action registry, read visibility classification, provider conformance, identity mapping, packaging, observability, and use-case evidence matrix).
-- Milestone **28c** completed (host-side AI run envelopes, checkpoint/evidence model, and `/host/tickets/spec` AI actuation semantics).
+- Milestone **28b1** completed (provider/integration graph, external-executor and surface conformance, read visibility, identity mapping, exact packaging, observability, and exhaustive use-case evidence matrix).
+- Milestone **28c** completed (host-side AI run envelopes, checkpoint/evidence model, complete PEFT pipeline transaction, use-case promotion, and `/host/tickets/spec` AI actuation semantics).
 - Milestone **28d** completed (MCP/A2A gateway projection over existing Cohesix grammar, with no new VM protocol, agent bus, or host-executor bypass).
-- Production profiles that claim VM worker/driver authority for AI namespace projections require Milestone **28e** cap-bundle and structured fault lifecycle evidence. Read-model-only or host-ticket-only profiles may remain gated by 28b/28b1/28c/28d without claiming full VM cap-bundle authority.
+- Production profiles may claim matching accepted 26e Worker/driver live authority for AI namespace projections. Claims of one-to-one Worker ticket/lease binding, complete driver-inventory ledger projection, or structured quarantine/restart additionally require Milestone **28e** evidence. Read-model-only or host-ticket-only profiles may remain gated by 28b/28b1/28c/28d without either live-task or 28e production-ledger claims.
 
 **Non-Goals**
 - No app runtime, package manager, bundle loader, or process model beyond the existing Queen/worker control model.
@@ -11995,6 +13239,7 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 
 **Deliverables**
 - AI namespace roots are the VM-visible control-plane projection of the host-side semantics proven in 28c.
+- Every enabled root/control file names the stable 28b1 `use_case_id`, required provider/integration rows, minimum Worker tier, and accepted host receipt schema. Generation fails or the path is deterministically absent when required dependencies are unavailable; a namespace projection never promotes their observed mode.
 - Any AI path whose write can cause host-side side effects MUST resolve to documented host-ticket actions and inherit delegated identity, idempotency, writer epoch, and audit/replay guarantees.
 - Read-only AI paths (`/metrics/*` and read views of `/jobs/*`, `/datasets/*`, `/experiments/*`) do not become a second source of truth for execution authority.
 - Manifest-gated AI control roots under the Secure9P namespace, with paths aligned to current authority rules:
@@ -12005,6 +13250,7 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
   - `/metrics/*` for read-only fleet and model metrics summaries
 - Queen-only control files remain append-only; worker and observer views remain role-filtered and read-only where appropriate.
 - Host tools (`cohsh`, `coh`, REST projection, SwarmUI read models where relevant) discover and render the new paths without introducing new verbs.
+- FUSE, Python, MCP/A2A, and UI views remain projections of the same admitted paths and 28b1 visibility classes; each is independently conformance-tested and cannot synthesize jobs, Workers, models, or successful PEFT/GPU execution from client state.
 - Canonical schemas for all new paths documented in `docs/INTERFACES.md` and emitted from `coh-rtc`.
 - Namespace state remains a projection of 28c run envelopes, checkpoints, retrieval manifests, and receipts; it does not introduce an independent scheduler or executor.
 - Namespace-scale microbenchmark evidence for representative job/run/checkpoint counts proves `ls`, `cat`, `tail`, and fixed-control-file writes remain bounded. This is a namespace/provider microbenchmark, not a full Pi hardware throughput gate, unless high-churn AI namespace paths change the root-task hot runtime path.
@@ -12023,12 +13269,14 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - Writes remain append-only and auditable; reads stay within declared `msize` and path bounds.
 - Existing ACK/ERR/END grammar, Secure9P transport behavior, and host-tool semantics remain byte-stable unless intentionally versioned in the same change.
 - Missing AI paths are treated as gate state, not client bugs.
+- Enabled AI paths have accepted provider/integration, package, external-executor, Worker-tier, and use-case records for the selected profile; missing dependencies yield generated absence or typed not-enabled status before mutation.
 - Read views expose 28c task/handoff/checkpoint/prefix evidence without becoming a second source of authority.
 - No new in-VM listener, runtime, or hidden RPC behavior is introduced.
 - AI namespace scale evidence shows bounded path walk/list/read/write behavior at representative job/run counts; material regressions are classified as namespace-provider overhead, host-tool projection overhead, or runtime hot-path regression before downstream profiles depend on the new roots.
 
 **Compiler touchpoints**
 - `coh-rtc` admits `ecosystem.ai.*` IR fields for path gating, quotas, and per-surface limits.
+- Each `ecosystem.ai.*` entry references stable 28b1 integration/use-case ids and generated receipt/Worker/executor prerequisites; validation rejects independent availability or maturity declarations.
 - `coh-rtc` rejects AI namespace definitions that require dynamic path creation, unconstrained components, directory mutation, prompt/blob-tree storage, or side effects outside generated host-ticket-backed receipt mappings.
 - Generated snippets refresh `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, and `docs/USERLAND_AND_CLI.md` so host tools consume authoritative bounds and namespace roots.
 - Validation and generated docs make the authority mapping explicit: AI namespace writes that trigger external execution are projections over the 28c host-ticket/evidence model, not an independent executor.
@@ -12113,7 +13361,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 - Milestone **26d** completed for the accepted seL4 15 provenance and timer/syscall baseline. Milestone 30 must still create and validate a separate AWS-selected seL4 build; Pi 4 or QEMU artifacts are not AWS boot proof.
 - Milestone **27b** completed before production AWS assurance claims so generated witnesses, HAL authority checks, and claim-class separation cover the AWS profile.
 - Milestone **27c** completed before D2 peak-performance work so ENA queue affinity and service-bucket evidence consume the generated core-local scheduling substrate rather than inventing a parallel scheduler.
-- Milestone **28e** completed before any production profile claims linked ENA runtime cap-bundle authority or structured fault containment. A pre-28e EC2 boot/first-link probe is permitted only as explicitly non-production feasibility evidence.
+- Milestone **28e** completed before any production profile claims complete ENA runtime-inventory ledger projection or structured quarantine/recovery. Live ENA cap-bundle authority itself must be complete in the Milestone 30 implementation and exact target evidence, following the 26e driver contract; a pre-28e EC2 boot/first-link probe is permitted only as explicitly non-production feasibility evidence.
 
 **Non-negotiable constraints**
 - The first executable gate is EC2 Arm64 platform feasibility, not ENA implementation. Re-check the selected instance family's current custom-OS support posture, then prove AMI registration, UEFI entry, serial/console evidence, selected seL4 platform support, and the hardware-description handoff used for memory, GIC/timer, PCIe configuration, and interrupts (ACPI, DT, or a documented conversion). If that gate fails, stop before ENA, TLS/HTTP, IMDS, or fabric-mount code.
