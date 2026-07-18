@@ -14,7 +14,9 @@ use sel4_sys;
 use crate::bootstrap::log::force_uart_line;
 
 const STACK_ALIGNMENT: usize = 16;
-const EXPECTED_STACK_SIZE: usize = 128 * 1024;
+// Keep this independent policy guard aligned with `sel4.ld`: the retained
+// EventPump plus CYW43 bootstrap supervisor requires the 256 KiB root stack.
+const EXPECTED_STACK_SIZE: usize = 0x0004_0000;
 
 const REPORT_WIDTH: usize = 192;
 

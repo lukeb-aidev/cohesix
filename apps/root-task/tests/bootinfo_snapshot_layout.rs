@@ -11,6 +11,27 @@ fn align_up(value: usize, align: usize) -> usize {
     (value + (align - 1)) & !(align - 1)
 }
 
+fn parse_hex_assignment(source: &str, marker: &str) -> usize {
+    let line = source
+        .lines()
+        .find(|line| line.contains(marker))
+        .unwrap_or_else(|| panic!("missing assignment for {marker}"));
+    let (_, value) = line
+        .split_once('=')
+        .unwrap_or_else(|| panic!("assignment for {marker} must contain '='"));
+    let literal = value
+        .split(';')
+        .next()
+        .expect("assignment must end before a semicolon")
+        .trim()
+        .replace('_', "");
+    let digits = literal
+        .strip_prefix("0x")
+        .unwrap_or_else(|| panic!("assignment for {marker} must be hexadecimal"));
+    usize::from_str_radix(digits, 16)
+        .unwrap_or_else(|_| panic!("assignment for {marker} must be valid hexadecimal"))
+}
+
 #[test]
 fn post_canary_respects_unpadded_snapshot_length() {
     let payload_len = 0x1800usize;
@@ -54,5 +75,25 @@ fn runtime_entry_uses_linker_stack_top() {
     assert!(
         linker.contains("__stack_top = .;"),
         "linker script must export the stack top consumed by the runtime"
+    );
+}
+
+#[test]
+fn linker_stack_size_matches_bootstrap_policy_guard() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let linker = fs::read_to_string(crate_dir.join("sel4.ld")).expect("read root-task linker");
+    let layout = fs::read_to_string(crate_dir.join("src/bootstrap/layout.rs"))
+        .expect("read bootstrap layout guard");
+
+    let linker_size = parse_hex_assignment(&linker, "__stack_size");
+    let guard_size = parse_hex_assignment(&layout, "const EXPECTED_STACK_SIZE");
+    assert_eq!(
+        guard_size,
+        256 * 1024,
+        "root stack policy must remain 256 KiB"
+    );
+    assert_eq!(
+        linker_size, guard_size,
+        "sel4.ld and the independent boot layout guard must agree"
     );
 }

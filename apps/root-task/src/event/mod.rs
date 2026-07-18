@@ -3009,12 +3009,15 @@ where
             let _ = self.try_serial_linked_runtime_cutover_after_prompt(true, true);
         }
         if !self.banner_emitted {
+            #[cfg(feature = "kernel")]
             if crate::serial::serial_linked_runtime_transport_active() {
                 let _ =
                     self.queue_cyw43_bootstrap_operator_line("[event] root console banner emitted");
             } else {
                 log::info!(target: "event", "[event] root console banner emitted");
             }
+            #[cfg(not(feature = "kernel"))]
+            log::info!(target: "event", "[event] root console banner emitted");
             self.banner_emitted = true;
         }
     }
