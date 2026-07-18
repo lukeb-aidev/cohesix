@@ -351,6 +351,23 @@ This as-built closure is authorized by Milestone 26d task
   resumes, proves, and lowers SDIO before resuming, proving, and lowering
   CYW43. There is no client-first descriptor service or legacy fallback
   ordering.
+- A retained one-way request cannot rely on `seL4_Yield` to schedule a child
+  below the root task. HAL therefore advances a request- and
+  generation-bound scheduling lease through separate ordinary EventPump
+  turns. The first turn prepares the immutable ring record with sequence zero,
+  so an autonomously polling child cannot observe it. Later turns boost the
+  reciprocal SDIO owner when required, boost the primary child, commit the
+  nonzero sequence as the issue boundary, publish exactly one best-effort wake
+  notification, and poll the matching completion once per turn. After that
+  completion is latched, later turns restore the primary child before the bus
+  owner and release the lease before exposing the completion to its caller.
+  Request, full command fingerprint, and pair generation must match throughout;
+  an issued-unknown request cannot be recommitted or renotified. Pair restart
+  clears an unresolved lease only after both runtimes are suspended and fenced.
+  The retained phase order is
+  `prepare -> boost bus -> boost primary -> commit -> notify -> poll -> restore`;
+  it is scheduling admission for one immutable operation, not a private
+  send/poll loop or a legacy driver fallback.
 - Root-task must not wait synchronously for CMD52/CMD53 credit, firmware
   replies, or RX drain work.
 - Function 1 enable uses the SDIO CIS timeout when that field is eventually
@@ -382,6 +399,15 @@ This as-built closure is authorized by Milestone 26d task
   before CYW43, and replays retained firmware and control context. Immutable
   credential, firmware-bundle, and descriptor-bound failures are terminal and
   remain visible to the local operator.
+- Recovery can become necessary before initial firmware-bundle admission. After
+  the ordered pair restart acquires the context-replay gate, a supervisor with
+  no retained bundle reacquires the manifest-selected bundle through HAL,
+  validates it and its firmware reset vector, normalizes NVRAM into retained
+  storage, and publishes the retained recovery context before beginning the
+  firmware turns. A bundle already admitted by the same supervisor is reused.
+  Reacquisition failure is a typed terminal failure that releases the replay
+  gate as unsuccessful; it cannot substitute an empty context, retain the gate
+  as active, or bypass HAL.
 - The same no-allocation bootstrap supervisor remains alive after the network
   stack is attached. It owns monotonic turn IDs, immutable
   descriptor/payload fingerprints, the current linked-pair generation,
@@ -390,6 +416,13 @@ This as-built closure is authorized by Milestone 26d task
   work and re-enters that retained supervisor; a stale completion cannot
   mutate the replacement generation, and an issued-but-unknown action is
   poisoned rather than replayed.
+- Descriptor replay, engine initialization, prerequisite admission, context
+  replay, and post-secure retained maintenance carry absolute virtual-counter
+  deadlines. The linked engine envelope is eight seconds, covering the
+  Linux-aligned one-second ALP and three-second Function 2 waits plus bounded
+  handoff margin. An expired issued request poisons its generation and cannot
+  be replaced in that generation; a non-issued gate fails with a typed stage
+  error instead of remaining pending forever.
 - Steady association, EAPOL, maintenance, data, and pair-signal paths may only
   publish the first immutable deferred-recovery record for the current
   generation. That record separately binds the current recovery generation and
@@ -426,14 +459,23 @@ This as-built closure is authorized by Milestone 26d task
   supervisor remains retained but blocked if linked serial service is
   unproved; the ordinary root-UART EventPump retries that proof every 250 ms
   without abandoning Wi-Fi for the boot. After Wi-Fi begins, serial never
-  falls back to the current TCB or a path that
-  reacquires the Wi-Fi HAL. Supervisor status and failure breadcrumbs enqueue
-  into the linked serial queue and `/log/queen.log`; they do not use raw UART,
-  and their linked flush occurs on the following operator turn rather than in
-  the same turn as a CYW43 child operation. Local-seat service consumes only
-  already-buffered bytes while Wi-Fi bootstrap or recovery owns the HAL; USB backend polling,
-  HDMI echo/redraw, and network service remain fenced. Reboot ACK dispatch wins
-  before another bootstrap/recovery operation.
+  falls back to the current TCB or a path that reacquires the Wi-Fi HAL. Every
+  returned pending supervisor turn is retained in the bounded
+  `/log/queen.log` software record. Supervisor status, failure, and sparse
+  `CYW43_BOOTSTRAP_TURN` lines then attempt an all-or-nothing enqueue to the
+  bounded linked-serial queue after the HAL guard is released; their physical
+  serial delivery is best-effort and happens on a later operator turn. Queue
+  pressure may therefore omit a live UART copy without proving that the
+  supervisor failed to advance, while a required missing UART record still
+  leaves hardware acceptance evidence incomplete. There is no raw-UART
+  fallback after cutover. The sparse line is attempted on stage transitions
+  and power-of-two repeats, and a rejected enqueue preserves eligibility for a
+  later same-stage attempt. Local-seat service consumes only already-buffered
+  bytes while Wi-Fi bootstrap or recovery owns the HAL; USB backend polling,
+  HDMI echo/redraw, and network service remain fenced. During this fence,
+  `attach queen <ticket>` remains available because it is parser/ticket-table
+  work; authenticated `reboot` remains the only hardware-facing exception and
+  still waits for its ACK flush before reset dispatch.
 - Linked serial TX uses an immutable retained command and staged-byte cursor.
   A missing completion resumes the same ring fingerprint on a later outer turn;
   it never restores possibly issued bytes to the queue tail. A known partial

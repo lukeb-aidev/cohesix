@@ -3039,7 +3039,21 @@ mod tests {
         let driver = LoopbackSerial::<64>::new();
         let mut port: SerialPort<_, 16, 32, 16> = SerialPort::new(driver);
         port.enqueue_tx(b"abcdef");
+        let ring_counters =
+            || {
+                crate::hal::driver_task::driver_task_counter_snapshot(driver_task_contract())
+                    .map_or((0, 0, 0), |snapshot| {
+                        (
+                            snapshot.submitted_turns,
+                            snapshot.completed_turns,
+                            snapshot.send_attempts,
+                        )
+                    })
+            };
+        let counters_before = ring_counters();
 
+        // Preparing the immutable payload and sequence-zero command is one root
+        // turn. The autonomously polling reciprocal owner cannot observe it yet.
         assert_eq!(
             port.flush_tx_driver_task_ring_turn(driver_task_contract()),
             LinkedSerialTurnOutcome::Pending
@@ -3052,6 +3066,13 @@ mod tests {
         assert_ne!(ticket, 0);
         assert_eq!(TEST_SERIAL_RING_CALLS.load(AtomicOrdering::Acquire), 0);
         assert!(TEST_SERIAL_RING_BYTES.lock().is_empty());
+        let prepared =
+            crate::hal::driver_task::active_driver_task_retained_request(driver_task_contract())
+                .expect("prepared serial request remains retained");
+        assert!(!prepared.issued());
+        assert_eq!(ring_counters().0, counters_before.0 + 1);
+        assert_eq!(ring_counters().1, counters_before.1);
+        assert_eq!(ring_counters().2, counters_before.2);
 
         assert!(
             crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
@@ -3060,6 +3081,45 @@ mod tests {
                 test_serial_reciprocal_ring_service,
             )
         );
+
+        // The serial contract needs no CYW43/SDIO priority boosts, so its next
+        // root turn is the dedicated sequence-commit turn. It makes the exact
+        // request visible but does not also notify or poll the child.
+        assert_eq!(
+            port.flush_tx_driver_task_ring_turn(driver_task_contract()),
+            LinkedSerialTurnOutcome::Pending
+        );
+        let committed =
+            crate::hal::driver_task::active_driver_task_retained_request(driver_task_contract())
+                .expect("committed serial request remains retained");
+        assert!(committed.issued());
+        assert_eq!(committed.request(), prepared.request());
+        assert_eq!(committed.command(), prepared.command());
+        assert_eq!(TEST_SERIAL_RING_CALLS.load(AtomicOrdering::Acquire), 0);
+        assert!(TEST_SERIAL_RING_BYTES.lock().is_empty());
+        assert_eq!(ring_counters().0, counters_before.0 + 1);
+        assert_eq!(ring_counters().1, counters_before.1);
+        assert_eq!(ring_counters().2, counters_before.2);
+
+        // Notification is a separate root turn. The test then schedules the
+        // reciprocal controller between root turns, exactly as the child TCB
+        // runs independently in production.
+        assert_eq!(
+            port.flush_tx_driver_task_ring_turn(driver_task_contract()),
+            LinkedSerialTurnOutcome::Pending
+        );
+        let notified =
+            crate::hal::driver_task::active_driver_task_retained_request(driver_task_contract())
+                .expect("notified serial request remains retained");
+        assert!(notified.issued());
+        assert_eq!(notified.request(), prepared.request());
+        assert_eq!(notified.command(), prepared.command());
+        assert_eq!(TEST_SERIAL_RING_CALLS.load(AtomicOrdering::Acquire), 0);
+        assert!(TEST_SERIAL_RING_BYTES.lock().is_empty());
+        assert_eq!(ring_counters().0, counters_before.0 + 1);
+        assert_eq!(ring_counters().1, counters_before.1);
+        assert_eq!(ring_counters().2, counters_before.2 + 1);
+
         assert!(
             crate::hal::driver_task::test_service_pending_driver_task_ring_command(
                 driver_task_contract(),
@@ -3069,6 +3129,9 @@ mod tests {
         assert_eq!(TEST_SERIAL_RING_BYTES.lock().as_slice(), b"abcdef");
         assert_eq!(port.linked_tx.command, Some(command));
 
+        // The following root turn performs only the retained completion poll
+        // and local lease finalisation. It must not notify or execute the child
+        // a second time.
         assert_eq!(
             port.flush_tx_driver_task_ring_turn(driver_task_contract()),
             LinkedSerialTurnOutcome::Complete { activity: true }
@@ -3078,6 +3141,9 @@ mod tests {
         assert!(!port.tx_pending());
         assert_eq!(TEST_SERIAL_RING_CALLS.load(AtomicOrdering::Acquire), 1);
         assert_eq!(TEST_SERIAL_RING_BYTES.lock().as_slice(), b"abcdef");
+        assert_eq!(ring_counters().0, counters_before.0 + 1);
+        assert_eq!(ring_counters().1, counters_before.1 + 1);
+        assert_eq!(ring_counters().2, counters_before.2 + 1);
     }
 
     #[cfg(feature = "kernel")]

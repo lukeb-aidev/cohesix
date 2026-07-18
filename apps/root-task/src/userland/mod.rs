@@ -494,6 +494,49 @@ impl DeferredSerialRouteRetry {
     feature = "net-console"
 ))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeferredCyw43TurnStatus {
+    stage: Option<&'static str>,
+    repeats: u64,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+impl DeferredCyw43TurnStatus {
+    const fn new() -> Self {
+        Self {
+            stage: None,
+            repeats: 0,
+        }
+    }
+
+    fn observe(&mut self, stage: &'static str) -> Option<u64> {
+        if self.stage == Some(stage) {
+            self.repeats = self.repeats.saturating_add(1);
+        } else {
+            self.stage = Some(stage);
+            self.repeats = 1;
+        }
+        self.repeats.is_power_of_two().then_some(self.repeats)
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn retry_last(&mut self) {
+        self.repeats = self.repeats.saturating_sub(1);
+    }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DeferredNetRetrySchedule {
     transient_failures: u32,
     next_attempt_ms: u64,
@@ -715,6 +758,7 @@ where
     let mut permanent_recovery_failure = false;
     let mut wifi_operation_started = false;
     let mut serial_retry = DeferredSerialRouteRetry::new(crate::hal::timebase().now_ms());
+    let mut turn_status = DeferredCyw43TurnStatus::new();
 
     loop {
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
@@ -841,8 +885,23 @@ where
                     turn_id, stage, operation_executed,
                 );
                 crate::log_buffer::append_log_line(line.as_str());
+                if let Some(repeat) = turn_status.observe(stage) {
+                    let mut operator_line = HeaplessString::<192>::new();
+                    let _ = write!(
+                        operator_line,
+                        "CYW43_BOOTSTRAP_TURN attempt={} turn={} stage={} operation={} repeat={}",
+                        attempt, turn_id, stage, operation_executed, repeat,
+                    );
+                    // `with_deferred_net_hal` has returned, so this only queues
+                    // bytes for the independent linked serial runtime. The next
+                    // outer EventPump turn performs the actual flush.
+                    if !pump.queue_cyw43_bootstrap_operator_line(operator_line.as_str()) {
+                        turn_status.retry_last();
+                    }
+                }
             }
             Cyw43BootstrapTurnOutcome::Complete => {
+                turn_status.reset();
                 if !bootstrap.is_ready() || bootstrap.ready_generation().is_none() {
                     let mut detail = HeaplessString::<192>::new();
                     let _ = detail.push_str("retained supervisor completed without generation");
@@ -935,6 +994,7 @@ where
                 attempt_active = false;
             }
             Cyw43BootstrapTurnOutcome::Failed(driver_error) => {
+                turn_status.reset();
                 let err = crate::net::map_cyw43_bootstrap_error(driver_error);
                 let failure_now_ms = crate::hal::timebase().now_ms();
                 let mut detail = HeaplessString::<192>::new();
@@ -1699,6 +1759,27 @@ mod tests {
         assert!(retry.probe_due(600));
         retry.record_ready();
         assert!(retry.record_missing_proof(600));
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn cyw43_turn_status_reports_transitions_and_power_of_two_repeats() {
+        let mut status = super::DeferredCyw43TurnStatus::new();
+        assert_eq!(status.observe("sdio-engine-init"), Some(1));
+        assert_eq!(status.observe("sdio-engine-init"), Some(2));
+        assert_eq!(status.observe("sdio-engine-init"), None);
+        assert_eq!(status.observe("sdio-engine-init"), Some(4));
+        status.retry_last();
+        assert_eq!(status.observe("sdio-engine-init"), Some(4));
+        assert_eq!(status.observe("cyw43-engine-init"), Some(1));
+        status.retry_last();
+        assert_eq!(status.observe("cyw43-engine-init"), Some(1));
+        status.reset();
+        assert_eq!(status.observe("cyw43-firmware-transport"), Some(1));
     }
 
     #[cfg(all(feature = "net-console", feature = "kernel"))]

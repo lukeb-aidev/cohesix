@@ -224,6 +224,16 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p pi4-driver-runtime --lib cyw43_data_tx_never_replays_ambiguous_function2_write -- --test-threads=1`
 - Focused bootstrap/restart operator-liveness checks:
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_bootstrap_operator_turn -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_one_way_turn_keeps_a_demoted_pi_runtime_schedulable -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_ring_sequence_is_invisible_until_the_dedicated_issue_turn -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_priority_lease_identity_rejects_request_fingerprint_and_generation_aliases -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_engine_deadline_poisons_an_issued_request_without_replay -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib sdio_engine_deadline_poisons_an_issued_request_without_replay -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib descriptor_issued_deadlines_poison_both_linked_runtime_generations -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_engine_active_request_requires_the_complete_immutable_fingerprint -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib pre_bundle_pair_recovery_reacquires_firmware_before_continuation -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_maintenance_deadline_poisons_only_an_issued_action -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_turn_status_reports_transitions_and_power_of_two_repeats -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_tx_ -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_executes_one_operation_per_turn_in_canonical_order -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_every_operation_cut_uses_the_same_outer_fence -- --test-threads=1`
@@ -440,7 +450,19 @@ register SDIO service, replay the SDIO descriptor, lower SDIO priority, register
 CYW43 service, replay the CYW43 descriptor, and lower CYW43 priority. Each
 deferred member must remain at bootstrap priority until its own matching
 descriptor/service completion proves the route, and each lowering must consume
-a separate outer turn. Pair-restart coverage must preserve the 22 logical
+a separate outer turn. Once lowered, a retained one-way request must use this
+exact outer-turn sequence: prepare one immutable sequence-zero record; boost
+the reciprocal bus owner when required; boost the primary child; commit the
+nonzero sequence as the issue boundary; publish exactly one best-effort wake
+notification; poll at most once for its matching completion per later turn;
+latch that completion; restore the primary child before the bus owner; and
+release the lease before returning the completion. Tests must bind the lease
+to request, full command fingerprint, and pair generation, reject torn/stale
+identities, prove that prepare is invisible to the autonomous runtime, and
+prove neither commit nor notification can repeat after issued-unknown
+ownership. They must also reject a lease for a nonphysical profile,
+zero/unpublished priority, or an already-bootstrap-priority runtime.
+Pair-restart coverage must preserve the 22 logical
 SDIO-before-CYW43 actions while treating each member's bootstrap-priority and
 steady-priority substeps as separately admitted operations. Coverage must also
 include firmware and NVRAM chunks, core release, operation-11 control exchange,
@@ -452,6 +474,28 @@ resume or fail deterministically at every retained action. EventPump/NetStack
 tests must prove Wi-Fi urgency is retained across later turns rather than
 implemented as private pre-root, EAPOL, tail-ingest, TCP-flush, hot-dispatch, or
 smoltcp device bursts.
+
+Descriptor replay, engine init, prerequisite admission, context replay, and
+post-secure retained maintenance must have absolute virtual-counter deadlines.
+Engine active-state validation covers sequence, opcode, flags, both arguments,
+both auxiliaries, budget, and frame descriptor. A completion permanently
+withheld after publication must expire into generation poisoning without a new
+same-generation request. Sparse linked-serial stage telemetry may be queued
+only after the HAL guard is released and is emitted on transitions plus
+power-of-two repeats; it must not add a second child operation to that turn.
+Tests must distinguish the authoritative bounded `/log/queen.log` append from
+the all-or-nothing, best-effort linked-serial mirror: saturation may reject the
+UART enqueue without a raw fallback, and a rejected sparse record must remain
+eligible for a later same-stage attempt.
+
+Recovery coverage must include a fault before initial firmware admission. Once
+the ordered pair restart completes and context-replay ownership is acquired, a
+supervisor without a retained bundle must consume one later outer turn to
+reacquire and validate the HAL bundle, validate its reset vector, normalize
+NVRAM, publish the retained recovery context, and only then continue with
+firmware replay. A forced bundle-admission failure must release context replay
+as unsuccessful and produce the exact typed failure without firmware work, an
+empty replacement context, or a HAL bypass.
 
 Association, host-EAPOL, post-secure maintenance, data-TX, and pair-signal
 fault injection must use the real reciprocal ring/controller integration point.

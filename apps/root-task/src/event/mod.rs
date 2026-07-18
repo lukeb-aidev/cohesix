@@ -2374,8 +2374,7 @@ where
             return false;
         }
         crate::log_buffer::append_log_line(line);
-        let _ = self.serial.try_enqueue_line_record(line);
-        true
+        self.serial.try_enqueue_line_record(line)
     }
 
     /// Whether a deferred CYW43 bootstrap may begin after an ordinary pump.
@@ -13352,11 +13351,14 @@ where
             return false;
         }
         let command = line.split_ascii_whitespace().next();
-        if command.is_some_and(|head| head.eq_ignore_ascii_case("reboot")) {
-            // Reboot is the sole hardware-facing exception: this operator turn
-            // starts only after the prior retained HAL action released its
-            // guards, and a scheduled reset fences every later bootstrap turn
-            // until its ACK is flushed and the backend runs.
+        if command.is_some_and(|head| {
+            head.eq_ignore_ascii_case("attach") || head.eq_ignore_ascii_case("reboot")
+        }) {
+            // Authentication is parser/ticket-table-only and lets a fresh
+            // serial operator establish the Queen authority required by
+            // `reboot`. Reboot remains the sole hardware-facing exception: a
+            // scheduled reset fences every later bootstrap turn until its ACK
+            // is flushed and the backend runs.
             return false;
         }
         self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
@@ -23214,6 +23216,49 @@ mod tests {
         assert!(wifi.calls.is_empty(), "Wi-Fi HAL callback must stay fenced");
         assert_eq!(local_seat.keyboard_trace().backend_poll_calls, 0);
         assert_eq!(local_seat.keyboard_trace().echoed_bytes, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_bootstrap_operator_turn_allows_queen_authentication_for_reboot() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let token = issue_token("ticket", Role::Queen);
+        let line = format!("attach queen {token}\n");
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(line.as_bytes()),
+            line.len()
+        );
+
+        pump.poll_cyw43_bootstrap_supervisor_event_turn();
+        assert_eq!(pump.session, Some(SessionRole::Queen));
+        assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
+
+        pump.poll_cyw43_bootstrap_supervisor_event_turn();
+        let transcript = crate::serial::test_take_linked_runtime_only_tx();
+        let rendered =
+            core::str::from_utf8(transcript.as_slice()).expect("linked serial output must be utf8");
+        assert!(rendered.contains("OK "), "{rendered}");
+        assert!(
+            !rendered.contains("cyw43-bootstrap-in-progress"),
+            "{rendered}"
+        );
     }
 
     #[cfg(feature = "kernel")]

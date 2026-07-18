@@ -534,6 +534,56 @@ that stops at `CYW43_BOOTSTRAP_SUPERVISOR ... status=begin`, shows client-first
 descriptor service, or depends on a legacy root-owned Wi-Fi path is failed
 bootstrap evidence.
 
+After either member reaches its steady priority, retained one-way work uses a
+request- and generation-bound scheduling lease. Separate ordinary EventPump
+turns prepare an immutable sequence-zero record, boost the reciprocal SDIO bus
+owner when required, boost the primary child, commit the nonzero sequence as
+the issue boundary, publish exactly one best-effort wake notification, poll at
+most once for its matching completion per later turn, then restore the primary
+child before the bus owner and release the lease. The sequence-zero prepare
+cannot be observed by an autonomously polling child; the commit can, so the
+following notification is a wake hint and is never replayed. No completion is
+exposed until all leased priorities have returned to their manifest values. An
+unresolved lease is cleared only inside fenced pair restart after both runtimes
+are suspended.
+
+The `[BUILD] b550c26e9238` current-image capture ended after
+`CYW43_BOOTSTRAP_SUPERVISOR ... status=begin`; it did not include a retained
+stage record and therefore did not directly identify `sdio-engine-init` or any
+other exact stalled phase. Source inspection made the demoted-child retained
+request the strongest explanation: root could remain runnable above the
+steady-priority SDIO child while a one-way request waited indefinitely. The
+scheduling lease closes that liveness class without adding a timing retry or a
+legacy driver path. The next exact-image boot must use the stage records below
+to confirm the live phase rather than treating that inference as hardware
+proof.
+
+Every returned pending turn is appended as a full-fidelity record to the
+bounded `/log/queen.log` software ledger. The
+`CYW43_BOOTSTRAP_TURN attempt=<n> turn=<n> stage=<stage> operation=<bool>
+repeat=<n>` line is its sparse live-serial mirror: after the Wi-Fi HAL guard is
+released, an all-or-nothing linked-serial enqueue is attempted on stage changes
+and power-of-two repeats, and a rejected enqueue remains eligible for a later
+same-stage attempt. Accepted bytes flush on a later operator turn. The UART
+copy is deliberately best-effort under bounded queue pressure, so its absence
+alone does not prove a supervisor freeze; it does leave a required capture
+predicate unproved. Diagnose with the retained queen log and later terminal or
+stage records, while keeping the raw UART capture as the boot source of truth.
+Descriptor replay, engine init, prerequisites, context replay, and retained
+maintenance have virtual-counter deadlines; an eight-second engine envelope
+covers the Linux-shaped one-second ALP and three-second Function 2 waits plus
+bounded handoff margin. Repeating one stage beyond that envelope without a
+terminal failure/recovery record is failed liveness evidence.
+
+If recovery occurs before the initial firmware bundle was admitted, the
+ordered pair restart first acquires context-replay ownership. A later retained
+turn then reacquires and validates the manifest-selected bundle through HAL,
+checks the firmware reset vector, normalizes NVRAM into retained storage, and
+publishes the recovery context before firmware streaming resumes. If that
+admission fails, the supervisor releases context replay as unsuccessful and
+reports the typed terminal failure; it must not use an empty, stale, or
+root-supplied substitute bundle.
+
 Before Wi-Fi supervision begins, physical-Pi serial cutover must have an
 attached linked runtime plus a matching `Idle`, `Progress`, or `FrameReady`
 service completion. That service completion proves the independent operator
@@ -546,9 +596,12 @@ scope is held, serial uses only that proved
 linked route and local-seat handling consumes already-buffered bytes only; USB
 backend polling, HDMI/echo re-entry, and network polling remain fenced until the
 scope is released. `CYW43_BOOTSTRAP_SUPERVISOR` and deferred failure/result
-records must traverse the linked serial queue (plus `/log/queen.log`) and flush
-on a later operator turn; a raw-UART breadcrumb after cutover is failed
-operator-ownership evidence.
+records are retained in the bounded `/log/queen.log` ledger and attempt a
+bounded linked-serial enqueue. An accepted serial record flushes on a later
+operator turn; delivery is not guaranteed when that queue is saturated. A
+raw-UART breadcrumb after cutover is failed operator-ownership evidence, while
+an absent required linked-serial line is incomplete capture evidence rather
+than proof that its transition never occurred.
 
 Linked serial output is exact-ticket retained work after cutover. Each CYW43
 bootstrap/recovery operator turn may send or poll only the current immutable
@@ -559,6 +612,11 @@ after every completed chunk, so large startup output cannot hide a paced serial
 command. Repeated or reordered console banners indicate failed linked-serial
 transport evidence, not a Wi-Fi supervisor retry, unless the capture also shows
 a later numbered `CYW43_BOOTSTRAP_SUPERVISOR attempt=` record.
+On a fresh boot with no authenticated session, use the paced serial
+`attach queen <ticket>` flow before `reboot`; authentication remains available
+during bootstrap because it touches only the parser and ticket table. All other
+hardware diagnostics remain fenced until the retained Wi-Fi action releases
+its HAL scope, and reboot dispatch still occurs only after its ACK is flushed.
 
 Hardware-free closure is narrower: it requires the retained production
 supervisor, one-child-operation EventPump permit, reciprocal-ring/controller
