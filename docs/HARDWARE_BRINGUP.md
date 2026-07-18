@@ -550,6 +550,16 @@ records must traverse the linked serial queue (plus `/log/queen.log`) and flush
 on a later operator turn; a raw-UART breadcrumb after cutover is failed
 operator-ownership evidence.
 
+Linked serial output is exact-ticket retained work after cutover. Each CYW43
+bootstrap/recovery operator turn may send or poll only the current immutable
+serial command, with no queue-tail restoration after an unknown result. A valid
+partial completion advances only the written prefix; its FIFO suffix receives a
+new action ticket. TX is limited to 128 bytes per action and alternates with RX
+after every completed chunk, so large startup output cannot hide a paced serial
+command. Repeated or reordered console banners indicate failed linked-serial
+transport evidence, not a Wi-Fi supervisor retry, unless the capture also shows
+a later numbered `CYW43_BOOTSTRAP_SUPERVISOR attempt=` record.
+
 Hardware-free closure is narrower: it requires the retained production
 supervisor, one-child-operation EventPump permit, reciprocal-ring/controller
 failure-cut tests, supervisor-only generation transitions from immutable

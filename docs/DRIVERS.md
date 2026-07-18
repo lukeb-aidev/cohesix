@@ -434,6 +434,14 @@ This as-built closure is authorized by Milestone 26d task
   already-buffered bytes while Wi-Fi bootstrap or recovery owns the HAL; USB backend polling,
   HDMI echo/redraw, and network service remain fenced. Reboot ACK dispatch wins
   before another bootstrap/recovery operation.
+- Linked serial TX uses an immutable retained command and staged-byte cursor.
+  A missing completion resumes the same ring fingerprint on a later outer turn;
+  it never restores possibly issued bytes to the queue tail. A known partial
+  completion consumes only its completed prefix and gives the remaining FIFO
+  suffix a new monotonic action ticket. Each TX action is capped at 128 bytes,
+  and a completed chunk forces one RX turn before another chunk so startup
+  output cannot starve commands or reboot. Malformed or over-reported
+  completions poison TX without replay while preserving fail-closed RX service.
 - Association alone is not acceptance. Require DHCP, raw TCP/`cohsh`, clean
   counters, and repeated current-image boots with paired network evidence.
 
@@ -447,8 +455,11 @@ turns, that every failure cut resumes or fails deterministically, and that
 reciprocal-ring association/EAPOL/maintenance faults return before supervisor
 recovery. Duplicate or stale deferred records cannot replay work or advance a
 replacement generation. Operator service runs only after the preceding scoped
-HAL borrow and service guards are released. These tests prove control-flow,
-ownership, timeout,
+HAL borrow and service guards are released. The serial production-chain test
+publishes staged bytes through the real reciprocal ring, delays the child
+completion across an outer-turn boundary, and proves exactly one physical
+service plus same-ticket consumption on the next turn. These tests prove
+control-flow, ownership, timeout,
 operator-liveness, and fail-closed invariants; they do not prove Pi electrical
 timing, firmware behavior, RF association, DHCP, or repeatability. Those remain
 target evidence.

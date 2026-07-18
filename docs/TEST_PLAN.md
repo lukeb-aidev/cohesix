@@ -224,6 +224,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p pi4-driver-runtime --lib cyw43_data_tx_never_replays_ambiguous_function2_write -- --test-threads=1`
 - Focused bootstrap/restart operator-liveness checks:
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_bootstrap_operator_turn -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_tx_ -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_executes_one_operation_per_turn_in_canonical_order -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_every_operation_cut_uses_the_same_outer_fence -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_deadline_failure_fences_before_recovery_mmio -- --test-threads=1`
@@ -489,6 +490,17 @@ already-buffered local-seat bytes are permitted; generic/current-TCB UART
 fallback, USB backend polling, HDMI/echo re-entry, and network polling must
 remain absent. Reboot ACK and reset dispatch must complete before another
 Wi-Fi operation is admitted.
+
+Linked-serial adversarial coverage must exercise the production reciprocal
+ring rather than only a fabricated completion: publish a staged TX action,
+leave it pending for one outer turn, have the registered child controller
+publish the delayed completion, and consume it on the next turn with the same
+immutable command and ticket. It must also prove partial-prefix FIFO handling,
+no replay after an impossible completion, a 128-byte TX action bound, RX service
+between completed TX chunks, RX/TX ticket fencing, and operator RX/reboot
+admission after TX poisoning. RX coverage must reserve the heapless SPSC
+sentinel slot and prove the child never returns more bytes than the root-issued
+command grant.
 
 Host tests must prove the fixed-layout pointer-free command/completion records remain primitive-only and bounded, including primitive aux fields for service-turn arguments, nonzero-progress/frame-ready-only hot-path credit, owner-state descriptor rejection when the matching runtime spec is not acceptance-eligible, owner-state acceptance requiring the explicit owner hot-path mask plus acceptance-eligible runtime images, the separate root-context diagnostic versus pointer-free selector registration classes, the common `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit forced onto transitional root-context ring commands, and the one-way command flag used by send-only bootstrap/background turns so isolated runtimes do not call `Reply` without a reply cap. Runtime-init records must carry primitive MMIO/DMA/shared physical page metadata, fixed virtual bases, semantic resource ranges for large apertures and large buffer arenas, bus-address policy, optional IRQ descriptors, optional bus-link descriptors, and framebuffer metadata without root pointers.
 

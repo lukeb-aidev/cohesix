@@ -2347,7 +2347,7 @@ where
         debug_assert!(!self.cyw43_bootstrap_operator_turn_active);
         self.cyw43_bootstrap_operator_turn_active = true;
         self.serial_console_turn_active = true;
-        let serial_rx_activity = self.serial.poll_io_linked_runtime_only();
+        let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
         let serial_input = self.consume_serial();
         let local_input = self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime);
         if local_input {
@@ -2357,7 +2357,6 @@ where
             false,
             serial_rx_activity || serial_input || local_input || self.serial.tx_pending(),
         );
-        let _ = self.serial.flush_tx_linked_runtime_only();
         self.serial_console_turn_active = false;
         self.cyw43_bootstrap_operator_turn_active = false;
     }
@@ -2881,8 +2880,7 @@ where
         self.emit_prompt_atomic();
         #[cfg(feature = "kernel")]
         if crate::serial::serial_linked_runtime_transport_active() {
-            let _ = self.serial.flush_tx_linked_runtime_only();
-            let _ = self.serial.poll_io_linked_runtime_only();
+            let _ = self.serial.service_linked_runtime_only_turn();
         } else {
             self.serial.poll_io();
         }
@@ -2922,7 +2920,6 @@ where
                 let _ = self.serial.try_enqueue_line_record(
                     "[trace] log channel remains unavailable; linked serial route retained",
                 );
-                let _ = self.serial.flush_tx_linked_runtime_only();
             } else {
                 boot_log::force_uart_line_raw_without_prompt_refresh(
                     "[trace] log channel remains on serial; raw driver blockers preserved",
@@ -2942,8 +2939,6 @@ where
             let _ = self.serial.try_enqueue_line_record(
                 "[audit] console: log stream deferred; linked serial route retained",
             );
-            #[cfg(feature = "kernel")]
-            let _ = self.serial.flush_tx_linked_runtime_only();
         } else {
             self.audit.info("console: attach uart");
             #[cfg(feature = "kernel")]
@@ -3055,7 +3050,7 @@ where
             let _ = self.serial.try_enqueue_line_record(
                 "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover acceptance=green reason=driver-task-service-proven",
             );
-            let _ = self.serial.flush_tx_linked_runtime_only();
+            let _ = self.serial.service_linked_runtime_only_turn();
             return true;
         }
         if emit_deferred {
@@ -23136,7 +23131,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_bootstrap_progress_services_live_linked_serial_without_hal_reentry() {
+    fn cyw43_bootstrap_progress_defers_linked_reply_to_the_next_outer_turn() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -23149,7 +23144,7 @@ mod tests {
         let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
-        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let timer = TestTimer::repeated(2, 1);
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
         store.register(Role::Queen, "ticket").unwrap();
@@ -23192,11 +23187,15 @@ mod tests {
             drop(progress);
             assert_eq!(callback_count, 1);
             assert!(
-                visible_during_callback,
-                "reply must flush before the inner progress callback returns"
+                !visible_during_callback,
+                "RX and reply TX must consume separate outer event turns"
             );
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            let transcript = crate::serial::test_take_linked_runtime_only_tx();
+            let text = core::str::from_utf8(transcript.as_slice())
+                .expect("linked serial output must be utf8");
             (
-                visible_during_callback,
+                text.contains("ERR WIFI reason=busy detail=cyw43-bootstrap-in-progress"),
                 pump.serial_mut().driver_mut().io_call_counts(),
                 pump.timer.index,
             )
@@ -23209,8 +23208,8 @@ mod tests {
             "linked-only service must not fall through to the generic serial driver"
         );
         assert_eq!(
-            timer_polls, 1,
-            "bootstrap supervisor turn must retain the ordinary timer pump"
+            timer_polls, 2,
+            "each bootstrap supervisor turn must retain the ordinary timer pump"
         );
         assert!(wifi.calls.is_empty(), "Wi-Fi HAL callback must stay fenced");
         assert_eq!(local_seat.keyboard_trace().backend_poll_calls, 0);
@@ -23256,11 +23255,9 @@ mod tests {
             "accepted reboot must not re-enter generic serial HAL"
         );
         let transcript = crate::serial::test_take_linked_runtime_only_tx();
-        let rendered =
-            core::str::from_utf8(transcript.as_slice()).expect("linked serial output must be utf8");
         assert!(
-            rendered.contains("OK REBOOT detail=scheduled"),
-            "{rendered}"
+            transcript.is_empty(),
+            "RX and reboot ACK TX must consume separate outer event turns"
         );
         assert!(
             pump.reboot_pending,
@@ -23270,6 +23267,13 @@ mod tests {
         assert_eq!(crate::reboot::test_reboot_requests(), 0);
 
         pump.poll_cyw43_bootstrap_supervisor_event_turn();
+        let transcript = crate::serial::test_take_linked_runtime_only_tx();
+        let rendered =
+            core::str::from_utf8(transcript.as_slice()).expect("linked serial output must be utf8");
+        assert!(
+            rendered.contains("OK REBOOT detail=scheduled"),
+            "{rendered}"
+        );
         assert!(!pump.reboot_pending);
         assert_eq!(crate::reboot::test_reboot_requests(), 1);
         crate::reboot::reset_test_backend();

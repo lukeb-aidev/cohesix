@@ -11039,6 +11039,15 @@ pub(crate) fn test_publish_driver_task_ring_endpoint(contract: DriverTaskContrac
     true
 }
 
+/// Publish a delayed reciprocal-ring completion without consuming root state.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_service_pending_driver_task_ring_command(contract: DriverTaskContract) -> bool {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    service_pending_driver_task_ring_command(task_key).is_some()
+}
+
 /// Dispatch one pending command through the registered reciprocal ring owner.
 #[cfg(all(test, feature = "kernel"))]
 pub(crate) fn test_dispatch_pending_driver_task_ring_command(
