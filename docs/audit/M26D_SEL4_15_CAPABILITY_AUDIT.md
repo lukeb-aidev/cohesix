@@ -97,15 +97,16 @@ outside the verified configuration.
    a hash-locked 38-distribution Python environment, official DENX U-Boot source
    and `mkimage`, empty build directories, disabled memoization, causal
    completion stamps, and structurally valid AArch64 executable artifacts.
-8. Root-endpoint admission treated a zero `DebugCapIdentify` result as a hard
-   failure even though production kernels intentionally omit that diagnostic
-   syscall, so the canonical production QEMU image parked after a successful
-   endpoint retype. **Closed for production bootstrap:** successful bounded
-   retype, the generated bootinfo CSpace window, and publication state remain
-   authoritative; endpoint type identification is checked only when the
-   selected kernel exposes it. Early production diagnostics remain buffered
-   until the admitted PL011 sink exists instead of being drained into the
-   printing-disabled stub.
+8. Root-endpoint admission treated `DebugCapIdentify` as authoritative even
+   though production kernels may omit that diagnostic syscall and debug kernels
+   return a kernel capability tag, not the libsel4 retype-object enum. Comparing
+   those two numbering domains rejected the valid Pi endpoint tag `4` after a
+   successful retype. **Closed for production bootstrap:** successful bounded
+   retype, the generated bootinfo CSpace window, and exact publication state are
+   authoritative. `DebugCapIdentify` remains recorded telemetry only and cannot
+   admit, reject, or recover a capability. Early production diagnostics remain
+   buffered until the admitted PL011 sink exists instead of being drained into
+   the printing-disabled stub.
 
 ## Required evidence classes
 

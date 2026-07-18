@@ -1363,6 +1363,7 @@ def classify_domain(line: str) -> str | None:
         return "wifi"
     if (
         line.startswith("BOOTINFO_SNAPSHOT_CORRUPTED")
+        or line.startswith("[HARD_GUARD]")
         or "[panic]" in lower
         or "[timers]" in lower
         or lower.startswith("[bootstrap:fatal]")
@@ -1590,6 +1591,15 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
         fields = {**fields, "halt": "yes", "reason": "kernel-halt"}
         stage = "halt"
         message = "halt reason=kernel-halt"
+    elif line.startswith("[HARD_GUARD]"):
+        tag = normalize_panic_reason(fields.get("tag", "unknown"))
+        violation = normalize_panic_reason(
+            fields.get("v", "unknown").split("{", 1)[0]
+        )
+        reason = f"hard-guard-{tag}-{violation}"
+        fields = {**fields, "halt": "yes", "reason": reason}
+        stage = "hard-guard"
+        message = f"halt reason={reason}"
     elif line.startswith("BOOTINFO_SNAPSHOT_CORRUPTED"):
         fields = {
             **fields,
@@ -11819,10 +11829,12 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             ),
             panic_events[0].fields.get("reason", "root-task-panic"),
         )
-    boot_halted = panic_seen or any(
-        event.domain == "kernel" and event.fields.get("halt") == "yes"
+    halt_events = [
+        event
         for event in event_list
-    )
+        if event.domain == "kernel" and event.fields.get("halt") == "yes"
+    ]
+    boot_halted = panic_seen or bool(halt_events)
     timer_irq27_seen = any(
         event.domain == "kernel"
         and event.fields.get("irq") == "27"
@@ -11867,7 +11879,14 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     if panic_seen:
         boot_halt_reason = panic_reason
     elif boot_halted:
-        boot_halt_reason = "kernel-halt"
+        boot_halt_reason = next(
+            (
+                event.fields.get("reason", "kernel-halt")
+                for event in halt_events
+                if event.fields.get("reason") not in (None, "kernel-halt")
+            ),
+            halt_events[0].fields.get("reason", "kernel-halt"),
+        )
     elif timer_irq27_seen:
         boot_halt_reason = "timer-irq27-observed"
     else:
@@ -12422,6 +12441,24 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             last="none",
             missing="not-selected",
         )
+    wifi_runtime_evidence_seen = any(
+        event.domain in {"wifi", "driver"}
+        and (
+            event.raw.startswith(("wifi:", "WiFi:", "WIFI:", "CYW43_"))
+            or "[pi4-wifi]" in event.raw.lower()
+            or "[cyw43]" in event.raw.lower()
+            or "[net-console]" in event.raw.lower()
+            or "hot_path=cyw43-wifi" in event.raw.lower()
+            or "hot_path=sdio-host" in event.raw.lower()
+        )
+        for event in event_list
+    )
+    if boot_halted and not wifi_runtime_evidence_seen:
+        wifi_gate = 0
+        wifi_blocker = "boot-halted-before-wifi"
+        wifi_exact = boot_halt_reason
+        wifi_phase = "root-bootstrap"
+        wifi_blocker_line = halt_events[0].line if halt_events else 0
     wifi_subgate = summarize_wifi_gate7_subgate_detail(
         event_list, wifi_gate, wifi_blocker
     )

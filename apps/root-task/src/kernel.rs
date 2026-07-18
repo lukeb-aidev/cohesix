@@ -122,8 +122,32 @@ fn debug_identify_boot_caps() {
 }
 
 #[inline(always)]
-fn endpoint_identification_is_valid(available: bool, ident: u32) -> bool {
-    !available || ident == sel4_sys::seL4_EndpointObject as u32
+fn root_endpoint_admission_is_valid(
+    report: &crate::boot::ep::RootEpReport,
+    slot: sel4_sys::seL4_CPtr,
+    empty_start: sel4_sys::seL4_CPtr,
+    empty_end: sel4_sys::seL4_CPtr,
+    published_slot: sel4_sys::seL4_CPtr,
+) -> bool {
+    report.retype_err == Some(sel4_sys::seL4_NoError)
+        && report.ep_slot == slot
+        && slot != sel4_sys::seL4_CapNull
+        && empty_start <= slot
+        && slot < empty_end
+        && published_slot == slot
+}
+
+#[inline(always)]
+fn validated_root_endpoint_fallback(
+    ready: bool,
+    validated: bool,
+    published_slot: sel4_sys::seL4_CPtr,
+) -> sel4_sys::seL4_CPtr {
+    if ready && validated && published_slot != sel4_sys::seL4_CapNull {
+        published_slot
+    } else {
+        sel4_sys::seL4_CapNull
+    }
 }
 
 fn emit_manifest_boot_lines<P: Platform>(console: &mut DebugConsole<'_, P>) {
@@ -3973,7 +3997,7 @@ fn bootstrap<P: Platform>(
         slot = boot_cspace.next_free_slot(),
     );
     boot_log::force_uart_line(ep_probe.as_str());
-    let (ep_slot, boot_ep_ok) = match ep::bootstrap_ep(
+    let (ep_slot, boot_ep_retyped) = match ep::bootstrap_ep(
         &bootinfo_snapshot,
         &mut boot_cspace,
         &mut ep_report,
@@ -3981,7 +4005,7 @@ fn bootstrap<P: Platform>(
         Ok(slot) => {
             check_bootinfo(&mut boot_guard, "MARK 39");
             boot_log::force_uart_line("[MARK 39] after bootstrap_ep ok");
-            (slot, true)
+            (slot, !ep_report.preexisting)
         }
         Err(err) => {
             crate::trace::trace_fail(b"bootstrap_ep", err);
@@ -4024,15 +4048,11 @@ fn bootstrap<P: Platform>(
                     ident = ep_report.slot_ident,
                 );
                 boot_log::force_uart_line(structured.as_str());
-                let fallback_existing = sel4::ep_ready();
-                let fallback_ident = sel4::debug_cap_identify(ep_report.ep_slot);
-                let fallback_slot = if fallback_existing {
-                    sel4::root_endpoint()
-                } else if fallback_ident == sel4_sys::seL4_EndpointObject as sel4::seL4_Word {
-                    ep_report.ep_slot
-                } else {
-                    sel4_sys::seL4_CapNull
-                };
+                let fallback_slot = validated_root_endpoint_fallback(
+                    sel4::ep_ready(),
+                    sel4::ep_validated(),
+                    sel4::root_endpoint(),
+                );
                 if fallback_slot != sel4_sys::seL4_CapNull {
                     boot_log::force_uart_line(
                         "[boot] bootstrap_ep fallback: reusing existing endpoint",
@@ -4062,29 +4082,33 @@ fn bootstrap<P: Platform>(
     boot_log::force_uart_line(ep_status.as_str());
     probe_canary("[probe] after.bootstrap_ep");
 
-    if boot_ep_ok {
+    if boot_ep_retyped {
         let (empty_start, empty_end) = bootinfo_view.init_cnode_empty_range();
-        if !(empty_start <= ep_slot && ep_slot < empty_end) {
+        if !root_endpoint_admission_is_valid(
+            &ep_report,
+            ep_slot,
+            empty_start,
+            empty_end,
+            sel4::root_endpoint(),
+        ) {
             hard_guard_fail(
                 "bootstrap_ep",
                 HardGuardViolation::EPInvalidOrNotInEmptyWindow,
             );
         }
 
-        let ident = sel4::debug_cap_identify(ep_slot) as u32;
-        if !endpoint_identification_is_valid(sel4::debug_cap_identify_available(), ident) {
-            hard_guard_fail(
-                "bootstrap_ep",
-                HardGuardViolation::EPIdentifyInvalid { ident },
-            );
-        }
-
         sel4::set_ep_validated(true);
         boot_guard.record_invariant("root_ep.ready");
     } else {
-        sel4::set_ep_validated(false);
+        if !sel4::ep_ready() || !sel4::ep_validated() || sel4::root_endpoint() != ep_slot {
+            hard_guard_fail(
+                "bootstrap_ep",
+                HardGuardViolation::EPInvalidOrNotInEmptyWindow,
+            );
+        }
+        boot_guard.record_invariant("root_ep.ready");
         log::warn!(
-            "[boot] continuing with existing root endpoint=0x{slot:04x}",
+            "[boot] continuing with validated root endpoint=0x{slot:04x}",
             slot = ep_slot
         );
     }
@@ -7312,17 +7336,62 @@ mod tests {
     use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
     #[test]
-    fn endpoint_identification_is_diagnostic_only_when_unavailable() {
-        let endpoint_ident = sel4_sys::seL4_EndpointObject as u32;
-        let cnode_ident = sel4_sys::seL4_CapTableObject as u32;
+    fn root_endpoint_admission_uses_retype_window_and_publication_not_debug_tag() {
+        let slot = 0x0788;
+        let mut report = crate::boot::ep::RootEpReport {
+            preexisting: false,
+            ep_slot: slot,
+            verify_err: Some(sel4_sys::seL4_NoError),
+            retype_err: Some(sel4_sys::seL4_NoError),
+            slot_ident: 0,
+        };
 
-        assert!(super::endpoint_identification_is_valid(false, 0));
-        assert!(super::endpoint_identification_is_valid(
-            true,
-            endpoint_ident
+        for diagnostic_tag in [
+            0,
+            sel4_sys::seL4_EndpointObject as sel4_sys::seL4_Word,
+            4,
+            10,
+        ] {
+            report.slot_ident = diagnostic_tag;
+            assert!(super::root_endpoint_admission_is_valid(
+                &report, slot, 0x0788, 0x2000, slot,
+            ));
+        }
+        report.retype_err = Some(sel4_sys::seL4_InvalidCapability);
+        assert!(!super::root_endpoint_admission_is_valid(
+            &report, slot, 0x0788, 0x2000, slot,
         ));
-        assert!(!super::endpoint_identification_is_valid(true, 0));
-        assert!(!super::endpoint_identification_is_valid(true, cnode_ident));
+        report.retype_err = Some(sel4_sys::seL4_NoError);
+        report.ep_slot = 0x0787;
+        assert!(!super::root_endpoint_admission_is_valid(
+            &report, 0x0787, 0x0788, 0x2000, 0x0787,
+        ));
+        report.ep_slot = slot;
+        assert!(!super::root_endpoint_admission_is_valid(
+            &report, slot, 0x0788, 0x2000, 0x0789,
+        ));
+    }
+
+    #[test]
+    fn root_endpoint_fallback_requires_prior_validated_publication() {
+        let slot = 0x0788;
+
+        assert_eq!(
+            super::validated_root_endpoint_fallback(true, true, slot),
+            slot
+        );
+        assert_eq!(
+            super::validated_root_endpoint_fallback(true, false, slot),
+            sel4_sys::seL4_CapNull
+        );
+        assert_eq!(
+            super::validated_root_endpoint_fallback(false, true, slot),
+            sel4_sys::seL4_CapNull
+        );
+        assert_eq!(
+            super::validated_root_endpoint_fallback(true, true, sel4_sys::seL4_CapNull),
+            sel4_sys::seL4_CapNull
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

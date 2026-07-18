@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the bootstrap/hard_guard module for root-task.
 // Author: Lukas Bower
@@ -19,7 +19,6 @@ pub enum HardGuardViolation {
     BootInfoSnapshotOutOfRange,
     CSpaceWindowInvalid,
     EPInvalidOrNotInEmptyWindow,
-    EPIdentifyInvalid { ident: u32 },
     IPCBufferMissing,
     IPCBufferNotAligned,
     IPCBufferSetRejected { err: seL4_Error },
@@ -38,10 +37,6 @@ pub fn hard_guard_fail(tag: &str, v: HardGuardViolation) -> ! {
         HardGuardViolation::CSpaceWindowInvalid => line.push_str("CSpaceWindowInvalid"),
         HardGuardViolation::EPInvalidOrNotInEmptyWindow => {
             line.push_str("EPInvalidOrNotInEmptyWindow")
-        }
-        HardGuardViolation::EPIdentifyInvalid { ident } => {
-            let _ = write!(line, "EPIdentifyInvalid{{ident={}}}", ident);
-            Ok(())
         }
         HardGuardViolation::IPCBufferMissing => line.push_str("IPCBufferMissing"),
         HardGuardViolation::IPCBufferNotAligned => line.push_str("IPCBufferNotAligned"),

@@ -4702,6 +4702,30 @@ def test_gate_summary_marks_bootinfo_panic_as_unclean_halt() -> None:
     assert gates.to_record()["BOOT_HALT_REASON"] == "bootinfo-snapshot-corrupted"
 
 
+def test_gate_summary_marks_hard_guard_as_terminal_boot_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cohesix] Network: Wi-Fi",
+            "[HARD_GUARD] tag=bootstrap_ep "
+            "v=EPIdentifyInvalid{ident=4}",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.boot_halted is True
+    assert gates.to_record()["BOOT_HALTED"] == "yes"
+    assert gates.to_record()["PANIC_SEEN"] == "no"
+    assert (
+        gates.to_record()["BOOT_HALT_REASON"]
+        == "hard-guard-bootstrap-ep-epidentifyinvalid"
+    )
+    assert gates.to_record()["WIFI_GATE"] == 0
+    assert gates.to_record()["WIFI_BLOCKER"] == "boot-halted-before-wifi"
+    assert gates.to_record()["WIFI_PHASE"] == "root-bootstrap"
+    assert normalizer.boot_evidence_blockers(gates.to_record())[0] == "boot-halted"
+
+
 def test_gate_summary_promotes_bootstrap_fatal_panic_detail() -> None:
     events = normalizer.parse_events(
         [
