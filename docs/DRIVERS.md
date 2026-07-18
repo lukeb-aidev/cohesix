@@ -334,7 +334,23 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
 
 ### SDIO and CYW43
 
+This as-built closure is authorized by Milestone 26d task
+`m26d-cyw43-hardware-free-closure` and Reopened Milestone 26b task
+`m26b-wifi-sdio-notification-dpc-closure`.
+
 - SDIO is the sole SDHCI owner; CYW43 submits bounded bus-link operations.
+- The physical Pi profile places SDIO and CYW43 on the same driver core. Both
+  deferred runtimes retain shell-safe bootstrap priority until their own exact
+  descriptor replay completion proves the linked service route. The supervisor
+  registers and replays the SDIO owner descriptor first, lowers SDIO to its
+  steady contract priority in a separate outer turn, then registers and replays
+  the CYW43 client descriptor and lowers CYW43 in another separate outer turn.
+  Descriptor replay, priority cutover, and the next child operation never share
+  one CYW43 operation permit. Pair recovery raises and reprograms SDIO, then
+  raises and reprograms CYW43 while both are suspended; it subsequently
+  resumes, proves, and lowers SDIO before resuming, proving, and lowering
+  CYW43. There is no client-first descriptor service or legacy fallback
+  ordering.
 - Root-task must not wait synchronously for CMD52/CMD53 credit, firmware
   replies, or RX drain work.
 - Function 1 enable uses the SDIO CIS timeout when that field is eventually
@@ -403,10 +419,20 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   particular, the post-up 256-frame drain requires 256 separately admitted
   outer turns.
 - Between retained operations, live serial service is admitted only through
-  the independent linked-runtime route. It never falls back to the current
-  TCB or a path that reacquires the Wi-Fi HAL. Local-seat service consumes only
-  already-buffered bytes while Wi-Fi recovery owns the HAL; USB polling, HDMI
-  echo/redraw, and network service remain fenced. Reboot ACK dispatch wins
+  the independent linked-runtime route. Physical-Pi cutover requires a matching
+  linked-runtime service completion (`Idle`, `Progress`, or `FrameReady`) after
+  attach; an actual accepted `FrameReady` byte remains the separate RX-input
+  proof and is not required merely to establish transport ownership. The Wi-Fi
+  supervisor remains retained but blocked if linked serial service is
+  unproved; the ordinary root-UART EventPump retries that proof every 250 ms
+  without abandoning Wi-Fi for the boot. After Wi-Fi begins, serial never
+  falls back to the current TCB or a path that
+  reacquires the Wi-Fi HAL. Supervisor status and failure breadcrumbs enqueue
+  into the linked serial queue and `/log/queen.log`; they do not use raw UART,
+  and their linked flush occurs on the following operator turn rather than in
+  the same turn as a CYW43 child operation. Local-seat service consumes only
+  already-buffered bytes while Wi-Fi bootstrap or recovery owns the HAL; USB backend polling,
+  HDMI echo/redraw, and network service remain fenced. Reboot ACK dispatch wins
   before another bootstrap/recovery operation.
 - Association alone is not acceptance. Require DHCP, raw TCP/`cohsh`, clean
   counters, and repeated current-image boots with paired network evidence.

@@ -4064,6 +4064,79 @@ pub fn publish_driver_task_steady_priority_active(contract: DriverTaskContract) 
     slot.steady_priority_active.store(1, Ordering::Release);
 }
 
+/// Move one deferred CYW43/SDIO runtime back to its shell-safe bootstrap priority.
+///
+/// Pair recovery invokes this as a retained operation while the target TCB is
+/// suspended. The following outer turn programs or resumes the runtime; the
+/// transition is never combined with a ring submission.
+#[cfg(feature = "kernel")]
+pub fn transition_deferred_cyw43_pair_to_bootstrap_priority(contract: DriverTaskContract) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT && contract != SDIO_HOST_DRIVER_TASK_CONTRACT {
+        return false;
+    }
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    let tcb = slot.tcb.load(Ordering::Acquire);
+    if tcb == 0 {
+        return false;
+    }
+    let priority = driver_task_bootstrap_priority(contract);
+    if crate::sel4::set_tcb_sched_params(
+        tcb as sel4_sys::seL4_CPtr,
+        sel4_sys::seL4_CapInitThreadTCB,
+        priority,
+        priority,
+    )
+    .is_err()
+    {
+        return false;
+    }
+    slot.steady_priority_active.store(0, Ordering::Release);
+    true
+}
+
+/// Complete one deferred CYW43/SDIO runtime's priority cutover.
+///
+/// Descriptor replay proves that the runtime has selected its generated
+/// notification route and can block in `Recv`. Only then may the shared-core
+/// pair leave priority 255 for its manifest contract priority.
+#[cfg(feature = "kernel")]
+pub fn complete_deferred_cyw43_pair_priority_cutover(contract: DriverTaskContract) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT && contract != SDIO_HOST_DRIVER_TASK_CONTRACT {
+        return false;
+    }
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    let tcb = slot.tcb.load(Ordering::Acquire);
+    let steady_priority = slot.steady_priority.load(Ordering::Acquire);
+    if tcb == 0 || steady_priority == 0 {
+        return false;
+    }
+    let Ok(steady_priority) = u8::try_from(steady_priority) else {
+        return false;
+    };
+    if crate::sel4::set_tcb_sched_params(
+        tcb as sel4_sys::seL4_CPtr,
+        sel4_sys::seL4_CapInitThreadTCB,
+        steady_priority,
+        steady_priority,
+    )
+    .is_err()
+    {
+        return false;
+    }
+    slot.steady_priority_active.store(1, Ordering::Release);
+    true
+}
+
 /// Publish the root-side command endpoint for a created driver TCB.
 #[cfg(feature = "kernel")]
 pub fn publish_driver_task_command_endpoint(contract: DriverTaskContract, endpoint: usize) {
@@ -6237,10 +6310,12 @@ enum Cyw43SdioPairRestartOperation {
     RebindNotification(Cyw43SdioPairMember),
     ClearDescriptorSeals,
     ResetRing(Cyw43SdioPairMember),
+    SetBootstrapPriority(Cyw43SdioPairMember),
     ProgramRestartRegisters(Cyw43SdioPairMember),
     Resume(Cyw43SdioPairMember),
     PollRecvReady(Cyw43SdioPairMember),
     ReplayDescriptor(Cyw43SdioPairMember),
+    SetSteadyPriority(Cyw43SdioPairMember),
     ReplayEngine(Cyw43SdioPairMember),
     HandoffRingToCyw43,
     DelegateCyw43Endpoint,
@@ -6285,6 +6360,10 @@ impl Cyw43SdioPairRestartOperation {
             Self::ClearDescriptorSeals => "clear-descriptor-seals",
             Self::ResetRing(Cyw43SdioPairMember::Cyw43) => "reset-cyw43-ring",
             Self::ResetRing(Cyw43SdioPairMember::Sdio) => "reset-sdio-ring",
+            Self::SetBootstrapPriority(Cyw43SdioPairMember::Cyw43) => {
+                "set-cyw43-bootstrap-priority"
+            }
+            Self::SetBootstrapPriority(Cyw43SdioPairMember::Sdio) => "set-sdio-bootstrap-priority",
             Self::ProgramRestartRegisters(Cyw43SdioPairMember::Cyw43) => {
                 "program-cyw43-restart-registers"
             }
@@ -6297,6 +6376,8 @@ impl Cyw43SdioPairRestartOperation {
             Self::PollRecvReady(Cyw43SdioPairMember::Sdio) => "poll-sdio-recv-ready",
             Self::ReplayDescriptor(Cyw43SdioPairMember::Cyw43) => "replay-cyw43-descriptor-turn",
             Self::ReplayDescriptor(Cyw43SdioPairMember::Sdio) => "replay-sdio-descriptor-turn",
+            Self::SetSteadyPriority(Cyw43SdioPairMember::Cyw43) => "set-cyw43-steady-priority",
+            Self::SetSteadyPriority(Cyw43SdioPairMember::Sdio) => "set-sdio-steady-priority",
             Self::ReplayEngine(Cyw43SdioPairMember::Cyw43) => "replay-cyw43-engine-turn",
             Self::ReplayEngine(Cyw43SdioPairMember::Sdio) => "replay-sdio-engine-turn",
             Self::HandoffRingToCyw43 => "handoff-ring-to-cyw43",
@@ -6452,6 +6533,14 @@ impl Cyw43SdioPairRestartExecutor for Cyw43SdioPairRestartProductionExecutor {
                     Cyw43SdioPairRestartOperationOutcome::Failed
                 }
             }
+            Cyw43SdioPairRestartOperation::SetBootstrapPriority(member) => {
+                let context = Self::context(cursor, member);
+                if transition_deferred_cyw43_pair_to_bootstrap_priority(context.contract) {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
+                }
+            }
             Cyw43SdioPairRestartOperation::ProgramRestartRegisters(member) => {
                 let context = Self::context(cursor, member);
                 let Ok(restart_flag) = usize::try_from(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG) else {
@@ -6484,6 +6573,14 @@ impl Cyw43SdioPairRestartExecutor for Cyw43SdioPairRestartProductionExecutor {
             }
             Cyw43SdioPairRestartOperation::ReplayDescriptor(member) => {
                 replay_cyw43_sdio_restart_descriptor_once(Self::context(cursor, member))
+            }
+            Cyw43SdioPairRestartOperation::SetSteadyPriority(member) => {
+                let context = Self::context(cursor, member);
+                if complete_deferred_cyw43_pair_priority_cutover(context.contract) {
+                    Cyw43SdioPairRestartOperationOutcome::Complete
+                } else {
+                    Cyw43SdioPairRestartOperationOutcome::Failed
+                }
             }
             Cyw43SdioPairRestartOperation::ReplayEngine(member) => {
                 replay_cyw43_sdio_restart_engine_once(Self::context(cursor, member))
@@ -6966,10 +7063,18 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
             Cyw43SdioPairRestartOperation::ResetRing(Cyw43SdioPairMember::Cyw43)
         }
         Cyw43SdioPairRestartAction::ProgramSdioRestartRegisters => {
-            Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Sdio)
+            if cursor.substep == 0 {
+                Cyw43SdioPairRestartOperation::SetBootstrapPriority(Cyw43SdioPairMember::Sdio)
+            } else {
+                Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Sdio)
+            }
         }
         Cyw43SdioPairRestartAction::ProgramCyw43RestartRegisters => {
-            Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Cyw43)
+            if cursor.substep == 0 {
+                Cyw43SdioPairRestartOperation::SetBootstrapPriority(Cyw43SdioPairMember::Cyw43)
+            } else {
+                Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Cyw43)
+            }
         }
         Cyw43SdioPairRestartAction::ResumeSdio => {
             Cyw43SdioPairRestartOperation::Resume(Cyw43SdioPairMember::Sdio)
@@ -6978,7 +7083,11 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
             Cyw43SdioPairRestartOperation::PollRecvReady(Cyw43SdioPairMember::Sdio)
         }
         Cyw43SdioPairRestartAction::ReplaySdioDescriptor => {
-            Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Sdio)
+            if cursor.substep == 0 {
+                Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Sdio)
+            } else {
+                Cyw43SdioPairRestartOperation::SetSteadyPriority(Cyw43SdioPairMember::Sdio)
+            }
         }
         Cyw43SdioPairRestartAction::ReplaySdioEngine => {
             Cyw43SdioPairRestartOperation::ReplayEngine(Cyw43SdioPairMember::Sdio)
@@ -6990,7 +7099,11 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
             Cyw43SdioPairRestartOperation::PollRecvReady(Cyw43SdioPairMember::Cyw43)
         }
         Cyw43SdioPairRestartAction::ReplayCyw43Descriptor => {
-            Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Cyw43)
+            if cursor.substep == 0 {
+                Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Cyw43)
+            } else {
+                Cyw43SdioPairRestartOperation::SetSteadyPriority(Cyw43SdioPairMember::Cyw43)
+            }
         }
         Cyw43SdioPairRestartAction::ReplayCyw43Engine => {
             Cyw43SdioPairRestartOperation::ReplayEngine(Cyw43SdioPairMember::Cyw43)
@@ -7061,7 +7174,16 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
         | Cyw43SdioPairRestartAction::ReplaySdioDescriptor
         | Cyw43SdioPairRestartAction::ReplayCyw43Descriptor => match outcome {
             Cyw43SdioPairRestartOperationOutcome::Complete => {
-                if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
+                if matches!(
+                    action,
+                    Cyw43SdioPairRestartAction::ReplaySdioDescriptor
+                        | Cyw43SdioPairRestartAction::ReplayCyw43Descriptor
+                ) && cursor.substep == 0
+                {
+                    cursor.substep = 1;
+                    cursor.poll_count = 0;
+                } else if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action)
+                {
                     return Cyw43SdioPairRestartTurn::Complete { epoch };
                 }
             }
@@ -7075,6 +7197,24 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
                 "retained-poll-failed",
             ),
         },
+        Cyw43SdioPairRestartAction::ProgramSdioRestartRegisters
+        | Cyw43SdioPairRestartAction::ProgramCyw43RestartRegisters => {
+            if succeeded {
+                if cursor.substep == 0 {
+                    cursor.substep = 1;
+                } else if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action)
+                {
+                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                }
+            } else {
+                enter_cyw43_sdio_pair_restart_failure(
+                    cursor,
+                    action,
+                    Cyw43SdioPairRestartFailureKind::ActionFailed,
+                    "priority-or-register-program-failed",
+                );
+            }
+        }
         Cyw43SdioPairRestartAction::ReplaySdioEngine
         | Cyw43SdioPairRestartAction::ReplayCyw43Engine => match outcome {
             Cyw43SdioPairRestartOperationOutcome::Completion(completion) => {
@@ -14020,6 +14160,40 @@ mod tests {
             .map(|action| action.as_str())
             .collect();
         assert_eq!(actions, expected);
+        let sdio_priority_path: Vec<_> = executor
+            .calls
+            .iter()
+            .filter(|(action, _)| {
+                *action == "program-sdio-restart-registers" || *action == "replay-sdio-descriptor"
+            })
+            .map(|(_, operation)| *operation)
+            .collect();
+        assert_eq!(
+            sdio_priority_path,
+            [
+                Cyw43SdioPairRestartOperation::SetBootstrapPriority(Cyw43SdioPairMember::Sdio,),
+                Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Sdio,),
+                Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Sdio),
+                Cyw43SdioPairRestartOperation::SetSteadyPriority(Cyw43SdioPairMember::Sdio),
+            ]
+        );
+        let cyw43_priority_path: Vec<_> = executor
+            .calls
+            .iter()
+            .filter(|(action, _)| {
+                *action == "program-cyw43-restart-registers" || *action == "replay-cyw43-descriptor"
+            })
+            .map(|(_, operation)| *operation)
+            .collect();
+        assert_eq!(
+            cyw43_priority_path,
+            [
+                Cyw43SdioPairRestartOperation::SetBootstrapPriority(Cyw43SdioPairMember::Cyw43,),
+                Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Cyw43,),
+                Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Cyw43),
+                Cyw43SdioPairRestartOperation::SetSteadyPriority(Cyw43SdioPairMember::Cyw43),
+            ]
+        );
         assert_eq!(
             executor
                 .calls

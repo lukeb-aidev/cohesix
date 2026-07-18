@@ -2792,6 +2792,16 @@ fn restore_driver_tcb_steady_priority(
 }
 
 #[cfg(feature = "kernel")]
+fn retain_deferred_cyw43_pair_bootstrap_priority(
+    contract: DriverTaskContract,
+    runtime_init_deferred: bool,
+) -> bool {
+    runtime_init_deferred
+        && (contract == driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+            || contract == driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT)
+}
+
+#[cfg(feature = "kernel")]
 fn emit_driver_tcb_resume_return(contract: DriverTaskContract, tcb: seL4_CPtr, mode: &str) {
     let mut line = heapless::String::<192>::new();
     let _ = fmt::write(
@@ -4372,7 +4382,24 @@ impl<'a> KernelHal<'a> {
         }
 
         let pointer_free_ipc = if driver_task::physical_pi_driver_task_only_owner_state_active() {
-            restore_driver_tcb_steady_priority(contract, tcb, bootstrap_priority, steady_priority)?;
+            if retain_deferred_cyw43_pair_bootstrap_priority(contract, runtime_init_deferred) {
+                let mut line = heapless::String::<192>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "DRIVER_TASK_BOOTSTRAP_PRIORITY_RETAINED contract={} tcb=0x{:04x} priority={} reason=deferred-cyw43-sdio-owner-first",
+                        contract.name, tcb, bootstrap_priority,
+                    ),
+                );
+                crate::bootstrap::log::force_uart_line(line.as_str());
+            } else {
+                restore_driver_tcb_steady_priority(
+                    contract,
+                    tcb,
+                    bootstrap_priority,
+                    steady_priority,
+                )?;
+            }
             if !runtime_init_ok && !runtime_init_deferred {
                 emit_driver_task_bootstrap_deferred(
                     contract,
@@ -4879,6 +4906,27 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     use super::{irq_notification_badge, Irq, IrqTrigger};
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn deferred_cyw43_pair_retains_bootstrap_priority_until_descriptor_proof() {
+        assert!(super::retain_deferred_cyw43_pair_bootstrap_priority(
+            super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            true,
+        ));
+        assert!(super::retain_deferred_cyw43_pair_bootstrap_priority(
+            super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            true,
+        ));
+        assert!(!super::retain_deferred_cyw43_pair_bootstrap_priority(
+            super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            true,
+        ));
+        assert!(!super::retain_deferred_cyw43_pair_bootstrap_priority(
+            super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            false,
+        ));
+    }
 
     #[cfg(feature = "kernel")]
     fn fake_driver_task_handle(

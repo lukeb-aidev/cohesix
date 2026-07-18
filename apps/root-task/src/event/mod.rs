@@ -2362,6 +2362,23 @@ where
         self.cyw43_bootstrap_operator_turn_active = false;
     }
 
+    /// Queue one bootstrap/recovery diagnostic without touching the root UART.
+    ///
+    /// The linked serial turn that follows performs the actual flush. Keeping
+    /// this method enqueue-only prevents a status breadcrumb and a CYW43 child
+    /// operation from sharing one outer operation permit.
+    #[cfg(feature = "kernel")]
+    pub fn queue_cyw43_bootstrap_operator_line(&mut self, line: &str) -> bool {
+        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+            && !crate::serial::serial_linked_runtime_transport_active()
+        {
+            return false;
+        }
+        crate::log_buffer::append_log_line(line);
+        let _ = self.serial.try_enqueue_line_record(line);
+        true
+    }
+
     /// Whether a deferred CYW43 bootstrap may begin after an ordinary pump.
     ///
     /// A scheduled reboot must retain the event loop until its ACK has flushed
@@ -2369,8 +2386,10 @@ where
     /// between those two steps.
     #[cfg(feature = "kernel")]
     #[must_use]
-    pub const fn cyw43_bootstrap_may_begin(&self) -> bool {
+    pub fn cyw43_bootstrap_may_begin(&self) -> bool {
         !self.reboot_pending
+            && (!crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                || crate::serial::serial_linked_runtime_transport_active())
     }
 
     #[must_use]
@@ -2860,6 +2879,14 @@ where
         #[cfg(feature = "net-console")]
         self.emit_wifi_credential_warning_current_before_prompt_atomic();
         self.emit_prompt_atomic();
+        #[cfg(feature = "kernel")]
+        if crate::serial::serial_linked_runtime_transport_active() {
+            let _ = self.serial.flush_tx_linked_runtime_only();
+            let _ = self.serial.poll_io_linked_runtime_only();
+        } else {
+            self.serial.poll_io();
+        }
+        #[cfg(not(feature = "kernel"))]
         self.serial.poll_io();
         let local_seat_command_ready = if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();
@@ -2891,6 +2918,11 @@ where
                 boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
                     "[trace] log channel switched to /log/queen.log; raw driver blockers remain on serial",
                 );
+            } else if crate::serial::serial_linked_runtime_transport_active() {
+                let _ = self.serial.try_enqueue_line_record(
+                    "[trace] log channel remains unavailable; linked serial route retained",
+                );
+                let _ = self.serial.flush_tx_linked_runtime_only();
             } else {
                 boot_log::force_uart_line_raw_without_prompt_refresh(
                     "[trace] log channel remains on serial; raw driver blockers preserved",
@@ -2898,22 +2930,38 @@ where
             }
         }
         self.schedule_post_prompt_local_seat_attach();
-        self.audit.info("console: attach uart");
         #[cfg(feature = "kernel")]
-        if let Some(bridge) = self.ninedoor.as_mut() {
-            match bridge.log_stream(&mut *self.audit) {
-                Ok(()) => {
-                    self.audit.info("console: log stream start");
-                }
-                Err(err) => {
-                    let summary =
-                        format_message(format_args!("console: log stream failed: {}", err));
-                    self.audit.info(summary.as_str());
-                }
-            }
+        let linked_without_log_channel = crate::serial::serial_linked_runtime_transport_active()
+            && !crate::log_buffer::log_channel_active();
+        #[cfg(not(feature = "kernel"))]
+        let linked_without_log_channel = false;
+        if linked_without_log_channel {
+            let _ = self
+                .serial
+                .try_enqueue_line_record("[audit] console: attach linked uart");
+            let _ = self.serial.try_enqueue_line_record(
+                "[audit] console: log stream deferred; linked serial route retained",
+            );
+            #[cfg(feature = "kernel")]
+            let _ = self.serial.flush_tx_linked_runtime_only();
         } else {
-            self.audit
-                .info("console: log stream deferred (bridge unavailable)");
+            self.audit.info("console: attach uart");
+            #[cfg(feature = "kernel")]
+            if let Some(bridge) = self.ninedoor.as_mut() {
+                match bridge.log_stream(&mut *self.audit) {
+                    Ok(()) => {
+                        self.audit.info("console: log stream start");
+                    }
+                    Err(err) => {
+                        let summary =
+                            format_message(format_args!("console: log stream failed: {}", err));
+                        self.audit.info(summary.as_str());
+                    }
+                }
+            } else {
+                self.audit
+                    .info("console: log stream deferred (bridge unavailable)");
+            }
         }
     }
 
@@ -2958,42 +3006,78 @@ where
         }
         #[cfg(feature = "kernel")]
         {
-            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
-                && crate::serial::resume_serial_driver_task_runtime_after_prompt()
-            {
-                if crate::serial::probe_driver_task_rx_after_attach()
-                    && crate::serial::serial_driver_task_interactive_cutover_allowed()
-                    && self.serial.use_driver_task_client_after_attach()
-                {
-                    boot_log::force_uart_line_raw(
-                        "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
-                    );
-                    boot_log::force_uart_line_raw(
-                        "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover acceptance=green reason=driver-task-attached",
-                    );
-                    crate::serial::emit_serial_input_route_trace(
-                        "root-console-start",
-                        "driver-task-rx-proven",
-                    );
-                    self.serial.poll_io();
-                } else {
-                    boot_log::force_uart_line_raw(
-                        "[uart] serial console cutover deferred backend=bcm2711-mini-uart reason=driver-task-rx-proof-missing action=root-uart-console",
-                    );
-                    crate::serial::emit_serial_runtime_cutover_deferred(
-                        "driver-task-rx-proof-missing",
-                    );
-                    crate::serial::emit_serial_input_route_trace(
-                        "root-console-start",
-                        "driver-task-rx-proof-missing",
-                    );
-                }
-            }
+            let _ = self.try_serial_linked_runtime_cutover_after_prompt(true, true);
         }
         if !self.banner_emitted {
-            log::info!(target: "event", "[event] root console banner emitted");
+            if crate::serial::serial_linked_runtime_transport_active() {
+                let _ =
+                    self.queue_cyw43_bootstrap_operator_line("[event] root console banner emitted");
+            } else {
+                log::info!(target: "event", "[event] root console banner emitted");
+            }
             self.banner_emitted = true;
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn try_serial_linked_runtime_cutover_after_prompt(
+        &mut self,
+        emit_deferred: bool,
+        raw_uart_allowed: bool,
+    ) -> bool {
+        if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+            || crate::serial::serial_linked_runtime_transport_active()
+        {
+            return true;
+        }
+        let runtime_ready = if raw_uart_allowed {
+            crate::serial::resume_serial_driver_task_runtime_after_prompt()
+        } else {
+            crate::serial::serial_driver_task_runtime_attached()
+        };
+        let service_ready = runtime_ready
+            && crate::serial::probe_driver_task_service_after_attach()
+            && crate::serial::serial_driver_task_interactive_cutover_allowed();
+        let cutover_ready = service_ready
+            && if raw_uart_allowed {
+                self.serial.use_driver_task_client_after_attach()
+            } else {
+                self.serial
+                    .use_driver_task_client_after_attach_without_root_flush()
+            };
+        if cutover_ready {
+            let _ = self.serial.try_enqueue_line_record(
+                "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
+            );
+            let _ = self.serial.try_enqueue_line_record(
+                "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover acceptance=green reason=driver-task-service-proven",
+            );
+            let _ = self.serial.flush_tx_linked_runtime_only();
+            return true;
+        }
+        if emit_deferred {
+            boot_log::force_uart_line_raw(
+                "[uart] serial console cutover deferred backend=bcm2711-mini-uart reason=driver-task-service-proof-missing action=root-uart-console",
+            );
+            crate::serial::emit_serial_runtime_cutover_deferred(
+                "driver-task-service-proof-missing",
+            );
+            crate::serial::emit_serial_input_route_trace(
+                "root-console-start",
+                "driver-task-service-proof-missing",
+            );
+        }
+        false
+    }
+
+    /// Retry the prompt-side linked serial cutover without abandoning the
+    /// ordinary root-UART event loop after one transient no-completion result.
+    #[cfg(feature = "kernel")]
+    pub fn retry_serial_linked_runtime_cutover_after_prompt(
+        &mut self,
+        raw_uart_allowed: bool,
+    ) -> bool {
+        self.try_serial_linked_runtime_cutover_after_prompt(false, raw_uart_allowed)
     }
 
     /// Run the cooperative pump until shutdown.
@@ -3909,6 +3993,12 @@ where
     }
 
     fn emit_serial_line_atomic(&mut self, line: &str) {
+        #[cfg(feature = "kernel")]
+        if crate::serial::serial_linked_runtime_transport_active() {
+            let _ = self.serial.try_enqueue_line_record(line);
+            self.mirror_local_seat_line_if_ready(line);
+            return;
+        }
         self.serial.write_line_blocking(line);
         self.mirror_local_seat_line_if_ready(line);
     }
@@ -3946,6 +4036,14 @@ where
     }
 
     fn emit_prompt_atomic(&mut self) {
+        #[cfg(feature = "kernel")]
+        if crate::serial::serial_linked_runtime_transport_active() {
+            let _ = self
+                .serial
+                .try_enqueue_tx_record(&[CONSOLE_PROMPT.as_bytes()]);
+            self.mirror_local_seat_prompt_if_ready();
+            return;
+        }
         self.serial.write_bytes_blocking(CONSOLE_PROMPT.as_bytes());
         self.mirror_local_seat_prompt_if_ready();
     }
@@ -22990,6 +23088,47 @@ mod tests {
             "{rendered}"
         );
         assert!(wifi.calls.is_empty(), "Wi-Fi HAL callback must stay fenced");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_status_queue_defers_linked_flush_to_the_next_outer_turn() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.serial_mut().driver_mut().reset_io_call_counts();
+
+        assert!(pump.queue_cyw43_bootstrap_operator_line(
+            "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin",
+        ));
+        assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
+        assert_eq!(pump.serial_mut().driver_mut().io_call_counts(), (0, 0));
+
+        pump.poll_cyw43_bootstrap_supervisor_event_turn();
+        let transcript = crate::serial::test_take_linked_runtime_only_tx();
+        let rendered =
+            core::str::from_utf8(transcript.as_slice()).expect("linked serial output must be utf8");
+        assert!(rendered.contains("CYW43_BOOTSTRAP_SUPERVISOR"));
+        assert_eq!(
+            pump.serial_mut().driver_mut().io_call_counts(),
+            (0, 0),
+            "status flush must never re-enter the generic serial backend",
+        );
     }
 
     #[cfg(feature = "kernel")]

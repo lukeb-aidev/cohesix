@@ -136,6 +136,8 @@ static SERIAL_LINKED_RUNTIME_ATTACHED: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_DRIVER_TASK_CLIENT_ACTIVE: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
+static SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
 static SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_INPUT_ROUTE_LOGGED: AtomicU32 = AtomicU32::new(0);
@@ -435,6 +437,7 @@ pub fn init_serial_driver_task_runtime() -> bool {
     if SERIAL_LINKED_RUNTIME_ATTACHED.load(AtomicOrdering::Acquire) != 0 {
         return true;
     }
+    SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
     let contract = driver_task_contract();
     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
         contract,
@@ -488,6 +491,7 @@ pub fn init_serial_driver_task_runtime() -> bool {
                 None,
             );
             SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
+            SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
             emit_serial_runtime_state("driver", "owner-state-rejected", "red");
             return false;
         }
@@ -505,6 +509,7 @@ pub fn init_serial_driver_task_runtime() -> bool {
         );
     } else {
         SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
+        SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
         emit_serial_runtime_state("driver", status, "red");
     }
     if ok || completion.is_some() {
@@ -559,9 +564,9 @@ const fn serial_driver_task_transport_required(
 const fn serial_driver_task_interactive_cutover_policy(
     owner_state_active: bool,
     runtime_attached: bool,
-    rx_proven: bool,
+    service_proven: bool,
 ) -> bool {
-    runtime_attached && (!owner_state_active || rx_proven)
+    runtime_attached && (!owner_state_active || service_proven)
 }
 
 #[cfg(feature = "kernel")]
@@ -569,8 +574,13 @@ pub(crate) fn serial_driver_task_interactive_cutover_allowed() -> bool {
     serial_driver_task_interactive_cutover_policy(
         crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
         serial_driver_task_runtime_attached(),
-        SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.load(AtomicOrdering::Acquire) != 0,
+        SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.load(AtomicOrdering::Acquire) != 0,
     )
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn serial_linked_runtime_transport_active() -> bool {
+    serial_driver_task_transport_active()
 }
 
 #[cfg(feature = "kernel")]
@@ -829,6 +839,9 @@ fn driver_task_client_poll_rx_into_client_queue() -> usize {
     else {
         return 0;
     };
+    if serial_driver_task_service_completion_proves_transport(completion.code) {
+        SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(1, AtomicOrdering::Release);
+    }
     if completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16() {
         return 0;
     }
@@ -855,12 +868,19 @@ fn driver_task_client_poll_rx_into_client_queue() -> usize {
 }
 
 #[cfg(feature = "kernel")]
-pub(crate) fn probe_driver_task_rx_after_attach() -> bool {
+pub(crate) fn probe_driver_task_service_after_attach() -> bool {
     if !serial_driver_task_runtime_attached() {
         return false;
     }
     let _ = driver_task_client_poll_rx_into_client_queue();
-    SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.load(AtomicOrdering::Acquire) != 0
+    SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.load(AtomicOrdering::Acquire) != 0
+}
+
+#[cfg(feature = "kernel")]
+const fn serial_driver_task_service_completion_proves_transport(code: u16) -> bool {
+    code == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+        || code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+        || code == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
 }
 
 #[cfg(feature = "kernel")]
@@ -1454,12 +1474,30 @@ where
     /// Switch prompt-side service from the root mini-UART fallback to the driver task.
     #[cfg(feature = "kernel")]
     pub fn use_driver_task_client_after_attach(&mut self) -> bool {
+        self.activate_driver_task_client_after_attach(true)
+    }
+
+    /// Switch to the linked client without flushing through the prior backend.
+    ///
+    /// CYW43 supervision uses this only after its first physical operation, when
+    /// re-entering the root/current-TCB UART would violate the fail-closed HAL
+    /// boundary. Any queued output is retained and flushed through the linked
+    /// runtime after the switch succeeds.
+    #[cfg(feature = "kernel")]
+    pub fn use_driver_task_client_after_attach_without_root_flush(&mut self) -> bool {
+        self.activate_driver_task_client_after_attach(false)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn activate_driver_task_client_after_attach(&mut self, flush_prior_backend: bool) -> bool {
         if !serial_driver_task_transport_active() {
             if !serial_driver_task_interactive_cutover_allowed() {
                 return false;
             }
         }
-        self.flush_tx_locked();
+        if flush_prior_backend {
+            self.flush_tx_locked();
+        }
         let attached = self.driver.try_use_driver_task_client_after_attach();
         if attached {
             SERIAL_DRIVER_TASK_CLIENT_ACTIVE.store(1, AtomicOrdering::Release);
@@ -2265,7 +2303,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn physical_pi_serial_interactive_cutover_requires_rx_proof() {
+    fn physical_pi_serial_interactive_cutover_requires_service_proof() {
         assert!(serial_driver_task_interactive_cutover_policy(
             true, true, true
         ));
@@ -2283,6 +2321,9 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn physical_pi_serial_idle_completion_is_not_rx_proof() {
+        assert!(serial_driver_task_service_completion_proves_transport(
+            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16(),
+        ));
         assert!(!serial_driver_task_rx_completion_proves_input(
             crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16(),
             0

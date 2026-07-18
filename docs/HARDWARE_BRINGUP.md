@@ -504,6 +504,10 @@ authenticated `cohsh` from the same boot.
 
 ### CYW43 Wi-Fi
 
+This runbook section exercises Milestone 26d task
+`m26d-cyw43-hardware-free-closure` and Reopened Milestone 26b task
+`m26b-wifi-sdio-notification-dpc-closure`.
+
 Wi-Fi is the current research and evidence-closure lane. Source tests and a
 stage-only build do not establish live association or data-path readiness. The
 current image must be reflashed and revalidated with fresh serial and packet
@@ -515,6 +519,36 @@ and 10/10 warm software-reset boots of the same independently read-back image.
 Every counted boot must contain that image's exact `[BUILD]` marker and must
 pass the complete normalizer evidence predicate with `NET_ACTIVE=wifi`; one
 failed boot keeps repeatability open rather than being hidden by extra passes.
+
+On the current shared-core linked-runtime design, the prompt-side supervisor
+must prove the SDIO owner before the CYW43 client. SDIO service registration and
+exact descriptor replay occur first; a later outer turn lowers only SDIO from
+bootstrap priority to its steady contract priority. CYW43 registration and
+descriptor replay follow, and a separate later turn lowers only CYW43. Recovery
+raises and reprograms SDIO, raises and reprograms CYW43 while both remain
+suspended, then resumes, proves, and lowers the SDIO owner before doing so for
+the CYW43 client. Each priority transition, register-programming step, resume,
+descriptor replay, steady-priority transition, and engine replay is admitted
+as its own retained operation. A capture
+that stops at `CYW43_BOOTSTRAP_SUPERVISOR ... status=begin`, shows client-first
+descriptor service, or depends on a legacy root-owned Wi-Fi path is failed
+bootstrap evidence.
+
+Before Wi-Fi supervision begins, physical-Pi serial cutover must have an
+attached linked runtime plus a matching `Idle`, `Progress`, or `FrameReady`
+service completion. That service completion proves the independent operator
+transport; accepted `FrameReady` bytes separately prove RX input and need not be
+present on an idle console. If linked serial service is unproved, the supervisor
+stays retained at the ordinary root console, retries the service proof every
+250 ms, and must report `serial=blocked`, not `serial=ready`; a transient first
+miss must not disable Wi-Fi for the remainder of the boot. While a Wi-Fi HAL
+scope is held, serial uses only that proved
+linked route and local-seat handling consumes already-buffered bytes only; USB
+backend polling, HDMI/echo re-entry, and network polling remain fenced until the
+scope is released. `CYW43_BOOTSTRAP_SUPERVISOR` and deferred failure/result
+records must traverse the linked serial queue (plus `/log/queen.log`) and flush
+on a later operator turn; a raw-UART breadcrumb after cutover is failed
+operator-ownership evidence.
 
 Hardware-free closure is narrower: it requires the retained production
 supervisor, one-child-operation EventPump permit, reciprocal-ring/controller

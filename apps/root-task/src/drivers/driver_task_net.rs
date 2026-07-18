@@ -854,10 +854,12 @@ impl Cyw43DeferredRecovery {
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43BootstrapPhase {
-    RegisterCyw43Service,
-    ReplayCyw43Descriptor,
     RegisterSdioService,
     ReplaySdioDescriptor,
+    LowerSdioPriority,
+    RegisterCyw43Service,
+    ReplayCyw43Descriptor,
+    LowerCyw43Priority,
     CheckSdioPrerequisites,
     HandoffSdioMailbox,
     InitSdioEngine,
@@ -927,7 +929,7 @@ impl Cyw43BootstrapSupervisor {
     pub fn new(config: ConsoleNetConfig) -> Self {
         Self {
             config,
-            phase: Cyw43BootstrapPhase::RegisterCyw43Service,
+            phase: Cyw43BootstrapPhase::RegisterSdioService,
             firmware_phase: Cyw43FirmwarePhase::Transport { attempt: 0 },
             control_phase: Cyw43ControlPhase::Reset,
             turn_id: 0,
@@ -2795,6 +2797,50 @@ impl Cyw43BootstrapSupervisor {
             return Cyw43BootstrapTurnOutcome::Complete;
         }
         match self.phase {
+            Cyw43BootstrapPhase::RegisterSdioService => {
+                if !claim_cyw43_outer_event_turn() {
+                    return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
+                }
+                if !crate::hal::driver_task::register_pi4_bus_ring_service(
+                    SDIO_HOST_DRIVER_TASK_CONTRACT,
+                ) {
+                    return self.fail(DriverTaskNetError::RuntimeInit(
+                        "sdio-ring-service-register",
+                    ));
+                }
+                self.phase = Cyw43BootstrapPhase::ReplaySdioDescriptor;
+                self.pending_outcome("sdio-ring-service-register", true)
+            }
+            Cyw43BootstrapPhase::ReplaySdioDescriptor => {
+                if !claim_cyw43_outer_event_turn() {
+                    return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
+                }
+                match crate::hal::driver_task::step_deferred_runtime_init_descriptor(
+                    SDIO_HOST_DRIVER_TASK_CONTRACT,
+                    DriverTaskHotPath::SdioHost,
+                ) {
+                    crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Pending => {}
+                    crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Complete => {
+                        self.phase = Cyw43BootstrapPhase::LowerSdioPriority;
+                    }
+                    crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Failed(reason) => {
+                        return self.fail(DriverTaskNetError::RuntimeInit(reason));
+                    }
+                }
+                self.pending_outcome("sdio-descriptor-replay", true)
+            }
+            Cyw43BootstrapPhase::LowerSdioPriority => {
+                if !claim_cyw43_outer_event_turn() {
+                    return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
+                }
+                if !crate::hal::driver_task::complete_deferred_cyw43_pair_priority_cutover(
+                    SDIO_HOST_DRIVER_TASK_CONTRACT,
+                ) {
+                    return self.fail(DriverTaskNetError::RuntimeInit("sdio-priority-cutover"));
+                }
+                self.phase = Cyw43BootstrapPhase::RegisterCyw43Service;
+                self.pending_outcome("sdio-priority-cutover", true)
+            }
             Cyw43BootstrapPhase::RegisterCyw43Service => {
                 if !claim_cyw43_outer_event_turn() {
                     return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
@@ -2824,7 +2870,7 @@ impl Cyw43BootstrapSupervisor {
                 ) {
                     crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Pending => {}
                     crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Complete => {
-                        self.phase = Cyw43BootstrapPhase::RegisterSdioService;
+                        self.phase = Cyw43BootstrapPhase::LowerCyw43Priority;
                     }
                     crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Failed(reason) => {
                         return self.fail(DriverTaskNetError::RuntimeInit(reason));
@@ -2832,37 +2878,17 @@ impl Cyw43BootstrapSupervisor {
                 }
                 self.pending_outcome("cyw43-descriptor-replay", true)
             }
-            Cyw43BootstrapPhase::RegisterSdioService => {
+            Cyw43BootstrapPhase::LowerCyw43Priority => {
                 if !claim_cyw43_outer_event_turn() {
                     return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
                 }
-                if !crate::hal::driver_task::register_pi4_bus_ring_service(
-                    SDIO_HOST_DRIVER_TASK_CONTRACT,
+                if !crate::hal::driver_task::complete_deferred_cyw43_pair_priority_cutover(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
                 ) {
-                    return self.fail(DriverTaskNetError::RuntimeInit(
-                        "sdio-ring-service-register",
-                    ));
+                    return self.fail(DriverTaskNetError::RuntimeInit("cyw43-priority-cutover"));
                 }
-                self.phase = Cyw43BootstrapPhase::ReplaySdioDescriptor;
-                self.pending_outcome("sdio-ring-service-register", true)
-            }
-            Cyw43BootstrapPhase::ReplaySdioDescriptor => {
-                if !claim_cyw43_outer_event_turn() {
-                    return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
-                }
-                match crate::hal::driver_task::step_deferred_runtime_init_descriptor(
-                    SDIO_HOST_DRIVER_TASK_CONTRACT,
-                    DriverTaskHotPath::SdioHost,
-                ) {
-                    crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Pending => {}
-                    crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Complete => {
-                        self.phase = Cyw43BootstrapPhase::CheckSdioPrerequisites;
-                    }
-                    crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Failed(reason) => {
-                        return self.fail(DriverTaskNetError::RuntimeInit(reason));
-                    }
-                }
-                self.pending_outcome("sdio-descriptor-replay", true)
+                self.phase = Cyw43BootstrapPhase::CheckSdioPrerequisites;
+                self.pending_outcome("cyw43-priority-cutover", true)
             }
             Cyw43BootstrapPhase::CheckSdioPrerequisites => {
                 if !crate::hal::pi4_pcie::pi4_pcie_link_and_rc_ready_proven()
@@ -21371,7 +21397,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_supervisor_direct_hal_branch_claims_the_outer_turn() {
+    fn cyw43_supervisor_starts_with_sdio_owner_and_claims_the_outer_turn() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
@@ -21383,12 +21409,12 @@ mod tests {
             supervisor.service_turn(&mut hal),
             Cyw43BootstrapTurnOutcome::Pending {
                 turn_id: 1,
-                stage: "cyw43-ring-service-register",
+                stage: "sdio-ring-service-register",
                 operation_executed: true,
             }
         );
         assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
-        assert_eq!(supervisor.phase, Cyw43BootstrapPhase::ReplayCyw43Descriptor);
+        assert_eq!(supervisor.phase, Cyw43BootstrapPhase::ReplaySdioDescriptor);
 
         assert_eq!(
             supervisor.service_turn(&mut hal),
@@ -21399,7 +21425,7 @@ mod tests {
             }
         );
         assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
-        assert_eq!(supervisor.phase, Cyw43BootstrapPhase::ReplayCyw43Descriptor);
+        assert_eq!(supervisor.phase, Cyw43BootstrapPhase::ReplaySdioDescriptor);
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         reset_cyw43_status_flags();
