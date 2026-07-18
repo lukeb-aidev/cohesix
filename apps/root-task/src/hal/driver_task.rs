@@ -391,10 +391,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG,
-    DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
-    DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX, DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -3721,7 +3721,7 @@ fn emit_driver_task_runtime_entry_status(
             progress.aux0,
         ),
     );
-    crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+    crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
 }
 
 /// Wait for a linked runtime to enter its receive loop before descriptor replay.
@@ -5895,7 +5895,7 @@ fn emit_cyw43_sdio_pair_restart_status(phase: Cyw43SdioPairRestartPhase, status:
             CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire),
         ),
     );
-    crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+    crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -5914,7 +5914,7 @@ fn emit_cyw43_sdio_pair_restart_failure(
             CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire),
         ),
     );
-    crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+    crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -6709,15 +6709,34 @@ fn replay_cyw43_sdio_restart_engine_once(
     );
     match run_driver_task_ring_command_retained_turn(context.contract, command) {
         Some(completion)
-            if completion.code == DriverTaskCompletionCode::Progress.as_u16()
-                && completion.detail == DriverTaskFaultCode::None.as_u16()
-                && completion.result == 1 =>
+            if cyw43_sdio_restart_engine_completion_ready(context.hot_path, completion) =>
         {
             Cyw43SdioPairRestartOperationOutcome::Completion(completion)
         }
         Some(_) => Cyw43SdioPairRestartOperationOutcome::Failed,
         None => Cyw43SdioPairRestartOperationOutcome::Pending,
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_sdio_restart_engine_completion_ready(
+    hot_path: DriverTaskHotPath,
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    let expected_detail = match hot_path {
+        // The retained Linux-shaped SDIO power-sequence path reports its
+        // role-specific ready detail on success. Treating that value as a
+        // generic fault detail deterministically fenced every pair restart.
+        DriverTaskHotPath::SdioHost => DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+        DriverTaskHotPath::Cyw43Wifi => DriverTaskFaultCode::None.as_u16(),
+        _ => return false,
+    };
+    completion.code == DriverTaskCompletionCode::Progress.as_u16()
+        && completion.detail == expected_detail
+        && completion.result == 1
+        && completion.frame.offset == 0
+        && completion.frame.len == 0
+        && completion.frame.flags == 0
 }
 
 #[cfg(feature = "kernel")]
@@ -14100,10 +14119,12 @@ mod tests {
                 Cyw43SdioPairRestartOperation::ReadCardInterrupt(_) => {
                     Cyw43SdioPairRestartOperationOutcome::Value(0)
                 }
-                Cyw43SdioPairRestartOperation::ReplayEngine(_) => {
-                    Cyw43SdioPairRestartOperationOutcome::Completion(
-                        DriverTaskCompletionRecord::progress(1, 1),
-                    )
+                Cyw43SdioPairRestartOperation::ReplayEngine(member) => {
+                    let mut completion = DriverTaskCompletionRecord::progress(1, 1);
+                    if member == Cyw43SdioPairMember::Sdio {
+                        completion.detail = DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY;
+                    }
+                    Cyw43SdioPairRestartOperationOutcome::Completion(completion)
                 }
                 Cyw43SdioPairRestartOperation::AdvanceEpoch => {
                     Cyw43SdioPairRestartOperationOutcome::Value(7)
@@ -14210,6 +14231,46 @@ mod tests {
                 .count(),
             CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP * 2
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_restart_engine_replay_requires_each_runtime_success_contract() {
+        let cyw43 = DriverTaskCompletionRecord::progress(41, 1);
+        let mut sdio = DriverTaskCompletionRecord::progress(42, 1);
+        sdio.detail = DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY;
+
+        assert!(cyw43_sdio_restart_engine_completion_ready(
+            DriverTaskHotPath::Cyw43Wifi,
+            cyw43,
+        ));
+        assert!(cyw43_sdio_restart_engine_completion_ready(
+            DriverTaskHotPath::SdioHost,
+            sdio,
+        ));
+        assert!(!cyw43_sdio_restart_engine_completion_ready(
+            DriverTaskHotPath::SdioHost,
+            cyw43,
+        ));
+        assert!(!cyw43_sdio_restart_engine_completion_ready(
+            DriverTaskHotPath::Cyw43Wifi,
+            sdio,
+        ));
+
+        let mut wrong_code = sdio;
+        wrong_code.code = DriverTaskCompletionCode::Fault.as_u16();
+        let mut wrong_result = sdio;
+        wrong_result.result = 0;
+        let mut framed = sdio;
+        framed.frame.len = 1;
+        let mut wrong_detail = sdio;
+        wrong_detail.detail = DriverTaskFaultCode::None.as_u16();
+        for malformed in [wrong_code, wrong_result, framed, wrong_detail] {
+            assert!(!cyw43_sdio_restart_engine_completion_ready(
+                DriverTaskHotPath::SdioHost,
+                malformed,
+            ));
+        }
     }
 
     #[cfg(feature = "kernel")]
