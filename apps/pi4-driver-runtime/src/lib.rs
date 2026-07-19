@@ -12795,6 +12795,37 @@ const CYW43_FOREGROUND_PARENT_OVERLAY_BYTES: usize =
     CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES.div_ceil(8);
 #[cfg(any(target_os = "none", test))]
 const CYW43_FOREGROUND_DEADLINES: usize = 64;
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43ForegroundParentPayloadSnapshot {
+    Empty,
+    Copy(DriverFrameDescriptor),
+    Reject,
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_parent_payload_snapshot(
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    shared_payload_bytes: usize,
+) -> Cyw43ForegroundParentPayloadSnapshot {
+    if descriptor.payload_len == 0 {
+        return Cyw43ForegroundParentPayloadSnapshot::Empty;
+    }
+    let payload = DriverFrameDescriptor {
+        offset: u32::from(descriptor.payload_offset),
+        len: descriptor.payload_len,
+        flags: 0,
+    };
+    if usize::from(descriptor.payload_len) <= CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES
+        && payload.in_runtime_payload(shared_payload_bytes)
+    {
+        Cyw43ForegroundParentPayloadSnapshot::Copy(payload)
+    } else {
+        Cyw43ForegroundParentPayloadSnapshot::Reject
+    }
+}
+
 #[cfg(target_os = "none")]
 const CYW43_FOREGROUND_DEADLINE_LEGACY_SPINS: u8 = 1;
 #[cfg(target_os = "none")]
@@ -13136,22 +13167,18 @@ impl Cyw43ForegroundTransaction {
         self.parent_payload_offset = 0;
         self.parent_payload_len = 0;
         if let Some(descriptor) = descriptor.filter(|descriptor| descriptor.valid()) {
-            let len = usize::from(descriptor.payload_len);
-            let payload = DriverFrameDescriptor {
-                offset: u32::from(descriptor.payload_offset),
-                len: descriptor.payload_len,
-                flags: 0,
-            };
-            if len <= self.parent_payload.len() && payload.in_runtime_payload(shared_payload_bytes)
-            {
-                self.parent_payload_offset = descriptor.payload_offset;
-                self.parent_payload_len = descriptor.payload_len;
-                let base = usize::from(descriptor.payload_offset);
-                for index in 0..len {
-                    self.parent_payload[index] = read_runtime_payload_byte_physical(base + index);
+            match cyw43_foreground_parent_payload_snapshot(descriptor, shared_payload_bytes) {
+                Cyw43ForegroundParentPayloadSnapshot::Empty => {}
+                Cyw43ForegroundParentPayloadSnapshot::Copy(payload) => {
+                    self.parent_payload_offset = descriptor.payload_offset;
+                    self.parent_payload_len = descriptor.payload_len;
+                    let base = payload.offset as usize;
+                    for index in 0..usize::from(payload.len) {
+                        self.parent_payload[index] =
+                            read_runtime_payload_byte_physical(base + index);
+                    }
                 }
-            } else {
-                self.poisoned = true;
+                Cyw43ForegroundParentPayloadSnapshot::Reject => self.poisoned = true,
             }
         }
     }
@@ -40895,6 +40922,67 @@ mod tests {
             "a terminal poll cannot submit the next reciprocal action in the same turn",
         );
         assert_eq!(io.command_issue_count(), 1);
+    }
+
+    #[test]
+    fn foreground_snapshot_accepts_every_valid_zero_payload_cyw43_command() {
+        for op in [
+            DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL,
+            DRIVER_RUNTIME_CYW43_OP_RELEASE,
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+        ] {
+            let descriptor = DriverRuntimeCyw43CommandDescriptor {
+                op,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            };
+            assert!(descriptor.valid(), "zero-payload op {op} must be ABI-valid");
+            assert_eq!(
+                cyw43_foreground_parent_payload_snapshot(
+                    descriptor,
+                    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize,
+                ),
+                Cyw43ForegroundParentPayloadSnapshot::Empty,
+                "zero-payload op {op} must not poison its retained transaction",
+            );
+        }
+    }
+
+    #[test]
+    fn foreground_snapshot_bounds_only_nonempty_parent_payloads() {
+        let shared = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            payload_len: 4,
+            total_len: 4,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert!(shared.valid());
+        assert_eq!(
+            cyw43_foreground_parent_payload_snapshot(
+                shared,
+                DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize,
+            ),
+            Cyw43ForegroundParentPayloadSnapshot::Copy(DriverFrameDescriptor {
+                offset: u32::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE),
+                len: 4,
+                flags: 0,
+            }),
+        );
+
+        assert_eq!(
+            cyw43_foreground_parent_payload_snapshot(
+                DriverRuntimeCyw43CommandDescriptor {
+                    payload_offset: 0,
+                    ..shared
+                },
+                DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize,
+            ),
+            Cyw43ForegroundParentPayloadSnapshot::Reject,
+            "a nonempty payload may not alias command/completion metadata",
+        );
     }
 
     #[test]
