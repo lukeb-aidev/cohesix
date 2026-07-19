@@ -4121,6 +4121,9 @@ def cyw43_raw_command_progress_blocker(event: TraceEvent) -> str | None:
         "cyw43-backplane-pullup-clear": (
             "cyw43-backplane-pullup-clear-no-reply"
         ),
+        "cyw43-backplane-pullup-skipped": (
+            "cyw43-backplane-pullup-skipped-no-reply"
+        ),
         "cyw43-backplane-pullup-fault-contained": (
             "cyw43-backplane-pullup-fault-contained"
         ),
@@ -7125,10 +7128,25 @@ def summarize_terminal_wifi_diag_failure(
 
     terminal: tuple[int, str, str, int] | None = None
     causal_preserved = False
+    boundary_proves_terminal = False
     for event in events:
         raw = event.raw.lower()
         diag_gate = startup_diag_gate(raw, "wifi")
         if diag_gate is None:
+            if terminal is not None and raw.startswith("wifi: evidence boundary"):
+                proof_gate = parse_hex_int(event.fields.get("proof_gate"))
+                frontier_gate = parse_hex_int(event.fields.get("frontier_gate"))
+                failing_gate = parse_hex_int(event.fields.get("failing_gate"))
+                boundary_exact = normalize_wifi_exact(
+                    event.fields.get("failure_domain", "")
+                )
+                boundary_proves_terminal = (
+                    proof_gate == terminal[0]
+                    and frontier_gate == proof_gate
+                    and failing_gate == terminal[0] + 1
+                    and boundary_exact == terminal[1]
+                )
+                continue
             if terminal is not None and raw.startswith("wifi: cyw43 fault"):
                 exact = normalize_wifi_exact(event.fields.get("detail", ""))
                 if exact == terminal[1]:
@@ -7157,6 +7175,7 @@ def summarize_terminal_wifi_diag_failure(
             phase = event.fields.get("name") or f"wifi-gate-{diag_gate}"
             terminal = (max(0, diag_gate - 1), exact, phase, event.line)
             causal_preserved = False
+            boundary_proves_terminal = False
             continue
         if (
             terminal is not None
@@ -7165,7 +7184,8 @@ def summarize_terminal_wifi_diag_failure(
         ):
             terminal = None
             causal_preserved = False
-    return terminal if causal_preserved else None
+            boundary_proves_terminal = False
+    return terminal if causal_preserved or boundary_proves_terminal else None
 
 
 def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:

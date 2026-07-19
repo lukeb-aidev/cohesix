@@ -690,10 +690,11 @@ terminal failure/recovery record is failed liveness evidence.
 
 Backplane attach advances through a retained generation-bound ALP/window cursor,
 not a synchronous private loop. One outer EventPump turn may perform one exact
-ALP request or read, one retained deadline observation, one FORCE_ALP or pull-up
-write, one window-register CMD52, one ChipCommon CMD53, one continuation grant,
-or one completion poll. A terminal child or deadline poll records the result and
-returns; the next attach action requires a later turn. Each non-ready ALP read
+ALP request or read, one retained deadline observation, one FORCE_ALP, one
+zero-operation Pi pull-up-policy transition, one window-register CMD52, one
+ChipCommon CMD53, one continuation grant, or one completion poll. A terminal
+child or deadline poll records the result and returns; the next attach action
+requires a later turn. Each non-ready ALP read
 checkpoints the one-second absolute deadline, last `CHIPCLKCSR` value, and poll
 count, then closes that foreground transaction. Thus a long, still-within-
 deadline ALP wait does not accumulate against the retained transaction's
@@ -701,15 +702,19 @@ deadline ALP wait does not accumulate against the retained transaction's
 
 Serial evidence should name the exact frontier rather than leaving the generic
 backplane marker as an ALP diagnosis: ALP request, ALP poll, FORCE_ALP, its
-65-microsecond settle, pull-up clear, contained pull-up fault, ChipCommon read,
-and each LOW/MID/HIGH backplane-window CMD52 have separate progress markers. The
-post-settle `SBSDIO_FUNC1_SDIOPULLUP=0` command is a Linux-compatible one-shot.
-An exact fault is tolerated only when command-local telemetry proves the same
-sequence, generation, CMD52 fingerprint, Function 1 address/value, nonzero
-failure, stable quiescent ring, and successful `CONTAINED` disposition. An
-issued-unknown, `OWNER_PATH_POISONED`, uncontained, stale, or malformed result
-must poison the generation and request the ordered pair restart; operators must
-not interpret it as a harmless best-effort write or retry it in place.
+65-microsecond settle, the Pi pull-up-policy skip, ChipCommon read, and each
+LOW/MID/HIGH backplane-window CMD52 have separate progress markers. Current Pi
+production must emit `BACKPLANE_PULLUP_SKIPPED` and no Function 1 descriptor for
+`SBSDIO_FUNC1_SDIOPULLUP`. Upstream brcmfmac treats that optional write as best
+effort, but a post-issue fault on this BCM2711 path can poison the next CMD52;
+resetting the host does not prove card-side non-issue. Initial attach and
+generation reprobe therefore reject it. Any other issued-unknown,
+`OWNER_PATH_POISONED`, stale, or malformed result must poison the generation and
+request the ordered pair restart; host quiescence is not permission to continue
+or retry in place.
+Card selection uses CMD7 with the SDIO R1b short-busy response. Only the entry
+inhibit wait before `SDHCI_COMMAND` is written is retryable; a busy timeout after
+issue is retained as post-issue quiescence and cannot be replayed in-generation.
 
 The retained CYW43 transaction keeps its full 1,024-action and 128 KiB payload
 capacity in loader-zeroed `SHT_NOBITS` pages; the HAL loader must zero those
@@ -808,8 +813,14 @@ scope is held, serial uses only that proved
 linked route and local-seat handling consumes already-buffered bytes only; USB
 backend polling, HDMI/echo re-entry, and network polling remain fenced until the
 scope is released. High-impact `CYW43_BOOTSTRAP_SUPERVISOR` lifecycle records
-are retained in the bounded `/log/queen.log` ledger and given bounded physical-
-console priority: a terminal `ready`, `exhausted`, or `permanent` record may
+retain their exact machine-readable form on serial and in the bounded
+`/log/queen.log` ledger. HDMI instead shows a concise `[drivers] WiFi ...`
+semantic rendering on a later isolated-display turn; it must not render the raw
+supervisor record. The `telemetry_sinks=serial+qlog+hdmi` field declares the
+configured routing targets without requiring byte-identical presentation; it
+is not proof that an unavailable or saturated display accepted the mirror.
+The serial record receives bounded physical-console priority: a terminal
+`ready`, `exhausted`, or `permanent` record may
 evict only an older nonterminal background record, never an `ACK`/`ERR`/`END`,
 prompt, or in-progress command line. The typed `[net-console] deferred failed
 detail=...` record immediately preceding generic `permanent` shares the

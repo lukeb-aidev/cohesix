@@ -47,6 +47,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW,
@@ -9707,6 +9708,9 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
             "cyw43-backplane-force-alp-settle"
         }
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR => "cyw43-backplane-pullup-clear",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED => {
+            "cyw43-backplane-pullup-skipped"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED => {
             "cyw43-backplane-pullup-fault-contained"
         }
@@ -21113,6 +21117,10 @@ mod tests {
             (
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
                 "cyw43-backplane-pullup-clear",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED,
+                "cyw43-backplane-pullup-skipped",
             ),
             (
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED,

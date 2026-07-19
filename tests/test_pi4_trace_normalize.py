@@ -3185,6 +3185,11 @@ def test_gate_summary_refines_cyw43_release_no_reply_with_last_release_marker() 
             "cyw43-backplane-window-high",
             "cyw43-backplane-window-high-no-reply",
         ),
+        (
+            457,
+            "cyw43-backplane-pullup-skipped",
+            "cyw43-backplane-pullup-skipped-no-reply",
+        ),
     ],
 )
 def test_gate_summary_preserves_exact_linked_backplane_progress(
@@ -3240,6 +3245,11 @@ def test_gate_summary_preserves_exact_linked_backplane_progress(
             456,
             "cyw43-backplane-window-high",
             "cyw43-backplane-window-high-no-reply",
+        ),
+        (
+            457,
+            "cyw43-backplane-pullup-skipped",
+            "cyw43-backplane-pullup-skipped-no-reply",
         ),
     ],
 )
@@ -3490,6 +3500,39 @@ def test_gate_summary_keeps_primary_gate_six_fault_over_preserved_recovery() -> 
     assert record["WIFI_EXACT"] == "cyw43-sdio-descriptor-transfer-failed"
     assert record["WIFI_PHASE"] == "cyw43-firmware-chunk"
     assert record["WIFI_BLOCKER_LINE"] == 5
+
+
+def test_gate_summary_uses_explicit_gate_six_boundary_over_generic_later_gate() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 5 name=backplane-window status=inferred "
+            "evidence=programmed=n/a next=firmware-upload",
+            "wifi: gate 6 name=firmware-upload status=fail "
+            "evidence=uploaded=no verified=no fault_detail=0x5103 "
+            "next=function2-ready",
+            "wifi: gate 7 name=function2-ready status=blocked "
+            "dependency=not-reached-due-to-gate-6 next=firmware-channel",
+            "wifi: evidence sdio_status "
+            "descriptor_status=sdio-descriptor-transfer-failed "
+            "transfer_stage=command transfer_status=0x0c8000 "
+            "transfer_reason=sdhci-command retry=none",
+            "wifi: evidence boundary console_client=root-net-console "
+            "hal=admission-descriptor-diagnostics-only "
+            "linked_runtime_owner=cyw43+sdio "
+            "failure_domain=sdio-descriptor-transfer-failed "
+            "direct_proof_gate=0 proof_gate=5 frontier_gate=5 "
+            "failing_gate=6 target_gate=10",
+            "wifi: cyw43 fault stage=cyw43-transport-init op=1 "
+            "detail=0x5103 reason=",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE"] == 5
+    assert record["WIFI_BLOCKER"] == "cyw43-sdio-descriptor-transfer-failed"
+    assert record["WIFI_EXACT"] == "cyw43-sdio-descriptor-transfer-failed"
+    assert record["WIFI_PHASE"] == "cyw43-transport-init"
 
 
 def test_gate_summary_fails_closed_on_cyw43_firmware_upload_pass_with_fault() -> None:

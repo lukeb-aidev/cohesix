@@ -1331,9 +1331,9 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL: u32 = 448;
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP: u32 = 449;
 /// CYW43 retained backplane attach is consuming one 65-us settle turn.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE: u32 = 450;
-/// CYW43 retained backplane attach is issuing the one-shot extra-pull-up clear.
+/// Legacy capture: CYW43 issued the one-shot extra-pull-up clear.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR: u32 = 451;
-/// CYW43 accepted an exact contained fault from Linux's best-effort pull-up clear.
+/// Reserved legacy value for captures that accepted a contained pull-up fault.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED: u32 = 452;
 /// CYW43 retained backplane attach is reading the first ChipCommon word.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ: u32 = 453;
@@ -1343,6 +1343,8 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW: u32 = 454;
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_MID: u32 = 455;
 /// CYW43 retained attach is programming the ChipCommon window high byte.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH: u32 = 456;
+/// CYW43 retained backplane attach skipped the optional Pi extra-pull-up clear.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED: u32 = 457;
 /// CYW43 runtime proved card selection/adoption.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY: u32 = 112;
 /// CYW43 runtime is programming Function 1 block size.
@@ -4272,6 +4274,22 @@ mod tests {
         assert_ne!(
             DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
             DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+        );
+    }
+
+    #[test]
+    fn pullup_progress_preserves_legacy_values_and_uses_a_distinct_skip_value() {
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
+            451
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED,
+            452
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED,
+            457
         );
     }
 

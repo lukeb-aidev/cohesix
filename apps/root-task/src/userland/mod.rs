@@ -813,6 +813,65 @@ fn format_deferred_net_bootstrap_supervisor_semantic_status(
     feature = "kernel",
     feature = "net-console"
 ))]
+pub(crate) fn format_deferred_net_bootstrap_supervisor_display_status(
+    attempt: u32,
+    status: DeferredNetSupervisorStatus,
+    backoff_ms: u64,
+    serial_ready: bool,
+) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+    if !status.valid_attempt(attempt) {
+        return None;
+    }
+    let mut line = HeaplessString::new();
+    let failed = match status {
+        DeferredNetSupervisorStatus::Preflight if serial_ready => {
+            line.push_str("[drivers] WiFi operator path ready; bootstrap pending")
+                .is_err()
+        }
+        DeferredNetSupervisorStatus::Preflight => {
+            line.push_str("[drivers] WiFi waiting for safe serial path; bootstrap paused")
+                .is_err()
+        }
+        DeferredNetSupervisorStatus::Begin => write!(
+            line,
+            "[drivers] WiFi bootstrap attempt {attempt}/{CYW43_BOOTSTRAP_MAX_ATTEMPTS} starting"
+        )
+        .is_err(),
+        DeferredNetSupervisorStatus::Recovery => write!(
+            line,
+            "[drivers] WiFi recovery attempt {attempt}/{CYW43_BOOTSTRAP_MAX_ATTEMPTS} starting"
+        )
+        .is_err(),
+        DeferredNetSupervisorStatus::Backoff => write!(
+            line,
+            "[drivers] WiFi attempt {attempt}/{CYW43_BOOTSTRAP_MAX_ATTEMPTS} paused; retry in {backoff_ms} ms"
+        )
+        .is_err(),
+        DeferredNetSupervisorStatus::Ready => line
+            .push_str("[drivers] WiFi driver ready; association and DHCP continuing")
+            .is_err(),
+        DeferredNetSupervisorStatus::Exhausted => write!(
+            line,
+            "[drivers] WiFi unavailable after {CYW43_BOOTSTRAP_MAX_ATTEMPTS} attempts; diagnostics remain active"
+        )
+        .is_err(),
+        DeferredNetSupervisorStatus::Permanent => line
+            .push_str(
+                "[drivers] WiFi unavailable: non-retryable startup failure; diagnostics remain active",
+            )
+            .is_err(),
+    };
+    if failed {
+        return None;
+    }
+    Some(line)
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
 fn format_deferred_net_bootstrap_supervisor_linked_route(
     semantic: &str,
     console_sequence: u64,
@@ -889,12 +948,27 @@ fn emit_deferred_net_bootstrap_supervisor_status<
         );
         return;
     };
+    let Some(display_line) = format_deferred_net_bootstrap_supervisor_display_status(
+        attempt,
+        status,
+        backoff_ms,
+        serial_ready,
+    ) else {
+        emit_deferred_net_operator_line(
+            pump,
+            "CYW43_BOOTSTRAP_STATUS_FORMAT_ERROR action=operator-diagnostics acceptance=red",
+            raw_fallback_allowed,
+        );
+        return;
+    };
     // Preserve the full-fidelity record without a logger prefix. Once the
     // linked route is active this is enqueue-only; its next ordinary operator
     // turn performs the flush, separately from any CYW43 operation. Before
     // cutover, pass only the semantic payload to the raw route because that
     // route appends its own ordering suffix.
-    if !pump.queue_cyw43_bootstrap_operator_line(linked_line.as_str()) && raw_fallback_allowed {
+    if !pump.queue_cyw43_bootstrap_supervisor_status(linked_line.as_str(), display_line.as_str())
+        && raw_fallback_allowed
+    {
         let raw_console_sequence = match u32::try_from(console_sequence) {
             Ok(sequence) => sequence,
             Err(_) => u32::MAX,
@@ -2126,6 +2200,83 @@ mod tests {
             true,
         )
         .is_none());
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn cyw43_supervisor_display_status_is_concise_and_machine_record_free() {
+        for (attempt, status, backoff_ms, serial_ready, expected) in [
+            (
+                0,
+                super::DeferredNetSupervisorStatus::Preflight,
+                0,
+                true,
+                "[drivers] WiFi operator path ready; bootstrap pending",
+            ),
+            (
+                0,
+                super::DeferredNetSupervisorStatus::Preflight,
+                0,
+                false,
+                "[drivers] WiFi waiting for safe serial path; bootstrap paused",
+            ),
+            (
+                1,
+                super::DeferredNetSupervisorStatus::Begin,
+                0,
+                true,
+                "[drivers] WiFi bootstrap attempt 1/5 starting",
+            ),
+            (
+                2,
+                super::DeferredNetSupervisorStatus::Recovery,
+                0,
+                true,
+                "[drivers] WiFi recovery attempt 2/5 starting",
+            ),
+            (
+                3,
+                super::DeferredNetSupervisorStatus::Backoff,
+                u64::MAX,
+                true,
+                "[drivers] WiFi attempt 3/5 paused; retry in 18446744073709551615 ms",
+            ),
+            (
+                4,
+                super::DeferredNetSupervisorStatus::Ready,
+                0,
+                true,
+                "[drivers] WiFi driver ready; association and DHCP continuing",
+            ),
+            (
+                5,
+                super::DeferredNetSupervisorStatus::Exhausted,
+                0,
+                true,
+                "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active",
+            ),
+            (
+                5,
+                super::DeferredNetSupervisorStatus::Permanent,
+                0,
+                true,
+                "[drivers] WiFi unavailable: non-retryable startup failure; diagnostics remain active",
+            ),
+        ] {
+            let line = super::format_deferred_net_bootstrap_supervisor_display_status(
+                attempt,
+                status,
+                backoff_ms,
+                serial_ready,
+            )
+            .expect("bounded display status must fit");
+            assert_eq!(line.as_str(), expected);
+            assert!(!line.contains("CYW43_BOOTSTRAP_SUPERVISOR"));
+        }
     }
 
     #[cfg(all(

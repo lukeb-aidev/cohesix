@@ -388,8 +388,12 @@ This as-built closure is authorized by Milestone 26d task
   retained `TRANSPORT_INIT` turn request one generation reset from the SDIO
   owner. A later turn starts fresh owner-side enumeration in Linux order:
   startup host configuration, `CMD0`, discovery `CMD5(0)`, bounded ready
-  `CMD5(OCR)`, `CMD3`, and `CMD7` with an ordinary short R1 response. Generation
+  `CMD5(OCR)`, `CMD3`, and `CMD7` with the required short-busy R1b response. Generation
   reset completion, enumeration, and generation commit remain separate turns.
+  Same-command retries are admitted only for an entry-inhibit result proving
+  the command register was never written. A CMD7 busy timeout is recorded as
+  post-issue quiescence; command, response, busy, and later failure stages are
+  issued-unknown and leave through pair recovery without replay.
   A pair restart already performs its owner-side physical reset and therefore
   must not trigger a second CYW43-requested power cycle in the same episode.
 - The physical Pi profile places SDIO and CYW43 on the same driver core. Both
@@ -489,7 +493,7 @@ This as-built closure is authorized by Milestone 26d task
   carried by the ABI; the current fixed profile uses Linux's one-second
   fallback. Backplane attach is a generation- and request-bound retained
   cursor with explicit `ALP request`, `ALP poll`, `FORCE_ALP`, `FORCE_ALP
-  settle`, `pull-up clear`, `ChipCommon read`, and `complete` phases. ALP
+  settle`, `pull-up policy`, `ChipCommon read`, and `complete` phases. ALP
   availability uses one absolute one-second elapsed deadline. Each exact
   `CHIPCLKCSR` poll checkpoints the cursor's deadline, last value, and poll
   count, then releases the foreground trace before a later outer EventPump
@@ -499,24 +503,24 @@ This as-built closure is authorized by Milestone 26d task
   excluding only asynchronous availability bits.
 
   After `FORCE_ALP`, the retained cursor preserves the 65 microsecond settle.
-  Both a nonterminal deadline observation and the terminal observation consume
-  their admitted outer turn; only a later turn may begin the pull-up command.
-  The Linux-compatible one-shot
-  `SBSDIO_FUNC1_SDIOPULLUP=0` write is never replayed in the same generation.
-  Success advances normally. A write fault may advance only when the exact
-  command-local completion proves successful containment: sequence,
-  generation, CMD52 write fingerprint, Function 1 address/value, nonzero
-  failure result, stable quiescent owner ring, and the `CONTAINED` fault-frame
-  disposition must all match. `OWNER_PATH_POISONED`, failed containment,
-  malformed or stale telemetry, a stale generation, and issued-unknown
-  ownership poison the generation and enter deterministic SDIO-first/CYW43-
-  second pair recovery instead of being ignored or retried.
+  Both nonterminal and terminal deadline observations consume their admitted
+  turn. A later `pull-up policy` turn deliberately does not issue
+  `SBSDIO_FUNC1_SDIOPULLUP=0` on the current BCM2711 profile. Upstream brcmfmac
+  issues that optional write with a null error sink, but Cohesix hardware
+  evidence showed that its failed CMD52 can poison the following command, and
+  the linked owner cannot prove safe continuation after issued-unknown
+  ownership. The policy turn publishes `BACKPLANE_PULLUP_SKIPPED`, performs no
+  child-runtime/HAL operation, and returns; only a later turn may begin the
+  ChipCommon window. Initial attach and generation reprobe reject every
+  descriptor targeting `SBSDIO_FUNC1_SDIOPULLUP`.
 
   Attach diagnostics identify the exact retained frontier with distinct
   `BACKPLANE_ALP_REQUEST`, `BACKPLANE_ALP_POLL`,
   `BACKPLANE_FORCE_ALP`, `BACKPLANE_FORCE_ALP_SETTLE`,
-  `BACKPLANE_PULLUP_CLEAR`, `BACKPLANE_PULLUP_FAULT_CONTAINED`, and
-  `BACKPLANE_CHIPCOMMON_READ` progress. The first ChipCommon access additionally
+  `BACKPLANE_PULLUP_SKIPPED`, and `BACKPLANE_CHIPCOMMON_READ` progress.
+  `BACKPLANE_PULLUP_CLEAR` and `BACKPLANE_PULLUP_FAULT_CONTAINED` describe
+  legacy captures only and are not current-image acceptance progress. The first
+  ChipCommon access additionally
   publishes `BACKPLANE_WINDOW_LOW`, `BACKPLANE_WINDOW_MID`, and
   `BACKPLANE_WINDOW_HIGH` immediately before the matching CMD52 programming
   operations. Each child submission, continuation grant, completion poll, and
@@ -592,8 +596,9 @@ This as-built closure is authorized by Milestone 26d task
   records remain authoritative, while a fixed twelve-entry, episode-sized HDMI
   FIFO preserves every start/backoff/terminal milestone during display delay.
   The wire suffix `recovery=full telemetry_sinks=serial+qlog+hdmi` declares the
-  configured fail-closed full-pair recovery policy and all three retained sinks;
-  `qlog` denotes `/log/queen.log`, and does not claim a restart has already run.
+  configured fail-closed full-pair recovery policy and three routing targets;
+  `qlog` denotes `/log/queen.log`. It proves neither that a restart already ran
+  nor that an unavailable or saturated display accepted the semantic mirror.
   Terminal status has bounded priority over older nonterminal breadcrumbs but
   can never evict an `ACK`/`ERR`/`END` tail or prompt.
   One retained copy can be submitted only during each later ordinary `Display`
@@ -667,7 +672,14 @@ This as-built closure is authorized by Milestone 26d task
   High-impact `CYW43_BOOTSTRAP_SUPERVISOR` records use a retained serial class:
   when the ordinary background partition is full, they may evict only an older
   nonterminal background breadcrumb and can never evict an `ACK`/`ERR`/`END`
-  tail or prompt. Their physical delivery occurs on a later operator turn.
+  tail or prompt. Serial and `/log/queen.log` retain the exact machine record.
+  The twelve-entry HDMI FIFO retains one concise typed `[drivers] WiFi ...`
+  rendering of each transition in the same order; HDMI does not receive or
+  display the machine record verbatim. Thus
+  `telemetry_sinks=serial+qlog+hdmi` declares the configured semantic routing
+  targets, not byte-identical formatting or delivery proof. When HDMI is
+  available and its bounded FIFO admits the transition, one display rendering
+  is submitted only on a later `Display` turn.
   The typed `[net-console] deferred failed detail=...` record immediately
   preceding a generic `permanent` status shares that retained serial class.
   Other nonterminal detail/result and sparse `CYW43_BOOTSTRAP_TURN` lines remain

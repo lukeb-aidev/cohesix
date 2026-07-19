@@ -1833,13 +1833,8 @@ enum LinkedRuntimeServicePhase {
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_bootstrap_hdmi_milestone(line: &str) -> bool {
-    line.as_bytes().starts_with(b"CYW43_BOOTSTRAP_SUPERVISOR ")
-}
-
-#[cfg(feature = "kernel")]
 fn cyw43_bootstrap_serial_milestone(line: &str) -> bool {
-    cyw43_bootstrap_hdmi_milestone(line)
+    line.as_bytes().starts_with(b"CYW43_BOOTSTRAP_SUPERVISOR ")
         || line
             .as_bytes()
             .starts_with(b"[net-console] deferred failed detail=")
@@ -2702,30 +2697,7 @@ where
     /// operation from sharing one outer operation permit.
     #[cfg(feature = "kernel")]
     pub fn queue_cyw43_bootstrap_operator_line(&mut self, line: &str) -> bool {
-        let supervisor_milestone = cyw43_bootstrap_hdmi_milestone(line);
         let serial_milestone = cyw43_bootstrap_serial_milestone(line);
-        if supervisor_milestone {
-            if self.local_seat.is_some() {
-                let mut milestone = HeaplessString::new();
-                if milestone.push_str(line).is_err() {
-                    return false;
-                }
-                if self
-                    .pending_cyw43_bootstrap_hdmi_milestones
-                    .push_back(milestone)
-                    .is_ok()
-                {
-                    self.cyw43_bootstrap_hdmi_pending = true;
-                } else {
-                    // The finite supervisor episode is sized to fit this queue.
-                    // Preserve existing HDMI milestones without coupling HDMI
-                    // backpressure to the independent serial/log route below.
-                    crate::log_buffer::append_log_line(
-                        "CYW43_BOOTSTRAP_HDMI_QUEUE status=full action=preserve-existing-milestones",
-                    );
-                }
-            }
-        }
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && !crate::serial::serial_linked_runtime_transport_active()
         {
@@ -2761,6 +2733,40 @@ where
             return true;
         }
         self.queue_physical_console_output(PendingConsoleOutputKind::BackgroundLine, line)
+    }
+
+    /// Queue one machine-readable supervisor record and its concise HDMI view.
+    ///
+    /// Serial and qlog retain the stable `CYW43_BOOTSTRAP_SUPERVISOR` schema.
+    /// HDMI receives only the bounded operator-facing `[drivers] WiFi` line on
+    /// a later display turn, after the current CYW43/HAL operation has ended.
+    #[cfg(feature = "kernel")]
+    pub fn queue_cyw43_bootstrap_supervisor_status(
+        &mut self,
+        serial_line: &str,
+        hdmi_line: &str,
+    ) -> bool {
+        if self.local_seat.is_some() {
+            let mut milestone = HeaplessString::new();
+            if milestone.push_str(hdmi_line).is_err() {
+                return false;
+            }
+            if self
+                .pending_cyw43_bootstrap_hdmi_milestones
+                .push_back(milestone)
+                .is_ok()
+            {
+                self.cyw43_bootstrap_hdmi_pending = true;
+            } else {
+                // The finite supervisor episode is sized to fit this queue.
+                // Preserve existing HDMI milestones without coupling HDMI
+                // backpressure to the independent serial/log route below.
+                crate::log_buffer::append_log_line(
+                    "CYW43_BOOTSTRAP_HDMI_QUEUE status=full action=preserve-existing-milestones",
+                );
+            }
+        }
+        self.queue_cyw43_bootstrap_operator_line(serial_line)
     }
 
     /// Retain and service one high-impact Wi-Fi milestone on one display turn.
@@ -11958,6 +11964,7 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW
@@ -12131,6 +12138,9 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR => {
                 "cyw43-backplane-pullup-clear-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED => {
+                "cyw43-backplane-pullup-skipped-no-reply"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED => {
                 "cyw43-backplane-pullup-fault-contained"
@@ -12338,7 +12348,10 @@ where
                 "verify-cyw43-force-alp-virtual-counter-settle"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR => {
-                "verify-cyw43-extra-pullup-clear-cmd52-write"
+                "verify-legacy-cyw43-extra-pullup-clear-cmd52-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED => {
+                "continue-cyw43-chipcommon-attach-without-optional-pullup-write"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED => {
                 "continue-cyw43-chipcommon-attach-after-contained-pullup-fault"
@@ -23740,7 +23753,12 @@ mod tests {
             (
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
                 "cyw43-backplane-pullup-clear-no-reply",
-                "verify-cyw43-extra-pullup-clear-cmd52-write",
+                "verify-legacy-cyw43-extra-pullup-clear-cmd52-write",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED,
+                "cyw43-backplane-pullup-skipped-no-reply",
+                "continue-cyw43-chipcommon-attach-without-optional-pullup-write",
             ),
             (
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED,
@@ -24785,6 +24803,7 @@ mod tests {
 
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
+        crate::log_buffer::clear_for_test();
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::repeated(2, 1);
@@ -24809,12 +24828,24 @@ mod tests {
             false,
         )
         .expect("maximum supervisor status must fit exactly");
+        let display = crate::userland::format_deferred_net_bootstrap_supervisor_display_status(
+            5,
+            crate::userland::DeferredNetSupervisorStatus::Permanent,
+            u64::MAX,
+            false,
+        )
+        .expect("maximum terminal display status must fit");
         assert_eq!(status.len(), DEFAULT_LINE_CAPACITY);
 
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_local_seat(&mut local_seat);
-            assert!(pump.queue_cyw43_bootstrap_operator_line(status.as_str()));
+            assert!(
+                pump.queue_cyw43_bootstrap_supervisor_status(status.as_str(), display.as_str(),)
+            );
+            let logged = crate::log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, 8>();
+            assert!(logged.iter().any(|line| line == status.as_str()));
+            assert!(!logged.iter().any(|line| line == display.as_str()));
             assert_eq!(
                 pump.pending_console_output
                     .last()
@@ -24825,7 +24856,7 @@ mod tests {
                 pump.pending_cyw43_bootstrap_hdmi_milestones
                     .back()
                     .map(|line| line.as_str()),
-                Some(status.as_str()),
+                Some(display.as_str()),
             );
 
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
@@ -24849,7 +24880,7 @@ mod tests {
         assert!(local_seat
             .mirrored_lines_snapshot()
             .iter()
-            .any(|line| line == status.as_str()));
+            .any(|line| line == display.as_str()));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -25156,7 +25187,8 @@ mod tests {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_local_seat(&mut local_seat);
             let status = "CYW43_BOOTSTRAP_SUPERVISOR attempt=2 status=recovery";
-            assert!(pump.queue_cyw43_bootstrap_operator_line(status));
+            let display = "[drivers] WiFi recovery attempt 2/5 starting";
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status(status, display));
             assert!(pump.cyw43_bootstrap_hdmi_pending);
             assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
 
@@ -25177,7 +25209,11 @@ mod tests {
         assert!(local_seat
             .mirrored_lines_snapshot()
             .iter()
-            .any(|line| line.contains("status=recovery")));
+            .any(|line| line == "[drivers] WiFi recovery attempt 2/5 starting"));
+        assert!(!local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line.contains("CYW43_BOOTSTRAP_SUPERVISOR")));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -25265,7 +25301,21 @@ mod tests {
                 .expect("production supervisor status must fit")
             })
             .collect();
+        let displays: Vec<HeaplessString<DEFAULT_LINE_CAPACITY>> = specs
+            .iter()
+            .enumerate()
+            .map(|(index, (attempt, status, serial_ready))| {
+                crate::userland::format_deferred_net_bootstrap_supervisor_display_status(
+                    *attempt,
+                    *status,
+                    index as u64 * 1_000,
+                    *serial_ready,
+                )
+                .expect("production display status must fit")
+            })
+            .collect();
         assert_eq!(statuses.len(), CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY);
+        assert_eq!(displays.len(), CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY);
         let rejected = crate::userland::format_deferred_net_bootstrap_supervisor_status(
             u64::MAX,
             5,
@@ -25276,12 +25326,21 @@ mod tests {
             false,
         )
         .expect("maximum terminal supervisor status must fit");
+        let rejected_display =
+            crate::userland::format_deferred_net_bootstrap_supervisor_display_status(
+                5,
+                crate::userland::DeferredNetSupervisorStatus::Ready,
+                u64::MAX,
+                false,
+            )
+            .expect("maximum terminal display status must fit");
 
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_local_seat(&mut local_seat);
-            for status in &statuses {
-                assert!(pump.queue_cyw43_bootstrap_operator_line(status.as_str()));
+            for (status, display) in statuses.iter().zip(&displays) {
+                assert!(pump
+                    .queue_cyw43_bootstrap_supervisor_status(status.as_str(), display.as_str(),));
             }
             assert_eq!(
                 pump.pending_cyw43_bootstrap_hdmi_milestones.len(),
@@ -25315,7 +25374,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 retained,
-                statuses
+                displays
                     .iter()
                     .map(|line| line.as_str().to_owned())
                     .collect::<Vec<_>>()
@@ -25345,7 +25404,10 @@ mod tests {
                     line.as_str(),
                 ));
             }
-            assert!(pump.queue_cyw43_bootstrap_operator_line(rejected.as_str()));
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status(
+                rejected.as_str(),
+                rejected_display.as_str(),
+            ));
             let retained_after_rejection: Vec<String> = pump
                 .pending_cyw43_bootstrap_hdmi_milestones
                 .iter()
@@ -25392,12 +25454,12 @@ mod tests {
         let mirrored: Vec<String> = local_seat
             .mirrored_lines_snapshot()
             .iter()
-            .filter(|line| line.starts_with("CYW43_BOOTSTRAP_SUPERVISOR "))
+            .filter(|line| line.starts_with("[drivers] WiFi "))
             .map(|line| line.as_str().to_owned())
             .collect();
         assert_eq!(
             mirrored,
-            statuses
+            displays
                 .iter()
                 .map(|line| line.as_str().to_owned())
                 .collect::<Vec<_>>()
@@ -25442,8 +25504,9 @@ mod tests {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_network(&mut net)
                 .with_local_seat(&mut local_seat);
-            assert!(pump.queue_cyw43_bootstrap_operator_line(
-                "CYW43_BOOTSTRAP_SUPERVISOR attempt=5 status=exhausted"
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status(
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=5 status=exhausted",
+                "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active",
             ));
             pump.quarantine_network_service_after_cyw43_exhaustion();
 
@@ -25468,10 +25531,9 @@ mod tests {
         );
         let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
         assert!(rendered.contains("Commands:"), "{rendered}");
-        assert!(local_seat
-            .mirrored_lines_snapshot()
-            .iter()
-            .any(|line| line.contains("status=exhausted")));
+        assert!(local_seat.mirrored_lines_snapshot().iter().any(|line| {
+            line == "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active"
+        }));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
