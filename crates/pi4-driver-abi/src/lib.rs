@@ -1350,11 +1350,12 @@ pub const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u32 = 3;
 pub const DRIVER_RUNTIME_SDIO_IRQ: u32 = 158;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SDIO_IRQ`].
 pub const DRIVER_RUNTIME_SDIO_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_IRQ + 1;
-/// One-hot root-to-child badge reserved for one retained foreground quantum.
+/// Reserved high notification bit that can never authorize device work.
 ///
-/// Notification badges coalesce with bitwise OR, so the continuation must not
-/// be zero and must not overlap any peer or IRQ badge.
-pub const DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE: u32 = 1 << 31;
+/// Peer and IRQ badges coalesce with bitwise OR. Keeping this bit outside their
+/// mask makes stale authority fail closed, while foreground quanta use only the
+/// immutable command endpoint and never mint or signal this badge.
+pub const DRIVER_RUNTIME_RESERVED_ROOT_BADGE: u32 = 1 << 31;
 /// Badge delivered to the SDIO owner when CYW43 signals its reciprocal peer cap.
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1;
 /// Badge delivered to CYW43 when the SDIO owner signals its reciprocal peer cap.
@@ -3481,7 +3482,7 @@ mod tests {
 
     #[test]
     fn cyw43_sdio_bus_link_supports_reciprocal_notification_dpc_descriptors() {
-        assert_ne!(DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE, 0);
+        assert_ne!(DRIVER_RUNTIME_RESERVED_ROOT_BADGE, 0);
         assert_ne!(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, 0);
         assert_ne!(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE, 0);
         assert_ne!(
@@ -3502,12 +3503,12 @@ mod tests {
             "the SDIO peer wake intentionally coalesces into the durable IRQ wake"
         );
         assert_eq!(
-            DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE
+            DRIVER_RUNTIME_RESERVED_ROOT_BADGE
                 & (DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
                     | DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
                     | DRIVER_RUNTIME_SDIO_IRQ_BADGE),
             0,
-            "the continuation bit must survive badge coalescing without aliasing"
+            "the reserved root bit must remain outside every service badge"
         );
         let client = DriverRuntimeBusLinkDescriptor::new(
             HOT_PATH_SDIO_HOST,

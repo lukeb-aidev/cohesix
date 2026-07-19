@@ -2559,7 +2559,7 @@ where
                 let local_input = if serial_input {
                     false
                 } else {
-                    self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime)
+                    self.consume_local_seat_buffered_for_dispatch(LocalSeatConsumePhase::PreRuntime)
                 };
                 #[cfg(feature = "net-console")]
                 let network_input = if serial_input || local_input {
@@ -13853,7 +13853,19 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn consume_local_seat_buffered_for_dispatch(&mut self, phase: LocalSeatConsumePhase) -> bool {
+        // The preceding LocalSeat phase already released the USB runtime
+        // operation. Dispatch may therefore perform root-owned parser/echo
+        // bookkeeping, but it must not poll USB or submit HDMI work; any
+        // queued echo or scrollback redraw waits for the later Display phase.
+        self.consume_local_seat_with_policy(phase, true, false, true)
+    }
+
+    #[cfg(feature = "kernel")]
     fn consume_local_seat_buffered_only(&mut self, phase: LocalSeatConsumePhase) -> bool {
+        // CYW43 bootstrap/recovery may run while Wi-Fi HAL resources are held.
+        // It may consume already-buffered bytes for operator liveness, but it
+        // must not poll USB or re-enter the HDMI/echo path.
         self.consume_local_seat_with_policy(phase, true, false, false)
     }
 
@@ -24058,6 +24070,166 @@ mod tests {
         assert_eq!(crate::serial::test_take_linked_runtime_only_tx().len(), 128);
         assert_eq!(pump.serial_mut().driver_mut().io_call_counts(), (0, 0));
         assert!(pump.serial_mut().tx_pending());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ordinary_linked_dispatch_echoes_buffered_keyboard_without_usb_or_display_turn() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        serial.driver_mut().reset_io_call_counts();
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 128,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        assert_eq!(local_seat.enqueue_keyboard_bytes(b"help"), 4);
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+            pump.poll();
+
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+            assert_eq!(pump.local_line.as_str(), "help");
+            assert_eq!(pump.serial_mut().driver_mut().io_call_counts(), (0, 0));
+        }
+
+        let keyboard = local_seat.keyboard_trace();
+        assert_eq!(keyboard.backend_poll_calls, 0);
+        assert_eq!(keyboard.accepted_bytes, 4);
+        assert_eq!(keyboard.drained_bytes, 4);
+        assert_eq!(keyboard.echoed_bytes, 4);
+        assert_eq!(keyboard.queued_bytes, 0);
+        assert_eq!(local_seat.display_trace().submitted_frames, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ordinary_linked_dispatch_routes_arrows_to_echo_before_later_display_phase() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        serial.driver_mut().reset_io_call_counts();
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 128,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        assert_eq!(local_seat.enqueue_keyboard_bytes(b"\x1b[A\x1b[B"), 6);
+        // Host tests cannot submit the Pi framebuffer operation, so retain a
+        // representative display item and prove Dispatch leaves it for the
+        // dedicated later Display phase. Existing LocalSeat unit tests cover
+        // the ESC[A/ESC[B scroll delta and canonical redraw construction.
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(6);
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+            assert!(pump.local_line.is_empty());
+            assert_eq!(pump.local_seat_escape_state, LocalSeatEscapeState::Idle);
+            assert_eq!(
+                pump.local_seat
+                    .as_ref()
+                    .expect("local seat remains attached")
+                    .keyboard_trace()
+                    .backend_poll_calls,
+                0
+            );
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .expect("local seat remains attached")
+                .linked_hdmi_pending_work());
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::LocalSeat
+            );
+            assert_eq!(
+                pump.local_seat
+                    .as_ref()
+                    .expect("local seat remains attached")
+                    .keyboard_trace()
+                    .backend_poll_calls,
+                0
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Display
+            );
+            assert_eq!(
+                pump.local_seat
+                    .as_ref()
+                    .expect("local seat remains attached")
+                    .keyboard_trace()
+                    .backend_poll_calls,
+                1
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial
+            );
+            assert_eq!(pump.serial_mut().driver_mut().io_call_counts(), (0, 0));
+        }
+
+        let keyboard = local_seat.keyboard_trace();
+        assert_eq!(keyboard.accepted_bytes, 6);
+        assert_eq!(keyboard.drained_bytes, 6);
+        assert_eq!(keyboard.echoed_bytes, 6);
+        assert_eq!(keyboard.queued_bytes, 0);
+        assert_eq!(local_seat.display_trace().submitted_frames, 0);
     }
 
     #[cfg(feature = "kernel")]

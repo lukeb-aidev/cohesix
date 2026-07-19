@@ -87,7 +87,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
     DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
     DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
-    DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1274,7 +1274,7 @@ const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_BASE: &[DriverTaskContract] = 
 
 /// Conservative non-payload capability allowance for each isolated runtime.
 ///
-/// This covers the task objects, continuation/recovery caps, translation
+/// This covers the task objects, command/recovery caps, translation
 /// tables for every declared virtual region, IRQ/bus-link caps, and bounded
 /// growth in those fixed structures. Page-backed resources are accounted for
 /// separately below.
@@ -2416,8 +2416,7 @@ const fn runtime_uncached_xn_attributes() -> sel4_sys::seL4_ARM_VMAttributes {
 const fn driver_runtime_local_notification_receive_rights() -> sel4_sys::seL4_CapRights {
     // The child may poll/receive its TCB-bound notification, but only root and
     // separately minted badged peer/IRQ caps may signal it. With write removed,
-    // the child cannot manufacture an indistinguishable badge-zero foreground
-    // continuation.
+    // the child cannot manufacture an unbadged wake or any service badge.
     sel4_sys::seL4_CapRights::new(0, 0, 1, 0)
 }
 
@@ -3957,35 +3956,6 @@ impl<'a> KernelHal<'a> {
         Ok(true)
     }
 
-    fn mint_driver_runtime_continuation_notification(
-        &mut self,
-        contract: DriverTaskContract,
-        notification: seL4_CPtr,
-    ) -> Result<Option<seL4_CPtr>, HalError> {
-        if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT && contract != SDIO_HOST_DRIVER_TASK_CONTRACT
-        {
-            return Ok(None);
-        }
-        let root_cnode = self.env.init_cnode_cap();
-        let root_depth = sel4::word_bits() as u8;
-        let continuation = self.env.allocate_slot();
-        let send_only = sel4_sys::seL4_CapRights::new(0, 0, 0, 1);
-        let err = sel4::cnode_mint_depth(
-            root_cnode,
-            continuation,
-            root_depth,
-            root_cnode,
-            notification,
-            root_depth,
-            send_only,
-            seL4_Word::from(DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE),
-        );
-        if err != seL4_NoError {
-            return Err(HalError::Sel4(err));
-        }
-        Ok(Some(continuation))
-    }
-
     fn install_cyw43_sdio_bus_link(
         &mut self,
         contract: DriverTaskContract,
@@ -4236,8 +4206,6 @@ impl<'a> KernelHal<'a> {
             None
         };
         let notification = self.env.alloc_notification().map_err(HalError::Sel4)?;
-        let continuation_notification =
-            self.mint_driver_runtime_continuation_notification(contract, notification)?;
         let vspace = self.env.alloc_vspace_root().map_err(HalError::Sel4)?;
         self.env
             .assign_vspace_asid_from_init_pool(vspace)
@@ -4520,7 +4488,6 @@ impl<'a> KernelHal<'a> {
                 recovery_endpoint as usize,
                 command_endpoint as usize,
                 notification as usize,
-                continuation_notification.unwrap_or(0) as usize,
                 irq_handler,
                 restart_sdhci_root_ptr,
             ) {
@@ -5174,9 +5141,10 @@ mod tests {
         irq_notification_badge, Irq, IrqTrigger, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
         DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
         DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
-        DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE,
-        DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+        DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
     };
+    #[cfg(feature = "kernel")]
+    use pi4_driver_abi::DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
 
     #[cfg(feature = "kernel")]
     #[test]
@@ -5944,8 +5912,8 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn linked_runtime_continuation_authority_is_disjoint_from_lower_wakes() {
-        assert_ne!(DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE, 0);
+    fn linked_runtime_service_badges_exclude_the_reserved_root_bit() {
+        assert_ne!(DRIVER_RUNTIME_RESERVED_ROOT_BADGE, 0);
         assert_eq!(
             driver_runtime_local_notification_receive_rights().raw(),
             0b0010,
@@ -5979,12 +5947,12 @@ mod tests {
             "lower wake badges may overlap because their work sources are durable"
         );
         assert_eq!(
-            DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE
+            DRIVER_RUNTIME_RESERVED_ROOT_BADGE
                 & (DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
                     | DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
                     | DRIVER_RUNTIME_SDIO_IRQ_BADGE),
             0,
-            "coalesced peer/IRQ badges must preserve a distinct continuation bit"
+            "peer/IRQ service badges must exclude the reserved root bit"
         );
     }
 

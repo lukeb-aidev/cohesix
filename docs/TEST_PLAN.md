@@ -224,18 +224,21 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p pi4-driver-runtime --lib cyw43_data_tx_never_replays_ambiguous_function2_write -- --test-threads=1`
 - Focused bootstrap/restart operator-liveness checks:
   - `cargo test -p pi4-driver-abi --lib cyw43_sdio_bus_link_supports_reciprocal_notification_dpc_descriptors -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_continuation_authority_is_disjoint_from_lower_wakes -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_service_badges_exclude_the_reserved_root_bit -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib production_loop_routes_idle_and_retained_commands_to_blocking_receive -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib pending_quantum_requires_one_explicit_root_continuation_badge -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib pending_quantum_coalesced_peer_irq_requires_fresh_root_grant -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib pending_quantum_rejects_every_endpoint_wake -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib pending_command_dpc_arbitration_requires_separate_root_continuations -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib reciprocal_sdio_child_submit_and_polls_require_separate_root_continuations -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib pending_quantum_requires_one_exact_endpoint_rendezvous -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib pending_quantum_coalesced_peer_irq_arbitration_is_fair_and_durable -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib pending_quantum_accepts_only_the_exact_one_way_endpoint_rendezvous -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib pending_command_dpc_arbitration_requires_separate_endpoint_rendezvous -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib reciprocal_sdio_child_submit_and_polls_require_separate_root_rendezvous -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib retained_256_poll_drain_spends_256_root_endpoint_rendezvous -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_bootstrap_operator_turn -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_one_way_turn_keeps_a_demoted_pi_runtime_schedulable -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_ring_sequence_is_invisible_until_the_dedicated_issue_turn -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_poll_miss_arms_one_identity_bound_continuation_turn -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_poll_miss_arms_one_endpoint_rendezvous_or_quarantines_the_request -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_priority_lease_identity_rejects_request_fingerprint_and_generation_aliases -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib non_pair_retained_faults_never_request_cyw43_sdio_recovery -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_service_turn_preserves_pending_and_rejects_aliases -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_engine_deadline_poisons_an_issued_request_without_replay -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib sdio_engine_deadline_poisons_an_issued_request_without_replay -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib descriptor_issued_deadlines_poison_both_linked_runtime_generations -- --test-threads=1`
@@ -258,6 +261,11 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p pi4-driver-runtime --lib serial_tx_idle_probe_distinguishes_fifo_acceptance_from_wire_drain -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_resumes_issued_idle_probe_before_later_tx -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib poisoned_linked_tx_keeps_polling_successive_operator_rx -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_rx_terminal_transport_failure_is_not_reported_as_pending -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_tx_idle_terminal_transport_failure_poison_is_idempotent -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_staged_tx_terminal_transport_failure_is_not_backpressure -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib ordinary_linked_dispatch_echoes_buffered_keyboard_without_usb_or_display_turn -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib ordinary_linked_dispatch_routes_arrows_to_echo_before_later_display_phase -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_reboot_waits_until_complete_ack_is_transmitted -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_reboot_poison_fails_closed_without_false_ack_proof -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_cutover_routes_raw_diagnostics_to_queen_log -- --test-threads=1`
@@ -706,32 +714,45 @@ Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be 
 
 The isolated runtime engines contain production service turns for serial mini-UART init/RX/TX, HDMI framebuffer rendering, PCIe MMIO turns, direct-root-port xHCI boot-keyboard polling, GENET MDIO/MAC/RX/TX rings, CYW43 shared-control SDPCM command records, and SDIO fixed-layout CMD52/CMD53/POLL_IRQ service turns. Physical Pi root starts each isolated runtime with `TCB.WriteRegisters(resume=1)` at a shell-safe bootstrap priority while preserving the contract MCP; roles outside the deferred Wi-Fi pair keep their existing profile-specific priority transition. Deferred CYW43 and SDIO remain at bootstrap priority `255` through prompt publication, owner-first descriptor and engine replay, firmware/control-context replay, and control-plane readiness; the supervisor proves SDIO first, then CYW43, and only then lowers SDIO and CYW43 in two separate outer turns. A linked serial runtime cuts over after its descriptor/init/owner-state path plus a valid service completion; RX-byte proof remains separate. Root may emit `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` so an unproved child cannot starve the root shell. Captures may show SDIO host, PCIe root, GENET, and CYW43 `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` lines before the prompt; those markers are acceptable only as shell-preserving fail-closed evidence, and the retained descriptor must later replay with `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=resumed owner=linked-runtime proof_effect=deferred-proof-retry-enabled` before matching call/return service proof can close SDIO, PCIe, or network acceptance. Wi-Fi descriptor replay is prompt-safe: when physical Pi pointer-free IPC proof and linked serial service proof are present, root emits `[net-console] deferred resume scheduled reason=driver-startup-before-root-prompt action=publish-prompt-then-supervise`, publishes `cohesix>`, and then starts the persistent SDIO/CYW43 bootstrap supervisor. Each episode emits `CYW43_BOOTSTRAP_SUPERVISOR attempt=<n> status=begin|recovery|backoff|ready|exhausted ... recovery=full telemetry_sinks=serial+qlog+hdmi`; it admits at most five attempts with `1/2/4/8` second backoffs. A fifth retryable failure emits `status=exhausted backoff_ms=0`, admits no automatic sixth attempt, and returns to the ordinary EventPump so diagnostics, authentication, and reboot remain responsive while Wi-Fi stays acceptance-red. If linked serial service is absent, the supervisor stays at the root console and reports `attempt=0 status=preflight serial=blocked`. Once both linked-runtime restart contexts exist, every retry must perform the complete fenced pair restart and retained firmware/control replay before ordinary network construction continues. A no-reply runtime must emit `DRIVER_TASK_RING_CALL_TIMEOUT` and `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=pending owner=linked-runtime action=serial-shell proof_effect=acceptance-red-until-replayed`; the supervisor may retry only after another ordinary serial/local-seat event-pump turn and the elapsed backoff. If pointer-free proof is absent, root must emit `[net-console] deferred resume skipped reason=driver-task-net-runtime-unproved action=serial-diagnostics-only`, preserve serial diagnostics, and leave Wi-Fi acceptance red until an explicit diagnostic command retries the failed stage. Physical Pi local-seat captures must show HDMI as an independent display sink without making it a pre-prompt serial dependency: the framebuffer hint must be available before driver-task bootstrap, and after EventPump construction each `hdmi-text` descriptor/attach step and pending-frame service must consume one retained `Display` outer turn. Attach and frame submission cannot share a turn. High-impact supervisor records may retain an HDMI mirror only after the Wi-Fi HAL guard is released; the mirror must wait for a later `Display` turn. A no-reply HDMI render path is display-red evidence and must emit `DRIVER_TASK_RING_CALL_TIMEOUT`, but it must not prevent `cohesix>` from becoming responsive on UART. No HAL-mapped framebuffer diagnostic mirror is allowed; HDMI output must come from the isolated `hdmi-text` runtime only. Before linked-serial cutover, raw UART remains the boot log; after cutover, the serial child is the sole physical UART owner, root diagnostics are authoritative in `/log/queen.log`, and operator output may reach UART only through the linked reciprocal ring. Before EventPump construction, the current synchronous PCIe HAL prerequisite runs only as local bookkeeping and authority setup for the USB cursor. It cannot construct a root-owned steady USB backend or authorize combined later work, and missing proof leaves USB attach blocked at the PCIe prerequisite. After `cohesix>`, local-seat must defer if the USB runtime already has an active command, emit one `prompt-settle attach deferred reason=usb-runtime-active` summary, and retry after the normal quiet window; PCIe descriptor replay, USB init, enumeration, and keyboard report service then advance as retained one-action `LocalSeat` outer turns. While a Wi-Fi HAL scope is held, local-seat service is buffered-only: it must not poll USB, re-enter HDMI or echo, or start network work. It must then advance HID discovery only through the explicit keyboard-enumeration aux while ordinary background polls report the current frontier without re-entering enumeration. No-reply background USB polls must produce `DRIVER_TASK_RING_CALL_TIMEOUT` plus `[local-seat] isolated USB runtime keyboard poll suspended contract=usb-local-seat source=linked-runtime reason=driver-task-no-reply action=serial-shell` rather than repeated blocking `usb-local-seat` calls. `usb probe-kbd` must retain its bounded keyboard-enumeration cursor and must not replay the whole isolated local-seat attach/init chain; each attempt consumes one later `LocalSeat` outer turn and is permitted only while the child USB enumeration marker advances, stopping at the finite cap, keyboard readiness, or no new marker. Root-console startup must emit UART-visible `[mark] root-console.start.begin`, publish `cohesix>` after bounded non-Wi-Fi driver startup settles or fails closed, and emit `[mark] root-console.start.ok` before persistent Wi-Fi bootstrap, `/log/queen.log`, or NineDoor log-stream handoff; host-EAPOL, association, DHCP, and retry backoff cannot hold the serial shell hostage. Once `cohesix>` is published and USB polling is armed, serial UART and USB keyboard input must both feed the shared parser concurrently after USB proof succeeds. Steady physical Pi root submits serial/network service turns through bounded ring calls; HDMI submits are limited to high-impact progress lines, while init, deferred-resume, timeout, and proof turns retain bounded diagnostics and may enqueue linked-UART breadcrumbs. USB keyboard auto-poll uses bounded nonblocking sends until the runtime proves it can reply without risking serial. The isolated runtime `_start` entry must preserve root's task key, install the mapped driver-local IPC buffer before receiving commands, skip `Reply` for commands marked with the one-way flag, and emit replies only for call-delivered commands. Hardware captures should show `DRIVER_TASK_RING_CALL_BEGIN` and the matching `DRIVER_TASK_RING_CALL_RETURN` for init/deferred-resume/proof turns; routine steady console data turns may be suppressed to keep interactive serial latency bounded. Any `DRIVER_TASK_RING_CALL_TIMEOUT` or positive `DRIVER_TASK_BOOTSTRAP_DEFERRED` keeps driver-task acceptance red until later service proof closes it. A role boolean is credited only from a line proving both `live_tcb=yes` and `hot_path=dedicated`; static contract isolation, callback-pointer live-TCB service turns, shared-root ring service turns, runtime-image declarations, runtime-region mapping, runtime-image smoke loops, runtime-init descriptor commands, and any ring command marked root-context or init-descriptor non-acceptance are diagnostic until the driver state boundary is owned by an isolated ring-backed task, VSpace proof is `yes`, pointer-free IPC is `yes`, and `owner_state=driver-owned` is present. Pre-root bootstrap turns, including the serial bootstrap reply proof, must not sample timer registers. Later ring latency telemetry may sample the EL0 virtual counter only when the profile enables `timers-arch-counter`; dummy-timer Pi captures must suppress latency proof rather than reading CNT registers.
 
-CYW43/SDIO runtime continuation coverage must prove capability-enforced wake
-authority, not only badge comparisons in software. Root retains the original
-unbadged cap privately for TCB bind/restart and holds a separate send-only
-continuation cap carrying the one-hot `0x80000000` badge; each child's bound
-local cap is receive-only. Send-only reciprocal caps deliver CYW43-to-SDIO badge
-1 and SDIO-to-CYW43 badge 2, and the SDIO IRQ delivers badge 159. Tests must
-prove the continuation bit has no overlap with the peer/IRQ badge mask, a child
-cannot self-signal it, and peer/IRQ work takes priority if seL4 coalesces it with
-a root grant before any service quantum. Such a coalesced grant must not advance
-foreground work later; a fresh root turn is required. After that first service,
-at least 4,096 standalone level reassertions must produce no second service
-quantum and lose no badge. The fresh continuation must then admit exactly one
-foreground phase even if the level badge is coalesced again, retaining that
-badge for at most one later service boundary. CARD_INT coverage must also prove
-that terminal deferred service masks the host source before IRQ acknowledgement.
+CYW43/SDIO runtime foreground coverage must prove endpoint-rendezvous wake
+authority, not only software state transitions. Root repeats an immutable
+one-way endpoint `NBSend` carrying the retained sequence; the child admits one
+foreground quantum only if that send rendezvouses while it is waiting and the
+complete no-reply ring record still matches the retained intake. Tests must
+prove that a dropped send is not queued, multiple sends cannot coalesce into
+multiple grants, and repeated doorbells never republish, mutate, or replay the
+command. Stale-sequence, changed-action, changed-generation, changed-flags, and
+reply-cap endpoint wakes must all remain rejected without altering the retained
+intake.
+
+Send-only reciprocal caps still deliver CYW43-to-SDIO badge 1 and
+SDIO-to-CYW43 badge 2, and the SDIO IRQ delivers badge 159. These coalescing
+notifications are service wakes only; the reserved high notification bit is
+excluded from service work and is not foreground authority. Tests must prove
+that one pending peer/IRQ source can consume at most one service quantum, that
+at least 4,096 standalone level reassertions produce no second service quantum
+and lose no durable source, and that an exact later endpoint rendezvous admits
+only one foreground phase. If deferred notification service consumes that
+rendezvous, another fresh endpoint rendezvous is required for foreground work.
+CARD_INT coverage must also prove that terminal deferred service masks the host
+source before IRQ acknowledgement.
 The real SDIO post-claim priority-failure hook must prove that one episode
 cannot reclaim its sticky cutover, that each failure/restart action consumes one
 outer turn, and that only the exact SDIO-first/CYW43-second pair restart resets
 the latch before a later recovery episode may claim cutover. A precondition
 rejection without a valid restart context remains terminal.
 Autonomous committed-ring polling must preserve
-initial intake when a best-effort endpoint send is lost, while every delayed
-endpoint wake after `Pending` is consumed and rejected rather than treated as
-continuation authority. Pending-command DPC arbitration, reciprocal SDIO
-child-ring submission, and every reciprocal completion poll must each consume
-separately released retained quanta, with no private yield/resignal/poll loop.
+initial intake when a best-effort endpoint send is lost. After `Pending`, only
+an exact rendezvous for the retained intake may grant the next foreground
+quantum; a missed poll can re-arm another wake-only turn but cannot recommit the
+sequence. Pending-command DPC arbitration, reciprocal SDIO child-ring
+submission, and every reciprocal completion poll must each consume separately
+released retained quanta, with no private yield/resignal/poll loop. Retained
+lease tests must also prove that the CYW43/SDIO pair epoch cannot alias serial,
+USB, HDMI, PCIe, or GENET transport identity, and that non-pair failures stay in
+their contract-local recovery domain. Serial tests must classify RX, staged TX,
+and transmitter-idle terminal transport failures as typed `Failed`, poison once
+without replay, and never misreport them as `Pending` or backpressure.
 
 The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; hardware captures must show `DRIVER_TASK_BOOT ... contract=bcmgenet-v5 ... affinity_core=3` and `DRIVER_TASK_BOOT ... contract=cyw43455 ... affinity_core=3` before claiming fourth-core driver placement. Physical Pi owner-state boots apply `seL4_TCB_SetAffinity` directly to each driver child TCB. That is distinct from the root-authority affinity wrapper used around in-process NineDoor and Worker-model operations; neither NineDoor nor a general Worker has a separate TCB in the current profile. Any `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence and must fail placement proof. Captures may still emit `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`; that keeps notification lifecycle proof red while allowing endpoint-backed command-ring startup to proceed. QEMU virtio compatibility boots may prove isolated VSpace/ASID allocation, runtime-image transport-region mapping, and pointer-free ring transport after virtio networking is online, but that is transport-substrate evidence only. Fresh Pi hardware proof is still required before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest isolated-driver hardware acceptance.
 

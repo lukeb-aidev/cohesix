@@ -405,47 +405,47 @@ This as-built closure is authorized by Milestone 26d task
   turns. The first turn prepares the immutable ring record with sequence zero,
   so an autonomously polling child cannot observe it. Later turns boost the
   reciprocal SDIO owner when required, boost the primary child, commit the
-  nonzero sequence as the issue boundary, publish exactly one best-effort wake
-  notification, and poll the matching completion once per turn. After that
+  nonzero sequence as the issue boundary, publish one best-effort one-way
+  endpoint doorbell, and poll the matching completion once per turn. After that
   completion is latched, later turns restore the primary child before the bus
   owner and release the lease before exposing the completion to its caller.
   If a CYW43 or SDIO quantum returns `Pending`, the child retains the exact
   command and blocks on the combined endpoint/notification receive; it does not
-  `seL4_Yield` into another foreground quantum. A later root EventPump turn
-  publishes one dedicated one-hot continuation notification with badge
-  `0x80000000`, and a still later turn polls for completion. IRQ and linked-peer
-  badges service only their notification work and cannot advance the retained
-  foreground cursor. This separation is capability-enforced: root keeps the
-  original unbadged notification cap private for TCB bind/restart and holds a
-  separately minted send-only `0x80000000` continuation cap, while the cap
-  installed in the child's bound local-notification slot is receive-only and
-  cannot self-signal. The only child-held signal caps are separately minted
-  send-only peer caps: CYW43-to-SDIO carries badge 1 and SDIO-to-CYW43 carries
-  badge 2; the SDIO IRQ carries badge 159. All peer/IRQ badges remain in the low
-  bits and cannot manufacture the reserved continuation bit. Because seL4
-  coalesces notification badges with bitwise OR, the first wake containing peer
-  or IRQ work takes one notification-service quantum even when the continuation
-  bit is also present; that coalesced continuation is not banked. Once that
-  service quantum has run, later standalone level badges are retained but
-  rejected so a priority-255 runtime cannot form a private IRQ loop. A fresh
-  root continuation then admits exactly one foreground quantum, even if the
-  level badge reappears with it, and preserves that lower badge for one later
-  service boundary. Explicit scheduler handoffs follow both service and
-  rejected immediately-ready wakes. Autonomous committed-ring polling
-  prevents a lost best-effort endpoint send from stranding initial command
-  intake, but the sequence commit remains the issue boundary: once a command
-  returns `Pending`, any delayed endpoint wake is consumed and rejected, even
-  if its immutable record matches. Endpoint delivery never grants a foreground
-  continuation. An idle runtime likewise blocks for a new endpoint command
-  instead of polling or yielding.
+  `seL4_Yield` into another foreground quantum. Each subsequent foreground
+  quantum requires a later root EventPump turn to repeat the one-way endpoint
+  doorbell for the same sequence. The child admits that rendezvous only when
+  the complete ring record still matches its retained immutable intake and no
+  reply capability is present. This wake is not a new issue boundary: it never
+  republishes, mutates, or replays the command. seL4 `NBSend` is delivered only
+  while the child is waiting on the endpoint, so dropped sends do not queue and
+  successful sends cannot coalesce into ambiguous grant counts. A later poll
+  miss may therefore re-arm another wake-only turn, but never another sequence
+  commit or physical action replay.
+
+  IRQ and linked-peer notifications remain coalescing service wakes and cannot
+  advance the retained foreground cursor. The first pending peer/IRQ source may
+  consume one notification-service quantum; immediately reasserted level wakes
+  are retained and rejected until an exact endpoint rendezvous returns control
+  to foreground work. If deferred service consumes an endpoint rendezvous, a
+  fresh later rendezvous is required for the foreground quantum. Explicit
+  scheduler handoffs follow service and rejected immediately-ready wakes, so a
+  priority-255 runtime cannot form a private IRQ loop. The reserved high
+  notification bit is excluded from service badges but is not foreground grant
+  authority. Root keeps the original unbadged notification cap private for TCB
+  bind/restart, the child's bound local-notification cap is receive-only, and
+  the only child-held send caps are the generated peer routes:
+  CYW43-to-SDIO badge 1 and SDIO-to-CYW43 badge 2; the SDIO IRQ carries badge
+  159. Autonomous committed-ring polling still prevents a lost initial
+  endpoint send from stranding first command intake. An idle runtime blocks for
+  a new endpoint command instead of polling or yielding.
   Request, full command fingerprint, and pair generation must match throughout;
   an issued-unknown request cannot be recommitted or renotified. Pair restart
   clears an unresolved lease only after both runtimes are suspended and fenced.
   The retained phase order is `prepare -> boost bus -> boost primary -> commit
-  -> notify -> poll -> [continue -> poll]* -> restore`; every bracketed
-  continuation and poll is a separate root EventPump turn. It is scheduling
-  admission for one immutable operation, not a private send/poll loop or a
-  legacy driver fallback.
+  -> endpoint wake -> poll -> [endpoint wake -> poll]* -> restore`; every
+  bracketed rendezvous and poll is a separate root EventPump turn. It is
+  scheduling admission for one immutable operation, not a private send/poll
+  loop or a legacy driver fallback.
 - Root-task must not wait synchronously for CMD52/CMD53 credit, firmware
   replies, or RX drain work.
 - Function 1 enable uses the SDIO CIS timeout when that field is eventually
@@ -461,12 +461,13 @@ This as-built closure is authorized by Milestone 26d task
   generation, and pair recovery owns the only retained replay.
 - SDIO captures/clears the source and wakes CYW43; CYW43 drains bounded control,
   event, and data work. Pending-command DPC arbitration is retained across
-  quanta: one root continuation admits one DPC or foreground child action, and
-  any remaining work blocks for another root continuation. Reciprocal CYW43 to
-  SDIO work likewise separates child-ring submission from each completion poll
-  into retained quanta. Neither path contains a private yield/resignal loop;
-  peer notifications report peer work or completion and never grant the next
-  foreground quantum.
+  quanta: a peer/IRQ notification admits at most one DPC service action, while
+  one exact root endpoint rendezvous admits at most one foreground child
+  action. Any remaining foreground work blocks for another endpoint
+  rendezvous. Reciprocal CYW43-to-SDIO work likewise separates child-ring
+  submission from each completion poll into retained quanta. Neither path
+  contains a private yield/resignal loop; peer notifications report peer work
+  or completion and never grant the next foreground quantum.
 - Each retained foreground phase snapshots the committed DPC producer. Events
   through that watermark drain first; later level-triggered publications stay
   queued until after one foreground quantum. A new snapshot before the next
@@ -615,6 +616,15 @@ This as-built closure is authorized by Milestone 26d task
   that first proves wire idle only records that fact and returns; platform reset
   is dispatched on a later reset-only outer turn with no serial, driver,
   network, local-seat, or display work.
+- Retained lease generations are contract-local. Only CYW43 and SDIO bind to
+  the linked-pair restart epoch; serial, USB, HDMI, PCIe, and GENET retain their
+  own transport identity and cannot be invalidated by a Wi-Fi pair restart. A
+  non-pair pre-issue failure clears only that request, while an issued-unknown
+  failure poisons only that device's retained slot and never requests pair
+  recovery. Serial consumes typed `Pending`, `Complete`, and `Failed` HAL
+  outcomes for RX, staged TX, and transmitter-idle probes. Terminal `Failed`
+  poisons the serial transport once, discards issued-unknown TX without replay,
+  and is never reported as ordinary backpressure or indefinite `Pending`.
 - Linked serial TX uses an immutable retained command and staged-byte cursor.
   A missing completion resumes the same ring fingerprint on a later outer turn;
   it never restores possibly issued bytes to the queue tail. A known partial
@@ -668,13 +678,15 @@ than one child operation in an outer turn, that 256 retained polls consume 256
 turns, that every failure cut resumes or fails deterministically, and that
 reciprocal-ring association/EAPOL/maintenance faults return before supervisor
 recovery. Runtime-loop tests prove that idle and retained-Pending commands use
-blocking receive, that exactly one root-held `0x80000000` grant advances one
-foreground quantum, that peer/IRQ notification badges cannot do so, that a
-coalesced peer/IRQ wake consumes no reusable continuation credit, that the
-autonomous intake poll survives a lost best-effort endpoint send, and that
-delayed, stale, or mutated endpoint wakes cannot advance or alter the retained
-intake. Duplicate or stale deferred records cannot replay work or advance a
-replacement generation.
+blocking receive, that exactly one immutable one-way endpoint rendezvous
+advances one foreground quantum, that dropped `NBSend` doorbells do not queue,
+and that repeated doorbells neither republish nor replay the retained command.
+Peer/IRQ notification badges can service only coalesced DPC work and cannot
+advance foreground state. Exact-match, stale, mutated, and reply-cap endpoint
+wakes are separated explicitly; only the exact no-reply rendezvous is admitted.
+The autonomous intake poll survives a lost initial best-effort endpoint send.
+Duplicate or stale deferred records cannot replay work or advance a replacement
+generation.
 The fixed 1,024-action trace and 128 KiB replay payload retain their full
 capacity in loader-zeroed `SHT_NOBITS` storage. Only the smaller, semantically
 nonzero CYW43 baseline snapshot is file-backed; packaging must not shrink,

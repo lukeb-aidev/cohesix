@@ -749,6 +749,7 @@ impl DeferredNetSupervisorStatus {
 }
 
 #[cfg(all(
+    test,
     feature = "serial-console",
     feature = "kernel",
     feature = "net-console"
@@ -762,19 +763,67 @@ pub(crate) fn format_deferred_net_bootstrap_supervisor_status(
     serial_ready: bool,
     local_seat_enabled: bool,
 ) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+    let semantic = format_deferred_net_bootstrap_supervisor_semantic_status(
+        attempt,
+        status,
+        backoff_ms,
+        next_attempt_ms,
+        serial_ready,
+        local_seat_enabled,
+    )?;
+    format_deferred_net_bootstrap_supervisor_linked_route(semantic.as_str(), console_sequence)
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn format_deferred_net_bootstrap_supervisor_semantic_status(
+    attempt: u32,
+    status: DeferredNetSupervisorStatus,
+    backoff_ms: u64,
+    next_attempt_ms: u64,
+    serial_ready: bool,
+    local_seat_enabled: bool,
+) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
     if !status.valid_attempt(attempt) {
         return None;
     }
     let mut line = HeaplessString::new();
     if write!(
         line,
-        "CYW43_BOOTSTRAP_SUPERVISOR attempt={} status={} backoff_ms={} next_attempt_ms={} serial={} local_seat={} recovery=full console_seq={} telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt={} status={} backoff_ms={} next_attempt_ms={} serial={} local_seat={} recovery=full",
         attempt,
         status.as_str(),
         backoff_ms,
         next_attempt_ms,
         if serial_ready { "ready" } else { "blocked" },
         if local_seat_enabled { "ready" } else { "disabled" },
+    )
+    .is_err()
+    {
+        return None;
+    }
+    Some(line)
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn format_deferred_net_bootstrap_supervisor_linked_route(
+    semantic: &str,
+    console_sequence: u64,
+) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+    let mut line = HeaplessString::new();
+    if line.push_str(semantic).is_err() {
+        return None;
+    }
+    if write!(
+        line,
+        " console_seq={} telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         console_sequence,
     )
     .is_err()
@@ -815,8 +864,7 @@ fn emit_deferred_net_bootstrap_supervisor_status<
 {
     let serial_ready = !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
         || crate::serial::serial_linked_runtime_transport_active();
-    let Some(line) = format_deferred_net_bootstrap_supervisor_status(
-        console_sequence,
+    let Some(semantic) = format_deferred_net_bootstrap_supervisor_semantic_status(
         attempt,
         status,
         backoff_ms,
@@ -831,10 +879,31 @@ fn emit_deferred_net_bootstrap_supervisor_status<
         );
         return;
     };
+    let Some(linked_line) =
+        format_deferred_net_bootstrap_supervisor_linked_route(semantic.as_str(), console_sequence)
+    else {
+        emit_deferred_net_operator_line(
+            pump,
+            "CYW43_BOOTSTRAP_STATUS_FORMAT_ERROR action=operator-diagnostics acceptance=red",
+            raw_fallback_allowed,
+        );
+        return;
+    };
     // Preserve the full-fidelity record without a logger prefix. Once the
     // linked route is active this is enqueue-only; its next ordinary operator
-    // turn performs the flush, separately from any CYW43 operation.
-    emit_deferred_net_operator_line(pump, line.as_str(), raw_fallback_allowed);
+    // turn performs the flush, separately from any CYW43 operation. Before
+    // cutover, pass only the semantic payload to the raw route because that
+    // route appends its own ordering suffix.
+    if !pump.queue_cyw43_bootstrap_operator_line(linked_line.as_str()) && raw_fallback_allowed {
+        let raw_console_sequence = match u32::try_from(console_sequence) {
+            Ok(sequence) => sequence,
+            Err(_) => u32::MAX,
+        };
+        boot_log::force_uart_line_raw_and_log_with_console_seq(
+            semantic.as_str(),
+            raw_console_sequence,
+        );
+    }
 }
 
 #[cfg(all(
@@ -1939,6 +2008,63 @@ fn counter_frequency() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn cyw43_supervisor_pre_cutover_raw_fallback_receives_semantic_only() {
+        let semantic = super::format_deferred_net_bootstrap_supervisor_semantic_status(
+            0,
+            super::DeferredNetSupervisorStatus::Preflight,
+            super::SERIAL_LINKED_RUNTIME_RETRY_MS,
+            250,
+            false,
+            true,
+        )
+        .expect("preflight supervisor semantic record must fit");
+
+        assert!(semantic.ends_with("serial=blocked local_seat=ready recovery=full"));
+        for routing_field in ["console_seq=", "telemetry_sinks=", "prompt_refresh="] {
+            assert_eq!(
+                semantic.matches(routing_field).count(),
+                0,
+                "the raw fallback must append {routing_field} itself: {semantic}",
+            );
+        }
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn cyw43_supervisor_post_cutover_route_has_one_ordering_suffix() {
+        let line = super::format_deferred_net_bootstrap_supervisor_status(
+            17,
+            1,
+            super::DeferredNetSupervisorStatus::Begin,
+            0,
+            42,
+            true,
+            true,
+        )
+        .expect("linked supervisor record must fit");
+
+        for routing_field in ["console_seq=", "telemetry_sinks=", "prompt_refresh="] {
+            assert_eq!(
+                line.matches(routing_field).count(),
+                1,
+                "the linked route must append {routing_field} exactly once: {line}",
+            );
+        }
+        assert!(
+            line.ends_with("console_seq=17 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes")
+        );
+    }
+
     #[cfg(all(
         feature = "serial-console",
         feature = "kernel",
