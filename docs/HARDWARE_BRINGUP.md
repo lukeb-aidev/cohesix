@@ -502,6 +502,17 @@ GENET claim needs a new read-back image marker, wired DHCP or accepted static
 configuration, bidirectional packet evidence, driver-task proof, raw TCP, and
 authenticated `cohsh` from the same boot.
 
+A dispatched GENET console command performs no TCP flush in its `Dispatch`
+turn. It installs a cursor owned by the active TCP connection; each later
+`Network` phase performs exactly one budgeted response flush and returns. The
+normal cursor limit is eight phases and rises to sixteen only while the local
+display reports pending/redraw/no-reply backlog pressure. A second buffered
+command must wait behind the first cursor. If the active connection changes or
+disappears, root rejects the stale cursor rather than flushing a replacement
+session. A trace or test that shows command dispatch plus a flush in one turn,
+multiple flushes in one `Network` phase, an unbounded cursor, or cursor transfer
+between connections is failed TCP liveness evidence.
+
 ### CYW43 Wi-Fi
 
 This runbook section exercises Milestone 26d task
@@ -547,16 +558,48 @@ exposed until all leased priorities have returned to their manifest values. An
 unresolved lease is cleared only inside fenced pair restart after both runtimes
 are suspended.
 
-The `[BUILD] b550c26e9238` current-image capture ended after
-`CYW43_BOOTSTRAP_SUPERVISOR ... status=begin`; it did not include a retained
-stage record and therefore did not directly identify `sdio-engine-init` or any
-other exact stalled phase. Source inspection made the demoted-child retained
-request the strongest explanation: root could remain runnable above the
-steady-priority SDIO child while a one-way request waited indefinitely. The
-scheduling lease closes that liveness class without adding a timing retry or a
-legacy driver path. The next exact-image boot must use the stage records below
-to confirm the live phase rather than treating that inference as hardware
-proof.
+Each CYW43/SDIO foreground quantum that returns `Pending` now ends child
+execution for that outer turn. The runtime retains the immutable intake and
+blocks on the combined endpoint/notification receive. A separate root
+EventPump turn sends one dedicated one-hot `0x80000000` continuation, and a
+later root turn polls the same completion. IRQ or linked-peer badges service
+only their notification path and cannot advance foreground work. Root keeps the
+original unbadged notification cap private for TCB bind/restart and holds a
+separately minted send-only continuation cap; the bound child local cap is
+receive-only, so the child cannot self-release another quantum. Separate
+send-only peer caps deliver CYW43-to-SDIO as badge 1 and SDIO-to-CYW43 as badge
+2, while the SDIO IRQ is badge 159. Those peer/IRQ values have no overlap with
+the reserved high continuation bit. Because seL4 ORs coalesced notification
+badges, peer or IRQ work takes priority when it arrives with a root grant; that
+grant cannot be reused and a fresh root EventPump turn must release foreground
+work. Autonomous committed-ring polling still prevents a lost best-effort
+endpoint send from stranding initial command intake. After that command returns
+`Pending`, however, a delayed endpoint wake is consumed and rejected even when
+its immutable record matches; endpoint delivery is never continuation
+authority. Idle runtimes block on their command endpoint rather than spinning.
+Pending-command DPC arbitration performs at most one retained DPC or foreground
+action per released quantum. A reciprocal CYW43-to-SDIO transaction uses one
+quantum to submit the immutable child-ring command and a separately released
+quantum for each completion poll. Neither path may privately yield, resignal,
+or poll itself into another action. A trace that shows multiple foreground
+phases after one root admission, or foreground progress caused only by a
+peer/IRQ-only badge, fails the one-operation-per-turn contract.
+
+The latest `[BUILD] a15379cacc1d` serial capture contains two Wi-Fi boots that
+both reached `sdio-engine-init`, emitted the same power-of-two retained repeats
+through turn 33, and produced no later stage before reset. Two GENET control
+boots in the same capture reached a DHCP-bound address but then lost prompt
+progress. The Wi-Fi stop is before firmware streaming, RF association, or the
+shared TCP stack; the GENET result independently keeps TCP below the first
+failure boundary. Production-chain inspection identified two deterministic
+software liveness defects: CYW43/SDIO runtimes could continue a retained
+`Pending` command through their private yield path instead of returning
+ownership to the root EventPump, and ordinary linked-serial polling could
+allocate an RX fingerprint behind an active TX fingerprint and deadlock both
+cursors. The explicit runtime continuation gate and TX-first serial arbiter
+close those paths without adding a timing retry or legacy driver fallback. They
+remain host-side fixes until the next exact image is rebuilt, read back, and
+booted; the capture does not prove the fixed hardware result.
 
 Every returned pending turn is appended as a full-fidelity record to the
 bounded `/log/queen.log` software ledger. The
@@ -567,8 +610,13 @@ and power-of-two repeats, and a rejected enqueue remains eligible for a later
 same-stage attempt. Accepted bytes flush on a later operator turn. The UART
 copy is deliberately best-effort under bounded queue pressure, so its absence
 alone does not prove a supervisor freeze; it does leave a required capture
-predicate unproved. Diagnose with the retained queen log and later terminal or
-stage records, while keeping the raw UART capture as the boot source of truth.
+predicate unproved. After linked-runtime cutover, the child is the sole
+physical UART owner: even an explicitly raw root diagnostic is retained with
+ordering metadata in `/log/queen.log` and must not bypass the reciprocal ring.
+Diagnose with the retained queen log and later terminal or stage records, while
+keeping the raw UART capture as the boot source of truth for bytes that really
+reached the wire. A post-cutover serial capture is no longer, by itself, a
+complete driver-diagnostic ledger.
 Descriptor replay, engine init, prerequisites, context replay, and retained
 maintenance have virtual-counter deadlines; an eight-second engine envelope
 covers the Linux-shaped one-second ALP and three-second Function 2 waits plus
@@ -598,10 +646,12 @@ backend polling, HDMI/echo re-entry, and network polling remain fenced until the
 scope is released. `CYW43_BOOTSTRAP_SUPERVISOR` and deferred failure/result
 records are retained in the bounded `/log/queen.log` ledger and attempt a
 bounded linked-serial enqueue. An accepted serial record flushes on a later
-operator turn; delivery is not guaranteed when that queue is saturated. A
-raw-UART breadcrumb after cutover is failed operator-ownership evidence, while
-an absent required linked-serial line is incomplete capture evidence rather
-than proof that its transition never occurred.
+operator turn; delivery is not guaranteed when that queue is saturated. Every
+root raw-UART helper must also route only to `/log/queen.log` after cutover. A
+raw-UART breadcrumb that bypasses the linked runtime is failed
+operator-ownership evidence, while an absent required linked-serial line is
+incomplete capture evidence rather than proof that its transition never
+occurred.
 
 Linked serial output is exact-ticket retained work after cutover. Each CYW43
 bootstrap/recovery operator turn may send or poll only the current immutable
@@ -609,23 +659,74 @@ serial command, with no queue-tail restoration after an unknown result. A valid
 partial completion advances only the written prefix; its FIFO suffix receives a
 new action ticket. TX is limited to 128 bytes per action and alternates with RX
 after every completed chunk, so large startup output cannot hide a paced serial
-command. Repeated or reordered console banners indicate failed linked-serial
-transport evidence, not a Wi-Fi supervisor retry, unless the capture also shows
-a later numbered `CYW43_BOOTSTRAP_SUPERVISOR attempt=` record.
+command. The ordinary linked EventPump rotates through separate `Serial`,
+`Dispatch`, `Network`, `LocalSeat`, and `Display` outer turns. `Serial` admits
+one TX-first serial-ring turn. `Dispatch` consumes at most one serial, buffered
+local-seat, or already-buffered network command without polling the NIC.
+`Network` performs one NIC service and leaves any received command buffered for
+the next `Dispatch` turn; receiving a command and dispatching it therefore never
+share an outer turn. `LocalSeat` performs one retained USB keyboard turn, and
+`Display` performs at most one retained HDMI attach or pending-frame turn.
+For wired GENET, the one `Network` service may instead be the next retained
+post-command TCP flush described above; dispatch itself performs none. A
+data-ready CYW43 connection never uses that GENET cursor and continues through
+ordinary one-operation network polls on successive `Network` phases.
+
+If a TX command already owns the shared ring slot, RX remains unallocated and
+cannot install a competing ticket or fingerprint. When the bounded linked TX
+queue is full, complete output remains retained. Three backlog records are
+reserved for response tails; ordinary `Line` and nonessential `BackgroundLine`
+records cannot consume them. A response-priority enqueue may preempt only the
+newest `BackgroundLine`, whose authoritative copy is already in
+`/log/queen.log`; it cannot drop command output or an existing tail. The stream
+cursor and pending `END` do not advance on backpressure, and the prompt is a
+retained `ResponseTailPrompt` backlog record, not a separate one-bit slot.
+Physical-console command intake remains fenced until the current serial bytes,
+backlog records, and response barrier have drained. A later `Serial` turn
+retries one retained record; queue saturation must not silently discard or
+truncate it. Repeated or reordered console
+banners, or a prompt that freezes after otherwise successful DHCP, indicate
+failed linked-serial transport evidence, not a Wi-Fi supervisor retry, unless
+the capture also shows a later numbered `CYW43_BOOTSTRAP_SUPERVISOR attempt=`
+record.
 On a fresh boot with no authenticated session, use the paced serial
 `attach queen <ticket>` flow before `reboot`; authentication remains available
 during bootstrap because it touches only the parser and ticket table. All other
 hardware diagnostics remain fenced until the retained Wi-Fi action releases
-its HAL scope, and reboot dispatch still occurs only after its ACK is flushed.
+its HAL scope. Once reboot is accepted, every later command is fenced and reset
+admission discards only nonessential `BackgroundLine` records already preserved
+in `/log/queen.log`, never command output or protocol tails. Reset dispatch waits
+for the complete ACK, all output ahead of it, and an explicit linked-runtime
+UART transmitter-idle sample. FIFO acceptance is not wire-idle proof. A busy
+sample completes only that immutable idle probe and preserves an RX fairness
+turn before a fresh idle ticket. If the serial generation is poisoned or the
+three-second virtual-counter drain deadline expires, the reset stays fenced and
+`/log/queen.log` records `linked-serial-generation-poisoned` or
+`ack-drain-timeout`; an empty queue after poison is not ACK proof. The turn that
+first proves wire idle records the proof and returns. Platform reset occurs on a
+later reset-only outer turn with no driver, network, local-seat, display, or
+serial work.
 
 Hardware-free closure is narrower: it requires the retained production
 supervisor, one-child-operation EventPump permit, reciprocal-ring/controller
 failure-cut tests, supervisor-only generation transitions from immutable
 deferred-recovery records after steady-path guards unwind, preservation of an
-unresolved association cursor across logical epoch changes, exact clean image
-identity, and all repository gates to pass. That result makes the committed
-image ready for the strongest available Pi test, but it is not evidence that
-the board associated, completed EAPOL,
+unresolved association cursor across logical epoch changes, explicit high-bit
+root continuation gating after every retained runtime `Pending` quantum,
+five-phase linked EventPump arbitration with distinct NIC-service and command
+dispatch turns, retained GENET TCP response flushing with one operation per
+later `Network` phase and connection fencing, ordinary CYW43 data-ready polls,
+TX-first single-operation linked-serial service, one-turn USB
+keyboard and HDMI attach/service cursors, sole linked-runtime UART ownership,
+terminal-output retention, exact UART wire-idle reboot-ACK fencing followed by
+a later reset-only turn, exact clean image identity, and all repository gates to
+pass. Host tests cover the
+initial endpoint-send loss path, delayed endpoint-wake rejection, peer/IRQ
+coalescing priority, stale/mutated wake rejection, idle blocking, raw-diagnostic
+routing, stream/prompt saturation, reboot command fencing, and the serial TX/RX
+collision that previously froze the prompt. That result makes
+the committed image ready for the strongest available Pi test, but it is not
+evidence that the board associated, completed EAPOL,
 obtained DHCP, answered ARP, carried raw TCP/authenticated `cohsh`, preserved
 USB/local-seat liveness, or repeated reliably. Only the boot-paired 10-cold and
 10-warm capture set below can close those physical claims.
@@ -676,6 +777,15 @@ USB keyboard readiness requires isolated-runtime command and first-report
 proof. A prompt displayed on HDMI does not prove keyboard input, and a USB
 descriptor does not prove command readiness. Under load, preserve serial and
 local-seat command liveness before nonessential mirroring or redraws.
+
+Before constructing the EventPump, Pi root completes the current synchronous
+PCIe HAL prerequisite as local bookkeeping and authority setup for the retained
+USB cursor. This does not create a root-owned steady USB backend or authorize a
+later combined PCIe/USB turn; a missing proof leaves retained USB attach blocked
+at the PCIe prerequisite. Once the pump is active, each USB descriptor replay,
+init, enumeration/report poll, HDMI descriptor/attach step, and pending-frame
+service issues one immutable linked-runtime action or polls one exact completion
+per outer turn. HDMI attach and frame submit are always separate turns.
 
 ## Failure Routing
 

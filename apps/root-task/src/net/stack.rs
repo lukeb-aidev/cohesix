@@ -7602,6 +7602,16 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.disconnect_requested_polls = 0;
     }
 
+    fn console_output_drained(&self, conn_id: u64) -> bool {
+        if self.active_client_id != Some(conn_id)
+            || self.server.has_outbound()
+            || self.outbound.has_pending()
+        {
+            return false;
+        }
+        self.sockets.get::<TcpSocket>(self.tcp_handle).send_queue() == 0
+    }
+
     fn drain_console_events(&mut self, visitor: &mut dyn FnMut(NetConsoleEvent)) {
         let mut drained = HeaplessVec::<NetConsoleEvent, SOCKET_CAPACITY>::new();
         while let Some(event) = self.events.pop() {
@@ -8203,6 +8213,16 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.request_disconnect(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.request_disconnect(),
+        }
+    }
+
+    fn console_output_drained(&self, conn_id: u64) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.console_output_drained(conn_id),
+            Self::GenetDriverTask(stack) => stack.console_output_drained(conn_id),
+            Self::Cyw43DriverTask(stack) => stack.console_output_drained(conn_id),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_output_drained(conn_id),
         }
     }
 

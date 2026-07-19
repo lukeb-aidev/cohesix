@@ -57,33 +57,37 @@ use crate::sel4::{
 };
 #[cfg(feature = "kernel")]
 use pci::{PciAddress, PciTopology};
+#[cfg(test)]
+use pi4_driver_abi::DRIVER_RUNTIME_SDIO_IRQ_BADGE;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
     DriverRuntimeBusLinkDescriptor, DriverRuntimeInitDescriptor, DriverRuntimeIrqDescriptor,
     DriverRuntimePageDescriptor, DriverRuntimeResourceRangeDescriptor,
     DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
     DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
     DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
-    DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING,
-    DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
-    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
-    DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
-    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
-    DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED, DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS,
-    DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
-    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
-    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
-    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
-    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
-    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
-    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+    DRIVER_RUNTIME_DPC_EVENT_RING_BYTES, DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH,
+    DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+    DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
+    DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
+    DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND, DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED,
+    DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
+    DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN, DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS,
+    DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+    DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
+    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+    DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1676,6 +1680,19 @@ fn generated_cyw43_sdio_topology() -> Result<GeneratedCyw43SdioTopology, HalErro
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_sdio_peer_notification_badge(send_slot: u32) -> Option<u32> {
+    match send_slot {
+        DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT => {
+            Some(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE)
+        }
+        DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT => {
+            Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn generated_irq_trigger_word(trigger: crate::generated::DriverRuntimeIrqTrigger) -> u16 {
     match trigger {
         crate::generated::DriverRuntimeIrqTrigger::Level => DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
@@ -2283,6 +2300,15 @@ const fn runtime_cacheable_xn_attributes() -> sel4_sys::seL4_ARM_VMAttributes {
 #[cfg(feature = "kernel")]
 const fn runtime_uncached_xn_attributes() -> sel4_sys::seL4_ARM_VMAttributes {
     sel4::vm_attributes_with_execute_never(sel4_sys::seL4_ARM_Page_Uncached)
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_runtime_local_notification_receive_rights() -> sel4_sys::seL4_CapRights {
+    // The child may poll/receive its TCB-bound notification, but only root and
+    // separately minted badged peer/IRQ caps may signal it. With write removed,
+    // the child cannot manufacture an indistinguishable badge-zero foreground
+    // continuation.
+    sel4_sys::seL4_CapRights::new(0, 0, 1, 0)
 }
 
 #[cfg(feature = "kernel")]
@@ -3213,7 +3239,7 @@ impl<'a> KernelHal<'a> {
             root_cnode,
             notification,
             root_depth,
-            sel4_sys::seL4_CapRights_All,
+            driver_runtime_local_notification_receive_rights(),
             0,
         );
         if notification_err != seL4_NoError {
@@ -3741,6 +3767,35 @@ impl<'a> KernelHal<'a> {
         Ok(true)
     }
 
+    fn mint_driver_runtime_continuation_notification(
+        &mut self,
+        contract: DriverTaskContract,
+        notification: seL4_CPtr,
+    ) -> Result<Option<seL4_CPtr>, HalError> {
+        if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT && contract != SDIO_HOST_DRIVER_TASK_CONTRACT
+        {
+            return Ok(None);
+        }
+        let root_cnode = self.env.init_cnode_cap();
+        let root_depth = sel4::word_bits() as u8;
+        let continuation = self.env.allocate_slot();
+        let send_only = sel4_sys::seL4_CapRights::new(0, 0, 0, 1);
+        let err = sel4::cnode_mint_depth(
+            root_cnode,
+            continuation,
+            root_depth,
+            root_cnode,
+            notification,
+            root_depth,
+            send_only,
+            seL4_Word::from(DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE),
+        );
+        if err != seL4_NoError {
+            return Err(HalError::Sel4(err));
+        }
+        Ok(Some(continuation))
+    }
+
     fn install_cyw43_sdio_bus_link(
         &mut self,
         contract: DriverTaskContract,
@@ -3775,6 +3830,11 @@ impl<'a> KernelHal<'a> {
         let send_only = sel4_sys::seL4_CapRights::new(0, 0, 0, 1);
         let mut installed = ReciprocalNotificationCapGuard::empty();
         let client_to_owner_slot = seL4_CPtr::from(topology.link.client_to_owner_slot);
+        let client_to_owner_badge =
+            cyw43_sdio_peer_notification_badge(u32::from(topology.link.client_to_owner_slot))
+                .ok_or(HalError::Unsupported(
+                    "driver-runtime-sdio-peer-notification-badge",
+                ))?;
         let client_to_owner_err = sel4::cnode_mint_depth(
             child_cnode,
             client_to_owner_slot,
@@ -3783,7 +3843,7 @@ impl<'a> KernelHal<'a> {
             owner.notification,
             root_depth,
             send_only,
-            0,
+            seL4_Word::from(client_to_owner_badge),
         );
         if client_to_owner_err != seL4_NoError {
             return Err(HalError::Sel4(client_to_owner_err));
@@ -3794,6 +3854,11 @@ impl<'a> KernelHal<'a> {
             depth: child_depth,
         })?;
         let owner_to_client_slot = seL4_CPtr::from(topology.link.owner_to_client_slot);
+        let owner_to_client_badge =
+            cyw43_sdio_peer_notification_badge(u32::from(topology.link.owner_to_client_slot))
+                .ok_or(HalError::Unsupported(
+                    "driver-runtime-cyw43-peer-notification-badge",
+                ))?;
         let owner_to_client_err = sel4::cnode_mint_depth(
             owner.cnode,
             owner_to_client_slot,
@@ -3802,7 +3867,7 @@ impl<'a> KernelHal<'a> {
             client_notification,
             root_depth,
             send_only,
-            0,
+            seL4_Word::from(owner_to_client_badge),
         );
         if owner_to_client_err != seL4_NoError {
             return Err(HalError::Sel4(owner_to_client_err));
@@ -3843,12 +3908,14 @@ impl<'a> KernelHal<'a> {
         let _ = fmt::write(
             &mut line,
             format_args!(
-                "DRIVER_TASK_BUS_LINK contract={} owner={} channel={} client_send_slot=0x{:04x} owner_send_slot=0x{:04x} rights=write-only ring_vaddr=0x{:08x} data_vaddr=0x{:08x} shared_len={} link_epoch={}",
+                "DRIVER_TASK_BUS_LINK contract={} owner={} channel={} client_send_slot=0x{:04x} client_badge={} owner_send_slot=0x{:04x} owner_badge={} rights=write-only ring_vaddr=0x{:08x} data_vaddr=0x{:08x} shared_len={} link_epoch={}",
                 contract.name,
                 SDIO_HOST_DRIVER_TASK_CONTRACT.name,
                 topology.link.channel,
                 topology.link.client_to_owner_slot,
+                client_to_owner_badge,
                 topology.link.owner_to_client_slot,
+                owner_to_client_badge,
                 driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR,
                 driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR
                     + driver_task::DRIVER_TASK_RING_PAGE_BYTES,
@@ -3979,6 +4046,8 @@ impl<'a> KernelHal<'a> {
             None
         };
         let notification = self.env.alloc_notification().map_err(HalError::Sel4)?;
+        let continuation_notification =
+            self.mint_driver_runtime_continuation_notification(contract, notification)?;
         let vspace = self.env.alloc_vspace_root().map_err(HalError::Sel4)?;
         self.env
             .assign_vspace_asid_from_init_pool(vspace)
@@ -4051,7 +4120,7 @@ impl<'a> KernelHal<'a> {
             root_cnode,
             notification,
             root_depth,
-            sel4_sys::seL4_CapRights_All,
+            driver_runtime_local_notification_receive_rights(),
             0,
         );
         if notification_err != seL4_NoError {
@@ -4252,6 +4321,7 @@ impl<'a> KernelHal<'a> {
                 recovery_endpoint as usize,
                 command_endpoint as usize,
                 notification as usize,
+                continuation_notification.unwrap_or(0) as usize,
                 irq_handler,
                 restart_sdhci_root_ptr,
             ) {
@@ -4905,7 +4975,14 @@ mod tests {
     use super::{SdioBusWidth, SdioFunction, WifiFirmwareBundle};
 
     #[cfg(feature = "kernel")]
-    use super::{irq_notification_badge, Irq, IrqTrigger};
+    use super::{
+        cyw43_sdio_peer_notification_badge, driver_runtime_local_notification_receive_rights,
+        irq_notification_badge, Irq, IrqTrigger, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
+        DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
+        DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
+        DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE,
+        DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+    };
 
     #[cfg(feature = "kernel")]
     #[test]
@@ -5669,6 +5746,52 @@ mod tests {
     fn irq_notification_badges_are_nonzero_and_irq_derived() {
         assert_eq!(irq_notification_badge(Irq(0)), 1);
         assert_eq!(irq_notification_badge(Irq(143)), 144);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_runtime_continuation_authority_is_disjoint_from_lower_wakes() {
+        assert_ne!(DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE, 0);
+        assert_eq!(
+            driver_runtime_local_notification_receive_rights().raw(),
+            0b0010,
+            "the child local cap may receive but cannot self-signal"
+        );
+        assert_eq!(
+            cyw43_sdio_peer_notification_badge(DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT),
+            Some(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE)
+        );
+        assert_eq!(
+            cyw43_sdio_peer_notification_badge(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT),
+            Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE)
+        );
+        assert_ne!(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, 0);
+        assert_ne!(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE, 0);
+        assert_ne!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE & DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            "lower wake badges may overlap because their work sources are durable"
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE
+                & (DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
+                    | DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
+                    | DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+            0,
+            "coalesced peer/IRQ badges must preserve a distinct continuation bit"
+        );
     }
 
     #[cfg(feature = "kernel")]

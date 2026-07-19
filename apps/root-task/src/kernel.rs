@@ -4728,6 +4728,29 @@ fn bootstrap<P: Platform>(
         extra_range.clone(),
     )?;
 
+    // The current PCIe ownership proof is internally synchronous, so settle
+    // it before EventPump begins enforcing one linked-runtime operation per
+    // outer turn. A missing proof remains fail-closed: the retained USB attach
+    // cursor will stop at its PCIe prerequisite instead of bypassing HAL.
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    if local_seat_runtime.is_some()
+        && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+    {
+        let prepared = local_seat::prepare_linked_local_seat_pcie_hal_before_event_pump();
+        let mut line = HeaplessString::<160>::new();
+        let _ = write!(
+            line,
+            "[local-seat] pre-event PCIe prerequisite status={}",
+            if prepared { "ready" } else { "blocked" }
+        );
+        boot_log::force_uart_line(line.as_str());
+    }
+
     #[cfg(feature = "kernel")]
     let ninedoor: &'static mut NineDoorBridge = {
         let bridge = Box::new(NineDoorBridge::new());

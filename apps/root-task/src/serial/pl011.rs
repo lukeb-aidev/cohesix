@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the serial/pl011 module for root-task.
 // Author: Lukas Bower
@@ -291,6 +291,11 @@ impl ErrorType for Pl011 {
 }
 
 impl SerialDriver for Pl011 {
+    fn transmitter_idle(&self) -> bool {
+        // SAFETY: `reg_fr` addresses the admitted volatile PL011 flag register.
+        unsafe { read_volatile(self.reg_fr()) & FR_BUSY == 0 }
+    }
+
     fn read_byte(&mut self) -> nb::Result<u8, Self::Error> {
         if let Some(byte) = self.rx_cached.take() {
             return Ok(byte);

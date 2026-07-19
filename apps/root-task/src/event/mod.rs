@@ -124,11 +124,12 @@ use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
 use crate::net::NetSelfTestStartResult;
+#[cfg(all(test, feature = "net-console"))]
+use crate::net::CONSOLE_DISPATCH_BURST;
 #[cfg(feature = "net-console")]
 use crate::net::{
     ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDiagSnapshot,
-    NetPoller, NetSelfTestReport, NetStatusReport, NetTelemetry, CONSOLE_DISPATCH_BURST, NET_DIAG,
-    NET_DIAG_FEATURED,
+    NetPoller, NetSelfTestReport, NetStatusReport, NetTelemetry, NET_DIAG, NET_DIAG_FEATURED,
 };
 #[cfg(feature = "kernel")]
 use crate::ninedoor::TelemetryTailMeta;
@@ -272,16 +273,12 @@ const NET_DIAG_STUCK_MS: u64 = 3_000;
 #[cfg(feature = "net-console")]
 const M26D_NET_PROOF_OVERRIDES_PHYSICAL_INPUT: bool = true;
 #[cfg(feature = "net-console")]
-// Network-origin NineDoor commands may enqueue multiple TCP response segments;
-// keep a small bounded flush window so replies are not deferred behind later
-// event-loop work during Genet bursts.
+// Network-origin NineDoor commands may enqueue multiple TCP response segments.
+// Retain a bounded cursor so each later Network phase performs at most one
+// flush operation without monopolising the outer event pump.
 const NET_POST_DISPATCH_FLUSH_POLLS: usize = 8;
 #[cfg(feature = "net-console")]
 const NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 16;
-#[cfg(feature = "net-console")]
-const NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS: usize = 3;
-#[cfg(feature = "net-console")]
-const NET_CYW43_HOT_DISPATCH_ROUNDS: usize = 1;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
@@ -291,6 +288,7 @@ const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 3;
 const LOCAL_SEAT_HDMI_PUMP_PASSES_UNDER_NET_PRESSURE: usize = 1;
 const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 4;
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 32;
+const CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE: usize = 3;
 const CONSOLE_OUTPUT_LINES_PER_IDLE_TURN: usize = 2;
 const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
 const CONSOLE_PARSE_ERROR_REPEAT_MAX: u16 = 1024;
@@ -658,17 +656,6 @@ fn net_status_cyw43_dhcp_pending(status: &NetStatusReport) -> bool {
 }
 
 #[cfg(feature = "net-console")]
-fn net_hot_dispatch_rounds_for_status(status: &NetStatusReport) -> usize {
-    if net_status_cyw43_data_ready(status) {
-        NET_CYW43_HOT_DISPATCH_ROUNDS
-    } else if net_status_linked_runtime_data_ready(status) {
-        NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS
-    } else {
-        1
-    }
-}
-
-#[cfg(feature = "net-console")]
 const fn net_post_dispatch_flush_limit_for_display(
     display: Option<LocalSeatDisplayTrace>,
 ) -> usize {
@@ -914,7 +901,8 @@ impl<const N: usize> CapabilityValidator for TicketTable<N> {
 }
 
 const TICKET_RATE_WINDOW_MS: u64 = 1_000;
-const REBOOT_ACK_FLUSH_TURNS: u8 = 1;
+const REBOOT_ACK_MINIMUM_WAIT_TURNS: u8 = 1;
+const REBOOT_ACK_DEADLINE_MS: u64 = 3_000;
 
 /// Validation error when a ticket exceeds manifest limits.
 #[derive(Debug, Clone)]
@@ -1771,8 +1759,55 @@ impl ConsoleInputSource {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingConsoleOutputKind {
+    BackgroundLine,
     Line,
-    Prompt,
+    TerminalLine,
+    ResponseTailLine,
+    ResponseTailPrompt,
+}
+
+impl PendingConsoleOutputKind {
+    const fn is_response_tail(self) -> bool {
+        matches!(self, Self::ResponseTailLine | Self::ResponseTailPrompt)
+    }
+
+    const fn is_background(self) -> bool {
+        matches!(self, Self::BackgroundLine)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum PhysicalResponseBarrier {
+    #[default]
+    Idle,
+    AwaitingTail,
+    TailQueued,
+    TailInFlight,
+}
+
+#[cfg(feature = "net-console")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PendingNetFlush {
+    conn_id: Option<u64>,
+    remaining_turns: usize,
+}
+
+#[cfg(feature = "net-console")]
+impl PendingNetFlush {
+    const fn active(self) -> bool {
+        self.remaining_turns != 0
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum LinkedRuntimeServicePhase {
+    #[default]
+    Serial,
+    Dispatch,
+    Network,
+    LocalSeat,
+    Display,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1811,17 +1846,13 @@ struct PendingConsoleOutput {
 }
 
 impl PendingConsoleOutput {
-    fn from_str(kind: PendingConsoleOutputKind, text: &str) -> Self {
+    fn try_from_str(kind: PendingConsoleOutputKind, text: &str) -> Option<Self> {
         let mut buffered = HeaplessString::new();
-        for ch in text.chars() {
-            if buffered.push(ch).is_err() {
-                break;
-            }
-        }
-        Self {
+        buffered.push_str(text).ok()?;
+        Some(Self {
             kind,
             text: buffered,
-        }
+        })
     }
 }
 
@@ -1924,6 +1955,7 @@ where
     next_session_id: u64,
     last_input_source: ConsoleInputSource,
     stream_end_pending: bool,
+    stream_prompt_pending: bool,
     stream_output_source: Option<ConsoleInputSource>,
     #[cfg(feature = "net-console")]
     stream_net_conn_id: Option<u64>,
@@ -1937,6 +1969,8 @@ where
     net_unavailable_detail: Option<HeaplessString<192>>,
     #[cfg(feature = "net-console")]
     net_conn_id: Option<u64>,
+    #[cfg(feature = "net-console")]
+    pending_net_flush: PendingNetFlush,
     #[cfg(feature = "net-console")]
     last_net_diag_log_ms: Option<u64>,
     #[cfg(feature = "net-console")]
@@ -1965,6 +1999,8 @@ where
     banner_emitted: bool,
     console_ready_announced: bool,
     serial_console_turn_active: bool,
+    #[cfg(feature = "kernel")]
+    linked_runtime_service_phase: LinkedRuntimeServicePhase,
     console_input_turn_active: bool,
     console_input_turn_output_budget: usize,
     last_console_error_key: Option<ConsoleErrorKey>,
@@ -1974,11 +2010,18 @@ where
     local_seat_mirror_suppressed: bool,
     local_seat_first_command_input_logged: bool,
     reboot_pending: bool,
-    reboot_flush_turns: u8,
+    reboot_ack_wait_turns: u8,
+    reboot_ack_source: Option<ConsoleInputSource>,
+    #[cfg(feature = "net-console")]
+    reboot_ack_net_conn_id: Option<u64>,
+    reboot_ack_deadline_ms: u64,
+    reboot_ack_failed: bool,
+    reboot_ack_drain_observed: bool,
     #[cfg(feature = "kernel")]
     pending_usb_debug_hdmi_frontier: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     local_seat_escape_state: LocalSeatEscapeState,
     pending_console_output: HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
+    physical_response_barrier: PhysicalResponseBarrier,
     #[cfg(feature = "kernel")]
     serial_input_idle_trace_next_ms: u64,
     #[cfg(feature = "kernel")]
@@ -2056,6 +2099,7 @@ where
             next_session_id: 1,
             last_input_source: ConsoleInputSource::Serial,
             stream_end_pending: false,
+            stream_prompt_pending: false,
             stream_output_source: None,
             #[cfg(feature = "net-console")]
             stream_net_conn_id: None,
@@ -2069,6 +2113,8 @@ where
             net_unavailable_detail: None,
             #[cfg(feature = "net-console")]
             net_conn_id: None,
+            #[cfg(feature = "net-console")]
+            pending_net_flush: PendingNetFlush::default(),
             #[cfg(feature = "net-console")]
             last_net_diag_log_ms: None,
             #[cfg(feature = "net-console")]
@@ -2097,6 +2143,8 @@ where
             banner_emitted: false,
             console_ready_announced: false,
             serial_console_turn_active: false,
+            #[cfg(feature = "kernel")]
+            linked_runtime_service_phase: LinkedRuntimeServicePhase::Serial,
             console_input_turn_active: false,
             console_input_turn_output_budget: 0,
             last_console_error_key: None,
@@ -2106,11 +2154,18 @@ where
             local_seat_mirror_suppressed: false,
             local_seat_first_command_input_logged: false,
             reboot_pending: false,
-            reboot_flush_turns: 0,
+            reboot_ack_wait_turns: 0,
+            reboot_ack_source: None,
+            #[cfg(feature = "net-console")]
+            reboot_ack_net_conn_id: None,
+            reboot_ack_deadline_ms: 0,
+            reboot_ack_failed: false,
+            reboot_ack_drain_observed: false,
             #[cfg(feature = "kernel")]
             pending_usb_debug_hdmi_frontier: None,
             local_seat_escape_state: LocalSeatEscapeState::Idle,
             pending_console_output: HeaplessVec::new(),
+            physical_response_barrier: PhysicalResponseBarrier::Idle,
             #[cfg(feature = "kernel")]
             serial_input_idle_trace_next_ms: 0,
             #[cfg(feature = "kernel")]
@@ -2239,8 +2294,19 @@ where
 
     /// Execute a single cooperative polling cycle.
     pub fn poll(&mut self) {
+        self.reconcile_physical_response_barrier();
+        self.queue_stream_prompt_tail_if_ready();
+        if self.reboot_pending && self.reboot_ack_drain_observed {
+            self.service_pending_reboot();
+            return;
+        }
         #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+        #[cfg(feature = "kernel")]
+        if crate::serial::serial_linked_runtime_transport_active() {
+            self.poll_with_linked_serial_runtime();
+            return;
+        }
         let serial_rx_activity = self.serial.poll_io();
         let local_seat_input_waiting = self
             .local_seat
@@ -2253,7 +2319,7 @@ where
             let serial_input = self.consume_serial();
             self.serial.flush_tx();
             let serial_output_pending = self.serial.tx_pending();
-            self.poll_runtime(false, true);
+            self.poll_runtime(false, true, true);
             self.serial.poll_io();
             let serial_followup_input = if self.local_seat.is_some() {
                 false
@@ -2269,6 +2335,11 @@ where
                 || self.serial.tx_pending();
             self.serial_console_turn_active = false;
             if serial_turn_should_return {
+                // A completed physical command may leave a terminal prompt or
+                // ACK queued while the next command is already buffered. The
+                // response barrier owns this turn; flush its ordered tail
+                // before returning to input arbitration.
+                self.flush_pending_console_output_if_idle();
                 self.maybe_run_post_prompt_local_seat_attach(
                     serial_rx_activity || serial_input || serial_followup_input,
                 );
@@ -2283,7 +2354,7 @@ where
             self.pump_local_seat_display_after_local_input();
             #[cfg(feature = "net-console")]
             if self.m26d_network_oracle_service_due() {
-                self.poll_runtime(false, false);
+                self.poll_runtime(false, false, true);
             }
             self.serial.flush_tx();
             return;
@@ -2294,6 +2365,7 @@ where
         self.poll_runtime(
             false,
             serial_rx_activity || serial_input || local_input || serial_output_pending,
+            true,
         );
         self.serial.poll_io();
         let post_runtime_local_input =
@@ -2332,6 +2404,113 @@ where
         );
     }
 
+    /// Run an ordinary pump cycle after serial has moved behind its linked
+    /// runtime.
+    ///
+    /// TX and RX share one reciprocal ring, so exactly one TX-first serial
+    /// service quantum is admitted for the entire cycle. Console processing,
+    /// timer/IPC dispatch, networking, and local-seat work may enqueue output,
+    /// but none of those descendants may submit a second serial fingerprint in
+    /// the same cycle. The next outer pump turn resumes the retained action.
+    #[cfg(feature = "kernel")]
+    fn poll_with_linked_serial_runtime(&mut self) {
+        debug_assert!(crate::serial::serial_linked_runtime_transport_active());
+        match self.linked_runtime_service_phase {
+            LinkedRuntimeServicePhase::Serial => {
+                self.serial_console_turn_active = true;
+                self.queue_pending_console_output_for_linked_serial();
+                let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
+                self.poll_runtime(true, serial_rx_activity || self.serial.tx_pending(), false);
+                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+                self.serial_console_turn_active = false;
+            }
+            LinkedRuntimeServicePhase::Dispatch => {
+                let serial_input = self.consume_serial();
+                let local_input = if serial_input {
+                    false
+                } else {
+                    self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime)
+                };
+                #[cfg(feature = "net-console")]
+                let network_input = if serial_input || local_input {
+                    false
+                } else {
+                    self.dispatch_one_buffered_network_line()
+                };
+                #[cfg(not(feature = "net-console"))]
+                let network_input = false;
+                self.poll_runtime(true, serial_input || local_input, false);
+                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+                self.maybe_emit_serial_input_idle_trace(
+                    serial_input || local_input || network_input,
+                );
+            }
+            LinkedRuntimeServicePhase::Network => {
+                // Admit the NIC child operation only. Any line it produces is
+                // retained by the network console and dispatched during the
+                // next dedicated Dispatch phase, after the NIC guard and
+                // reciprocal-ring ownership have been released.
+                self.poll_runtime(true, false, true);
+                self.linked_runtime_service_phase = if self.local_seat.is_some() {
+                    LinkedRuntimeServicePhase::LocalSeat
+                } else {
+                    LinkedRuntimeServicePhase::Serial
+                };
+            }
+            LinkedRuntimeServicePhase::LocalSeat => {
+                // This phase may perform one USB linked-runtime operation. Any
+                // bytes it produces remain buffered until the following
+                // dispatch phase, so a hardware-facing command cannot compose
+                // with the USB poll that delivered it.
+                self.poll_local_seat_backend_for_ingress();
+                self.poll_runtime(true, false, false);
+                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Display;
+            }
+            LinkedRuntimeServicePhase::Display => {
+                // HDMI attach and frame submission share the display runtime
+                // ring. Service at most one of them in this dedicated phase;
+                // USB and serial have already released their own guards.
+                if let Some(runtime) = self.local_seat.as_mut() {
+                    if runtime.linked_hdmi_pending_work() {
+                        if runtime.pump_linked_hdmi_once() {
+                            self.metrics.local_seat_hdmi_pump_turns =
+                                self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
+                        }
+                    } else {
+                        let _ = runtime.ensure_prompt_linked_display_ready();
+                    }
+                }
+                self.poll_runtime(true, false, false);
+                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+            }
+        }
+    }
+
+    /// Dispatch at most one network-console line already retained by the NIC
+    /// service phase.
+    ///
+    /// The linked-runtime arbiter calls this only from its hardware-free
+    /// dispatch phase. Draining one line here ensures that a command which may
+    /// schedule hardware work cannot share an outer event turn with the NIC
+    /// poll that received it.
+    #[cfg(feature = "net-console")]
+    fn dispatch_one_buffered_network_line(&mut self) -> bool {
+        if self.pending_net_flush.active() {
+            return false;
+        }
+        let mut buffered: HeaplessVec<ConsoleLine, 1> = HeaplessVec::new();
+        if let Some(net) = self.net.as_mut() {
+            let _ = net.drain_console_lines_bounded(self.now_ms, 1, &mut |line| {
+                let _ = buffered.push(line);
+            });
+        }
+        let Some(line) = buffered.pop() else {
+            return false;
+        };
+        self.handle_network_line(line.text);
+        true
+    }
+
     /// Service one ordinary event-pump turn between retained CYW43 bootstrap
     /// operations.
     ///
@@ -2347,6 +2526,15 @@ where
         debug_assert!(!self.cyw43_bootstrap_operator_turn_active);
         self.cyw43_bootstrap_operator_turn_active = true;
         self.serial_console_turn_active = true;
+        self.reconcile_physical_response_barrier();
+        self.queue_stream_prompt_tail_if_ready();
+        if self.reboot_pending && self.reboot_ack_drain_observed {
+            self.service_pending_reboot();
+            self.serial_console_turn_active = false;
+            self.cyw43_bootstrap_operator_turn_active = false;
+            return;
+        }
+        self.queue_pending_console_output_for_linked_serial();
         let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
         let serial_input = self.consume_serial();
         let local_input = self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime);
@@ -2356,7 +2544,9 @@ where
         self.poll_runtime(
             false,
             serial_rx_activity || serial_input || local_input || self.serial.tx_pending(),
+            false,
         );
+        self.queue_pending_console_output_for_linked_serial();
         self.serial_console_turn_active = false;
         self.cyw43_bootstrap_operator_turn_active = false;
     }
@@ -2374,7 +2564,10 @@ where
             return false;
         }
         crate::log_buffer::append_log_line(line);
-        self.serial.try_enqueue_line_record(line)
+        if self.reboot_pending || self.physical_console_response_pending() {
+            return true;
+        }
+        self.queue_physical_console_output(PendingConsoleOutputKind::BackgroundLine, line)
     }
 
     /// Whether a deferred CYW43 bootstrap may begin after an ordinary pump.
@@ -2408,7 +2601,7 @@ where
     pub fn poll_pre_root_network(&mut self) {
         #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
-        self.poll_runtime(true, false);
+        self.poll_runtime(true, false, true);
     }
 
     #[cfg(feature = "net-console")]
@@ -2419,11 +2612,19 @@ where
         })
     }
 
-    fn poll_runtime(&mut self, suppress_console_input: bool, physical_input_active: bool) {
+    fn poll_runtime(
+        &mut self,
+        suppress_console_input: bool,
+        physical_input_active: bool,
+        service_network: bool,
+    ) {
+        let suppress_console_input = suppress_console_input || self.reboot_pending;
         #[cfg(not(feature = "net-console"))]
         let _ = suppress_console_input;
         #[cfg(not(feature = "net-console"))]
         let _ = physical_input_active;
+        #[cfg(not(feature = "net-console"))]
+        let _ = service_network;
 
         #[cfg(feature = "kernel")]
         let timebase_now_ms = crate::hal::timebase().now_ms();
@@ -2449,7 +2650,7 @@ where
         #[cfg(feature = "net-console")]
         let local_seat_usb_input_pending = self.linked_local_seat_usb_input_pending();
         #[cfg(feature = "net-console")]
-        let net_poll = if self.cyw43_bootstrap_operator_turn_is_active() {
+        let net_poll = if !service_network || self.cyw43_bootstrap_operator_turn_is_active() {
             // Bootstrap and linked-pair recovery retain sole CYW43 ownership.
             // The independently owned serial route, buffered local-seat bytes,
             // timer/IPC service, and reboot dispatch continue below, but an
@@ -2458,6 +2659,14 @@ where
         } else if let Some(net) = self.net.as_mut() {
             let status_before = net.status_report();
             let net_contract = net.driver_task_contract();
+            let conn_id = net.active_console_conn_id();
+            if self.pending_net_flush.active() && self.pending_net_flush.conn_id != conn_id {
+                // A response cursor belongs only to the connection that
+                // created it. A replacement session must never inherit stale
+                // flush work.
+                self.pending_net_flush = PendingNetFlush::default();
+            }
+            let flush_turn = self.pending_net_flush.active();
             let network_data_yields_to_input = net_contract
                 .validate()
                 .map(|_| !net_contract.preempts_network_data())
@@ -2478,7 +2687,12 @@ where
             // event-pump turn.
             if !yield_for_physical_input {
                 if let Some(budget) = net_budget.as_mut() {
-                    match net.poll_with_budget(self.now_ms, budget) {
+                    let result = if flush_turn {
+                        net.flush_tcp_with_budget(self.now_ms, budget)
+                    } else {
+                        net.poll_with_budget(self.now_ms, budget)
+                    };
+                    match result {
                         Ok(polled) => activity = polled,
                         Err(err) => {
                             let message = format_message(format_args!(
@@ -2490,46 +2704,38 @@ where
                             self.audit.denied(message.as_str());
                         }
                     }
+                    if flush_turn {
+                        self.metrics.net_post_dispatch_flush_polls =
+                            self.metrics.net_post_dispatch_flush_polls.saturating_add(1);
+                        self.pending_net_flush.remaining_turns =
+                            self.pending_net_flush.remaining_turns.saturating_sub(1);
+                        if !activity {
+                            self.pending_net_flush = PendingNetFlush::default();
+                        } else if self.pending_net_flush.remaining_turns == 0 {
+                            self.metrics.net_post_dispatch_flush_exhaustions = self
+                                .metrics
+                                .net_post_dispatch_flush_exhaustions
+                                .saturating_add(1);
+                            self.pending_net_flush = PendingNetFlush::default();
+                        }
+                    }
                 }
             }
             let telemetry = net.telemetry();
-            let conn_id = net.active_console_conn_id();
-            let status_after = net.status_report();
-            let hot_dispatch_rounds = net_hot_dispatch_rounds_for_status(&status_after);
-            let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_DISPATCH_BURST }> =
-                HeaplessVec::new();
-            if !yield_for_physical_input {
-                let _ = net.drain_console_lines_bounded(
-                    self.now_ms,
-                    CONSOLE_DISPATCH_BURST,
-                    &mut |line| {
-                        let _ = buffered.push(line);
-                    },
-                );
+            let mut buffered: HeaplessVec<ConsoleLine, 1> = HeaplessVec::new();
+            if !flush_turn && !yield_for_physical_input && !suppress_console_input {
+                let _ = net.drain_console_lines_bounded(self.now_ms, 1, &mut |line| {
+                    let _ = buffered.push(line);
+                });
             }
             let ingest_snapshot: IngestSnapshot = net.ingest_snapshot();
-            Some((
-                activity,
-                telemetry,
-                buffered,
-                conn_id,
-                ingest_snapshot,
-                hot_dispatch_rounds,
-            ))
+            Some((activity, telemetry, buffered, conn_id, ingest_snapshot))
         } else {
             None
         };
 
         #[cfg(feature = "net-console")]
-        if let Some((
-            activity,
-            telemetry,
-            buffered,
-            conn_id,
-            _ingest_snapshot,
-            hot_dispatch_rounds,
-        )) = net_poll
-        {
+        if let Some((activity, telemetry, buffered, conn_id, _ingest_snapshot)) = net_poll {
             self.net_conn_id = conn_id;
             if NET_DIAG_FEATURED {
                 self.log_net_diag(telemetry);
@@ -2540,40 +2746,11 @@ where
                 ));
                 self.audit.info(message.as_str());
             }
-            let mut ingest_snapshot = _ingest_snapshot;
+            let ingest_snapshot = _ingest_snapshot;
             for line in buffered {
                 if !suppress_console_input {
                     self.handle_network_line(line.text);
-                    if let Some(snapshot) = self.poll_net_after_network_dispatch() {
-                        ingest_snapshot = snapshot;
-                    }
                 }
-            }
-            let mut remaining_hot_rounds = hot_dispatch_rounds.saturating_sub(1);
-            while !suppress_console_input && remaining_hot_rounds != 0 {
-                let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_DISPATCH_BURST }> =
-                    HeaplessVec::new();
-                let drained = if let Some(net) = self.net.as_mut() {
-                    net.drain_console_lines_bounded(
-                        self.now_ms,
-                        CONSOLE_DISPATCH_BURST,
-                        &mut |line| {
-                            let _ = buffered.push(line);
-                        },
-                    )
-                } else {
-                    0
-                };
-                if drained == 0 {
-                    break;
-                }
-                for line in buffered {
-                    self.handle_network_line(line.text);
-                    if let Some(snapshot) = self.poll_net_after_network_dispatch() {
-                        ingest_snapshot = snapshot;
-                    }
-                }
-                remaining_hot_rounds = remaining_hot_rounds.saturating_sub(1);
             }
             #[cfg(not(feature = "kernel"))]
             let _ = ingest_snapshot;
@@ -2592,94 +2769,87 @@ where
         self.service_pending_reboot();
     }
 
-    #[cfg(feature = "net-console")]
-    fn poll_net_after_network_dispatch(&mut self) -> Option<IngestSnapshot> {
-        let display_trace = self
-            .local_seat
-            .as_ref()
-            .map(|local_seat| local_seat.display_trace());
-        let Some(net) = self.net.as_mut() else {
-            return None;
-        };
-        let Some(flush_limit) =
-            net_post_dispatch_flush_limit_for_status(&net.status_report(), display_trace)
-        else {
-            return Some(net.ingest_snapshot());
-        };
-        let net_contract = net.driver_task_contract();
-        let mut flush_polls = 0u64;
-        let mut flush_exhausted = false;
-        for _ in 0..flush_limit {
-            let mut net_budget = match DriverServiceBudget::new(net_contract) {
-                Ok(budget) => budget,
-                Err(err) => {
-                    let message = format_message(format_args!(
-                        "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                        net_contract.name,
-                        err.reason(),
-                        net_contract.max_service_us(),
-                    ));
-                    self.audit.denied(message.as_str());
-                    return Some(net.ingest_snapshot());
-                }
-            };
-            match net.flush_tcp_with_budget(self.now_ms, &mut net_budget) {
-                Ok(polled) => {
-                    flush_polls = flush_polls.saturating_add(1);
-                    if !polled {
-                        flush_exhausted = false;
-                        break;
-                    }
-                    flush_exhausted = true;
-                }
-                Err(err) => {
-                    let message = format_message(format_args!(
-                        "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                        net_contract.name,
-                        err.reason(),
-                        net_contract.max_service_us(),
-                    ));
-                    self.audit.denied(message.as_str());
-                    flush_polls = flush_polls.saturating_add(1);
-                    flush_exhausted = false;
-                    break;
-                }
-            }
-        }
-        self.metrics.net_post_dispatch_flush_polls = self
-            .metrics
-            .net_post_dispatch_flush_polls
-            .saturating_add(flush_polls);
-        if flush_exhausted && flush_polls >= flush_limit as u64 {
-            self.metrics.net_post_dispatch_flush_exhaustions = self
-                .metrics
-                .net_post_dispatch_flush_exhaustions
-                .saturating_add(1);
-        }
-        Some(net.ingest_snapshot())
-    }
-
     fn service_pending_reboot(&mut self) {
         if !self.reboot_pending {
             return;
         }
-        if self.reboot_flush_turns != 0 {
-            self.reboot_flush_turns = self.reboot_flush_turns.saturating_sub(1);
+        if self.reboot_ack_failed {
+            return;
+        }
+        if self.reboot_ack_wait_turns != 0 {
+            self.reboot_ack_wait_turns = self.reboot_ack_wait_turns.saturating_sub(1);
+            return;
+        }
+        if self
+            .reboot_ack_source
+            .is_some_and(ConsoleInputSource::is_physical_console)
+        {
+            let queued_output = !self.pending_console_output.is_empty();
+            let drain = self.serial.tx_drain_outcome();
+            if drain == crate::serial::SerialTxDrainOutcome::Failed {
+                self.fail_pending_reboot_ack("linked-serial-generation-poisoned");
+                return;
+            }
+            if queued_output
+                || self.physical_response_barrier != PhysicalResponseBarrier::Idle
+                || drain == crate::serial::SerialTxDrainOutcome::Pending
+            {
+                if self.now_ms >= self.reboot_ack_deadline_ms {
+                    self.fail_pending_reboot_ack("ack-drain-timeout");
+                }
+                return;
+            }
+        }
+        #[cfg(feature = "net-console")]
+        if self.reboot_ack_source == Some(ConsoleInputSource::Net) {
+            let drained = self
+                .reboot_ack_net_conn_id
+                .and_then(|conn_id| {
+                    self.net
+                        .as_ref()
+                        .map(|net| (conn_id, net.console_output_drained(conn_id)))
+                })
+                .is_some_and(|(_, drained)| drained);
+            if !drained {
+                if self.now_ms >= self.reboot_ack_deadline_ms {
+                    self.fail_pending_reboot_ack("tcp-ack-drain-timeout");
+                }
+                return;
+            }
+        }
+        if !self.reboot_ack_drain_observed {
+            self.reboot_ack_drain_observed = true;
             return;
         }
         let line = format_message(format_args!(
             "console: reboot firing source={}",
-            self.last_input_source.label()
+            self.reboot_ack_source
+                .unwrap_or(self.last_input_source)
+                .label()
         ));
         self.audit.info(line.as_str());
         #[cfg(feature = "kernel")]
-        boot_log::force_uart_line_raw("[reboot] platform reset request firing");
+        crate::log_buffer::append_log_line("[reboot] platform reset request firing");
         match crate::reboot::request_reboot() {
             Ok(()) => {
                 self.reboot_pending = false;
+                self.reboot_ack_source = None;
+                #[cfg(feature = "net-console")]
+                {
+                    self.reboot_ack_net_conn_id = None;
+                }
+                self.reboot_ack_deadline_ms = 0;
+                self.reboot_ack_drain_observed = false;
             }
             Err(err) => {
                 self.reboot_pending = false;
+                self.reboot_ack_source = None;
+                #[cfg(feature = "net-console")]
+                {
+                    self.reboot_ack_net_conn_id = None;
+                }
+                self.reboot_ack_deadline_ms = 0;
+                self.reboot_ack_drain_observed = false;
                 self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
                 let message =
                     format_message(format_args!("reboot request failed: {}", err.detail()));
@@ -2688,6 +2858,20 @@ where
                 self.emit_refusal("REBOOT", RefusalReason::Policy, Some(detail.as_str()));
             }
         }
+    }
+
+    fn fail_pending_reboot_ack(&mut self, reason: &'static str) {
+        if self.reboot_ack_failed {
+            return;
+        }
+        self.reboot_ack_failed = true;
+        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+        let line = format_message(format_args!(
+            "reboot request fenced: ACK delivery not proven reason={reason}"
+        ));
+        self.audit.denied(line.as_str());
+        #[cfg(feature = "kernel")]
+        crate::log_buffer::append_log_line(line.as_str());
     }
 
     #[cfg(feature = "net-console")]
@@ -3020,49 +3204,45 @@ where
     fn try_serial_linked_runtime_cutover_after_prompt(
         &mut self,
         emit_deferred: bool,
-        raw_uart_allowed: bool,
+        _raw_uart_allowed: bool,
     ) -> bool {
         if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             || crate::serial::serial_linked_runtime_transport_active()
         {
             return true;
         }
-        let runtime_ready = if raw_uart_allowed {
-            crate::serial::resume_serial_driver_task_runtime_after_prompt()
-        } else {
-            crate::serial::serial_driver_task_runtime_attached()
-        };
-        let service_ready = runtime_ready
-            && crate::serial::probe_driver_task_service_after_attach()
-            && crate::serial::serial_driver_task_interactive_cutover_allowed();
-        let cutover_ready = service_ready
-            && if raw_uart_allowed {
-                self.serial.use_driver_task_client_after_attach()
-            } else {
-                self.serial
-                    .use_driver_task_client_after_attach_without_root_flush()
-            };
+        if !self.serial.root_uart_cutover_drained() {
+            return false;
+        }
+        let attach = crate::serial::service_serial_driver_task_runtime_after_prompt_turn();
+        let cutover_ready = attach == crate::serial::SerialRuntimeAttachTurn::Complete
+            && crate::serial::serial_driver_task_interactive_cutover_allowed()
+            && self
+                .serial
+                .use_driver_task_client_after_attach_without_root_flush();
         if cutover_ready {
-            let _ = self.serial.try_enqueue_line_record(
+            let _ = self.try_emit_serial_line_with_kind(
                 "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
+                PendingConsoleOutputKind::Line,
             );
-            let _ = self.serial.try_enqueue_line_record(
+            let _ = self.try_emit_serial_line_with_kind(
                 "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover acceptance=green reason=driver-task-service-proven",
+                PendingConsoleOutputKind::Line,
             );
-            let _ = self.serial.service_linked_runtime_only_turn();
             return true;
         }
         if emit_deferred {
-            boot_log::force_uart_line_raw(
-                "[uart] serial console cutover deferred backend=bcm2711-mini-uart reason=driver-task-service-proof-missing action=root-uart-console",
+            let status = match attach {
+                crate::serial::SerialRuntimeAttachTurn::Pending => "pending",
+                crate::serial::SerialRuntimeAttachTurn::Failed => "failed",
+                crate::serial::SerialRuntimeAttachTurn::Complete => "cutover-rejected",
+            };
+            let mut line = HeaplessString::<192>::new();
+            let _ = write!(
+                line,
+                "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status={status} acceptance=red reason=driver-task-service-proof-missing"
             );
-            crate::serial::emit_serial_runtime_cutover_deferred(
-                "driver-task-service-proof-missing",
-            );
-            crate::serial::emit_serial_input_route_trace(
-                "root-console-start",
-                "driver-task-service-proof-missing",
-            );
+            crate::log_buffer::append_log_line(line.as_str());
         }
         false
     }
@@ -3212,6 +3392,10 @@ where
                 .local_seat
                 .as_ref()
                 .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
+    }
+
+    fn physical_console_response_pending(&self) -> bool {
+        self.physical_response_barrier != PhysicalResponseBarrier::Idle
     }
 
     fn physical_console_input_pending_for_display_pump(&self) -> bool {
@@ -3364,8 +3548,67 @@ where
         kind: PendingConsoleOutputKind,
         text: &str,
     ) -> bool {
-        let output = PendingConsoleOutput::from_str(kind, text);
-        if self.pending_console_output.push(output).is_ok() {
+        let response_priority = !kind.is_background()
+            && self.physical_response_barrier != PhysicalResponseBarrier::Idle;
+        let capacity = if matches!(
+            kind,
+            PendingConsoleOutputKind::BackgroundLine | PendingConsoleOutputKind::Line
+        ) && !response_priority
+        {
+            CONSOLE_OUTPUT_BACKLOG_LINES
+                .saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE)
+        } else {
+            CONSOLE_OUTPUT_BACKLOG_LINES
+        };
+        if self.pending_console_output.len() >= capacity {
+            if response_priority {
+                if let Some(index) = self
+                    .pending_console_output
+                    .iter()
+                    .rposition(|output| output.kind.is_background())
+                {
+                    self.pending_console_output.remove(index);
+                } else {
+                    self.metrics.physical_console_output_backpressure = self
+                        .metrics
+                        .physical_console_output_backpressure
+                        .saturating_add(1);
+                    return false;
+                }
+            } else {
+                self.metrics.physical_console_output_backpressure = self
+                    .metrics
+                    .physical_console_output_backpressure
+                    .saturating_add(1);
+                return false;
+            }
+        }
+        let Some(output) = PendingConsoleOutput::try_from_str(kind, text) else {
+            self.metrics.physical_console_output_backpressure = self
+                .metrics
+                .physical_console_output_backpressure
+                .saturating_add(1);
+            return false;
+        };
+        let insert_at = if response_priority {
+            self.pending_console_output
+                .iter()
+                .position(|queued| queued.kind.is_background())
+                .unwrap_or(self.pending_console_output.len())
+        } else {
+            self.pending_console_output.len()
+        };
+        let inserted = if insert_at == self.pending_console_output.len() {
+            self.pending_console_output.push(output)
+        } else {
+            self.pending_console_output.insert(insert_at, output)
+        };
+        if inserted.is_ok() {
+            if kind.is_response_tail()
+                && self.physical_response_barrier == PhysicalResponseBarrier::AwaitingTail
+            {
+                self.physical_response_barrier = PhysicalResponseBarrier::TailQueued;
+            }
             self.metrics.physical_console_output_deferred = self
                 .metrics
                 .physical_console_output_deferred
@@ -3380,10 +3623,28 @@ where
         }
     }
 
+    /// Discard only nonessential bootstrap/recovery chatter before a platform
+    /// reset response. Command output and protocol tails retain their order.
+    fn discard_pending_background_console_output(&mut self) {
+        let mut index = 0usize;
+        while index < self.pending_console_output.len() {
+            if self.pending_console_output[index].kind.is_background() {
+                self.pending_console_output.remove(index);
+                self.metrics.physical_console_output_backpressure = self
+                    .metrics
+                    .physical_console_output_backpressure
+                    .saturating_add(1);
+            } else {
+                index = index.saturating_add(1);
+            }
+        }
+    }
+
     fn flush_pending_console_output_if_idle(&mut self) {
+        let response_has_priority = self.physical_response_barrier != PhysicalResponseBarrier::Idle;
         if self.pending_console_output.is_empty()
             || self.serial.tx_pending()
-            || self.physical_console_input_pending_for_output()
+            || (self.physical_console_input_pending_for_output() && !response_has_priority)
         {
             return;
         }
@@ -3392,13 +3653,22 @@ where
         while flushed < CONSOLE_OUTPUT_LINES_PER_IDLE_TURN
             && !self.pending_console_output.is_empty()
             && !self.serial.tx_pending()
-            && !self.physical_console_input_pending_for_output()
+            && (!self.physical_console_input_pending_for_output()
+                || self.physical_response_barrier != PhysicalResponseBarrier::Idle)
         {
             let output = self.pending_console_output.remove(0);
             self.with_local_seat_mirror_suppressed(|this| match output.kind {
-                PendingConsoleOutputKind::Line => this.emit_serial_line_now(output.text.as_str()),
-                PendingConsoleOutputKind::Prompt => this.emit_prompt_now(),
+                PendingConsoleOutputKind::BackgroundLine
+                | PendingConsoleOutputKind::Line
+                | PendingConsoleOutputKind::TerminalLine
+                | PendingConsoleOutputKind::ResponseTailLine => {
+                    this.emit_serial_line_now(output.text.as_str());
+                }
+                PendingConsoleOutputKind::ResponseTailPrompt => this.emit_prompt_now(),
             });
+            if output.kind.is_response_tail() {
+                self.physical_response_barrier = PhysicalResponseBarrier::TailInFlight;
+            }
             self.metrics.physical_console_output_flushed = self
                 .metrics
                 .physical_console_output_flushed
@@ -3406,8 +3676,73 @@ where
             flushed = flushed.saturating_add(1);
             let _ = self.serial.poll_io();
             self.service_local_seat_keyboard_during_output();
+            if output.kind.is_response_tail() {
+                // The terminal ACK/ERR/END or prompt must remain the final
+                // bytes of this outer turn. Background output may resume only
+                // after a later turn proves that tail drained on the wire.
+                break;
+            }
         }
         self.console_output_flush_active = false;
+    }
+
+    #[cfg(feature = "kernel")]
+    fn queue_pending_console_output_for_linked_serial(&mut self) {
+        if self.pending_console_output.is_empty()
+            || self.serial.tx_pending()
+            || self.physical_response_barrier == PhysicalResponseBarrier::TailInFlight
+        {
+            return;
+        }
+        let output = self.pending_console_output.remove(0);
+        let queued = match output.kind {
+            PendingConsoleOutputKind::BackgroundLine
+            | PendingConsoleOutputKind::Line
+            | PendingConsoleOutputKind::TerminalLine
+            | PendingConsoleOutputKind::ResponseTailLine => {
+                self.serial.try_enqueue_line_record(output.text.as_str())
+            }
+            PendingConsoleOutputKind::ResponseTailPrompt => self
+                .serial
+                .try_enqueue_tx_record(&[CONSOLE_PROMPT.as_bytes()]),
+        };
+        if queued {
+            if output.kind.is_response_tail() {
+                self.physical_response_barrier = PhysicalResponseBarrier::TailInFlight;
+            }
+            self.metrics.physical_console_output_flushed = self
+                .metrics
+                .physical_console_output_flushed
+                .saturating_add(1);
+        } else {
+            let _ = self.pending_console_output.insert(0, output);
+            self.metrics.physical_console_output_backpressure = self
+                .metrics
+                .physical_console_output_backpressure
+                .saturating_add(1);
+        }
+    }
+
+    fn reconcile_physical_response_barrier(&mut self) {
+        if self.physical_response_barrier != PhysicalResponseBarrier::TailInFlight {
+            return;
+        }
+        if self.serial.tx_drain_outcome() == crate::serial::SerialTxDrainOutcome::Complete {
+            self.physical_response_barrier = PhysicalResponseBarrier::Idle;
+        }
+    }
+
+    fn queue_stream_prompt_tail_if_ready(&mut self) {
+        if self.stream_end_pending || !self.stream_prompt_pending {
+            return;
+        }
+        if self.queue_physical_console_output(
+            PendingConsoleOutputKind::ResponseTailPrompt,
+            CONSOLE_PROMPT,
+        ) {
+            self.stream_prompt_pending = false;
+            self.mirror_local_seat_prompt_if_ready();
+        }
     }
 
     fn pump_local_seat_display_if_idle(&mut self) {
@@ -3466,6 +3801,9 @@ where
 
     #[cfg(feature = "kernel")]
     fn maybe_emit_serial_input_idle_trace(&mut self, physical_input_active: bool) {
+        if crate::serial::serial_linked_runtime_transport_active() {
+            return;
+        }
         if !self.banner_emitted {
             return;
         }
@@ -3903,8 +4241,7 @@ where
         #[cfg(not(feature = "net-console"))]
         let _ = expected_net_conn_id;
         if source.is_physical_console() {
-            self.emit_serial_line(line);
-            return true;
+            return self.try_emit_serial_line_with_kind(line, PendingConsoleOutputKind::Line);
         }
         #[cfg(feature = "net-console")]
         if source == ConsoleInputSource::Net {
@@ -3959,18 +4296,56 @@ where
     }
 
     fn emit_serial_line(&mut self, line: &str) {
-        #[cfg(feature = "kernel")]
-        if self.cyw43_bootstrap_operator_turn_active {
-            let _ = self.serial.try_enqueue_line_record(line);
-            return;
+        let _ = self.try_emit_serial_line_with_kind(line, PendingConsoleOutputKind::Line);
+    }
+
+    fn try_emit_serial_line_with_kind(
+        &mut self,
+        line: &str,
+        kind: PendingConsoleOutputKind,
+    ) -> bool {
+        if !self.pending_console_output.is_empty() {
+            let accepted = self.queue_physical_console_output(kind, line);
+            if accepted && !self.cyw43_bootstrap_operator_turn_is_active() {
+                self.mirror_local_seat_line_if_ready(line);
+            }
+            return accepted;
         }
-        if self.should_defer_physical_console_output()
-            && self.queue_physical_console_output(PendingConsoleOutputKind::Line, line)
-        {
-            self.mirror_local_seat_line_if_ready(line);
-            return;
+        #[cfg(feature = "kernel")]
+        if crate::serial::serial_linked_runtime_transport_active() {
+            let accepted = self.queue_physical_console_output(kind, line);
+            if accepted {
+                self.mirror_local_seat_line_if_ready(line);
+            }
+            return accepted;
+        }
+        if self.should_defer_physical_console_output() {
+            let accepted = self.queue_physical_console_output(kind, line);
+            if accepted {
+                self.mirror_local_seat_line_if_ready(line);
+            }
+            return accepted;
         }
         self.emit_serial_line_now(line);
+        if kind.is_response_tail()
+            && self.physical_response_barrier == PhysicalResponseBarrier::AwaitingTail
+        {
+            self.physical_response_barrier = PhysicalResponseBarrier::TailInFlight;
+        }
+        true
+    }
+
+    fn emit_terminal_console_line(&mut self, line: &str) {
+        if self.last_input_source.is_physical_console() {
+            let kind = if self.reboot_pending {
+                PendingConsoleOutputKind::ResponseTailLine
+            } else {
+                PendingConsoleOutputKind::TerminalLine
+            };
+            let _ = self.try_emit_serial_line_with_kind(line, kind);
+        } else {
+            let _ = self.try_emit_console_line(line);
+        }
     }
 
     fn emit_serial_line_now(&mut self, line: &str) {
@@ -3992,29 +4367,41 @@ where
     fn emit_serial_line_atomic(&mut self, line: &str) {
         #[cfg(feature = "kernel")]
         if crate::serial::serial_linked_runtime_transport_active() {
-            let _ = self.serial.try_enqueue_line_record(line);
-            self.mirror_local_seat_line_if_ready(line);
+            let _ = self.try_emit_serial_line_with_kind(line, PendingConsoleOutputKind::Line);
             return;
         }
         self.serial.write_line_blocking(line);
         self.mirror_local_seat_line_if_ready(line);
     }
 
+    fn defer_console_prompt(&mut self) {
+        let _ = self.queue_physical_console_output(
+            PendingConsoleOutputKind::ResponseTailPrompt,
+            CONSOLE_PROMPT,
+        );
+    }
+
     fn emit_prompt(&mut self) {
-        #[cfg(feature = "kernel")]
-        if self.cyw43_bootstrap_operator_turn_active {
-            let _ = self
-                .serial
-                .try_enqueue_tx_record(&[CONSOLE_PROMPT.as_bytes()]);
+        if !self.pending_console_output.is_empty() {
+            self.defer_console_prompt();
+            self.mirror_local_seat_prompt_if_ready();
             return;
         }
-        if self.should_defer_physical_console_output()
-            && self.queue_physical_console_output(PendingConsoleOutputKind::Prompt, CONSOLE_PROMPT)
-        {
+        #[cfg(feature = "kernel")]
+        if crate::serial::serial_linked_runtime_transport_active() {
+            self.defer_console_prompt();
+            self.mirror_local_seat_prompt_if_ready();
+            return;
+        }
+        if self.should_defer_physical_console_output() {
+            self.defer_console_prompt();
             self.mirror_local_seat_prompt_if_ready();
             return;
         }
         self.emit_prompt_now();
+        if self.physical_response_barrier == PhysicalResponseBarrier::AwaitingTail {
+            self.physical_response_barrier = PhysicalResponseBarrier::TailInFlight;
+        }
     }
 
     fn emit_prompt_now(&mut self) {
@@ -4033,15 +4420,21 @@ where
     }
 
     fn emit_prompt_atomic(&mut self) {
+        if !self.pending_console_output.is_empty() {
+            self.defer_console_prompt();
+            self.mirror_local_seat_prompt_if_ready();
+            return;
+        }
         #[cfg(feature = "kernel")]
         if crate::serial::serial_linked_runtime_transport_active() {
-            let _ = self
-                .serial
-                .try_enqueue_tx_record(&[CONSOLE_PROMPT.as_bytes()]);
+            self.defer_console_prompt();
             self.mirror_local_seat_prompt_if_ready();
             return;
         }
         self.serial.write_bytes_blocking(CONSOLE_PROMPT.as_bytes());
+        if self.physical_response_barrier == PhysicalResponseBarrier::AwaitingTail {
+            self.physical_response_barrier = PhysicalResponseBarrier::TailInFlight;
+        }
         self.mirror_local_seat_prompt_if_ready();
     }
 
@@ -4056,6 +4449,9 @@ where
 
     #[cfg(feature = "kernel")]
     fn preflush_serial_before_raw_uart(&mut self) {
+        if crate::serial::serial_linked_runtime_transport_active() {
+            return;
+        }
         for _ in 0..SERIAL_RAW_UART_PREFLUSH_TURNS {
             if !self.serial.tx_pending() {
                 break;
@@ -4291,6 +4687,12 @@ where
     #[allow(unsafe_code)]
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn emit_smp_snapshot(&mut self) -> Option<&'static str> {
+        if crate::serial::serial_linked_runtime_transport_active() {
+            self.emit_console_line(
+                "[smp] scheduler dump unavailable after linked UART cutover use=smp-activity",
+            );
+            return None;
+        }
         self.preflush_serial_before_raw_uart();
         self.emit_console_line("[smp] debug scheduler dump begin");
         self.serial.flush_tx();
@@ -5103,10 +5505,10 @@ where
             detail,
         };
         match render_ack(&mut line, &ack_line) {
-            Ok(()) => self.emit_console_line(line.as_str()),
+            Ok(()) => self.emit_terminal_console_line(line.as_str()),
             Err(LineFormatError::Truncated) => {
                 self.audit.denied("console ack truncated");
-                self.emit_console_line("ERR PARSE reason=policy detail=ack-truncated");
+                self.emit_terminal_console_line("ERR PARSE reason=policy detail=ack-truncated");
             }
         }
     }
@@ -13051,7 +13453,21 @@ where
     }
 
     fn consume_serial(&mut self) -> bool {
+        if self.reboot_pending || self.physical_console_response_pending() {
+            return false;
+        }
         let mut consumed = false;
+        #[cfg(feature = "kernel")]
+        let linked_runtime_transport = crate::serial::serial_linked_runtime_transport_active();
+        #[cfg(feature = "kernel")]
+        let line_budget = if linked_runtime_transport {
+            1
+        } else if self.local_seat.is_some() {
+            LOCAL_SEAT_SERIAL_LINES_PER_TURN
+        } else {
+            usize::MAX
+        };
+        #[cfg(not(feature = "kernel"))]
         let line_budget = if self.local_seat.is_some() {
             LOCAL_SEAT_SERIAL_LINES_PER_TURN
         } else {
@@ -13060,7 +13476,8 @@ where
         let mut lines = 0usize;
         while lines < line_budget {
             #[cfg(feature = "kernel")]
-            let line = if self.cyw43_bootstrap_operator_turn_is_active() {
+            let line = if self.cyw43_bootstrap_operator_turn_is_active() || linked_runtime_transport
+            {
                 self.serial.next_line_buffered_quiet()
             } else {
                 self.serial.next_line()
@@ -13074,7 +13491,7 @@ where
             lines = lines.saturating_add(1);
             self.last_input_source = ConsoleInputSource::Serial;
             #[cfg(feature = "kernel")]
-            if !self.cyw43_bootstrap_operator_turn_is_active() {
+            if !self.cyw43_bootstrap_operator_turn_is_active() && !linked_runtime_transport {
                 crate::serial::emit_serial_input_consume_trace(line.len());
             }
             if !self.local_line.is_empty() {
@@ -13085,6 +13502,9 @@ where
                 }
             }
             self.process_console_line(&line);
+            if self.reboot_pending || self.physical_console_response_pending() {
+                break;
+            }
         }
         consumed
     }
@@ -13125,7 +13545,7 @@ where
 
     fn poll_local_seat_backend_for_ingress(&mut self) {
         if let Some(runtime) = self.local_seat.as_mut() {
-            runtime.poll_backend_keyboard();
+            let _ = runtime.service_backend_keyboard_turn();
         }
     }
 
@@ -13145,10 +13565,14 @@ where
         poll_backend: bool,
         echo_input: bool,
     ) -> bool {
+        if self.reboot_pending || self.physical_console_response_pending() {
+            return false;
+        }
         let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
         let mut empty_polls = 0usize;
         let mut consumed = false;
         let mut passes = 0usize;
+        let mut backend_polled = false;
         let mut burst_allowed = self.local_seat.as_ref().is_some_and(|runtime| {
             runtime.keyboard_trace().queued_bytes >= KEYBOARD_POLL_CHUNK_BYTES
         });
@@ -13156,7 +13580,8 @@ where
             || (burst_allowed && passes < LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN)
         {
             passes = passes.saturating_add(1);
-            if poll_backend {
+            if poll_backend && !backend_polled {
+                backend_polled = true;
                 self.poll_local_seat_backend_for_ingress();
             }
             if self
@@ -13167,7 +13592,7 @@ where
                 break;
             }
             let read = match self.local_seat.as_mut() {
-                Some(runtime) => runtime.drain_keyboard_bytes(&mut chunk),
+                Some(runtime) => runtime.drain_keyboard_dispatch_bytes(&mut chunk),
                 None => return consumed,
             };
             if read == 0 {
@@ -13223,7 +13648,9 @@ where
                 burst_allowed = true;
             }
             #[cfg(feature = "kernel")]
-            let cleared_serial_line = if self.cyw43_bootstrap_operator_turn_is_active() {
+            let cleared_serial_line = if self.cyw43_bootstrap_operator_turn_is_active()
+                || crate::serial::serial_linked_runtime_transport_active()
+            {
                 self.serial.clear_partial_line_buffered_quiet()
             } else {
                 self.serial.clear_partial_line()
@@ -13250,6 +13677,14 @@ where
                             self.local_seat_chunk_input_pending = index + 1 < read;
                             self.process_console_line(&line);
                             self.local_seat_chunk_input_pending = prior_remainder;
+                            if self.reboot_pending {
+                                return consumed;
+                            }
+                            // A coalesced USB report or paste may contain more
+                            // than one complete command. Retain every later
+                            // line for a fresh outer dispatcher turn so each
+                            // response tail is fenced and drained in order.
+                            return consumed;
                         }
                     }
                     0x08 | 0x7f => {
@@ -13299,6 +13734,22 @@ where
             self.ignore_empty_console_line();
             return;
         }
+        if self.last_input_source.is_physical_console() {
+            debug_assert_eq!(
+                self.physical_response_barrier,
+                PhysicalResponseBarrier::Idle
+            );
+            // Ordinary lines retained before this command are asynchronous
+            // background output. Reclassify them at the response epoch
+            // boundary so the new command response and terminal tail can
+            // preempt them without reordering protocol output.
+            for output in &mut self.pending_console_output {
+                if output.kind == PendingConsoleOutputKind::Line {
+                    output.kind = PendingConsoleOutputKind::BackgroundLine;
+                }
+            }
+            self.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+        }
         self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
         let prior_input_turn_active = self.console_input_turn_active;
         let prior_output_budget = self.console_input_turn_output_budget;
@@ -13339,7 +13790,19 @@ where
         }
         if prompt_after_line && self.last_input_source.is_physical_console() && !self.reboot_pending
         {
-            self.emit_prompt();
+            if self.stream_end_pending {
+                self.stream_prompt_pending = true;
+            } else {
+                self.emit_prompt();
+            }
+        } else if !prompt_after_line
+            && self.last_input_source.is_physical_console()
+            && self.physical_response_barrier == PhysicalResponseBarrier::AwaitingTail
+        {
+            // A coalesced parse error deliberately emits no response. Retire
+            // its empty response epoch so the next buffered command cannot be
+            // fenced forever behind a tail that will never exist.
+            self.physical_response_barrier = PhysicalResponseBarrier::Idle;
         }
         self.console_input_turn_active = prior_input_turn_active;
         self.console_input_turn_output_budget = prior_output_budget;
@@ -13398,6 +13861,35 @@ where
         }
         self.last_input_source = ConsoleInputSource::Net;
         self.process_console_line(&converted);
+        self.schedule_net_post_dispatch_flush();
+    }
+
+    /// Retain the legacy post-response TCP progress budget without executing
+    /// its private polling loop in the command-dispatch turn.
+    #[cfg(feature = "net-console")]
+    fn schedule_net_post_dispatch_flush(&mut self) {
+        let display_trace = self
+            .local_seat
+            .as_ref()
+            .map(|local_seat| local_seat.display_trace());
+        let Some(net) = self.net.as_ref() else {
+            return;
+        };
+        let Some(limit) =
+            net_post_dispatch_flush_limit_for_status(&net.status_report(), display_trace)
+        else {
+            return;
+        };
+        let conn_id = net.active_console_conn_id();
+        if self.pending_net_flush.active() && self.pending_net_flush.conn_id != conn_id {
+            self.pending_net_flush = PendingNetFlush::default();
+        }
+        self.pending_net_flush.conn_id = conn_id;
+        self.pending_net_flush.remaining_turns = self
+            .pending_net_flush
+            .remaining_turns
+            .saturating_add(limit)
+            .min(NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS);
     }
 
     #[cfg(feature = "net-console")]
@@ -13850,14 +14342,25 @@ where
                         self.audit.info("console: reboot scheduled");
                         self.metrics.accepted_commands += 1;
                         self.reboot_pending = true;
-                        self.reboot_flush_turns = REBOOT_ACK_FLUSH_TURNS;
-                        self.emit_ack_ok(verb_label, Some("detail=scheduled"));
+                        self.reboot_ack_wait_turns = REBOOT_ACK_MINIMUM_WAIT_TURNS;
+                        self.reboot_ack_source = Some(self.last_input_source);
                         #[cfg(feature = "net-console")]
-                        if self.last_input_source == ConsoleInputSource::Net {
-                            if let Some(net) = self.net.as_mut() {
-                                net.request_disconnect();
-                            }
+                        {
+                            self.reboot_ack_net_conn_id =
+                                if self.last_input_source == ConsoleInputSource::Net {
+                                    self.net_conn_id
+                                } else {
+                                    None
+                                };
                         }
+                        self.reboot_ack_deadline_ms =
+                            self.now_ms.saturating_add(REBOOT_ACK_DEADLINE_MS);
+                        self.reboot_ack_failed = false;
+                        self.reboot_ack_drain_observed = false;
+                        if self.last_input_source.is_physical_console() {
+                            self.discard_pending_background_console_output();
+                        }
+                        self.emit_ack_ok(verb_label, Some("detail=scheduled"));
                     } else {
                         self.metrics.denied_commands += 1;
                         self.audit.denied("reboot denied: backend unavailable");
@@ -14868,7 +15371,15 @@ where
                     return;
                 }
             }
-            if !self.try_emit_stream_line("END") {
+            let physical = self
+                .stream_output_source
+                .is_some_and(ConsoleInputSource::is_physical_console);
+            let accepted = if physical {
+                self.try_emit_serial_line_with_kind("END", PendingConsoleOutputKind::TerminalLine)
+            } else {
+                self.try_emit_stream_line("END")
+            };
+            if !accepted {
                 return;
             }
             self.clear_stream_output();
@@ -14876,6 +15387,9 @@ where
                 let sid = self.session_id.unwrap_or(0);
                 self.audit_tail_stop(sid, "eof");
                 self.tail_active = false;
+            }
+            if physical {
+                self.queue_stream_prompt_tail_if_ready();
             }
         }
     }
@@ -17738,7 +18252,7 @@ mod tests {
             output.kind == PendingConsoleOutputKind::Line && output.text.as_str() == "PONG"
         }));
         assert!(pump.pending_console_output.iter().any(|output| {
-            output.kind == PendingConsoleOutputKind::Prompt
+            output.kind == PendingConsoleOutputKind::ResponseTailPrompt
                 && output.text.as_str() == CONSOLE_PROMPT
         }));
         assert_eq!(pump.metrics().physical_console_output_deferred, 2);
@@ -18143,6 +18657,8 @@ mod tests {
         exhaust_flush_budget: bool,
         disconnect_requests: usize,
         active_conn_id: Option<u64>,
+        console_output_drained: bool,
+        console_output_drained_after_polls: Option<usize>,
         events: heapless::Vec<NetConsoleEvent, 8>,
         driver_contract: crate::hal::driver_task::DriverTaskContract,
     }
@@ -18168,6 +18684,8 @@ mod tests {
                 exhaust_flush_budget: false,
                 disconnect_requests: 0,
                 active_conn_id: None,
+                console_output_drained: true,
+                console_output_drained_after_polls: None,
                 events: heapless::Vec::new(),
                 driver_contract: crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
             }
@@ -18283,6 +18801,14 @@ mod tests {
 
         fn request_disconnect(&mut self) {
             self.disconnect_requests = self.disconnect_requests.saturating_add(1);
+        }
+
+        fn console_output_drained(&self, conn_id: u64) -> bool {
+            self.active_conn_id == Some(conn_id)
+                && (self.console_output_drained
+                    || self
+                        .console_output_drained_after_polls
+                        .is_some_and(|target| self.polls >= target))
         }
 
         fn drain_console_events(&mut self, visitor: &mut dyn FnMut(NetConsoleEvent)) {
@@ -18601,7 +19127,9 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
         let driver = pump.serial_mut().driver_mut();
         driver.push_rx(b"attach queen wrong\nattach queen wrong\n");
-        pump.poll();
+        for _ in 0..16 {
+            pump.poll();
+        }
         drop(pump);
         assert!(audit.denials.iter().any(|line| line.contains("attach")));
         assert!(!audit.denials.is_empty());
@@ -19076,7 +19604,9 @@ mod tests {
         let token = issue_token("ok", Role::Queen);
         let line = format!("attach queen {token}\nlog\n");
         driver.push_rx(line.as_bytes());
-        pump.poll();
+        for _ in 0..64 {
+            pump.poll();
+        }
         drop(pump);
         assert!(audit
             .entries
@@ -19124,6 +19654,15 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
 
         pump.poll();
+        assert_eq!(pump.metrics.net_post_dispatch_flush_polls, 0);
+        assert_eq!(
+            pump.pending_net_flush.remaining_turns,
+            NET_POST_DISPATCH_FLUSH_POLLS
+        );
+        for expected in 1..=NET_POST_DISPATCH_FLUSH_POLLS {
+            pump.poll();
+            assert_eq!(pump.metrics.net_post_dispatch_flush_polls, expected as u64);
+        }
         let metrics = pump.metrics;
         drop(pump);
 
@@ -19156,6 +19695,11 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
 
         pump.poll();
+        assert_eq!(pump.metrics.net_post_dispatch_flush_polls, 0);
+        for expected in 1..=NET_POST_DISPATCH_FLUSH_POLLS {
+            pump.poll();
+            assert_eq!(pump.metrics.net_post_dispatch_flush_polls, expected as u64);
+        }
         let metrics = pump.metrics;
         drop(pump);
 
@@ -19191,10 +19735,27 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
 
         pump.poll();
+        assert_eq!(pump.metrics.net_post_dispatch_flush_polls, 0);
+        assert_eq!(pump.metrics.accepted_commands, 1);
+        for expected in 1..=NET_POST_DISPATCH_FLUSH_POLLS {
+            pump.poll();
+            assert_eq!(pump.metrics.net_post_dispatch_flush_polls, expected as u64);
+            assert_eq!(pump.metrics.accepted_commands, 1);
+        }
+        pump.poll();
+        assert_eq!(pump.metrics.accepted_commands, 2);
+        assert_eq!(
+            pump.metrics.net_post_dispatch_flush_polls,
+            NET_POST_DISPATCH_FLUSH_POLLS as u64
+        );
+        for expected in (NET_POST_DISPATCH_FLUSH_POLLS + 1)..=(NET_POST_DISPATCH_FLUSH_POLLS * 2) {
+            pump.poll();
+            assert_eq!(pump.metrics.net_post_dispatch_flush_polls, expected as u64);
+        }
         let metrics = pump.metrics;
         drop(pump);
 
-        assert_eq!(net.polls, 1);
+        assert_eq!(net.polls, 2);
         assert_eq!(net.tcp_flushes, NET_POST_DISPATCH_FLUSH_POLLS * 2);
         assert_eq!(
             metrics.net_post_dispatch_flush_polls,
@@ -19209,7 +19770,33 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn linked_runtime_data_ready_drains_extra_console_dispatch_rounds() {
+    fn retained_network_flush_rejects_replacement_connection() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(2);
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.pending_net_flush = PendingNetFlush {
+            conn_id: Some(1),
+            remaining_turns: NET_POST_DISPATCH_FLUSH_POLLS,
+        };
+
+        pump.poll();
+
+        assert!(!pump.pending_net_flush.active());
+        assert_eq!(pump.metrics.net_post_dispatch_flush_polls, 0);
+        drop(pump);
+        assert_eq!(net.polls, 1);
+        assert_eq!(net.tcp_flushes, 0);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn linked_runtime_data_ready_dispatches_one_command_per_outer_turn() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19233,7 +19820,16 @@ mod tests {
         }
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
 
-        pump.poll();
+        let mut accepted = 0u64;
+        for _ in 0..(line_count * (NET_POST_DISPATCH_FLUSH_POLLS + 1) + 1) {
+            pump.poll();
+            let next = pump.metrics.accepted_commands;
+            assert!(next.saturating_sub(accepted) <= 1);
+            accepted = next;
+            if accepted == line_count as u64 {
+                break;
+            }
+        }
         let metrics = pump.metrics;
         drop(pump);
 
@@ -19243,7 +19839,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn cyw43_data_ready_uses_wifi_only_deeper_dispatch_rounds() {
+    fn cyw43_data_ready_dispatches_one_command_per_outer_turn() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19257,7 +19853,7 @@ mod tests {
         net.status.active_interface = "wifi";
         net.status.address_source = "dhcp-lease";
         net.status.dhcp_phase = "bound";
-        let line_count = CONSOLE_DISPATCH_BURST * NET_CYW43_HOT_DISPATCH_ROUNDS + 2;
+        let line_count = CONSOLE_DISPATCH_BURST + 2;
         for conn_id in 1..=line_count {
             let mut line = HeaplessString::new();
             assert!(line.push_str("ping").is_ok());
@@ -19268,17 +19864,18 @@ mod tests {
         }
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
 
-        pump.poll();
+        let mut accepted = 0u64;
+        for _ in 0..line_count {
+            pump.poll();
+            let next = pump.metrics.accepted_commands;
+            assert!(next.saturating_sub(accepted) <= 1);
+            accepted = next;
+        }
         let metrics = pump.metrics;
         drop(pump);
 
-        assert_eq!(
-            metrics.accepted_commands,
-            (CONSOLE_DISPATCH_BURST * NET_CYW43_HOT_DISPATCH_ROUNDS) as u64
-        );
-        assert_eq!(net.lines.len(), 2);
-        assert_eq!(NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS, 3);
-        assert_eq!(NET_CYW43_HOT_DISPATCH_ROUNDS, 1);
+        assert_eq!(metrics.accepted_commands, line_count as u64);
+        assert_eq!(net.lines.len(), 0);
     }
 
     #[cfg(feature = "net-console")]
@@ -19432,7 +20029,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn non_data_ready_net_dispatch_stays_single_burst() {
+    fn non_data_ready_net_dispatch_stays_single_command_per_turn() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -19460,8 +20057,8 @@ mod tests {
         let metrics = pump.metrics;
         drop(pump);
 
-        assert_eq!(metrics.accepted_commands, CONSOLE_DISPATCH_BURST as u64);
-        assert_eq!(net.lines.len(), line_count - CONSOLE_DISPATCH_BURST);
+        assert_eq!(metrics.accepted_commands, 1);
+        assert_eq!(net.lines.len(), line_count - 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -19606,49 +20203,6 @@ mod tests {
         assert!(!net_status_needs_physical_pressure_service(
             &wifi_host_eapol
         ));
-    }
-
-    #[cfg(feature = "net-console")]
-    #[test]
-    fn linked_runtime_data_ready_enables_hot_dispatch_rounds() {
-        let mut genet = NetStatusReport::default();
-        genet.profile_backend = "bcmgenet-v5";
-        genet.backend = "bcmgenet-v5";
-        genet.active_driver = "bcmgenet-v5";
-        genet.active_interface = "wired";
-        genet.address_source = "dhcp-lease";
-        genet.dhcp_phase = "bound";
-        assert_eq!(
-            net_hot_dispatch_rounds_for_status(&genet),
-            NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS
-        );
-
-        let mut wifi = genet.clone();
-        wifi.active_driver = "cyw43";
-        wifi.active_interface = "wifi";
-        assert_eq!(
-            net_hot_dispatch_rounds_for_status(&wifi),
-            NET_CYW43_HOT_DISPATCH_ROUNDS
-        );
-
-        let mut stack_reported_wifi = genet.clone();
-        stack_reported_wifi.active_driver = "cyw43";
-        stack_reported_wifi.active_interface = "wifi";
-        assert_eq!(
-            net_hot_dispatch_rounds_for_status(&stack_reported_wifi),
-            NET_CYW43_HOT_DISPATCH_ROUNDS
-        );
-
-        let mut pre_dhcp = genet.clone();
-        pre_dhcp.address_source = "dhcp-pending";
-        pre_dhcp.dhcp_phase = "requesting";
-        assert_eq!(net_hot_dispatch_rounds_for_status(&pre_dhcp), 1);
-
-        let mut virtio = genet.clone();
-        virtio.profile_backend = "virtio-net";
-        virtio.backend = "virtio-net";
-        virtio.active_driver = "virtio-net";
-        assert_eq!(net_hot_dispatch_rounds_for_status(&virtio), 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -20671,9 +21225,9 @@ mod tests {
             let line = format!("log\nattach queen {token}\nlog\n");
             driver.push_rx(line.as_bytes());
         }
-        pump.poll();
-        pump.poll();
-        pump.poll();
+        for _ in 0..16 {
+            pump.poll();
+        }
         let tx = {
             let driver = pump.serial_mut().driver_mut();
             driver.drain_tx()
@@ -20705,7 +21259,9 @@ mod tests {
             .driver_mut()
             .push_rx(b"reboot\nattach queen\nreboot\n");
 
-        pump.poll();
+        for _ in 0..64 {
+            pump.poll();
+        }
 
         let tx = pump.serial_mut().driver_mut().drain_tx();
         let transcript: Vec<u8> = tx.into_iter().collect();
@@ -20741,16 +21297,32 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
         pump.serial_mut().driver_mut().push_rx(line.as_bytes());
 
-        pump.poll();
+        for _ in 0..64 {
+            pump.poll();
+            if pump.reboot_pending {
+                break;
+            }
+        }
 
-        assert!(pump.reboot_pending, "accepted reboot must remain scheduled");
+        assert!(
+            pump.reboot_pending,
+            "accepted reboot must remain scheduled requests={} barrier={:?} session={:?}",
+            crate::reboot::test_reboot_requests(),
+            pump.physical_response_barrier,
+            pump.session,
+        );
         assert!(
             !pump.cyw43_bootstrap_may_begin(),
             "supervisor must not begin bootstrap between ACK and reset dispatch"
         );
         assert_eq!(crate::reboot::test_reboot_requests(), 0);
 
-        pump.poll();
+        for _ in 0..64 {
+            pump.poll();
+            if crate::reboot::test_reboot_requests() != 0 {
+                break;
+            }
+        }
         assert!(!pump.reboot_pending);
         assert!(pump.cyw43_bootstrap_may_begin());
         assert_eq!(crate::reboot::test_reboot_requests(), 1);
@@ -20786,11 +21358,12 @@ mod tests {
         let mut pump =
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
 
-        pump.poll();
-        assert_eq!(crate::reboot::test_reboot_requests(), 0);
-        pump.poll();
-        assert_eq!(crate::reboot::test_reboot_requests(), 0);
-        pump.poll();
+        for _ in 0..64 {
+            pump.poll();
+            if crate::reboot::test_reboot_requests() != 0 {
+                break;
+            }
+        }
 
         let tx = pump.serial_mut().driver_mut().drain_tx();
         let transcript: Vec<u8> = tx.into_iter().collect();
@@ -20818,6 +21391,9 @@ mod tests {
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.active_conn_id = Some(2);
+        net.console_output_drained = false;
+        net.console_output_drained_after_polls = Some(3);
         let mut attach = HeaplessString::new();
         attach.push_str("attach queen").unwrap();
         let mut reboot = HeaplessString::new();
@@ -20831,7 +21407,12 @@ mod tests {
 
             pump.poll();
             assert_eq!(crate::reboot::test_reboot_requests(), 0);
-            pump.poll();
+            for _ in 0..64 {
+                pump.poll();
+                if crate::reboot::test_reboot_requests() != 0 {
+                    break;
+                }
+            }
             assert_eq!(crate::reboot::test_reboot_requests(), 1);
         }
 
@@ -20843,7 +21424,7 @@ mod tests {
             .join("\n");
         assert!(sent.contains("OK ATTACH role=queen"), "{sent}");
         assert!(sent.contains("OK REBOOT detail=scheduled"), "{sent}");
-        assert_eq!(net.disconnect_requests, 1);
+        assert_eq!(net.disconnect_requests, 0);
         assert!(audit
             .entries
             .iter()
@@ -20952,7 +21533,9 @@ mod tests {
             pump.serial_mut().driver_mut().push_rx(b"bogus\n");
         }
         pump.serial_mut().driver_mut().push_rx(b"ping\n");
-        pump.poll();
+        for _ in 0..64 {
+            pump.poll();
+        }
 
         let tx = pump.serial_mut().driver_mut().drain_tx();
         let rendered =
@@ -21147,7 +21730,14 @@ mod tests {
             "{first_turn_rendered}"
         );
 
-        pump.poll();
+        for _ in 0..(CONSOLE_OUTPUT_BACKLOG_LINES * 5 + 5) {
+            pump.poll();
+            let _ = pump.serial_mut().driver_mut().drain_tx();
+            if pump.last_input_source == ConsoleInputSource::LocalSeat {
+                break;
+            }
+            assert!(pump.local_line.is_empty());
+        }
 
         assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
         assert_eq!(pump.local_line.as_str(), "pi");
@@ -21189,16 +21779,20 @@ mod tests {
         .expect("serial output must be utf8");
         assert!(serial_turn.contains("Commands:"), "{serial_turn}");
 
-        pump.poll();
+        let mut usb_turn = String::new();
+        for _ in 0..(CONSOLE_OUTPUT_BACKLOG_LINES * 5 + 5) {
+            pump.poll();
+            let chunk = pump.serial_mut().driver_mut().drain_tx();
+            usb_turn.push_str(
+                String::from_utf8(chunk.into_iter().collect())
+                    .expect("serial output must be utf8")
+                    .as_str(),
+            );
+            if pump.last_input_source == ConsoleInputSource::LocalSeat {
+                break;
+            }
+        }
         assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
-        let usb_turn = String::from_utf8(
-            pump.serial_mut()
-                .driver_mut()
-                .drain_tx()
-                .into_iter()
-                .collect(),
-        )
-        .expect("serial output must be utf8");
         assert!(usb_turn.contains("PONG"), "{usb_turn}");
     }
 
@@ -21320,7 +21914,10 @@ mod tests {
         let echoed = pump.serial_mut().driver_mut().drain_tx();
         assert_eq!(echoed.as_slice(), b"h");
 
-        pump.emit_console_line("[log] background burst");
+        assert!(pump.queue_physical_console_output(
+            PendingConsoleOutputKind::BackgroundLine,
+            "[log] background burst",
+        ));
         assert_eq!(pump.pending_console_output.len(), 1);
         assert_eq!(pump.metrics().physical_console_output_deferred, 1);
         assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
@@ -21338,17 +21935,27 @@ mod tests {
         assert!(command_turn.contains("Commands:"), "{command_turn}");
         assert!(!command_turn.contains("[log] background burst"));
 
-        pump.poll();
-        let idle_turn = String::from_utf8(
-            pump.serial_mut()
-                .driver_mut()
-                .drain_tx()
-                .into_iter()
-                .collect(),
-        )
-        .expect("serial output must be utf8");
-        assert!(idle_turn.contains("[log] background burst"), "{idle_turn}");
-        assert_eq!(pump.metrics().physical_console_output_flushed, 1);
+        let mut ordered = command_turn;
+        for _ in 0..(CONSOLE_OUTPUT_BACKLOG_LINES * 5 + 5) {
+            pump.poll();
+            let chunk = pump.serial_mut().driver_mut().drain_tx();
+            ordered.push_str(
+                String::from_utf8(chunk.into_iter().collect())
+                    .expect("serial output must be utf8")
+                    .as_str(),
+            );
+            if ordered.contains("[log] background burst") {
+                break;
+            }
+        }
+        let prompt = ordered
+            .find(CONSOLE_PROMPT)
+            .expect("response prompt must drain");
+        let background = ordered
+            .find("[log] background burst")
+            .expect("background output must eventually drain");
+        assert!(prompt < background, "{ordered}");
+        assert!(pump.metrics().physical_console_output_flushed > 0);
     }
 
     #[cfg(feature = "kernel")]
@@ -21408,7 +22015,15 @@ mod tests {
 
         pump.poll();
         assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
-        assert_eq!(pump.local_line.as_str(), "x");
+        assert!(pump.local_line.is_empty());
+        assert_eq!(
+            pump.local_seat
+                .as_ref()
+                .expect("local-seat should be attached")
+                .keyboard_trace()
+                .queued_bytes,
+            1
+        );
         assert!(pump.pending_console_output.len() >= 2);
         let first_turn = String::from_utf8(
             pump.serial_mut()
@@ -21425,20 +22040,37 @@ mod tests {
             .as_mut()
             .expect("local-seat should be attached")
             .enqueue_keyboard_bytes(b"\x08");
-        pump.poll();
+        let mut later_output = String::new();
+        for _ in 0..(CONSOLE_OUTPUT_BACKLOG_LINES * 5 + 5) {
+            if pump.physical_response_barrier != PhysicalResponseBarrier::Idle {
+                assert!(pump.local_line.is_empty());
+            }
+            pump.poll();
+            let chunk = pump.serial_mut().driver_mut().drain_tx();
+            later_output.push_str(
+                String::from_utf8(chunk.into_iter().collect())
+                    .expect("serial output must be utf8")
+                    .as_str(),
+            );
+            let queued = pump
+                .local_seat
+                .as_ref()
+                .expect("local-seat should be attached")
+                .keyboard_trace()
+                .queued_bytes;
+            if pump.physical_response_barrier == PhysicalResponseBarrier::Idle
+                && queued == 0
+                && pump.local_line.is_empty()
+            {
+                break;
+            }
+        }
+        assert!(later_output.contains("Show this help"), "{later_output}");
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::Idle
+        );
         assert!(pump.local_line.is_empty());
-        let _ = pump.serial_mut().driver_mut().drain_tx();
-
-        pump.poll();
-        let idle_turn = String::from_utf8(
-            pump.serial_mut()
-                .driver_mut()
-                .drain_tx()
-                .into_iter()
-                .collect(),
-        )
-        .expect("serial output must be utf8");
-        assert!(idle_turn.contains("Show this help"), "{idle_turn}");
         assert!(pump.metrics().physical_console_output_flushed > 0);
     }
 
@@ -21465,6 +22097,25 @@ mod tests {
         pump.poll();
 
         assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+        assert!(pump.local_line.is_empty());
+        assert_eq!(
+            pump.local_seat
+                .as_ref()
+                .expect("local-seat should be attached")
+                .keyboard_trace()
+                .queued_bytes,
+            1
+        );
+        assert!(pump.metrics().physical_console_output_deferred > 0);
+        assert!(!pump.pending_console_output.is_empty());
+
+        for _ in 0..(CONSOLE_OUTPUT_BACKLOG_LINES * 5 + 5) {
+            let _ = pump.serial_mut().driver_mut().drain_tx();
+            pump.poll();
+            if pump.local_line.as_str() == "x" {
+                break;
+            }
+        }
         assert_eq!(pump.local_line.as_str(), "x");
         assert_eq!(
             pump.local_seat
@@ -21473,8 +22124,6 @@ mod tests {
                 .input_echo_preview(),
             "x"
         );
-        assert!(pump.metrics().physical_console_output_deferred > 0);
-        assert!(!pump.pending_console_output.is_empty());
     }
 
     #[test]
@@ -21973,6 +22622,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn log_command_emits_end_sentinel_and_quit_clears_session() {
+        let _root_guard = ReachableRootGuard::new(1);
+        log_buffer::clear_for_test();
         let driver = LoopbackSerial::<2048>::new();
         let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -21992,25 +22643,24 @@ mod tests {
             driver.push_rx(b"quit\n");
             driver.push_rx(b"log\n");
         }
-        pump.poll();
-        pump.poll();
-        pump.poll();
-        pump.poll();
         let mut rendered = String::new();
-        loop {
-            pump.serial_mut().poll_io();
+        for _ in 0..128 {
+            pump.poll();
             let transcript = {
                 let driver = pump.serial_mut().driver_mut();
                 driver.drain_tx()
             };
-            if transcript.is_empty() {
-                break;
-            }
             rendered.push_str(
                 String::from_utf8(transcript.into_iter().collect())
                     .expect("serial output must be utf8")
                     .as_str(),
             );
+            if rendered.contains("ERR LOG reason=policy detail=unauthenticated")
+                && rendered.contains("OK QUIT")
+                && rendered.contains("END\r\n")
+            {
+                break;
+            }
         }
         assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
         assert!(rendered.contains("OK LOG"), "{rendered}");
@@ -22102,7 +22752,14 @@ mod tests {
         pump.poll();
 
         assert_eq!(pump.metrics.accepted_commands, 1);
-        pump.poll();
+        for _ in 0..(CONSOLE_OUTPUT_BACKLOG_LINES * 5 + 5) {
+            pump.poll();
+            let _ = pump.serial_mut().driver_mut().drain_tx();
+            if pump.metrics.accepted_commands == 2 {
+                break;
+            }
+            assert_eq!(pump.metrics.accepted_commands, 1);
+        }
         assert_eq!(pump.metrics.accepted_commands, 2);
         assert!(pump.local_line.is_empty());
         assert!(!pump.parser.clear_buffer());
@@ -23047,24 +23704,348 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_bootstrap_operator_turn_refuses_wifi_debug_without_hal_callback() {
+    fn ordinary_linked_serial_pump_admits_one_tx_first_operation_per_turn() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
         let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
-        serial.driver_mut().push_rx(b"wifi retry\n");
-        serial.poll_io();
+        assert_eq!(serial.enqueue_tx_best_effort(&[b'x'; 300]), 300);
         serial.driver_mut().reset_io_call_counts();
+        let timer = TestTimer::repeated(3, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.poll();
+        assert_eq!(crate::serial::test_take_linked_runtime_only_tx().len(), 128);
+        assert_eq!(pump.serial_mut().driver_mut().io_call_counts(), (0, 0));
+
+        // Dispatch and NIC each own later outer turns. The next serial phase is
+        // the mandatory RX fairness turn, and only the following serial phase
+        // may submit the second TX chunk.
+        for _ in 0..5 {
+            pump.poll();
+            assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
+            assert_eq!(pump.serial_mut().driver_mut().io_call_counts(), (0, 0));
+        }
+        pump.poll();
+        assert_eq!(crate::serial::test_take_linked_runtime_only_tx().len(), 128);
+        assert_eq!(pump.serial_mut().driver_mut().io_call_counts(), (0, 0));
+        assert!(pump.serial_mut().tx_pending());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_serial_backpressure_retains_operator_line_and_prompt() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<16>::new();
+        let mut serial = SerialPort::<_, 16, 16, DEFAULT_LINE_CAPACITY>::new(driver);
+        assert_ne!(serial.enqueue_tx_best_effort(&[b'x'; 32]), 0);
+        assert!(serial.tx_pending());
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.emit_serial_line("PONG");
+        pump.emit_prompt();
+
+        assert_eq!(pump.pending_console_output.len(), 2);
+        assert!(pump.pending_console_output.iter().any(|output| {
+            output.kind == PendingConsoleOutputKind::Line && output.text.as_str() == "PONG"
+        }));
+        assert!(pump.pending_console_output.iter().any(|output| {
+            output.kind == PendingConsoleOutputKind::ResponseTailPrompt
+                && output.text.as_str() == CONSOLE_PROMPT
+        }));
+        assert_eq!(pump.metrics().physical_console_output_deferred, 2);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_serial_saturation_retains_protocol_tail_and_stream_cursor() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<16>::new();
+        let mut serial = SerialPort::<_, 16, 16, DEFAULT_LINE_CAPACITY>::new(driver);
+        assert_eq!(serial.enqueue_tx_best_effort(&[b'x'; 15]), 15);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        for index in 0..CONSOLE_OUTPUT_BACKLOG_LINES
+            .saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE)
+        {
+            let line = format!("queued-{index}");
+            assert!(
+                pump.queue_physical_console_output(PendingConsoleOutputKind::Line, line.as_str(),)
+            );
+        }
+        let oversized = "x".repeat(DEFAULT_LINE_CAPACITY + 1);
+        assert!(!pump
+            .queue_physical_console_output(PendingConsoleOutputKind::Line, oversized.as_str(),));
+
+        pump.stream_end_pending = true;
+        pump.stream_output_source = Some(ConsoleInputSource::Serial);
+        let mut pending = PendingStream::new();
+        let mut retained_line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        retained_line
+            .push_str("retained-stream-line")
+            .expect("fixed test line fits the protocol line bound");
+        pending
+            .lines
+            .push(retained_line)
+            .expect("single test line fits the pending stream bound");
+        pump.pending_stream = Some(pending);
+        pump.flush_pending_stream();
+        assert_eq!(
+            pump.pending_stream
+                .as_ref()
+                .expect("backpressured stream remains retained")
+                .next_line,
+            0,
+        );
+        assert!(pump.stream_end_pending);
+
+        pump.emit_ack_ok("TEST", Some("detail=terminal-reserved"));
+        assert_eq!(
+            pump.pending_console_output.len(),
+            CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE + 1,
+        );
+        assert_eq!(
+            pump.pending_console_output
+                .last()
+                .expect("terminal reserve contains the ACK")
+                .kind,
+            PendingConsoleOutputKind::TerminalLine,
+        );
+        pump.emit_prompt();
+        assert_eq!(
+            pump.pending_console_output.len(),
+            CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE + 2,
+        );
+        assert_eq!(
+            pump.pending_console_output
+                .last()
+                .expect("protocol tail retains the prompt")
+                .kind,
+            PendingConsoleOutputKind::ResponseTailPrompt,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_reboot_waits_until_complete_ack_is_transmitted() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+                crate::reboot::reset_test_backend();
+            }
+        }
+
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        crate::serial::test_begin_linked_runtime_only_transport();
+        crate::serial::test_set_linked_runtime_only_tx_idle_misses(3);
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        assert_eq!(serial.enqueue_tx_best_effort(&[b'x'; 300]), 300);
+        let timer = TestTimer::repeated(64, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.session = Some(SessionRole::Queen);
+        pump.session_ticket = Some("ticket".to_owned());
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(b"reboot\nhelp\n"),
+            12,
+        );
+
+        let mut transcript = Vec::new();
+        let mut turns_after_ack_acceptance = None;
+        for _ in 0..64 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            let ack_accepted = transcript
+                .windows(b"OK REBOOT detail=scheduled".len())
+                .any(|window| window == b"OK REBOOT detail=scheduled");
+            if ack_accepted {
+                let turns = turns_after_ack_acceptance.get_or_insert(0usize);
+                *turns = turns.saturating_add(1);
+                if *turns <= 3 {
+                    assert_eq!(crate::reboot::test_reboot_requests(), 0);
+                }
+            }
+            if crate::reboot::test_reboot_requests() != 0 {
+                assert!(ack_accepted);
+                assert!(turns_after_ack_acceptance.is_some_and(|turns| turns > 3));
+                break;
+            }
+        }
+        let rendered = core::str::from_utf8(transcript.as_slice())
+            .expect("linked serial transcript is valid utf8");
+        assert_eq!(
+            crate::reboot::test_reboot_requests(),
+            1,
+            "reboot_pending={} ack_observed={} barrier={:?} backlog={} serial_drain={:?} transcript={rendered}",
+            pump.reboot_pending,
+            pump.reboot_ack_drain_observed,
+            pump.physical_response_barrier,
+            pump.pending_console_output.len(),
+            pump.serial.tx_drain_outcome(),
+        );
+        assert!(!rendered.contains("OK HELP"), "{rendered}");
+        assert!(!rendered.contains("Commands:"), "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_reboot_poison_fails_closed_without_false_ack_proof() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+                crate::reboot::reset_test_backend();
+            }
+        }
+
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.session = Some(SessionRole::Queen);
+        pump.session_ticket = Some("ticket".to_owned());
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(b"reboot\n"),
+            7,
+        );
+
+        pump.poll_cyw43_bootstrap_supervisor_event_turn();
+        assert!(pump.reboot_pending);
+        pump.serial_mut().test_poison_linked_tx();
+        pump.poll_cyw43_bootstrap_supervisor_event_turn();
+
+        assert_eq!(crate::reboot::test_reboot_requests(), 0);
+        assert!(pump.reboot_pending);
+        assert!(pump.reboot_ack_failed);
+        assert!(!pump.cyw43_bootstrap_may_begin());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_cutover_routes_raw_diagnostics_to_queen_log() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::log_buffer::clear_for_test();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        crate::bootstrap::log::force_uart_line_raw("linked-owner-diagnostic");
+        crate::debug_uart::debug_uart_line("linked-debug-owner-diagnostic");
+        assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
+        let lines = crate::log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, 4>();
+        assert!(lines
+            .iter()
+            .any(|line| line.as_str().contains("linked-owner-diagnostic")));
+        assert!(lines
+            .iter()
+            .any(|line| line.as_str().contains("linked-debug-owner-diagnostic")));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_bootstrap_operator_turn_refuses_wifi_debug_without_hal_callback() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
         let mut wifi = FakeWifiDebug::new();
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(b"wifi retry\n"),
+            11
+        );
         let transcript = {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_wifi_debug(&mut wifi)
                 .with_test_pi4_debug_commands();
-
-            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            pump.serial_mut().driver_mut().reset_io_call_counts();
+            let mut transcript = Vec::new();
+            for _ in 0..8 {
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+                if transcript
+                    .windows(b"ERR WIFI reason=busy".len())
+                    .any(|window| window == b"ERR WIFI reason=busy")
+                {
+                    break;
+                }
+            }
             assert_eq!(
                 pump.serial_mut().driver_mut().io_call_counts(),
                 (0, 0),
@@ -23074,12 +24055,7 @@ mod tests {
                 pump.timer.index, 1,
                 "bootstrap supervisor turn must retain the ordinary timer pump"
             );
-            pump.serial_mut().flush_tx();
-            pump.serial_mut()
-                .driver_mut()
-                .drain_tx()
-                .into_iter()
-                .collect::<Vec<u8>>()
+            transcript
         };
 
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
@@ -23192,8 +24168,17 @@ mod tests {
                 !visible_during_callback,
                 "RX and reply TX must consume separate outer event turns"
             );
-            pump.poll_cyw43_bootstrap_supervisor_event_turn();
-            let transcript = crate::serial::test_take_linked_runtime_only_tx();
+            let mut transcript = Vec::new();
+            for _ in 0..8 {
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+                if transcript
+                    .windows(b"ERR WIFI reason=busy".len())
+                    .any(|window| window == b"ERR WIFI reason=busy")
+                {
+                    break;
+                }
+            }
             let text = core::str::from_utf8(transcript.as_slice())
                 .expect("linked serial output must be utf8");
             (
@@ -23250,8 +24235,17 @@ mod tests {
         assert_eq!(pump.session, Some(SessionRole::Queen));
         assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
 
-        pump.poll_cyw43_bootstrap_supervisor_event_turn();
-        let transcript = crate::serial::test_take_linked_runtime_only_tx();
+        let mut transcript = Vec::new();
+        for _ in 0..16 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if transcript
+                .windows(b"OK ATTACH role=queen".len())
+                .any(|window| window == b"OK ATTACH role=queen")
+            {
+                break;
+            }
+        }
         let rendered =
             core::str::from_utf8(transcript.as_slice()).expect("linked serial output must be utf8");
         assert!(rendered.contains("OK "), "{rendered}");
@@ -23311,8 +24305,18 @@ mod tests {
         assert!(!pump.cyw43_bootstrap_may_begin());
         assert_eq!(crate::reboot::test_reboot_requests(), 0);
 
-        pump.poll_cyw43_bootstrap_supervisor_event_turn();
-        let transcript = crate::serial::test_take_linked_runtime_only_tx();
+        let mut transcript = Vec::new();
+        for _ in 0..64 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            let ack_seen = transcript
+                .windows(b"OK REBOOT detail=scheduled".len())
+                .any(|window| window == b"OK REBOOT detail=scheduled");
+            if crate::reboot::test_reboot_requests() != 0 {
+                assert!(ack_seen, "reset must follow the complete ACK");
+                break;
+            }
+        }
         let rendered =
             core::str::from_utf8(transcript.as_slice()).expect("linked serial output must be utf8");
         assert!(
@@ -23323,9 +24327,103 @@ mod tests {
         assert_eq!(crate::reboot::test_reboot_requests(), 1);
         crate::reboot::reset_test_backend();
     }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn continuous_bootstrap_status_cannot_starve_authenticated_reboot() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+                crate::reboot::reset_test_backend();
+            }
+        }
+
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        crate::serial::test_begin_linked_runtime_only_transport();
+        crate::serial::test_set_linked_runtime_only_tx_idle_misses(2);
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(160, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let token = issue_token("ticket", Role::Queen);
+        let commands = format!("attach queen {token}\nreboot\nhelp\n");
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(commands.as_bytes()),
+            commands.len()
+        );
+
+        let mut transcript = Vec::new();
+        let mut ack_turn = None;
+        let mut drain_observed_turn = None;
+        for turn in 0..160 {
+            let status =
+                format!("CYW43_BOOTSTRAP_TURN attempt=1 turn={turn} stage=continuous-producer");
+            // Nonessential status may be coalesced into queen.log once the
+            // bounded serial backlog is full; it must never displace the
+            // authenticated response tail.
+            let _ = pump.queue_cyw43_bootstrap_operator_line(status.as_str());
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if ack_turn.is_none()
+                && transcript
+                    .windows(b"OK REBOOT detail=scheduled".len())
+                    .any(|window| window == b"OK REBOOT detail=scheduled")
+            {
+                ack_turn = Some(turn);
+            }
+            if drain_observed_turn.is_none() && pump.reboot_ack_drain_observed {
+                drain_observed_turn = Some(turn);
+            }
+            if crate::reboot::test_reboot_requests() != 0 {
+                break;
+            }
+        }
+
+        let rendered = core::str::from_utf8(transcript.as_slice())
+            .expect("linked serial transcript is valid utf8");
+        assert_eq!(
+            crate::reboot::test_reboot_requests(),
+            1,
+            "reboot_pending={} ack_observed={} ack_turn={ack_turn:?} drain_turn={drain_observed_turn:?} barrier={:?} backlog={} serial_drain={:?} transcript={rendered}",
+            pump.reboot_pending,
+            pump.reboot_ack_drain_observed,
+            pump.physical_response_barrier,
+            pump.pending_console_output.len(),
+            pump.serial.tx_drain_outcome(),
+        );
+        assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
+        assert!(
+            rendered.contains("OK REBOOT detail=scheduled"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("OK HELP"), "{rendered}");
+        assert!(
+            pump.pending_console_output.len() <= CONSOLE_OUTPUT_BACKLOG_LINES,
+            "continuous status output must remain bounded"
+        );
+    }
     #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_bootstrap_operator_turn_drains_buffered_usb_input_without_backend_or_hal() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -23348,7 +24446,17 @@ mod tests {
                 .with_local_seat(&mut local_seat)
                 .with_test_pi4_debug_commands();
             pump.serial_mut().driver_mut().reset_io_call_counts();
-            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            let mut transcript = Vec::new();
+            for _ in 0..8 {
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+                if transcript
+                    .windows(b"ERR USB reason=busy".len())
+                    .any(|window| window == b"ERR USB reason=busy")
+                {
+                    break;
+                }
+            }
             assert_eq!(
                 pump.serial_mut().driver_mut().io_call_counts(),
                 (0, 0),
@@ -23358,12 +24466,7 @@ mod tests {
                 pump.timer.index, 1,
                 "bootstrap supervisor turn must retain the ordinary timer pump"
             );
-            pump.serial_mut().flush_tx();
-            pump.serial_mut()
-                .driver_mut()
-                .drain_tx()
-                .into_iter()
-                .collect::<Vec<u8>>()
+            transcript
         };
 
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");

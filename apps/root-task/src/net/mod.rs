@@ -1185,6 +1185,13 @@ pub trait NetPoller {
     /// Request the active TCP console connection to close after flushing responses.
     fn request_disconnect(&mut self) {}
 
+    /// Return true only after every byte queued for the named console
+    /// connection has left both the console/coalescer queues and the TCP send
+    /// queue. Reboot uses this as an exact ACK barrier.
+    fn console_output_drained(&self, _conn_id: u64) -> bool {
+        false
+    }
+
     /// Drain pending net-console connection events (optional).
     fn drain_console_events(&mut self, _visitor: &mut dyn FnMut(NetConsoleEvent)) {}
 

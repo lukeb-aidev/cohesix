@@ -228,6 +228,10 @@ impl ErrorType for Bcm2711MiniUart {
 }
 
 impl SerialDriver for Bcm2711MiniUart {
+    fn transmitter_idle(&self) -> bool {
+        (self.read_reg(MU_LSR_OFFSET) & LSR_TX_IDLE) != 0
+    }
+
     fn read_byte(&mut self) -> nb::Result<u8, Self::Error> {
         if let Some(byte) = self.rx_cached.take() {
             return Ok(byte);

@@ -19,6 +19,8 @@ pub const DRIVER_RUNTIME_INIT_AUX: u32 = 0x4452_494e;
 pub const DRIVER_RUNTIME_ENGINE_INIT_AUX: u32 = 0x454e_474e;
 /// Local-seat USB/HDMI init command used by the root ring client.
 pub const DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX: u32 = 0x4c53_494e;
+/// Serial-console service command that samples the mini-UART transmitter-idle bit.
+pub const DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX: u32 = 0x5345_5244;
 
 const fn driver_runtime_nonzero_hash(hash: u32) -> u32 {
     if hash == 0 {
@@ -1348,6 +1350,15 @@ pub const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u32 = 3;
 pub const DRIVER_RUNTIME_SDIO_IRQ: u32 = 158;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SDIO_IRQ`].
 pub const DRIVER_RUNTIME_SDIO_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_IRQ + 1;
+/// One-hot root-to-child badge reserved for one retained foreground quantum.
+///
+/// Notification badges coalesce with bitwise OR, so the continuation must not
+/// be zero and must not overlap any peer or IRQ badge.
+pub const DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE: u32 = 1 << 31;
+/// Badge delivered to the SDIO owner when CYW43 signals its reciprocal peer cap.
+pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1;
+/// Badge delivered to CYW43 when the SDIO owner signals its reciprocal peer cap.
+pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE: u32 = 2;
 /// Level-sensitive runtime IRQ trigger tag.
 pub const DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL: u16 = 0;
 /// Edge-sensitive runtime IRQ trigger tag.
@@ -3470,6 +3481,34 @@ mod tests {
 
     #[test]
     fn cyw43_sdio_bus_link_supports_reciprocal_notification_dpc_descriptors() {
+        assert_ne!(DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE, 0);
+        assert_ne!(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, 0);
+        assert_ne!(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE, 0);
+        assert_ne!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE & DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            "the SDIO peer wake intentionally coalesces into the durable IRQ wake"
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE
+                & (DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
+                    | DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
+                    | DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+            0,
+            "the continuation bit must survive badge coalescing without aliasing"
+        );
         let client = DriverRuntimeBusLinkDescriptor::new(
             HOT_PATH_SDIO_HOST,
             DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,

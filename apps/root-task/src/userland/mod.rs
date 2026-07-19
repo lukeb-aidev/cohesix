@@ -537,6 +537,17 @@ impl DeferredCyw43TurnStatus {
     feature = "net-console"
 ))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredCyw43SupervisorPhase {
+    Operator,
+    Driver,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DeferredNetRetrySchedule {
     transient_failures: u32,
     next_attempt_ms: u64,
@@ -759,6 +770,7 @@ where
     let mut wifi_operation_started = false;
     let mut serial_retry = DeferredSerialRouteRetry::new(crate::hal::timebase().now_ms());
     let mut turn_status = DeferredCyw43TurnStatus::new();
+    let mut supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
 
     loop {
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
@@ -827,43 +839,39 @@ where
             continue;
         }
 
-        // The ordinary event-pump supervisor turn owns timer/IPC/reboot
-        // dispatch plus fail-closed linked serial and buffered local-seat I/O.
-        // The prior scoped HAL borrow has ended before this call begins.
-        pump.poll_cyw43_bootstrap_supervisor_event_turn();
-        if permanent_recovery_failure {
-            // The attached network remains fail-closed after a permanent
-            // recovery error, while the independent operator route continues
-            // servicing reboot and diagnostics.
-            sel4::yield_now();
-            continue;
-        }
-        if !pump.cyw43_bootstrap_may_begin() {
-            // The ordinary pump owns reboot ACK flushing and backend dispatch.
-            // Keep looping there until the pending reset is serviced; never
-            // take the HAL for Wi-Fi bootstrap in between those two steps.
-            sel4::yield_now();
-            continue;
-        }
-        let now_ms = crate::hal::timebase().now_ms();
-        if !attempt_active {
-            if !retry_schedule.attempt_due(now_ms) {
+        if supervisor_phase == DeferredCyw43SupervisorPhase::Operator {
+            // Operator service and CYW43/SDIO service occupy distinct outer
+            // turns. Even an active serial command therefore cannot compose
+            // with a Wi-Fi child operation in one scheduler iteration.
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            if permanent_recovery_failure || !pump.cyw43_bootstrap_may_begin() {
                 sel4::yield_now();
                 continue;
             }
-            emit_deferred_net_bootstrap_supervisor_status(
-                &mut pump,
-                retry_schedule.next_status_sequence(),
-                retry_schedule.attempt_number(),
-                "begin",
-                0,
-                now_ms,
-                local_seat_enabled,
-                false,
-            );
-            attempt_active = true;
+            let now_ms = crate::hal::timebase().now_ms();
+            if !attempt_active {
+                if !retry_schedule.attempt_due(now_ms) {
+                    sel4::yield_now();
+                    continue;
+                }
+                emit_deferred_net_bootstrap_supervisor_status(
+                    &mut pump,
+                    retry_schedule.next_status_sequence(),
+                    retry_schedule.attempt_number(),
+                    "begin",
+                    0,
+                    now_ms,
+                    local_seat_enabled,
+                    false,
+                );
+                attempt_active = true;
+            }
+            supervisor_phase = DeferredCyw43SupervisorPhase::Driver;
+            sel4::yield_now();
+            continue;
         }
 
+        let now_ms = crate::hal::timebase().now_ms();
         let attempt = retry_schedule.attempt_number();
         wifi_operation_started = true;
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
@@ -872,6 +880,7 @@ where
             // retained bootstrap pointer was corrupted after validation.
             pump.run();
         };
+        supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
         match turn {
             Cyw43BootstrapTurnOutcome::Pending {
                 turn_id,

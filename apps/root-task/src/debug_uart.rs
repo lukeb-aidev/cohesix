@@ -11,7 +11,9 @@
 pub fn debug_uart_str(s: &str) {
     #[cfg(feature = "kernel")]
     {
-        if crate::log_buffer::log_channel_active() {
+        if crate::serial::serial_linked_runtime_transport_active()
+            || crate::log_buffer::log_channel_active()
+        {
             crate::log_buffer::append_log_bytes(s.as_bytes());
             return;
         }
@@ -30,6 +32,10 @@ pub fn debug_uart_str(s: &str) {
 pub fn debug_uart_line(line: &str) {
     #[cfg(feature = "kernel")]
     {
+        if crate::serial::serial_linked_runtime_transport_active() {
+            crate::log_buffer::append_log_line(line);
+            return;
+        }
         crate::bootstrap::log::with_raw_uart_lock(|| {
             crate::sel4::debug_put_line_unlocked(line.as_bytes());
             crate::bootstrap::log::emit_serial_prompt_refresh_for_raw_uart(line.as_bytes());

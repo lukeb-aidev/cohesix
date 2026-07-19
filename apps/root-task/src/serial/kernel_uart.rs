@@ -289,6 +289,15 @@ impl SerialDriver for KernelSerialDriver {
         true
     }
 
+    fn transmitter_idle(&self) -> bool {
+        match self {
+            Self::Pl011(driver) => driver.transmitter_idle(),
+            Self::Bcm2711MiniUart(driver) => driver.transmitter_idle(),
+            Self::DriverTaskClient => false,
+            Self::Null => true,
+        }
+    }
+
     fn read_byte(&mut self) -> nb::Result<u8, Self::Error> {
         match self {
             Self::Pl011(driver) => driver.read_byte(),

@@ -21221,9 +21221,11 @@ mod tests {
         CYW43_SUPERVISOR_LAST_OP.store(op, Ordering::Release);
         CYW43_SUPERVISOR_RING_TURNS.fetch_add(1, Ordering::AcqRel);
         // Simulate a reciprocal owner that accepted the immutable command but
-        // lost its HAL registration before root could authenticate completion
-        // ownership. The command was issued, so production must never replay
-        // it; clearing the real controller slot forces that exact boundary.
+        // autonomously observed it at sequence commit, before root's deferred
+        // best-effort endpoint notification. It then loses HAL registration
+        // before root can authenticate completion ownership. The command was
+        // issued, so production must never replay it; clearing the real
+        // controller slot forces that exact boundary.
         crate::hal::driver_task::clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         DriverTaskCompletionRecord::idle(command.sequence)
     }
@@ -22674,14 +22676,26 @@ mod tests {
         bootstrap.ready_generation = Some(0);
         let mut hal = Cyw43SupervisorTestHal;
 
-        begin_cyw43_outer_event_turn();
-        let _ = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, 1);
+        let mut retained_turns = 0usize;
+        for now_ms in 1..=CYW43_RUNTIME_MIN_RETAINED_TURNS as u64 {
+            retained_turns = retained_turns.saturating_add(1);
+            begin_cyw43_outer_event_turn();
+            let _ = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, now_ms);
+            assert!(cyw43_outer_event_turn_operation_count() <= 1);
+            if CYW43_DEFERRED_RECOVERY.lock().is_some() {
+                break;
+            }
+        }
+        assert!(
+            retained_turns > 1,
+            "prepare, commit, notify, and completion restore use distinct outer turns"
+        );
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
         assert_eq!(
             CYW43_SUPERVISOR_LAST_OP.load(Ordering::Acquire),
             u32::from(DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL)
         );
-        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        assert!(cyw43_outer_event_turn_operation_count() <= 1);
         assert_eq!(cyw43_connection_generation(), 0);
         assert!(CYW43_HOST_EAPOL_SESSION.lock().is_some());
         let ticket = CYW43_DEFERRED_RECOVERY
@@ -22752,10 +22766,30 @@ mod tests {
             bootstrap.ready_generation = Some(0);
             let mut hal = Cyw43SupervisorTestHal;
 
-            begin_cyw43_outer_event_turn();
-            assert!(service_cyw43_maintenance_turn());
+            let mut retained_turns = 0usize;
+            for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+                let ring_turns_before = CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire);
+                begin_cyw43_outer_event_turn();
+                assert!(service_cyw43_maintenance_turn());
+                let ring_turns_after = CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire);
+                assert!(ring_turns_after.saturating_sub(ring_turns_before) <= 1);
+                assert!(cyw43_outer_event_turn_operation_count() <= 1);
+                retained_turns = retained_turns.saturating_add(1);
+                if retained_turns == 1 {
+                    assert_eq!(
+                        ring_turns_after, 0,
+                        "the prepare turn must return before child execution"
+                    );
+                }
+                if CYW43_DEFERRED_RECOVERY.lock().is_some() {
+                    break;
+                }
+            }
+            assert!(
+                retained_turns > 1,
+                "prepare, commit, notify, continuation, and completion use distinct outer turns"
+            );
             assert_eq!(CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire), 1);
-            assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
             assert_eq!(cyw43_connection_generation(), 0);
             assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
             let ticket = CYW43_DEFERRED_RECOVERY
@@ -22768,17 +22802,34 @@ mod tests {
 
             begin_cyw43_outer_event_turn();
             assert!(service_cyw43_maintenance_turn());
+            assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
             assert_eq!(
                 CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire),
                 1,
                 "an issued-unknown maintenance action must never replay"
             );
+            assert_eq!(cyw43_connection_generation(), 0);
+            assert_eq!(*CYW43_DEFERRED_RECOVERY.lock(), Some(ticket));
 
             begin_cyw43_outer_event_turn();
-            let _ = bootstrap.service_turn(&mut hal);
+            assert!(matches!(
+                bootstrap.service_turn(&mut hal),
+                Cyw43BootstrapTurnOutcome::Pending {
+                    stage: "cyw43-pair-recovery-signalled",
+                    operation_executed: false,
+                    ..
+                }
+            ));
             assert_eq!(cyw43_connection_generation(), 0);
             begin_cyw43_outer_event_turn();
-            let _ = bootstrap.service_turn(&mut hal);
+            assert!(matches!(
+                bootstrap.service_turn(&mut hal),
+                Cyw43BootstrapTurnOutcome::Pending {
+                    stage: "cyw43-generation-poisoned",
+                    operation_executed: false,
+                    ..
+                }
+            ));
             assert_eq!(cyw43_connection_generation(), 1);
             assert_eq!(CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire), 1);
 
@@ -22961,6 +23012,11 @@ mod tests {
         );
         CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+        let counters_before =
+            crate::hal::driver_task::driver_task_counter_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+                .map_or((0, 0), |snapshot| {
+                    (snapshot.send_attempts, snapshot.submitted_turns)
+                });
 
         let credentials =
             WifiCredentials::new("cohesix", "passphrase").expect("valid association credentials");
@@ -22992,6 +23048,23 @@ mod tests {
             "the stale issued join must enter recovery within the retained lease bound"
         );
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+        let counters_after =
+            crate::hal::driver_task::driver_task_counter_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+                .expect("the real reciprocal controller retains its counters");
+        assert_eq!(
+            counters_after
+                .send_attempts
+                .saturating_sub(counters_before.0),
+            0,
+            "the autonomous child must execute at CommitRing before NotifyRing"
+        );
+        assert_eq!(
+            counters_after
+                .submitted_turns
+                .saturating_sub(counters_before.1),
+            1,
+            "the immutable issued action is published exactly once"
+        );
         assert_eq!(
             CYW43_SUPERVISOR_LAST_OP.load(Ordering::Acquire),
             u32::from(DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE)

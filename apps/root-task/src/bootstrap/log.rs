@@ -335,7 +335,22 @@ fn record_drop() {
     LOG_DROPS.fetch_add(1, Ordering::AcqRel);
 }
 
+fn linked_runtime_owns_uart() -> bool {
+    #[cfg(feature = "kernel")]
+    {
+        crate::serial::serial_linked_runtime_transport_active()
+    }
+    #[cfg(not(feature = "kernel"))]
+    {
+        false
+    }
+}
+
 fn emit_uart(payload: &[u8]) {
+    if linked_runtime_owns_uart() {
+        log_buffer::append_log_bytes(payload);
+        return;
+    }
     emit_uart_payload(payload, false);
 }
 
@@ -510,7 +525,7 @@ pub fn force_uart_line(line: &str) {
         }
     }
 
-    if log_buffer::log_channel_active() {
+    if linked_runtime_owns_uart() || log_buffer::log_channel_active() {
         log_buffer::append_log_line(line);
         return;
     }
@@ -538,6 +553,16 @@ pub fn force_uart_line_raw_without_prompt_refresh(line: &str) {
 
 fn force_uart_line_raw_with_console_seq_inner(line: &str, console_seq: u32, refresh_prompt: bool) {
     if line.trim().is_empty() {
+        return;
+    }
+
+    // After linked-runtime cutover, the child runtime has sole physical UART
+    // authority. Retain even explicitly "raw" diagnostics in queen.log; a
+    // root/current-TCB write here could collide with the runtime's reciprocal
+    // ring transaction and stall every NIC behind the shared EventPump.
+    if linked_runtime_owns_uart() {
+        let suffix = console_ordering_suffix(console_seq, "queen-log", false);
+        append_ordered_log_line(line, suffix.as_str());
         return;
     }
 
@@ -579,6 +604,12 @@ fn force_uart_line_raw_and_log_with_console_seq_inner(
     refresh_prompt: bool,
 ) {
     if line.trim().is_empty() {
+        return;
+    }
+
+    if linked_runtime_owns_uart() {
+        let suffix = console_ordering_suffix(console_seq, "queen-log", false);
+        append_ordered_log_line(line, suffix.as_str());
         return;
     }
 

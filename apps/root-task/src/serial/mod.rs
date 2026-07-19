@@ -118,6 +118,8 @@ const SERIAL_OWNER_DESCRIPTOR_FLAGS: u16 =
     crate::hal::driver_task::DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS;
 #[cfg(feature = "kernel")]
 const SERIAL_RUNTIME_AUX_INIT: u32 = 0x5345_5249;
+#[cfg(feature = "kernel")]
+const SERIAL_RUNTIME_AUX_TX_IDLE: u32 = pi4_driver_abi::DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX;
 
 /// Immutable linked-runtime TX bytes retained until their exact completion.
 ///
@@ -175,11 +177,68 @@ impl LinkedSerialTxCursor {
     }
 }
 
+/// Retained proof that every accepted UART byte has left the hardware.
+///
+/// Emptying root's software queues proves only that the child accepted the
+/// bytes. A separate immutable command samples the physical transmitter-idle
+/// bit, and an indeterminate completion remains authoritative until it is
+/// resolved or the linked generation is poisoned.
+#[cfg(feature = "kernel")]
+#[derive(Debug)]
+struct LinkedSerialTxIdleCursor {
+    required: bool,
+    command: Option<crate::hal::driver_task::DriverTaskCommandRecord>,
+    ticket: u64,
+    poisoned: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl LinkedSerialTxIdleCursor {
+    const fn new() -> Self {
+        Self {
+            required: false,
+            command: None,
+            ticket: 0,
+            poisoned: false,
+        }
+    }
+
+    fn poison(&mut self) {
+        self.command = None;
+        self.ticket = 0;
+        self.required = true;
+        self.poisoned = true;
+    }
+}
+
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum LinkedSerialTurnOutcome {
     Pending,
     Complete { activity: bool },
+    Failed,
+}
+
+/// Exact drain state for an operator response retained by the serial owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SerialTxDrainOutcome {
+    /// Bytes or an immutable linked-runtime command remain in flight.
+    Pending,
+    /// Every byte accepted before the observation has completed.
+    Complete,
+    /// The linked-runtime generation was poisoned; an empty queue is not proof.
+    Failed,
+}
+
+/// Result of one retained linked-runtime transmitter-idle service turn.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SerialTxIdleTurnOutcome {
+    /// The exact poll remains in flight or the transmitter is still busy.
+    Pending,
+    /// The child proved the physical UART transmitter is idle.
+    Complete,
+    /// The linked generation or completion shape is invalid.
     Failed,
 }
 
@@ -208,6 +267,8 @@ static SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
+static SERIAL_RUNTIME_ATTACH_PHASE: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
 static SERIAL_INPUT_ROUTE_LOGGED: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_INPUT_RX_TRACE_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -217,6 +278,17 @@ static SERIAL_INPUT_LINE_TRACE_COUNT: AtomicU32 = AtomicU32::new(0);
 static SERIAL_PROMPT_INPUT_SHADOW: SpinMutex<HeaplessString<DEFAULT_LINE_CAPACITY>> =
     SpinMutex::new(HeaplessString::new());
 
+#[cfg(feature = "kernel")]
+const SERIAL_RUNTIME_ATTACH_DESCRIPTOR: u32 = 0;
+#[cfg(feature = "kernel")]
+const SERIAL_RUNTIME_ATTACH_INIT: u32 = 1;
+#[cfg(feature = "kernel")]
+const SERIAL_RUNTIME_ATTACH_PROBE: u32 = 2;
+#[cfg(feature = "kernel")]
+const SERIAL_RUNTIME_ATTACH_READY: u32 = 3;
+#[cfg(feature = "kernel")]
+const SERIAL_RUNTIME_ATTACH_FAILED: u32 = 4;
+
 #[cfg(all(feature = "kernel", test))]
 static SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(feature = "kernel", test))]
@@ -225,6 +297,8 @@ static SERIAL_LINKED_RUNTIME_ONLY_TEST_RX: SpinMutex<Queue<u8, DEFAULT_RX_CAPACI
 #[cfg(all(feature = "kernel", test))]
 static SERIAL_LINKED_RUNTIME_ONLY_TEST_TX: SpinMutex<Queue<u8, DEFAULT_TX_CAPACITY>> =
     SpinMutex::new(Queue::new());
+#[cfg(all(feature = "kernel", test))]
+static SERIAL_LINKED_RUNTIME_ONLY_TEST_TX_IDLE_MISSES: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(feature = "kernel")]
 fn prompt_shadow_push(byte: u8) {
@@ -298,6 +372,14 @@ pub trait SerialDriver: ErrorType {
 
     /// Attempt to write a single byte to the device.
     fn write_byte(&mut self, byte: u8) -> nb::Result<(), Self::Error>;
+
+    /// Whether every accepted TX byte has left the physical transmitter.
+    ///
+    /// Memory-backed and host drivers complete writes synchronously. Physical
+    /// UART implementations override this with their hardware idle bit.
+    fn transmitter_idle(&self) -> bool {
+        true
+    }
 
     /// Switch the live console endpoint to the linked serial driver task.
     #[cfg(feature = "kernel")]
@@ -500,18 +582,6 @@ fn emit_serial_runtime_state(owner: &str, status: &str, acceptance: &str) {
     crate::bootstrap::log::force_uart_line(line.as_str());
 }
 
-#[cfg(feature = "kernel")]
-pub(crate) fn emit_serial_runtime_cutover_deferred(reason: &str) {
-    let mut line = HeaplessString::<192>::new();
-    let _ = fmt::Write::write_fmt(
-        &mut line,
-        format_args!(
-            "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover-deferred acceptance=red reason={reason}",
-        ),
-    );
-    crate::bootstrap::log::force_uart_line(line.as_str());
-}
-
 /// Construct the physical UART runtime behind the serial driver-task ring.
 #[cfg(feature = "kernel")]
 pub fn init_serial_driver_task_runtime() -> bool {
@@ -599,29 +669,175 @@ pub fn init_serial_driver_task_runtime() -> bool {
     ok
 }
 
-/// Replay deferred serial runtime topology and attach the linked mini-UART image.
-///
-/// This is intentionally prompt-side on physical Pi 4 owner-state boots: the
-/// direct HAL-owned mini-UART fallback must publish a usable shell before any
-/// linked-runtime no-reply can affect operator input.
+/// Outcome of one retained post-prompt serial-runtime attachment turn.
 #[cfg(feature = "kernel")]
-pub fn resume_serial_driver_task_runtime_after_prompt() -> bool {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SerialRuntimeAttachTurn {
+    /// The exact descriptor, init, or proof action must resume on a later turn.
+    Pending,
+    /// Runtime init and one child service proof both completed exactly.
+    Complete,
+    /// The attach generation failed closed and must not be replayed.
+    Failed,
+}
+
+/// Advance serial linked-runtime attachment by at most one child/HAL action.
+#[cfg(feature = "kernel")]
+pub(crate) fn service_serial_driver_task_runtime_after_prompt_turn() -> SerialRuntimeAttachTurn {
     if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-        return true;
-    }
-    if serial_driver_task_runtime_attached() {
-        return true;
+        return SerialRuntimeAttachTurn::Complete;
     }
     let contract = driver_task_contract();
-    let descriptor_ready = crate::hal::driver_task::ensure_deferred_runtime_init_descriptor(
-        contract,
-        crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-    );
-    if !descriptor_ready {
-        emit_serial_runtime_state("driver", "post-prompt-descriptor-pending", "red");
-        return false;
+    let mut phase = SERIAL_RUNTIME_ATTACH_PHASE.load(AtomicOrdering::Acquire);
+    if serial_driver_task_runtime_attached() && phase < SERIAL_RUNTIME_ATTACH_PROBE {
+        phase = SERIAL_RUNTIME_ATTACH_PROBE;
+        SERIAL_RUNTIME_ATTACH_PHASE.store(phase, AtomicOrdering::Release);
     }
-    init_serial_driver_task_runtime()
+    match phase {
+        SERIAL_RUNTIME_ATTACH_DESCRIPTOR => {
+            match crate::hal::driver_task::step_deferred_runtime_init_descriptor(
+                contract,
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+            ) {
+                crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Pending => {
+                    SerialRuntimeAttachTurn::Pending
+                }
+                crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Complete => {
+                    SERIAL_RUNTIME_ATTACH_PHASE
+                        .store(SERIAL_RUNTIME_ATTACH_INIT, AtomicOrdering::Release);
+                    SerialRuntimeAttachTurn::Pending
+                }
+                crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Failed(_) => {
+                    SERIAL_RUNTIME_ATTACH_PHASE
+                        .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+                    SerialRuntimeAttachTurn::Failed
+                }
+            }
+        }
+        SERIAL_RUNTIME_ATTACH_INIT => {
+            SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                contract,
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+                serial_runtime_ring_service_driver_task,
+            );
+            let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                0,
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+                crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                crate::hal::driver_task::DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            );
+            command.aux0 = SERIAL_RUNTIME_AUX_INIT;
+            let Some(completion) =
+                crate::hal::driver_task::run_driver_task_ring_service_retained_turn(
+                    contract, command,
+                )
+            else {
+                return SerialRuntimeAttachTurn::Pending;
+            };
+            let exact = completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.detail == crate::hal::driver_task::DriverTaskFaultCode::None.as_u16()
+                && completion.result == 1
+                && completion.frame.offset == 0
+                && completion.frame.len == 0
+                && completion.frame.flags == 0;
+            if !exact
+                || !serial_owner_state_descriptor().is_some_and(|descriptor| {
+                    crate::hal::driver_task::register_driver_task_owner_state_descriptor(
+                        contract, descriptor,
+                    )
+                })
+            {
+                SERIAL_RUNTIME_ATTACH_PHASE
+                    .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+                SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
+                return SerialRuntimeAttachTurn::Failed;
+            }
+            SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
+            let _ = SERIAL_RUNTIME_INIT_LEASE.lock().take();
+            SERIAL_RUNTIME_ATTACH_PHASE.store(SERIAL_RUNTIME_ATTACH_PROBE, AtomicOrdering::Release);
+            SerialRuntimeAttachTurn::Pending
+        }
+        SERIAL_RUNTIME_ATTACH_PROBE => {
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                contract,
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+                serial_runtime_ring_service_driver_task,
+            );
+            let Some(budget) = serial_driver_task_rx_budget(contract, DEFAULT_RX_CAPACITY) else {
+                SERIAL_RUNTIME_ATTACH_PHASE
+                    .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+                return SerialRuntimeAttachTurn::Failed;
+            };
+            let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                0,
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+                budget,
+                crate::hal::driver_task::DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            );
+            let Some(completion) =
+                crate::hal::driver_task::run_driver_task_ring_service_retained_turn(
+                    contract, command,
+                )
+            else {
+                return SerialRuntimeAttachTurn::Pending;
+            };
+            let no_fault =
+                completion.detail == crate::hal::driver_task::DriverTaskFaultCode::None.as_u16();
+            let empty = completion.frame.offset == 0
+                && completion.frame.len == 0
+                && completion.frame.flags == 0;
+            let valid_idle = completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+                && no_fault
+                && completion.result == 0
+                && empty;
+            let mut valid_frame = false;
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
+                && no_fault
+                && completion.frame.len != 0
+                && completion.result == u32::from(completion.frame.len)
+            {
+                if let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
+                    contract,
+                    completion.frame,
+                ) {
+                    let mut rx = SERIAL_CLIENT_RX.lock();
+                    let mut accepted = 0usize;
+                    for &byte in bytes {
+                        if rx.enqueue(byte).is_err() {
+                            break;
+                        }
+                        accepted = accepted.saturating_add(1);
+                    }
+                    valid_frame = accepted == bytes.len();
+                    if valid_frame {
+                        SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.store(1, AtomicOrdering::Release);
+                    }
+                }
+            }
+            if !valid_idle && !valid_frame {
+                SERIAL_RUNTIME_ATTACH_PHASE
+                    .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+                return SerialRuntimeAttachTurn::Failed;
+            }
+            SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(1, AtomicOrdering::Release);
+            SERIAL_RUNTIME_ATTACH_PHASE.store(SERIAL_RUNTIME_ATTACH_READY, AtomicOrdering::Release);
+            SerialRuntimeAttachTurn::Complete
+        }
+        SERIAL_RUNTIME_ATTACH_READY => SerialRuntimeAttachTurn::Complete,
+        _ => SerialRuntimeAttachTurn::Failed,
+    }
 }
 
 /// Returns whether the physical serial runtime is attached to its driver task.
@@ -687,12 +903,14 @@ pub(crate) fn test_begin_linked_runtime_only_transport() {
         let mut tx = SERIAL_LINKED_RUNTIME_ONLY_TEST_TX.lock();
         while tx.dequeue().is_some() {}
     }
+    SERIAL_LINKED_RUNTIME_ONLY_TEST_TX_IDLE_MISSES.store(0, AtomicOrdering::Release);
     SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE.store(1, AtomicOrdering::Release);
 }
 
 #[cfg(all(feature = "kernel", test))]
 pub(crate) fn test_end_linked_runtime_only_transport() {
     SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE.store(0, AtomicOrdering::Release);
+    SERIAL_LINKED_RUNTIME_ONLY_TEST_TX_IDLE_MISSES.store(0, AtomicOrdering::Release);
     {
         let mut rx = SERIAL_LINKED_RUNTIME_ONLY_TEST_RX.lock();
         while rx.dequeue().is_some() {}
@@ -701,6 +919,11 @@ pub(crate) fn test_end_linked_runtime_only_transport() {
         let mut tx = SERIAL_LINKED_RUNTIME_ONLY_TEST_TX.lock();
         while tx.dequeue().is_some() {}
     }
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_set_linked_runtime_only_tx_idle_misses(misses: u32) {
+    SERIAL_LINKED_RUNTIME_ONLY_TEST_TX_IDLE_MISSES.store(misses, AtomicOrdering::Release);
 }
 
 #[cfg(all(feature = "kernel", test))]
@@ -949,15 +1172,6 @@ fn driver_task_client_poll_rx_into_client_queue() -> usize {
 }
 
 #[cfg(feature = "kernel")]
-pub(crate) fn probe_driver_task_service_after_attach() -> bool {
-    if !serial_driver_task_runtime_attached() {
-        return false;
-    }
-    let _ = driver_task_client_poll_rx_into_client_queue();
-    SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.load(AtomicOrdering::Acquire) != 0
-}
-
-#[cfg(feature = "kernel")]
 const fn serial_driver_task_service_completion_proves_transport(code: u16) -> bool {
     code == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
         || code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
@@ -1037,6 +1251,8 @@ pub struct SerialPort<
     #[cfg(feature = "kernel")]
     linked_tx: LinkedSerialTxCursor,
     #[cfg(feature = "kernel")]
+    linked_tx_idle: LinkedSerialTxIdleCursor,
+    #[cfg(feature = "kernel")]
     linked_rx_command: Option<crate::hal::driver_task::DriverTaskCommandRecord>,
     #[cfg(feature = "kernel")]
     linked_rx_ticket: u64,
@@ -1065,6 +1281,8 @@ where
             telemetry: SerialTelemetryCounters::default(),
             #[cfg(feature = "kernel")]
             linked_tx: LinkedSerialTxCursor::new(),
+            #[cfg(feature = "kernel")]
+            linked_tx_idle: LinkedSerialTxIdleCursor::new(),
             #[cfg(feature = "kernel")]
             linked_rx_command: None,
             #[cfg(feature = "kernel")]
@@ -1099,6 +1317,32 @@ where
         self.logical_tx_len() != 0
     }
 
+    /// Whether pre-cutover software queues and the selected UART are both idle.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn root_uart_cutover_drained(&self) -> bool {
+        !self.tx_pending() && self.driver.transmitter_idle()
+    }
+
+    /// Classify whether all accepted TX bytes have completed without confusing
+    /// poison cleanup with successful drain.
+    #[must_use]
+    pub(crate) fn tx_drain_outcome(&self) -> SerialTxDrainOutcome {
+        #[cfg(feature = "kernel")]
+        {
+            if self.linked_tx.poisoned || self.linked_tx_idle.poisoned {
+                return SerialTxDrainOutcome::Failed;
+            }
+            if self.linked_tx_idle.required || self.linked_tx_idle.command.is_some() {
+                return SerialTxDrainOutcome::Pending;
+            }
+        }
+        if self.tx_pending() {
+            SerialTxDrainOutcome::Pending
+        } else {
+            SerialTxDrainOutcome::Complete
+        }
+    }
+
     fn logical_tx_len(&self) -> usize {
         let pending = self
             .tx
@@ -1123,9 +1367,15 @@ where
     #[cfg(feature = "kernel")]
     fn poison_linked_tx(&mut self) {
         self.linked_tx.poison();
+        self.linked_tx_idle.poison();
         let _ = self.driver_local.take_pending_tx();
         while self.tx.dequeue().is_some() {}
         self.telemetry.driver_task_budget_overrun();
+    }
+
+    #[cfg(all(feature = "kernel", test))]
+    pub(crate) fn test_poison_linked_tx(&mut self) {
+        self.poison_linked_tx();
     }
 
     /// Whether serial input is already waiting in the command path.
@@ -1386,11 +1636,118 @@ where
             let _ = self.flush_tx_linked_runtime_only();
             return false;
         }
-        if self.linked_rx_due || self.linked_tx.poisoned || !self.tx_pending() {
+        if self.linked_tx.poisoned || self.linked_tx_idle.poisoned {
             return self.poll_io_linked_runtime_only();
+        }
+        if self.linked_tx_idle.command.is_some() {
+            let _ = self.poll_linked_tx_idle_turn();
+            return false;
+        }
+        if self.linked_rx_due || self.linked_tx.poisoned || !self.tx_pending() {
+            if self.linked_rx_due || !self.linked_tx_idle.required {
+                return self.poll_io_linked_runtime_only();
+            }
+            let _ = self.poll_linked_tx_idle_turn();
+            return false;
         }
         let _ = self.flush_tx_linked_runtime_only();
         false
+    }
+
+    /// Execute one retained child-runtime poll of the physical UART idle bit.
+    ///
+    /// A valid busy sample completes only that sample. It schedules an RX turn
+    /// before a fresh idle ticket so a slow transmitter cannot starve operator
+    /// input. No call path polls privately or replays an issued-unknown command.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn poll_linked_tx_idle_turn(&mut self) -> SerialTxIdleTurnOutcome {
+        if self.linked_tx.poisoned || self.linked_tx_idle.poisoned {
+            return SerialTxIdleTurnOutcome::Failed;
+        }
+        if self.linked_rx_command.is_some() || self.linked_tx.command.is_some() {
+            return SerialTxIdleTurnOutcome::Pending;
+        }
+        if self.linked_tx_idle.command.is_none() && self.tx_pending() {
+            return SerialTxIdleTurnOutcome::Pending;
+        }
+        if !self.linked_tx_idle.required {
+            return SerialTxIdleTurnOutcome::Complete;
+        }
+        #[cfg(test)]
+        if SERIAL_LINKED_RUNTIME_ONLY_TEST_ACTIVE.load(AtomicOrdering::Acquire) != 0 {
+            let misses = SERIAL_LINKED_RUNTIME_ONLY_TEST_TX_IDLE_MISSES
+                .fetch_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
+                    if current == 0 {
+                        None
+                    } else {
+                        Some(current - 1)
+                    }
+                })
+                .unwrap_or(0);
+            if misses != 0 {
+                self.linked_rx_due = true;
+                return SerialTxIdleTurnOutcome::Pending;
+            }
+            self.linked_tx_idle.required = self.tx_pending();
+            return SerialTxIdleTurnOutcome::Complete;
+        }
+        let contract = <D as SerialDriver>::driver_task_contract();
+        let command = if let Some(command) = self.linked_tx_idle.command {
+            command
+        } else {
+            let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                0,
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+                crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                crate::hal::driver_task::DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            );
+            command.aux0 = SERIAL_RUNTIME_AUX_TX_IDLE;
+            self.linked_tx_idle.ticket = self.next_linked_turn_id();
+            self.linked_tx_idle.command = Some(command);
+            command
+        };
+        crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+            contract,
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+            serial_runtime_ring_service_driver_task,
+        );
+        let Some(completion) =
+            crate::hal::driver_task::run_driver_task_ring_service_retained_turn(contract, command)
+        else {
+            return SerialTxIdleTurnOutcome::Pending;
+        };
+        self.linked_tx_idle.command = None;
+        self.linked_tx_idle.ticket = 0;
+        let no_fault =
+            completion.detail == crate::hal::driver_task::DriverTaskFaultCode::None.as_u16();
+        let empty_frame = completion.frame.offset == 0
+            && completion.frame.len == 0
+            && completion.frame.flags == 0;
+        if completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+            && no_fault
+            && completion.result == 1
+            && empty_frame
+        {
+            // This sample proves only bytes accepted before the immutable
+            // probe. Output queued while it was in flight still needs its own
+            // TX action and later wire-idle proof.
+            self.linked_tx_idle.required = self.tx_pending();
+            return SerialTxIdleTurnOutcome::Complete;
+        }
+        if completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+            && no_fault
+            && completion.result == 0
+            && empty_frame
+        {
+            self.linked_rx_due = true;
+            return SerialTxIdleTurnOutcome::Pending;
+        }
+        self.poison_linked_tx();
+        SerialTxIdleTurnOutcome::Failed
     }
 
     /// Flush only through the independently owned physical serial linked runtime.
@@ -1440,6 +1797,9 @@ where
                 written = written.saturating_add(1);
             }
             drop(emitted);
+            if written != 0 {
+                self.linked_tx_idle.required = true;
+            }
             self.linked_rx_due = true;
             return true;
         }
@@ -1613,6 +1973,14 @@ where
         &mut self,
         contract: DriverTaskContract,
     ) -> LinkedSerialTurnOutcome {
+        // TX and RX share one serial command/completion ring. A retained TX
+        // action is immutable until its exact completion, so beginning an RX
+        // cursor here would submit a different fingerprint into the occupied
+        // slot. Ordinary EventPump turns must let the TX-first arbiter resume
+        // that action before an RX ticket can be created.
+        if self.linked_tx.command.is_some() || self.linked_tx_idle.command.is_some() {
+            return LinkedSerialTurnOutcome::Pending;
+        }
         if self.drain_driver_task_client_rx_queue() != 0 {
             return LinkedSerialTurnOutcome::Complete { activity: true };
         }
@@ -1705,12 +2073,6 @@ where
         accepted
     }
 
-    /// Switch prompt-side service from the root mini-UART fallback to the driver task.
-    #[cfg(feature = "kernel")]
-    pub fn use_driver_task_client_after_attach(&mut self) -> bool {
-        self.activate_driver_task_client_after_attach(true)
-    }
-
     /// Switch to the linked client without flushing through the prior backend.
     ///
     /// CYW43 supervision uses this only after its first physical operation, when
@@ -1719,18 +2081,15 @@ where
     /// runtime after the switch succeeds.
     #[cfg(feature = "kernel")]
     pub fn use_driver_task_client_after_attach_without_root_flush(&mut self) -> bool {
-        self.activate_driver_task_client_after_attach(false)
+        self.activate_driver_task_client_after_attach()
     }
 
     #[cfg(feature = "kernel")]
-    fn activate_driver_task_client_after_attach(&mut self, flush_prior_backend: bool) -> bool {
+    fn activate_driver_task_client_after_attach(&mut self) -> bool {
         if !serial_driver_task_transport_active() {
             if !serial_driver_task_interactive_cutover_allowed() {
                 return false;
             }
-        }
-        if flush_prior_backend {
-            self.flush_tx_locked();
         }
         let attached = self.driver.try_use_driver_task_client_after_attach();
         if attached {
@@ -1790,7 +2149,7 @@ where
         // An outstanding RX poll owns the shared serial ring until its exact
         // completion. The next outer serial turn resumes it before TX stages a
         // different fingerprint.
-        if self.linked_rx_command.is_some() {
+        if self.linked_rx_command.is_some() || self.linked_tx_idle.command.is_some() {
             return LinkedSerialTurnOutcome::Pending;
         }
         if self.linked_tx.poisoned {
@@ -1871,6 +2230,9 @@ where
         if !self.linked_tx.consume_prefix(written) {
             self.poison_linked_tx();
             return LinkedSerialTurnOutcome::Failed;
+        }
+        if written != 0 {
+            self.linked_tx_idle.required = true;
         }
         LinkedSerialTurnOutcome::Complete {
             activity: written != 0,
@@ -2157,6 +2519,24 @@ unsafe fn serial_runtime_ring_service_driver_task(
         SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
         *SERIAL_DRIVER_RUNTIME.lock() = Some(SerialPort::new(driver));
         return crate::hal::driver_task::DriverTaskCompletionRecord::progress(command.sequence, 1);
+    }
+    if command.aux0 == SERIAL_RUNTIME_AUX_TX_IDLE
+        && command.frame.offset == 0
+        && command.frame.len == 0
+        && command.frame.flags == 0
+    {
+        let runtime = SERIAL_DRIVER_RUNTIME.lock();
+        let Some(port) = runtime.as_ref() else {
+            return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+                command.sequence,
+                crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable,
+            );
+        };
+        return if port.driver.transmitter_idle() {
+            crate::hal::driver_task::DriverTaskCompletionRecord::progress(command.sequence, 1)
+        } else {
+            crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence)
+        };
     }
     if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Service.as_u16()
         && command.arg0 == expected_hot_path.as_u32()
@@ -2546,6 +2926,8 @@ mod tests {
     > = SpinMutex::new(HeaplessVec::new());
     #[cfg(feature = "kernel")]
     static TEST_SERIAL_RING_CALLS: AtomicU32 = AtomicU32::new(0);
+    #[cfg(feature = "kernel")]
+    static TEST_SERIAL_RING_IDLE_MISSES: AtomicU32 = AtomicU32::new(0);
 
     #[cfg(feature = "kernel")]
     struct TestSerialRingGuard {
@@ -2558,6 +2940,7 @@ mod tests {
             crate::hal::driver_task::clear_driver_task_transport(driver_task_contract());
             TEST_SERIAL_RING_BYTES.lock().clear();
             TEST_SERIAL_RING_CALLS.store(0, AtomicOrdering::Release);
+            TEST_SERIAL_RING_IDLE_MISSES.store(0, AtomicOrdering::Release);
         }
     }
 
@@ -2574,6 +2957,7 @@ mod tests {
         );
         TEST_SERIAL_RING_BYTES.lock().clear();
         TEST_SERIAL_RING_CALLS.store(0, AtomicOrdering::Release);
+        TEST_SERIAL_RING_IDLE_MISSES.store(0, AtomicOrdering::Release);
         TestSerialRingGuard { _page: page }
     }
 
@@ -2587,6 +2971,23 @@ mod tests {
                 command.sequence,
                 crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
             );
+        }
+        if command.aux0 == SERIAL_RUNTIME_AUX_TX_IDLE && command.frame.len == 0 {
+            TEST_SERIAL_RING_CALLS.fetch_add(1, AtomicOrdering::AcqRel);
+            let misses = TEST_SERIAL_RING_IDLE_MISSES
+                .fetch_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
+                    if current == 0 {
+                        None
+                    } else {
+                        Some(current - 1)
+                    }
+                })
+                .unwrap_or(0);
+            return if misses == 0 {
+                crate::hal::driver_task::DriverTaskCompletionRecord::progress(command.sequence, 1)
+            } else {
+                crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence)
+            };
         }
         let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
             driver_task_contract(),
@@ -3101,6 +3502,23 @@ mod tests {
         assert_eq!(ring_counters().1, counters_before.1);
         assert_eq!(ring_counters().2, counters_before.2);
 
+        // Ordinary EventPump polling used to install a distinct RX fingerprint
+        // here. The occupied TX slot then rejected RX while the TX path refused
+        // to advance behind that RX cursor, deterministically freezing the
+        // prompt after GENET had already reached DHCP. RX must remain entirely
+        // unallocated until this exact TX action reaches terminal completion.
+        assert_eq!(
+            port.poll_driver_task_rx_turn(driver_task_contract()),
+            LinkedSerialTurnOutcome::Pending
+        );
+        assert!(port.linked_rx_command.is_none());
+        assert_eq!(port.linked_rx_ticket, 0);
+        assert_eq!(port.linked_tx.command, Some(command));
+        assert_eq!(port.linked_tx.ticket, ticket);
+        assert_eq!(ring_counters().0, counters_before.0 + 1);
+        assert_eq!(ring_counters().1, counters_before.1);
+        assert_eq!(ring_counters().2, counters_before.2);
+
         // Notification is a separate root turn. The test then schedules the
         // reciprocal controller between root turns, exactly as the child TCB
         // runs independently in production.
@@ -3144,6 +3562,95 @@ mod tests {
         assert_eq!(ring_counters().0, counters_before.0 + 1);
         assert_eq!(ring_counters().1, counters_before.1 + 1);
         assert_eq!(ring_counters().2, counters_before.2 + 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_runtime_resumes_issued_idle_probe_before_later_tx() {
+        let _ring_guard = test_publish_serial_ring();
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(driver_task_contract(),)
+        );
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                driver_task_contract(),
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+                test_serial_reciprocal_ring_service,
+            )
+        );
+        let driver = LoopbackSerial::<64>::new();
+        let mut port: SerialPort<_, 16, 32, 16> = SerialPort::new(driver);
+        port.linked_tx_idle.required = true;
+
+        assert_eq!(
+            port.poll_linked_tx_idle_turn(),
+            SerialTxIdleTurnOutcome::Pending
+        );
+        let command = port
+            .linked_tx_idle
+            .command
+            .expect("idle probe retains its immutable command");
+        assert_eq!(
+            port.poll_linked_tx_idle_turn(),
+            SerialTxIdleTurnOutcome::Pending
+        );
+        assert_eq!(
+            port.poll_linked_tx_idle_turn(),
+            SerialTxIdleTurnOutcome::Pending
+        );
+        assert_eq!(port.linked_tx_idle.command, Some(command));
+
+        port.enqueue_tx(b"later");
+        assert!(port.tx_pending());
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                driver_task_contract(),
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+                test_serial_reciprocal_ring_service,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::test_service_pending_driver_task_ring_command(
+                driver_task_contract(),
+            )
+        );
+        assert!(!port.service_linked_runtime_only_turn());
+        assert!(port.linked_tx_idle.command.is_none());
+        assert!(port.linked_tx_idle.required);
+        assert!(port.tx_pending());
+
+        assert_eq!(
+            port.flush_tx_driver_task_ring_turn(driver_task_contract()),
+            LinkedSerialTurnOutcome::Pending
+        );
+        assert!(
+            port.linked_tx.command.is_some(),
+            "later TX must begin after the exact idle completion, not deadlock behind it"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn poisoned_linked_tx_keeps_polling_successive_operator_rx() {
+        struct LinkedRuntimeTestReset;
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                test_end_linked_runtime_only_transport();
+            }
+        }
+
+        test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<64>::new();
+        let mut port: SerialPort<_, 16, 32, 16> = SerialPort::new(driver);
+        port.test_poison_linked_tx();
+
+        assert_eq!(test_inject_linked_runtime_only_rx(b"a"), 1);
+        assert!(port.service_linked_runtime_only_turn());
+        assert_eq!(test_inject_linked_runtime_only_rx(b"b"), 1);
+        assert!(port.service_linked_runtime_only_turn());
+        assert_eq!(port.rx.len(), 2);
+        assert_eq!(port.tx_drain_outcome(), SerialTxDrainOutcome::Failed);
     }
 
     #[cfg(feature = "kernel")]
@@ -3224,6 +3731,7 @@ mod tests {
         assert!(port.linked_tx.poisoned);
         assert!(port.linked_tx.bytes.is_empty());
         assert!(!port.tx_pending());
+        assert_eq!(port.tx_drain_outcome(), SerialTxDrainOutcome::Failed);
 
         let mut executed = false;
         assert!(!port.flush_tx_driver_task_ring_with(
