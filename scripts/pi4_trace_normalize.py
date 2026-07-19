@@ -3374,6 +3374,7 @@ def normalize_wifi_blocker(value: str) -> str:
                 "cyw43-engine-init-",
                 "cyw43-state-reset-",
                 "cyw43-bus-link-",
+                "cyw43-backplane-",
                 "cyw43-release-",
                 "cyw43-shared-control-",
                 "cyw43-sdio-owner-",
@@ -4111,6 +4112,24 @@ def cyw43_raw_command_progress_blocker(event: TraceEvent) -> str | None:
         return None
     phase_name = fields.get("marker_phase_name", "").lower()
     return {
+        "cyw43-backplane-alp-request": "cyw43-backplane-alp-request-no-reply",
+        "cyw43-backplane-alp-poll": "cyw43-backplane-alp-poll-no-reply",
+        "cyw43-backplane-force-alp": "cyw43-backplane-force-alp-no-reply",
+        "cyw43-backplane-force-alp-settle": (
+            "cyw43-backplane-force-alp-settle-no-reply"
+        ),
+        "cyw43-backplane-pullup-clear": (
+            "cyw43-backplane-pullup-clear-no-reply"
+        ),
+        "cyw43-backplane-pullup-fault-contained": (
+            "cyw43-backplane-pullup-fault-contained"
+        ),
+        "cyw43-backplane-window-low": "cyw43-backplane-window-low-no-reply",
+        "cyw43-backplane-window-mid": "cyw43-backplane-window-mid-no-reply",
+        "cyw43-backplane-window-high": "cyw43-backplane-window-high-no-reply",
+        "cyw43-backplane-chipcommon-read": (
+            "cyw43-backplane-chipcommon-read-no-reply"
+        ),
         "cyw43-release-begin": "cyw43-release-begin-no-reply",
         "cyw43-release-reset-vector-begin": (
             "cyw43-release-reset-vector-no-reply"
@@ -7189,6 +7208,7 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
                 "cyw43-engine-init-",
                 "cyw43-state-reset-",
                 "cyw43-bus-link-",
+                "cyw43-backplane-",
                 "cyw43-release-",
                 "cyw43-shared-control-",
                 "cyw43-sdio-owner-",
@@ -10129,6 +10149,7 @@ def wifi_blocker_is_exact_cyw43_progress(blocker: str) -> bool:
             "cyw43-engine-init-",
             "cyw43-state-reset-",
             "cyw43-bus-link-",
+            "cyw43-backplane-",
             "cyw43-release-",
             "cyw43-shared-control-",
             "cyw43-sdio-owner-",
@@ -11879,6 +11900,13 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     wifi_exact, wifi_phase, wifi_blocker_line = summarize_wifi_failure_detail(
         event_list, wifi_blocker
     )
+    if wifi_blocker == "backplane-window" and wifi_exact.startswith(
+        "cyw43-backplane-"
+    ):
+        # The dependency gate row is intentionally broad. Preserve the linked
+        # runtime's exact retained attach frontier when it immediately precedes
+        # that generic Gate-5 failure.
+        wifi_blocker = wifi_exact
     initial_wifi_subgate = summarize_wifi_gate7_subgate_detail(
         event_list, wifi_gate, wifi_blocker
     )

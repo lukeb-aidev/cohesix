@@ -11953,6 +11953,16 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_CONFIG_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_READY => Some(4),
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_MID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY => Some(5),
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN
@@ -12105,7 +12115,37 @@ where
                 "cyw43-backplane-alp-start-no-reply"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN => {
-                "cyw43-backplane-alp-no-reply"
+                "cyw43-backplane-attach-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST => {
+                "cyw43-backplane-alp-request-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL => {
+                "cyw43-backplane-alp-poll-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP => {
+                "cyw43-backplane-force-alp-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE => {
+                "cyw43-backplane-force-alp-settle-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR => {
+                "cyw43-backplane-pullup-clear-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED => {
+                "cyw43-backplane-pullup-fault-contained"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ => {
+                "cyw43-backplane-chipcommon-read-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW => {
+                "cyw43-backplane-window-low-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_MID => {
+                "cyw43-backplane-window-mid-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH => {
+                "cyw43-backplane-window-high-no-reply"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY => {
                 "cyw43-transport-ready-publish-no-reply"
@@ -12283,7 +12323,37 @@ where
                 "start-cyw43-backplane-alp-and-window"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN => {
-                "inspect-cyw43-backplane-alp-and-window"
+                "inspect-cyw43-backplane-attach-frontier"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST => {
+                "verify-cyw43-alp-request-cmd52-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL => {
+                "inspect-cyw43-alp-availability-cmd52-read"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP => {
+                "verify-cyw43-force-alp-cmd52-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE => {
+                "verify-cyw43-force-alp-virtual-counter-settle"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR => {
+                "verify-cyw43-extra-pullup-clear-cmd52-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED => {
+                "continue-cyw43-chipcommon-attach-after-contained-pullup-fault"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW => {
+                "inspect-cyw43-backplane-window-low-cmd52-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_MID => {
+                "inspect-cyw43-backplane-window-mid-cmd52-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH => {
+                "inspect-cyw43-backplane-window-high-cmd52-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ => {
+                "inspect-cyw43-chipcommon-strict-function1-cmd53-read"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY => {
@@ -12392,7 +12462,16 @@ where
             0x5104 => "verify-sdio-host-config-replay",
             0x5302 | 0x5303 | 0x5308 => "inspect-cyw43-firmware-upload",
             0x5309 | 0x530a => "verify-cyw43-command-descriptor-shared-payload-window",
-            0x5310..=0x531f => "inspect-cyw43-backplane-window",
+            0x5310 => "inspect-cyw43-sdio-owner-bus-link",
+            0x531a => "inspect-cyw43-alp-request-and-readback",
+            0x531b => "inspect-cyw43-backplane-wake-register",
+            0x531c => "inspect-cyw43-backplane-kso-register",
+            0x531d => "inspect-cyw43-backplane-watermark-register",
+            0x531e => "inspect-cyw43-backplane-device-control-register",
+            0x531f => "inspect-cyw43-armcr4-reset-sequence",
+            0x5321 => "inspect-cyw43-backplane-window-cmd52-sequence",
+            0x5323 => "inspect-cyw43-chipcommon-strict-function1-cmd53-read",
+            0x5311..=0x5319 => "inspect-cyw43-backplane-window",
             0x5324 => "verify-linked-sdio-cmd0-go-idle",
             0x5325 => "verify-linked-sdio-cmd5-ocr-discovery",
             0x5326 => "verify-linked-sdio-cmd5-ready-ocr",
@@ -23627,6 +23706,104 @@ mod tests {
             KernelConsoleTestPump::wifi_startup_gate_status(7, 1, 6),
             "blocked"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_backplane_progress_names_every_retained_attach_frontier() {
+        for (phase, blocker, next_action) in [
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN,
+                "cyw43-backplane-attach-no-reply",
+                "inspect-cyw43-backplane-attach-frontier",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST,
+                "cyw43-backplane-alp-request-no-reply",
+                "verify-cyw43-alp-request-cmd52-write",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL,
+                "cyw43-backplane-alp-poll-no-reply",
+                "inspect-cyw43-alp-availability-cmd52-read",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP,
+                "cyw43-backplane-force-alp-no-reply",
+                "verify-cyw43-force-alp-cmd52-write",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE,
+                "cyw43-backplane-force-alp-settle-no-reply",
+                "verify-cyw43-force-alp-virtual-counter-settle",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
+                "cyw43-backplane-pullup-clear-no-reply",
+                "verify-cyw43-extra-pullup-clear-cmd52-write",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED,
+                "cyw43-backplane-pullup-fault-contained",
+                "continue-cyw43-chipcommon-attach-after-contained-pullup-fault",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW,
+                "cyw43-backplane-window-low-no-reply",
+                "inspect-cyw43-backplane-window-low-cmd52-write",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_MID,
+                "cyw43-backplane-window-mid-no-reply",
+                "inspect-cyw43-backplane-window-mid-cmd52-write",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH,
+                "cyw43-backplane-window-high-no-reply",
+                "inspect-cyw43-backplane-window-high-cmd52-write",
+            ),
+            (
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ,
+                "cyw43-backplane-chipcommon-read-no-reply",
+                "inspect-cyw43-chipcommon-strict-function1-cmd53-read",
+            ),
+        ] {
+            assert_eq!(
+                KernelConsoleTestPump::wifi_cyw43_runtime_progress_gate(phase),
+                Some(5)
+            );
+            assert_eq!(
+                KernelConsoleTestPump::wifi_cyw43_runtime_progress_blocker(phase),
+                blocker
+            );
+            assert_eq!(
+                KernelConsoleTestPump::wifi_cyw43_runtime_progress_next_action(phase),
+                next_action
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_backplane_faults_name_the_exact_linux_attach_primitive() {
+        for (detail, next_action) in [
+            (0x531a, "inspect-cyw43-alp-request-and-readback"),
+            (0x531b, "inspect-cyw43-backplane-wake-register"),
+            (0x531c, "inspect-cyw43-backplane-kso-register"),
+            (0x531d, "inspect-cyw43-backplane-watermark-register"),
+            (0x531e, "inspect-cyw43-backplane-device-control-register"),
+            (0x5321, "inspect-cyw43-backplane-window-cmd52-sequence"),
+            (
+                0x5323,
+                "inspect-cyw43-chipcommon-strict-function1-cmd53-read",
+            ),
+        ] {
+            assert_eq!(KernelConsoleTestPump::wifi_cyw43_fault_gate(detail), 5);
+            assert_eq!(
+                KernelConsoleTestPump::wifi_cyw43_fault_next_action(detail),
+                next_action
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]

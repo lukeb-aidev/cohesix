@@ -229,6 +229,14 @@ pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY: u16 = 0x5406;
 pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BACKPLANE_READY: u16 = 0x5407;
 /// CYW43 transport detail: transport is ready for firmware prep/upload.
 pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY: u16 = 0x5408;
+/// SDIO fault telemetry proves owner-side command/data-path containment.
+pub const DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED: u16 = 1 << 0;
+/// SDIO fault telemetry records that owner-side containment failed.
+pub const DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED: u16 = 1 << 1;
+/// All valid disposition bits on an SDIO fault-telemetry frame.
+pub const DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_MASK: u16 =
+    DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED
+        | DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED;
 /// CYW43 command flag: force Function 1 backplane writes through byte-mode retry.
 /// CYW43 command flag: transmit control frames with the Linux SDPCM hw extension.
 pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER: u16 = 1 << 1;
@@ -1315,6 +1323,26 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT: u32 = 143;
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY: u32 = 144;
 /// CYW43 exhausted the issued-unknown reap deadline and requires a fenced pair restart.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED: u32 = 446;
+/// CYW43 retained backplane attach is issuing its one-shot ALP request.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST: u32 = 447;
+/// CYW43 retained backplane attach is consuming one ALP readback turn.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL: u32 = 448;
+/// CYW43 retained backplane attach is issuing FORCE_ALP.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP: u32 = 449;
+/// CYW43 retained backplane attach is consuming one 65-us settle turn.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE: u32 = 450;
+/// CYW43 retained backplane attach is issuing the one-shot extra-pull-up clear.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR: u32 = 451;
+/// CYW43 accepted an exact contained fault from Linux's best-effort pull-up clear.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED: u32 = 452;
+/// CYW43 retained backplane attach is reading the first ChipCommon word.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ: u32 = 453;
+/// CYW43 retained attach is programming the ChipCommon window low byte.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW: u32 = 454;
+/// CYW43 retained attach is programming the ChipCommon window middle byte.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_MID: u32 = 455;
+/// CYW43 retained attach is programming the ChipCommon window high byte.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH: u32 = 456;
 /// CYW43 runtime proved card selection/adoption.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY: u32 = 112;
 /// CYW43 runtime is programming Function 1 block size.
@@ -4244,6 +4272,22 @@ mod tests {
         assert_ne!(
             DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
             DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+        );
+    }
+
+    #[test]
+    fn sdio_fault_frame_dispositions_are_disjoint_and_exhaustive() {
+        assert_ne!(DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED, 0);
+        assert_ne!(DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED, 0);
+        assert_eq!(
+            DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED
+                & DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED,
+            0
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_MASK,
+            DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED
+                | DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED
         );
     }
 }

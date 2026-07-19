@@ -3152,6 +3152,117 @@ def test_gate_summary_refines_cyw43_release_no_reply_with_last_release_marker() 
     assert gates.wifi_phase == "cyw43-release-reset-vector-no-reply"
 
 
+@pytest.mark.parametrize(
+    ("phase", "phase_name", "blocker"),
+    [
+        (447, "cyw43-backplane-alp-request", "cyw43-backplane-alp-request-no-reply"),
+        (448, "cyw43-backplane-alp-poll", "cyw43-backplane-alp-poll-no-reply"),
+        (449, "cyw43-backplane-force-alp", "cyw43-backplane-force-alp-no-reply"),
+        (
+            450,
+            "cyw43-backplane-force-alp-settle",
+            "cyw43-backplane-force-alp-settle-no-reply",
+        ),
+        (
+            451,
+            "cyw43-backplane-pullup-clear",
+            "cyw43-backplane-pullup-clear-no-reply",
+        ),
+        (
+            452,
+            "cyw43-backplane-pullup-fault-contained",
+            "cyw43-backplane-pullup-fault-contained",
+        ),
+        (
+            453,
+            "cyw43-backplane-chipcommon-read",
+            "cyw43-backplane-chipcommon-read-no-reply",
+        ),
+        (454, "cyw43-backplane-window-low", "cyw43-backplane-window-low-no-reply"),
+        (455, "cyw43-backplane-window-mid", "cyw43-backplane-window-mid-no-reply"),
+        (
+            456,
+            "cyw43-backplane-window-high",
+            "cyw43-backplane-window-high-no-reply",
+        ),
+    ],
+)
+def test_gate_summary_preserves_exact_linked_backplane_progress(
+    phase: int, phase_name: str, blocker: str
+) -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: cyw43 linked_runtime_progress marker_valid=yes sequence=99 "
+            f"phase={phase} phase_name={phase_name} aux0=0x43595734 "
+            f"gate=5 blocker={blocker} next_action=inspect-exact-backplane-action",
+            "wifi: gate 5 name=backplane-window status=fail "
+            f"evidence=phase={phase} phase_name={phase_name} next=firmware-upload",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 4
+    assert record["WIFI_BLOCKER"] == blocker
+    assert record["WIFI_EXACT"] == blocker
+    assert record["WIFI_PHASE"] == blocker
+    assert record["WIFI_EXACT"] != "wifi-driver-task-runtime-unproved"
+
+
+@pytest.mark.parametrize(
+    ("phase", "phase_name", "blocker"),
+    [
+        (447, "cyw43-backplane-alp-request", "cyw43-backplane-alp-request-no-reply"),
+        (448, "cyw43-backplane-alp-poll", "cyw43-backplane-alp-poll-no-reply"),
+        (449, "cyw43-backplane-force-alp", "cyw43-backplane-force-alp-no-reply"),
+        (
+            450,
+            "cyw43-backplane-force-alp-settle",
+            "cyw43-backplane-force-alp-settle-no-reply",
+        ),
+        (
+            451,
+            "cyw43-backplane-pullup-clear",
+            "cyw43-backplane-pullup-clear-no-reply",
+        ),
+        (
+            452,
+            "cyw43-backplane-pullup-fault-contained",
+            "cyw43-backplane-pullup-fault-contained",
+        ),
+        (
+            453,
+            "cyw43-backplane-chipcommon-read",
+            "cyw43-backplane-chipcommon-read-no-reply",
+        ),
+        (454, "cyw43-backplane-window-low", "cyw43-backplane-window-low-no-reply"),
+        (455, "cyw43-backplane-window-mid", "cyw43-backplane-window-mid-no-reply"),
+        (
+            456,
+            "cyw43-backplane-window-high",
+            "cyw43-backplane-window-high-no-reply",
+        ),
+    ],
+)
+def test_gate_summary_derives_exact_backplane_frontier_from_raw_progress(
+    phase: int, phase_name: str, blocker: str
+) -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-firmware blocker=no-reply",
+            "DRIVER_TASK_RING_PROGRESS contract=cyw43455 request=99 "
+            "expected_aux0=0x43595734 marker_valid=yes marker_sequence=99 "
+            f"marker_phase={phase} marker_phase_name={phase_name} "
+            "marker_aux0=0x43595734",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_EXACT"] == blocker
+    assert record["WIFI_PHASE"] == blocker
+    assert record["WIFI_EXACT"] != "wifi-driver-task-runtime-unproved"
+
+
 def test_gate_summary_tracks_cyw43_post_release_mailbox_ready_fault() -> None:
     events = normalizer.parse_events(
         [

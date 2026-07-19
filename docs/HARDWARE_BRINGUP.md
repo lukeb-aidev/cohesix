@@ -687,11 +687,37 @@ maintenance have virtual-counter deadlines; an eight-second engine envelope
 covers the Linux-shaped one-second ALP and three-second Function 2 waits plus
 bounded handoff margin. Repeating one stage beyond that envelope without a
 terminal failure/recovery record is failed liveness evidence.
+
+Backplane attach advances through a retained generation-bound ALP/window cursor,
+not a synchronous private loop. One outer EventPump turn may perform one exact
+ALP request or read, one retained deadline observation, one FORCE_ALP or pull-up
+write, one window-register CMD52, one ChipCommon CMD53, one continuation grant,
+or one completion poll. A terminal child or deadline poll records the result and
+returns; the next attach action requires a later turn. Each non-ready ALP read
+checkpoints the one-second absolute deadline, last `CHIPCLKCSR` value, and poll
+count, then closes that foreground transaction. Thus a long, still-within-
+deadline ALP wait does not accumulate against the retained transaction's
+1,024-action trace or use trace exhaustion as a timeout.
+
+Serial evidence should name the exact frontier rather than leaving the generic
+backplane marker as an ALP diagnosis: ALP request, ALP poll, FORCE_ALP, its
+65-microsecond settle, pull-up clear, contained pull-up fault, ChipCommon read,
+and each LOW/MID/HIGH backplane-window CMD52 have separate progress markers. The
+post-settle `SBSDIO_FUNC1_SDIOPULLUP=0` command is a Linux-compatible one-shot.
+An exact fault is tolerated only when command-local telemetry proves the same
+sequence, generation, CMD52 fingerprint, Function 1 address/value, nonzero
+failure, stable quiescent ring, and successful `CONTAINED` disposition. An
+issued-unknown, `OWNER_PATH_POISONED`, uncontained, stale, or malformed result
+must poison the generation and request the ordered pair restart; operators must
+not interpret it as a harmless best-effort write or retry it in place.
+
 The retained CYW43 transaction keeps its full 1,024-action and 128 KiB payload
 capacity in loader-zeroed `SHT_NOBITS` pages; the HAL loader must zero those
-pages before copying file-backed bytes. The smaller nonzero baseline snapshot
-remains file-backed, so this layout changes packaging size without changing the
-runtime aperture, replay capacity, or state semantics.
+pages before copying file-backed bytes. That trace remains a bounded cache for
+one straight-line retained substep, not an elapsed-time or ALP-poll budget. The
+smaller nonzero baseline snapshot remains file-backed, so this layout changes
+packaging size without changing the runtime aperture, replay capacity, or state
+semantics.
 
 Each initial bootstrap or later steady-state recovery episode is finite. The
 supervisor permits five attempts with `1/2/4/8` second virtual-counter backoffs
@@ -860,6 +886,11 @@ acknowledged sequence-last shared grants after every delegated CYW43-to-SDIO
 `Pending` quantum, foreground/DPC `Poll -> Grant -> Poll` parity, authoritative
 owner-generation rejection, and the one-pair-restart-per-attempt bound until
 attached address/TCP readiness,
+retained generation-bound ALP/backplane attach with one request, deadline poll,
+CMD52/CMD53 child action, grant, or completion poll per outer turn, terminal
+poll separation, per-poll cursor checkpointing beyond the 1,024-action trace
+capacity, exact window/ChipCommon progress, and command-local proof before a
+contained one-shot pull-up-clear fault may advance,
 five-phase linked EventPump arbitration with distinct NIC-service and command
 dispatch turns, retained GENET TCP response flushing with one operation per
 later `Network` phase and connection fencing, ordinary CYW43 data-ready polls,

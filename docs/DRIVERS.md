@@ -487,10 +487,41 @@ This as-built closure is authorized by Milestone 26d task
   replies, or RX drain work.
 - Function 1 enable uses the SDIO CIS timeout when that field is eventually
   carried by the ABI; the current fixed profile uses Linux's one-second
-  fallback. ALP availability also uses a one-second elapsed deadline. After
-  `FORCE_ALP`, the runtime preserves the 65 microsecond settle, writes
-  `SBSDIO_FUNC1_SDIOPULLUP=0`, and validates `CHIPCLKCSR` while excluding only
-  asynchronous availability bits from the immediate readback comparison.
+  fallback. Backplane attach is a generation- and request-bound retained
+  cursor with explicit `ALP request`, `ALP poll`, `FORCE_ALP`, `FORCE_ALP
+  settle`, `pull-up clear`, `ChipCommon read`, and `complete` phases. ALP
+  availability uses one absolute one-second elapsed deadline. Each exact
+  `CHIPCLKCSR` poll checkpoints the cursor's deadline, last value, and poll
+  count, then releases the foreground trace before a later outer EventPump
+  turn. A long ALP wait therefore does not consume one entry per poll from the
+  1,024-action foreground trace and cannot mistake trace capacity for an
+  elapsed-time bound. The first read validates all synchronous writable bits,
+  excluding only asynchronous availability bits.
+
+  After `FORCE_ALP`, the retained cursor preserves the 65 microsecond settle.
+  Both a nonterminal deadline observation and the terminal observation consume
+  their admitted outer turn; only a later turn may begin the pull-up command.
+  The Linux-compatible one-shot
+  `SBSDIO_FUNC1_SDIOPULLUP=0` write is never replayed in the same generation.
+  Success advances normally. A write fault may advance only when the exact
+  command-local completion proves successful containment: sequence,
+  generation, CMD52 write fingerprint, Function 1 address/value, nonzero
+  failure result, stable quiescent owner ring, and the `CONTAINED` fault-frame
+  disposition must all match. `OWNER_PATH_POISONED`, failed containment,
+  malformed or stale telemetry, a stale generation, and issued-unknown
+  ownership poison the generation and enter deterministic SDIO-first/CYW43-
+  second pair recovery instead of being ignored or retried.
+
+  Attach diagnostics identify the exact retained frontier with distinct
+  `BACKPLANE_ALP_REQUEST`, `BACKPLANE_ALP_POLL`,
+  `BACKPLANE_FORCE_ALP`, `BACKPLANE_FORCE_ALP_SETTLE`,
+  `BACKPLANE_PULLUP_CLEAR`, `BACKPLANE_PULLUP_FAULT_CONTAINED`, and
+  `BACKPLANE_CHIPCOMMON_READ` progress. The first ChipCommon access additionally
+  publishes `BACKPLANE_WINDOW_LOW`, `BACKPLANE_WINDOW_MID`, and
+  `BACKPLANE_WINDOW_HIGH` immediately before the matching CMD52 programming
+  operations. Each child submission, continuation grant, completion poll, and
+  retained deadline poll remains a separate outer EventPump turn; a terminal
+  child or deadline poll cannot compose the next attach action into that turn.
 - Function 2 enable is one `IOEx` write followed by elapsed `IORx` polling for
   up to three seconds. A transient miss does not clear/re-enable F2 or start a
   raw-spin retry. Post-release write readiness likewise does not re-prime F2

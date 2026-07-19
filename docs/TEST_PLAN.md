@@ -553,6 +553,39 @@ already-consumed, replayed, aliased, or exhausted-id state. The notification is
 only a wake hint. Both foreground and DPC paths must alternate separately
 admitted `Poll -> Grant -> Poll` turns, with no acknowledgement poll or second
 child/service/HAL operation composed into the grant turn.
+
+Backplane-attach coverage must drive the production retained cursor through
+ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, one-shot
+pull-up clear, LOW/MID/HIGH window programming, the first ChipCommon read, and
+completion. Each child submission, continuation grant, child completion poll,
+and retained deadline observation must consume its own outer EventPump turn.
+The terminal child poll and terminal deadline observation must return before a
+following action can issue. Tests must hold ALP unavailable for more than 1,024
+exact reads under a still-live virtual-counter deadline, then make it available,
+and prove that cursor checkpoints—not foreground-trace growth—carry the last
+`CHIPCLKCSR` value, poll count, and deadline. The request must be issued once,
+the action trace for each checkpoint must remain bounded, and reaching trace
+capacity must never substitute for the one-second timeout.
+
+The first read must validate the request's writable bits while allowing only
+the asynchronous availability bits to differ. Boundary tests must prove the
+absolute one-second deadline, including that its terminal observation spends a
+turn and cannot issue another CMD52. Per-command progress must identify ALP
+request/poll, FORCE_ALP/settle, pull-up clear, contained pull-up failure,
+ChipCommon read, and each LOW/MID/HIGH window CMD52 so a generic backplane phase
+cannot misclassify the stalled command.
+
+The Linux-compatible pull-up write is attempted exactly once per generation.
+Only an exact fault completion whose command-local telemetry matches sequence,
+generation, CMD52 write fingerprint, Function 1 pull-up address/value, nonzero
+failure, stable quiescent owner ring, and `CONTAINED` disposition may advance
+the cursor. Tests must reject `OWNER_PATH_POISONED`, failed containment,
+transient pending state, wrong sequence or generation, wrong command fields,
+torn or stale telemetry, nonquiescent ring state, and issued-unknown ownership.
+Every rejected terminal case must poison the generation and enter the exact
+SDIO-first/CYW43-second restart without replaying the pull-up command. A stale
+completion from the replaced generation must not mutate the new attach cursor.
+
 Pair-restart coverage must preserve the 22 logical
 SDIO-before-CYW43 actions while treating each bootstrap-priority,
 register-programming, resume, descriptor, and engine-replay substep as a

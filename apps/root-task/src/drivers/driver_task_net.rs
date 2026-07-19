@@ -1589,6 +1589,19 @@ impl Cyw43BootstrapSupervisor {
         );
         record_cyw43_runtime_completion(CYW43_WIFI_DRIVER_TASK_CONTRACT, completion);
 
+        if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
+            // Record the exact child-runtime terminal before retry or recovery
+            // policy consumes it. This is the sole emission site for retained
+            // supervisor actions, so one completion cannot be reported twice.
+            emit_cyw43_runtime_command_fault(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                pending.ticket.stage,
+                pending.ticket.descriptor,
+                completion,
+                Some(payload),
+            );
+        }
+
         if completion.code == DriverTaskCompletionCode::FrameReady.as_u16()
             && completion.detail == DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME
         {
@@ -1624,13 +1637,6 @@ impl Cyw43BootstrapSupervisor {
         if completion.code == DriverTaskCompletionCode::Fault.as_u16()
             && cyw43_fault_invalidates_root_generation(completion.detail)
         {
-            emit_cyw43_runtime_command_fault(
-                CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                pending.ticket.stage,
-                pending.ticket.descriptor,
-                completion,
-                Some(payload),
-            );
             return Cyw43RetainedActionOutcome::Poisoned("cyw43-ambiguous-generation-fault");
         }
         Cyw43RetainedActionOutcome::Complete(completion)
@@ -3527,6 +3533,8 @@ static SDIO_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static CYW43_LAST_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultStatus>> =
     Mutex::new(None);
+#[cfg(test)]
+static CYW43_RUNTIME_COMMAND_FAULT_EMISSIONS: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static CYW43_LAST_SDIO_OWNER_FAULT: Mutex<Option<Cyw43SdioOwnerFaultStatus>> = Mutex::new(None);
 #[cfg(feature = "kernel")]
@@ -17352,6 +17360,8 @@ fn emit_cyw43_runtime_command_fault(
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
         return;
     }
+    #[cfg(test)]
+    CYW43_RUNTIME_COMMAND_FAULT_EMISSIONS.fetch_add(1, Ordering::AcqRel);
     let reason = cyw43_runtime_fault_reason_for_descriptor(descriptor, completion);
     record_cyw43_runtime_command_fault_status(Cyw43RuntimeCommandFaultStatus {
         stage,
@@ -21525,6 +21535,7 @@ mod tests {
         CYW43_SUPERVISOR_LAST_OP.store(0, Ordering::Release);
         CYW43_SUPERVISOR_ENGINE_SCRIPT.store(0, Ordering::Release);
         CYW43_SUPERVISOR_FAULT_DETAIL.store(0, Ordering::Release);
+        CYW43_RUNTIME_COMMAND_FAULT_EMISSIONS.store(0, Ordering::Release);
         *CYW43_SUPERVISOR_ENGINE_COMMAND
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
@@ -21657,6 +21668,69 @@ mod tests {
             1,
             "an issued-unknown action must never be replayed"
         );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_supervisor_emits_each_retryable_completion_fault_once() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                cyw43_supervisor_ring_test_service,
+            )
+        );
+        CYW43_SUPERVISOR_FAULT_DETAIL.store(0x532b, Ordering::Release);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor
+            .install_empty_action(
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                "cyw43-retryable-fault-test",
+            )
+            .expect("retained action installs");
+
+        let mut outcome = Cyw43RetainedActionOutcome::Pending;
+        for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+            begin_cyw43_outer_event_turn();
+            outcome = supervisor.service_pending_action();
+            if CYW43_RUNTIME_COMMAND_FAULT_EMISSIONS.load(Ordering::Acquire) != 0 {
+                break;
+            }
+        }
+
+        assert_eq!(outcome, Cyw43RetainedActionOutcome::Pending);
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_RUNTIME_COMMAND_FAULT_EMISSIONS.load(Ordering::Acquire),
+            1,
+            "one exact reciprocal completion must have one telemetry emission"
+        );
+        let status = latest_cyw43_runtime_command_fault_status()
+            .expect("retryable completion remains diagnostically visible");
+        assert_eq!(status.stage, "cyw43-retryable-fault-test");
+        assert_eq!(status.detail, 0x532b);
+        let pending = supervisor
+            .pending
+            .expect("retryable action remains retained");
+        assert_eq!(pending.not_issued_retries, 1);
+        assert_eq!(pending.issuance, Cyw43ActionIssuance::Prepared);
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         reset_cyw43_status_flags();
     }
 

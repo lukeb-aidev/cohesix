@@ -39,8 +39,18 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
     DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_MID,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_CHECK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_READY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_ADOPT_BEGIN,
@@ -9690,6 +9700,22 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_CONFIG_BEGIN => "cyw43-host-config-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_READY => "cyw43-host-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN => "cyw43-backplane-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST => "cyw43-backplane-alp-request",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL => "cyw43-backplane-alp-poll",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP => "cyw43-backplane-force-alp",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE => {
+            "cyw43-backplane-force-alp-settle"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR => "cyw43-backplane-pullup-clear",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED => {
+            "cyw43-backplane-pullup-fault-contained"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ => {
+            "cyw43-backplane-chipcommon-read"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW => "cyw43-backplane-window-low",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_MID => "cyw43-backplane-window-mid",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH => "cyw43-backplane-window-high",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY => "cyw43-backplane-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY => "cyw43-transport-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN => "cyw43-release-begin",
@@ -21067,6 +21093,50 @@ mod tests {
             ),
             "usb-hid-report-flexible-key-fallback"
         );
+        for (phase, label) in [
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST,
+                "cyw43-backplane-alp-request",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL,
+                "cyw43-backplane-alp-poll",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP,
+                "cyw43-backplane-force-alp",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE,
+                "cyw43-backplane-force-alp-settle",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
+                "cyw43-backplane-pullup-clear",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_FAULT_CONTAINED,
+                "cyw43-backplane-pullup-fault-contained",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ,
+                "cyw43-backplane-chipcommon-read",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW,
+                "cyw43-backplane-window-low",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_MID,
+                "cyw43-backplane-window-mid",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH,
+                "cyw43-backplane-window-high",
+            ),
+        ] {
+            assert_eq!(driver_task_ring_progress_phase_label(phase), label);
+        }
         assert_eq!(
             driver_task_ring_progress_phase_label(DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN),
             "cyw43-release-begin"
