@@ -459,12 +459,26 @@ This as-built closure is authorized by Milestone 26d task
 - A fixed event ring must report overrun, drop, stale epoch, and malformed
   entries explicitly.
 - Physical-Pi Wi-Fi bootstrap is supervised after the serial/local-seat prompt.
-  Transient timing, transport, and linked-runtime progress faults retry forever
-  at `1/2/4/8/16/30` seconds and then every 30 seconds. Once both restart
-  contexts exist, every retry first suspends and fences the pair, restarts SDIO
-  before CYW43, and replays retained firmware and control context. Immutable
-  credential, firmware-bundle, and descriptor-bound failures are terminal and
-  remain visible to the local operator.
+  One bootstrap or recovery episode permits at most five attempts, separated
+  by bounded `1/2/4/8` second virtual-counter backoffs. This finite bound is
+  analogous to brcmfmac's `BRCMF_SDIO_MAX_ACCESS_ERRORS = 5` SDIO-access error
+  budget; it does not claim that Linux retries the whole device-bootstrap
+  sequence identically. Once both restart contexts exist, every retry first
+  suspends and fences the pair, restarts SDIO before CYW43, and replays retained
+  firmware and control context. A fifth retryable failure emits
+  `status=exhausted`, admits no implicit sixth pair restart, and returns
+  ownership to the ordinary EventPump so serial, local-seat, HDMI, diagnostics,
+  authentication, and reboot remain live while Wi-Fi acceptance stays red. A
+  successful episode resets the finite budget for a later independently
+  signalled steady-state recovery episode. Immutable credential,
+  firmware-bundle, and descriptor-bound failures are terminal and remain
+  visible to the local operator.
+- High-impact supervisor transitions use `status=begin`, `status=recovery`,
+  `status=backoff`, `status=ready`, and `status=exhausted`. They are enqueued
+  only after the Wi-Fi HAL scope is released. The serial and bounded queen-log
+  records remain authoritative, while the retained HDMI copy can be submitted
+  only during a later ordinary `Display` EventPump turn; status publication
+  cannot compose display service with the child operation that caused it.
 - Recovery can become necessary before initial firmware-bundle admission. After
   the ordered pair restart acquires the context-replay gate, a supervisor with
   no retained bundle reacquires the manifest-selected bundle through HAL,

@@ -3939,12 +3939,16 @@ const fn runtime_command_loop_route(
 ///
 /// Ring sequence commit is the issue boundary, so a delayed endpoint doorbell
 /// can never become continuation authority. Only root's dedicated one-hot
-/// continuation badge advances foreground work. When that bit is coalesced
-/// with peer or IRQ work, the lower work wins and root must grant a fresh turn.
+/// continuation badge advances foreground work. Coalesced peer or IRQ work is
+/// retained locally and alternates with foreground grants, so a continuously
+/// asserted level source cannot starve the immutable command. Each wake still
+/// selects exactly one service or foreground quantum.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimePendingCommandGate {
     continuation_required: bool,
+    deferred_service_badge: u32,
+    foreground_due_after_service: bool,
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -3952,6 +3956,8 @@ impl RuntimePendingCommandGate {
     const fn new() -> Self {
         Self {
             continuation_required: false,
+            deferred_service_badge: 0,
+            foreground_due_after_service: false,
         }
     }
 
@@ -3965,6 +3971,13 @@ impl RuntimePendingCommandGate {
 
     fn complete(&mut self) {
         self.continuation_required = false;
+        self.foreground_due_after_service = false;
+    }
+
+    fn take_deferred_service(&mut self) -> Option<u32> {
+        let badge = self.deferred_service_badge;
+        self.deferred_service_badge = 0;
+        (badge != 0).then_some(badge)
     }
 
     fn route_wake(
@@ -3975,24 +3988,33 @@ impl RuntimePendingCommandGate {
         if !self.continuation_required {
             return RuntimePendingWakeRoute::Rejected;
         }
-        let route = match wake {
+        match wake {
             RuntimeWake::Notification(badge) => {
                 let continuation = badge & DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE != 0;
                 let service_badge = badge & !DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE;
-                if service_badge != 0 {
-                    RuntimePendingWakeRoute::ServiceNotification(service_badge)
-                } else if continuation {
+                self.deferred_service_badge |= service_badge;
+                if continuation
+                    && (self.foreground_due_after_service || self.deferred_service_badge == 0)
+                {
+                    // A fresh root grant admits one foreground quantum. Any
+                    // lower badge coalesced with this grant remains durable and
+                    // consumes a later grant before another foreground phase.
+                    self.continuation_required = false;
+                    self.foreground_due_after_service = false;
                     RuntimePendingWakeRoute::ContinueForeground
+                } else if let Some(service_badge) = self.take_deferred_service() {
+                    // Service at most one persistent-source quantum. Keeping
+                    // the continuation requirement armed makes the following
+                    // root grant eligible for foreground work even when the
+                    // same level IRQ immediately reasserts.
+                    self.foreground_due_after_service = true;
+                    RuntimePendingWakeRoute::ServiceNotification(service_badge)
                 } else {
                     RuntimePendingWakeRoute::Rejected
                 }
             }
             RuntimeWake::Command(_) | RuntimeWake::None => RuntimePendingWakeRoute::Rejected,
-        };
-        if route == RuntimePendingWakeRoute::ContinueForeground {
-            self.continuation_required = false;
         }
-        route
     }
 }
 
@@ -34090,6 +34112,18 @@ pub fn runtime_main(task_key: usize) -> ! {
             }
         }
         let notification_route = runtime_notification_route(&RUNTIME_DESCRIPTOR.load());
+        if pending_intake.is_none() && !pending_command_gate.continuation_required() {
+            if let Some(service_badge) = pending_command_gate.take_deferred_service() {
+                // A terminal foreground turn may leave one coalesced persistent
+                // source behind. Drain exactly that retained source quantum on
+                // a later scheduler slice before returning to the idle receive;
+                // never combine it with the foreground action that completed.
+                runtime_yield_current_tcb();
+                let _ = service_runtime_notification(service_badge);
+                runtime_yield_current_tcb();
+                continue;
+            }
+        }
         if notification_route == RuntimeNotificationRoute::Cyw43Client {
             if let Some(intake) = pending_intake {
                 if !foreground_dpc_watermark.belongs_to(intake.command.sequence) {
@@ -39173,7 +39207,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_quantum_coalesced_peer_irq_requires_fresh_root_grant() {
+    fn pending_quantum_coalesced_peer_irq_arbitration_is_fair_and_durable() {
         let mut retained = retained_gate_test_intake(0x8000_0042);
         let mut gate = RuntimePendingCommandGate::new();
 
@@ -39213,17 +39247,83 @@ mod tests {
                         | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
                 ),
             ),
-            RuntimePendingWakeRoute::ServiceNotification(DRIVER_RUNTIME_SDIO_IRQ_BADGE)
-        );
-        assert!(gate.continuation_required());
-        assert_eq!(
-            gate.route_wake(
-                &mut retained,
-                RuntimeWake::Notification(DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE),
-            ),
             RuntimePendingWakeRoute::ContinueForeground
         );
         assert!(!gate.continuation_required());
+        assert_eq!(
+            gate.deferred_service_badge, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            "the lower source coalesced with a foreground grant remains durable",
+        );
+
+        gate.retain_after_pending();
+        assert_eq!(
+            gate.route_wake(
+                &mut retained,
+                RuntimeWake::Notification(
+                    DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                ),
+            ),
+            RuntimePendingWakeRoute::ServiceNotification(DRIVER_RUNTIME_SDIO_IRQ_BADGE)
+        );
+        assert!(gate.continuation_required());
+        assert_eq!(gate.deferred_service_badge, 0);
+        assert_eq!(
+            gate.route_wake(
+                &mut retained,
+                RuntimeWake::Notification(
+                    DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                ),
+            ),
+            RuntimePendingWakeRoute::ContinueForeground,
+        );
+        assert!(!gate.continuation_required());
+        gate.complete();
+        assert_eq!(
+            gate.take_deferred_service(),
+            Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+            "terminal foreground keeps one coalesced source for idle draining",
+        );
+        assert_eq!(gate.take_deferred_service(), None);
+    }
+
+    #[test]
+    fn continuously_coalesced_level_irq_cannot_starve_retained_foreground() {
+        let mut retained = retained_gate_test_intake(0x8000_0042);
+        let mut gate = RuntimePendingCommandGate::new();
+        let mut foreground_quanta = 0usize;
+        let mut service_quanta = 0usize;
+        gate.retain_after_pending();
+
+        for _root_grant in 0..64 {
+            let route = gate.route_wake(
+                &mut retained,
+                RuntimeWake::Notification(
+                    DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                ),
+            );
+            match route {
+                RuntimePendingWakeRoute::ContinueForeground => {
+                    foreground_quanta = foreground_quanta.saturating_add(1);
+                    assert!(!gate.continuation_required());
+                    // Production re-arms only after this one foreground phase
+                    // returns Pending to the outer command loop.
+                    gate.retain_after_pending();
+                }
+                RuntimePendingWakeRoute::ServiceNotification(badge) => {
+                    service_quanta = service_quanta.saturating_add(1);
+                    assert_eq!(badge, DRIVER_RUNTIME_SDIO_IRQ_BADGE);
+                    assert!(gate.continuation_required());
+                }
+                RuntimePendingWakeRoute::Rejected => {
+                    panic!("every fresh coalesced root grant must select one quantum")
+                }
+            }
+        }
+
+        assert_eq!(foreground_quanta, 32);
+        assert_eq!(service_quanta, 32);
+        assert_eq!(foreground_quanta + service_quanta, 64);
+        assert!(gate.continuation_required());
     }
 
     #[test]

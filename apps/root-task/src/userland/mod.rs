@@ -439,7 +439,14 @@ fn announce_root_console_loop_start() {
     feature = "kernel",
     feature = "net-console"
 ))]
-const CYW43_BOOTSTRAP_RETRY_BACKOFF_MS: [u64; 6] = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+const CYW43_BOOTSTRAP_MAX_ATTEMPTS: u32 = 5;
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const CYW43_BOOTSTRAP_RETRY_BACKOFF_MS: [u64; 4] = [1_000, 2_000, 4_000, 8_000];
 
 #[cfg(all(
     feature = "serial-console",
@@ -569,21 +576,40 @@ impl DeferredNetRetrySchedule {
     }
 
     const fn attempt_due(self, now_ms: u64) -> bool {
-        now_ms >= self.next_attempt_ms
+        !self.exhausted() && now_ms >= self.next_attempt_ms
     }
 
     const fn attempt_number(self) -> u32 {
-        self.transient_failures.saturating_add(1)
+        self.transient_failures
+            .saturating_add(1)
+            .min(CYW43_BOOTSTRAP_MAX_ATTEMPTS)
     }
 
-    fn record_transient_failure(&mut self, now_ms: u64) -> u64 {
-        let index = usize::try_from(self.transient_failures)
+    const fn exhausted(self) -> bool {
+        self.transient_failures >= CYW43_BOOTSTRAP_MAX_ATTEMPTS
+    }
+
+    fn record_transient_failure(&mut self, now_ms: u64) -> Option<u64> {
+        if self.exhausted() {
+            return None;
+        }
+        let failed_attempt = self.transient_failures;
+        self.transient_failures = self.transient_failures.saturating_add(1);
+        if self.exhausted() {
+            self.next_attempt_ms = u64::MAX;
+            return None;
+        }
+        let index = usize::try_from(failed_attempt)
             .unwrap_or(usize::MAX)
             .min(CYW43_BOOTSTRAP_RETRY_BACKOFF_MS.len() - 1);
         let delay_ms = CYW43_BOOTSTRAP_RETRY_BACKOFF_MS[index];
-        self.transient_failures = self.transient_failures.saturating_add(1);
         self.next_attempt_ms = now_ms.saturating_add(delay_ms);
-        delay_ms
+        Some(delay_ms)
+    }
+
+    fn reset_attempt_budget(&mut self, now_ms: u64) {
+        self.transient_failures = 0;
+        self.next_attempt_ms = now_ms;
     }
 
     fn next_status_sequence(&mut self) -> u64 {
@@ -655,7 +681,7 @@ fn emit_deferred_net_bootstrap_supervisor_status<
     let mut line = HeaplessString::<384>::new();
     let _ = write!(
         line,
-        "CYW43_BOOTSTRAP_SUPERVISOR attempt={} status={} backoff_ms={} next_attempt_ms={} serial={} local_seat={} recovery=pair-restart-full-context-if-partial console_seq={} telemetry_sinks=serial+queen-log prompt_refresh=yes",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt={} status={} backoff_ms={} next_attempt_ms={} serial={} local_seat={} recovery=pair-restart-full-context-if-partial console_seq={} telemetry_sinks=serial+queen-log+hdmi-retained prompt_refresh=yes",
         attempt,
         status,
         backoff_ms,
@@ -767,12 +793,23 @@ where
     let mut attempt_active = false;
     let mut network_attached = false;
     let mut permanent_recovery_failure = false;
+    let mut attempts_exhausted = false;
     let mut wifi_operation_started = false;
     let mut serial_retry = DeferredSerialRouteRetry::new(crate::hal::timebase().now_ms());
     let mut turn_status = DeferredCyw43TurnStatus::new();
     let mut supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
 
     loop {
+        if attempts_exhausted {
+            // A finite failed Wi-Fi episode must not become a second boot
+            // failure. Ordinary EventPump ownership keeps serial, local-seat,
+            // HDMI, diagnostics, authentication, and reboot live, while the
+            // exhausted schedule prevents an implicit sixth child operation.
+            pump.poll();
+            sel4::yield_now();
+            continue;
+        }
+
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && !crate::serial::serial_linked_runtime_transport_active()
         {
@@ -858,7 +895,7 @@ where
                     &mut pump,
                     retry_schedule.next_status_sequence(),
                     retry_schedule.attempt_number(),
-                    "begin",
+                    if network_attached { "recovery" } else { "begin" },
                     0,
                     now_ms,
                     local_seat_enabled,
@@ -927,12 +964,13 @@ where
                         &mut pump,
                         retry_schedule.next_status_sequence(),
                         attempt,
-                        "recovery-ready",
+                        "ready",
                         0,
                         now_ms,
                         local_seat_enabled,
                         false,
                     );
+                    retry_schedule.reset_attempt_budget(now_ms);
                     attempt_active = false;
                     sel4::yield_now();
                     continue;
@@ -1000,6 +1038,7 @@ where
                 );
                 crate::log_buffer::append_log_line(line.as_str());
                 network_attached = true;
+                retry_schedule.reset_attempt_budget(now_ms);
                 attempt_active = false;
             }
             Cyw43BootstrapTurnOutcome::Failed(driver_error) => {
@@ -1010,18 +1049,33 @@ where
                 let _ = write!(detail, "{err}");
                 emit_deferred_net_console_failure(&mut pump, &detail, false);
                 if crate::net::cyw43_net_console_bootstrap_error_retryable(&err) {
-                    let delay_ms = retry_schedule.record_transient_failure(failure_now_ms);
-                    emit_deferred_net_bootstrap_supervisor_status(
-                        &mut pump,
-                        retry_schedule.next_status_sequence(),
-                        attempt,
-                        "transient-retry-scheduled",
-                        delay_ms,
-                        retry_schedule.next_attempt_ms,
-                        local_seat_enabled,
-                        false,
-                    );
-                    bootstrap = Cyw43BootstrapSupervisor::new(config);
+                    if let Some(delay_ms) =
+                        retry_schedule.record_transient_failure(failure_now_ms)
+                    {
+                        emit_deferred_net_bootstrap_supervisor_status(
+                            &mut pump,
+                            retry_schedule.next_status_sequence(),
+                            attempt,
+                            "backoff",
+                            delay_ms,
+                            retry_schedule.next_attempt_ms,
+                            local_seat_enabled,
+                            false,
+                        );
+                        bootstrap = Cyw43BootstrapSupervisor::new(config);
+                    } else {
+                        emit_deferred_net_bootstrap_supervisor_status(
+                            &mut pump,
+                            retry_schedule.next_status_sequence(),
+                            attempt,
+                            "exhausted",
+                            0,
+                            retry_schedule.next_attempt_ms,
+                            local_seat_enabled,
+                            false,
+                        );
+                        attempts_exhausted = true;
+                    }
                     attempt_active = false;
                 } else {
                     emit_deferred_net_bootstrap_supervisor_status(
@@ -1735,21 +1789,51 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn cyw43_bootstrap_supervisor_backoff_caps_and_remains_persistent() {
+    fn cyw43_bootstrap_supervisor_stops_after_five_attempts() {
         let mut supervisor = super::DeferredNetRetrySchedule::new(100);
         assert!(supervisor.attempt_due(100));
         assert_eq!(supervisor.attempt_number(), 1);
+        assert!(!supervisor.exhausted());
 
-        let expected = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+        let expected = [1_000, 2_000, 4_000, 8_000];
         let mut now_ms = 100;
         for (index, expected_delay) in expected.into_iter().enumerate() {
             let delay = supervisor.record_transient_failure(now_ms);
-            assert_eq!(delay, expected_delay);
+            assert_eq!(delay, Some(expected_delay));
             assert!(!supervisor.attempt_due(supervisor.next_attempt_ms.saturating_sub(1)));
             assert!(supervisor.attempt_due(supervisor.next_attempt_ms));
             assert_eq!(supervisor.attempt_number(), index as u32 + 2);
+            assert!(!supervisor.exhausted());
             now_ms = supervisor.next_attempt_ms;
         }
+
+        assert_eq!(supervisor.attempt_number(), 5);
+        assert_eq!(supervisor.record_transient_failure(now_ms), None);
+        assert!(supervisor.exhausted());
+        assert_eq!(supervisor.next_attempt_ms, u64::MAX);
+        assert!(!supervisor.attempt_due(u64::MAX));
+        assert_eq!(supervisor.record_transient_failure(u64::MAX), None);
+        assert_eq!(supervisor.attempt_number(), 5);
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn successful_cyw43_episode_resets_the_next_recovery_budget() {
+        let mut supervisor = super::DeferredNetRetrySchedule::new(100);
+        assert_eq!(supervisor.record_transient_failure(100), Some(1_000));
+        assert_eq!(supervisor.record_transient_failure(1_100), Some(2_000));
+        assert_eq!(supervisor.attempt_number(), 3);
+
+        supervisor.reset_attempt_budget(3_100);
+
+        assert_eq!(supervisor.attempt_number(), 1);
+        assert!(supervisor.attempt_due(3_100));
+        assert!(!supervisor.exhausted());
+        assert_eq!(supervisor.record_transient_failure(3_100), Some(1_000));
     }
 
     #[cfg(all(

@@ -638,6 +638,33 @@ covers the Linux-shaped one-second ALP and three-second Function 2 waits plus
 bounded handoff margin. Repeating one stage beyond that envelope without a
 terminal failure/recovery record is failed liveness evidence.
 
+Each initial bootstrap or later steady-state recovery episode is finite. The
+supervisor permits five attempts with `1/2/4/8` second virtual-counter backoffs
+between them. This uses brcmfmac's five-error SDIO access budget as the finite
+reliability analogue; it is not a claim that Linux retries its complete device
+bootstrap in the same way. Initial attempts emit `status=begin`, attempts after
+an attached-stack fault emit `status=recovery`, the first four retryable
+failures emit `status=backoff`, and success emits `status=ready`. A fifth
+retryable failure must emit exactly one `status=exhausted backoff_ms=0` record,
+retain `next_attempt_ms=18446744073709551615` as the no-deadline sentinel, and
+perform no automatic sixth child operation or pair restart. The supervisor then
+returns to the ordinary EventPump with Wi-Fi acceptance red. Paced serial and
+local-seat commands remain dispatchable: `netstats`, `nettest`, `wifi diag`,
+`wifi probe-ht`, `usb diag`, `usb probe-kbd`, `smp activity`, authentication,
+and `reboot` must return their documented result or a typed unavailable/fenced
+error rather than being swallowed by the failed bootstrap. A successful
+episode resets the five-attempt budget only for a later independently signalled
+recovery episode.
+
+The high-impact `begin`, `recovery`, `backoff`, `ready`, and `exhausted`
+supervisor records declare
+`telemetry_sinks=serial+queen-log+hdmi-retained`. They are queued only after the
+Wi-Fi HAL guard is released. Serial and `/log/queen.log` retain the transition
+immediately; the isolated HDMI runtime may mirror it only during a later
+ordinary `Display` turn. A trace with `attempt=6`, a same-turn HDMI submit, or
+an unresponsive prompt after `status=exhausted` fails the software liveness
+contract even before Wi-Fi RF acceptance is considered.
+
 If recovery occurs before the initial firmware bundle was admitted, the
 ordered pair restart first acquires context-replay ownership. A later retained
 turn then reacquires and validates the manifest-selected bundle through HAL,

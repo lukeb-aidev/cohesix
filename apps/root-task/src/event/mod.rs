@@ -284,6 +284,9 @@ const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
 const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
 const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 3;
+/// Serial retains first service, but queued HDMI must receive one later turn
+/// even when a large diagnostic keeps UART TX continuously backlogged.
+const LOCAL_SEAT_HDMI_MAX_SERIAL_DEFERRALS: u8 = 4;
 #[cfg(feature = "net-console")]
 const LOCAL_SEAT_HDMI_PUMP_PASSES_UNDER_NET_PRESSURE: usize = 1;
 const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 4;
@@ -1810,6 +1813,11 @@ enum LinkedRuntimeServicePhase {
     Display,
 }
 
+#[cfg(feature = "kernel")]
+fn cyw43_bootstrap_hdmi_milestone(line: &str) -> bool {
+    line.as_bytes().starts_with(b"CYW43_BOOTSTRAP_SUPERVISOR ")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConsoleErrorKey {
     LineTooLong,
@@ -1993,6 +2001,10 @@ where
     wifi_debug: Option<&'a mut dyn WifiDebugOps>,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_operator_turn_active: bool,
+    #[cfg(feature = "kernel")]
+    cyw43_bootstrap_hdmi_pending: bool,
+    #[cfg(feature = "kernel")]
+    cyw43_bootstrap_last_operator_turn_was_display: bool,
     local_seat: Option<&'a mut LocalSeatRuntime>,
     #[cfg(test)]
     test_pi4_debug_commands: bool,
@@ -2019,6 +2031,7 @@ where
     reboot_ack_drain_observed: bool,
     #[cfg(feature = "kernel")]
     pending_usb_debug_hdmi_frontier: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    local_seat_hdmi_serial_deferrals: u8,
     local_seat_escape_state: LocalSeatEscapeState,
     pending_console_output: HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
     physical_response_barrier: PhysicalResponseBarrier,
@@ -2137,6 +2150,10 @@ where
             wifi_debug: None,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_operator_turn_active: false,
+            #[cfg(feature = "kernel")]
+            cyw43_bootstrap_hdmi_pending: false,
+            #[cfg(feature = "kernel")]
+            cyw43_bootstrap_last_operator_turn_was_display: false,
             local_seat: None,
             #[cfg(test)]
             test_pi4_debug_commands: false,
@@ -2163,6 +2180,7 @@ where
             reboot_ack_drain_observed: false,
             #[cfg(feature = "kernel")]
             pending_usb_debug_hdmi_frontier: None,
+            local_seat_hdmi_serial_deferrals: 0,
             local_seat_escape_state: LocalSeatEscapeState::Idle,
             pending_console_output: HeaplessVec::new(),
             physical_response_barrier: PhysicalResponseBarrier::Idle,
@@ -2340,6 +2358,9 @@ where
                 // response barrier owns this turn; flush its ordered tail
                 // before returning to input arbitration.
                 self.flush_pending_console_output_if_idle();
+                if self.pump_local_seat_display_after_bounded_serial_deferral() {
+                    return;
+                }
                 self.maybe_run_post_prompt_local_seat_attach(
                     serial_rx_activity || serial_input || serial_followup_input,
                 );
@@ -2514,26 +2535,42 @@ where
     /// Service one ordinary event-pump turn between retained CYW43 bootstrap
     /// operations.
     ///
-    /// This turn admits only the independently owned serial linked runtime and
-    /// already-buffered local-seat bytes for physical I/O. Serial RX/TX uses
-    /// fail-closed helpers with no root-context or current-TCB UART fallback;
-    /// USB backend polling, HDMI pumping, network service, and hardware-facing
-    /// commands remain fenced. The normal timer/IPC/reboot runtime portion is
-    /// still serviced, and the caller invokes this method only after releasing
-    /// the prior turn's scoped `KernelHal` borrow.
+    /// Serial RX/TX uses fail-closed helpers with no root-context or current-TCB
+    /// UART fallback. A retained high-impact Wi-Fi status may instead receive a
+    /// dedicated display turn, alternating with serial so neither operator
+    /// surface can starve. USB polling, network service, and hardware-facing
+    /// commands remain fenced. The caller invokes this method only after
+    /// releasing the prior turn's scoped `KernelHal` borrow.
     #[cfg(feature = "kernel")]
     pub fn poll_cyw43_bootstrap_supervisor_event_turn(&mut self) {
         debug_assert!(!self.cyw43_bootstrap_operator_turn_active);
         self.cyw43_bootstrap_operator_turn_active = true;
-        self.serial_console_turn_active = true;
         self.reconcile_physical_response_barrier();
         self.queue_stream_prompt_tail_if_ready();
         if self.reboot_pending && self.reboot_ack_drain_observed {
             self.service_pending_reboot();
-            self.serial_console_turn_active = false;
             self.cyw43_bootstrap_operator_turn_active = false;
             return;
         }
+        if self.cyw43_bootstrap_hdmi_pending && !self.cyw43_bootstrap_last_operator_turn_was_display
+        {
+            self.cyw43_bootstrap_last_operator_turn_was_display = true;
+            let display_still_pending = if let Some(runtime) = self.local_seat.as_mut() {
+                if runtime.pump_linked_hdmi_once() {
+                    self.metrics.local_seat_hdmi_pump_turns =
+                        self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
+                }
+                runtime.linked_hdmi_pending_work()
+            } else {
+                false
+            };
+            self.cyw43_bootstrap_hdmi_pending = display_still_pending;
+            self.poll_runtime(false, false, false);
+            self.cyw43_bootstrap_operator_turn_active = false;
+            return;
+        }
+        self.cyw43_bootstrap_last_operator_turn_was_display = false;
+        self.serial_console_turn_active = true;
         self.queue_pending_console_output_for_linked_serial();
         let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
         let serial_input = self.consume_serial();
@@ -2558,6 +2595,12 @@ where
     /// operation from sharing one outer operation permit.
     #[cfg(feature = "kernel")]
     pub fn queue_cyw43_bootstrap_operator_line(&mut self, line: &str) -> bool {
+        if cyw43_bootstrap_hdmi_milestone(line) {
+            if let Some(runtime) = self.local_seat.as_mut() {
+                runtime.mirror_high_impact_line(line);
+                self.cyw43_bootstrap_hdmi_pending = true;
+            }
+        }
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && !crate::serial::serial_linked_runtime_transport_active()
         {
@@ -3765,6 +3808,39 @@ where
             return;
         }
         self.pump_local_seat_display_once();
+    }
+
+    /// Give one display operation a bounded fair turn after serial has already
+    /// received priority for this cycle.
+    ///
+    /// Returning `true` means the caller must end the outer turn even when the
+    /// display runtime retained an attach or retry instead of completing a
+    /// frame. This keeps later USB/NIC work from composing with that operation.
+    fn pump_local_seat_display_after_bounded_serial_deferral(&mut self) -> bool {
+        let pending = self
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.linked_hdmi_pending_work());
+        if !pending {
+            self.local_seat_hdmi_serial_deferrals = 0;
+            return false;
+        }
+        self.local_seat_hdmi_serial_deferrals = self
+            .local_seat_hdmi_serial_deferrals
+            .saturating_add(1)
+            .min(LOCAL_SEAT_HDMI_MAX_SERIAL_DEFERRALS);
+        if self.local_seat_hdmi_serial_deferrals < LOCAL_SEAT_HDMI_MAX_SERIAL_DEFERRALS {
+            return false;
+        }
+        self.local_seat_hdmi_serial_deferrals = 0;
+        let Some(runtime) = self.local_seat.as_mut() else {
+            return false;
+        };
+        if runtime.pump_linked_hdmi_once() {
+            self.metrics.local_seat_hdmi_pump_turns =
+                self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
+        }
+        true
     }
 
     fn pump_local_seat_display_once(&mut self) {

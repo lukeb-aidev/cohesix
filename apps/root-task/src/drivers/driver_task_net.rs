@@ -799,6 +799,8 @@ enum Cyw43RecoveryPhase {
     AcquireFirmwareBundle,
     Firmware,
     Control,
+    LowerSdioPriority,
+    LowerCyw43Priority,
     FinishContextReplay,
     Complete,
 }
@@ -863,10 +865,8 @@ impl Cyw43DeferredRecovery {
 enum Cyw43BootstrapPhase {
     RegisterSdioService,
     ReplaySdioDescriptor,
-    LowerSdioPriority,
     RegisterCyw43Service,
     ReplayCyw43Descriptor,
-    LowerCyw43Priority,
     CheckSdioPrerequisites,
     HandoffSdioMailbox,
     InitSdioEngine,
@@ -877,6 +877,8 @@ enum Cyw43BootstrapPhase {
     Firmware,
     RegisterCyw43Owner,
     Control,
+    LowerSdioPriority,
+    LowerCyw43Priority,
     Recovery(Cyw43RecoveryPhase),
     Complete,
     Failed(DriverTaskNetError),
@@ -2596,11 +2598,11 @@ impl Cyw43BootstrapSupervisor {
         }
         if self.control_phase == Cyw43ControlPhase::Complete {
             if self.context_replay_owned {
-                self.phase = Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::FinishContextReplay);
+                self.phase = Cyw43BootstrapPhase::Recovery(
+                    Cyw43RecoveryPhase::LowerSdioPriority,
+                );
             } else {
-                CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
-                self.ready_generation = Some(self.generation);
-                self.phase = Cyw43BootstrapPhase::Complete;
+                self.phase = Cyw43BootstrapPhase::LowerSdioPriority;
             }
             return self.pending_outcome("cyw43-control-plane-ready", false);
         }
@@ -2931,6 +2933,38 @@ impl Cyw43BootstrapSupervisor {
                 }
                 self.service_control_turn()
             }
+            Cyw43RecoveryPhase::LowerSdioPriority => {
+                if !claim_cyw43_outer_event_turn() {
+                    return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
+                }
+                if !crate::hal::driver_task::complete_deferred_cyw43_pair_priority_cutover(
+                    SDIO_HOST_DRIVER_TASK_CONTRACT,
+                ) {
+                    return self.fail(DriverTaskNetError::RuntimeInit(
+                        "sdio-recovery-priority-cutover",
+                    ));
+                }
+                self.phase = Cyw43BootstrapPhase::Recovery(
+                    Cyw43RecoveryPhase::LowerCyw43Priority,
+                );
+                self.pending_outcome("sdio-recovery-priority-cutover", true)
+            }
+            Cyw43RecoveryPhase::LowerCyw43Priority => {
+                if !claim_cyw43_outer_event_turn() {
+                    return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
+                }
+                if !crate::hal::driver_task::complete_deferred_cyw43_pair_priority_cutover(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                ) {
+                    return self.fail(DriverTaskNetError::RuntimeInit(
+                        "cyw43-recovery-priority-cutover",
+                    ));
+                }
+                self.phase = Cyw43BootstrapPhase::Recovery(
+                    Cyw43RecoveryPhase::FinishContextReplay,
+                );
+                self.pending_outcome("cyw43-recovery-priority-cutover", true)
+            }
             Cyw43RecoveryPhase::FinishContextReplay => {
                 if !claim_cyw43_outer_event_turn() {
                     return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
@@ -3025,7 +3059,7 @@ impl Cyw43BootstrapSupervisor {
                     crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Pending => {}
                     crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Complete => {
                         self.clear_retained_wait(STAGE);
-                        self.phase = Cyw43BootstrapPhase::LowerSdioPriority;
+                        self.phase = Cyw43BootstrapPhase::RegisterCyw43Service;
                     }
                     crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Failed(reason) => {
                         return self.fail(DriverTaskNetError::RuntimeInit(reason));
@@ -3042,7 +3076,7 @@ impl Cyw43BootstrapSupervisor {
                 ) {
                     return self.fail(DriverTaskNetError::RuntimeInit("sdio-priority-cutover"));
                 }
-                self.phase = Cyw43BootstrapPhase::RegisterCyw43Service;
+                self.phase = Cyw43BootstrapPhase::LowerCyw43Priority;
                 self.pending_outcome("sdio-priority-cutover", true)
             }
             Cyw43BootstrapPhase::RegisterCyw43Service => {
@@ -3089,7 +3123,7 @@ impl Cyw43BootstrapSupervisor {
                     crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Pending => {}
                     crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Complete => {
                         self.clear_retained_wait(STAGE);
-                        self.phase = Cyw43BootstrapPhase::LowerCyw43Priority;
+                        self.phase = Cyw43BootstrapPhase::CheckSdioPrerequisites;
                     }
                     crate::hal::driver_task::DriverTaskDescriptorReplayTurn::Failed(reason) => {
                         return self.fail(DriverTaskNetError::RuntimeInit(reason));
@@ -3106,7 +3140,9 @@ impl Cyw43BootstrapSupervisor {
                 ) {
                     return self.fail(DriverTaskNetError::RuntimeInit("cyw43-priority-cutover"));
                 }
-                self.phase = Cyw43BootstrapPhase::CheckSdioPrerequisites;
+                CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+                self.ready_generation = Some(self.generation);
+                self.phase = Cyw43BootstrapPhase::Complete;
                 self.pending_outcome("cyw43-priority-cutover", true)
             }
             Cyw43BootstrapPhase::CheckSdioPrerequisites => {
@@ -21689,6 +21725,47 @@ mod tests {
             "256 reciprocal polls require at least 256 outer turns"
         );
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_supervisor_keeps_pair_at_bootstrap_priority_until_control_ready() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor.phase = Cyw43BootstrapPhase::Control;
+        supervisor.control_phase = Cyw43ControlPhase::Complete;
+
+        assert!(matches!(
+            supervisor.service_control_turn(),
+            Cyw43BootstrapTurnOutcome::Pending {
+                stage: "cyw43-control-plane-ready",
+                operation_executed: false,
+                ..
+            }
+        ));
+        assert_eq!(supervisor.phase, Cyw43BootstrapPhase::LowerSdioPriority);
+        assert!(supervisor.ready_generation.is_none());
+        assert_eq!(CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire), 0);
+
+        supervisor.phase = Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::Control);
+        supervisor.control_phase = Cyw43ControlPhase::Complete;
+        supervisor.context_replay_owned = true;
+        assert!(matches!(
+            supervisor.service_control_turn(),
+            Cyw43BootstrapTurnOutcome::Pending {
+                stage: "cyw43-control-plane-ready",
+                operation_executed: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            supervisor.phase,
+            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::LowerSdioPriority),
+        );
+        assert!(supervisor.ready_generation.is_none());
+        assert_eq!(CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire), 0);
         reset_cyw43_status_flags();
     }
 
