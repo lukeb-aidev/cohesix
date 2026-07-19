@@ -999,6 +999,7 @@ where
             pump.run();
         }
     };
+    crate::drivers::driver_task_net::begin_cyw43_bootstrap_causal_fault_capture();
     let mut bootstrap = Cyw43BootstrapSupervisor::new(config);
     let mut attempt_active = false;
     let mut network_attached = false;

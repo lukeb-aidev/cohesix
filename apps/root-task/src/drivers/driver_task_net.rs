@@ -136,8 +136,8 @@ const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize =
 const CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL: usize = 32 * 1024;
 const CYW43_RUNTIME_STREAM_COMMAND_RETRIES: usize = 2;
 const CYW43_TRANSPORT_ADMISSION_REJECT_RETRIES: usize = 4;
-const CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES: usize = 8;
 const CYW43_RUNTIME_NESTED_SDIO_NO_REPLY_RESUMES: usize = 32_768;
+const CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES: usize = CYW43_RUNTIME_NESTED_SDIO_NO_REPLY_RESUMES;
 // A retained request needs separate prepare, priority-lease, issue, poll, and
 // priority-restore turns. Keep the counter-less test fallback large enough for
 // the complete lease even when both the CYW43 and SDIO TCBs require a boost.
@@ -1702,7 +1702,6 @@ impl Cyw43BootstrapSupervisor {
             bundle,
         });
         clear_cyw43_runtime_command_fault_status();
-        begin_cyw43_bootstrap_causal_fault_capture();
         self.firmware_phase = Cyw43FirmwarePhase::Transport { attempt: 0 };
         Ok(())
     }
@@ -5851,7 +5850,7 @@ fn clear_cyw43_runtime_command_fault_status() {
 }
 
 #[cfg(feature = "kernel")]
-fn begin_cyw43_bootstrap_causal_fault_capture() {
+pub(crate) fn begin_cyw43_bootstrap_causal_fault_capture() {
     *CYW43_BOOTSTRAP_CAUSAL_RUNTIME_COMMAND_FAULT.lock() = None;
     *CYW43_BOOTSTRAP_CAUSAL_SDIO_OWNER_FAULT.lock() = None;
     CYW43_BOOTSTRAP_CAUSAL_CAPTURE_ACTIVE.store(1, Ordering::Release);
@@ -31058,9 +31057,9 @@ mod tests {
             cyw43_bootstrap_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
             0
         );
-        assert!(
-            CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES
-                > CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES
+        assert_eq!(
+            CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES,
+            CYW43_RUNTIME_NESTED_SDIO_NO_REPLY_RESUMES,
         );
         assert!(
             CYW43_RUNTIME_NESTED_SDIO_NO_REPLY_RESUMES
@@ -33319,13 +33318,23 @@ mod tests {
             bootstrap_causal_cyw43_runtime_command_fault_status(),
             Some(first)
         );
+        record_cyw43_runtime_command_fault_status(later);
+        record_cyw43_sdio_owner_fault_status(later_owner);
+        assert_eq!(
+            bootstrap_causal_cyw43_runtime_command_fault_status(),
+            Some(first),
+            "retained retries must not erase the first causal fault",
+        );
+        assert_eq!(
+            bootstrap_causal_cyw43_sdio_owner_fault_status(),
+            Some(first_owner),
+        );
+
         begin_cyw43_bootstrap_causal_fault_capture();
         assert_eq!(bootstrap_causal_cyw43_runtime_command_fault_status(), None);
         assert_eq!(bootstrap_causal_cyw43_sdio_owner_fault_status(), None);
-
         record_cyw43_runtime_command_fault_status(later);
         finish_cyw43_bootstrap_causal_fault_capture();
-        assert_eq!(bootstrap_causal_cyw43_runtime_command_fault_status(), None);
         record_cyw43_runtime_command_fault_status(first);
         assert_eq!(bootstrap_causal_cyw43_runtime_command_fault_status(), None);
 

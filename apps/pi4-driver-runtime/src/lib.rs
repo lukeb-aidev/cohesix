@@ -4152,9 +4152,19 @@ enum RuntimeCommandTurn {
     Complete(DriverTaskCompletionRecord),
 }
 
+#[cfg(any(target_os = "none", test))]
+const fn cyw43_command_uses_foreground_transaction(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.opcode == OPCODE_SERVICE
+        && command.arg0 == HOT_PATH_CYW43_WIFI
+        && command.arg1 == ROLE_NET
+        && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+        && command.frame.len as usize == core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>()
+}
+
 fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> RuntimeCommandTurn {
     #[cfg(target_os = "none")]
-    let cyw43_transaction = command.sequence != 0 && command.arg0 == HOT_PATH_CYW43_WIFI;
+    let cyw43_transaction = cyw43_command_uses_foreground_transaction(command);
 
     #[cfg(target_os = "none")]
     if cyw43_transaction && !cyw43_foreground_begin_turn(command) {
@@ -5559,7 +5569,7 @@ fn cyw43_dpc_command_requires_preflight(
 
 fn cyw43_dpc_explicit_recovery_command(
     command: DriverTaskCommandRecord,
-    generation_transport_pending: bool,
+    generation_transport_recovery_admissible: bool,
 ) -> bool {
     if command.opcode == OPCODE_SERVICE
         && command.frame.len == 0
@@ -5567,7 +5577,7 @@ fn cyw43_dpc_explicit_recovery_command(
     {
         return true;
     }
-    if !generation_transport_pending
+    if !generation_transport_recovery_admissible
         || command.opcode != OPCODE_SERVICE
         || command.arg0 != HOT_PATH_CYW43_WIFI
         || command.aux0 != DRIVER_RUNTIME_CYW43_COMMAND_AUX
@@ -5584,6 +5594,15 @@ fn cyw43_dpc_explicit_recovery_command(
     read_cyw43_command_descriptor(command.frame).is_some_and(|descriptor| {
         descriptor.valid() && descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
     })
+}
+
+const fn cyw43_generation_transport_recovery_admissible(
+    recovery_required: bool,
+    dpc_shared_epoch: u32,
+    bus_link_ready: bool,
+    dpc_link_ready: bool,
+) -> bool {
+    recovery_required && dpc_shared_epoch != 0 && bus_link_ready && dpc_link_ready
 }
 
 const fn cyw43_dpc_generation_quarantined(recovery_required: bool, issued_unknown: bool) -> bool {
@@ -12933,6 +12952,58 @@ impl Cyw43ForegroundTraceEntry {
     }
 }
 
+/// Operation-independent cursor for one retained CYW43 parent transaction.
+///
+/// Keeping this cursor host-testable makes the production terminal-poll rule
+/// executable without fabricating a child completion inside the target-only
+/// seL4 notification path.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43ForegroundTurnState {
+    pending: bool,
+    replay_index: u16,
+    completed_count: u16,
+    action_consumed: bool,
+}
+
+#[cfg(any(target_os = "none", test))]
+impl Cyw43ForegroundTurnState {
+    const fn new() -> Self {
+        Self {
+            pending: false,
+            replay_index: 0,
+            completed_count: 0,
+            action_consumed: false,
+        }
+    }
+
+    fn clear(&mut self) {
+        *self = Self::new();
+    }
+
+    fn begin_turn(&mut self) {
+        self.pending = false;
+        self.replay_index = 0;
+        self.action_consumed = false;
+    }
+
+    fn complete_child_poll(&mut self) {
+        self.completed_count = self.completed_count.saturating_add(1);
+        self.replay_index = self.completed_count;
+        self.action_consumed = true;
+        self.pending = true;
+    }
+
+    fn replay_cached_child(&mut self) -> Option<u16> {
+        if self.replay_index >= self.completed_count {
+            return None;
+        }
+        let replayed = self.replay_index;
+        self.replay_index = self.replay_index.saturating_add(1);
+        Some(replayed)
+    }
+}
+
 /// No-allocation transaction trace for one retained root->CYW43 command.
 ///
 /// Existing Linux-shaped helpers remain ordinary straight-line Rust, while
@@ -12943,7 +13014,7 @@ impl Cyw43ForegroundTraceEntry {
 struct Cyw43ForegroundTransaction {
     active: bool,
     executing: bool,
-    pending: bool,
+    turn: Cyw43ForegroundTurnState,
     issued_unknown: bool,
     poisoned: bool,
     parent: DriverTaskCommandRecord,
@@ -12968,9 +13039,6 @@ struct Cyw43ForegroundTransaction {
     deadline_replay_index: u8,
     deadline_count: u8,
     deadlines: [Cyw43ForegroundDeadline; CYW43_FOREGROUND_DEADLINES],
-    replay_index: u16,
-    completed_count: u16,
-    action_consumed: bool,
     prepared_sequence: u32,
     prepared_descriptor: DriverRuntimeSdioCommandDescriptor,
     prepared_descriptor_valid: bool,
@@ -12997,7 +13065,7 @@ impl Cyw43ForegroundTransaction {
         Self {
             active: false,
             executing: false,
-            pending: false,
+            turn: Cyw43ForegroundTurnState::new(),
             issued_unknown: false,
             poisoned: false,
             parent: Cyw43ForegroundTraceEntry::empty().command,
@@ -13028,9 +13096,6 @@ impl Cyw43ForegroundTransaction {
             deadline_replay_index: 0,
             deadline_count: 0,
             deadlines: [Cyw43ForegroundDeadline::empty(); CYW43_FOREGROUND_DEADLINES],
-            replay_index: 0,
-            completed_count: 0,
-            action_consumed: false,
             prepared_sequence: 0,
             prepared_descriptor: DriverRuntimeSdioCommandDescriptor::empty(),
             prepared_descriptor_valid: false,
@@ -13057,7 +13122,7 @@ impl Cyw43ForegroundTransaction {
     fn clear(&mut self) {
         self.active = false;
         self.executing = false;
-        self.pending = false;
+        self.turn.clear();
         self.issued_unknown = false;
         self.poisoned = false;
         self.parent.sequence = 0;
@@ -13068,9 +13133,6 @@ impl Cyw43ForegroundTransaction {
         self.baseline_state_valid = false;
         self.deadline_replay_index = 0;
         self.deadline_count = 0;
-        self.replay_index = 0;
-        self.completed_count = 0;
-        self.action_consumed = false;
         self.prepared_sequence = 0;
         self.prepared_descriptor_valid = false;
         self.prepared_write_len = 0;
@@ -13094,11 +13156,9 @@ impl Cyw43ForegroundTransaction {
         }
         self.active = true;
         self.executing = true;
-        self.pending = false;
+        self.turn.begin_turn();
         self.parent = command;
         self.turn_id = turn_id;
-        self.replay_index = 0;
-        self.action_consumed = false;
         self.prepared_sequence = 0;
         self.prepared_descriptor_valid = false;
         self.prepared_write_len = 0;
@@ -13120,7 +13180,7 @@ impl Cyw43ForegroundTransaction {
         fallback: usize,
         fresh: RuntimeDeadline,
     ) -> RuntimeDeadline {
-        if self.action_consumed || self.pending || self.issued_unknown || self.poisoned {
+        if self.turn.action_consumed || self.turn.pending || self.issued_unknown || self.poisoned {
             return fresh;
         }
         let index = usize::from(self.deadline_replay_index);
@@ -13243,8 +13303,8 @@ fn cyw43_foreground_transaction_executing() -> bool {
 fn cyw43_foreground_action_suspended() -> bool {
     CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
         transaction.executing
-            && (transaction.action_consumed
-                || transaction.pending
+            && (transaction.turn.action_consumed
+                || transaction.turn.pending
                 || transaction.issued_unknown
                 || transaction.poisoned)
     })
@@ -13271,8 +13331,8 @@ fn cyw43_foreground_poll_retained_deadline(deadline: RuntimeDeadline) -> Option<
     }
     let current = runtime_timer_counter_ticks();
     CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        if transaction.action_consumed
-            || transaction.pending
+        if transaction.turn.action_consumed
+            || transaction.turn.pending
             || transaction.issued_unknown
             || transaction.poisoned
         {
@@ -13296,8 +13356,8 @@ fn cyw43_foreground_poll_retained_deadline(deadline: RuntimeDeadline) -> Option<
             RuntimeDeadline::Iterations { remaining } => remaining == 0,
         };
         if !expired {
-            transaction.action_consumed = true;
-            transaction.pending = true;
+            transaction.turn.action_consumed = true;
+            transaction.turn.pending = true;
         }
         Some(expired)
     })
@@ -13384,7 +13444,7 @@ fn cyw43_foreground_poison_after_reap(expected_sequence: u32) {
             && transaction.frontier.command.sequence == expected_sequence
         {
             transaction.issued_unknown = false;
-            transaction.pending = false;
+            transaction.turn.pending = false;
             transaction.poisoned = true;
             transaction.frontier_submitted = false;
         }
@@ -13401,7 +13461,7 @@ fn cyw43_foreground_finish_turn(
             transaction.executing = false;
             (
                 transaction.parent == command,
-                transaction.pending,
+                transaction.turn.pending,
                 transaction.issued_unknown,
                 transaction.poisoned,
                 if transaction.frontier_valid {
@@ -13464,8 +13524,8 @@ fn cyw43_foreground_prepare_sequence() -> Option<u32> {
         return None;
     }
     if let Some(sequence) = CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
-        let index = transaction.replay_index as usize;
-        if index < transaction.completed_count as usize {
+        let index = transaction.turn.replay_index as usize;
+        if index < transaction.turn.completed_count as usize {
             Some(transaction.entries[index].command.sequence)
         } else if transaction.frontier_valid {
             Some(transaction.frontier.command.sequence)
@@ -13492,8 +13552,8 @@ fn cyw43_foreground_prepare_descriptor(desc: DriverRuntimeSdioCommandDescriptor)
         return None;
     }
     let accepted = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        if transaction.action_consumed
-            || transaction.pending
+        if transaction.turn.action_consumed
+            || transaction.turn.pending
             || transaction.issued_unknown
             || transaction.poisoned
         {
@@ -13521,8 +13581,8 @@ fn cyw43_foreground_prepare_write_byte(offset: usize, value: u8) -> Option<bool>
         return Some(false);
     };
     let accepted = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        if transaction.action_consumed
-            || transaction.pending
+        if transaction.turn.action_consumed
+            || transaction.turn.pending
             || transaction.issued_unknown
             || transaction.poisoned
         {
@@ -13559,8 +13619,8 @@ fn cyw43_foreground_prepare_write_frame(
         return Some(None);
     }
     let result = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-        if transaction.action_consumed
-            || transaction.pending
+        if transaction.turn.action_consumed
+            || transaction.turn.pending
             || transaction.issued_unknown
             || transaction.poisoned
         {
@@ -14443,7 +14503,7 @@ fn cyw43_foreground_prepared_matches(
         || entry.ticket.parent_sequence != transaction.parent.sequence
         || entry.ticket.generation != transaction.generation
         || entry.ticket.owner_sequence != entry.command.sequence
-        || entry.ticket.ordinal != transaction.replay_index
+        || entry.ticket.ordinal != transaction.turn.replay_index
         || entry.ticket.issued_turn_id == 0
     {
         return false;
@@ -14471,8 +14531,8 @@ fn cyw43_foreground_reserve_frontier(
 ) -> bool {
     if transaction.frontier_valid
         || !transaction.prepared_descriptor_valid
-        || transaction.replay_index != transaction.completed_count
-        || transaction.completed_count as usize >= transaction.entries.len()
+        || transaction.turn.replay_index != transaction.turn.completed_count
+        || transaction.turn.completed_count as usize >= transaction.entries.len()
         || transaction.prepared_sequence == 0
         || command.sequence != transaction.prepared_sequence
     {
@@ -14498,7 +14558,7 @@ fn cyw43_foreground_reserve_frontier(
             parent_sequence: transaction.parent.sequence,
             generation: transaction.generation,
             owner_sequence: command.sequence,
-            ordinal: transaction.completed_count,
+            ordinal: transaction.turn.completed_count,
             issued_turn_id: transaction.turn_id,
         },
         command,
@@ -14759,8 +14819,8 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
         cyw43_sdio_bus_link_child_wait_timeout_us(entry.command),
     ));
     transaction.frontier_polls = 0;
-    transaction.action_consumed = true;
-    transaction.pending = true;
+    transaction.turn.action_consumed = true;
+    transaction.turn.pending = true;
     // SAFETY: All immutable command bytes are visible before sequence commit;
     // no fallible work occurs between that issue boundary and the doorbell.
     unsafe {
@@ -14797,7 +14857,7 @@ fn cyw43_foreground_grant_frontier(transaction: &mut Cyw43ForegroundTransaction)
         || entry.ticket.parent_sequence != transaction.parent.sequence
         || entry.ticket.generation != transaction.generation
         || entry.ticket.owner_sequence != entry.command.sequence
-        || entry.ticket.ordinal != transaction.completed_count
+        || entry.ticket.ordinal != transaction.turn.completed_count
         || entry.ticket.issued_turn_id == 0
         || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
         || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) != entry.command.sequence
@@ -14806,13 +14866,13 @@ fn cyw43_foreground_grant_frontier(transaction: &mut Cyw43ForegroundTransaction)
         CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
         CYW43_DPC_DEFERRED.store(true, Ordering::Release);
         transaction.poisoned = true;
-        transaction.pending = false;
+        transaction.turn.pending = false;
         return false;
     }
     let grant_id = transaction.frontier_grant_id;
     if grant_id == 0 {
         transaction.poisoned = true;
-        transaction.pending = false;
+        transaction.turn.pending = false;
         return false;
     }
     if transaction.frontier_continuation_grant_publish
@@ -14824,14 +14884,14 @@ fn cyw43_foreground_grant_frontier(transaction: &mut Cyw43ForegroundTransaction)
         )
     {
         transaction.poisoned = true;
-        transaction.pending = false;
+        transaction.turn.pending = false;
         return false;
     }
     transaction.frontier_grant_id = grant_id;
     transaction.frontier_continuation_grant_required = false;
     transaction.frontier_continuation_grant_publish = false;
-    transaction.action_consumed = true;
-    transaction.pending = true;
+    transaction.turn.action_consumed = true;
+    transaction.turn.pending = true;
     // The exact grant is sequence-last and globally visible. This signal is
     // only its one-operation wake hint; a duplicate or coalesced badge cannot
     // advance the retained owner command without a fresh ID.
@@ -14844,11 +14904,11 @@ fn cyw43_foreground_poll_frontier(
     transaction: &mut Cyw43ForegroundTransaction,
 ) -> Option<DriverTaskCompletionRecord> {
     let entry = transaction.frontier;
-    transaction.action_consumed = true;
+    transaction.turn.action_consumed = true;
     if entry.ticket.parent_sequence != transaction.parent.sequence
         || entry.ticket.generation != transaction.generation
         || entry.ticket.owner_sequence != entry.command.sequence
-        || entry.ticket.ordinal != transaction.completed_count
+        || entry.ticket.ordinal != transaction.turn.completed_count
         || entry.ticket.issued_turn_id == 0
         || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
         || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) != entry.command.sequence
@@ -14857,7 +14917,7 @@ fn cyw43_foreground_poll_frontier(
         CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
         CYW43_DPC_DEFERRED.store(true, Ordering::Release);
         transaction.poisoned = true;
-        transaction.pending = false;
+        transaction.turn.pending = false;
         return None;
     }
     let child = Cyw43SdioChildState::new(entry.command.sequence);
@@ -14868,7 +14928,7 @@ fn cyw43_foreground_poll_frontier(
             CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
             CYW43_DPC_DEFERRED.store(true, Ordering::Release);
             transaction.poisoned = true;
-            transaction.pending = false;
+            transaction.turn.pending = false;
             return None;
         }
         let progress_sequence = cyw43_sdio_owner_progress_sequence(
@@ -14891,13 +14951,12 @@ fn cyw43_foreground_poll_frontier(
         transaction.frontier.completion = completion;
         if !cyw43_foreground_capture_completion_payload(transaction, completion) {
             transaction.poisoned = true;
-            transaction.pending = false;
+            transaction.turn.pending = false;
             return None;
         }
-        let index = transaction.completed_count as usize;
+        let index = transaction.turn.completed_count as usize;
         transaction.entries[index] = transaction.frontier;
-        transaction.completed_count = transaction.completed_count.saturating_add(1);
-        transaction.replay_index = transaction.replay_index.saturating_add(1);
+        transaction.turn.complete_child_poll();
         transaction.last_replayed_index = index as u16;
         transaction.frontier = Cyw43ForegroundTraceEntry::empty();
         transaction.frontier_valid = false;
@@ -14911,7 +14970,13 @@ fn cyw43_foreground_poll_frontier(
         transaction.prepared_sequence = 0;
         transaction.prepared_descriptor_valid = false;
         transaction.prepared_write_len = 0;
-        transaction.pending = false;
+        // The completion poll is the one reciprocal operation admitted for
+        // this outer turn. Retain the parent so the next turn restores its
+        // baseline, replays this exact cached child locally, and only then may
+        // submit the following child action. Clearing `pending` here lets a
+        // straight-line multi-action helper attempt child N+1 in this turn;
+        // its deliberate one-action rejection is then indistinguishable from
+        // a physical SDIO failure.
         return Some(completion);
     }
     transaction.frontier_polls = transaction.frontier_polls.saturating_add(1);
@@ -14936,7 +15001,7 @@ fn cyw43_foreground_poll_frontier(
         );
         if !cyw43_sdio_child_mark_issued_unknown_or_restart(entry.command.sequence) {
             transaction.poisoned = true;
-            transaction.pending = false;
+            transaction.turn.pending = false;
             return None;
         }
         let result =
@@ -14965,13 +15030,13 @@ fn cyw43_foreground_poll_frontier(
             }
             RuntimeContinuationGrantPlan::Invalid => {
                 transaction.poisoned = true;
-                transaction.pending = false;
+                transaction.turn.pending = false;
                 return None;
             }
         }
         transaction.frontier_continuation_grant_required = true;
     }
-    transaction.pending = true;
+    transaction.turn.pending = true;
     None
 }
 
@@ -15007,8 +15072,8 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
         // generation. Root-issued SDIO commands keep their existing aux1
         // semantics and continue to use endpoint rendezvous instead.
         command.aux1 = transaction.generation;
-        let index = transaction.replay_index as usize;
-        if index >= transaction.completed_count as usize && !transaction.frontier_valid {
+        let index = transaction.turn.replay_index as usize;
+        if index >= transaction.turn.completed_count as usize && !transaction.frontier_valid {
             let ring = dpc_event_ring_read_at(
                 DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
             );
@@ -15018,16 +15083,16 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
                 return Cyw43BusLinkOutcome::Failed;
             }
         }
-        if index < transaction.completed_count as usize {
+        if index < transaction.turn.completed_count as usize {
             let entry = transaction.entries[index];
             let identity_matches = cyw43_foreground_prepared_matches(transaction, entry, command);
             match cyw43_foreground_frontier_route(
-                transaction.replay_index,
-                transaction.completed_count,
+                transaction.turn.replay_index,
+                transaction.turn.completed_count,
                 transaction.frontier_valid,
                 transaction.frontier_submitted,
                 transaction.frontier_continuation_grant_required,
-                transaction.action_consumed,
+                transaction.turn.action_consumed,
                 identity_matches,
                 transaction.poisoned,
                 transaction.issued_unknown,
@@ -15046,7 +15111,14 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
                 transaction.poisoned = true;
                 return Cyw43BusLinkOutcome::Failed;
             }
-            transaction.replay_index = transaction.replay_index.saturating_add(1);
+            let Some(replayed_index) = transaction.turn.replay_cached_child() else {
+                transaction.poisoned = true;
+                return Cyw43BusLinkOutcome::Failed;
+            };
+            if replayed_index as usize != index {
+                transaction.poisoned = true;
+                return Cyw43BusLinkOutcome::Failed;
+            }
             transaction.last_replayed_index = index as u16;
             transaction.prepared_sequence = 0;
             transaction.prepared_descriptor_valid = false;
@@ -15060,10 +15132,10 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
                         transaction.frontier.command.sequence,
                     ) {
                         transaction.issued_unknown = true;
-                        transaction.pending = true;
+                        transaction.turn.pending = true;
                     } else {
                         transaction.poisoned = true;
-                        transaction.pending = false;
+                        transaction.turn.pending = false;
                     }
                 } else {
                     transaction.poisoned = true;
@@ -15078,12 +15150,12 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
             return Cyw43BusLinkOutcome::Failed;
         }
         match cyw43_foreground_frontier_route(
-            transaction.replay_index,
-            transaction.completed_count,
+            transaction.turn.replay_index,
+            transaction.turn.completed_count,
             transaction.frontier_valid,
             transaction.frontier_submitted,
             transaction.frontier_continuation_grant_required,
-            transaction.action_consumed,
+            transaction.turn.action_consumed,
             true,
             transaction.poisoned,
             transaction.issued_unknown,
@@ -15110,7 +15182,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
                 }
             }
             Cyw43ForegroundFrontierRoute::Defer => {
-                transaction.pending = true;
+                transaction.turn.pending = true;
                 Cyw43BusLinkOutcome::Pending
             }
             Cyw43ForegroundFrontierRoute::Poison => {
@@ -15265,7 +15337,7 @@ fn read_sdio_bus_payload_byte(offset: usize) -> Option<u8> {
     if cyw43_foreground_transaction_executing() {
         return CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             let index = transaction.last_replayed_index as usize;
-            if index >= transaction.completed_count as usize {
+            if index >= transaction.turn.completed_count as usize {
                 transaction.poisoned = true;
                 return None;
             }
@@ -15334,7 +15406,7 @@ fn sdio_bus_link_copy_from_owner_payload(
     if cyw43_foreground_transaction_executing() {
         return CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             let index = transaction.last_replayed_index as usize;
-            if index >= transaction.completed_count as usize {
+            if index >= transaction.turn.completed_count as usize {
                 transaction.poisoned = true;
                 return None;
             }
@@ -35110,21 +35182,23 @@ pub fn runtime_main(task_key: usize) -> ! {
             && pending_intake.is_some()
             && !cyw43_foreground_transaction_active()
         {
-            let (recovery_admissible, generation_transport_pending) =
+            let (recovery_admissible, generation_transport_recovery_admissible) =
                 CYW43_RUNTIME_STATE.with_ref(|state| {
                     (
                         !state.dpc_cursor.child.active && !state.dpc_cursor.child.issued_unknown,
-                        state.recovery_required
-                            && state.dpc_pending_epoch != 0
-                            && state.bus_link_ready
-                            && state.dpc_link_ready,
+                        cyw43_generation_transport_recovery_admissible(
+                            state.recovery_required,
+                            state.dpc_shared_epoch,
+                            state.bus_link_ready,
+                            state.dpc_link_ready,
+                        ),
                     )
                 });
             let explicit_recovery = pending_intake
                 .map(|intake| {
                     cyw43_dpc_explicit_recovery_command(
                         intake.command,
-                        generation_transport_pending,
+                        generation_transport_recovery_admissible,
                     )
                 })
                 .unwrap_or(false)
@@ -37173,6 +37247,71 @@ mod tests {
             cyw43_descriptor_command(93),
             true,
         ));
+    }
+
+    #[test]
+    fn generation_transport_recovery_admission_does_not_require_pending_epoch() {
+        let shared_epoch = 0x4359_5301;
+        assert!(cyw43_generation_transport_recovery_admissible(
+            true,
+            shared_epoch,
+            true,
+            true,
+        ));
+        for (recovery_required, epoch, bus_link_ready, dpc_link_ready) in [
+            (false, shared_epoch, true, true),
+            (true, 0, true, true),
+            (true, shared_epoch, false, true),
+            (true, shared_epoch, true, false),
+        ] {
+            assert!(!cyw43_generation_transport_recovery_admissible(
+                recovery_required,
+                epoch,
+                bus_link_ready,
+                dpc_link_ready,
+            ));
+        }
+    }
+
+    #[test]
+    fn cyw43_foreground_transaction_scope_excludes_runtime_and_engine_init() {
+        let physical = cyw43_descriptor_command(0x43);
+        assert!(cyw43_command_uses_foreground_transaction(physical));
+
+        let mut command = physical;
+        command.aux0 = DRIVER_RUNTIME_ENGINE_INIT_AUX;
+        command.frame = DriverFrameDescriptor::empty();
+        assert!(!cyw43_command_uses_foreground_transaction(command));
+
+        command = physical;
+        command.aux0 = DRIVER_RUNTIME_INIT_AUX;
+        command.frame.len = core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16;
+        assert!(!cyw43_command_uses_foreground_transaction(command));
+
+        for malformed in [
+            DriverTaskCommandRecord {
+                sequence: 0,
+                ..physical
+            },
+            DriverTaskCommandRecord {
+                opcode: OPCODE_SHUTDOWN,
+                ..physical
+            },
+            DriverTaskCommandRecord {
+                arg1: ROLE_SDIO,
+                ..physical
+            },
+            DriverTaskCommandRecord {
+                aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+                ..physical
+            },
+            DriverTaskCommandRecord {
+                frame: DriverFrameDescriptor::empty(),
+                ..physical
+            },
+        ] {
+            assert!(!cyw43_command_uses_foreground_transaction(malformed));
+        }
     }
 
     #[test]
@@ -40928,6 +41067,147 @@ mod tests {
             "a terminal poll cannot submit the next reciprocal action in the same turn",
         );
         assert_eq!(io.command_issue_count(), 1);
+    }
+
+    #[test]
+    fn transport_f1_block_size_children_each_require_a_fresh_outer_turn() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        let base = SDIO_CCCR_FBR_BASE;
+        let low = (SDIO_FUNCTION1_BLOCK_SIZE & 0xff) as u8;
+        let high = (SDIO_FUNCTION1_BLOCK_SIZE >> 8) as u8;
+        let actions = [
+            (true, base + SDIO_FBR_BLKSIZE, low),
+            (true, base + SDIO_FBR_BLKSIZE + 1, high),
+            (false, base + SDIO_FBR_BLKSIZE, low),
+            (false, base + SDIO_FBR_BLKSIZE + 1, high),
+        ];
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.command_status = SDHCI_INT_RESPONSE;
+        let mut parent_turn = Cyw43ForegroundTurnState::new();
+
+        for (ordinal, (write, addr, value)) in actions.into_iter().enumerate() {
+            if write {
+                write_runtime_payload_byte(data_offset, value);
+            } else {
+                io.command_response = u32::from(value);
+            }
+            let descriptor = sdio_bus_link_cmd52_descriptor(write, 0, addr, 0)
+                .expect("F1 block-size CMD52 descriptor must encode");
+            let sequence = 0x8000_6100u32.wrapping_add(ordinal as u32);
+            let command = stage_sdio_descriptor_service_command(sequence, descriptor);
+            let issue_count_before = io.command_issue_count();
+            let completion = service_sdio_descriptor_command_with_io(command, &mut io);
+            assert_eq!(io.command_issue_count(), issue_count_before + 1);
+            assert_eq!(completion.sequence, sequence);
+            assert_eq!(
+                completion.code,
+                if write {
+                    COMPLETION_PROGRESS
+                } else {
+                    COMPLETION_FRAME_READY
+                },
+            );
+
+            let entry = Cyw43ForegroundTraceEntry {
+                ticket: Cyw43ForegroundActionTicket {
+                    parent_sequence: 10,
+                    generation: 0x4359_5301,
+                    owner_sequence: sequence,
+                    ordinal: ordinal as u16,
+                    issued_turn_id: (ordinal + 1) as u64,
+                },
+                command,
+                descriptor,
+                completion: DriverTaskCompletionRecord::idle(0),
+                write_offset: 0,
+                write_len: if write { 1 } else { 0 },
+                read_offset: 0,
+                read_len: 0,
+                read_from_owner: false,
+                local_read_frame: DriverFrameDescriptor::empty(),
+            };
+            assert!(cyw43_foreground_completion_matches(entry, completion));
+
+            parent_turn.complete_child_poll();
+            assert_eq!(parent_turn.completed_count, (ordinal + 1) as u16);
+            assert_eq!(parent_turn.replay_index, parent_turn.completed_count);
+            assert!(parent_turn.action_consumed);
+            assert!(parent_turn.pending);
+            assert_eq!(
+                cyw43_foreground_frontier_route(
+                    parent_turn.replay_index,
+                    parent_turn.completed_count,
+                    false,
+                    false,
+                    false,
+                    parent_turn.action_consumed,
+                    true,
+                    false,
+                    false,
+                ),
+                Cyw43ForegroundFrontierRoute::Defer,
+                "the exact child poll cannot issue the next F1 CMD52 in the same turn",
+            );
+            assert_eq!(
+                io.command_issue_count(),
+                issue_count_before + 1,
+                "the terminal poll turn performs exactly one owner operation",
+            );
+
+            parent_turn.begin_turn();
+            for replay_index in 0..parent_turn.completed_count {
+                assert_eq!(
+                    cyw43_foreground_frontier_route(
+                        parent_turn.replay_index,
+                        parent_turn.completed_count,
+                        false,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false,
+                        false,
+                    ),
+                    Cyw43ForegroundFrontierRoute::Cached,
+                    "the fresh parent turn replays each completed prefix locally",
+                );
+                assert_eq!(parent_turn.replay_cached_child(), Some(replay_index));
+            }
+            if ordinal + 1 < actions.len() {
+                assert_eq!(
+                    cyw43_foreground_frontier_route(
+                        parent_turn.replay_index,
+                        parent_turn.completed_count,
+                        false,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false,
+                        false,
+                    ),
+                    Cyw43ForegroundFrontierRoute::Submit,
+                    "only a fresh parent turn may submit the next F1 CMD52",
+                );
+            }
+        }
+        assert_eq!(io.command_issue_count(), 4);
+        assert_eq!(parent_turn.completed_count, 4);
+        assert_eq!(parent_turn.replay_index, 4);
+        assert!(!parent_turn.pending);
+        assert!(!parent_turn.action_consumed);
+
+        let mut single_child = Cyw43ForegroundTurnState::new();
+        single_child.complete_child_poll();
+        assert!(single_child.pending);
+        single_child.begin_turn();
+        assert_eq!(single_child.replay_cached_child(), Some(0));
+        assert_eq!(single_child.replay_cached_child(), None);
+        assert!(!single_child.pending);
+        assert!(!single_child.action_consumed);
     }
 
     #[test]
