@@ -399,8 +399,8 @@ This as-built closure is authorized by Milestone 26d task
   enters the exact owner-first restart, which resets the latch only at the
   bootstrap-priority transition; an absent restart context or a cutover
   precondition rejection remains terminal.
-- A retained one-way request cannot rely on `seL4_Yield` to schedule a child
-  below the root task. HAL therefore advances a request- and
+- A retained one-way root-to-runtime request cannot rely on `seL4_Yield` to
+  schedule a child below the root task. HAL therefore advances a request- and
   generation-bound scheduling lease through separate ordinary EventPump
   turns. The first turn prepares the immutable ring record with sequence zero,
   so an autonomously polling child cannot observe it. Later turns boost the
@@ -409,26 +409,50 @@ This as-built closure is authorized by Milestone 26d task
   endpoint doorbell, and poll the matching completion once per turn. After that
   completion is latched, later turns restore the primary child before the bus
   owner and release the lease before exposing the completion to its caller.
-  If a CYW43 or SDIO quantum returns `Pending`, the child retains the exact
-  command and blocks on the combined endpoint/notification receive; it does not
-  `seL4_Yield` into another foreground quantum. Each subsequent foreground
-  quantum requires a later root EventPump turn to repeat the one-way endpoint
-  doorbell for the same sequence. The child admits that rendezvous only when
-  the complete ring record still matches its retained immutable intake and no
-  reply capability is present. This wake is not a new issue boundary: it never
-  republishes, mutates, or replays the command. seL4 `NBSend` is delivered only
-  while the child is waiting on the endpoint, so dropped sends do not queue and
-  successful sends cannot coalesce into ambiguous grant counts. A later poll
-  miss may therefore re-arm another wake-only turn, but never another sequence
-  commit or physical action replay.
+  Root-to-runtime retained commands use the runtime's command endpoint. If one
+  of those commands returns `Pending`, the child retains the exact command and
+  blocks on the combined endpoint/notification receive; it does not
+  `seL4_Yield` into another foreground quantum. Each subsequent root-command
+  quantum requires a later EventPump turn to repeat the one-way endpoint
+  rendezvous for the same sequence. The child admits it only when the complete
+  ring record still matches the retained immutable no-reply intake. This wake
+  is not a new issue boundary: it never republishes, mutates, or replays the
+  command. seL4 `NBSend` is delivered only while the child is waiting on the
+  endpoint, so dropped sends do not queue and successful sends cannot
+  accumulate foreground authority.
+
+  Delegated CYW43-to-SDIO work has a different authority path. Successful
+  one-way owner handoff deletes and zeros root's SDIO endpoint authority, and
+  CYW43 receives no substitute endpoint cap. A retained multi-phase SDIO child
+  therefore advances through one fixed 24-byte acknowledged continuation grant
+  in reserved bytes 40 through 63 of the shared owner command page. The record
+  carries a magic discriminator, request sequence, fingerprint of every action
+  field, authoritative SDIO generation, monotonic nonzero grant id, and the
+  SDIO consumer's `consumed_grant_id`. CYW43 publishes the immutable body and
+  then the grant id as the sequence-last commit. It never overwrites an
+  unacknowledged grant: a missed acknowledgement re-signals the same id, while
+  a new id is published only after the preceding id is acknowledged. Grant-id
+  exhaustion, malformed state, an already-consumed id, or any identity mismatch
+  fails closed.
+
+  The delegated owner compares the command generation with its independently
+  retained SDIO generation before the first physical action, binds that
+  generation when the command first returns `Pending`, validates the stable
+  grant against that retained intake, and irrevocably acknowledges exactly one
+  grant before spending its one continuation quantum. The reciprocal
+  notification is only a coalescing wake hint; it cannot create, duplicate, or
+  mutate authority. A failed completion poll plans publication or re-signal,
+  the next `Grant` turn performs that one retained grant action, and a later
+  `Poll` turn observes the result. Foreground and DPC-owned children use the
+  same `Poll -> Grant -> Poll` separation.
 
   IRQ and linked-peer notifications remain coalescing service wakes and cannot
-  advance the retained foreground cursor. The first pending peer/IRQ source may
-  consume one notification-service quantum; immediately reasserted level wakes
-  are retained and rejected until an exact endpoint rendezvous returns control
-  to foreground work. If deferred service consumes an endpoint rendezvous, a
-  fresh later rendezvous is required for the foreground quantum. Explicit
-  scheduler handoffs follow service and rejected immediately-ready wakes, so a
+  advance a retained cursor without the exact endpoint rendezvous or shared
+  grant appropriate to that command's authority path. The first pending
+  peer/IRQ source may consume one notification-service quantum; immediately
+  reasserted level wakes are retained until a later admitted foreground turn.
+  Explicit scheduler handoffs follow service and rejected immediately-ready
+  wakes, so a
   priority-255 runtime cannot form a private IRQ loop. The reserved high
   notification bit is excluded from service badges but is not foreground grant
   authority. Root keeps the original unbadged notification cap private for TCB
@@ -439,13 +463,14 @@ This as-built closure is authorized by Milestone 26d task
   endpoint send from stranding first command intake. An idle runtime blocks for
   a new endpoint command instead of polling or yielding.
   Request, full command fingerprint, and pair generation must match throughout;
-  an issued-unknown request cannot be recommitted or renotified. Pair restart
+  an issued-unknown request cannot be recommitted or granted again. Pair restart
   clears an unresolved lease only after both runtimes are suspended and fenced.
-  The retained phase order is `prepare -> boost bus -> boost primary -> commit
-  -> endpoint wake -> poll -> [endpoint wake -> poll]* -> restore`; every
-  bracketed rendezvous and poll is a separate root EventPump turn. It is
-  scheduling admission for one immutable operation, not a private send/poll
-  loop or a legacy driver fallback.
+  Root-command phase order is `prepare -> boost bus -> boost primary -> commit
+  -> endpoint wake -> poll -> [endpoint wake -> poll]* -> restore`;
+  delegated-owner phase order is `submit -> poll -> [grant -> poll]*`. Every
+  rendezvous, grant, and poll is a separate root EventPump turn. These are
+  scheduling admissions for one immutable operation, not private send/poll
+  loops or legacy driver fallbacks.
 - Root-task must not wait synchronously for CMD52/CMD53 credit, firmware
   replies, or RX drain work.
 - Function 1 enable uses the SDIO CIS timeout when that field is eventually
@@ -464,10 +489,11 @@ This as-built closure is authorized by Milestone 26d task
   quanta: a peer/IRQ notification admits at most one DPC service action, while
   one exact root endpoint rendezvous admits at most one foreground child
   action. Any remaining foreground work blocks for another endpoint
-  rendezvous. Reciprocal CYW43-to-SDIO work likewise separates child-ring
-  submission from each completion poll into retained quanta. Neither path
-  contains a private yield/resignal loop; peer notifications report peer work
-  or completion and never grant the next foreground quantum.
+  rendezvous. Reciprocal CYW43-to-SDIO foreground and DPC work separates
+  child-ring submission, each completion poll, and each acknowledged shared
+  grant into retained quanta. Neither path contains a private yield/resignal
+  loop; peer notifications report peer work or wake the owner to inspect an
+  already-published exact grant and never grant a quantum by themselves.
 - Each retained foreground phase snapshots the committed DPC producer. Events
   through that watermark drain first; later level-triggered publications stay
   queued until after one foreground quantum. A new snapshot before the next
@@ -484,7 +510,18 @@ This as-built closure is authorized by Milestone 26d task
   budget; it does not claim that Linux retries the whole device-bootstrap
   sequence identically. Once both restart contexts exist, every retry first
   suspends and fences the pair, restarts SDIO before CYW43, and replays retained
-  firmware and control context. A fifth retryable failure emits
+  firmware and control context. Inside one outer attempt, at most one such pair
+  restart is admitted until the attached EventPump proves address/TCP network
+  readiness. Successful descriptor, engine, firmware, or context replay is not
+  stability proof and cannot reset that inner streak; the same transport fault
+  recurring before network-ready proof returns typed
+  `cyw43-pair-recovery-limit` to the outer retry/backoff policy instead of
+  forming an endless replay-success/fault cycle. Only a matching ready
+  generation plus the attached EventPump's network-ready observation resets the
+  inner pair-restart budget for a later independent recovery episode. A lease
+  conflict before issue that neither executed an action nor changed scheduler
+  state clears locally; issued or scheduler-mutating uncertainty requires the
+  bounded pair restart. A fifth retryable failure emits
   `status=exhausted`, admits no implicit sixth pair restart, and returns
   ownership to the ordinary EventPump so serial, local-seat, HDMI, diagnostics,
   authentication, and reboot remain live while Wi-Fi acceptance stays red. If
@@ -498,8 +535,8 @@ This as-built closure is authorized by Milestone 26d task
   lacks ready-generation proof, emits one permanent terminal status and enters
   the same quarantined ordinary-operator mode; it cannot remain in a
   bootstrap-only turn that fences diagnostics forever.
-  A successful episode resets the finite budget for a later independently
-  signalled steady-state recovery episode. Immutable credential,
+  End-to-end network-ready proof resets the finite recovery state for a later
+  independently signalled steady-state recovery episode. Immutable credential,
   firmware-bundle, and descriptor-bound failures are terminal and remain
   visible to the local operator.
 - High-impact supervisor transitions use `status=begin`, `status=recovery`,
@@ -669,6 +706,19 @@ This as-built closure is authorized by Milestone 26d task
 - Association alone is not acceptance. Require DHCP, raw TCP/`cohsh`, clean
   counters, and repeated current-image boots with paired network evidence.
 
+The July 19 pre-fix image (`df7196c7bc56`, image id
+`2fb39b8be336200d73082e0b00d265900da50041d24af31d28a7120d5264357d`)
+completed the SDIO engine, began CYW43 engine work, and then cycled attempt-1
+pair/context replay for more than seven million turns before any Pi network
+frame. That evidence identifies the deleted-endpoint/delegated-continuation
+boundary and replay-budget reset as the first causal failure; it does not
+justify rewriting association, EAPOL, DHCP, or TCP. Conversely, July 10 W01
+from `918a58c09-dirty` completed all ten Wi-Fi gates, PTK/GTK, DHCP, raw TCP,
+authenticated scripts, and `tcp_accepts=4 tcp_auth=4`. It remains an upper-path
+compatibility oracle only, never current proof or authority to restore timing
+loops, same-generation replay, root-owned SDIO, or a legacy fallback. Exact
+capture names and pairing are recorded in [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md).
+
 Hardware-free validation executes the production reciprocal runtime-ring and
 descriptor-to-SDHCI transfer path against a deterministic controller model,
 injects failure at every production pair-restart action plus the modeled
@@ -678,15 +728,24 @@ than one child operation in an outer turn, that 256 retained polls consume 256
 turns, that every failure cut resumes or fails deterministically, and that
 reciprocal-ring association/EAPOL/maintenance faults return before supervisor
 recovery. Runtime-loop tests prove that idle and retained-Pending commands use
-blocking receive, that exactly one immutable one-way endpoint rendezvous
-advances one foreground quantum, that dropped `NBSend` doorbells do not queue,
-and that repeated doorbells neither republish nor replay the retained command.
-Peer/IRQ notification badges can service only coalesced DPC work and cannot
-advance foreground state. Exact-match, stale, mutated, and reply-cap endpoint
-wakes are separated explicitly; only the exact no-reply rendezvous is admitted.
-The autonomous intake poll survives a lost initial best-effort endpoint send.
+blocking receive. For root-to-runtime commands, exactly one immutable one-way
+endpoint rendezvous advances one foreground quantum; dropped `NBSend`
+doorbells do not queue, and repeated doorbells neither republish nor replay the
+retained command. For delegated CYW43-to-SDIO work, the tests drive the real
+owner cursor and shared record: sequence-last publication, acknowledgement,
+unacknowledged same-id re-signal, monotonic replacement after acknowledgement,
+authoritative owner-generation validation, and exact `Poll -> Grant -> Poll`
+turns for both foreground and DPC children. Torn, stale, mutated,
+wrong-generation, already-consumed, replayed, aliased, and grant-id-exhausted
+records fail closed. Peer/IRQ notification badges can service only coalesced
+DPC work or wake the owner to inspect an existing exact grant; a badge alone
+cannot advance foreground state. Exact-match, stale, mutated, and reply-cap
+endpoint wakes remain separated explicitly for the root-command path. The
+autonomous intake poll survives a lost initial best-effort root endpoint send.
 Duplicate or stale deferred records cannot replay work or advance a replacement
-generation.
+generation. Recovery tests also prove that context-replay success cannot reset
+the one-pair-restart-per-attempt bound and that only attached address/TCP
+network-ready proof resets the streak.
 The fixed 1,024-action trace and 128 KiB replay payload retain their full
 capacity in loader-zeroed `SHT_NOBITS` storage. Only the smaller, semantically
 nonzero CYW43 baseline snapshot is file-backed; packaging must not shrink,

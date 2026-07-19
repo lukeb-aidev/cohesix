@@ -224,6 +224,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p pi4-driver-runtime --lib cyw43_data_tx_never_replays_ambiguous_function2_write -- --test-threads=1`
 - Focused bootstrap/restart operator-liveness checks:
   - `cargo test -p pi4-driver-abi --lib cyw43_sdio_bus_link_supports_reciprocal_notification_dpc_descriptors -- --test-threads=1`
+  - `cargo test -p pi4-driver-abi --lib continuation_grant_fits_reserved_command_slot_and_fingerprints_actions -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_service_badges_exclude_the_reserved_root_bit -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib production_loop_routes_idle_and_retained_commands_to_blocking_receive -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib pending_quantum_requires_one_exact_endpoint_rendezvous -- --test-threads=1`
@@ -232,6 +233,12 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p pi4-driver-runtime --lib pending_command_dpc_arbitration_requires_separate_endpoint_rendezvous -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib reciprocal_sdio_child_submit_and_polls_require_separate_root_rendezvous -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib retained_256_poll_drain_spends_256_root_endpoint_rendezvous -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib continuation_grant_ring_publication_ack_and_aliases_fail_closed -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib continuation_grant_state_and_id_exhaustion_are_fail_closed -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib delegated_pending_quantum_requires_fresh_exact_generation_grants -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib reciprocal_multiphase_child_alternates_poll_grant_and_poll_outer_turns -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib delegated_generation_reset_real_cursor_requires_one_fresh_grant_per_quantum -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib dpc_owned_multiphase_child_uses_real_owner_cursor_and_shared_grants -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_bootstrap_operator_turn -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_one_way_turn_keeps_a_demoted_pi_runtime_schedulable -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_ring_sequence_is_invisible_until_the_dedicated_issue_turn -- --test-threads=1`
@@ -278,6 +285,8 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_executes_one_operation_per_turn_in_canonical_order -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_every_operation_cut_uses_the_same_outer_fence -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_deadline_failure_fences_before_recovery_mmio -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib recurring_replay_fault_cannot_restart_the_pair_forever_in_one_attempt -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib network_ready_proof_resets_pair_recovery_streak_once_per_generation -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_supervisor_post_up_drain_consumes_256_reciprocal_ring_turns -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib accepted_reboot_blocks_cyw43_bootstrap_until_backend_dispatch -- --test-threads=1`
 - `cargo test -p swarmui --test transcript`
@@ -450,8 +459,11 @@ root submission and staging are admitted before handoff, handoff is rejected
 while the root slot is active or its completion is undrained, successful
 handoff deletes/zeros root's SDIO endpoint authority, all later root SDIO
 submission and staging fail before copying bytes, and delegation cannot return
-to root. Live Wi-Fi proof must contain the successful one-way handoff marker
-before the first CYW43 transport/firmware command. Power-sequence coverage must
+to root. The handoff test must then prove that a delegated CYW43-to-SDIO
+multi-phase command progresses without an endpoint cap through the exact
+acknowledged shared grant only; granting or reacquiring root endpoint authority
+fails the test. Live Wi-Fi proof must contain the successful one-way handoff
+marker before the first CYW43 transport/firmware command. Power-sequence coverage must
 also prove that an already root-preseeded mailbox frame remains available for a
 child capability copy after fresh device-untyped coverage is consumed; no
 second retype is permitted. Runtime tests must drive the retained Linux-ordered
@@ -478,6 +490,30 @@ aux, contract, mode, done phase, or unrelated progress retains the ordinary
 SDIO bound. Tests must prove timeout retention cannot permit a new request to
 replace the firmware-owned page.
 
+The live regression input for this closure is
+`/Users/lukasbower/pi4-serial-20260719-180716.log`, boot-paired with
+`/Users/lukasbower/tcpdump-wifi-20260719-180713.pcap` and
+`/Users/lukasbower/tcpdump-usb-eth-20260719-180713.pcap`, marker
+`df7196c7bc56`, image id
+`2fb39b8be336200d73082e0b00d265900da50041d24af31d28a7120d5264357d`.
+It completed SDIO engine initialization, began CYW43 engine initialization,
+then cycled pair/context replay on attempt 1 for more than seven million outer
+turns before any transport command; the paired captures contain no Pi EAPOL,
+DHCP, ARP, IP, or TCP traffic. The causal regression test is therefore the
+stranded delegated `Pending` command after root's SDIO endpoint deletion plus
+the context-replay-success/recurrent-fault restart cycle, not an association or
+TCP rewrite.
+
+The July 10 W01 serial
+`/Users/lukasbower/pi4-serial-20260710-123050-m26d-authoritative-W01-pyserial.log`
+and pcap `/Users/lukasbower/tcpdump-wifi-20260710-112826.pcap` from
+`918a58c09-dirty` remain a compatibility oracle only. They completed all ten
+Wi-Fi gates, host EAPOL, PTK/GTK, DHCP, raw TCP, authenticated
+`boot_v0.coh`/`smp_parity.coh`, and `tcp_accepts=4 tcp_auth=4`. Host tests must
+preserve those upper-path invariants, but this historical pass cannot satisfy a
+current-image gate and cannot authorize timing-dependent loops,
+same-generation replay, root-owned SDIO, or a legacy fallback.
+
 The CYW43 software-closure gate is authorized by Milestone 26d task
 `m26d-cyw43-hardware-free-closure` and Reopened Milestone 26b task
 `m26b-wifi-sdio-notification-dpc-closure`. It exercises the production
@@ -494,15 +530,29 @@ replay must not lower either child early, and each final lowering must consume a
 separate outer turn. Once both are lowered, a retained one-way request must use
 this exact outer-turn sequence: prepare one immutable sequence-zero record; boost
 the reciprocal bus owner when required; boost the primary child; commit the
-nonzero sequence as the issue boundary; publish exactly one best-effort wake
-notification; poll at most once for its matching completion per later turn;
+nonzero sequence as the issue boundary; publish exactly one best-effort
+command-endpoint doorbell; poll at most once for its matching completion per later turn;
 latch that completion; restore the primary child before the bus owner; and
 release the lease before returning the completion. Tests must bind the lease
 to request, full command fingerprint, and pair generation, reject torn/stale
 identities, prove that prepare is invisible to the autonomous runtime, and
-prove neither commit nor notification can repeat after issued-unknown
+prove neither commit nor endpoint doorbell can repeat after issued-unknown
 ownership. They must also reject a lease for a nonphysical profile,
 zero/unpublished priority, or an already-bootstrap-priority runtime.
+This endpoint contract applies to root-to-runtime commands only. After the
+one-way owner handoff deletes root's SDIO endpoint, delegated CYW43-to-SDIO
+foreground and DPC commands must instead use the fixed 24-byte continuation
+grant in shared owner-ring bytes 40 through 63. Tests must exercise the real
+shared record and owner cursor: publish magic, request sequence, every-action
+fingerprint, independently authoritative SDIO generation, and a monotonic
+nonzero grant id sequence-last; let the owner publish
+`consumed_grant_id` irrevocably before spending one quantum; re-signal an
+unacknowledged id without replacement; publish a new id only after exact
+acknowledgement; and fail closed on torn, stale, mutated, wrong-generation,
+already-consumed, replayed, aliased, or exhausted-id state. The notification is
+only a wake hint. Both foreground and DPC paths must alternate separately
+admitted `Poll -> Grant -> Poll` turns, with no acknowledgement poll or second
+child/service/HAL operation composed into the grant turn.
 Pair-restart coverage must preserve the 22 logical
 SDIO-before-CYW43 actions while treating each bootstrap-priority,
 register-programming, resume, descriptor, and engine-replay substep as a
@@ -523,7 +573,16 @@ The supervisor retry-budget unit test must admit exactly five attempts with
 `1/2/4/8` second delays after failures one through four, return a terminal
 outcome after failure five, leave the next deadline at the no-attempt sentinel,
 and prove that even `u64::MAX` cannot admit attempt six. A successful episode
-must reset that budget for a later independently signalled recovery episode.
+must reset that budget for a later independently signalled recovery episode
+only after the matching ready generation is attached and the EventPump reports
+address/TCP network readiness. Each outer attempt admits at most one ordered
+pair restart before that proof. Successful context replay alone must preserve
+the spent inner restart count; an injected recurring transport fault then
+returns typed `cyw43-pair-recovery-limit` to the outer retry policy instead of
+starting another restart in the same attempt. A pre-issue lease conflict that
+performed no child action and changed no scheduler state must clear locally;
+issued or scheduler-mutating uncertainty must request the one bounded pair
+restart.
 Production failure-cut coverage must show one queued `status=exhausted` record
 after the fifth retryable failure and after the HAL guard is released, followed
 by ordinary EventPump turns with no automatic CYW43/SDIO operation. When a
@@ -555,7 +614,8 @@ and generic `permanent` record fits losslessly in the fixed 256-byte serial and
 HDMI milestone queues at maximum integer widths. Attempt-zero preflight cannot
 consume an attempt; `begin` and attached `recovery` episodes follow exact
 `1/2/4/8` second backoffs; a later recovery episode may reset to attempt one
-only after ready; exhausted is valid only at attempt five with the exact
+only after matching ready-generation plus attached address/TCP readiness;
+exhausted is valid only at attempt five with the exact
 no-attempt sentinel. A maximum-length terminal record must survive saturated
 background breadcrumbs without evicting a response tail or prompt.
 
@@ -714,26 +774,39 @@ Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be 
 
 The isolated runtime engines contain production service turns for serial mini-UART init/RX/TX, HDMI framebuffer rendering, PCIe MMIO turns, direct-root-port xHCI boot-keyboard polling, GENET MDIO/MAC/RX/TX rings, CYW43 shared-control SDPCM command records, and SDIO fixed-layout CMD52/CMD53/POLL_IRQ service turns. Physical Pi root starts each isolated runtime with `TCB.WriteRegisters(resume=1)` at a shell-safe bootstrap priority while preserving the contract MCP; roles outside the deferred Wi-Fi pair keep their existing profile-specific priority transition. Deferred CYW43 and SDIO remain at bootstrap priority `255` through prompt publication, owner-first descriptor and engine replay, firmware/control-context replay, and control-plane readiness; the supervisor proves SDIO first, then CYW43, and only then lowers SDIO and CYW43 in two separate outer turns. A linked serial runtime cuts over after its descriptor/init/owner-state path plus a valid service completion; RX-byte proof remains separate. Root may emit `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` so an unproved child cannot starve the root shell. Captures may show SDIO host, PCIe root, GENET, and CYW43 `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` lines before the prompt; those markers are acceptable only as shell-preserving fail-closed evidence, and the retained descriptor must later replay with `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=resumed owner=linked-runtime proof_effect=deferred-proof-retry-enabled` before matching call/return service proof can close SDIO, PCIe, or network acceptance. Wi-Fi descriptor replay is prompt-safe: when physical Pi pointer-free IPC proof and linked serial service proof are present, root emits `[net-console] deferred resume scheduled reason=driver-startup-before-root-prompt action=publish-prompt-then-supervise`, publishes `cohesix>`, and then starts the persistent SDIO/CYW43 bootstrap supervisor. Each episode emits `CYW43_BOOTSTRAP_SUPERVISOR attempt=<n> status=begin|recovery|backoff|ready|exhausted ... recovery=full telemetry_sinks=serial+qlog+hdmi`; it admits at most five attempts with `1/2/4/8` second backoffs. A fifth retryable failure emits `status=exhausted backoff_ms=0`, admits no automatic sixth attempt, and returns to the ordinary EventPump so diagnostics, authentication, and reboot remain responsive while Wi-Fi stays acceptance-red. If linked serial service is absent, the supervisor stays at the root console and reports `attempt=0 status=preflight serial=blocked`. Once both linked-runtime restart contexts exist, every retry must perform the complete fenced pair restart and retained firmware/control replay before ordinary network construction continues. A no-reply runtime must emit `DRIVER_TASK_RING_CALL_TIMEOUT` and `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=pending owner=linked-runtime action=serial-shell proof_effect=acceptance-red-until-replayed`; the supervisor may retry only after another ordinary serial/local-seat event-pump turn and the elapsed backoff. If pointer-free proof is absent, root must emit `[net-console] deferred resume skipped reason=driver-task-net-runtime-unproved action=serial-diagnostics-only`, preserve serial diagnostics, and leave Wi-Fi acceptance red until an explicit diagnostic command retries the failed stage. Physical Pi local-seat captures must show HDMI as an independent display sink without making it a pre-prompt serial dependency: the framebuffer hint must be available before driver-task bootstrap, and after EventPump construction each `hdmi-text` descriptor/attach step and pending-frame service must consume one retained `Display` outer turn. Attach and frame submission cannot share a turn. High-impact supervisor records may retain an HDMI mirror only after the Wi-Fi HAL guard is released; the mirror must wait for a later `Display` turn. A no-reply HDMI render path is display-red evidence and must emit `DRIVER_TASK_RING_CALL_TIMEOUT`, but it must not prevent `cohesix>` from becoming responsive on UART. No HAL-mapped framebuffer diagnostic mirror is allowed; HDMI output must come from the isolated `hdmi-text` runtime only. Before linked-serial cutover, raw UART remains the boot log; after cutover, the serial child is the sole physical UART owner, root diagnostics are authoritative in `/log/queen.log`, and operator output may reach UART only through the linked reciprocal ring. Before EventPump construction, the current synchronous PCIe HAL prerequisite runs only as local bookkeeping and authority setup for the USB cursor. It cannot construct a root-owned steady USB backend or authorize combined later work, and missing proof leaves USB attach blocked at the PCIe prerequisite. After `cohesix>`, local-seat must defer if the USB runtime already has an active command, emit one `prompt-settle attach deferred reason=usb-runtime-active` summary, and retry after the normal quiet window; PCIe descriptor replay, USB init, enumeration, and keyboard report service then advance as retained one-action `LocalSeat` outer turns. While a Wi-Fi HAL scope is held, local-seat service is buffered-only: it must not poll USB, re-enter HDMI or echo, or start network work. It must then advance HID discovery only through the explicit keyboard-enumeration aux while ordinary background polls report the current frontier without re-entering enumeration. No-reply background USB polls must produce `DRIVER_TASK_RING_CALL_TIMEOUT` plus `[local-seat] isolated USB runtime keyboard poll suspended contract=usb-local-seat source=linked-runtime reason=driver-task-no-reply action=serial-shell` rather than repeated blocking `usb-local-seat` calls. `usb probe-kbd` must retain its bounded keyboard-enumeration cursor and must not replay the whole isolated local-seat attach/init chain; each attempt consumes one later `LocalSeat` outer turn and is permitted only while the child USB enumeration marker advances, stopping at the finite cap, keyboard readiness, or no new marker. Root-console startup must emit UART-visible `[mark] root-console.start.begin`, publish `cohesix>` after bounded non-Wi-Fi driver startup settles or fails closed, and emit `[mark] root-console.start.ok` before persistent Wi-Fi bootstrap, `/log/queen.log`, or NineDoor log-stream handoff; host-EAPOL, association, DHCP, and retry backoff cannot hold the serial shell hostage. Once `cohesix>` is published and USB polling is armed, serial UART and USB keyboard input must both feed the shared parser concurrently after USB proof succeeds. Steady physical Pi root submits serial/network service turns through bounded ring calls; HDMI submits are limited to high-impact progress lines, while init, deferred-resume, timeout, and proof turns retain bounded diagnostics and may enqueue linked-UART breadcrumbs. USB keyboard auto-poll uses bounded nonblocking sends until the runtime proves it can reply without risking serial. The isolated runtime `_start` entry must preserve root's task key, install the mapped driver-local IPC buffer before receiving commands, skip `Reply` for commands marked with the one-way flag, and emit replies only for call-delivered commands. Hardware captures should show `DRIVER_TASK_RING_CALL_BEGIN` and the matching `DRIVER_TASK_RING_CALL_RETURN` for init/deferred-resume/proof turns; routine steady console data turns may be suppressed to keep interactive serial latency bounded. Any `DRIVER_TASK_RING_CALL_TIMEOUT` or positive `DRIVER_TASK_BOOTSTRAP_DEFERRED` keeps driver-task acceptance red until later service proof closes it. A role boolean is credited only from a line proving both `live_tcb=yes` and `hot_path=dedicated`; static contract isolation, callback-pointer live-TCB service turns, shared-root ring service turns, runtime-image declarations, runtime-region mapping, runtime-image smoke loops, runtime-init descriptor commands, and any ring command marked root-context or init-descriptor non-acceptance are diagnostic until the driver state boundary is owned by an isolated ring-backed task, VSpace proof is `yes`, pointer-free IPC is `yes`, and `owner_state=driver-owned` is present. Pre-root bootstrap turns, including the serial bootstrap reply proof, must not sample timer registers. Later ring latency telemetry may sample the EL0 virtual counter only when the profile enables `timers-arch-counter`; dummy-timer Pi captures must suppress latency proof rather than reading CNT registers.
 
-CYW43/SDIO runtime foreground coverage must prove endpoint-rendezvous wake
-authority, not only software state transitions. Root repeats an immutable
-one-way endpoint `NBSend` carrying the retained sequence; the child admits one
-foreground quantum only if that send rendezvouses while it is waiting and the
-complete no-reply ring record still matches the retained intake. Tests must
-prove that a dropped send is not queued, multiple sends cannot coalesce into
-multiple grants, and repeated doorbells never republish, mutate, or replay the
-command. Stale-sequence, changed-action, changed-generation, changed-flags, and
-reply-cap endpoint wakes must all remain rejected without altering the retained
-intake.
+CYW43/SDIO runtime foreground coverage must prove the correct authority path,
+not only software state transitions. For root-to-runtime commands, root repeats
+an immutable one-way endpoint `NBSend` carrying the retained sequence; the
+child admits one foreground quantum only if that send rendezvouses while it is
+waiting and the complete no-reply ring record still matches the retained
+intake. Tests must prove that a dropped send is not queued, multiple sends
+cannot accumulate authority, and repeated doorbells never republish, mutate,
+or replay the command. Stale-sequence, changed-action, changed-generation,
+changed-flags, and reply-cap endpoint wakes must all remain rejected without
+altering the retained intake.
+
+For delegated CYW43-to-SDIO commands, tests must prove there is no usable
+endpoint after handoff and that only the stable acknowledged shared grant can
+advance the retained owner cursor. The grant must match the command sequence,
+complete action fingerprint, and the independently retained SDIO generation;
+its nonzero id is published last and must exceed the last consumed id. The
+consumer acknowledgement is irrevocable, an unacknowledged id may only be
+re-signalled, and the producer may publish the next id only after observing the
+exact acknowledgement. The production foreground and DPC cursors must each
+show one poll, one later grant action, and one later poll, never two operations
+in one turn.
 
 Send-only reciprocal caps still deliver CYW43-to-SDIO badge 1 and
 SDIO-to-CYW43 badge 2, and the SDIO IRQ delivers badge 159. These coalescing
 notifications are service wakes only; the reserved high notification bit is
-excluded from service work and is not foreground authority. Tests must prove
+excluded from service work and is not foreground authority by itself. Tests must prove
 that one pending peer/IRQ source can consume at most one service quantum, that
 at least 4,096 standalone level reassertions produce no second service quantum
-and lose no durable source, and that an exact later endpoint rendezvous admits
-only one foreground phase. If deferred notification service consumes that
-rendezvous, another fresh endpoint rendezvous is required for foreground work.
+and lose no durable source, and that an exact later endpoint rendezvous or
+acknowledged shared grant admits only one foreground phase on its respective
+path. If deferred notification service consumes a root rendezvous, another
+fresh endpoint rendezvous is required for root foreground work; a delegated
+owner wake must still carry the already-published exact grant.
 CARD_INT coverage must also prove that terminal deferred service masks the host
 source before IRQ acknowledgement.
 The real SDIO post-claim priority-failure hook must prove that one episode
@@ -743,11 +816,12 @@ the latch before a later recovery episode may claim cutover. A precondition
 rejection without a valid restart context remains terminal.
 Autonomous committed-ring polling must preserve
 initial intake when a best-effort endpoint send is lost. After `Pending`, only
-an exact rendezvous for the retained intake may grant the next foreground
-quantum; a missed poll can re-arm another wake-only turn but cannot recommit the
-sequence. Pending-command DPC arbitration, reciprocal SDIO child-ring
-submission, and every reciprocal completion poll must each consume separately
-released retained quanta, with no private yield/resignal/poll loop. Retained
+an exact root rendezvous or delegated shared grant for the retained intake may
+grant the next foreground quantum; a missed poll can schedule only the matching
+later wake/grant action and cannot recommit the command sequence. Pending-command
+DPC arbitration, reciprocal SDIO child-ring submission, every shared grant, and
+every reciprocal completion poll must each consume separately released retained
+quanta, with no private yield/resignal/poll loop. Retained
 lease tests must also prove that the CYW43/SDIO pair epoch cannot alias serial,
 USB, HDMI, PCIe, or GENET transport identity, and that non-pair failures stay in
 their contract-local recovery domain. Serial tests must classify RX, staged TX,

@@ -428,6 +428,18 @@ pub const DRIVER_RUNTIME_RING_PAGE_BYTES: u16 = 4096;
 pub const DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET: u16 = 2048;
 /// Fixed offset of the runtime progress marker in one ring page.
 pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
+/// Fixed offset of the retained-command continuation grant.
+///
+/// The command record occupies bytes `0..40` and the completion record begins
+/// at byte 64. This pointer-free ticket uses the otherwise reserved gap so a
+/// linked producer can durably grant one later runtime quantum without
+/// republishing the immutable command or relying on a coalescing badge as
+/// authority.
+pub const DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET: u16 = 40;
+/// Bytes in one retained-command continuation grant.
+pub const DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES: u16 = 24;
+/// Magic value for a retained-command continuation grant.
+pub const DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC: u32 = 0x4452_4347;
 /// Bytes in the runtime progress marker.
 pub const DRIVER_RUNTIME_RING_PROGRESS_BYTES: u16 = 16;
 /// Runtime progress-marker magic.
@@ -1360,6 +1372,112 @@ pub const DRIVER_RUNTIME_RESERVED_ROOT_BADGE: u32 = 1 << 31;
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1;
 /// Badge delivered to CYW43 when the SDIO owner signals its reciprocal peer cap.
 pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE: u32 = 2;
+
+/// Durable authority for exactly one retained-command continuation quantum.
+///
+/// `grant_id` is the sequence-last commit word. Producers publish zero there,
+/// then the immutable request identity, and finally a nonzero monotonically
+/// increasing ID. `consumed_grant_id` is written only by the consumer after it
+/// spends that grant on one arbitration quantum. Producers re-signal an
+/// unacknowledged ID rather than overwriting it. Consumers accept the record
+/// only when both reads of the ID match and its request/fingerprint/generation
+/// match the retained command. A notification is therefore only a wake hint;
+/// its coalesced badge cannot create, duplicate, or mutate foreground authority.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeContinuationGrant {
+    /// Fixed [`DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC`] discriminator.
+    pub magic: u32,
+    /// Immutable retained command sequence.
+    pub request_sequence: u32,
+    /// Fingerprint of every command action field except the sequence.
+    pub action_fingerprint: u32,
+    /// Producer-owned runtime generation for stale-grant rejection.
+    pub generation: u32,
+    /// Nonzero sequence-last grant commit ID.
+    pub grant_id: u32,
+    /// Consumer-published ID of the most recently spent grant.
+    pub consumed_grant_id: u32,
+}
+
+impl DriverRuntimeContinuationGrant {
+    /// Return a byte-zero, uncommitted grant record.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: 0,
+            request_sequence: 0,
+            action_fingerprint: 0,
+            generation: 0,
+            grant_id: 0,
+            consumed_grant_id: 0,
+        }
+    }
+
+    /// Build one immutable grant whose ID is published last by the producer.
+    #[must_use]
+    pub const fn new(
+        request_sequence: u32,
+        action_fingerprint: u32,
+        generation: u32,
+        grant_id: u32,
+    ) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
+            request_sequence,
+            action_fingerprint,
+            generation,
+            grant_id,
+            consumed_grant_id: 0,
+        }
+    }
+}
+
+const fn driver_runtime_continuation_fingerprint_mix(mut hash: u32, value: u32) -> u32 {
+    hash ^= value;
+    hash = hash.wrapping_mul(16_777_619);
+    hash
+}
+
+/// Fingerprint every immutable action field in a fixed runtime command.
+///
+/// The request sequence is carried independently in
+/// [`DriverRuntimeContinuationGrant`]. The linked generation is also repeated
+/// explicitly there while remaining part of the complete action fingerprint
+/// through `aux1`. Payload bytes remain protected by the already-retained
+/// command/staging ticket; a continuation can only advance that intake and can
+/// never republish a payload.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub const fn driver_runtime_continuation_action_fingerprint(
+    opcode: u16,
+    flags: u16,
+    arg0: u32,
+    arg1: u32,
+    aux0: u32,
+    aux1: u32,
+    max_ops: u16,
+    max_frames: u16,
+    max_bytes: u32,
+    frame_offset: u32,
+    frame_len: u16,
+    frame_flags: u16,
+) -> u32 {
+    let mut hash = 2_166_136_261u32;
+    hash = driver_runtime_continuation_fingerprint_mix(hash, opcode as u32);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, flags as u32);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, arg0);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, arg1);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, aux0);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, aux1);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, max_ops as u32);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, max_frames as u32);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, max_bytes);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, frame_offset);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, frame_len as u32);
+    hash = driver_runtime_continuation_fingerprint_mix(hash, frame_flags as u32);
+    hash | 1
+}
 /// Level-sensitive runtime IRQ trigger tag.
 pub const DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL: u16 = 0;
 /// Edge-sensitive runtime IRQ trigger tag.
@@ -3096,6 +3214,118 @@ mod tests {
         assert!(core::mem::size_of::<DriverRuntimeInitDescriptor>() <= 1536);
         assert_eq!(core::mem::align_of::<DriverRuntimeInitDescriptor>(), 8);
         assert!(DRIVER_RUNTIME_INIT_MAX_DMA_PAGES >= 80);
+    }
+
+    #[test]
+    fn continuation_grant_fits_reserved_command_slot_and_fingerprints_actions() {
+        assert_eq!(core::mem::size_of::<DriverRuntimeContinuationGrant>(), 24);
+        assert_eq!(core::mem::align_of::<DriverRuntimeContinuationGrant>(), 4);
+        assert_eq!(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET, 40);
+        assert_eq!(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES, 24);
+        assert!(
+            usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
+                + core::mem::size_of::<DriverRuntimeContinuationGrant>()
+                <= 64
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+            16
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id),
+            20
+        );
+
+        let fingerprint =
+            driver_runtime_continuation_action_fingerprint(1, 2, 3, 4, 5, 6, 1, 0, 64, 256, 32, 0);
+        assert_ne!(fingerprint, 0);
+        for (field, mutated) in [
+            (
+                "opcode",
+                driver_runtime_continuation_action_fingerprint(
+                    7, 2, 3, 4, 5, 6, 1, 0, 64, 256, 32, 0,
+                ),
+            ),
+            (
+                "flags",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 7, 3, 4, 5, 6, 1, 0, 64, 256, 32, 0,
+                ),
+            ),
+            (
+                "arg0",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 7, 4, 5, 6, 1, 0, 64, 256, 32, 0,
+                ),
+            ),
+            (
+                "arg1",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 3, 7, 5, 6, 1, 0, 64, 256, 32, 0,
+                ),
+            ),
+            (
+                "aux0",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 3, 4, 7, 6, 1, 0, 64, 256, 32, 0,
+                ),
+            ),
+            (
+                "aux1",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 3, 4, 5, 7, 1, 0, 64, 256, 32, 0,
+                ),
+            ),
+            (
+                "max_ops",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 3, 4, 5, 6, 7, 0, 64, 256, 32, 0,
+                ),
+            ),
+            (
+                "max_frames",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 3, 4, 5, 6, 1, 7, 64, 256, 32, 0,
+                ),
+            ),
+            (
+                "max_bytes",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 3, 4, 5, 6, 1, 0, 65, 256, 32, 0,
+                ),
+            ),
+            (
+                "frame_offset",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 3, 4, 5, 6, 1, 0, 64, 257, 32, 0,
+                ),
+            ),
+            (
+                "frame_len",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 3, 4, 5, 6, 1, 0, 64, 256, 33, 0,
+                ),
+            ),
+            (
+                "frame_flags",
+                driver_runtime_continuation_action_fingerprint(
+                    1, 2, 3, 4, 5, 6, 1, 0, 64, 256, 32, 1,
+                ),
+            ),
+        ] {
+            assert_ne!(fingerprint, mutated, "{field} must be fingerprinted");
+        }
+        assert_eq!(
+            DriverRuntimeContinuationGrant::new(9, fingerprint, 11, 1),
+            DriverRuntimeContinuationGrant {
+                magic: DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
+                request_sequence: 9,
+                action_fingerprint: fingerprint,
+                generation: 11,
+                grant_id: 1,
+                consumed_grant_id: 0,
+            }
+        );
     }
 
     #[test]

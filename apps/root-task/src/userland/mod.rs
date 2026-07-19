@@ -1081,6 +1081,13 @@ where
             && !crate::drivers::driver_task_net::cyw43_recovery_required()
         {
             pump.poll();
+            let stability_now_ms = crate::hal::timebase().now_ms();
+            if bootstrap.mark_ready_generation_stable(pump.net_console_ready_for_root()) {
+                retry_schedule.reset_attempt_budget(stability_now_ms);
+                crate::log_buffer::append_log_line(
+                    "[net-console] CYW43 recovery budget reset after address/TCP-ready proof",
+                );
+            }
             sel4::yield_now();
             continue;
         }
@@ -1194,7 +1201,6 @@ where
                         local_seat_enabled,
                         false,
                     );
-                    retry_schedule.reset_attempt_budget(now_ms);
                     attempt_active = false;
                     sel4::yield_now();
                     continue;
@@ -1262,7 +1268,6 @@ where
                 );
                 crate::log_buffer::append_log_line(line.as_str());
                 network_attached = true;
-                retry_schedule.reset_attempt_budget(now_ms);
                 attempt_active = false;
             }
             Cyw43BootstrapTurnOutcome::Failed(driver_error) => {

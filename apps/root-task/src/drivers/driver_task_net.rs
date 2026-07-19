@@ -909,6 +909,9 @@ struct Cyw43SupervisorWaitCursor {
     deadline: Cyw43PollDeadline,
 }
 
+#[cfg(feature = "kernel")]
+const CYW43_SUPERVISOR_PAIR_RESTART_LIMIT: u8 = 1;
+
 /// Retained no-allocation CYW43/SDIO bootstrap and recovery supervisor.
 ///
 /// The supervisor is deliberately stored above `NetStack`: it is serviced by
@@ -936,8 +939,10 @@ pub struct Cyw43BootstrapSupervisor {
     wait: Option<Cyw43SupervisorWaitCursor>,
     engine_completion: Option<DriverTaskCompletionRecord>,
     recovery_cursor: Option<crate::hal::driver_task::Cyw43SdioPairRestartCursor>,
+    pair_restarts: u8,
     context_replay_owned: bool,
     ready_generation: Option<u32>,
+    stable_generation: Option<u32>,
 }
 
 #[cfg(feature = "kernel")]
@@ -964,8 +969,10 @@ impl Cyw43BootstrapSupervisor {
             wait: None,
             engine_completion: None,
             recovery_cursor: None,
+            pair_restarts: 0,
             context_replay_owned: false,
             ready_generation: None,
+            stable_generation: None,
         }
     }
 
@@ -985,6 +992,34 @@ impl Cyw43BootstrapSupervisor {
     #[must_use]
     pub const fn is_ready(&self) -> bool {
         matches!(self.phase, Cyw43BootstrapPhase::Complete)
+    }
+
+    /// Accept an attached stack's real address/TCP-ready proof for this generation.
+    ///
+    /// A successful pair replay alone is not stability evidence: association,
+    /// EAPOL, DHCP, and data service still run above it. Until the ordinary
+    /// EventPump reports the attached network ready, the single-restart budget
+    /// remains spent so a success/fault oscillation cannot loop forever inside
+    /// logical attempt one.
+    pub fn mark_ready_generation_stable(&mut self, network_ready: bool) -> bool {
+        let Some(ready_generation) = self.ready_generation else {
+            return false;
+        };
+        if !network_ready
+            || !self.is_ready()
+            || ready_generation != self.generation
+            || cyw43_recovery_required()
+            || crate::hal::driver_task::cyw43_sdio_pair_restart_required()
+            || crate::hal::driver_task::cyw43_sdio_pair_context_replay_required()
+        {
+            return false;
+        }
+        if self.stable_generation == Some(ready_generation) {
+            return false;
+        }
+        self.stable_generation = Some(ready_generation);
+        self.pair_restarts = 0;
+        true
     }
 
     fn pending_outcome(
@@ -1031,6 +1066,7 @@ impl Cyw43BootstrapSupervisor {
     fn fail(&mut self, error: DriverTaskNetError) -> Cyw43BootstrapTurnOutcome {
         self.pending = None;
         self.wait = None;
+        self.recovery_cursor = None;
         if self.context_replay_owned {
             crate::hal::driver_task::finish_cyw43_sdio_pair_context_replay(false);
             self.context_replay_owned = false;
@@ -1631,6 +1667,7 @@ impl Cyw43BootstrapSupervisor {
         self.pending = None;
         self.wait = None;
         self.ready_generation = None;
+        self.stable_generation = None;
         if self.recovery_ticket.is_some_and(|ticket| {
             ticket.generation == self.generation && ticket.generation == current_generation
         }) {
@@ -2861,8 +2898,12 @@ impl Cyw43BootstrapSupervisor {
                 self.pending_outcome("cyw43-generation-poisoned", false)
             }
             Cyw43RecoveryPhase::BeginPairRestart => {
+                if self.pair_restarts >= CYW43_SUPERVISOR_PAIR_RESTART_LIMIT {
+                    return self.fail(DriverTaskNetError::RuntimeInit("cyw43-pair-recovery-limit"));
+                }
                 match crate::hal::driver_task::begin_cyw43_sdio_pair_restart() {
                     Ok(cursor) => {
+                        self.pair_restarts = self.pair_restarts.saturating_add(1);
                         self.recovery_cursor = Some(cursor);
                         self.phase =
                             Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::StepPairRestart);
@@ -31579,6 +31620,99 @@ mod tests {
         assert!(supervisor.pending.is_none());
         assert!(supervisor.recovery_cursor.is_none());
         assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn recurring_replay_fault_cannot_restart_the_pair_forever_in_one_attempt() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        CYW43_CONNECTION_EPOCH.store(17, Ordering::Release);
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor.generation = 17;
+        supervisor.phase = Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::FinishContextReplay);
+        supervisor.pair_restarts = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
+        supervisor.context_replay_owned = true;
+        assert!(crate::hal::driver_task::test_begin_cyw43_sdio_pair_context_replay());
+        let mut hal = Cyw43SupervisorTestHal;
+
+        assert!(matches!(
+            supervisor.service_recovery_turn(Cyw43RecoveryPhase::FinishContextReplay, &mut hal),
+            Cyw43BootstrapTurnOutcome::Pending {
+                stage: "cyw43-pair-context-replay-finish",
+                operation_executed: true,
+                ..
+            }
+        ));
+        assert_eq!(
+            supervisor.phase,
+            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::Complete),
+        );
+        assert_eq!(
+            supervisor.pair_restarts, CYW43_SUPERVISOR_PAIR_RESTART_LIMIT,
+            "context replay is not end-to-end network stability proof",
+        );
+        assert_eq!(
+            supervisor.service_recovery_turn(Cyw43RecoveryPhase::Complete, &mut hal),
+            Cyw43BootstrapTurnOutcome::Complete,
+        );
+
+        // Model the same transport fault recurring before association/EAPOL,
+        // DHCP, and TCP readiness. The successful replay above must not reset
+        // the inner restart budget and form another success/fault cycle in
+        // logical attempt one.
+        supervisor.arm_generation_recovery("cyw43-ambiguous-generation-fault");
+
+        assert!(matches!(
+            supervisor.service_recovery_turn(Cyw43RecoveryPhase::PoisonGeneration, &mut hal),
+            Cyw43BootstrapTurnOutcome::Pending {
+                stage: "cyw43-generation-poisoned",
+                operation_executed: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            supervisor.service_recovery_turn(Cyw43RecoveryPhase::BeginPairRestart, &mut hal),
+            Cyw43BootstrapTurnOutcome::Failed(DriverTaskNetError::RuntimeInit(
+                "cyw43-pair-recovery-limit"
+            )),
+        );
+        assert_eq!(
+            supervisor.phase,
+            Cyw43BootstrapPhase::Failed(DriverTaskNetError::RuntimeInit(
+                "cyw43-pair-recovery-limit"
+            )),
+        );
+        assert!(supervisor.recovery_cursor.is_none());
+        assert_eq!(CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire), 0);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn network_ready_proof_resets_pair_recovery_streak_once_per_generation() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        CYW43_CONNECTION_EPOCH.store(23, Ordering::Release);
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor.generation = 23;
+        supervisor.phase = Cyw43BootstrapPhase::Complete;
+        supervisor.ready_generation = Some(23);
+        supervisor.pair_restarts = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
+
+        assert!(!supervisor.mark_ready_generation_stable(false));
+        assert_eq!(
+            supervisor.pair_restarts,
+            CYW43_SUPERVISOR_PAIR_RESTART_LIMIT,
+        );
+        assert!(supervisor.mark_ready_generation_stable(true));
+        assert_eq!(supervisor.pair_restarts, 0);
+        assert_eq!(supervisor.stable_generation, Some(23));
+        assert!(!supervisor.mark_ready_generation_stable(true));
+
+        supervisor.arm_generation_recovery("post-stability-independent-fault");
+        assert_eq!(supervisor.stable_generation, None);
         reset_cyw43_status_flags();
     }
 

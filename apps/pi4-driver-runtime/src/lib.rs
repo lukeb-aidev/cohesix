@@ -34,6 +34,11 @@ use font8x8::legacy::BASIC_LEGACY;
 use pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID;
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
 use pi4_driver_abi::DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE;
+#[cfg(any(target_os = "none", test))]
+use pi4_driver_abi::{
+    driver_runtime_continuation_action_fingerprint, DriverRuntimeContinuationGrant,
+    DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
+};
 use pi4_driver_abi::{
     driver_runtime_cyw43_armcr4_reset_result, driver_runtime_genet_completion_result,
     DriverRuntimeBusLinkDescriptor, DriverRuntimeCyw43CommandDescriptor,
@@ -536,6 +541,10 @@ use pi4_driver_abi::{
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
     DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
+};
+#[cfg(any(target_os = "none", test))]
+use pi4_driver_abi::{
+    DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
 };
 
 /// Child CSpace slot containing the root-to-driver command endpoint.
@@ -2526,6 +2535,7 @@ enum Cyw43DpcIoPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43DpcTurnRoute {
     Quarantine,
+    GrantChild,
     PollChild,
     CompleteEvent,
     AdvanceState,
@@ -2536,7 +2546,12 @@ enum Cyw43DpcTurnRoute {
 struct Cyw43DpcChild {
     active: bool,
     issued_unknown: bool,
+    continuation_grant_required: bool,
+    continuation_grant_publish: bool,
+    generation: u32,
+    grant_id: u32,
     expected_sequence: u32,
+    command: DriverTaskCommandRecord,
     started_ticks: u64,
     timeout_cycles: u64,
     fallback_polls: u32,
@@ -2553,7 +2568,26 @@ impl Cyw43DpcChild {
         Self {
             active: false,
             issued_unknown: false,
+            continuation_grant_required: false,
+            continuation_grant_publish: false,
+            generation: 0,
+            grant_id: 0,
             expected_sequence: 0,
+            command: DriverTaskCommandRecord {
+                sequence: 0,
+                opcode: 0,
+                flags: 0,
+                arg0: 0,
+                arg1: 0,
+                aux0: 0,
+                aux1: 0,
+                budget: DriverTaskBudgetGrant {
+                    max_ops: 0,
+                    max_frames: 0,
+                    max_bytes: 0,
+                },
+                frame: DriverFrameDescriptor::empty(),
+            },
             started_ticks: 0,
             timeout_cycles: 0,
             fallback_polls: 0,
@@ -2627,6 +2661,8 @@ impl Cyw43DpcCursor {
 const fn cyw43_dpc_turn_route(cursor: &Cyw43DpcCursor) -> Cyw43DpcTurnRoute {
     if cursor.child.issued_unknown {
         Cyw43DpcTurnRoute::Quarantine
+    } else if cursor.child.active && cursor.child.continuation_grant_required {
+        Cyw43DpcTurnRoute::GrantChild
     } else if cursor.child.active {
         Cyw43DpcTurnRoute::PollChild
     } else if matches!(cursor.action, Cyw43DpcAction::None) {
@@ -3492,6 +3528,431 @@ pub struct DriverTaskCommandRecord {
     pub frame: DriverFrameDescriptor,
 }
 
+#[cfg(any(target_os = "none", test))]
+const fn runtime_continuation_action_fingerprint(command: DriverTaskCommandRecord) -> u32 {
+    driver_runtime_continuation_action_fingerprint(
+        command.opcode,
+        command.flags,
+        command.arg0,
+        command.arg1,
+        command.aux0,
+        command.aux1,
+        command.budget.max_ops,
+        command.budget.max_frames,
+        command.budget.max_bytes,
+        command.frame.offset,
+        command.frame.len,
+        command.frame.flags,
+    )
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_continuation_expected_generation(command: DriverTaskCommandRecord) -> Option<u32> {
+    if command.sequence & CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN != 0
+        && command.arg0 == HOT_PATH_SDIO_HOST
+        && command.arg1 == ROLE_SDIO
+        && command.aux1 != 0
+    {
+        Some(command.aux1)
+    } else {
+        None
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeDelegatedGenerationAdmission {
+    NotDelegated,
+    Admitted(u32),
+    Rejected,
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_delegated_generation_admission(
+    command: DriverTaskCommandRecord,
+    owner_generation: Option<u32>,
+) -> RuntimeDelegatedGenerationAdmission {
+    let Some(command_generation) = runtime_continuation_expected_generation(command) else {
+        return RuntimeDelegatedGenerationAdmission::NotDelegated;
+    };
+    if owner_generation == Some(command_generation) {
+        RuntimeDelegatedGenerationAdmission::Admitted(command_generation)
+    } else {
+        RuntimeDelegatedGenerationAdmission::Rejected
+    }
+}
+
+#[cfg(target_os = "none")]
+fn runtime_continuation_grant_window(base: usize) -> Option<RuntimeRingWindowKind> {
+    if base == DRIVER_TASK_RING_VADDR {
+        Some(RuntimeRingWindowKind::Local)
+    } else if base == DRIVER_TASK_SDIO_BUS_RING_VADDR {
+        Some(RuntimeRingWindowKind::SdioOwner)
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "none")]
+fn runtime_continuation_grant_read_u32(base: usize, field_offset: usize) -> Option<u32> {
+    runtime_volatile_read(
+        runtime_continuation_grant_window(base)?,
+        usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET).checked_add(field_offset)?,
+        RuntimeVolatileWidth::U32,
+    )
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn runtime_continuation_grant_read_u32(base: usize, field_offset: usize) -> Option<u32> {
+    if field_offset.checked_add(core::mem::size_of::<u32>())?
+        > usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES)
+    {
+        return None;
+    }
+    let address = base
+        .checked_add(usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET))?
+        .checked_add(field_offset)?;
+    if address & (core::mem::align_of::<u32>() - 1) != 0 {
+        return None;
+    }
+    // SAFETY: Host tests pass the base of their live, aligned, page-sized
+    // continuation-grant fixture. Checked arithmetic and alignment keep this
+    // single primitive access within the fixed 24-byte record.
+    Some(unsafe { core::ptr::read_volatile(address as *const u32) })
+}
+
+#[cfg(target_os = "none")]
+fn runtime_continuation_grant_write_u32(base: usize, field_offset: usize, value: u32) -> bool {
+    let Some(offset) =
+        usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET).checked_add(field_offset)
+    else {
+        return false;
+    };
+    runtime_volatile_write(
+        match runtime_continuation_grant_window(base) {
+            Some(kind) => kind,
+            None => return false,
+        },
+        offset,
+        RuntimeVolatileWidth::U32,
+        value,
+    )
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn runtime_continuation_grant_write_u32(base: usize, field_offset: usize, value: u32) -> bool {
+    if field_offset
+        .checked_add(core::mem::size_of::<u32>())
+        .is_none_or(|end| end > usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES))
+    {
+        return false;
+    }
+    let Some(address) = base
+        .checked_add(usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET))
+        .and_then(|address| address.checked_add(field_offset))
+    else {
+        return false;
+    };
+    if address & (core::mem::align_of::<u32>() - 1) != 0 {
+        return false;
+    }
+    // SAFETY: Host tests pass the base of their live, aligned, page-sized
+    // continuation-grant fixture. Checked arithmetic and alignment keep this
+    // single primitive access within the fixed 24-byte record.
+    unsafe {
+        core::ptr::write_volatile(address as *mut u32, value);
+    }
+    true
+}
+
+#[cfg(any(target_os = "none", test))]
+fn read_runtime_continuation_grant_at(base: usize) -> Option<DriverRuntimeContinuationGrant> {
+    let address = base + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+    driver_task_shared_invalidate_range(
+        address,
+        usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES),
+    );
+    let first_id = runtime_continuation_grant_read_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+    )?;
+    if first_id == 0 {
+        return None;
+    }
+    driver_task_shared_load_barrier();
+    let observed = DriverRuntimeContinuationGrant {
+        magic: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, magic),
+        )?,
+        request_sequence: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, request_sequence),
+        )?,
+        action_fingerprint: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, action_fingerprint),
+        )?,
+        generation: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, generation),
+        )?,
+        grant_id: first_id,
+        consumed_grant_id: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id),
+        )?,
+    };
+    driver_task_shared_load_barrier();
+    driver_task_shared_invalidate_range(
+        address + core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+        core::mem::size_of::<u32>(),
+    );
+    let second_id = runtime_continuation_grant_read_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+    )?;
+    (first_id == second_id && observed.magic == DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC)
+        .then_some(observed)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn publish_runtime_continuation_grant_at(
+    base: usize,
+    command: DriverTaskCommandRecord,
+    generation: u32,
+    grant_id: u32,
+) -> bool {
+    if runtime_continuation_expected_generation(command) != Some(generation) || grant_id == 0 {
+        return false;
+    }
+    let address = base + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+    let grant = DriverRuntimeContinuationGrant::new(
+        command.sequence,
+        runtime_continuation_action_fingerprint(command),
+        generation,
+        grant_id,
+    );
+    if !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+        0,
+    ) || !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id),
+        0,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+        core::mem::size_of::<u32>() * 2,
+    );
+    for (offset, value) in [
+        (
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, magic),
+            grant.magic,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, request_sequence),
+            grant.request_sequence,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, action_fingerprint),
+            grant.action_fingerprint,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, generation),
+            grant.generation,
+        ),
+    ] {
+        if !runtime_continuation_grant_write_u32(base, offset, value) {
+            return false;
+        }
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+    );
+    if !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+        grant.grant_id,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+        core::mem::size_of::<u32>(),
+    );
+    true
+}
+
+#[cfg(any(target_os = "none", test))]
+fn acknowledge_runtime_continuation_grant_at(base: usize, grant_id: u32) -> bool {
+    if grant_id == 0 {
+        return false;
+    }
+    let address = base + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+    let Some(current_id) = runtime_continuation_grant_read_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+    ) else {
+        return false;
+    };
+    if current_id != grant_id {
+        return false;
+    }
+    if !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id),
+        grant_id,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id),
+        core::mem::size_of::<u32>(),
+    );
+    // Acknowledgement publication is the irrevocable consumption boundary.
+    // The producer may replace this record with the next ID as soon as it
+    // observes the acknowledgement, so a post-commit re-read would race a
+    // legitimate replacement and could incorrectly roll back spent authority.
+    true
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeContinuationGrantProducerState {
+    Pending,
+    Consumed,
+    Invalid,
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_continuation_grant_producer_state(
+    grant: Option<DriverRuntimeContinuationGrant>,
+    command: DriverTaskCommandRecord,
+    generation: u32,
+    grant_id: u32,
+) -> RuntimeContinuationGrantProducerState {
+    let Some(grant) = grant else {
+        return RuntimeContinuationGrantProducerState::Invalid;
+    };
+    if runtime_continuation_expected_generation(command) != Some(generation)
+        || grant.magic != DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC
+        || grant.request_sequence != command.sequence
+        || grant.action_fingerprint != runtime_continuation_action_fingerprint(command)
+        || grant.generation != generation
+        || grant.grant_id != grant_id
+        || grant_id == 0
+    {
+        return RuntimeContinuationGrantProducerState::Invalid;
+    }
+    if grant.consumed_grant_id == 0 {
+        RuntimeContinuationGrantProducerState::Pending
+    } else if grant.consumed_grant_id == grant.grant_id {
+        RuntimeContinuationGrantProducerState::Consumed
+    } else {
+        RuntimeContinuationGrantProducerState::Invalid
+    }
+}
+
+#[cfg(target_os = "none")]
+fn runtime_continuation_grant_producer_state_at(
+    base: usize,
+    command: DriverTaskCommandRecord,
+    generation: u32,
+    grant_id: u32,
+) -> RuntimeContinuationGrantProducerState {
+    runtime_continuation_grant_producer_state(
+        read_runtime_continuation_grant_at(base),
+        command,
+        generation,
+        grant_id,
+    )
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_continuation_next_grant_id(current: u32) -> Option<u32> {
+    if current == 0 {
+        Some(1)
+    } else {
+        current.checked_add(1)
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeContinuationGrantPlan {
+    Publish(u32),
+    Resignal(u32),
+    Invalid,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_continuation_grant_plan_after_poll(
+    current: u32,
+    observed: RuntimeContinuationGrantProducerState,
+) -> RuntimeContinuationGrantPlan {
+    if current == 0 {
+        return RuntimeContinuationGrantPlan::Publish(1);
+    }
+    match observed {
+        RuntimeContinuationGrantProducerState::Pending => {
+            RuntimeContinuationGrantPlan::Resignal(current)
+        }
+        RuntimeContinuationGrantProducerState::Consumed => {
+            match runtime_continuation_next_grant_id(current) {
+                Some(next) => RuntimeContinuationGrantPlan::Publish(next),
+                None => RuntimeContinuationGrantPlan::Invalid,
+            }
+        }
+        RuntimeContinuationGrantProducerState::Invalid => RuntimeContinuationGrantPlan::Invalid,
+    }
+}
+
+#[cfg(target_os = "none")]
+fn runtime_continuation_grant_plan_at_poll(
+    base: usize,
+    command: DriverTaskCommandRecord,
+    generation: u32,
+    current: u32,
+) -> RuntimeContinuationGrantPlan {
+    let observed = if current == 0 {
+        // No grant exists before the first missed completion poll. Avoid a
+        // speculative shared-ring read and plan the first publication locally.
+        RuntimeContinuationGrantProducerState::Pending
+    } else {
+        runtime_continuation_grant_producer_state_at(base, command, generation, current)
+    };
+    runtime_continuation_grant_plan_after_poll(current, observed)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn clear_runtime_continuation_grant_at(base: usize) {
+    let address = base + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+    let _ = runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+        0,
+    );
+    let _ = runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id),
+        0,
+    );
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id),
+        core::mem::size_of::<u32>() * 2,
+    );
+}
+
 /// Completion record written by isolated driver runtimes.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3935,22 +4396,25 @@ const fn runtime_command_loop_route(
 }
 
 /// Retained foreground commands release exactly one physical quantum per
-/// root-issued endpoint rendezvous.
+/// endpoint rendezvous or exact sequence-last shared continuation grant.
 ///
 /// Ring sequence commit is the issue boundary. A later matching endpoint
-/// message is only a wake grant for that exact retained intake: it cannot
-/// republish, mutate, or replay the action. Unlike notification bits, endpoint
-/// NBSends cannot coalesce into ambiguous grant counts and can rendezvous with
-/// at most one blocked receive. Coalesced peer or IRQ work remains local and
-/// alternates with foreground grants, so a continuously asserted level source
-/// cannot starve the immutable command. Each delivered wake still selects
-/// exactly one service or foreground quantum.
+/// message or shared grant is only continuation authority for that exact
+/// retained intake: neither can republish, mutate, or replay the action.
+/// Notifications are wake hints and may coalesce; the shared grant's immutable
+/// request, action, generation, and monotonic ID decide whether foreground work
+/// is admitted. Coalesced peer or IRQ work remains local and alternates with
+/// foreground grants, so a continuously asserted level source cannot starve
+/// the immutable command. Each delivered wake still selects exactly one
+/// service or foreground quantum.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimePendingCommandGate {
     continuation_required: bool,
     deferred_service_badge: u32,
     foreground_due_after_service: bool,
+    retained_generation: Option<u32>,
+    last_grant_id: u32,
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -3960,6 +4424,8 @@ impl RuntimePendingCommandGate {
             continuation_required: false,
             deferred_service_badge: 0,
             foreground_due_after_service: false,
+            retained_generation: None,
+            last_grant_id: 0,
         }
     }
 
@@ -3971,9 +4437,16 @@ impl RuntimePendingCommandGate {
         self.continuation_required = true;
     }
 
+    fn retain_after_pending_generation(&mut self, generation: u32) {
+        self.continuation_required = true;
+        self.retained_generation = Some(generation);
+    }
+
     fn complete(&mut self) {
         self.continuation_required = false;
         self.foreground_due_after_service = false;
+        self.retained_generation = None;
+        self.last_grant_id = 0;
     }
 
     fn take_deferred_service(&mut self) -> Option<u32> {
@@ -3986,6 +4459,39 @@ impl RuntimePendingCommandGate {
         &mut self,
         retained: &mut RuntimeCommandIntake,
         wake: RuntimeWake,
+    ) -> RuntimePendingWakeRoute {
+        self.route_wake_with_grant(retained, wake, None)
+    }
+
+    fn grant_matches(
+        &self,
+        retained: RuntimeCommandIntake,
+        grant: DriverRuntimeContinuationGrant,
+    ) -> bool {
+        let Some(expected_generation) = runtime_continuation_expected_generation(retained.command)
+        else {
+            return false;
+        };
+        grant.magic == DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC
+            && grant.request_sequence == retained.command.sequence
+            && grant.action_fingerprint == runtime_continuation_action_fingerprint(retained.command)
+            && grant.generation == expected_generation
+            && grant.grant_id != 0
+            && grant.consumed_grant_id == 0
+            && grant.grant_id > self.last_grant_id
+            && self.retained_generation == Some(expected_generation)
+    }
+
+    fn consume_grant(&mut self, grant: DriverRuntimeContinuationGrant) {
+        self.retained_generation = Some(grant.generation);
+        self.last_grant_id = grant.grant_id;
+    }
+
+    fn route_wake_with_grant(
+        &mut self,
+        retained: &mut RuntimeCommandIntake,
+        wake: RuntimeWake,
+        grant: Option<DriverRuntimeContinuationGrant>,
     ) -> RuntimePendingWakeRoute {
         if !self.continuation_required {
             return RuntimePendingWakeRoute::Rejected;
@@ -4017,19 +4523,35 @@ impl RuntimePendingCommandGate {
             RuntimeWake::Notification(badge) => {
                 let service_badge = badge & !DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
                 self.deferred_service_badge |= service_badge;
-                if self.foreground_due_after_service {
+                let exact_grant = grant.filter(|grant| self.grant_matches(*retained, *grant));
+                if let (true, Some(grant)) = (self.foreground_due_after_service, exact_grant) {
+                    self.consume_grant(grant);
+                    self.continuation_required = false;
+                    self.foreground_due_after_service = false;
+                    RuntimePendingWakeRoute::ContinueForeground
+                } else if self.foreground_due_after_service {
                     // A priority-255 linked runtime must not turn a continuously
                     // reasserted level source into a private service loop. Only
-                    // the next exact endpoint rendezvous can return to the
-                    // retained foreground command.
+                    // the next exact endpoint rendezvous or committed shared
+                    // grant can return to the retained foreground command.
                     RuntimePendingWakeRoute::Rejected
                 } else if let Some(service_badge) = self.take_deferred_service() {
                     // Service at most one persistent-source quantum. Keeping
                     // the continuation requirement armed makes the following
-                    // root grant eligible for foreground work even when the
-                    // same level IRQ immediately reasserts.
+                    // producer grant eligible for foreground work even when
+                    // the same level IRQ immediately reasserts. A coalesced
+                    // valid grant is consumed by this service arbitration; it
+                    // cannot later authorize a second physical quantum.
+                    if let Some(grant) = exact_grant {
+                        self.consume_grant(grant);
+                    }
                     self.foreground_due_after_service = true;
                     RuntimePendingWakeRoute::ServiceNotification(service_badge)
+                } else if let Some(grant) = exact_grant {
+                    self.consume_grant(grant);
+                    self.continuation_required = false;
+                    self.foreground_due_after_service = false;
+                    RuntimePendingWakeRoute::ContinueForeground
                 } else {
                     RuntimePendingWakeRoute::Rejected
                 }
@@ -8169,9 +8691,20 @@ fn cyw43_runtime_service_dpc_event() -> bool {
             }
 
             if cursor.child.active {
+                if cursor.child.continuation_grant_required {
+                    if cyw43_dpc_child_grant_once(&mut cursor) {
+                        state.dpc_cursor = cursor;
+                        should_defer_local = true;
+                        return true;
+                    }
+                    state.dpc_cursor = cursor;
+                    state.recovery_required = true;
+                    return false;
+                }
                 match cyw43_dpc_child_poll_once(&mut cursor) {
                     Cyw43DpcChildPoll::Pending => {
                         state.dpc_cursor = cursor;
+                        should_defer_local = true;
                         return true;
                     }
                     Cyw43DpcChildPoll::TerminalMalformed => {
@@ -8188,17 +8721,18 @@ fn cyw43_runtime_service_dpc_event() -> bool {
                         return false;
                     }
                     Cyw43DpcChildPoll::Exact(completion) => {
-                        let terminal =
+                        let _terminal =
                             cyw43_dpc_apply_exact_completion(state, &mut cursor, completion);
+                        state.dpc_cursor = cursor;
                         if state.recovery_required {
-                            state.dpc_cursor = cursor;
                             return false;
                         }
-                        if !terminal {
-                            state.dpc_cursor = cursor;
-                            should_defer_local = true;
-                            return true;
-                        }
+                        // The exact child-completion poll is this turn's sole
+                        // cross-runtime operation. Even when it made the DPC
+                        // action terminal, retain the cursor and defer event
+                        // advance/owner rearm to a later CompleteEvent turn.
+                        should_defer_local = true;
+                        return true;
                     }
                 }
             } else if cursor.io_phase == Cyw43DpcIoPhase::Idle {
@@ -12231,6 +12765,7 @@ const CYW43_SDIO_BUS_LINK_SEQUENCE_VALUE_MASK: u32 = !CYW43_SDIO_BUS_LINK_SEQUEN
 enum Cyw43ForegroundFrontierRoute {
     Cached,
     Submit,
+    Grant,
     Poll,
     Defer,
     Poison,
@@ -12262,6 +12797,7 @@ const fn cyw43_foreground_frontier_route(
     completed_count: u16,
     frontier_valid: bool,
     frontier_submitted: bool,
+    continuation_grant_required: bool,
     action_consumed: bool,
     identity_matches: bool,
     poisoned: bool,
@@ -12273,6 +12809,8 @@ const fn cyw43_foreground_frontier_route(
         Cyw43ForegroundFrontierRoute::Cached
     } else if action_consumed {
         Cyw43ForegroundFrontierRoute::Defer
+    } else if frontier_valid && frontier_submitted && continuation_grant_required {
+        Cyw43ForegroundFrontierRoute::Grant
     } else if frontier_valid && frontier_submitted {
         Cyw43ForegroundFrontierRoute::Poll
     } else {
@@ -12454,6 +12992,9 @@ struct Cyw43ForegroundTransaction {
     frontier: Cyw43ForegroundTraceEntry,
     frontier_valid: bool,
     frontier_submitted: bool,
+    frontier_continuation_grant_required: bool,
+    frontier_continuation_grant_publish: bool,
+    frontier_grant_id: u32,
     frontier_started_ticks: u64,
     frontier_timeout_cycles: u64,
     frontier_polls: u32,
@@ -12511,6 +13052,9 @@ impl Cyw43ForegroundTransaction {
             frontier: Cyw43ForegroundTraceEntry::empty(),
             frontier_valid: false,
             frontier_submitted: false,
+            frontier_continuation_grant_required: false,
+            frontier_continuation_grant_publish: false,
+            frontier_grant_id: 0,
             frontier_started_ticks: 0,
             frontier_timeout_cycles: 0,
             frontier_polls: 0,
@@ -12546,6 +13090,9 @@ impl Cyw43ForegroundTransaction {
         self.frontier = Cyw43ForegroundTraceEntry::empty();
         self.frontier_valid = false;
         self.frontier_submitted = false;
+        self.frontier_continuation_grant_required = false;
+        self.frontier_continuation_grant_publish = false;
+        self.frontier_grant_id = 0;
         self.frontier_started_ticks = 0;
         self.frontier_timeout_cycles = 0;
         self.frontier_polls = 0;
@@ -13636,7 +14183,13 @@ fn cyw43_dpc_child_submit_once(
     {
         return false;
     }
+    let generation = CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_shared_epoch);
+    if generation == 0 {
+        let _ = cyw43_sdio_child_release_exact_or_restart(command.sequence);
+        return false;
+    }
     command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+    command.aux1 = generation;
     let command_result = cyw43_sdio_bus_link_command_result(command);
     let timeout_us = cyw43_sdio_bus_link_child_wait_timeout_us(command);
     let started_ticks = runtime_timer_counter_ticks();
@@ -13649,6 +14202,7 @@ fn cyw43_dpc_child_submit_once(
     );
     let staged_command = cyw43_sdio_bus_link_staged_command(command);
     let completion_reset = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
+    clear_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR);
     // SAFETY: The generated CYW43/SDIO bus-link maps this fixed command and
     // completion ring into both runtimes. The staged body and reset completion
     // are cleaned before sequence-last publication and the single doorbell.
@@ -13695,7 +14249,12 @@ fn cyw43_dpc_child_submit_once(
     cursor.child = Cyw43DpcChild {
         active: true,
         issued_unknown: false,
+        continuation_grant_required: false,
+        continuation_grant_publish: false,
+        generation,
+        grant_id: 0,
         expected_sequence: command.sequence,
+        command,
         started_ticks,
         timeout_cycles,
         fallback_polls: 0,
@@ -13718,6 +14277,44 @@ fn cyw43_dpc_child_submit_once(
         },
         expected_frame_len: read_frame.len,
     };
+    true
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_dpc_child_grant_once(cursor: &mut Cyw43DpcCursor) -> bool {
+    let child = cursor.child;
+    if !child.active
+        || child.issued_unknown
+        || !child.continuation_grant_required
+        || child.generation == 0
+        || child.command.sequence != child.expected_sequence
+        || child.command.aux1 != child.generation
+        || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+        || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) != child.expected_sequence
+        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+    {
+        return false;
+    }
+    let grant_id = child.grant_id;
+    if grant_id == 0 {
+        return false;
+    }
+    if child.continuation_grant_publish
+        && !publish_runtime_continuation_grant_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            child.command,
+            child.generation,
+            grant_id,
+        )
+    {
+        return false;
+    }
+    cursor.child.grant_id = grant_id;
+    cursor.child.continuation_grant_required = false;
+    cursor.child.continuation_grant_publish = false;
+    // The exact grant is visible before this wake hint. SDIO validates and
+    // acknowledges the immutable generation-bound ID before spending it.
+    runtime_signal_notification(DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT as u32);
     true
 }
 
@@ -13813,6 +14410,25 @@ fn cyw43_dpc_child_poll_once(cursor: &mut Cyw43DpcCursor) -> Cyw43DpcChildPoll {
         }
         return Cyw43DpcChildPoll::IssuedUnknown;
     }
+    match runtime_continuation_grant_plan_at_poll(
+        DRIVER_TASK_SDIO_BUS_RING_VADDR,
+        cursor.child.command,
+        cursor.child.generation,
+        cursor.child.grant_id,
+    ) {
+        RuntimeContinuationGrantPlan::Publish(grant_id) => {
+            cursor.child.grant_id = grant_id;
+            cursor.child.continuation_grant_publish = true;
+        }
+        RuntimeContinuationGrantPlan::Resignal(grant_id) => {
+            cursor.child.grant_id = grant_id;
+            cursor.child.continuation_grant_publish = false;
+        }
+        RuntimeContinuationGrantPlan::Invalid => {
+            return Cyw43DpcChildPoll::TerminalMalformed;
+        }
+    }
+    cursor.child.continuation_grant_required = true;
     Cyw43DpcChildPoll::Pending
 }
 
@@ -14127,6 +14743,7 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
     }
     let completion_reset = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
     let staged_command = cyw43_sdio_bus_link_staged_command(entry.command);
+    clear_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR);
     // SAFETY: The descriptor and optional write payload are complete and
     // cleaned before the sequence-last commit. That commit is the immutable
     // issue boundary; the following peer signal is only a liveness doorbell.
@@ -14151,6 +14768,9 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
         );
     }
     transaction.frontier_submitted = true;
+    transaction.frontier_continuation_grant_required = false;
+    transaction.frontier_continuation_grant_publish = false;
+    transaction.frontier_grant_id = 0;
     transaction.frontier_started_ticks = runtime_timer_counter_ticks();
     transaction.frontier_timeout_cycles = runtime_micros_to_cycles(u64::from(
         cyw43_sdio_bus_link_child_wait_timeout_us(entry.command),
@@ -14182,6 +14802,57 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
         DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     );
+    true
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_foreground_grant_frontier(transaction: &mut Cyw43ForegroundTransaction) -> bool {
+    let entry = transaction.frontier;
+    if !transaction.frontier_valid
+        || !transaction.frontier_submitted
+        || !transaction.frontier_continuation_grant_required
+        || entry.ticket.parent_sequence != transaction.parent.sequence
+        || entry.ticket.generation != transaction.generation
+        || entry.ticket.owner_sequence != entry.command.sequence
+        || entry.ticket.ordinal != transaction.completed_count
+        || entry.ticket.issued_turn_id == 0
+        || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+        || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) != entry.command.sequence
+        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+    {
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+        transaction.poisoned = true;
+        transaction.pending = false;
+        return false;
+    }
+    let grant_id = transaction.frontier_grant_id;
+    if grant_id == 0 {
+        transaction.poisoned = true;
+        transaction.pending = false;
+        return false;
+    }
+    if transaction.frontier_continuation_grant_publish
+        && !publish_runtime_continuation_grant_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            entry.command,
+            entry.ticket.generation,
+            grant_id,
+        )
+    {
+        transaction.poisoned = true;
+        transaction.pending = false;
+        return false;
+    }
+    transaction.frontier_grant_id = grant_id;
+    transaction.frontier_continuation_grant_required = false;
+    transaction.frontier_continuation_grant_publish = false;
+    transaction.action_consumed = true;
+    transaction.pending = true;
+    // The exact grant is sequence-last and globally visible. This signal is
+    // only its one-operation wake hint; a duplicate or coalesced badge cannot
+    // advance the retained owner command without a fresh ID.
+    runtime_signal_notification(DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT as u32);
     true
 }
 
@@ -14248,6 +14919,9 @@ fn cyw43_foreground_poll_frontier(
         transaction.frontier = Cyw43ForegroundTraceEntry::empty();
         transaction.frontier_valid = false;
         transaction.frontier_submitted = false;
+        transaction.frontier_continuation_grant_required = false;
+        transaction.frontier_continuation_grant_publish = false;
+        transaction.frontier_grant_id = 0;
         transaction.frontier_started_ticks = 0;
         transaction.frontier_timeout_cycles = 0;
         transaction.frontier_polls = 0;
@@ -14286,6 +14960,33 @@ fn cyw43_foreground_poll_frontier(
             cyw43_sdio_bus_link_command_result_from_descriptor(entry.command, entry.descriptor);
         cyw43_record_last_fault_with_result(FAULT_CYW43_TRANSPORT_BUS_LINK, result);
         transaction.issued_unknown = true;
+        transaction.frontier_continuation_grant_required = false;
+        transaction.frontier_continuation_grant_publish = false;
+    } else {
+        // A completion miss consumed this outer turn. The following turn may
+        // publish exactly one durable continuation grant; it must not poll the
+        // owner again until that grant has woken and admitted one SDIO quantum.
+        match runtime_continuation_grant_plan_at_poll(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            entry.command,
+            entry.ticket.generation,
+            transaction.frontier_grant_id,
+        ) {
+            RuntimeContinuationGrantPlan::Publish(grant_id) => {
+                transaction.frontier_grant_id = grant_id;
+                transaction.frontier_continuation_grant_publish = true;
+            }
+            RuntimeContinuationGrantPlan::Resignal(grant_id) => {
+                transaction.frontier_grant_id = grant_id;
+                transaction.frontier_continuation_grant_publish = false;
+            }
+            RuntimeContinuationGrantPlan::Invalid => {
+                transaction.poisoned = true;
+                transaction.pending = false;
+                return None;
+            }
+        }
+        transaction.frontier_continuation_grant_required = true;
     }
     transaction.pending = true;
     None
@@ -14310,6 +15011,10 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
         return Cyw43BusLinkOutcome::Failed;
     }
     CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+        // Bind delegated continuation authority to the immutable runtime
+        // generation. Root-issued SDIO commands keep their existing aux1
+        // semantics and continue to use endpoint rendezvous instead.
+        command.aux1 = transaction.generation;
         let index = transaction.replay_index as usize;
         if index < transaction.completed_count as usize {
             let entry = transaction.entries[index];
@@ -14319,6 +15024,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
                 transaction.completed_count,
                 transaction.frontier_valid,
                 transaction.frontier_submitted,
+                transaction.frontier_continuation_grant_required,
                 transaction.action_consumed,
                 identity_matches,
                 transaction.poisoned,
@@ -14327,6 +15033,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
                 Cyw43ForegroundFrontierRoute::Cached => {}
                 Cyw43ForegroundFrontierRoute::Poison
                 | Cyw43ForegroundFrontierRoute::Submit
+                | Cyw43ForegroundFrontierRoute::Grant
                 | Cyw43ForegroundFrontierRoute::Poll
                 | Cyw43ForegroundFrontierRoute::Defer => {
                     transaction.poisoned = true;
@@ -14373,6 +15080,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
             transaction.completed_count,
             transaction.frontier_valid,
             transaction.frontier_submitted,
+            transaction.frontier_continuation_grant_required,
             transaction.action_consumed,
             true,
             transaction.poisoned,
@@ -14380,6 +15088,13 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
         ) {
             Cyw43ForegroundFrontierRoute::Submit => {
                 if cyw43_foreground_submit_frontier(transaction) {
+                    Cyw43BusLinkOutcome::Pending
+                } else {
+                    Cyw43BusLinkOutcome::Failed
+                }
+            }
+            Cyw43ForegroundFrontierRoute::Grant => {
+                if cyw43_foreground_grant_frontier(transaction) {
                     Cyw43BusLinkOutcome::Pending
                 } else {
                     Cyw43BusLinkOutcome::Failed
@@ -34226,16 +34941,46 @@ pub fn runtime_main(task_key: usize) -> ! {
         ) == RuntimeCommandLoopRoute::WaitForRetainedContinuation
         {
             // A retained command has already consumed its one physical
-            // quantum. Only an exact endpoint rendezvous can advance it.
-            // Peer/IRQ notifications may consume one service quantum first;
-            // root then retries the same immutable wake without republishing
-            // the command.
+            // quantum. An exact endpoint rendezvous or a sequence-last shared
+            // grant can advance it. The latter keeps the delegated CYW43->SDIO
+            // producer viable after root intentionally deletes its steady
+            // command cap. Peer/IRQ notifications remain wake hints only.
             let wake = wait_runtime_command_or_notification(last_sequence);
-            let route = pending_intake
-                .as_mut()
-                .map_or(RuntimePendingWakeRoute::Rejected, |retained| {
-                    pending_command_gate.route_wake(retained, wake)
-                });
+            let continuation_grant = if matches!(wake, RuntimeWake::Notification(_)) {
+                read_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR)
+            } else {
+                None
+            };
+            let gate_before_wake = pending_command_gate;
+            let previous_grant_id = pending_command_gate.last_grant_id;
+            let mut route =
+                pending_intake
+                    .as_mut()
+                    .map_or(RuntimePendingWakeRoute::Rejected, |retained| {
+                        pending_command_gate.route_wake_with_grant(
+                            retained,
+                            wake,
+                            continuation_grant,
+                        )
+                    });
+            let consumed_grant = continuation_grant.filter(|grant| {
+                grant.grant_id != previous_grant_id
+                    && pending_command_gate.last_grant_id == grant.grant_id
+                    && matches!(
+                        route,
+                        RuntimePendingWakeRoute::ContinueForeground
+                            | RuntimePendingWakeRoute::ServiceNotification(_)
+                    )
+            });
+            if consumed_grant.is_some_and(|grant| {
+                !acknowledge_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR, grant.grant_id)
+            }) {
+                // A torn acknowledgement cannot spend authority. Restore the
+                // exact pre-wake arbitration state and wait for a stable
+                // producer record instead of risking a duplicate quantum.
+                pending_command_gate = gate_before_wake;
+                route = RuntimePendingWakeRoute::Rejected;
+            }
             match route {
                 RuntimePendingWakeRoute::ContinueForeground => {}
                 RuntimePendingWakeRoute::ServiceNotification(badge) => {
@@ -34500,7 +35245,20 @@ pub fn runtime_main(task_key: usize) -> ! {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
             command.aux0,
         );
-        let turn = if quarantine_command_fault {
+        let delegated_generation = runtime_delegated_generation_admission(
+            command,
+            if notification_route == RuntimeNotificationRoute::SdioOwner {
+                Some(SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch))
+            } else {
+                None
+            },
+        );
+        let turn = if delegated_generation == RuntimeDelegatedGenerationAdmission::Rejected {
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                command.sequence,
+                FAULT_REJECTED_COMMAND,
+            ))
+        } else if quarantine_command_fault {
             let event_sequence =
                 CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.event_sequence);
             RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
@@ -34526,7 +35284,15 @@ pub fn runtime_main(task_key: usize) -> ! {
             // The next phase is forbidden until a later root endpoint rendezvous;
             // blocking here releases both the CPU and seL4 kernel path instead
             // of turning `Yield` into a maximum-priority private poll loop.
-            pending_command_gate.retain_after_pending();
+            match delegated_generation {
+                RuntimeDelegatedGenerationAdmission::Admitted(generation) => {
+                    pending_command_gate.retain_after_pending_generation(generation);
+                }
+                RuntimeDelegatedGenerationAdmission::NotDelegated => {
+                    pending_command_gate.retain_after_pending();
+                }
+                RuntimeDelegatedGenerationAdmission::Rejected => {}
+            }
             continue;
         };
         pending_command_gate.complete();
@@ -36658,6 +37424,30 @@ mod tests {
         assert_eq!(cyw43_dpc_turn_route(&cursor), Cyw43DpcTurnRoute::PollChild);
         assert_eq!(cursor.event_sequence, 41);
 
+        cursor.child.continuation_grant_required = true;
+        assert_eq!(
+            cyw43_dpc_turn_route(&cursor),
+            Cyw43DpcTurnRoute::GrantChild,
+            "a missed child poll requires a separate later grant turn",
+        );
+        cursor.child.continuation_grant_required = false;
+        assert_eq!(
+            cyw43_dpc_turn_route(&cursor),
+            Cyw43DpcTurnRoute::PollChild,
+            "the poll after a grant remains a separate later turn",
+        );
+
+        cursor.child = Cyw43DpcChild::empty();
+        cursor.action = Cyw43DpcAction::None;
+        cursor.io_phase = Cyw43DpcIoPhase::Idle;
+        assert_eq!(
+            cyw43_dpc_turn_route(&cursor),
+            Cyw43DpcTurnRoute::CompleteEvent,
+            "a terminal child poll must return before event advance/rearm",
+        );
+
+        cursor.child.active = true;
+        cursor.child.expected_sequence = 0x8000_0042;
         cursor.child.issued_unknown = true;
         assert_eq!(cyw43_dpc_turn_route(&cursor), Cyw43DpcTurnRoute::Quarantine);
         assert_eq!(cursor.child.expected_sequence, 0x8000_0042);
@@ -38040,11 +38830,11 @@ mod tests {
         ));
 
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, false, false, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, false, false, false, true, false, false,),
             Cyw43ForegroundFrontierRoute::Submit,
         );
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, true, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
             "sequence-last publication consumes the turn and cannot be repeated",
         );
@@ -39133,6 +39923,15 @@ mod tests {
         assert_eq!(core::mem::align_of::<DriverTaskBudgetGrant>(), 4);
         assert_eq!(core::mem::size_of::<DriverTaskCommandRecord>(), 40);
         assert_eq!(core::mem::align_of::<DriverTaskCommandRecord>(), 4);
+        assert_eq!(core::mem::size_of::<DriverRuntimeContinuationGrant>(), 24);
+        assert_eq!(core::mem::align_of::<DriverRuntimeContinuationGrant>(), 4);
+        assert_eq!(usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET), 40);
+        assert_eq!(usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES), 24);
+        assert_eq!(
+            usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
+                + core::mem::size_of::<DriverRuntimeContinuationGrant>(),
+            DRIVER_TASK_RING_COMPLETION_OFFSET,
+        );
         assert_eq!(core::mem::size_of::<DriverTaskCompletionRecord>(), 20);
         assert_eq!(core::mem::align_of::<DriverTaskCompletionRecord>(), 4);
     }
@@ -39281,6 +40080,190 @@ mod tests {
             },
             reply_cap_available: false,
         }
+    }
+
+    fn retained_gate_test_grant(
+        intake: RuntimeCommandIntake,
+        generation: u32,
+        grant_id: u32,
+    ) -> DriverRuntimeContinuationGrant {
+        DriverRuntimeContinuationGrant::new(
+            intake.command.sequence,
+            runtime_continuation_action_fingerprint(intake.command),
+            generation,
+            grant_id,
+        )
+    }
+
+    #[repr(align(64))]
+    struct TestContinuationGrantRing([u8; DRIVER_TASK_RING_PAGE_BYTES]);
+
+    fn test_continuation_grant_ring() -> Box<TestContinuationGrantRing> {
+        Box::new(TestContinuationGrantRing([0; DRIVER_TASK_RING_PAGE_BYTES]))
+    }
+
+    #[test]
+    fn continuation_grant_ring_publication_ack_and_aliases_fail_closed() {
+        let intake = retained_gate_test_intake(0x8000_0042);
+        let command = intake.command;
+        let generation = command.aux1;
+        let mut ring = test_continuation_grant_ring();
+        let base = ring.0.as_mut_ptr() as usize;
+
+        assert_eq!(read_runtime_continuation_grant_at(base), None);
+        assert!(!publish_runtime_continuation_grant_at(
+            base, command, generation, 0,
+        ));
+        assert!(!publish_runtime_continuation_grant_at(
+            base,
+            command,
+            generation.wrapping_add(1),
+            1,
+        ));
+        let mut zero_generation = command;
+        zero_generation.aux1 = 0;
+        assert!(!publish_runtime_continuation_grant_at(
+            base,
+            zero_generation,
+            0,
+            1,
+        ));
+
+        assert!(publish_runtime_continuation_grant_at(
+            base, command, generation, 1,
+        ));
+        let first = read_runtime_continuation_grant_at(base).expect("published grant");
+        assert_eq!(first, retained_gate_test_grant(intake, generation, 1),);
+        assert_eq!(
+            runtime_continuation_grant_producer_state(Some(first), command, generation, 1),
+            RuntimeContinuationGrantProducerState::Pending,
+        );
+        assert!(!acknowledge_runtime_continuation_grant_at(base, 2));
+        let old_ack_committed = acknowledge_runtime_continuation_grant_at(base, 1);
+        assert!(old_ack_committed);
+        let consumed = read_runtime_continuation_grant_at(base).expect("acknowledged grant");
+        assert_eq!(consumed.consumed_grant_id, 1);
+        assert_eq!(
+            runtime_continuation_grant_producer_state(Some(consumed), command, generation, 1),
+            RuntimeContinuationGrantProducerState::Consumed,
+        );
+
+        assert!(publish_runtime_continuation_grant_at(
+            base, command, generation, 2,
+        ));
+        let second = read_runtime_continuation_grant_at(base).expect("replacement grant");
+        assert_eq!(second.grant_id, 2);
+        assert_eq!(second.consumed_grant_id, 0);
+        assert!(
+            old_ack_committed,
+            "immediate producer replacement cannot revoke an already committed acknowledgement",
+        );
+        clear_runtime_continuation_grant_at(base);
+        assert_eq!(read_runtime_continuation_grant_at(base), None);
+    }
+
+    #[test]
+    fn continuation_grant_state_and_id_exhaustion_are_fail_closed() {
+        let intake = retained_gate_test_intake(0x8000_0042);
+        let command = intake.command;
+        let generation = command.aux1;
+        let exact = retained_gate_test_grant(intake, generation, 7);
+
+        assert_eq!(
+            runtime_delegated_generation_admission(command, Some(generation)),
+            RuntimeDelegatedGenerationAdmission::Admitted(generation),
+        );
+        assert_eq!(
+            runtime_delegated_generation_admission(command, Some(generation.wrapping_add(1)),),
+            RuntimeDelegatedGenerationAdmission::Rejected,
+        );
+        assert_eq!(
+            runtime_delegated_generation_admission(command, None),
+            RuntimeDelegatedGenerationAdmission::Rejected,
+        );
+        let root_sequence_command = DriverTaskCommandRecord {
+            sequence: command.sequence & !CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN,
+            ..command
+        };
+        assert_eq!(
+            runtime_delegated_generation_admission(root_sequence_command, Some(generation)),
+            RuntimeDelegatedGenerationAdmission::NotDelegated,
+        );
+
+        assert_eq!(runtime_continuation_next_grant_id(0), Some(1));
+        assert_eq!(runtime_continuation_next_grant_id(7), Some(8));
+        assert_eq!(runtime_continuation_next_grant_id(u32::MAX), None);
+        assert_eq!(
+            runtime_continuation_grant_plan_after_poll(
+                0,
+                RuntimeContinuationGrantProducerState::Invalid,
+            ),
+            RuntimeContinuationGrantPlan::Publish(1),
+        );
+        assert_eq!(
+            runtime_continuation_grant_plan_after_poll(
+                7,
+                RuntimeContinuationGrantProducerState::Pending,
+            ),
+            RuntimeContinuationGrantPlan::Resignal(7),
+        );
+        assert_eq!(
+            runtime_continuation_grant_plan_after_poll(
+                7,
+                RuntimeContinuationGrantProducerState::Consumed,
+            ),
+            RuntimeContinuationGrantPlan::Publish(8),
+        );
+        assert_eq!(
+            runtime_continuation_grant_plan_after_poll(
+                u32::MAX,
+                RuntimeContinuationGrantProducerState::Consumed,
+            ),
+            RuntimeContinuationGrantPlan::Invalid,
+        );
+        assert_eq!(
+            runtime_continuation_grant_producer_state(None, command, generation, 7),
+            RuntimeContinuationGrantProducerState::Invalid,
+        );
+        for invalid in [
+            DriverRuntimeContinuationGrant { magic: 0, ..exact },
+            DriverRuntimeContinuationGrant {
+                request_sequence: exact.request_sequence.wrapping_sub(1),
+                ..exact
+            },
+            DriverRuntimeContinuationGrant {
+                action_fingerprint: exact.action_fingerprint ^ 1,
+                ..exact
+            },
+            DriverRuntimeContinuationGrant {
+                generation: generation.wrapping_add(1),
+                ..exact
+            },
+            DriverRuntimeContinuationGrant {
+                grant_id: 8,
+                ..exact
+            },
+            DriverRuntimeContinuationGrant {
+                consumed_grant_id: 8,
+                ..exact
+            },
+        ] {
+            assert_eq!(
+                runtime_continuation_grant_producer_state(Some(invalid), command, generation, 7,),
+                RuntimeContinuationGrantProducerState::Invalid,
+            );
+        }
+        let mut wrong_generation_command = command;
+        wrong_generation_command.aux1 = generation.wrapping_add(1);
+        assert_eq!(
+            runtime_continuation_grant_producer_state(
+                Some(exact),
+                wrong_generation_command,
+                generation,
+                7,
+            ),
+            RuntimeContinuationGrantProducerState::Invalid,
+        );
     }
 
     #[test]
@@ -39590,6 +40573,98 @@ mod tests {
     }
 
     #[test]
+    fn delegated_pending_quantum_requires_fresh_exact_generation_grants() {
+        let original = retained_gate_test_intake(0x8000_0042);
+        let generation = 0x4359_5302;
+        let mut retained = original;
+        let exact_first = retained_gate_test_grant(original, generation, 1);
+        let exact_second = retained_gate_test_grant(original, generation, 2);
+        let mut stale_sequence = exact_first;
+        stale_sequence.request_sequence = stale_sequence.request_sequence.wrapping_sub(1);
+        let mut mutated_action = exact_first;
+        mutated_action.action_fingerprint ^= 0x100;
+        let mut uncommitted = exact_first;
+        uncommitted.grant_id = 0;
+        let mut bad_magic = exact_first;
+        bad_magic.magic = 0;
+        let mut already_consumed = exact_first;
+        already_consumed.consumed_grant_id = exact_first.grant_id;
+        let wrong_first_generation =
+            retained_gate_test_grant(original, generation.wrapping_add(1), 1);
+
+        let mut gate = RuntimePendingCommandGate::new();
+        gate.retain_after_pending_generation(generation);
+        for grant in [
+            stale_sequence,
+            mutated_action,
+            uncommitted,
+            bad_magic,
+            already_consumed,
+            wrong_first_generation,
+        ] {
+            assert_eq!(
+                gate.route_wake_with_grant(
+                    &mut retained,
+                    RuntimeWake::Notification(0),
+                    Some(grant),
+                ),
+                RuntimePendingWakeRoute::Rejected,
+            );
+            assert!(gate.continuation_required());
+            assert_eq!(retained, original);
+        }
+
+        assert_eq!(
+            gate.route_wake_with_grant(
+                &mut retained,
+                RuntimeWake::Notification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+                Some(exact_first),
+            ),
+            RuntimePendingWakeRoute::ServiceNotification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+            "coalesced service receives at most one quantum before foreground",
+        );
+        assert!(gate.continuation_required());
+        assert!(gate.foreground_due_after_service);
+        assert_eq!(gate.last_grant_id, 1);
+
+        for _ in 0..4_096 {
+            assert_eq!(
+                gate.route_wake_with_grant(
+                    &mut retained,
+                    RuntimeWake::Notification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+                    Some(exact_first),
+                ),
+                RuntimePendingWakeRoute::Rejected,
+                "one coalesced grant can never authorize a second quantum",
+            );
+        }
+        let wrong_generation = retained_gate_test_grant(original, generation.wrapping_add(1), 2);
+        assert_eq!(
+            gate.route_wake_with_grant(
+                &mut retained,
+                RuntimeWake::Notification(0),
+                Some(wrong_generation),
+            ),
+            RuntimePendingWakeRoute::Rejected,
+            "a stale-generation grant cannot mutate retained ownership",
+        );
+        assert_eq!(gate.retained_generation, Some(generation));
+        assert_eq!(gate.last_grant_id, 1);
+
+        assert_eq!(
+            gate.route_wake_with_grant(
+                &mut retained,
+                RuntimeWake::Notification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+                Some(exact_second),
+            ),
+            RuntimePendingWakeRoute::ContinueForeground,
+        );
+        assert!(!gate.continuation_required());
+        assert_eq!(gate.last_grant_id, 2);
+        assert_eq!(retained, original);
+    }
+
+    #[test]
     fn idle_reserved_root_badge_is_never_device_work() {
         assert_eq!(runtime_idle_service_badge(0), None);
         assert_eq!(
@@ -39734,7 +40809,7 @@ mod tests {
         io.command_response = 0x80ff_8000;
 
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, false, false, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, false, false, false, true, false, false,),
             Cyw43ForegroundFrontierRoute::Submit
         );
         // The reciprocal owner executes the real descriptor/controller seam
@@ -39747,22 +40822,60 @@ mod tests {
             DriverTaskCompletionRecord::progress(command.sequence, 0x80ff_8000)
         );
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, true, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
             "the submit turn cannot also poll its child",
         );
 
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, false, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, false, false, true, false, false),
             Cyw43ForegroundFrontierRoute::Poll,
             "a fresh root endpoint rendezvous admits the one completion poll",
         );
         assert_eq!(
-            cyw43_foreground_frontier_route(1, 1, true, false, true, true, false, false),
+            cyw43_foreground_frontier_route(1, 1, true, false, false, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
             "a terminal poll cannot submit the next reciprocal action in the same turn",
         );
         assert_eq!(io.command_issue_count(), 1);
+    }
+
+    #[test]
+    fn reciprocal_multiphase_child_alternates_poll_grant_and_poll_outer_turns() {
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, false, false, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Submit,
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
+            Cyw43ForegroundFrontierRoute::Defer,
+            "submission consumes its parent outer turn",
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, false, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Poll,
+            "the next parent turn performs only one completion poll",
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, true, true, true, false, false),
+            Cyw43ForegroundFrontierRoute::Defer,
+            "a missed poll cannot publish a continuation in the same turn",
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, true, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Grant,
+            "a later parent turn publishes and signals one exact continuation",
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
+            Cyw43ForegroundFrontierRoute::Defer,
+            "the grant turn cannot also poll the owner completion",
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, false, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Poll,
+            "the following turn resumes the one-poll frontier",
+        );
     }
 
     #[test]
@@ -39861,14 +40974,14 @@ mod tests {
         assert_eq!(io.command_issue_count(), 1);
 
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 1, false, false, false, true, false, false),
+            cyw43_foreground_frontier_route(0, 1, false, false, false, false, true, false, false,),
             Cyw43ForegroundFrontierRoute::Cached
         );
         let replayed = completion;
         assert_eq!(replayed, completion);
         assert_eq!(io.command_issue_count(), 1, "cached replay is local only");
         assert_eq!(
-            cyw43_foreground_frontier_route(1, 1, true, false, false, true, false, false),
+            cyw43_foreground_frontier_route(1, 1, true, false, false, false, true, false, false,),
             Cyw43ForegroundFrontierRoute::Submit,
             "the cached prefix spends no physical-operation budget",
         );
@@ -39945,12 +41058,14 @@ mod tests {
         ] {
             assert!(!matches);
             assert_eq!(
-                cyw43_foreground_frontier_route(0, 1, true, true, false, matches, false, false),
+                cyw43_foreground_frontier_route(
+                    0, 1, true, true, false, false, matches, false, false,
+                ),
                 Cyw43ForegroundFrontierRoute::Poison
             );
         }
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 1, true, true, false, true, false, true),
+            cyw43_foreground_frontier_route(0, 1, true, true, false, false, true, false, true),
             Cyw43ForegroundFrontierRoute::Poison,
             "issued-unknown ownership can never replay a cached or frontier action",
         );
@@ -47243,6 +48358,302 @@ mod tests {
             assert!(!state.dpc_activation_allowed);
         });
         assert!(!sdio_generation_reset_commit(requested));
+    }
+
+    #[test]
+    fn delegated_generation_reset_real_cursor_requires_one_fresh_grant_per_quantum() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+        let current = 0x4359_5301;
+        let requested = dpc_generation_next(current);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.dpc_link_ready = true;
+            state.shared_epoch = current;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+        });
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET,
+            addr: requested,
+            timeout_us: PI4_WIFI_PWRSEQ_OWNER_WORST_CASE_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut command = stage_sdio_descriptor_service_command(0x8000_0704, descriptor);
+        command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        // Production binds the continuation ticket to the current linked
+        // runtime epoch. The requested next epoch remains descriptor data and
+        // cannot substitute for current-generation authority.
+        command.aux1 = current;
+        let intake = RuntimeCommandIntake {
+            command,
+            reply_cap_available: false,
+        };
+        let mut retained = intake;
+        let mut gate = RuntimePendingCommandGate::new();
+        let mut turn = service_command_turn(0, command);
+        let mut granted_quanta = 0u32;
+        let mut service_quanta = 0u32;
+        let mut grant_ring = test_continuation_grant_ring();
+        let grant_base = grant_ring.0.as_mut_ptr() as usize;
+        assert_eq!(turn, RuntimeCommandTurn::Pending);
+        assert!(!gate.grant_matches(intake, retained_gate_test_grant(intake, requested, 1),));
+
+        loop {
+            gate.retain_after_pending_generation(current);
+            loop {
+                let grant_id = granted_quanta.saturating_add(1);
+                assert!(publish_runtime_continuation_grant_at(
+                    grant_base, command, current, grant_id,
+                ));
+                let grant = read_runtime_continuation_grant_at(grant_base)
+                    .expect("sequence-last production grant");
+                assert_eq!(
+                    runtime_continuation_grant_producer_state(
+                        Some(grant),
+                        command,
+                        current,
+                        grant_id,
+                    ),
+                    RuntimeContinuationGrantProducerState::Pending,
+                );
+                granted_quanta = grant_id;
+                let route = gate.route_wake_with_grant(
+                    &mut retained,
+                    RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                    Some(grant),
+                );
+                assert!(acknowledge_runtime_continuation_grant_at(
+                    grant_base, grant_id,
+                ));
+                let consumed = read_runtime_continuation_grant_at(grant_base)
+                    .expect("consumer acknowledgement");
+                assert_eq!(
+                    runtime_continuation_grant_producer_state(
+                        Some(consumed),
+                        command,
+                        current,
+                        grant_id,
+                    ),
+                    RuntimeContinuationGrantProducerState::Consumed,
+                );
+                match route {
+                    RuntimePendingWakeRoute::ServiceNotification(badge) => {
+                        assert_eq!(badge, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE);
+                        service_quanta = service_quanta.saturating_add(1);
+                    }
+                    RuntimePendingWakeRoute::ContinueForeground => break,
+                    route => panic!("production grant took invalid route {route:?}"),
+                }
+            }
+            assert_eq!(
+                gate.route_wake_with_grant(
+                    &mut retained,
+                    RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                    read_runtime_continuation_grant_at(grant_base),
+                ),
+                RuntimePendingWakeRoute::Rejected,
+                "an acknowledged grant cannot execute the real cursor twice",
+            );
+            turn = service_command_turn(0, command);
+            match turn {
+                RuntimeCommandTurn::Pending => {}
+                RuntimeCommandTurn::Complete(completion) => {
+                    assert_eq!(
+                        completion,
+                        DriverTaskCompletionRecord::progress(command.sequence, requested),
+                    );
+                    gate.complete();
+                    break;
+                }
+            }
+            assert!(
+                granted_quanta < 128,
+                "the retained reset cursor must be bounded"
+            );
+        }
+
+        assert!(
+            granted_quanta >= 16,
+            "the production power/reset cursor must span many separately granted turns",
+        );
+        assert!(
+            service_quanta >= 8,
+            "the aliased production peer/IRQ badge must be fairly interleaved",
+        );
+        assert_eq!(
+            SDIO_RUNTIME_STATE.with_ref(|state| state.pending_epoch),
+            requested,
+        );
+        assert_eq!(
+            SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch),
+            current,
+            "generation commit remains a separate later action",
+        );
+    }
+
+    #[test]
+    fn dpc_owned_multiphase_child_uses_real_owner_cursor_and_shared_grants() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+        let current = 0x4359_5311;
+        let requested = dpc_generation_next(current);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.dpc_link_ready = true;
+            state.shared_epoch = current;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+        });
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET,
+            addr: requested,
+            timeout_us: PI4_WIFI_PWRSEQ_OWNER_WORST_CASE_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut command = stage_sdio_descriptor_service_command(0x8000_0714, descriptor);
+        command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        command.aux1 = current;
+        let intake = RuntimeCommandIntake {
+            command,
+            reply_cap_available: false,
+        };
+        let mut retained = intake;
+        let mut cursor = Cyw43DpcCursor::empty();
+        cursor.event_sequence = 91;
+        cursor.action = Cyw43DpcAction::CaptureStatus;
+        cursor.child.active = true;
+        cursor.child.generation = current;
+        cursor.child.expected_sequence = command.sequence;
+        cursor.child.command = command;
+
+        // The DPC submit turn has already sequence-last published this exact
+        // child command. Drive the real retained SDIO power/reset owner cursor;
+        // no completion is fabricated by the test.
+        let mut owner_turn = service_command_turn(0, command);
+        assert_eq!(owner_turn, RuntimeCommandTurn::Pending);
+        let mut owner_quanta = 1usize;
+        let mut gate = RuntimePendingCommandGate::new();
+        gate.retain_after_pending_generation(current);
+        let mut grant_ring = test_continuation_grant_ring();
+        let grant_base = grant_ring.0.as_mut_ptr() as usize;
+        let mut parent_turns = 1usize;
+        let mut completion_polls = 0usize;
+        let mut grant_turns = 0usize;
+        let mut service_quanta = 0usize;
+
+        loop {
+            assert_eq!(cyw43_dpc_turn_route(&cursor), Cyw43DpcTurnRoute::PollChild,);
+            completion_polls = completion_polls.saturating_add(1);
+            parent_turns = parent_turns.saturating_add(1);
+            if let RuntimeCommandTurn::Complete(completion) = owner_turn {
+                assert_eq!(
+                    completion,
+                    DriverTaskCompletionRecord::progress(command.sequence, requested),
+                );
+                cursor.child = Cyw43DpcChild::empty();
+                cursor.action = Cyw43DpcAction::None;
+                assert_eq!(
+                    cyw43_dpc_turn_route(&cursor),
+                    Cyw43DpcTurnRoute::CompleteEvent,
+                    "event advance/rearm is deferred after the terminal child poll",
+                );
+                break;
+            }
+
+            let observed = if cursor.child.grant_id == 0 {
+                RuntimeContinuationGrantProducerState::Pending
+            } else {
+                runtime_continuation_grant_producer_state(
+                    read_runtime_continuation_grant_at(grant_base),
+                    command,
+                    current,
+                    cursor.child.grant_id,
+                )
+            };
+            match runtime_continuation_grant_plan_after_poll(cursor.child.grant_id, observed) {
+                RuntimeContinuationGrantPlan::Publish(grant_id) => {
+                    cursor.child.grant_id = grant_id;
+                    cursor.child.continuation_grant_publish = true;
+                }
+                RuntimeContinuationGrantPlan::Resignal(grant_id) => {
+                    cursor.child.grant_id = grant_id;
+                    cursor.child.continuation_grant_publish = false;
+                }
+                RuntimeContinuationGrantPlan::Invalid => {
+                    panic!("real DPC owner cursor produced an invalid continuation plan")
+                }
+            }
+            cursor.child.continuation_grant_required = true;
+
+            assert_eq!(cyw43_dpc_turn_route(&cursor), Cyw43DpcTurnRoute::GrantChild,);
+            grant_turns = grant_turns.saturating_add(1);
+            parent_turns = parent_turns.saturating_add(1);
+            if cursor.child.continuation_grant_publish {
+                assert!(publish_runtime_continuation_grant_at(
+                    grant_base,
+                    command,
+                    current,
+                    cursor.child.grant_id,
+                ));
+            }
+            let grant = read_runtime_continuation_grant_at(grant_base)
+                .expect("DPC grant publication remains committed");
+            assert!(!gate.grant_matches(
+                retained,
+                retained_gate_test_grant(intake, requested, grant.grant_id),
+            ));
+            let route = gate.route_wake_with_grant(
+                &mut retained,
+                RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                Some(grant),
+            );
+            assert!(acknowledge_runtime_continuation_grant_at(
+                grant_base,
+                grant.grant_id,
+            ));
+            let acknowledged = read_runtime_continuation_grant_at(grant_base)
+                .expect("DPC grant acknowledgement remains visible");
+            assert_eq!(
+                gate.route_wake_with_grant(
+                    &mut retained,
+                    RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                    Some(acknowledged),
+                ),
+                RuntimePendingWakeRoute::Rejected,
+                "an acknowledged DPC grant cannot be replayed",
+            );
+            cursor.child.continuation_grant_required = false;
+            cursor.child.continuation_grant_publish = false;
+            match route {
+                RuntimePendingWakeRoute::ServiceNotification(badge) => {
+                    assert_eq!(badge, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE);
+                    service_quanta = service_quanta.saturating_add(1);
+                }
+                RuntimePendingWakeRoute::ContinueForeground => {
+                    owner_turn = service_command_turn(0, command);
+                    owner_quanta = owner_quanta.saturating_add(1);
+                    if owner_turn == RuntimeCommandTurn::Pending {
+                        gate.retain_after_pending_generation(current);
+                    }
+                }
+                RuntimePendingWakeRoute::Rejected => {
+                    panic!("fresh exact DPC grant was rejected")
+                }
+            }
+            assert!(parent_turns < 256, "DPC retained child must remain bounded");
+        }
+
+        assert_eq!(completion_polls, grant_turns.saturating_add(1));
+        assert_eq!(parent_turns, 1 + completion_polls + grant_turns);
+        assert!(owner_quanta >= 8);
+        assert!(service_quanta >= 1);
+        assert_eq!(
+            SDIO_RUNTIME_STATE.with_ref(|state| state.pending_epoch),
+            requested,
+        );
     }
 
     #[test]

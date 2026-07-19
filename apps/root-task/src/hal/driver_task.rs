@@ -3104,6 +3104,15 @@ pub(crate) fn test_publish_cyw43_sdio_pair_restart_context_available() {
     DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE.store(1, Ordering::Release);
 }
 
+/// Enter the post-restart context-replay ownership state for supervisor tests.
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_begin_cyw43_sdio_pair_context_replay() -> bool {
+    CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+    CYW43_SDIO_PAIR_RESTART_PENDING.store(0, Ordering::Release);
+    CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(1, Ordering::Release);
+    begin_cyw43_sdio_pair_context_replay()
+}
+
 #[cfg(feature = "kernel")]
 const fn cyw43_sdio_pair_submission_blocked(
     restart_in_progress: u32,
@@ -5240,21 +5249,66 @@ fn driver_task_retained_contract_owns_pair_recovery(contract: DriverTaskContract
 
 /// Fail one retained scheduling lease without crossing device recovery domains.
 ///
-/// Only the linked CYW43/SDIO pair may request pair recovery. A non-pair
-/// request that crossed the sequence issue boundary remains locally poisoned;
-/// a pre-issue non-pair failure clears only its own retained request so the
-/// typed caller observes `Failed` rather than manufacturing Wi-Fi recovery.
+/// Only issued or scheduler-mutating CYW43/SDIO failures may request pair
+/// recovery. A pre-issue failure that has not changed either TCB releases its
+/// reservations and clears locally; converting that harmless contention into
+/// a full pair restart creates an unbounded recovery amplifier. A non-pair
+/// request that crossed the sequence issue boundary remains locally poisoned.
 #[cfg(feature = "kernel")]
 fn fail_driver_task_retained_priority_lease(
     slot: &DriverTaskCommandSlot,
     contract: DriverTaskContract,
 ) {
-    if driver_task_retained_contract_owns_pair_recovery(contract) {
+    if slot.retained_doorbell_issued.load(Ordering::Acquire) != 0 {
+        if driver_task_retained_contract_owns_pair_recovery(contract) {
+            request_cyw43_sdio_pair_restart();
+        } else {
+            poison_driver_task_retained_request(slot);
+        }
+        return;
+    }
+    let phase = DriverTaskRetainedLeasePhase::from_usize(
+        slot.retained_priority_lease_phase.load(Ordering::Acquire),
+    );
+    let mask = slot.retained_priority_lease_mask.load(Ordering::Acquire);
+    let scheduler_unchanged = matches!(phase, Some(DriverTaskRetainedLeasePhase::Inactive))
+        || matches!(phase, Some(DriverTaskRetainedLeasePhase::BoostBus))
+        || (matches!(phase, Some(DriverTaskRetainedLeasePhase::BoostPrimary))
+            && mask & DRIVER_TASK_RETAINED_LEASE_BUS == 0)
+        || (matches!(phase, Some(DriverTaskRetainedLeasePhase::ReadyToIssue)) && mask == 0);
+    if driver_task_retained_contract_owns_pair_recovery(contract) && !scheduler_unchanged {
         request_cyw43_sdio_pair_restart();
         return;
     }
-    if slot.retained_doorbell_issued.load(Ordering::Acquire) != 0 {
-        poison_driver_task_retained_request(slot);
+    let owner_token = driver_task_contract_key(contract)
+        .map(|task_key| task_key.saturating_add(1))
+        .unwrap_or(0);
+    let mut reservations_released = owner_token != 0;
+    if mask & DRIVER_TASK_RETAINED_LEASE_BUS != 0 {
+        let bus_contract = if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+            Some(SDIO_HOST_DRIVER_TASK_CONTRACT)
+        } else if contract == USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT {
+            Some(PCIE_ROOT_DRIVER_TASK_CONTRACT)
+        } else {
+            None
+        };
+        reservations_released &= bus_contract
+            .and_then(driver_task_slot_for_contract)
+            .is_some_and(|bus_slot| {
+                bus_slot
+                    .retained_priority_boost_active
+                    .compare_exchange(owner_token, 0, Ordering::AcqRel, Ordering::Acquire)
+                    .is_ok()
+            });
+    }
+    if mask & DRIVER_TASK_RETAINED_LEASE_PRIMARY != 0 {
+        reservations_released &= slot
+            .retained_priority_boost_active
+            .compare_exchange(owner_token, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+    }
+    if !reservations_released && driver_task_retained_contract_owns_pair_recovery(contract) {
+        request_cyw43_sdio_pair_restart();
         return;
     }
     slot.active.store(0, Ordering::Release);
@@ -14901,6 +14955,64 @@ mod tests {
         }
         assert_eq!(ring.read_completion(), Some(completion));
 
+        let grant = pi4_driver_abi::DriverRuntimeContinuationGrant::new(
+            command.sequence,
+            0x1234_5678,
+            0x4359_5302,
+            7,
+        );
+        let grant_base = usize::from(pi4_driver_abi::DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+        for (offset, value) in [
+            (
+                core::mem::offset_of!(pi4_driver_abi::DriverRuntimeContinuationGrant, magic),
+                grant.magic,
+            ),
+            (
+                core::mem::offset_of!(
+                    pi4_driver_abi::DriverRuntimeContinuationGrant,
+                    request_sequence
+                ),
+                grant.request_sequence,
+            ),
+            (
+                core::mem::offset_of!(
+                    pi4_driver_abi::DriverRuntimeContinuationGrant,
+                    action_fingerprint
+                ),
+                grant.action_fingerprint,
+            ),
+            (
+                core::mem::offset_of!(pi4_driver_abi::DriverRuntimeContinuationGrant, generation),
+                grant.generation,
+            ),
+            (
+                core::mem::offset_of!(pi4_driver_abi::DriverRuntimeContinuationGrant, grant_id),
+                grant.grant_id,
+            ),
+            (
+                core::mem::offset_of!(
+                    pi4_driver_abi::DriverRuntimeContinuationGrant,
+                    consumed_grant_id
+                ),
+                grant.consumed_grant_id,
+            ),
+        ] {
+            ring.window
+                .write_u32(grant_base + offset, value)
+                .expect("continuation grant field fits reserved slot");
+        }
+        assert_eq!(ring.read_u32(grant_base), Some(grant.magic));
+        assert_eq!(
+            ring.read_u32(
+                grant_base
+                    + core::mem::offset_of!(
+                        pi4_driver_abi::DriverRuntimeContinuationGrant,
+                        grant_id
+                    ),
+            ),
+            Some(grant.grant_id),
+        );
+
         let dpc = DriverRuntimeDpcEventRing::empty(9);
         let dpc_base = usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
         for (offset, value) in [
@@ -16030,14 +16142,25 @@ mod tests {
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
         ] {
             reset_cyw43_sdio_pair_recovery_for_test();
-            let pair = DriverTaskCommandSlot::new();
-            seed_retained_slot(&pair, false);
-            fail_driver_task_retained_priority_lease(&pair, contract);
+            let pre_issue = DriverTaskCommandSlot::new();
+            seed_retained_slot(&pre_issue, false);
+            fail_driver_task_retained_priority_lease(&pre_issue, contract);
             assert!(
-                cyw43_sdio_pair_restart_required(),
-                "{} retained fault must request pair recovery",
+                !cyw43_sdio_pair_restart_required(),
+                "pre-issue {} contention must clear without pair recovery",
                 contract.name,
             );
+            assert_eq!(pre_issue.active.load(Ordering::Acquire), 0);
+
+            let issued = DriverTaskCommandSlot::new();
+            seed_retained_slot(&issued, true);
+            fail_driver_task_retained_priority_lease(&issued, contract);
+            assert!(
+                cyw43_sdio_pair_restart_required(),
+                "issued-unknown {} fault must request pair recovery",
+                contract.name,
+            );
+            assert_eq!(issued.active.load(Ordering::Acquire), 1);
         }
         reset_cyw43_sdio_pair_recovery_for_test();
     }
@@ -17011,6 +17134,23 @@ mod tests {
         assert_eq!(core::mem::align_of::<DriverTaskCommandRecord>(), 4);
         assert_eq!(core::mem::offset_of!(DriverTaskCommandRecord, sequence), 0);
         assert!(core::mem::size_of::<DriverTaskCommandRecord>() > core::mem::size_of::<u32>());
+        assert_eq!(
+            core::mem::size_of::<pi4_driver_abi::DriverRuntimeContinuationGrant>(),
+            24,
+        );
+        assert_eq!(
+            core::mem::align_of::<pi4_driver_abi::DriverRuntimeContinuationGrant>(),
+            4,
+        );
+        assert_eq!(
+            usize::from(pi4_driver_abi::DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET),
+            core::mem::size_of::<DriverTaskCommandRecord>(),
+        );
+        assert_eq!(
+            usize::from(pi4_driver_abi::DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
+                + core::mem::size_of::<pi4_driver_abi::DriverRuntimeContinuationGrant>(),
+            DRIVER_TASK_RING_COMPLETION_OFFSET,
+        );
         assert_eq!(core::mem::size_of::<DriverTaskCompletionRecord>(), 20);
         assert_eq!(core::mem::align_of::<DriverTaskCompletionRecord>(), 4);
         assert_eq!(
