@@ -198,6 +198,14 @@ the expected existing volume, restores it with restricted permissions, checks
 the staged root and fallback image hashes, and unmounts the disk. Do not print
 the policy file: it may contain Wi-Fi credentials.
 
+Keep the Mac unlocked throughout erase and copy. If macOS ejects or refuses to
+mount the new FAT partition after erase, the helper retains the private policy
+copy with mode `0600` and prints its path. Reinsert and reverify the whole disk,
+then retry with `--policy-recovery-file <printed-path>`. Recovery refuses to
+replace a different non-empty on-card policy, enforces the 384-byte policy
+bound, and removes the private recovery file only after the flash has been
+hash-verified and unmounted successfully.
+
 For acceptance, remount the media and independently compare every staged
 artifact. Re-run `scripts/pi4_image_identity.py verify` on the read-back primary
 and fallback images, require them to be byte-identical, and preserve the mutable

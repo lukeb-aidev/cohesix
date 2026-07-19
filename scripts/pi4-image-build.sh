@@ -48,6 +48,9 @@ PI4_TOTAL_MEM_MB=2048
 PI4_UBOOT_IMAGE_START_ADDR=0x10000000
 RESTORE_CANONICAL_CODEGEN=0
 PRESERVED_POLICY_TEMP=""
+POLICY_RECOVERY_FILE=""
+POLICY_RECOVERY_CONSUMED_FILE=""
+FLASH_ERASE_STARTED=0
 PI4_DTB_PADDED_SIZE=$((128 * 1024))
 U_BOOT_CROSS_COMPILE="aarch64-linux-gnu-"
 U_BOOT_MENU_INPUT="usb"
@@ -109,6 +112,9 @@ Options:
                             exact seL4 composition always uses a fresh derived tree
   --skip-build              Reuse the provenance-bound derived exact-image assembly
   --flash-disk <device>     Erase + flash SD card (example: /dev/disk16)
+  --policy-recovery-file <path>
+                            Explicit private cohesix.env copy retained by a
+                            prior interrupted flash
   --disk-label <name>       FAT32 label when flashing (default: COHESIX)
   -h, --help                Show this help
 
@@ -1402,6 +1408,11 @@ parse_args() {
                 FLASH_DISK="$2"
                 shift 2
                 ;;
+            --policy-recovery-file)
+                [[ $# -ge 2 ]] || fail "--policy-recovery-file requires a path"
+                POLICY_RECOVERY_FILE="$2"
+                shift 2
+                ;;
             --disk-label)
                 [[ $# -ge 2 ]] || fail "--disk-label requires a name"
                 DISK_LABEL="$2"
@@ -1468,6 +1479,17 @@ validate_output_paths() {
             fail "--stage-dir inside the checkout must be strictly under ${ROOT_DIR}/out"
             ;;
     esac
+    if [[ -n "${POLICY_RECOVERY_FILE}" ]]; then
+        [[ -n "${FLASH_DISK}" ]] || \
+          fail "--policy-recovery-file requires --flash-disk"
+        [[ -f "${POLICY_RECOVERY_FILE}" ]] || \
+          fail "--policy-recovery-file must name a regular file"
+        case "${POLICY_RECOVERY_FILE}/" in
+            "${STAGE_DIR}/"*)
+                fail "--policy-recovery-file must be outside the replaceable stage directory"
+                ;;
+        esac
+    fi
     for protected in \
         "$SEL4_BUILD_DIR" \
         "$SEL4_VENV_DIR" \
@@ -1511,6 +1533,9 @@ canonicalize_input_paths() {
     FIRMWARE_DIR="$(realpath_py "${FIRMWARE_DIR}")"
     PI4_WIFI_FIRMWARE_DIR="${COHESIX_PI4_WIFI_FIRMWARE_DIR:-${FIRMWARE_DIR}/firmware/cyw43455-linux-capture}"
     STAGE_DIR="$(realpath_py "${STAGE_DIR}")"
+    if [[ -n "${POLICY_RECOVERY_FILE}" ]]; then
+        POLICY_RECOVERY_FILE="$(realpath_py "${POLICY_RECOVERY_FILE}")"
+    fi
 }
 
 root_task_target_dir() {
@@ -1587,8 +1612,19 @@ cleanup() {
     local status=$?
     trap - EXIT
     if [[ -n "${PRESERVED_POLICY_TEMP:-}" ]]; then
-        rm -f "$PRESERVED_POLICY_TEMP"
+        if [[ "$status" -ne 0 && "${FLASH_ERASE_STARTED:-0}" -eq 1 && \
+              -z "${POLICY_RECOVERY_CONSUMED_FILE:-}" ]]; then
+            chmod 600 "$PRESERVED_POLICY_TEMP" 2>/dev/null || true
+            log "Retained saved policy after interrupted erase: ${PRESERVED_POLICY_TEMP}"
+            log "Retry with --policy-recovery-file ${PRESERVED_POLICY_TEMP}"
+        else
+            rm -f "$PRESERVED_POLICY_TEMP"
+        fi
         PRESERVED_POLICY_TEMP=""
+    fi
+    if [[ "$status" -ne 0 && -n "${POLICY_RECOVERY_CONSUMED_FILE:-}" ]]; then
+        log "Retained explicit policy recovery file after interrupted flash: ${POLICY_RECOVERY_CONSUMED_FILE}"
+        log "Retry with --policy-recovery-file ${POLICY_RECOVERY_CONSUMED_FILE}"
     fi
     if [[ -n "${COMPOSITION_ROOT:-}" ]]; then
         case "${COMPOSITION_ROOT}/" in
@@ -2323,16 +2359,36 @@ flash_sd_card() {
         preflash_volume=""
     fi
 
-    if [[ -n "$preflash_volume" && -f "${preflash_volume}/${policy_file}" && -s "${preflash_volume}/${policy_file}" ]]; then
+    if [[ -n "${POLICY_RECOVERY_FILE}" ]]; then
+        [[ -z "$preflash_volume" || ! -s "${preflash_volume}/${policy_file}" ]] || \
+          fail "--policy-recovery-file refuses to replace an existing non-empty ${policy_file}"
+        [[ -f "${POLICY_RECOVERY_FILE}" ]] || \
+          fail "--policy-recovery-file must name a regular file"
+        [[ -r "${POLICY_RECOVERY_FILE}" && -s "${POLICY_RECOVERY_FILE}" ]] || \
+          fail "--policy-recovery-file must be readable and non-empty"
+        local recovery_size
+        recovery_size="$(stat -f '%z' "${POLICY_RECOVERY_FILE}")"
+        [[ "$recovery_size" =~ ^[0-9]+$ && "$recovery_size" -le 384 ]] || \
+          fail "--policy-recovery-file exceeds the 384-byte Cohesix policy bound"
+        preserved_policy="$(mktemp "${TMPDIR:-/tmp}/cohesix-policy.XXXXXX")"
+        chmod 600 "$preserved_policy"
+        cp -f "${POLICY_RECOVERY_FILE}" "$preserved_policy"
+        chmod 600 "$preserved_policy"
+        PRESERVED_POLICY_TEMP="$preserved_policy"
+        POLICY_RECOVERY_CONSUMED_FILE="${POLICY_RECOVERY_FILE}"
+        log "Using explicit private Cohesix policy recovery file"
+    elif [[ -n "$preflash_volume" && -f "${preflash_volume}/${policy_file}" && -s "${preflash_volume}/${policy_file}" ]]; then
         preserved_policy="$(mktemp "${TMPDIR:-/tmp}/cohesix-policy.XXXXXX")"
         chmod 600 "$preserved_policy"
         cp -f "${preflash_volume}/${policy_file}" "$preserved_policy"
+        chmod 600 "$preserved_policy"
         PRESERVED_POLICY_TEMP="$preserved_policy"
         log "Preserving existing Cohesix U-Boot policy file ${policy_file} across flash"
     fi
 
     log "Flashing ${disk} (this erases the target disk)"
     diskutil unmountDisk force "$disk" >/dev/null 2>&1 || true
+    FLASH_ERASE_STARTED=1
     local erase_status=0
     if diskutil eraseDisk FAT32 "$DISK_LABEL" MBRFormat "$disk" >/dev/null; then
         erase_status=0
@@ -2368,6 +2424,7 @@ flash_sd_card() {
         rm -f "$preserved_policy"
         preserved_policy=""
         PRESERVED_POLICY_TEMP=""
+        FLASH_ERASE_STARTED=0
         log "Restored preserved Cohesix U-Boot policy file ${policy_file}"
     fi
 
@@ -2386,6 +2443,11 @@ flash_sd_card() {
     [[ "$stage_fallback_hash" == "$sd_fallback_hash" ]] || fail "fallback image hash mismatch after flash"
 
     unmount_flashed_disk "$disk" "$volume"
+    if [[ -n "${POLICY_RECOVERY_CONSUMED_FILE}" ]]; then
+        rm -f "${POLICY_RECOVERY_CONSUMED_FILE}"
+        POLICY_RECOVERY_CONSUMED_FILE=""
+        log "Removed consumed private policy recovery file"
+    fi
     log "Flash complete and unmounted: ${disk}"
 }
 

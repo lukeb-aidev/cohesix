@@ -337,6 +337,66 @@ def test_pi4_image_build_mounts_target_before_preserving_policy() -> None:
     assert 'cp -f "${preflash_volume}/${policy_file}" "$preserved_policy"' in flash_body
 
 
+def test_pi4_image_build_retains_policy_after_interrupted_erase() -> None:
+    """A post-erase mount failure must not delete the only saved policy copy."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    cleanup_start = source.index("cleanup() {")
+    cleanup_body = source[cleanup_start : source.index("\nsync_resolved_manifest_json() {")]
+    flash_start = source.index("flash_sd_card() {")
+    flash_body = source[flash_start : source.index("\ndiskutil_info_value() {")]
+
+    assert 'FLASH_ERASE_STARTED=1' in flash_body
+    assert '"${FLASH_ERASE_STARTED:-0}" -eq 1' in cleanup_body
+    assert "Retained saved policy after interrupted erase" in cleanup_body
+    assert "Retry with --policy-recovery-file" in cleanup_body
+    assert 'rm -f "$PRESERVED_POLICY_TEMP"' in cleanup_body
+
+
+def test_pi4_image_build_policy_recovery_is_explicit_bounded_and_consumed() -> None:
+    """Retry policy input must be explicit, bounded, and removed only on success."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    flash_start = source.index("flash_sd_card() {")
+    flash_body = source[flash_start : source.index("\ndiskutil_info_value() {")]
+    unmount_index = flash_body.index('unmount_flashed_disk "$disk" "$volume"')
+    consume_index = flash_body.index('rm -f "${POLICY_RECOVERY_CONSUMED_FILE}"')
+
+    assert "--policy-recovery-file <path>" in source
+    assert 'fail "--policy-recovery-file requires --flash-disk"' in source
+    assert "--policy-recovery-file exceeds the 384-byte Cohesix policy bound" in flash_body
+    assert "--policy-recovery-file refuses to replace an existing non-empty" in flash_body
+    assert 'POLICY_RECOVERY_CONSUMED_FILE="${POLICY_RECOVERY_FILE}"' in flash_body
+    assert consume_index > unmount_index
+
+
+def test_pi4_image_build_cleanup_keeps_post_erase_policy_copy(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The executable cleanup path must retain a private copy past erase."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    policy = tmp_path / "cohesix-policy.test"
+    policy.write_text("coh_net_mode=dhcp\n", encoding="utf-8")
+    policy.chmod(0o600)
+
+    result = _source_function(
+        script,
+        (
+            f"PRESERVED_POLICY_TEMP={str(policy)!r}; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; FLASH_ERASE_STARTED=1; "
+            "COMPOSITION_ROOT=''; RESTORE_CANONICAL_CODEGEN=0; "
+            "EXACT_GIT_COMMIT=''; set +e; false; cleanup"
+        ),
+    )
+
+    assert result.returncode == 1
+    assert policy.is_file()
+    assert policy.stat().st_mode & 0o777 == 0o600
+    assert "Retained saved policy after interrupted erase" in result.stdout
+    assert "Retry with --policy-recovery-file" in result.stdout
+
+
 def test_pi4_image_build_keeps_per_role_driver_runtime_artifacts() -> None:
     """Runtime CPIO entries must match generated per-role artifact identity."""
 
