@@ -5286,7 +5286,7 @@ const fn dpc_generation_reset_request_valid(current: u32, requested: u32) -> boo
     current != 0 && requested == dpc_generation_next(current)
 }
 
-const fn cyw43_engine_generation(static_epoch: u32, active_epoch: u32) -> u32 {
+const fn cyw43_engine_local_generation(static_epoch: u32, active_epoch: u32) -> u32 {
     if active_epoch == 0 {
         static_epoch
     } else {
@@ -7737,7 +7737,7 @@ fn cyw43_runtime_init(
     let Some(link) = descriptor_notification_dpc_link(descriptor) else {
         return false;
     };
-    let current_generation = cyw43_engine_generation(link.shared_epoch, previous_generation);
+    let current_generation = cyw43_engine_local_generation(link.shared_epoch, previous_generation);
     if current_generation == 0 {
         return false;
     }
@@ -7748,17 +7748,10 @@ fn cyw43_runtime_init(
         cyw43_sdio_bus_link_sequence_seed(current_generation),
         Ordering::Release,
     );
-    #[cfg(target_os = "none")]
-    {
-        let ring = dpc_event_ring_read_at(
-            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(link.event_offset),
-        );
-        if !ring.valid() || ring.epoch != current_generation {
-            state.bus_link_ready = false;
-            state.dpc_link_ready = false;
-            return false;
-        }
-    }
+    // The peer ring is still owned by root for SDIO bootstrap at this point.
+    // Do not consume dynamic owner state before the irreversible producer
+    // handoff. `sdio_bus_link_call` validates a readable, valid ring with this
+    // exact generation at the first post-handoff child frontier.
     publish_runtime_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_READY,
@@ -14990,12 +14983,13 @@ enum Cyw43BusLinkOutcome {
     Failed,
 }
 
-const fn cyw43_foreground_new_frontier_generation_valid(
+fn cyw43_foreground_new_frontier_generation_valid(
     retained_generation: u32,
-    owner_ring_valid: bool,
-    owner_generation: u32,
+    owner_ring: Option<&DriverRuntimeDpcEventRing>,
 ) -> bool {
-    owner_ring_valid && retained_generation != 0 && retained_generation == owner_generation
+    owner_ring.is_some_and(|ring| {
+        ring.valid() && retained_generation != 0 && retained_generation == ring.epoch
+    })
 }
 
 #[cfg(target_os = "none")]
@@ -15018,11 +15012,8 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
             let ring = dpc_event_ring_read_at(
                 DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
             );
-            if !cyw43_foreground_new_frontier_generation_valid(
-                transaction.generation,
-                ring.valid(),
-                ring.epoch,
-            ) {
+            if !cyw43_foreground_new_frontier_generation_valid(transaction.generation, Some(&ring))
+            {
                 transaction.poisoned = true;
                 return Cyw43BusLinkOutcome::Failed;
             }
@@ -36589,12 +36580,17 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_initial_generation_uses_static_epoch_without_recovery() {
+    fn cyw43_engine_generation_is_local_descriptor_state() {
         let static_epoch = 0x4359_5301;
         let state = Cyw43RuntimeState::new();
         assert_eq!(
-            cyw43_engine_generation(static_epoch, state.dpc_shared_epoch),
+            cyw43_engine_local_generation(static_epoch, state.dpc_shared_epoch),
             static_epoch
+        );
+        assert_eq!(
+            cyw43_engine_local_generation(static_epoch, dpc_generation_next(static_epoch)),
+            dpc_generation_next(static_epoch),
+            "engine init retains a quarantined generation without consulting peer-ring state",
         );
         assert!(!state.recovery_required);
     }
@@ -36787,24 +36783,30 @@ mod tests {
     #[test]
     fn delegated_new_frontier_requires_exact_nonzero_owner_generation() {
         let epoch = 0x4359_5301;
+        let exact = DriverRuntimeDpcEventRing::empty(epoch);
         assert!(cyw43_foreground_new_frontier_generation_valid(
-            epoch, true, epoch,
+            epoch,
+            Some(&exact),
         ));
         assert!(!cyw43_foreground_new_frontier_generation_valid(
-            0, true, epoch,
+            0,
+            Some(&exact),
         ));
-        assert!(!cyw43_foreground_new_frontier_generation_valid(
-            epoch, false, epoch,
-        ));
+        assert!(!cyw43_foreground_new_frontier_generation_valid(epoch, None,));
+        let mut invalid = exact;
+        invalid.magic = 0;
         assert!(!cyw43_foreground_new_frontier_generation_valid(
             epoch,
-            true,
-            dpc_generation_next(epoch),
+            Some(&invalid),
+        ));
+        let next = DriverRuntimeDpcEventRing::empty(dpc_generation_next(epoch));
+        assert!(!cyw43_foreground_new_frontier_generation_valid(
+            epoch,
+            Some(&next),
         ));
         assert!(!cyw43_foreground_new_frontier_generation_valid(
             dpc_generation_next(epoch),
-            true,
-            epoch,
+            Some(&exact),
         ));
     }
 
@@ -39964,6 +39966,10 @@ mod tests {
         init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
         let descriptor = RUNTIME_DESCRIPTOR.load();
         let link = descriptor_notification_dpc_link(&descriptor).expect("CYW43 DPC link");
+        assert!(
+            !cyw43_foreground_new_frontier_generation_valid(link.shared_epoch, None),
+            "an unpublished owner ring must fail the later delegated frontier",
+        );
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.recovery_required = true;
             state.firmware_execution_started = true;
