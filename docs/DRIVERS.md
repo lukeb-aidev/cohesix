@@ -380,6 +380,18 @@ This as-built closure is authorized by Milestone 26d task
 `m26b-wifi-sdio-notification-dpc-closure`.
 
 - SDIO is the sole SDHCI owner; CYW43 submits bounded bus-link operations.
+- Linux `mmc-bcm2835`/MMC-SDIO and `brcmfmac` ordering is the behavioral
+  reliability oracle, adapted to the linked-runtime authority boundary rather
+  than copied as a root-owned driver. CYW43 engine initialization is
+  descriptor- and local-state-only: it cannot submit an SDIO child. Root first
+  completes the irreversible SDIO producer handoff; only then may the first
+  retained `TRANSPORT_INIT` turn request one generation reset from the SDIO
+  owner. A later turn starts fresh owner-side enumeration in Linux order:
+  startup host configuration, `CMD0`, discovery `CMD5(0)`, bounded ready
+  `CMD5(OCR)`, `CMD3`, and `CMD7` with an ordinary short R1 response. Generation
+  reset completion, enumeration, and generation commit remain separate turns.
+  A pair restart already performs its owner-side physical reset and therefore
+  must not trigger a second CYW43-requested power cycle in the same episode.
 - The physical Pi profile places SDIO and CYW43 on the same driver core. Both
   deferred runtimes retain shell-safe bootstrap priority `255` through exact
   owner-first descriptor and engine replay, firmware/control-context replay,

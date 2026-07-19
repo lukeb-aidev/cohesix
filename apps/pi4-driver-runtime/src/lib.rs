@@ -7699,23 +7699,12 @@ fn cyw43_runtime_init(
         cyw43_record_last_fault_with_result(FAULT_CYW43_TRANSPORT_BUS_LINK, 0);
         return false;
     }
-    // Engine-init is the only command admitted while a DPC generation is
-    // quarantined. Preserve that reason and the active epoch across the local
-    // state reset so the SDIO owner receives one exact generation-reset turn
-    // before any firmware bytes or SDPCM sequence can be reused.
+    // Engine init is deliberately local-only. Preserve the quarantine reason
+    // and active epoch across the reset; the first retained TRANSPORT_INIT
+    // turn requests the SDIO-owner reset only after root has irreversibly
+    // handed the producer ring to CYW43. No child operation is legal here.
     let recovery_required = state.recovery_required;
     let previous_generation = state.dpc_shared_epoch;
-    if recovery_required
-        && state.firmware_execution_started
-        && (!state.sdio_transport_enumerated
-            || cyw43_hold_armcr4_for_firmware_upload(state).is_err())
-    {
-        // Do not expose E+1 while the old dongle execution can still mutate
-        // Function 2 or assert a new device source. The existing enumerated
-        // SDIO transport is the only authority used to halt ARMCR4 here.
-        state.recovery_required = true;
-        return false;
-    }
     state.reset();
     state.recovery_required = recovery_required;
     state.dpc_shared_epoch = previous_generation;
@@ -7767,32 +7756,6 @@ fn cyw43_runtime_init(
         if !ring.valid() || ring.epoch != current_generation {
             state.bus_link_ready = false;
             state.dpc_link_ready = false;
-            return false;
-        }
-    }
-    if state.recovery_required {
-        let requested = dpc_generation_next(current_generation);
-        let Some((reset_sequence, completion)) =
-            cyw43_reset_sdio_generation_via_bus_link(requested)
-        else {
-            return false;
-        };
-        if !cyw43_generation_reset_completion_exact(completion, reset_sequence, requested) {
-            return false;
-        }
-        #[cfg(target_os = "none")]
-        {
-            let ring = dpc_event_ring_read_at(
-                DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(link.event_offset),
-            );
-            if !ring.valid()
-                || ring.epoch != current_generation
-                || ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED == 0
-            {
-                return false;
-            }
-        }
-        if !cyw43_complete_generation_reset(state, completion, reset_sequence, requested) {
             return false;
         }
     }
@@ -9941,7 +9904,7 @@ fn sdio_generation_reprobe_card_command_allowed(desc: DriverRuntimeSdioCommandDe
         0 => desc.addr == 0 && desc.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE,
         SDIO_CMD5 => desc.response_kind == DRIVER_RUNTIME_SDIO_RESP_OCR,
         SDIO_CMD3 => desc.addr == 0 && desc.response_kind == DRIVER_RUNTIME_SDIO_RESP_SHORT,
-        SDIO_CMD7 => desc.addr != 0 && desc.response_kind == DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY,
+        SDIO_CMD7 => desc.addr != 0 && desc.response_kind == DRIVER_RUNTIME_SDIO_RESP_SHORT,
         _ => false,
     }
 }
@@ -15000,6 +14963,14 @@ enum Cyw43BusLinkOutcome {
     Failed,
 }
 
+const fn cyw43_foreground_new_frontier_generation_valid(
+    retained_generation: u32,
+    owner_ring_valid: bool,
+    owner_generation: u32,
+) -> bool {
+    owner_ring_valid && retained_generation != 0 && retained_generation == owner_generation
+}
+
 #[cfg(target_os = "none")]
 fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutcome {
     command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
@@ -15016,6 +14987,19 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
         // semantics and continue to use endpoint rendezvous instead.
         command.aux1 = transaction.generation;
         let index = transaction.replay_index as usize;
+        if index >= transaction.completed_count as usize && !transaction.frontier_valid {
+            let ring = dpc_event_ring_read_at(
+                DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+            );
+            if !cyw43_foreground_new_frontier_generation_valid(
+                transaction.generation,
+                ring.valid(),
+                ring.epoch,
+            ) {
+                transaction.poisoned = true;
+                return Cyw43BusLinkOutcome::Failed;
+            }
+        }
         if index < transaction.completed_count as usize {
             let entry = transaction.entries[index];
             let identity_matches = cyw43_foreground_prepared_matches(transaction, entry, command);
@@ -15939,6 +15923,41 @@ fn cyw43_transport_init_step(
             if !cyw43_uses_sdio_bus_link() {
                 return Err(FAULT_CYW43_TRANSPORT_BUS_LINK);
             }
+            if state.recovery_required && state.dpc_pending_epoch == 0 {
+                let current_generation = state.dpc_shared_epoch;
+                if current_generation == 0 {
+                    return Err(FAULT_CYW43_TRANSPORT_BUS_LINK);
+                }
+                let requested = dpc_generation_next(current_generation);
+                let Some((reset_sequence, completion)) =
+                    cyw43_reset_sdio_generation_via_bus_link(requested)
+                else {
+                    return Err(FAULT_CYW43_TRANSPORT_BUS_LINK);
+                };
+                if !cyw43_generation_reset_completion_exact(completion, reset_sequence, requested) {
+                    return Err(FAULT_CYW43_TRANSPORT_BUS_LINK);
+                }
+                #[cfg(target_os = "none")]
+                {
+                    let ring = dpc_event_ring_read_at(
+                        DRIVER_TASK_SDIO_BUS_RING_VADDR
+                            + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+                    );
+                    if !ring.valid()
+                        || ring.epoch != current_generation
+                        || ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED == 0
+                    {
+                        return Err(FAULT_CYW43_TRANSPORT_BUS_LINK);
+                    }
+                }
+                if !cyw43_complete_generation_reset(state, completion, reset_sequence, requested) {
+                    return Err(FAULT_CYW43_TRANSPORT_BUS_LINK);
+                }
+                // Completing the reset is the one child operation for this
+                // outer turn. Keep START so a later root command performs the
+                // local START -> BUS_LINK_READY transition before CMD0.
+                return Ok(DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START);
+            }
             state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY;
             publish_runtime_progress(
                 sequence,
@@ -16251,7 +16270,7 @@ fn cyw43_sdio_card_init_step(
                 if sdio_execute_transfer(
                     SDIO_CMD7,
                     state.card_init_rca,
-                    DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
+                    DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
                     empty,
                     1,
                     0,
@@ -36739,6 +36758,30 @@ mod tests {
     }
 
     #[test]
+    fn delegated_new_frontier_requires_exact_nonzero_owner_generation() {
+        let epoch = 0x4359_5301;
+        assert!(cyw43_foreground_new_frontier_generation_valid(
+            epoch, true, epoch,
+        ));
+        assert!(!cyw43_foreground_new_frontier_generation_valid(
+            0, true, epoch,
+        ));
+        assert!(!cyw43_foreground_new_frontier_generation_valid(
+            epoch, false, epoch,
+        ));
+        assert!(!cyw43_foreground_new_frontier_generation_valid(
+            epoch,
+            true,
+            dpc_generation_next(epoch),
+        ));
+        assert!(!cyw43_foreground_new_frontier_generation_valid(
+            dpc_generation_next(epoch),
+            true,
+            epoch,
+        ));
+    }
+
+    #[test]
     fn generation_reset_rejects_old_epoch_after_ring_commit() {
         let old_epoch = 0x4359_5301;
         let next_epoch = dpc_generation_next(old_epoch);
@@ -37275,7 +37318,7 @@ mod tests {
     }
 
     #[test]
-    fn engine_init_preserves_quarantine_epoch_until_exact_generation_reset() {
+    fn engine_init_defers_quarantine_reset_until_post_handoff_transport() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET);
@@ -37294,22 +37337,35 @@ mod tests {
             &descriptor,
         ));
         assert_eq!(state.dpc_shared_epoch, link.shared_epoch);
+        assert_eq!(state.dpc_pending_epoch, 0);
         assert_eq!(
-            state.dpc_pending_epoch,
-            dpc_generation_next(link.shared_epoch)
+            CYW43_SDIO_BUS_LINK_SEQ.load(Ordering::Acquire),
+            cyw43_sdio_bus_link_sequence_seed(link.shared_epoch),
+            "engine init must not issue a reciprocal SDIO child before producer handoff",
         );
         assert!(state.recovery_required);
         assert_eq!(state.dpc_cursor, Cyw43DpcCursor::empty());
         assert!(!state.firmware_execution_started);
-        assert!(!state.sdio_transport_enumerated);
+        assert!(state.sdio_transport_enumerated);
         assert!(!state.transport_ready);
-        assert!(cyw43_transport_card_init_required(
+        assert!(!cyw43_transport_card_init_required(
             state.sdio_transport_enumerated
         ));
         assert_eq!(
             cyw43_prepare_firmware_upload_transport(&mut state),
             Err(FAULT_CYW43_TRANSPORT_INIT)
         );
+        assert_eq!(
+            cyw43_transport_init_step(93, DRIVER_RUNTIME_CYW43_COMMAND_AUX, &mut state,),
+            Ok(DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START),
+            "the first post-handoff transport turn performs only generation reset",
+        );
+        assert_eq!(
+            state.dpc_pending_epoch,
+            dpc_generation_next(link.shared_epoch),
+        );
+        assert!(state.recovery_required);
+        assert!(!state.sdio_transport_enumerated);
         assert!(cyw43_transport_init(&mut state).is_ok());
         assert_eq!(
             state.dpc_shared_epoch,
@@ -39875,7 +39931,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_recovery_engine_init_preserves_exact_armcr4_fault() {
+    fn cyw43_recovery_engine_init_performs_no_pre_handoff_owner_io() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
@@ -39889,7 +39945,7 @@ mod tests {
             state.backplane_window = CYW43_ARMCR4_CORE_BASE & BACKPLANE_WINDOW_MASK;
             state.backplane_window_valid = true;
         });
-        test_sdio_transfer_fail_next(SDIO_CMD52, 1, true);
+        reset_test_sdio_transfer_log();
         let init = DriverTaskCommandRecord {
             sequence: 94,
             opcode: OPCODE_SERVICE,
@@ -39904,13 +39960,14 @@ mod tests {
 
         let completion = service_command(0, init);
 
-        assert_eq!(completion.sequence, 94);
-        assert_eq!(completion.code, COMPLETION_FAULT);
-        assert_eq!(completion.detail, FAULT_CYW43_BACKPLANE_ARMCR4_RESET);
-        assert_eq!(
-            pi4_driver_abi::driver_runtime_cyw43_armcr4_reset_result_edge(completion.result),
-            DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_PRERESET_WRITE
-        );
+        assert_eq!(completion, DriverTaskCompletionRecord::progress(94, 1));
+        assert_eq!(test_sdio_transfer_count(|_| true), 0);
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.recovery_required);
+            assert_eq!(state.dpc_shared_epoch, link.shared_epoch);
+            assert_eq!(state.dpc_pending_epoch, 0);
+            assert!(!state.firmware_execution_started);
+        });
     }
 
     #[test]
@@ -51255,13 +51312,7 @@ mod tests {
             (0u32, 0u16, 0u32, DRIVER_RUNTIME_SDIO_RESP_NONE, 0u32),
             (1, SDIO_CMD5, 0, DRIVER_RUNTIME_SDIO_RESP_OCR, 0x80ff_8000),
             (2, SDIO_CMD3, 0, DRIVER_RUNTIME_SDIO_RESP_SHORT, 0x1234_0000),
-            (
-                3,
-                SDIO_CMD7,
-                0x1234_0000,
-                DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY,
-                0,
-            ),
+            (3, SDIO_CMD7, 0x1234_0000, DRIVER_RUNTIME_SDIO_RESP_SHORT, 0),
         ] {
             reset_sdio_descriptor_seam_for_test();
             let sequence = 0x4d00 + case;
