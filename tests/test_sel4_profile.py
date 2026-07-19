@@ -1302,6 +1302,41 @@ def test_wrapper_is_parameterized_and_has_no_legacy_schedule() -> None:
     assert "/Users/" not in wrapper
 
 
+def test_pi_profiles_reserve_root_cspace_for_linked_runtimes(
+    tmp_path: Path,
+    contract: dict[str, Any],
+) -> None:
+    for profile_name in ("pi4_production", "pi4_diagnostic"):
+        profile = contract["profiles"][profile_name]
+
+        assert profile["cmake"]["KernelRootCNodeSizeBits"] == "14"
+        command = sel4_profile.wrapper_configure_command(
+            profile,
+            tmp_path / "source",
+            tmp_path / profile_name,
+        )
+        assert "-DKernelRootCNodeSizeBits=14" in command
+
+
+def test_wrapper_preserves_profile_root_cnode_before_upstream_settings() -> None:
+    wrapper = sel4_profile.WRAPPER_CMAKE.read_text(encoding="utf-8")
+
+    capture = wrapper.index(
+        'set(_cohesix_profile_root_cnode_size_bits "")'
+    )
+    upstream_settings = wrapper.index(
+        'include("${_cohesix_sel4test_dir}/settings.cmake")'
+    )
+    apply_profile = wrapper.index(
+        '"${_cohesix_profile_root_cnode_size_bits}"\n'
+        "    CACHE INTERNAL"
+    )
+
+    assert capture < upstream_settings < apply_profile
+    assert "set(_cohesix_profile_root_cnode_size_bits 13)" in wrapper
+    assert "Root CNode size selected by the Cohesix seL4 profile" in wrapper
+
+
 def test_qemu_configure_sets_arch_without_unused_qemu_smp(
     tmp_path: Path,
     contract: dict[str, Any],

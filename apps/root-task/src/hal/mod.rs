@@ -1272,6 +1272,116 @@ const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_BASE: &[DriverTaskContract] = 
     HDMI_TEXT_DRIVER_TASK_CONTRACT,
 ];
 
+/// Conservative non-payload capability allowance for each isolated runtime.
+///
+/// This covers the task objects, continuation/recovery caps, translation
+/// tables for every declared virtual region, IRQ/bus-link caps, and bounded
+/// growth in those fixed structures. Page-backed resources are accounted for
+/// separately below.
+#[cfg(feature = "kernel")]
+const DRIVER_TASK_CSPACE_FIXED_CAPS_PER_RUNTIME: usize = 64;
+
+/// Root-task capability headroom retained after all selected Pi runtimes exist.
+///
+/// Recovery, operator service, later IRQ setup, and network operation must not
+/// begin with a nearly exhausted init CNode. This reserve is deliberately part
+/// of admission rather than an optimistic post-bootstrap observation.
+#[cfg(feature = "kernel")]
+const DRIVER_TASK_CSPACE_POST_BOOT_RESERVE: usize = 2048;
+
+/// Maximum framebuffer span accepted by the HDMI runtime mapper.
+#[cfg(feature = "kernel")]
+const DRIVER_TASK_CSPACE_MAX_FRAMEBUFFER_PAGES: usize = 2048;
+
+/// A conservative source-plus-mapping allowance for aliasable page resources.
+///
+/// Code, stack, and framebuffer pages now transfer one cap directly into the
+/// child VSpace. Budgeting two slots nevertheless prevents a future root-alias
+/// regression from silently restoring the CSpace exhaustion fixed here.
+#[cfg(feature = "kernel")]
+const DRIVER_TASK_CSPACE_CAPS_PER_ALIASABLE_PAGE: usize = 2;
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DriverTaskCspaceBudget {
+    required_slots: usize,
+    available_slots: usize,
+    reserve_slots: usize,
+    contract_count: usize,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverTaskCspacePreflightError {
+    MissingRuntimeImage(&'static str),
+    InvalidRuntimeImage(&'static str),
+    ArithmeticOverflow,
+    Insufficient {
+        required_slots: usize,
+        available_slots: usize,
+    },
+}
+
+#[cfg(feature = "kernel")]
+impl fmt::Display for DriverTaskCspacePreflightError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingRuntimeImage(contract) => {
+                write!(f, "runtime-image-missing contract={contract}")
+            }
+            Self::InvalidRuntimeImage(contract) => {
+                write!(f, "runtime-image-invalid contract={contract}")
+            }
+            Self::ArithmeticOverflow => f.write_str("capability-budget-overflow"),
+            Self::Insufficient {
+                required_slots,
+                available_slots,
+            } => write!(
+                f,
+                "capability-budget-insufficient required={required_slots} available={available_slots}",
+            ),
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn checked_cspace_page_slots(pages: usize, caps_per_page: usize) -> Option<usize> {
+    pages.checked_mul(caps_per_page)
+}
+
+#[cfg(feature = "kernel")]
+fn isolated_runtime_cspace_upper_bound(
+    spec: driver_task::DriverTaskRuntimeImageSpec,
+    linked_code_pages: usize,
+    include_framebuffer: bool,
+) -> Option<usize> {
+    use driver_task::DriverTaskRuntimeRegionKind as Region;
+
+    let stack_pages = usize::from(spec.region_pages(Region::Stack));
+    let mmio_pages = usize::from(spec.region_pages(Region::Mmio));
+    let dma_pages = usize::from(spec.region_pages(Region::Dma));
+    let shared_pages = usize::from(spec.region_pages(Region::SharedBuffer));
+    let transport_pages = linked_code_pages.checked_add(stack_pages)?.checked_add(2)?;
+    let mut slots =
+        checked_cspace_page_slots(transport_pages, DRIVER_TASK_CSPACE_CAPS_PER_ALIASABLE_PAGE)?;
+    slots = slots.checked_add(checked_cspace_page_slots(
+        mmio_pages,
+        DRIVER_TASK_CSPACE_CAPS_PER_ALIASABLE_PAGE,
+    )?)?;
+    slots = slots.checked_add(dma_pages)?;
+    slots = slots.checked_add(checked_cspace_page_slots(
+        shared_pages,
+        DRIVER_TASK_CSPACE_CAPS_PER_ALIASABLE_PAGE,
+    )?)?;
+    if include_framebuffer {
+        slots = slots.checked_add(checked_cspace_page_slots(
+            DRIVER_TASK_CSPACE_MAX_FRAMEBUFFER_PAGES,
+            DRIVER_TASK_CSPACE_CAPS_PER_ALIASABLE_PAGE,
+        )?)?;
+    }
+    slots.checked_add(DRIVER_TASK_CSPACE_FIXED_CAPS_PER_RUNTIME)
+}
+
 #[cfg(feature = "kernel")]
 fn physical_pi_driver_task_bootstrap_contracts() -> &'static [DriverTaskContract] {
     match driver_task::pi4_pre_root_net_bootstrap_selection() {
@@ -2894,6 +3004,50 @@ impl<'a> KernelHal<'a> {
         &mut self.env
     }
 
+    fn preflight_isolated_driver_task_cspace(
+        &self,
+        contracts: &[DriverTaskContract],
+    ) -> Result<DriverTaskCspaceBudget, DriverTaskCspacePreflightError> {
+        let mut required_slots = DRIVER_TASK_CSPACE_POST_BOOT_RESERVE;
+        for contract in contracts {
+            let spec = driver_task::pi4_driver_task_runtime_image_spec_for_contract(*contract)
+                .ok_or(DriverTaskCspacePreflightError::MissingRuntimeImage(
+                    contract.name,
+                ))?;
+            let image = driver_task::driver_runtime_image_bytes(spec.hot_path).ok_or(
+                DriverTaskCspacePreflightError::MissingRuntimeImage(contract.name),
+            )?;
+            let plan = plan_runtime_elf_load(
+                image,
+                spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Code),
+            )
+            .map_err(|_| DriverTaskCspacePreflightError::InvalidRuntimeImage(contract.name))?;
+            let contract_slots = isolated_runtime_cspace_upper_bound(
+                spec,
+                plan.page_count,
+                *contract == HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            )
+            .ok_or(DriverTaskCspacePreflightError::ArithmeticOverflow)?;
+            required_slots = required_slots
+                .checked_add(contract_slots)
+                .ok_or(DriverTaskCspacePreflightError::ArithmeticOverflow)?;
+        }
+
+        let available_slots = self.env.snapshot().cspace_remaining;
+        if available_slots < required_slots {
+            return Err(DriverTaskCspacePreflightError::Insufficient {
+                required_slots,
+                available_slots,
+            });
+        }
+        Ok(DriverTaskCspaceBudget {
+            required_slots,
+            available_slots,
+            reserve_slots: DRIVER_TASK_CSPACE_POST_BOOT_RESERVE,
+            contract_count: contracts.len(),
+        })
+    }
+
     /// Creates the seL4 driver-task substrate for Pi 4 hardware roles.
     ///
     /// This creates live, separately scheduled TCBs with restricted child CSpaces,
@@ -2918,6 +3072,43 @@ impl<'a> KernelHal<'a> {
         } else {
             DRIVER_TASK_BOOTSTRAP_CONTRACTS
         };
+
+        if use_isolated_vspace {
+            match self.preflight_isolated_driver_task_cspace(bootstrap_contracts) {
+                Ok(budget) => {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "DRIVER_TASK_CSPACE_PREFLIGHT status=ready contracts={} required={} available={} reserve={} framebuffer_pages_max={}",
+                            budget.contract_count,
+                            budget.required_slots,
+                            budget.available_slots,
+                            budget.reserve_slots,
+                            DRIVER_TASK_CSPACE_MAX_FRAMEBUFFER_PAGES,
+                        ),
+                    );
+                    crate::bootstrap::log::force_uart_line(line.as_str());
+                }
+                Err(err) => {
+                    report.failed_count = bootstrap_contracts.len();
+                    let mut line = heapless::String::<256>::new();
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "DRIVER_TASK_CSPACE_PREFLIGHT status=failed contracts={} err={} action=reject-before-first-child",
+                            bootstrap_contracts.len(),
+                            err,
+                        ),
+                    );
+                    crate::bootstrap::log::force_uart_line(line.as_str());
+                    finalize_driver_task_bootstrap_report(&mut report, bootstrap_contracts.len());
+                    self.driver_task_report = report;
+                    driver_task::publish_driver_task_bootstrap_report(report);
+                    return report;
+                }
+            }
+        }
 
         for contract in bootstrap_contracts {
             let created = if use_isolated_vspace {
@@ -3418,7 +3609,10 @@ impl<'a> KernelHal<'a> {
                 .ok_or(HalError::Unsupported("driver-runtime-elf-map-vaddr"))?;
             let mapping = runtime_elf_page_mapping(fill)?;
             self.env
-                .map_page_copy_into_vspace(
+                .unmap_page_cap(frame.cap())
+                .map_err(HalError::Sel4)?;
+            self.env
+                .map_page_cap_into_vspace(
                     frame.cap(),
                     vspace,
                     vaddr,
@@ -3431,9 +3625,6 @@ impl<'a> KernelHal<'a> {
                 crate::hal::cache::cache_unify_instruction(vspace, vaddr, page_bytes)
                     .map_err(|err| HalError::Sel4(err.code()))?;
             }
-            self.env
-                .unmap_page_cap(frame.cap())
-                .map_err(HalError::Sel4)?;
         }
         Ok(RuntimeElfLoad {
             entry: plan.entry,
@@ -3473,7 +3664,7 @@ impl<'a> KernelHal<'a> {
             return Err(HalError::Unsupported("driver-runtime-hdmi-fb-map-len"));
         };
         let page_count = map_len.saturating_add(page_bytes - 1) / page_bytes;
-        if page_count == 0 || width == 0 || page_count > 2048 {
+        if page_count == 0 || width == 0 || page_count > DRIVER_TASK_CSPACE_MAX_FRAMEBUFFER_PAGES {
             return Err(HalError::Unsupported("driver-runtime-hdmi-fb-pages"));
         }
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
@@ -3484,10 +3675,9 @@ impl<'a> KernelHal<'a> {
             let vaddr = (DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize)
                 .checked_add(page.saturating_mul(page_bytes))
                 .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-vaddr"))?;
-            let frame = self.env.map_device(paddr).map_err(HalError::Sel4)?;
             self.env
-                .map_page_copy_into_vspace(
-                    frame.cap(),
+                .map_exclusive_device_page_into_vspace(
+                    paddr,
                     vspace,
                     vaddr,
                     rights,
@@ -4207,8 +4397,17 @@ impl<'a> KernelHal<'a> {
             let vaddr = driver_task::DRIVER_TASK_STACK_BOTTOM_VADDR
                 .checked_add(page.saturating_mul(1usize << sel4::PAGE_BITS))
                 .ok_or(HalError::Unsupported("driver-runtime-stack-vaddr"))?;
+            crate::hal::cache::cache_clean(
+                sel4_sys::seL4_CapInitThreadVSpace,
+                stack_frame.ptr().as_ptr() as usize,
+                page_bytes,
+            )
+            .map_err(|err| HalError::Sel4(err.code()))?;
             self.env
-                .map_page_copy_into_vspace(
+                .unmap_page_cap(stack_frame.cap())
+                .map_err(HalError::Sel4)?;
+            self.env
+                .map_page_cap_into_vspace(
                     stack_frame.cap(),
                     vspace,
                     vaddr,
@@ -4530,11 +4729,6 @@ impl<'a> KernelHal<'a> {
         self.env
             .unmap_page_cap(ipc_frame.cap())
             .map_err(HalError::Sel4)?;
-        for stack_frame in &stack_frames {
-            self.env
-                .unmap_page_cap(stack_frame.cap())
-                .map_err(HalError::Sel4)?;
-        }
         let stack_frame_cap = stack_frames
             .first()
             .map(RamFrame::cap)
@@ -6115,6 +6309,71 @@ mod tests {
         assert!(!base.contains(&super::driver_task::GENET_DRIVER_TASK_CONTRACT));
         assert!(!base.contains(&super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT));
         assert!(!base.contains(&super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn physical_pi_cspace_preflight_rejects_13_bits_and_admits_14_bits() {
+        const CURRENT_LINKED_RUNTIME_PAGES: usize = 203;
+        const OBSERVED_EMPTY_START: usize = 0x0a6a;
+
+        fn required_slots(contracts: &[super::DriverTaskContract]) -> usize {
+            contracts
+                .iter()
+                .try_fold(
+                    super::DRIVER_TASK_CSPACE_POST_BOOT_RESERVE,
+                    |total, contract| {
+                        let spec =
+                            super::driver_task::pi4_driver_task_runtime_image_spec_for_contract(
+                                *contract,
+                            )?;
+                        let slots = super::isolated_runtime_cspace_upper_bound(
+                            spec,
+                            CURRENT_LINKED_RUNTIME_PAGES,
+                            *contract == super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                        )?;
+                        total.checked_add(slots)
+                    },
+                )
+                .expect("generated Pi contracts have a bounded CSpace estimate")
+        }
+
+        let capacity_13 = (1usize << 13) - OBSERVED_EMPTY_START;
+        let capacity_14 = (1usize << 14) - OBSERVED_EMPTY_START;
+        for contracts in [
+            super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_SELECTED,
+            super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_SELECTED,
+        ] {
+            let required = required_slots(contracts);
+            assert!(
+                required > capacity_13,
+                "13-bit Pi CSpace must reject the linked-runtime upper bound"
+            );
+            assert!(
+                required <= capacity_14,
+                "14-bit Pi CSpace must retain the declared post-bootstrap reserve"
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn framebuffer_budget_is_worst_case_and_alias_conservative() {
+        let spec = super::driver_task::pi4_driver_task_runtime_image_spec_for_contract(
+            super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        )
+        .expect("HDMI runtime spec");
+        let without_framebuffer =
+            super::isolated_runtime_cspace_upper_bound(spec, 203, false).expect("bounded plan");
+        let with_framebuffer =
+            super::isolated_runtime_cspace_upper_bound(spec, 203, true).expect("bounded plan");
+
+        assert_eq!(
+            with_framebuffer - without_framebuffer,
+            super::DRIVER_TASK_CSPACE_MAX_FRAMEBUFFER_PAGES
+                * super::DRIVER_TASK_CSPACE_CAPS_PER_ALIASABLE_PAGE
+        );
+        assert_eq!(super::DRIVER_TASK_CSPACE_CAPS_PER_ALIASABLE_PAGE, 2);
     }
 
     #[cfg(feature = "kernel")]

@@ -81,6 +81,21 @@ if(NOT EXISTS "${_cohesix_sel4test_dir}/settings.cmake")
     )
 endif()
 
+# Preserve an explicit profile value before upstream settings are loaded. The
+# wrapper supplies the bounded 13-bit default only for profiles that omit the
+# setting; Pi profiles raise it explicitly for their larger linked-runtime cap
+# inventory.
+set(_cohesix_profile_root_cnode_size_bits "")
+if(
+    DEFINED KernelRootCNodeSizeBits
+    AND NOT "${KernelRootCNodeSizeBits}" STREQUAL ""
+)
+    set(
+        _cohesix_profile_root_cnode_size_bits
+        "${KernelRootCNodeSizeBits}"
+    )
+endif()
+
 include("${_cohesix_sel4test_dir}/settings.cmake")
 
 project(cohesix-sel4-profile C CXX ASM)
@@ -88,7 +103,16 @@ project(cohesix-sel4-profile C CXX ASM)
 find_package(seL4 REQUIRED)
 find_package(elfloader-tool REQUIRED)
 
-set(KernelRootCNodeSizeBits 13 CACHE INTERNAL "")
+if("${_cohesix_profile_root_cnode_size_bits}" STREQUAL "")
+    set(_cohesix_profile_root_cnode_size_bits 13)
+endif()
+set(
+    KernelRootCNodeSizeBits
+    "${_cohesix_profile_root_cnode_size_bits}"
+    CACHE INTERNAL
+    "Root CNode size selected by the Cohesix seL4 profile"
+    FORCE
+)
 sel4_import_kernel()
 
 if((NOT Sel4testAllowSettingsOverride) AND (KernelArchARM OR KernelArchRiscV))

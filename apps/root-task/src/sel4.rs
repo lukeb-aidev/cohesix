@@ -4753,6 +4753,33 @@ impl<'a> KernelEnv<'a> {
         Ok(frame_slot)
     }
 
+    /// Maps one previously unclaimed device page exclusively into a child VSpace.
+    ///
+    /// Unlike [`Self::map_device_page_into_vspace`], this path deliberately does
+    /// not retain a cache entry or create a root-VSpace alias. It is intended for
+    /// large, child-owned device-memory ranges such as the boot framebuffer,
+    /// where one permanent root alias and one copied child mapping per page would
+    /// waste CSpace and violate the linked runtime's exclusive data-plane
+    /// ownership. The returned init-CNode capability remains the mapping
+    /// capability for the child VSpace and therefore must stay live.
+    pub fn map_exclusive_device_page_into_vspace(
+        &mut self,
+        paddr: usize,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<seL4_CPtr, seL4_Error> {
+        if self.cached_device_frame_for_paddr(paddr).is_some() {
+            return Err(sel4_sys::seL4_IllegalOperation);
+        }
+        let frame_slot =
+            self.retype_device_page_for_paddr(paddr, "driver-vspace-exclusive-device")?;
+        self.map_page_cap_into_vspace(frame_slot, vspace, vaddr, rights, attr, tracker)?;
+        Ok(frame_slot)
+    }
+
     /// Ensures that all intermediate page-table objects exist in a target VSpace.
     pub fn ensure_page_table_in_vspace(
         &mut self,

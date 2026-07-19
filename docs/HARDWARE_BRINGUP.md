@@ -136,9 +136,16 @@ python3 scripts/sel4_profile.py validate \
 The default stage directory is `out/pi4-sd`. The script validates the Pi U-Boot
 shape, the canonical `pi4_diagnostic` seL4 profile, its pinned source and build
 input stamp, the virtual-counter contract, generated
-artifacts, runtime payloads, and rootfs bounds before staging. The selected
-seL4 build directory is immutable profile evidence: the wrapper fingerprints
-it, builds and validates a fresh disposable `pi4_diagnostic` composition tree,
+artifacts, runtime payloads, and rootfs bounds before staging. Both Pi
+production and diagnostic profiles require
+`KernelRootCNodeSizeBits=14`; this reserves deterministic root CSpace for the
+manifest-declared linked-runtime images and the isolated HDMI framebuffer
+mapping. The profile wrapper preserves that declared value and uses 13 bits
+only for profiles that omit the setting. An older Pi build cache reporting 13
+bits is stale and must be rebuilt before image staging or hardware proof.
+The selected seL4 build directory is immutable profile evidence: the wrapper
+fingerprints it, builds and validates a fresh disposable `pi4_diagnostic`
+composition tree,
 injects and relinks the Cohesix rootserver only in that derived tree, and then
 revalidates the selected tree and its complete byte/mode/symlink fingerprint.
 The durable `out/pi4-image-assembly` provenance binds the selected canonical

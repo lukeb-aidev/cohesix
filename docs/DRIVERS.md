@@ -230,6 +230,19 @@ ABI records contain integers, offsets, lengths, identities, and bounded arrays,
 not process-local pointers. Both sides validate magic, version, role, identity,
 resource counts, ranges, and sequence state before use.
 
+Physical Pi bootstrap also performs a deterministic root-CSpace admission pass
+before creating the first linked runtime. The pass parses each selected runtime
+ELF, accounts conservatively for code, stack, IPC, ring, MMIO, DMA, shared
+buffers, translation structures, the maximum admitted HDMI framebuffer, and a
+2,048-slot post-bootstrap reserve. Both canonical Pi seL4 profiles therefore
+require `KernelRootCNodeSizeBits=14`; a smaller or stale build is rejected
+before partial child construction rather than panicking midway through HDMI or
+network setup. Child-only code and stack pages are filled through temporary
+root mappings and then transferred using their original mapping capabilities.
+Framebuffer pages are mapped exclusively into the HDMI child without a
+root-VSpace alias. Ring, IPC, and explicitly root-shared pages retain separate
+caps because their ABI ownership genuinely crosses the root/runtime boundary.
+
 ### Scheduling contract
 
 Every hardware service path presents a validated `DriverTaskContract` before
