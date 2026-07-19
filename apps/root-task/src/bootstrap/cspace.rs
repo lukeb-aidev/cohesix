@@ -27,8 +27,8 @@ const MAX_DIAGNOSTIC_LEN: usize = 224;
 #[derive(Copy, Clone, Debug)]
 /// Canonical projection of the init thread CSpace window captured from bootinfo.
 /// Assumes the kernel provided `initThreadCNode` root (slot 0x0002) with
-/// `initBits = 13` and an empty window `[empty_start..empty_end)` that remains
-/// reserved for bootstrap placements.
+/// a valid bootinfo-derived radix and an empty window
+/// `[empty_start..empty_end)` that remains reserved for bootstrap placements.
 pub struct CSpaceWindow {
     /// Root CNode capability designating the init thread's CSpace.
     pub root: sel4::seL4_CPtr,

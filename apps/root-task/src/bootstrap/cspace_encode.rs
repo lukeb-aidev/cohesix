@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the bootstrap/cspace_encode module for root-task.
 // Author: Lukas Bower
@@ -19,8 +19,29 @@ pub fn encode_slot_for_wordbits(slot: u32) -> (u64, u8) {
     (slot as u64, WORD_BITS)
 }
 
-/// Defensive clamp for initBits -> u8, with a hard fallback to 13.
+/// Convert a bootinfo-provided radix to `u8`, rejecting unrepresentable values.
 #[inline]
-pub fn bits_u8_or_13(bits: usize) -> u8 {
-    u8::try_from(bits).unwrap_or(13)
+pub fn bits_u8(bits: usize) -> Option<u8> {
+    u8::try_from(bits).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bits_u8, encode_slot_for_wordbits, WORD_BITS};
+
+    #[test]
+    fn word_depth_slot_encoding_is_identity() {
+        assert_eq!(encode_slot_for_wordbits(0x1234), (0x1234, WORD_BITS));
+    }
+
+    #[test]
+    fn radix_conversion_preserves_profile_values() {
+        assert_eq!(bits_u8(13), Some(13));
+        assert_eq!(bits_u8(14), Some(14));
+    }
+
+    #[test]
+    fn radix_conversion_rejects_unrepresentable_values() {
+        assert_eq!(bits_u8(usize::MAX), None);
+    }
 }

@@ -23,6 +23,81 @@ use heapless::String as HeaplessString;
 
 pub static mut ROOT_EP: seL4_CPtr = seL4_CapNull;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RootEpCspaceGeometryError {
+    UnexpectedRoot,
+    AllocatorRootMismatch,
+    AllocatorRadixMismatch,
+    ZeroRadix,
+    RadixCapacityOverflow,
+    EmptyWindow,
+    WindowExceedsCapacity,
+    FirstFreeOutsideWindow,
+}
+
+impl RootEpCspaceGeometryError {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnexpectedRoot => "unexpected-root",
+            Self::AllocatorRootMismatch => "allocator-root-mismatch",
+            Self::AllocatorRadixMismatch => "allocator-radix-mismatch",
+            Self::ZeroRadix => "zero-radix",
+            Self::RadixCapacityOverflow => "radix-capacity-overflow",
+            Self::EmptyWindow => "empty-window",
+            Self::WindowExceedsCapacity => "window-exceeds-capacity",
+            Self::FirstFreeOutsideWindow => "first-free-outside-window",
+        }
+    }
+
+    const fn sel4_error(self) -> seL4_Error {
+        match self {
+            Self::UnexpectedRoot | Self::AllocatorRootMismatch => sel4_sys::seL4_InvalidCapability,
+            Self::AllocatorRadixMismatch
+            | Self::ZeroRadix
+            | Self::RadixCapacityOverflow
+            | Self::EmptyWindow
+            | Self::WindowExceedsCapacity
+            | Self::FirstFreeOutsideWindow => sel4_sys::seL4_RangeError,
+        }
+    }
+}
+
+fn validate_root_ep_cspace_geometry(
+    init_root: seL4_CPtr,
+    init_bits: u8,
+    allocator_root: seL4_CPtr,
+    allocator_bits: u8,
+    empty_start: seL4_CPtr,
+    empty_end: seL4_CPtr,
+    first_free: seL4_CPtr,
+) -> Result<(), RootEpCspaceGeometryError> {
+    if init_root != sel4_sys::seL4_CapInitThreadCNode {
+        return Err(RootEpCspaceGeometryError::UnexpectedRoot);
+    }
+    if allocator_root != init_root {
+        return Err(RootEpCspaceGeometryError::AllocatorRootMismatch);
+    }
+    if allocator_bits != init_bits {
+        return Err(RootEpCspaceGeometryError::AllocatorRadixMismatch);
+    }
+    if init_bits == 0 {
+        return Err(RootEpCspaceGeometryError::ZeroRadix);
+    }
+    let Some(capacity) = 1usize.checked_shl(u32::from(init_bits)) else {
+        return Err(RootEpCspaceGeometryError::RadixCapacityOverflow);
+    };
+    if empty_start >= empty_end {
+        return Err(RootEpCspaceGeometryError::EmptyWindow);
+    }
+    if empty_end as usize > capacity {
+        return Err(RootEpCspaceGeometryError::WindowExceedsCapacity);
+    }
+    if first_free < empty_start || first_free >= empty_end {
+        return Err(RootEpCspaceGeometryError::FirstFreeOutsideWindow);
+    }
+    Ok(())
+}
+
 /// Telemetry describing the root endpoint bootstrap attempt.
 #[derive(Debug, Clone, Copy)]
 pub struct RootEpReport {
@@ -97,10 +172,10 @@ pub fn publish_root_ep(ep: seL4_CPtr) {
 }
 
 /// One-shot endpoint bootstrap: pick a regular untyped, retype, publish, and trace.
-/// Assumes the init CNode root (slot 0x0002) has `initBits = 13` and that
-/// `first_free` is set within the kernel-advertised empty window
-/// `[empty_start..empty_end)`. This function consumes exactly one slot from that
-/// window and leaves ordering of earlier boot phases unchanged.
+/// Derives the init CNode radix and capacity from bootinfo and requires the
+/// allocator to describe that same kernel-advertised window. This function
+/// consumes exactly one slot from the window and leaves ordering of earlier
+/// boot phases unchanged.
 pub fn bootstrap_ep(
     snapshot: &BootInfoSnapshot,
     cs: &mut CSpace,
@@ -132,20 +207,36 @@ pub fn bootstrap_ep(
 
     let bi = view.header();
 
+    let init_root = view.root_cnode_cap();
+    let init_bits = view.init_cnode_bits();
     let cs_first_free = cs.next_free_slot();
     let (empty_start, empty_end) = view.init_cnode_empty_range();
-    if cs_first_free < empty_start || cs_first_free >= empty_end {
-        let mut line = HeaplessString::<144>::new();
+    if let Err(reason) = validate_root_ep_cspace_geometry(
+        init_root,
+        init_bits,
+        cs.root(),
+        cs.depth(),
+        empty_start,
+        empty_end,
+        cs_first_free,
+    ) {
+        let err = reason.sel4_error();
+        let mut line = HeaplessString::<256>::new();
         let _ = write!(
             line,
-            "[boot] bootstrap_ep: cspace window mismatch first_free=0x{first:04x} empty=[0x{start:04x}..0x{end:04x})",
+            "[boot] bootstrap_ep: cspace geometry rejected reason={reason} root=0x{root:04x} bits={bits} allocator_root=0x{allocator_root:04x} allocator_bits={allocator_bits} first_free=0x{first:04x} empty=[0x{start:04x}..0x{end:04x})",
+            reason = reason.as_str(),
+            root = init_root,
+            bits = init_bits,
+            allocator_root = cs.root(),
+            allocator_bits = cs.depth(),
             first = cs_first_free,
             start = empty_start,
             end = empty_end,
         );
         boot_log::force_uart_line(line.as_str());
-        report.verify_err = Some(sel4_sys::seL4_RangeError);
-        return Err(sel4_sys::seL4_RangeError);
+        report.verify_err = Some(err);
+        return Err(err);
     }
 
     let (ut, desc) = select_endpoint_untyped(&view)?;
@@ -180,19 +271,6 @@ pub fn bootstrap_ep(
         ep_slot,
         sel4::seL4_CapNull,
         "allocated endpoint slot must not be null",
-    );
-
-    assert!(
-        empty_start < empty_end,
-        "bootinfo empty window must have positive width",
-    );
-    let init_bits = view.init_cnode_bits();
-    assert_eq!(init_bits, 13, "unexpected init CNode bits");
-    let init_root = view.root_cnode_cap();
-    assert_eq!(
-        init_root,
-        sel4_sys::seL4_CapInitThreadCNode,
-        "unexpected init thread CNode capability",
     );
 
     let mut window = CSpaceWindow::new(
@@ -316,6 +394,33 @@ pub fn bootstrap_fault_ep(
 ) -> Result<seL4_CPtr, seL4_Error> {
     let view = snapshot.view();
     let bi = view.header();
+    let init_root = view.root_cnode_cap();
+    let init_bits = view.init_cnode_bits();
+    let (empty_start, empty_end) = view.init_cnode_empty_range();
+    let first_free = cs.next_free_slot();
+    if let Err(reason) = validate_root_ep_cspace_geometry(
+        init_root,
+        init_bits,
+        cs.root(),
+        cs.depth(),
+        empty_start,
+        empty_end,
+        first_free,
+    ) {
+        let mut line = HeaplessString::<192>::new();
+        let _ = write!(
+            line,
+            "[boot] bootstrap_fault_ep: cspace geometry rejected reason={reason} root=0x{root:04x} bits={bits} first_free=0x{first:04x} empty=[0x{start:04x}..0x{end:04x})",
+            reason = reason.as_str(),
+            root = init_root,
+            bits = init_bits,
+            first = first_free,
+            start = empty_start,
+            end = empty_end,
+        );
+        boot_log::force_uart_line(line.as_str());
+        return Err(reason.sel4_error());
+    }
     let (ut, desc) = select_endpoint_untyped(&view)?;
 
     #[cfg(feature = "untyped-debug")]
@@ -340,11 +445,10 @@ pub fn bootstrap_fault_ep(
         "allocated endpoint slot must not be null",
     );
 
-    let (empty_start, empty_end) = view.init_cnode_empty_range();
     let mut window = CSpaceWindow::new(
-        view.root_cnode_cap(),
+        init_root,
         view.canonical_root_cap(),
-        bits_as_u8(usize::from(view.init_cnode_bits())),
+        bits_as_u8(usize::from(init_bits)),
         empty_start,
         empty_end,
         ep_slot,
@@ -411,4 +515,83 @@ pub fn bootstrap_fault_ep(
     boot_log::force_uart_line(line.as_str());
 
     Ok(guarded_slot)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_root_ep_cspace_geometry, RootEpCspaceGeometryError};
+
+    const ROOT: sel4_sys::seL4_CPtr = sel4_sys::seL4_CapInitThreadCNode;
+
+    #[test]
+    fn root_endpoint_geometry_accepts_qemu_and_pi_radices() {
+        assert_eq!(
+            validate_root_ep_cspace_geometry(ROOT, 13, ROOT, 13, 0x0104, 0x2000, 0x0104),
+            Ok(())
+        );
+        assert_eq!(
+            validate_root_ep_cspace_geometry(ROOT, 14, ROOT, 14, 0x0a6a, 0x4000, 0x0a6a),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn root_endpoint_geometry_rejects_stale_allocator_radix() {
+        assert_eq!(
+            validate_root_ep_cspace_geometry(ROOT, 14, ROOT, 13, 0x0a6a, 0x4000, 0x0a6a),
+            Err(RootEpCspaceGeometryError::AllocatorRadixMismatch)
+        );
+    }
+
+    #[test]
+    fn root_endpoint_geometry_rejects_noncanonical_roots() {
+        assert_eq!(
+            validate_root_ep_cspace_geometry(3, 14, 3, 14, 0x0a6a, 0x4000, 0x0a6a),
+            Err(RootEpCspaceGeometryError::UnexpectedRoot)
+        );
+        assert_eq!(
+            validate_root_ep_cspace_geometry(ROOT, 14, 3, 14, 0x0a6a, 0x4000, 0x0a6a),
+            Err(RootEpCspaceGeometryError::AllocatorRootMismatch)
+        );
+    }
+
+    #[test]
+    fn root_endpoint_geometry_rejects_window_beyond_radix_capacity() {
+        assert_eq!(
+            validate_root_ep_cspace_geometry(ROOT, 13, ROOT, 13, 0x0a6a, 0x4000, 0x0a6a),
+            Err(RootEpCspaceGeometryError::WindowExceedsCapacity)
+        );
+    }
+
+    #[test]
+    fn root_endpoint_geometry_rejects_invalid_windows_before_allocation() {
+        assert_eq!(
+            validate_root_ep_cspace_geometry(ROOT, 14, ROOT, 14, 0x0a6a, 0x0a6a, 0x0a6a),
+            Err(RootEpCspaceGeometryError::EmptyWindow)
+        );
+        assert_eq!(
+            validate_root_ep_cspace_geometry(ROOT, 14, ROOT, 14, 0x0a6a, 0x4000, 0x4000),
+            Err(RootEpCspaceGeometryError::FirstFreeOutsideWindow)
+        );
+    }
+
+    #[test]
+    fn root_endpoint_geometry_rejects_unrepresentable_radices() {
+        assert_eq!(
+            validate_root_ep_cspace_geometry(ROOT, 0, ROOT, 0, 0x0104, 0x0200, 0x0104),
+            Err(RootEpCspaceGeometryError::ZeroRadix)
+        );
+        assert_eq!(
+            validate_root_ep_cspace_geometry(
+                ROOT,
+                usize::BITS as u8,
+                ROOT,
+                usize::BITS as u8,
+                0x0104,
+                0x0200,
+                0x0104,
+            ),
+            Err(RootEpCspaceGeometryError::RadixCapacityOverflow)
+        );
+    }
 }

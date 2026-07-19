@@ -1,11 +1,11 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines tests for root-task cspace_encode.
 // Author: Lukas Bower
 
 #![cfg(feature = "kernel")]
 
-use root_task::bootstrap::cspace_encode::{bits_u8_or_13, encode_slot_for_wordbits, WORD_BITS};
+use root_task::bootstrap::cspace_encode::{bits_u8, encode_slot_for_wordbits, WORD_BITS};
 
 #[test]
 fn encode_slot_for_wordbits_is_identity() {
@@ -17,8 +17,12 @@ fn encode_slot_for_wordbits_is_identity() {
 }
 
 #[test]
-fn bits_u8_or_13_clamps_large_values() {
-    assert_eq!(bits_u8_or_13(12), 12);
-    assert_eq!(bits_u8_or_13(usize::from(WORD_BITS)), WORD_BITS);
-    assert_eq!(bits_u8_or_13(usize::MAX), 13);
+fn bits_u8_preserves_representable_values() {
+    assert_eq!(bits_u8(12), Some(12));
+    assert_eq!(bits_u8(usize::from(WORD_BITS)), Some(WORD_BITS));
+}
+
+#[test]
+fn bits_u8_rejects_unrepresentable_values() {
+    assert_eq!(bits_u8(usize::MAX), None);
 }

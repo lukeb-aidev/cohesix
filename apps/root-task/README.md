@@ -167,7 +167,7 @@ Boot logs will now include the corrected capability path diagnostics and
 device mapping beacons:
 
 ```
-[cspace:init] root=0x0002 bits=13 window=[0x0104..0x2000)
+[cspace:init] root=0x0002 bits=<profile radix> window=[<bootinfo start>..<bootinfo end>)
 [cnode:copy] src=TCB depth=64 -> dst=0x0104 OK
 [retype:call] ut=0x00e6 type=5 size_bits=0 root=0x0002 index=0x0002 depth=64 offset=0x0105
 [retype:ret] err=0

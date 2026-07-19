@@ -378,9 +378,9 @@ fn ipcbuf_sanity_probe(bootinfo_ref: &sel4_sys::seL4_BootInfo) -> Result<(), Fat
 }
 
 /// Retypes a single notification object from the selected RAM-backed untyped and
-/// installs it into the init CSpace window ([0x010f..0x2000)). The destination
-/// slot is allocated from `CSpaceCtx`, ensuring it honours the init CSpace depth
-/// (`initBits = 13`) and empty-range bounds reported by bootinfo.
+/// installs it into the init CSpace window. The destination slot is allocated
+/// from `CSpaceCtx`, ensuring it honours the bootinfo-derived init CSpace radix
+/// and empty-range bounds.
 fn bootstrap_notification(
     cs: &mut CSpaceCtx,
     selection: &mut UntypedSelection,
@@ -3848,8 +3848,8 @@ fn bootstrap<P: Platform>(
     debug_identify_boot_caps();
     cspace_sys::dump_init_cnode_slots(0..32);
 
-    // Confirm the init CNode path using the kernel-advertised radix (`initBits = 13`)
-    // and empty window before consuming slots inside `[empty_start..empty_end)`.
+    // Confirm the init CNode path using the kernel-advertised radix and empty
+    // window before consuming slots inside `[empty_start..empty_end)`.
     if let Err(err) = cspace_sys::verify_root_cnode_slot(
         bootinfo_ref,
         cspace_window.first_free as sel4_sys::seL4_Word,

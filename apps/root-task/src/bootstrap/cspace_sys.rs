@@ -181,11 +181,15 @@ pub fn dump_init_cnode_slots(range: Range<usize>) {
     }
 }
 
-/// Sanity checks the init CNode layout, relying on `initBits = 13`, guard depth 0,
-/// and a non-empty `[empty_start..empty_end)` window provided by the kernel.
+/// Sanity checks the bootinfo-derived init CNode radix, guard depth 0, and the
+/// non-empty `[empty_start..empty_end)` window provided by the kernel.
 pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
     let init_bits = init_cnode_bits_u8(bi) as usize;
 
+    assert!(
+        init_bits > 0 && init_bits < usize::BITS as usize,
+        "initThreadCNodeSizeBits must be non-zero and fit the host word capacity"
+    );
     let capacity = 1usize << init_bits;
     let empty_start = bi.empty.start as usize;
     let empty_end = bi.empty.end as usize;
@@ -215,19 +219,14 @@ pub fn assert_init_cnode_layout(bi: &sys::seL4_BootInfo) {
         guard_bits,
     );
     debug_assert_eq!(
-        init_bits, 13,
-        "unexpected initThreadCNodeSizeBits (expected 13 for aarch64/virt)"
-    );
-    debug_assert_eq!(
         guard_bits, 0,
         "unexpected guard depth for init CNode (expected 0)"
     );
 }
 
-/// Performs a raw tuple copy between init CNode slots while assuming the init thread
-/// root (slot 0x0002) and `initBits = 13` guardless addressing. This helper only
-/// operates inside the bootinfo-advertised window `[empty_start..empty_end)` and
-/// leaves slot allocation untouched.
+/// Performs a raw tuple copy between init CNode slots using the init thread root
+/// (slot 0x0002) and its bootinfo-derived radix. This helper only operates inside
+/// the advertised window `[empty_start..empty_end)` and leaves allocation untouched.
 pub fn cnode_copy_raw_single(
     bi: &sys::seL4_BootInfo,
     dst_root: sys::seL4_CNode,
@@ -336,8 +335,8 @@ pub fn cnode_copy_raw_single(
     first
 }
 
-/// Performs a raw tuple mint between init CNode slots while assuming the init thread
-/// root (slot 0x0002) and `initBits = 13` guardless addressing. This helper mirrors
+/// Performs a raw tuple mint between init CNode slots using the init thread root
+/// (slot 0x0002) and its bootinfo-derived radix. This helper mirrors
 /// [`cnode_copy_raw_single`] but preserves badges during duplication.
 pub fn cnode_mint_raw_single(
     bi: &sys::seL4_BootInfo,
@@ -1099,12 +1098,9 @@ pub fn retype_endpoint_once(
     }
 }
 
-/// Convert `initThreadCNodeSizeBits` into `u8` without panicking during
-/// bring-up.
+/// Convert a validated `initThreadCNodeSizeBits` value into `u8`.
 ///
-/// seL4 guarantees that this value is typically in the range 12–16. When an
-/// unexpected value does slip through we log the anomaly and fall back to 13 so
-/// that the system can continue booting deterministically.
+/// Invalid widths fail closed instead of substituting a profile-specific radix.
 #[inline(always)]
 pub fn bits_as_u8(init_bits: usize) -> u8 {
     u8::try_from(init_bits).expect("initThreadCNodeSizeBits must fit in u8")
@@ -2602,6 +2598,16 @@ mod tests {
         let init_bits = 13u8;
         let value = super::encode_slot(0x0101, init_bits);
         assert_eq!(value as u64, 0x808000000000000);
+    }
+
+    #[test]
+    fn init_cnode_layout_accepts_qemu_and_pi_profile_radices() {
+        for (bits, end) in [(13, 0x2000), (14, 0x4000)] {
+            let mut bootinfo: sys::seL4_BootInfo = blank_bootinfo_for_tests();
+            bootinfo.initThreadCNodeSizeBits = bits;
+            store_bootinfo_empty_region(&mut bootinfo.empty, 0x0104, end, "test.cspace_sys.layout");
+            super::assert_init_cnode_layout(&bootinfo);
+        }
     }
 
     #[cfg(not(target_os = "none"))]
