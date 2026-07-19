@@ -2533,7 +2533,7 @@ struct DriverTaskCommandSlot {
     restart_irq_handler: AtomicUsize,
     restart_sdhci_root_ptr: AtomicUsize,
     steady_priority: AtomicUsize,
-    steady_priority_active: AtomicUsize,
+    steady_priority_state: AtomicUsize,
     retained_priority_boost_active: AtomicUsize,
     retained_priority_lease_phase: AtomicUsize,
     retained_priority_lease_request: AtomicUsize,
@@ -2761,7 +2761,7 @@ impl DriverTaskCommandSlot {
             restart_irq_handler: AtomicUsize::new(0),
             restart_sdhci_root_ptr: AtomicUsize::new(0),
             steady_priority: AtomicUsize::new(0),
-            steady_priority_active: AtomicUsize::new(0),
+            steady_priority_state: AtomicUsize::new(0),
             retained_priority_boost_active: AtomicUsize::new(0),
             retained_priority_lease_phase: AtomicUsize::new(0),
             retained_priority_lease_request: AtomicUsize::new(0),
@@ -3012,6 +3012,10 @@ pub fn request_cyw43_sdio_pair_restart() {
 #[cfg(feature = "kernel")]
 #[must_use]
 pub fn cyw43_sdio_pair_restart_context_available() -> bool {
+    #[cfg(test)]
+    if DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE.load(Ordering::Acquire) != 0 {
+        return true;
+    }
     cyw43_sdio_runtime_restart_context(DriverTaskHotPath::Cyw43Wifi).is_some()
         && cyw43_sdio_runtime_restart_context(DriverTaskHotPath::SdioHost).is_some()
 }
@@ -3092,6 +3096,14 @@ pub(crate) fn reset_cyw43_sdio_pair_recovery_for_test() {
     CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
     CYW43_SDIO_PAIR_RESTART_PENDING.store(0, Ordering::Release);
     CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
+    DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE.store(0, Ordering::Release);
+    DRIVER_TASK_TEST_STEADY_PRIORITY_CUTOVER_FAILURE_TCB.store(0, Ordering::Release);
+}
+
+/// Publish recovery-context availability without fabricating runtime commands.
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_publish_cyw43_sdio_pair_restart_context_available() {
+    DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE.store(1, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -3492,6 +3504,10 @@ static CYW43_SDIO_PAIR_RESTART_PENDING: AtomicU32 = AtomicU32::new(0);
 // 2=the explicit driver_task_net recovery scope owns that replay.
 #[cfg(feature = "kernel")]
 static CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(feature = "kernel", test))]
+static DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(feature = "kernel", test))]
+static DRIVER_TASK_TEST_STEADY_PRIORITY_CUTOVER_FAILURE_TCB: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_OBSERVED_US_SERIAL: AtomicU32 = AtomicU32::new(0);
@@ -4135,6 +4151,128 @@ fn driver_task_ring_deadline_allows_attempt(deadline: Option<&mut DriverTaskDead
     deadline.is_none_or(|deadline| !driver_task_deadline_expired(deadline))
 }
 
+/// Root-owned scheduling phase for a driver runtime.
+///
+/// Deferred CYW43/SDIO runtimes may leave bootstrap priority exactly once per
+/// ready generation. `CutoverClaimed` fences a concurrent or duplicate caller
+/// before the scheduler syscall, while `CutoverFailed` requires an explicit
+/// pair transition back to `Bootstrap` before another cutover can be attempted.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+enum DriverTaskSteadyPriorityState {
+    Bootstrap,
+    Active,
+    CutoverClaimed,
+    CutoverFailed,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskSteadyPriorityState {
+    const fn as_usize(self) -> usize {
+        self as usize
+    }
+
+    const fn from_usize(value: usize) -> Option<Self> {
+        match value {
+            0 => Some(Self::Bootstrap),
+            1 => Some(Self::Active),
+            2 => Some(Self::CutoverClaimed),
+            3 => Some(Self::CutoverFailed),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_steady_priority_is_active(slot: &DriverTaskCommandSlot) -> bool {
+    DriverTaskSteadyPriorityState::from_usize(slot.steady_priority_state.load(Ordering::Acquire))
+        == Some(DriverTaskSteadyPriorityState::Active)
+}
+
+/// Return whether a linked runtime's claimed steady-priority transition failed.
+///
+/// This state is distinct from a precondition rejection: only a pair restart
+/// may reset it to `Bootstrap` and authorize a later generation to claim the
+/// scheduler syscall again.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn cyw43_sdio_pair_priority_cutover_failed(contract: DriverTaskContract) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT && contract != SDIO_HOST_DRIVER_TASK_CONTRACT {
+        return false;
+    }
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    DriverTaskSteadyPriorityState::from_usize(slot.steady_priority_state.load(Ordering::Acquire))
+        == Some(DriverTaskSteadyPriorityState::CutoverFailed)
+}
+
+/// Inject one post-claim scheduler failure for the selected linked runtime.
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_fail_next_cyw43_sdio_pair_priority_cutover(
+    contract: DriverTaskContract,
+) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT && contract != SDIO_HOST_DRIVER_TASK_CONTRACT {
+        return false;
+    }
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    let tcb = slot.tcb.load(Ordering::Acquire);
+    if tcb == 0 {
+        return false;
+    }
+    DRIVER_TASK_TEST_STEADY_PRIORITY_CUTOVER_FAILURE_TCB.store(tcb, Ordering::Release);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn reset_driver_task_steady_priority_for_bootstrap(slot: &DriverTaskCommandSlot) {
+    slot.steady_priority_state.store(
+        DriverTaskSteadyPriorityState::Bootstrap.as_usize(),
+        Ordering::Release,
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn claim_driver_task_steady_priority_cutover(slot: &DriverTaskCommandSlot) -> bool {
+    slot.steady_priority_state
+        .compare_exchange(
+            DriverTaskSteadyPriorityState::Bootstrap.as_usize(),
+            DriverTaskSteadyPriorityState::CutoverClaimed.as_usize(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok()
+}
+
+#[cfg(feature = "kernel")]
+fn resolve_driver_task_steady_priority_cutover(
+    slot: &DriverTaskCommandSlot,
+    succeeded: bool,
+) -> bool {
+    slot.steady_priority_state
+        .compare_exchange(
+            DriverTaskSteadyPriorityState::CutoverClaimed.as_usize(),
+            if succeeded {
+                DriverTaskSteadyPriorityState::Active
+            } else {
+                DriverTaskSteadyPriorityState::CutoverFailed
+            }
+            .as_usize(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok()
+}
+
 /// Publish the TCB cap and steady priority backing one driver task.
 #[cfg(feature = "kernel")]
 pub fn publish_driver_task_scheduler(
@@ -4151,7 +4289,7 @@ pub fn publish_driver_task_scheduler(
     slot.tcb.store(tcb, Ordering::Release);
     slot.steady_priority
         .store(usize::from(steady_priority), Ordering::Release);
-    slot.steady_priority_active.store(0, Ordering::Release);
+    reset_driver_task_steady_priority_for_bootstrap(slot);
 }
 
 /// Retain the manifest-derived context required for a fenced CYW43/SDIO pair restart.
@@ -4217,7 +4355,10 @@ pub fn publish_driver_task_steady_priority_active(contract: DriverTaskContract) 
     let Some(slot) = slot_for_task_key(task_key) else {
         return;
     };
-    slot.steady_priority_active.store(1, Ordering::Release);
+    slot.steady_priority_state.store(
+        DriverTaskSteadyPriorityState::Active.as_usize(),
+        Ordering::Release,
+    );
 }
 
 /// Move one deferred CYW43/SDIO runtime back to its shell-safe bootstrap priority.
@@ -4254,7 +4395,7 @@ pub fn transition_deferred_cyw43_pair_to_bootstrap_priority(contract: DriverTask
     slot.retained_priority_boost_active
         .store(0, Ordering::Release);
     reset_driver_task_retained_priority_lease_slot(slot);
-    slot.steady_priority_active.store(0, Ordering::Release);
+    reset_driver_task_steady_priority_for_bootstrap(slot);
     true
 }
 
@@ -4288,6 +4429,17 @@ pub fn complete_deferred_cyw43_pair_priority_cutover(contract: DriverTaskContrac
     let Ok(steady_priority) = u8::try_from(steady_priority) else {
         return false;
     };
+    if !claim_driver_task_steady_priority_cutover(slot) {
+        return false;
+    }
+    #[cfg(test)]
+    if DRIVER_TASK_TEST_STEADY_PRIORITY_CUTOVER_FAILURE_TCB
+        .compare_exchange(tcb, 0, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let _ = resolve_driver_task_steady_priority_cutover(slot, false);
+        return false;
+    }
     if crate::sel4::set_tcb_sched_params(
         tcb as sel4_sys::seL4_CPtr,
         sel4_sys::seL4_CapInitThreadTCB,
@@ -4296,10 +4448,10 @@ pub fn complete_deferred_cyw43_pair_priority_cutover(contract: DriverTaskContrac
     )
     .is_err()
     {
+        let _ = resolve_driver_task_steady_priority_cutover(slot, false);
         return false;
     }
-    slot.steady_priority_active.store(1, Ordering::Release);
-    true
+    resolve_driver_task_steady_priority_cutover(slot, true)
 }
 
 /// Publish the root-side command endpoint for a created driver TCB.
@@ -4734,7 +4886,7 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     slot.restart_irq_handler.store(0, Ordering::Release);
     slot.restart_sdhci_root_ptr.store(0, Ordering::Release);
     slot.steady_priority.store(0, Ordering::Release);
-    slot.steady_priority_active.store(0, Ordering::Release);
+    reset_driver_task_steady_priority_for_bootstrap(slot);
     slot.retained_priority_boost_active
         .store(0, Ordering::Release);
     reset_driver_task_retained_priority_lease_slot(slot);
@@ -4787,8 +4939,7 @@ fn boost_driver_task_priority_for_bounded_turn(
     let slot = slot_for_task_key(task_key)?;
     let tcb = slot.tcb.load(Ordering::Acquire);
     let steady_priority = slot.steady_priority.load(Ordering::Acquire);
-    if tcb == 0 || steady_priority == 0 || slot.steady_priority_active.load(Ordering::Acquire) == 0
-    {
+    if tcb == 0 || steady_priority == 0 || !driver_task_steady_priority_is_active(slot) {
         return None;
     }
     let steady_priority = steady_priority as u8;
@@ -4879,6 +5030,10 @@ enum DriverTaskRetainedLeasePhase {
     RestorePrimary,
     RestoreBus,
     ReadyToComplete,
+    /// The child may have executed the immutable request, but root lost the
+    /// continuation cursor. The slot remains quarantined until explicit
+    /// transport recovery; it must never accept or alias another request.
+    Poisoned,
 }
 
 #[cfg(feature = "kernel")]
@@ -4914,6 +5069,7 @@ impl DriverTaskRetainedLeasePhase {
             7 => Some(Self::RestorePrimary),
             8 => Some(Self::RestoreBus),
             9 => Some(Self::ReadyToComplete),
+            10 => Some(Self::Poisoned),
             _ => None,
         }
     }
@@ -4930,6 +5086,7 @@ impl DriverTaskRetainedLeasePhase {
             Self::RestorePrimary => DriverTaskRetainedLeaseOperation::RestorePrimary,
             Self::RestoreBus => DriverTaskRetainedLeaseOperation::RestoreBus,
             Self::ReadyToComplete => DriverTaskRetainedLeaseOperation::Complete,
+            Self::Poisoned => DriverTaskRetainedLeaseOperation::None,
         }
     }
 
@@ -4988,7 +5145,7 @@ fn retained_priority_lease_target_mask(
     if driver_task_slot_for_contract(contract).is_some_and(|slot| {
         retained_priority_boost_required(
             true,
-            slot.steady_priority_active.load(Ordering::Acquire) != 0,
+            driver_task_steady_priority_is_active(slot),
             slot.steady_priority.load(Ordering::Acquire),
         )
     }) {
@@ -4999,7 +5156,7 @@ fn retained_priority_lease_target_mask(
         .is_some_and(|slot| {
             retained_priority_boost_required(
                 true,
-                slot.steady_priority_active.load(Ordering::Acquire) != 0,
+                driver_task_steady_priority_is_active(slot),
                 slot.steady_priority.load(Ordering::Acquire),
             )
         })
@@ -5074,6 +5231,36 @@ fn driver_task_retained_lease_identity_matches(
             .retained_priority_lease_generation
             .load(Ordering::Acquire)
             == CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_retained_contract_owns_pair_recovery(contract: DriverTaskContract) -> bool {
+    contract == CYW43_WIFI_DRIVER_TASK_CONTRACT || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
+}
+
+/// Fail one retained scheduling lease without crossing device recovery domains.
+///
+/// Only the linked CYW43/SDIO pair may request pair recovery. A non-pair
+/// request that crossed the sequence issue boundary remains locally poisoned;
+/// a pre-issue non-pair failure clears only its own retained request so the
+/// typed caller observes `Failed` rather than manufacturing Wi-Fi recovery.
+#[cfg(feature = "kernel")]
+fn fail_driver_task_retained_priority_lease(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+) {
+    if driver_task_retained_contract_owns_pair_recovery(contract) {
+        request_cyw43_sdio_pair_restart();
+        return;
+    }
+    if slot.retained_doorbell_issued.load(Ordering::Acquire) != 0 {
+        poison_driver_task_retained_request(slot);
+        return;
+    }
+    slot.active.store(0, Ordering::Release);
+    slot.active_command_fingerprint.store(0, Ordering::Release);
+    slot.timeout_resumes.store(0, Ordering::Release);
+    reset_driver_task_retained_priority_lease_slot(slot);
 }
 
 #[cfg(feature = "kernel")]
@@ -5169,31 +5356,34 @@ fn step_driver_task_retained_priority_lease(
             request,
             fingerprint,
         ) {
-            request_cyw43_sdio_pair_restart();
+            fail_driver_task_retained_priority_lease(slot, contract);
             return DriverTaskRetainedLeaseTurn::Failed;
         }
         phase = DriverTaskRetainedLeasePhase::from_usize(
             slot.retained_priority_lease_phase.load(Ordering::Acquire),
         );
         if phase == Some(DriverTaskRetainedLeasePhase::Inactive) {
-            request_cyw43_sdio_pair_restart();
+            fail_driver_task_retained_priority_lease(slot, contract);
             return DriverTaskRetainedLeaseTurn::Failed;
         }
     }
+    if phase == Some(DriverTaskRetainedLeasePhase::Poisoned) {
+        return DriverTaskRetainedLeaseTurn::Failed;
+    }
     if !driver_task_retained_lease_identity_matches(slot, request, fingerprint) {
-        request_cyw43_sdio_pair_restart();
+        fail_driver_task_retained_priority_lease(slot, contract);
         return DriverTaskRetainedLeaseTurn::Failed;
     }
     let mask = slot.retained_priority_lease_mask.load(Ordering::Acquire);
     let Some(task_key) = driver_task_contract_key(contract) else {
-        request_cyw43_sdio_pair_restart();
+        fail_driver_task_retained_priority_lease(slot, contract);
         return DriverTaskRetainedLeaseTurn::Failed;
     };
     let owner_token = task_key.saturating_add(1);
     if mask & DRIVER_TASK_RETAINED_LEASE_PRIMARY != 0
         && slot.retained_priority_boost_active.load(Ordering::Acquire) != owner_token
     {
-        request_cyw43_sdio_pair_restart();
+        fail_driver_task_retained_priority_lease(slot, contract);
         return DriverTaskRetainedLeaseTurn::Failed;
     }
     if mask & DRIVER_TASK_RETAINED_LEASE_BUS != 0
@@ -5204,11 +5394,11 @@ fn step_driver_task_retained_priority_lease(
                 == owner_token
         })
     {
-        request_cyw43_sdio_pair_restart();
+        fail_driver_task_retained_priority_lease(slot, contract);
         return DriverTaskRetainedLeaseTurn::Failed;
     }
     let Some(phase) = phase else {
-        request_cyw43_sdio_pair_restart();
+        fail_driver_task_retained_priority_lease(slot, contract);
         return DriverTaskRetainedLeaseTurn::Failed;
     };
     let doorbell_issued = slot.retained_doorbell_issued.load(Ordering::Acquire) != 0;
@@ -5221,11 +5411,12 @@ fn step_driver_task_retained_priority_lease(
         | DriverTaskRetainedLeasePhase::Continue
         | DriverTaskRetainedLeasePhase::RestorePrimary
         | DriverTaskRetainedLeasePhase::RestoreBus
-        | DriverTaskRetainedLeasePhase::ReadyToComplete => doorbell_issued,
+        | DriverTaskRetainedLeasePhase::ReadyToComplete
+        | DriverTaskRetainedLeasePhase::Poisoned => doorbell_issued,
         DriverTaskRetainedLeasePhase::Inactive => false,
     };
     if !doorbell_state_valid {
-        request_cyw43_sdio_pair_restart();
+        fail_driver_task_retained_priority_lease(slot, contract);
         return DriverTaskRetainedLeaseTurn::Failed;
     }
     let result = match phase.operation() {
@@ -5233,11 +5424,11 @@ fn step_driver_task_retained_priority_lease(
             let Some((target, target_slot)) =
                 retained_priority_lease_target(contract, command, true)
             else {
-                request_cyw43_sdio_pair_restart();
+                fail_driver_task_retained_priority_lease(slot, contract);
                 return DriverTaskRetainedLeaseTurn::Failed;
             };
             if !set_driver_task_retained_priority(target, target_slot, owner_token, true) {
-                request_cyw43_sdio_pair_restart();
+                fail_driver_task_retained_priority_lease(slot, contract);
                 return DriverTaskRetainedLeaseTurn::Failed;
             }
             let next = phase.after_success(mask);
@@ -5249,11 +5440,11 @@ fn step_driver_task_retained_priority_lease(
             let Some((target, target_slot)) =
                 retained_priority_lease_target(contract, command, false)
             else {
-                request_cyw43_sdio_pair_restart();
+                fail_driver_task_retained_priority_lease(slot, contract);
                 return DriverTaskRetainedLeaseTurn::Failed;
             };
             if !set_driver_task_retained_priority(target, target_slot, owner_token, true) {
-                request_cyw43_sdio_pair_restart();
+                fail_driver_task_retained_priority_lease(slot, contract);
                 return DriverTaskRetainedLeaseTurn::Failed;
             }
             slot.retained_priority_lease_phase
@@ -5270,11 +5461,11 @@ fn step_driver_task_retained_priority_lease(
             let Some((target, target_slot)) =
                 retained_priority_lease_target(contract, command, false)
             else {
-                request_cyw43_sdio_pair_restart();
+                fail_driver_task_retained_priority_lease(slot, contract);
                 return DriverTaskRetainedLeaseTurn::Failed;
             };
             if !set_driver_task_retained_priority(target, target_slot, owner_token, false) {
-                request_cyw43_sdio_pair_restart();
+                fail_driver_task_retained_priority_lease(slot, contract);
                 return DriverTaskRetainedLeaseTurn::Failed;
             }
             let next = phase.after_success(mask);
@@ -5286,11 +5477,11 @@ fn step_driver_task_retained_priority_lease(
             let Some((target, target_slot)) =
                 retained_priority_lease_target(contract, command, true)
             else {
-                request_cyw43_sdio_pair_restart();
+                fail_driver_task_retained_priority_lease(slot, contract);
                 return DriverTaskRetainedLeaseTurn::Failed;
             };
             if !set_driver_task_retained_priority(target, target_slot, owner_token, false) {
-                request_cyw43_sdio_pair_restart();
+                fail_driver_task_retained_priority_lease(slot, contract);
                 return DriverTaskRetainedLeaseTurn::Failed;
             }
             slot.retained_priority_lease_phase
@@ -5301,7 +5492,7 @@ fn step_driver_task_retained_priority_lease(
         DriverTaskRetainedLeaseOperation::None => DriverTaskRetainedLeaseTurn::Failed,
     };
     if result == DriverTaskRetainedLeaseTurn::Failed {
-        request_cyw43_sdio_pair_restart();
+        fail_driver_task_retained_priority_lease(slot, contract);
     }
     result
 }
@@ -5332,7 +5523,7 @@ fn mark_driver_task_retained_priority_lease_issued(slot: &DriverTaskCommandSlot)
 
 #[cfg(feature = "kernel")]
 fn driver_task_retained_command_requires_continuation(contract: DriverTaskContract) -> bool {
-    contract == CYW43_WIFI_DRIVER_TASK_CONTRACT || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
+    driver_task_retained_contract_owns_pair_recovery(contract)
 }
 
 #[cfg(feature = "kernel")]
@@ -5382,6 +5573,24 @@ fn arm_driver_task_retained_priority_lease_endpoint_wake_retry(
                 Ordering::Acquire,
             )
             .is_ok()
+}
+
+/// Quarantine an issued retained request whose wake cursor could not advance.
+///
+/// This deliberately preserves `active`, the request sequence, immutable
+/// fingerprint, and issued latch. A late child action or completion therefore
+/// remains bound to the poisoned slot and can never be mistaken for a fresh
+/// request. Only explicit transport recovery may reset the lease.
+#[cfg(feature = "kernel")]
+fn poison_driver_task_retained_request(slot: &DriverTaskCommandSlot) {
+    slot.retained_priority_lease_phase.store(
+        DriverTaskRetainedLeasePhase::Poisoned.as_usize(),
+        Ordering::Release,
+    );
+    // Preserve any existing identity fields and force the slot closed even if
+    // the detected tear included `active`. Recovery, not ordinary submission,
+    // is the only authority allowed to reopen this issued-unknown transport.
+    slot.active.store(1, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -10916,11 +11125,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 return None;
             }
             DriverTaskRetainedLeaseTurn::Failed => {
-                if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-                    || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
-                {
-                    request_cyw43_sdio_pair_restart();
-                }
+                fail_driver_task_retained_priority_lease(slot, contract);
                 cache_counter_batch.flush(slot);
                 return None;
             }
@@ -10952,7 +11157,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             // Sequence publication may already have been observed by the
             // autonomous runtime. The issued latch already poisons this
             // generation so no later turn can recommit or re-prime it.
-            request_cyw43_sdio_pair_restart();
+            fail_driver_task_retained_priority_lease(slot, contract);
         }
         cache_counter_batch.flush(slot);
         return None;
@@ -10979,7 +11184,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // produce a second command publication.
         crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
         if !mark_driver_task_retained_priority_lease_issued(slot) {
-            request_cyw43_sdio_pair_restart();
+            fail_driver_task_retained_priority_lease(slot, contract);
         }
         driver_task_counter_add(&slot.counters.send_attempts, 1);
         cache_counter_batch.flush(slot);
@@ -10997,7 +11202,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             request,
             command_fingerprint,
         ) {
-            request_cyw43_sdio_pair_restart();
+            fail_driver_task_retained_priority_lease(slot, contract);
         }
         cache_counter_batch.flush(slot);
         return None;
@@ -11195,11 +11400,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 request,
                 command_fingerprint,
             ) {
-                if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-                    || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
-                {
-                    request_cyw43_sdio_pair_restart();
-                }
+                fail_driver_task_retained_priority_lease(slot, contract);
                 cache_counter_batch.flush(slot);
                 return None;
             }
@@ -11217,7 +11418,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                         request,
                         command_fingerprint,
                     ) {
-                        request_cyw43_sdio_pair_restart();
+                        fail_driver_task_retained_priority_lease(slot, contract);
                         cache_counter_batch.flush(slot);
                         return None;
                     }
@@ -11227,21 +11428,14 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 | DriverTaskRetainedLeaseTurn::PollRing
                 | DriverTaskRetainedLeaseTurn::SignalContinuation
                 | DriverTaskRetainedLeaseTurn::Failed => {
-                    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-                        || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
-                    {
-                        request_cyw43_sdio_pair_restart();
-                    }
+                    fail_driver_task_retained_priority_lease(slot, contract);
                     cache_counter_batch.flush(slot);
                     return None;
                 }
             }
         }
     } else if retained_lease_ready_to_complete {
-        if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
-        {
-            request_cyw43_sdio_pair_restart();
-        }
+        fail_driver_task_retained_priority_lease(slot, contract);
         cache_counter_batch.flush(slot);
         return None;
     }
@@ -11293,16 +11487,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // continuation/wake cursor is therefore issued-unknown. CYW43/SDIO
         // poison the pair generation; other retained services fail closed
         // instead of mistaking transport state for a normal Pending turn.
-        if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-            || contract == SDIO_HOST_DRIVER_TASK_CONTRACT
-        {
-            request_cyw43_sdio_pair_restart();
-        } else {
-            slot.active.store(0, Ordering::Release);
-            slot.active_command_fingerprint.store(0, Ordering::Release);
-            slot.timeout_resumes.store(0, Ordering::Release);
-            reset_driver_task_retained_priority_lease_slot(slot);
-        }
+        fail_driver_task_retained_priority_lease(slot, contract);
         cache_counter_batch.flush(slot);
         return None;
     }
@@ -11517,9 +11702,6 @@ fn classify_driver_task_retained_service_turn(
     active: Option<DriverTaskRetainedRequestState>,
     mut requested: DriverTaskCommandRecord,
 ) -> DriverTaskRetainedServiceTurn {
-    if let Some(completion) = completion {
-        return DriverTaskRetainedServiceTurn::Complete(completion);
-    }
     let Some(active) = active else {
         return DriverTaskRetainedServiceTurn::Failed;
     };
@@ -11527,12 +11709,17 @@ fn classify_driver_task_retained_service_turn(
         return DriverTaskRetainedServiceTurn::Failed;
     };
     requested.sequence = active.request();
-    requested.flags = driver_task_ring_flags_for_mode(
-        DriverTaskRingCommandMode::RetainedTurn,
-        requested.flags,
-    );
+    requested.flags =
+        driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, requested.flags);
     retained.sequence = active.request();
-    if retained == requested {
+    let identity_matches = retained == requested;
+    if let Some(completion) = completion {
+        if active.issued() && identity_matches && completion.sequence == active.request() {
+            DriverTaskRetainedServiceTurn::Complete(completion)
+        } else {
+            DriverTaskRetainedServiceTurn::Failed
+        }
+    } else if identity_matches {
         DriverTaskRetainedServiceTurn::Pending
     } else {
         DriverTaskRetainedServiceTurn::Failed
@@ -11546,12 +11733,17 @@ pub fn run_driver_task_ring_service_retained_service_turn(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
 ) -> DriverTaskRetainedServiceTurn {
+    // Successful completion clears the production slot, so retain the exact
+    // pre-turn identity independently for terminal validation. Pending instead
+    // validates the post-turn state created or advanced by this outer turn.
+    let active_before = active_driver_task_retained_request(contract);
     let completion = run_driver_task_ring_service_retained_turn(contract, command);
-    classify_driver_task_retained_service_turn(
-        completion,
-        active_driver_task_retained_request(contract),
-        command,
-    )
+    let active = if completion.is_some() {
+        active_before
+    } else {
+        active_driver_task_retained_request(contract)
+    };
+    classify_driver_task_retained_service_turn(completion, active, command)
 }
 
 /// Execute one retained service turn with atomic staged-byte publication.
@@ -13200,7 +13392,7 @@ pub fn current_pi4_acceptance_hot_path_count() -> usize {
 /// malformed ring commands through the same ABI that will later carry their
 /// bounded bus descriptors.
 #[cfg(feature = "kernel")]
-pub unsafe fn pi4_bus_ring_service_driver_task(
+pub fn pi4_bus_ring_service_driver_task(
     context: usize,
     command: DriverTaskCommandRecord,
 ) -> DriverTaskCompletionRecord {
@@ -15301,7 +15493,6 @@ mod tests {
                 Cyw43SdioPairRestartOperation::SetBootstrapPriority(Cyw43SdioPairMember::Sdio,),
                 Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Sdio,),
                 Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Sdio),
-                Cyw43SdioPairRestartOperation::SetSteadyPriority(Cyw43SdioPairMember::Sdio),
             ]
         );
         let cyw43_priority_path: Vec<_> = executor
@@ -15318,8 +15509,20 @@ mod tests {
                 Cyw43SdioPairRestartOperation::SetBootstrapPriority(Cyw43SdioPairMember::Cyw43,),
                 Cyw43SdioPairRestartOperation::ProgramRestartRegisters(Cyw43SdioPairMember::Cyw43,),
                 Cyw43SdioPairRestartOperation::ReplayDescriptor(Cyw43SdioPairMember::Cyw43),
-                Cyw43SdioPairRestartOperation::SetSteadyPriority(Cyw43SdioPairMember::Cyw43),
             ]
+        );
+        let bootstrap_priority_operations: Vec<_> = executor
+            .calls
+            .iter()
+            .filter_map(|(_, operation)| match operation {
+                Cyw43SdioPairRestartOperation::SetBootstrapPriority(member) => Some(*member),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            bootstrap_priority_operations,
+            [Cyw43SdioPairMember::Sdio, Cyw43SdioPairMember::Cyw43],
+            "pair restart raises each suspended runtime once; steady cutover belongs to the later ready-generation boundary",
         );
         assert_eq!(
             executor
@@ -15605,6 +15808,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "kernel")]
     #[test]
     fn retained_one_way_turn_keeps_a_demoted_pi_runtime_schedulable() {
         assert!(retained_priority_boost_required(true, true, 160));
@@ -15665,7 +15869,44 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn retained_poll_miss_arms_one_identity_bound_continuation_turn() {
+    fn deferred_steady_priority_cutover_is_claimed_exactly_once() {
+        let slot = DriverTaskCommandSlot::new();
+        assert_eq!(
+            DriverTaskSteadyPriorityState::from_usize(
+                slot.steady_priority_state.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskSteadyPriorityState::Bootstrap),
+        );
+        assert!(claim_driver_task_steady_priority_cutover(&slot));
+        assert!(!claim_driver_task_steady_priority_cutover(&slot));
+        assert!(resolve_driver_task_steady_priority_cutover(&slot, true));
+        assert!(driver_task_steady_priority_is_active(&slot));
+        assert!(!claim_driver_task_steady_priority_cutover(&slot));
+        assert!(!resolve_driver_task_steady_priority_cutover(&slot, true));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn failed_steady_priority_cutover_stays_failed_until_explicit_restart_reset() {
+        let slot = DriverTaskCommandSlot::new();
+        assert!(claim_driver_task_steady_priority_cutover(&slot));
+        assert!(resolve_driver_task_steady_priority_cutover(&slot, false));
+        assert_eq!(
+            DriverTaskSteadyPriorityState::from_usize(
+                slot.steady_priority_state.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskSteadyPriorityState::CutoverFailed),
+        );
+        assert!(!claim_driver_task_steady_priority_cutover(&slot));
+        assert!(!resolve_driver_task_steady_priority_cutover(&slot, false));
+
+        reset_driver_task_steady_priority_for_bootstrap(&slot);
+        assert!(claim_driver_task_steady_priority_cutover(&slot));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_poll_miss_arms_one_wake_or_quarantines_the_issued_request() {
         let slot = DriverTaskCommandSlot::new();
         let generation = CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire);
         slot.retained_priority_lease_request
@@ -15719,6 +15960,11 @@ mod tests {
         ));
 
         let usb_slot = DriverTaskCommandSlot::new();
+        usb_slot.active.store(1, Ordering::Release);
+        usb_slot.request_seq.store(81, Ordering::Release);
+        usb_slot
+            .active_command_fingerprint
+            .store(0x7654_3211, Ordering::Release);
         usb_slot
             .retained_priority_lease_request
             .store(81, Ordering::Release);
@@ -15750,12 +15996,134 @@ mod tests {
             .map(DriverTaskRetainedLeasePhase::operation),
             Some(DriverTaskRetainedLeaseOperation::NotifyRing),
         );
-        assert!(!arm_driver_task_retained_priority_lease_endpoint_wake_retry(
-            &usb_slot,
-            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-            81,
+        assert!(
+            !arm_driver_task_retained_priority_lease_endpoint_wake_retry(
+                &usb_slot,
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                81,
+                0x7654_3211,
+            )
+        );
+        poison_driver_task_retained_request(&usb_slot);
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                usb_slot
+                    .retained_priority_lease_phase
+                    .load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::Poisoned),
+        );
+        assert_eq!(usb_slot.active.load(Ordering::Acquire), 1);
+        assert_eq!(usb_slot.request_seq.load(Ordering::Acquire), 81);
+        assert_eq!(
+            usb_slot.active_command_fingerprint.load(Ordering::Acquire),
             0x7654_3211,
+        );
+        assert_eq!(usb_slot.retained_doorbell_issued.load(Ordering::Acquire), 1);
+        assert!(
+            !arm_driver_task_retained_priority_lease_endpoint_wake_retry(
+                &usb_slot,
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                81,
+                0x7654_3211,
+            )
+        );
+        assert!(matches!(
+            active_driver_task_retained_request_for_slot(&usb_slot),
+            Some(DriverTaskRetainedRequestState::Invalid { request: 81 })
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn non_pair_retained_faults_never_request_cyw43_sdio_recovery() {
+        fn seed_retained_slot(slot: &DriverTaskCommandSlot, issued: bool) {
+            slot.active.store(1, Ordering::Release);
+            slot.request_seq.store(91, Ordering::Release);
+            slot.active_command_fingerprint
+                .store(0x1020_3041, Ordering::Release);
+            slot.retained_priority_lease_request
+                .store(91, Ordering::Release);
+            slot.retained_priority_lease_fingerprint
+                .store(0x1020_3041, Ordering::Release);
+            slot.retained_priority_lease_generation.store(
+                CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire),
+                Ordering::Release,
+            );
+            slot.retained_priority_lease_phase.store(
+                if issued {
+                    DriverTaskRetainedLeasePhase::Issued
+                } else {
+                    DriverTaskRetainedLeasePhase::ReadyToIssue
+                }
+                .as_usize(),
+                Ordering::Release,
+            );
+            slot.retained_doorbell_issued
+                .store(usize::from(issued), Ordering::Release);
+        }
+
+        for contract in [
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            SERIAL_DRIVER_TASK_CONTRACT,
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        ] {
+            reset_cyw43_sdio_pair_recovery_for_test();
+            let pre_issue = DriverTaskCommandSlot::new();
+            seed_retained_slot(&pre_issue, false);
+            fail_driver_task_retained_priority_lease(&pre_issue, contract);
+            assert!(
+                !cyw43_sdio_pair_restart_required(),
+                "pre-issue {} fault must not restart Wi-Fi",
+                contract.name,
+            );
+            assert_eq!(pre_issue.active.load(Ordering::Acquire), 0);
+            assert_eq!(
+                DriverTaskRetainedLeasePhase::from_usize(
+                    pre_issue
+                        .retained_priority_lease_phase
+                        .load(Ordering::Acquire),
+                ),
+                Some(DriverTaskRetainedLeasePhase::Inactive),
+            );
+
+            let issued = DriverTaskCommandSlot::new();
+            seed_retained_slot(&issued, true);
+            fail_driver_task_retained_priority_lease(&issued, contract);
+            assert!(
+                !cyw43_sdio_pair_restart_required(),
+                "issued-unknown {} fault must remain device-local",
+                contract.name,
+            );
+            assert_eq!(issued.active.load(Ordering::Acquire), 1);
+            assert_eq!(issued.request_seq.load(Ordering::Acquire), 91);
+            assert_eq!(
+                issued.active_command_fingerprint.load(Ordering::Acquire),
+                0x1020_3041,
+            );
+            assert_eq!(
+                DriverTaskRetainedLeasePhase::from_usize(
+                    issued.retained_priority_lease_phase.load(Ordering::Acquire),
+                ),
+                Some(DriverTaskRetainedLeasePhase::Poisoned),
+            );
+        }
+
+        for contract in [
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        ] {
+            reset_cyw43_sdio_pair_recovery_for_test();
+            let pair = DriverTaskCommandSlot::new();
+            seed_retained_slot(&pair, false);
+            fail_driver_task_retained_priority_lease(&pair, contract);
+            assert!(
+                cyw43_sdio_pair_restart_required(),
+                "{} retained fault must request pair recovery",
+                contract.name,
+            );
+        }
+        reset_cyw43_sdio_pair_recovery_for_test();
     }
 
     #[cfg(feature = "kernel")]
@@ -15801,11 +16169,58 @@ mod tests {
             DriverTaskRetainedServiceTurn::Pending,
         );
 
+        let exact_completion = DriverTaskCompletionRecord::progress(19, 1);
+        assert_eq!(
+            classify_driver_task_retained_service_turn(
+                Some(exact_completion),
+                Some(DriverTaskRetainedRequestState::Issued {
+                    request: 19,
+                    command: retained,
+                }),
+                requested,
+            ),
+            DriverTaskRetainedServiceTurn::Complete(exact_completion),
+        );
+        let stale_completion = DriverTaskCompletionRecord::progress(18, 1);
+        assert_eq!(
+            classify_driver_task_retained_service_turn(
+                Some(stale_completion),
+                Some(DriverTaskRetainedRequestState::Issued {
+                    request: 19,
+                    command: retained,
+                }),
+                requested,
+            ),
+            DriverTaskRetainedServiceTurn::Failed,
+        );
+        assert_eq!(
+            classify_driver_task_retained_service_turn(
+                Some(exact_completion),
+                Some(DriverTaskRetainedRequestState::Prepared {
+                    request: 19,
+                    command: retained,
+                }),
+                requested,
+            ),
+            DriverTaskRetainedServiceTurn::Failed,
+        );
+
         let mut aliased = retained;
         aliased.aux0 ^= 1;
         assert_eq!(
             classify_driver_task_retained_service_turn(
                 None,
+                Some(DriverTaskRetainedRequestState::Issued {
+                    request: 19,
+                    command: aliased,
+                }),
+                requested,
+            ),
+            DriverTaskRetainedServiceTurn::Failed,
+        );
+        assert_eq!(
+            classify_driver_task_retained_service_turn(
+                Some(exact_completion),
                 Some(DriverTaskRetainedRequestState::Issued {
                     request: 19,
                     command: aliased,
@@ -16072,7 +16487,12 @@ mod tests {
         assert_eq!(slot.shared_frame_root_ptrs[0].load(Ordering::Acquire), 0);
         assert_eq!(slot.tcb.load(Ordering::Acquire), 0);
         assert_eq!(slot.steady_priority.load(Ordering::Acquire), 0);
-        assert_eq!(slot.steady_priority_active.load(Ordering::Acquire), 0);
+        assert_eq!(
+            DriverTaskSteadyPriorityState::from_usize(
+                slot.steady_priority_state.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskSteadyPriorityState::Bootstrap),
+        );
         assert_eq!(slot.active.load(Ordering::Acquire), 0);
         assert_eq!(slot.request_seq.load(Ordering::Acquire), 0);
     }
@@ -21579,18 +21999,15 @@ mod tests {
                 },
             );
 
-            let completion =
-                unsafe { pi4_bus_ring_service_driver_task(hot_path.as_u32() as usize, command) };
+            let completion = pi4_bus_ring_service_driver_task(hot_path.as_u32() as usize, command);
             assert_eq!(completion.sequence, hot_path.as_u32());
             assert_eq!(completion.code, DriverTaskCompletionCode::Idle.as_u16());
             assert_eq!(completion.result, 0);
 
-            let bad_context = unsafe {
-                pi4_bus_ring_service_driver_task(
-                    DriverTaskHotPath::GenetNic.as_u32() as usize,
-                    command,
-                )
-            };
+            let bad_context = pi4_bus_ring_service_driver_task(
+                DriverTaskHotPath::GenetNic.as_u32() as usize,
+                command,
+            );
             assert_eq!(bad_context.code, DriverTaskCompletionCode::Fault.as_u16());
             assert_eq!(
                 bad_context.detail,
@@ -21601,9 +22018,8 @@ mod tests {
                 42,
                 DriverTaskBudgetGrant::from_contract(hot_path.contract()),
             );
-            let completion = unsafe {
-                pi4_bus_ring_service_driver_task(hot_path.as_u32() as usize, bad_command)
-            };
+            let completion =
+                pi4_bus_ring_service_driver_task(hot_path.as_u32() as usize, bad_command);
             assert_eq!(completion.sequence, 42);
             assert_eq!(completion.code, DriverTaskCompletionCode::Fault.as_u16());
             assert_eq!(

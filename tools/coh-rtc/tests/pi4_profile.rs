@@ -97,8 +97,8 @@ fn pi4_uboot_profile_emits_network_policy() {
     for image in images {
         assert_eq!(
             image["code-pages"].as_u64().expect("code pages"),
-            128,
-            "runtime image {} must leave room for the multi-segment linked ELF",
+            256,
+            "runtime image {} must cover the measured multi-segment linked ELF",
             image["id"]
         );
     }

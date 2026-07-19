@@ -8047,9 +8047,9 @@ unsafe fn net_driver_task_runtime_ring_service(
     context: usize,
     command: crate::hal::driver_task::DriverTaskCommandRecord,
 ) -> crate::hal::driver_task::DriverTaskCompletionRecord {
-    // SAFETY: This test/compatibility wrapper preserves the exact registered
-    // service ABI and forwards the primitive selector context unchanged.
-    unsafe { crate::drivers::driver_task_net::runtime_ring_service(context, command) }
+    // This compatibility wrapper preserves the exact registered service ABI
+    // and forwards the primitive selector context unchanged.
+    crate::drivers::driver_task_net::runtime_ring_service(context, command)
 }
 
 #[cfg(feature = "kernel")]

@@ -57,7 +57,7 @@ use crate::sel4::{
 };
 #[cfg(feature = "kernel")]
 use pci::{PciAddress, PciTopology};
-#[cfg(test)]
+#[cfg(all(test, feature = "kernel"))]
 use pi4_driver_abi::DRIVER_RUNTIME_SDIO_IRQ_BADGE;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{

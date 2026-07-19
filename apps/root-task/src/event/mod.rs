@@ -102,6 +102,8 @@ mod lifecycle {
 }
 use cohesix_ticket::{Role, TicketClaims, TicketQuotas, TicketToken, TicketVerb};
 use cohsh_core::{ConsoleVerb, RoleParseMode};
+#[cfg(feature = "kernel")]
+use heapless::Deque as HeaplessDeque;
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 
 #[cfg(feature = "kernel")]
@@ -287,6 +289,18 @@ const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 3;
 /// Serial retains first service, but queued HDMI must receive one later turn
 /// even when a large diagnostic keeps UART TX continuously backlogged.
 const LOCAL_SEAT_HDMI_MAX_SERIAL_DEFERRALS: u8 = 4;
+/// One failed bootstrap episode can retain at most ten attempt milestones
+/// (five starts, four backoffs, and exhaustion) plus the one-shot linked-serial
+/// blocked/ready transitions. Keeping the exact episode bound avoids dynamic
+/// allocation without permitting a delayed display to overwrite a milestone.
+#[cfg(feature = "kernel")]
+const CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY: usize = 12;
+/// Serial retains the complete five-attempt lifecycle: two preflight records,
+/// attempt begin/recovery, each typed failure, four backoffs, and one terminal
+/// result. This queue is a saturation fallback; ordinary turns drain records
+/// directly through the shared physical-console queue.
+#[cfg(feature = "kernel")]
+const CYW43_BOOTSTRAP_SERIAL_MILESTONE_CAPACITY: usize = 20;
 #[cfg(feature = "net-console")]
 const LOCAL_SEAT_HDMI_PUMP_PASSES_UNDER_NET_PRESSURE: usize = 1;
 const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 4;
@@ -1763,6 +1777,7 @@ impl ConsoleInputSource {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PendingConsoleOutputKind {
     BackgroundLine,
+    HighImpactLine,
     Line,
     TerminalLine,
     ResponseTailLine,
@@ -1776,6 +1791,10 @@ impl PendingConsoleOutputKind {
 
     const fn is_background(self) -> bool {
         matches!(self, Self::BackgroundLine)
+    }
+
+    const fn is_high_impact(self) -> bool {
+        matches!(self, Self::HighImpactLine)
     }
 }
 
@@ -1816,6 +1835,14 @@ enum LinkedRuntimeServicePhase {
 #[cfg(feature = "kernel")]
 fn cyw43_bootstrap_hdmi_milestone(line: &str) -> bool {
     line.as_bytes().starts_with(b"CYW43_BOOTSTRAP_SUPERVISOR ")
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_bootstrap_serial_milestone(line: &str) -> bool {
+    cyw43_bootstrap_hdmi_milestone(line)
+        || line
+            .as_bytes()
+            .starts_with(b"[net-console] deferred failed detail=")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1980,6 +2007,8 @@ where
     #[cfg(feature = "net-console")]
     pending_net_flush: PendingNetFlush,
     #[cfg(feature = "net-console")]
+    network_service_quarantined: bool,
+    #[cfg(feature = "net-console")]
     last_net_diag_log_ms: Option<u64>,
     #[cfg(feature = "net-console")]
     last_net_diag_emitted: Option<NetDiagLogSnapshot>,
@@ -2003,6 +2032,16 @@ where
     cyw43_bootstrap_operator_turn_active: bool,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_pending: bool,
+    #[cfg(feature = "kernel")]
+    pending_cyw43_bootstrap_hdmi_milestones: HeaplessDeque<
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+        CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY,
+    >,
+    #[cfg(feature = "kernel")]
+    pending_cyw43_bootstrap_serial_milestones: HeaplessDeque<
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+        CYW43_BOOTSTRAP_SERIAL_MILESTONE_CAPACITY,
+    >,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_last_operator_turn_was_display: bool,
     local_seat: Option<&'a mut LocalSeatRuntime>,
@@ -2129,6 +2168,8 @@ where
             #[cfg(feature = "net-console")]
             pending_net_flush: PendingNetFlush::default(),
             #[cfg(feature = "net-console")]
+            network_service_quarantined: false,
+            #[cfg(feature = "net-console")]
             last_net_diag_log_ms: None,
             #[cfg(feature = "net-console")]
             last_net_diag_emitted: None,
@@ -2152,6 +2193,10 @@ where
             cyw43_bootstrap_operator_turn_active: false,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_hdmi_pending: false,
+            #[cfg(feature = "kernel")]
+            pending_cyw43_bootstrap_hdmi_milestones: HeaplessDeque::new(),
+            #[cfg(feature = "kernel")]
+            pending_cyw43_bootstrap_serial_milestones: HeaplessDeque::new(),
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_last_operator_turn_was_display: false,
             local_seat: None,
@@ -2234,7 +2279,62 @@ where
         self.audit.info("event-pump: attach deferred network");
         self.net = Some(net);
         self.net_unavailable_detail = None;
+        self.network_service_quarantined = false;
         true
+    }
+
+    /// Quarantine an attached Wi-Fi stack after its retained recovery budget is
+    /// exhausted.
+    ///
+    /// The reference remains available for passive diagnostics, but ordinary
+    /// EventPump cycles must not poll or flush it until a reboot reconstructs
+    /// the poisoned CYW43/SDIO generation. Serial, local-seat, HDMI, timer, IPC,
+    /// fresh physical authentication, and reboot service continue through the
+    /// normal pump. Quarantine is also a connection boundary: authority and
+    /// retained output belonging to the poisoned network connection are
+    /// revoked without calling back into that connection.
+    #[cfg(feature = "net-console")]
+    pub fn quarantine_network_service_after_cyw43_exhaustion(&mut self) {
+        self.network_service_quarantined = true;
+        self.pending_net_flush = PendingNetFlush::default();
+        let net_session = matches!(self.session_origin, Some(ConsoleInputSource::Net))
+            || self.session_net_conn_id.is_some();
+        let net_stream = matches!(self.stream_output_source, Some(ConsoleInputSource::Net))
+            || self.stream_net_conn_id.is_some();
+        let net_reboot = self.reboot_ack_source == Some(ConsoleInputSource::Net)
+            || self.reboot_ack_net_conn_id.is_some();
+
+        if net_reboot {
+            self.audit
+                .denied("network quarantine cancelled unprovable TCP reboot ACK");
+            self.reboot_pending = false;
+            self.reboot_ack_wait_turns = 0;
+            self.reboot_ack_source = None;
+            self.reboot_ack_net_conn_id = None;
+            self.reboot_ack_deadline_ms = 0;
+            self.reboot_ack_failed = false;
+            self.reboot_ack_drain_observed = false;
+        }
+        if net_session {
+            self.end_session("network-quarantined");
+        }
+        if net_stream {
+            if self.tail_active {
+                let sid = self.session_id.unwrap_or(0);
+                self.audit_tail_stop(sid, "network-quarantined");
+                self.tail_active = false;
+            }
+            self.clear_stream_output();
+            self.stream_prompt_pending = false;
+            #[cfg(feature = "kernel")]
+            {
+                self.pending_stream = None;
+            }
+        }
+        self.net_conn_id = None;
+        if self.last_input_source == ConsoleInputSource::Net {
+            self.last_input_source = ConsoleInputSource::Serial;
+        }
     }
 
     /// Attach the preserved reason why the network stack was unavailable.
@@ -2395,6 +2495,11 @@ where
             let followup_serial_input = self.consume_serial();
             self.serial.flush_tx();
             self.flush_pending_console_output_if_idle();
+            if self.serial.tx_pending()
+                && self.pump_local_seat_display_after_bounded_serial_deferral()
+            {
+                return;
+            }
             self.retry_pending_usb_debug_hdmi_frontier();
             self.pump_local_seat_display_if_idle();
             self.maybe_run_post_prompt_local_seat_attach(
@@ -2415,6 +2520,10 @@ where
         }
         self.serial.flush_tx();
         self.flush_pending_console_output_if_idle();
+        if self.serial.tx_pending() && self.pump_local_seat_display_after_bounded_serial_deferral()
+        {
+            return;
+        }
         self.retry_pending_usb_debug_hdmi_frontier();
         self.pump_local_seat_display_if_idle();
         self.maybe_run_post_prompt_local_seat_attach(
@@ -2491,14 +2600,18 @@ where
                 // HDMI attach and frame submission share the display runtime
                 // ring. Service at most one of them in this dedicated phase;
                 // USB and serial have already released their own guards.
-                if let Some(runtime) = self.local_seat.as_mut() {
-                    if runtime.linked_hdmi_pending_work() {
-                        if runtime.pump_linked_hdmi_once() {
-                            self.metrics.local_seat_hdmi_pump_turns =
-                                self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
+                let response_owns_turn =
+                    self.reboot_pending || self.physical_console_response_pending();
+                if !response_owns_turn && !self.pump_one_cyw43_bootstrap_hdmi_milestone() {
+                    if let Some(runtime) = self.local_seat.as_mut() {
+                        if runtime.linked_hdmi_pending_work() {
+                            if runtime.pump_linked_hdmi_once() {
+                                self.metrics.local_seat_hdmi_pump_turns =
+                                    self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
+                            }
+                        } else {
+                            let _ = runtime.ensure_prompt_linked_display_ready();
                         }
-                    } else {
-                        let _ = runtime.ensure_prompt_linked_display_ready();
                     }
                 }
                 self.poll_runtime(true, false, false);
@@ -2516,7 +2629,7 @@ where
     /// poll that received it.
     #[cfg(feature = "net-console")]
     fn dispatch_one_buffered_network_line(&mut self) -> bool {
-        if self.pending_net_flush.active() {
+        if self.network_service_quarantined || self.pending_net_flush.active() {
             return false;
         }
         let mut buffered: HeaplessVec<ConsoleLine, 1> = HeaplessVec::new();
@@ -2552,19 +2665,13 @@ where
             self.cyw43_bootstrap_operator_turn_active = false;
             return;
         }
-        if self.cyw43_bootstrap_hdmi_pending && !self.cyw43_bootstrap_last_operator_turn_was_display
+        if self.cyw43_bootstrap_hdmi_pending
+            && !self.cyw43_bootstrap_last_operator_turn_was_display
+            && !self.reboot_pending
+            && !self.physical_console_response_pending()
         {
             self.cyw43_bootstrap_last_operator_turn_was_display = true;
-            let display_still_pending = if let Some(runtime) = self.local_seat.as_mut() {
-                if runtime.pump_linked_hdmi_once() {
-                    self.metrics.local_seat_hdmi_pump_turns =
-                        self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
-                }
-                runtime.linked_hdmi_pending_work()
-            } else {
-                false
-            };
-            self.cyw43_bootstrap_hdmi_pending = display_still_pending;
+            let _ = self.pump_one_cyw43_bootstrap_hdmi_milestone();
             self.poll_runtime(false, false, false);
             self.cyw43_bootstrap_operator_turn_active = false;
             return;
@@ -2595,10 +2702,28 @@ where
     /// operation from sharing one outer operation permit.
     #[cfg(feature = "kernel")]
     pub fn queue_cyw43_bootstrap_operator_line(&mut self, line: &str) -> bool {
-        if cyw43_bootstrap_hdmi_milestone(line) {
-            if let Some(runtime) = self.local_seat.as_mut() {
-                runtime.mirror_high_impact_line(line);
-                self.cyw43_bootstrap_hdmi_pending = true;
+        let supervisor_milestone = cyw43_bootstrap_hdmi_milestone(line);
+        let serial_milestone = cyw43_bootstrap_serial_milestone(line);
+        if supervisor_milestone {
+            if self.local_seat.is_some() {
+                let mut milestone = HeaplessString::new();
+                if milestone.push_str(line).is_err() {
+                    return false;
+                }
+                if self
+                    .pending_cyw43_bootstrap_hdmi_milestones
+                    .push_back(milestone)
+                    .is_ok()
+                {
+                    self.cyw43_bootstrap_hdmi_pending = true;
+                } else {
+                    // The finite supervisor episode is sized to fit this queue.
+                    // Preserve existing HDMI milestones without coupling HDMI
+                    // backpressure to the independent serial/log route below.
+                    crate::log_buffer::append_log_line(
+                        "CYW43_BOOTSTRAP_HDMI_QUEUE status=full action=preserve-existing-milestones",
+                    );
+                }
             }
         }
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
@@ -2607,10 +2732,67 @@ where
             return false;
         }
         crate::log_buffer::append_log_line(line);
+        if serial_milestone {
+            let serial_backlog_active = !self.pending_cyw43_bootstrap_serial_milestones.is_empty();
+            if !self.reboot_pending
+                && !serial_backlog_active
+                && self
+                    .queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, line)
+            {
+                return true;
+            }
+            let mut retained = HeaplessString::new();
+            if retained.push_str(line).is_err() {
+                return false;
+            }
+            if self
+                .pending_cyw43_bootstrap_serial_milestones
+                .push_back(retained)
+                .is_ok()
+            {
+                return true;
+            }
+            crate::log_buffer::append_log_line(
+                "CYW43_BOOTSTRAP_SERIAL_QUEUE status=full action=preserve-existing-milestones",
+            );
+            return false;
+        }
         if self.reboot_pending || self.physical_console_response_pending() {
             return true;
         }
         self.queue_physical_console_output(PendingConsoleOutputKind::BackgroundLine, line)
+    }
+
+    /// Retain and service one high-impact Wi-Fi milestone on one display turn.
+    ///
+    /// Mirroring mutates only the bounded local-seat queue on physical Pi; the
+    /// following pump may submit at most one linked HDMI operation. Callers must
+    /// end the outer turn after this method returns `true`.
+    #[cfg(feature = "kernel")]
+    fn pump_one_cyw43_bootstrap_hdmi_milestone(&mut self) -> bool {
+        if self.reboot_pending || self.physical_console_response_pending() {
+            return false;
+        }
+        let milestone_pending = !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty();
+        if !milestone_pending && !self.cyw43_bootstrap_hdmi_pending {
+            return false;
+        }
+        let Some(runtime) = self.local_seat.as_mut() else {
+            self.pending_cyw43_bootstrap_hdmi_milestones.clear();
+            self.cyw43_bootstrap_hdmi_pending = false;
+            return false;
+        };
+        if let Some(line) = self.pending_cyw43_bootstrap_hdmi_milestones.pop_front() {
+            runtime.mirror_high_impact_line(line.as_str());
+        }
+        if runtime.pump_linked_hdmi_once() {
+            self.metrics.local_seat_hdmi_pump_turns =
+                self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
+        }
+        self.cyw43_bootstrap_hdmi_pending =
+            !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty()
+                || runtime.linked_hdmi_pending_work();
+        true
     }
 
     /// Whether a deferred CYW43 bootstrap may begin after an ordinary pump.
@@ -2693,11 +2875,15 @@ where
         #[cfg(feature = "net-console")]
         let local_seat_usb_input_pending = self.linked_local_seat_usb_input_pending();
         #[cfg(feature = "net-console")]
-        let net_poll = if !service_network || self.cyw43_bootstrap_operator_turn_is_active() {
+        let net_poll = if !service_network
+            || self.cyw43_bootstrap_operator_turn_is_active()
+            || self.network_service_quarantined
+        {
             // Bootstrap and linked-pair recovery retain sole CYW43 ownership.
             // The independently owned serial route, buffered local-seat bytes,
-            // timer/IPC service, and reboot dispatch continue below, but an
-            // already-attached NetStack must not re-enter the same HAL.
+            // timer/IPC service, and reboot dispatch continue below. An attached
+            // NetStack must not re-enter the same HAL during supervision or
+            // after its recovery budget quarantines a poisoned generation.
             None
         } else if let Some(net) = self.net.as_mut() {
             let status_before = net.status_report();
@@ -3591,11 +3777,15 @@ where
         kind: PendingConsoleOutputKind,
         text: &str,
     ) -> bool {
+        let high_impact = kind.is_high_impact();
         let response_priority = !kind.is_background()
+            && !high_impact
             && self.physical_response_barrier != PhysicalResponseBarrier::Idle;
         let capacity = if matches!(
             kind,
-            PendingConsoleOutputKind::BackgroundLine | PendingConsoleOutputKind::Line
+            PendingConsoleOutputKind::BackgroundLine
+                | PendingConsoleOutputKind::HighImpactLine
+                | PendingConsoleOutputKind::Line
         ) && !response_priority
         {
             CONSOLE_OUTPUT_BACKLOG_LINES
@@ -3604,12 +3794,12 @@ where
             CONSOLE_OUTPUT_BACKLOG_LINES
         };
         if self.pending_console_output.len() >= capacity {
-            if response_priority {
-                if let Some(index) = self
+            if response_priority || high_impact {
+                let eviction = self
                     .pending_console_output
                     .iter()
-                    .rposition(|output| output.kind.is_background())
-                {
+                    .rposition(|output| output.kind.is_background());
+                if let Some(index) = eviction {
                     self.pending_console_output.remove(index);
                 } else {
                     self.metrics.physical_console_output_backpressure = self
@@ -3636,7 +3826,7 @@ where
         let insert_at = if response_priority {
             self.pending_console_output
                 .iter()
-                .position(|queued| queued.kind.is_background())
+                .position(|queued| queued.kind.is_background() || queued.kind.is_high_impact())
                 .unwrap_or(self.pending_console_output.len())
         } else {
             self.pending_console_output.len()
@@ -3683,7 +3873,34 @@ where
         }
     }
 
+    /// Move at most one losslessly retained CYW43 lifecycle record into the
+    /// ordinary serial queue after older output and physical response tails.
+    #[cfg(feature = "kernel")]
+    fn admit_one_retained_cyw43_serial_milestone(&mut self) {
+        if self.reboot_pending
+            || self.serial.tx_pending()
+            || self.physical_console_response_pending()
+        {
+            return;
+        }
+        let Some(milestone) = self
+            .pending_cyw43_bootstrap_serial_milestones
+            .front()
+            .cloned()
+        else {
+            return;
+        };
+        if self.queue_physical_console_output(
+            PendingConsoleOutputKind::HighImpactLine,
+            milestone.as_str(),
+        ) {
+            let _ = self.pending_cyw43_bootstrap_serial_milestones.pop_front();
+        }
+    }
+
     fn flush_pending_console_output_if_idle(&mut self) {
+        #[cfg(feature = "kernel")]
+        self.admit_one_retained_cyw43_serial_milestone();
         let response_has_priority = self.physical_response_barrier != PhysicalResponseBarrier::Idle;
         if self.pending_console_output.is_empty()
             || self.serial.tx_pending()
@@ -3702,6 +3919,7 @@ where
             let output = self.pending_console_output.remove(0);
             self.with_local_seat_mirror_suppressed(|this| match output.kind {
                 PendingConsoleOutputKind::BackgroundLine
+                | PendingConsoleOutputKind::HighImpactLine
                 | PendingConsoleOutputKind::Line
                 | PendingConsoleOutputKind::TerminalLine
                 | PendingConsoleOutputKind::ResponseTailLine => {
@@ -3731,6 +3949,7 @@ where
 
     #[cfg(feature = "kernel")]
     fn queue_pending_console_output_for_linked_serial(&mut self) {
+        self.admit_one_retained_cyw43_serial_milestone();
         if self.pending_console_output.is_empty()
             || self.serial.tx_pending()
             || self.physical_response_barrier == PhysicalResponseBarrier::TailInFlight
@@ -3740,6 +3959,7 @@ where
         let output = self.pending_console_output.remove(0);
         let queued = match output.kind {
             PendingConsoleOutputKind::BackgroundLine
+            | PendingConsoleOutputKind::HighImpactLine
             | PendingConsoleOutputKind::Line
             | PendingConsoleOutputKind::TerminalLine
             | PendingConsoleOutputKind::ResponseTailLine => {
@@ -4321,6 +4541,9 @@ where
         }
         #[cfg(feature = "net-console")]
         if source == ConsoleInputSource::Net {
+            if self.network_service_quarantined {
+                return false;
+            }
             if expected_net_conn_id.is_some() && self.net_conn_id != expected_net_conn_id {
                 return false;
             }
@@ -13929,6 +14152,9 @@ where
 
     #[cfg(feature = "net-console")]
     fn handle_network_line(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) {
+        if self.network_service_quarantined {
+            return;
+        }
         let mut converted: HeaplessString<LINE> = HeaplessString::new();
         if converted.push_str(line.as_str()).is_err() {
             self.audit
@@ -13944,6 +14170,9 @@ where
     /// its private polling loop in the command-dispatch turn.
     #[cfg(feature = "net-console")]
     fn schedule_net_post_dispatch_flush(&mut self) {
+        if self.network_service_quarantined {
+            return;
+        }
         let display_trace = self
             .local_seat
             .as_ref()
@@ -14156,7 +14385,15 @@ where
             Command::NetTest => {
                 #[cfg(feature = "net-console")]
                 {
-                    if let Some(net) = self.net.as_mut() {
+                    if self.network_service_quarantined {
+                        self.metrics.denied_commands += 1;
+                        cmd_status = "err";
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Cut,
+                            Some("detail=network-quarantined"),
+                        );
+                    } else if let Some(net) = self.net.as_mut() {
                         match net.start_self_test(self.now_ms) {
                             NetSelfTestStartResult::Started => {
                                 self.metrics.accepted_commands += 1;
@@ -18719,6 +18956,7 @@ mod tests {
         lines: heapless::Vec<ConsoleLine, 128>,
         sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 128>,
         start_result: NetSelfTestStartResult,
+        self_test_starts: usize,
         status: NetStatusReport,
         counters: NetCounters,
         polls: usize,
@@ -18746,6 +18984,7 @@ mod tests {
                 lines: heapless::Vec::new(),
                 sent: heapless::Vec::new(),
                 start_result: NetSelfTestStartResult::Unsupported,
+                self_test_starts: 0,
                 status: NetStatusReport::default(),
                 counters: NetCounters::default(),
                 polls: 0,
@@ -18898,6 +19137,7 @@ mod tests {
         }
 
         fn start_self_test(&mut self, _now_ms: u64) -> NetSelfTestStartResult {
+            self.self_test_starts = self.self_test_starts.saturating_add(1);
             self.start_result
         }
 
@@ -24181,6 +24421,935 @@ mod tests {
             (0, 0),
             "status flush must never re-enter the generic serial backend",
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn maximum_cyw43_status_is_lossless_across_serial_and_hdmi_queues() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: DEFAULT_LINE_CAPACITY as u16,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        let status = crate::userland::format_deferred_net_bootstrap_supervisor_status(
+            u64::MAX,
+            5,
+            crate::userland::DeferredNetSupervisorStatus::Permanent,
+            u64::MAX,
+            u64::MAX,
+            false,
+            false,
+        )
+        .expect("maximum supervisor status must fit exactly");
+        assert_eq!(status.len(), DEFAULT_LINE_CAPACITY);
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat);
+            assert!(pump.queue_cyw43_bootstrap_operator_line(status.as_str()));
+            assert_eq!(
+                pump.pending_console_output
+                    .last()
+                    .map(|line| line.text.as_str()),
+                Some(status.as_str()),
+            );
+            assert_eq!(
+                pump.pending_cyw43_bootstrap_hdmi_milestones
+                    .back()
+                    .map(|line| line.as_str()),
+                Some(status.as_str()),
+            );
+
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
+            let mut transcript = Vec::new();
+            for _ in 0..32 {
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+                if transcript
+                    .windows(status.len())
+                    .any(|window| window == status.as_bytes())
+                {
+                    break;
+                }
+            }
+            let rendered = core::str::from_utf8(transcript.as_slice())
+                .expect("linked serial output must be utf8");
+            assert!(rendered.contains(status.as_str()), "{rendered}");
+        }
+
+        assert!(local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line == status.as_str()));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn terminal_cyw43_status_evicts_only_chatter_from_saturated_serial_queue() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(256, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let status = crate::userland::format_deferred_net_bootstrap_supervisor_status(
+            u64::MAX,
+            5,
+            crate::userland::DeferredNetSupervisorStatus::Permanent,
+            u64::MAX,
+            u64::MAX,
+            false,
+            false,
+        )
+        .expect("maximum terminal supervisor status must fit");
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        for index in 0..CONSOLE_OUTPUT_BACKLOG_LINES
+            .saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE + 1)
+        {
+            let line = format!("background-{index}");
+            assert!(pump.queue_physical_console_output(
+                PendingConsoleOutputKind::BackgroundLine,
+                line.as_str(),
+            ));
+        }
+        assert!(pump.queue_physical_console_output(
+            PendingConsoleOutputKind::Line,
+            "CURRENT RESPONSE BODY",
+        ));
+        assert!(pump.queue_physical_console_output(
+            PendingConsoleOutputKind::TerminalLine,
+            "OK KEEP detail=ack",
+        ));
+        assert!(
+            pump.queue_physical_console_output(PendingConsoleOutputKind::ResponseTailLine, "END",)
+        );
+        assert!(pump.queue_physical_console_output(
+            PendingConsoleOutputKind::ResponseTailPrompt,
+            CONSOLE_PROMPT,
+        ));
+        assert_eq!(
+            pump.pending_console_output.len(),
+            CONSOLE_OUTPUT_BACKLOG_LINES
+        );
+
+        assert!(pump.queue_cyw43_bootstrap_operator_line(status.as_str()));
+        assert_eq!(
+            pump.pending_console_output.len(),
+            CONSOLE_OUTPUT_BACKLOG_LINES
+        );
+        assert!(pump.pending_console_output.iter().any(|output| {
+            output.kind == PendingConsoleOutputKind::HighImpactLine
+                && output.text.as_str() == status.as_str()
+        }));
+        for (kind, text) in [
+            (PendingConsoleOutputKind::Line, "CURRENT RESPONSE BODY"),
+            (PendingConsoleOutputKind::TerminalLine, "OK KEEP detail=ack"),
+            (PendingConsoleOutputKind::ResponseTailLine, "END"),
+            (PendingConsoleOutputKind::ResponseTailPrompt, CONSOLE_PROMPT),
+        ] {
+            assert!(pump
+                .pending_console_output
+                .iter()
+                .any(|output| output.kind == kind && output.text.as_str() == text));
+        }
+        assert_eq!(
+            pump.pending_console_output
+                .iter()
+                .filter(|output| output.kind == PendingConsoleOutputKind::BackgroundLine)
+                .count(),
+            CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE - 2,
+        );
+
+        let mut transcript = Vec::new();
+        for _ in 0..192 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if pump.pending_console_output.is_empty() && !pump.serial.tx_pending() {
+                break;
+            }
+        }
+        assert!(pump.pending_console_output.is_empty());
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        assert!(rendered.contains(status.as_str()), "{rendered}");
+        assert!(rendered.contains("CURRENT RESPONSE BODY"), "{rendered}");
+        assert!(rendered.contains("OK KEEP detail=ack"), "{rendered}");
+        assert!(rendered.contains("END"), "{rendered}");
+        assert!(rendered.contains(CONSOLE_PROMPT), "{rendered}");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn terminal_cyw43_status_retains_all_existing_high_impact_and_protocol_lines() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(256, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let terminal = crate::userland::format_deferred_net_bootstrap_supervisor_status(
+            u64::MAX,
+            5,
+            crate::userland::DeferredNetSupervisorStatus::Permanent,
+            u64::MAX,
+            u64::MAX,
+            false,
+            false,
+        )
+        .expect("maximum terminal supervisor status must fit");
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        for index in 0..CONSOLE_OUTPUT_BACKLOG_LINES
+            .saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE)
+        {
+            let line = format!("retained-high-{index}");
+            assert!(pump.queue_physical_console_output(
+                PendingConsoleOutputKind::HighImpactLine,
+                line.as_str(),
+            ));
+        }
+        for (kind, text) in [
+            (PendingConsoleOutputKind::TerminalLine, "OK KEEP"),
+            (PendingConsoleOutputKind::ResponseTailLine, "END"),
+            (PendingConsoleOutputKind::ResponseTailPrompt, CONSOLE_PROMPT),
+        ] {
+            assert!(pump.queue_physical_console_output(kind, text));
+        }
+        let retained_before: Vec<String> = pump
+            .pending_console_output
+            .iter()
+            .map(|output| output.text.as_str().to_owned())
+            .collect();
+
+        assert!(pump.queue_cyw43_bootstrap_operator_line(terminal.as_str()));
+        assert_eq!(
+            pump.pending_console_output
+                .iter()
+                .map(|output| output.text.as_str().to_owned())
+                .collect::<Vec<_>>(),
+            retained_before,
+            "terminal admission must not evict high-impact or protocol output"
+        );
+        assert_eq!(pump.pending_cyw43_bootstrap_serial_milestones.len(), 1);
+        assert_eq!(
+            pump.pending_cyw43_bootstrap_serial_milestones
+                .front()
+                .map(|line| line.as_str()),
+            Some(terminal.as_str())
+        );
+
+        let mut transcript = Vec::new();
+        for _ in 0..256 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if pump.pending_console_output.is_empty()
+                && pump.pending_cyw43_bootstrap_serial_milestones.is_empty()
+                && !pump.serial.tx_pending()
+            {
+                break;
+            }
+        }
+        assert!(pump.pending_cyw43_bootstrap_serial_milestones.is_empty());
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        assert!(rendered.contains(terminal.as_str()), "{rendered}");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn typed_cyw43_failure_precedes_following_permanent_status_under_pressure() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(384, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        for index in 0..CONSOLE_OUTPUT_BACKLOG_LINES
+            .saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE)
+        {
+            let line = format!("older-high-impact-{index}");
+            assert!(pump.queue_physical_console_output(
+                PendingConsoleOutputKind::HighImpactLine,
+                line.as_str(),
+            ));
+        }
+        for (kind, text) in [
+            (PendingConsoleOutputKind::TerminalLine, "OK KEEP"),
+            (PendingConsoleOutputKind::ResponseTailLine, "END"),
+            (PendingConsoleOutputKind::ResponseTailPrompt, CONSOLE_PROMPT),
+        ] {
+            assert!(pump.queue_physical_console_output(kind, text));
+        }
+        assert_eq!(
+            pump.pending_console_output.len(),
+            CONSOLE_OUTPUT_BACKLOG_LINES
+        );
+        let failure = "[net-console] deferred failed detail=typed-runtime-fault";
+        let permanent = crate::userland::format_deferred_net_bootstrap_supervisor_status(
+            2,
+            1,
+            crate::userland::DeferredNetSupervisorStatus::Permanent,
+            0,
+            1,
+            true,
+            true,
+        )
+        .expect("permanent supervisor status must fit");
+        assert!(pump.queue_cyw43_bootstrap_operator_line(failure));
+        assert!(pump.queue_cyw43_bootstrap_operator_line(permanent.as_str()));
+
+        let retained: Vec<&str> = pump
+            .pending_cyw43_bootstrap_serial_milestones
+            .iter()
+            .map(|line| line.as_str())
+            .collect();
+        assert_eq!(retained, vec![failure, permanent.as_str()]);
+
+        let mut transcript = Vec::new();
+        for _ in 0..384 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if pump.pending_console_output.is_empty()
+                && pump.pending_cyw43_bootstrap_serial_milestones.is_empty()
+                && !pump.serial.tx_pending()
+            {
+                break;
+            }
+        }
+        assert!(pump.pending_cyw43_bootstrap_serial_milestones.is_empty());
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        let failure_index = rendered.find(failure).expect("typed failure reaches UART");
+        let permanent_index = rendered
+            .find(permanent.as_str())
+            .expect("permanent status reaches UART");
+        assert!(failure_index < permanent_index, "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_hdmi_milestone_uses_a_distinct_later_operator_turn() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat);
+            let status = "CYW43_BOOTSTRAP_SUPERVISOR attempt=2 status=recovery";
+            assert!(pump.queue_cyw43_bootstrap_operator_line(status));
+            assert!(pump.cyw43_bootstrap_hdmi_pending);
+            assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
+
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(
+                crate::serial::test_take_linked_runtime_only_tx().is_empty(),
+                "the first later turn is display-only"
+            );
+            assert!(pump.cyw43_bootstrap_last_operator_turn_was_display);
+
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            let transcript = crate::serial::test_take_linked_runtime_only_tx();
+            let rendered = core::str::from_utf8(transcript.as_slice())
+                .expect("linked serial output must be utf8");
+            assert!(rendered.contains(status), "{rendered}");
+        }
+
+        assert!(local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line.contains("status=recovery")));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn delayed_cyw43_hdmi_fifo_retains_all_twelve_production_milestones() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(64, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: DEFAULT_LINE_CAPACITY as u16,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        let specs = [
+            (
+                0,
+                crate::userland::DeferredNetSupervisorStatus::Preflight,
+                false,
+            ),
+            (
+                0,
+                crate::userland::DeferredNetSupervisorStatus::Preflight,
+                true,
+            ),
+            (1, crate::userland::DeferredNetSupervisorStatus::Begin, true),
+            (
+                1,
+                crate::userland::DeferredNetSupervisorStatus::Backoff,
+                true,
+            ),
+            (2, crate::userland::DeferredNetSupervisorStatus::Begin, true),
+            (
+                2,
+                crate::userland::DeferredNetSupervisorStatus::Backoff,
+                true,
+            ),
+            (3, crate::userland::DeferredNetSupervisorStatus::Begin, true),
+            (
+                3,
+                crate::userland::DeferredNetSupervisorStatus::Backoff,
+                true,
+            ),
+            (4, crate::userland::DeferredNetSupervisorStatus::Begin, true),
+            (
+                4,
+                crate::userland::DeferredNetSupervisorStatus::Backoff,
+                true,
+            ),
+            (5, crate::userland::DeferredNetSupervisorStatus::Begin, true),
+            (
+                5,
+                crate::userland::DeferredNetSupervisorStatus::Exhausted,
+                true,
+            ),
+        ];
+        let statuses: Vec<HeaplessString<DEFAULT_LINE_CAPACITY>> = specs
+            .iter()
+            .enumerate()
+            .map(|(index, (attempt, status, serial_ready))| {
+                crate::userland::format_deferred_net_bootstrap_supervisor_status(
+                    index as u64,
+                    *attempt,
+                    *status,
+                    index as u64 * 1_000,
+                    index as u64 * 2_000,
+                    *serial_ready,
+                    true,
+                )
+                .expect("production supervisor status must fit")
+            })
+            .collect();
+        assert_eq!(statuses.len(), CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY);
+        let rejected = crate::userland::format_deferred_net_bootstrap_supervisor_status(
+            u64::MAX,
+            5,
+            crate::userland::DeferredNetSupervisorStatus::Ready,
+            u64::MAX,
+            u64::MAX,
+            false,
+            false,
+        )
+        .expect("maximum terminal supervisor status must fit");
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat);
+            for status in &statuses {
+                assert!(pump.queue_cyw43_bootstrap_operator_line(status.as_str()));
+            }
+            assert_eq!(
+                pump.pending_cyw43_bootstrap_hdmi_milestones.len(),
+                CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY
+            );
+            let serial_statuses: Vec<String> = pump
+                .pending_console_output
+                .iter()
+                .filter(|output| output.kind == PendingConsoleOutputKind::HighImpactLine)
+                .map(|output| output.text.as_str().to_owned())
+                .collect();
+            assert_eq!(
+                serial_statuses,
+                statuses
+                    .iter()
+                    .map(|line| line.as_str().to_owned())
+                    .collect::<Vec<_>>()
+            );
+
+            // A physical response owns these turns. No milestone may be
+            // overwritten merely because display service is delayed.
+            pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            for _ in 0..(CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY * 2) {
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                let _ = crate::serial::test_take_linked_runtime_only_tx();
+            }
+            let retained: Vec<String> = pump
+                .pending_cyw43_bootstrap_hdmi_milestones
+                .iter()
+                .map(|line| line.as_str().to_owned())
+                .collect();
+            assert_eq!(
+                retained,
+                statuses
+                    .iter()
+                    .map(|line| line.as_str().to_owned())
+                    .collect::<Vec<_>>()
+            );
+
+            // Saturate the independent serial chatter budget. The thirteenth
+            // HDMI record is rejected without overwriting the FIFO, while its
+            // terminal serial copy evicts only lower-impact chatter.
+            pump.physical_response_barrier = PhysicalResponseBarrier::Idle;
+            let typed_failure = "[net-console] deferred failed detail=thirteenth-attempt-rejected";
+            assert!(pump.queue_cyw43_bootstrap_operator_line(typed_failure));
+            assert_eq!(
+                pump.pending_cyw43_bootstrap_hdmi_milestones
+                    .iter()
+                    .map(|line| line.as_str().to_owned())
+                    .collect::<Vec<_>>(),
+                retained,
+                "typed serial failures must not consume HDMI milestone slots"
+            );
+            while pump.pending_console_output.len()
+                < CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE
+            {
+                let index = pump.pending_console_output.len();
+                let line = format!("delayed-background-{index}");
+                assert!(pump.queue_physical_console_output(
+                    PendingConsoleOutputKind::BackgroundLine,
+                    line.as_str(),
+                ));
+            }
+            assert!(pump.queue_cyw43_bootstrap_operator_line(rejected.as_str()));
+            let retained_after_rejection: Vec<String> = pump
+                .pending_cyw43_bootstrap_hdmi_milestones
+                .iter()
+                .map(|line| line.as_str().to_owned())
+                .collect();
+            assert_eq!(retained_after_rejection, retained);
+            assert!(!retained_after_rejection
+                .iter()
+                .any(|line| line == rejected.as_str()));
+            assert!(pump.pending_console_output.iter().any(|output| {
+                output.kind == PendingConsoleOutputKind::HighImpactLine
+                    && output.text.as_str() == rejected.as_str()
+            }));
+            let typed_failure_index = pump
+                .pending_console_output
+                .iter()
+                .position(|output| output.text.as_str() == typed_failure)
+                .expect("typed failure remains retained");
+            let terminal_index = pump
+                .pending_console_output
+                .iter()
+                .position(|output| output.text.as_str() == rejected.as_str())
+                .expect("terminal status remains retained");
+            assert!(typed_failure_index < terminal_index);
+
+            let mut display_turns = 0usize;
+            for _ in 0..64 {
+                let before = pump.pending_cyw43_bootstrap_hdmi_milestones.len();
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                let _ = crate::serial::test_take_linked_runtime_only_tx();
+                let after = pump.pending_cyw43_bootstrap_hdmi_milestones.len();
+                assert!(before.saturating_sub(after) <= 1);
+                if after < before {
+                    display_turns = display_turns.saturating_add(1);
+                }
+                if after == 0 {
+                    break;
+                }
+            }
+            assert_eq!(display_turns, CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY);
+            assert!(pump.pending_cyw43_bootstrap_hdmi_milestones.is_empty());
+        }
+
+        let mirrored: Vec<String> = local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .filter(|line| line.starts_with("CYW43_BOOTSTRAP_SUPERVISOR "))
+            .map(|line| line.as_str().to_owned())
+            .collect();
+        assert_eq!(
+            mirrored,
+            statuses
+                .iter()
+                .map(|line| line.as_str().to_owned())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn exhausted_cyw43_quarantine_keeps_operator_pump_live_without_net_poll() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(64, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(b"help\n"),
+            5
+        );
+
+        let mut transcript = Vec::new();
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut net)
+                .with_local_seat(&mut local_seat);
+            assert!(pump.queue_cyw43_bootstrap_operator_line(
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=5 status=exhausted"
+            ));
+            pump.quarantine_network_service_after_cyw43_exhaustion();
+
+            for _ in 0..48 {
+                pump.poll();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            }
+            assert!(
+                pump.timer.index > 0,
+                "ordinary timer/IPC turns must continue"
+            );
+            assert!(pump.network_service_quarantined);
+        }
+
+        assert_eq!(
+            net.polls, 0,
+            "a quarantined CYW43 stack must never be polled"
+        );
+        assert_eq!(
+            net.tcp_flushes, 0,
+            "a quarantined CYW43 stack must never flush retained TCP work"
+        );
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        assert!(rendered.contains("Commands:"), "{rendered}");
+        assert!(local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line.contains("status=exhausted")));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn exhausted_cyw43_quarantine_revokes_net_authority_and_buffered_work() {
+        struct TestReset;
+
+        impl Drop for TestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+                crate::reboot::reset_test_backend();
+            }
+        }
+
+        let _reboot_guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = TestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(128, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(41);
+        let mut attach = HeaplessString::new();
+        attach.push_str("attach queen").unwrap();
+        let mut buffered_reboot = HeaplessString::new();
+        buffered_reboot.push_str("reboot").unwrap();
+        net.lines.push(ConsoleLine::new(attach, 1)).unwrap();
+        net.lines
+            .push(ConsoleLine::new(buffered_reboot, 2))
+            .unwrap();
+
+        let mut transcript = Vec::new();
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+            // Use the production phase boundary: one NIC service turn captures
+            // the connection identity, the reciprocal serial turn follows, and
+            // only then may the pure Dispatch phase authenticate its line.
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            pump.poll();
+            pump.poll();
+            assert_eq!(pump.session, Some(SessionRole::Queen));
+            assert_eq!(pump.session_origin, Some(ConsoleInputSource::Net));
+            assert!(pump.pending_net_flush.active());
+            assert_eq!(pump.metrics.accepted_commands, 1);
+
+            // Exercise every connection-scoped cursor and the unprovable TCP
+            // reboot-ACK fence. Quarantine must clear them without polling,
+            // flushing, disconnecting, or otherwise calling the poisoned NIC.
+            pump.begin_stream_output();
+            pump.tail_active = true;
+            pump.pending_stream = Some(PendingStream::new());
+            pump.reboot_pending = true;
+            pump.reboot_ack_wait_turns = REBOOT_ACK_MINIMUM_WAIT_TURNS;
+            pump.reboot_ack_source = Some(ConsoleInputSource::Net);
+            pump.reboot_ack_net_conn_id = Some(41);
+            pump.reboot_ack_deadline_ms = REBOOT_ACK_DEADLINE_MS;
+            pump.quarantine_network_service_after_cyw43_exhaustion();
+
+            assert!(pump.network_service_quarantined);
+            assert_eq!(pump.session, None);
+            assert_eq!(pump.session_origin, None);
+            assert_eq!(pump.session_net_conn_id, None);
+            assert_eq!(pump.net_conn_id, None);
+            assert!(!pump.pending_net_flush.active());
+            assert!(!pump.stream_end_pending);
+            assert_eq!(pump.stream_output_source, None);
+            assert_eq!(pump.stream_net_conn_id, None);
+            assert!(pump.pending_stream.is_none());
+            assert!(!pump.tail_active);
+            assert!(!pump.reboot_pending);
+            assert_eq!(pump.reboot_ack_source, None);
+            assert_eq!(pump.reboot_ack_net_conn_id, None);
+
+            assert_eq!(
+                crate::serial::test_inject_linked_runtime_only_rx(b"reboot\n"),
+                7
+            );
+            for _ in 0..96 {
+                pump.poll();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            }
+            assert_eq!(pump.metrics.accepted_commands, 1);
+            assert_eq!(pump.session, None);
+            assert_eq!(crate::reboot::test_reboot_requests(), 0);
+        }
+
+        assert_eq!(
+            net.polls, 1,
+            "only the pre-quarantine production NIC turn may poll"
+        );
+        assert_eq!(net.tcp_flushes, 0, "quarantine must admit no TCP flush");
+        assert_eq!(
+            net.disconnect_requests, 0,
+            "poisoned NIC must not be touched"
+        );
+        assert_eq!(net.lines.len(), 1, "buffered net command must not dispatch");
+        assert!(!net
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK REBOOT")));
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        assert!(
+            rendered.contains("ERR REBOOT reason=policy detail=unauthenticated"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn quarantined_nettest_is_typed_and_live_on_paced_serial_and_local_seat() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(256, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.start_result = NetSelfTestStartResult::Started;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 32,
+        });
+        local_seat.mark_root_console_ready();
+        let typed = "ERR NETTEST reason=cut detail=network-quarantined";
+        let mut transcript = Vec::new();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut net)
+                .with_local_seat(&mut local_seat);
+            pump.quarantine_network_service_after_cyw43_exhaustion();
+
+            assert_eq!(
+                crate::serial::test_inject_linked_runtime_only_rx(b"nettest\n"),
+                8
+            );
+            for _ in 0..96 {
+                pump.poll();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+                if transcript
+                    .windows(typed.len())
+                    .any(|window| window == typed.as_bytes())
+                    && pump.physical_response_barrier == PhysicalResponseBarrier::Idle
+                {
+                    break;
+                }
+            }
+            assert!(transcript
+                .windows(typed.len())
+                .any(|window| window == typed.as_bytes()));
+
+            assert_eq!(
+                pump.local_seat
+                    .as_mut()
+                    .expect("local seat remains attached")
+                    .enqueue_keyboard_bytes(b"nettest\n"),
+                8
+            );
+            for _ in 0..128 {
+                pump.poll();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+                if transcript
+                    .windows(typed.len())
+                    .filter(|window| *window == typed.as_bytes())
+                    .count()
+                    >= 2
+                {
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(net.polls, 0);
+        assert_eq!(net.tcp_flushes, 0);
+        assert_eq!(net.self_test_starts, 0);
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        assert!(rendered.matches(typed).count() >= 2, "{rendered}");
+        assert!(local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line.as_str() == typed));
+    }
+
+    #[test]
+    fn serial_backlog_yields_one_bounded_fair_hdmi_turn() {
+        let driver = LoopbackSerial::<1024>::new();
+        let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 4,
+        });
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(1);
+
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        for _ in 1..LOCAL_SEAT_HDMI_MAX_SERIAL_DEFERRALS {
+            assert!(!pump.pump_local_seat_display_after_bounded_serial_deferral());
+        }
+        assert!(pump.pump_local_seat_display_after_bounded_serial_deferral());
+        assert_eq!(pump.local_seat_hdmi_serial_deferrals, 0);
     }
 
     #[cfg(feature = "kernel")]

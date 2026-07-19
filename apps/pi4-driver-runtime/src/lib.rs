@@ -3993,9 +3993,25 @@ impl RuntimePendingCommandGate {
                 let continuation = badge & DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE != 0;
                 let service_badge = badge & !DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE;
                 self.deferred_service_badge |= service_badge;
-                if continuation
-                    && (self.foreground_due_after_service || self.deferred_service_badge == 0)
-                {
+                if self.foreground_due_after_service {
+                    if !continuation {
+                        // A priority-255 linked runtime must not turn a
+                        // continuously reasserted level source into a private
+                        // service loop. The first service quantum wins, all
+                        // later source badges remain coalesced, and only a fresh
+                        // root continuation can hand the CPU back to the exact
+                        // retained foreground command.
+                        return RuntimePendingWakeRoute::Rejected;
+                    }
+                    // The service quantum has already consumed the lower-source
+                    // side of this arbitration pair. A fresh root grant admits
+                    // exactly one foreground quantum even when another level
+                    // badge coalesces with it; that badge remains durable for a
+                    // later root/event boundary.
+                    self.continuation_required = false;
+                    self.foreground_due_after_service = false;
+                    RuntimePendingWakeRoute::ContinueForeground
+                } else if continuation && self.deferred_service_badge == 0 {
                     // A fresh root grant admits one foreground quantum. Any
                     // lower badge coalesced with this grant remains durable and
                     // consumes a later grant before another foreground phase.
@@ -12259,19 +12275,19 @@ const fn cyw43_foreground_frontier_route(
     }
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 const CYW43_FOREGROUND_TRACE_ACTIONS: usize = 1_024;
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 const CYW43_FOREGROUND_TRACE_PAYLOAD_BYTES: usize = 128 * 1_024;
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 const CYW43_FOREGROUND_TRACE_INDEX_NONE: u16 = u16::MAX;
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 const CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES: usize =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 const CYW43_FOREGROUND_PARENT_OVERLAY_BYTES: usize =
     CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES.div_ceil(8);
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 const CYW43_FOREGROUND_DEADLINES: usize = 64;
 #[cfg(target_os = "none")]
 const CYW43_FOREGROUND_DEADLINE_LEGACY_SPINS: u8 = 1;
@@ -12280,7 +12296,7 @@ const CYW43_FOREGROUND_DEADLINE_MICROS: u8 = 2;
 #[cfg(target_os = "none")]
 const CYW43_FOREGROUND_DEADLINE_MILLIS: u8 = 3;
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy)]
 struct Cyw43ForegroundDeadline {
     kind: u8,
@@ -12289,14 +12305,20 @@ struct Cyw43ForegroundDeadline {
     deadline: RuntimeDeadline,
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 impl Cyw43ForegroundDeadline {
     const fn empty() -> Self {
         Self {
             kind: 0,
             amount: 0,
             fallback: 0,
-            deadline: RuntimeDeadline::Iterations { remaining: 0 },
+            // `Counter` is the zero discriminant. Empty slots are guarded by
+            // `deadline_count`, so using its zero payload keeps the retained
+            // transaction's large initial storage file-free in `.bss`.
+            deadline: RuntimeDeadline::Counter {
+                start: 0,
+                cycles: 0,
+            },
         }
     }
 }
@@ -12360,7 +12382,17 @@ impl Cyw43ForegroundTraceEntry {
                 frame: DriverFrameDescriptor::empty(),
             },
             descriptor: DriverRuntimeSdioCommandDescriptor::empty(),
-            completion: DriverTaskCompletionRecord::idle(0),
+            // Empty trace slots are guarded by `completed_count`/
+            // `frontier_valid`; completion code zero is deliberately not a
+            // typed runtime result. Keeping the invalid slot byte-zero lets
+            // the no-allocation trace live in loader-zeroed `.bss`.
+            completion: DriverTaskCompletionRecord {
+                sequence: 0,
+                code: 0,
+                detail: 0,
+                result: 0,
+                frame: DriverFrameDescriptor::empty(),
+            },
             write_offset: 0,
             write_len: 0,
             read_offset: 0,
@@ -12392,7 +12424,7 @@ struct Cyw43ForegroundTransaction {
     parent_payload: [u8; CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES],
     parent_overlay: [u8; CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES],
     parent_overlay_valid: [u8; CYW43_FOREGROUND_PARENT_OVERLAY_BYTES],
-    baseline_state: Cyw43RuntimeState,
+    baseline_state_valid: bool,
     baseline_control_request: Cyw43ControlRequest,
     baseline_runtime_flags: u32,
     baseline_tx_count: u32,
@@ -12443,7 +12475,10 @@ impl Cyw43ForegroundTransaction {
             parent_payload: [0; CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES],
             parent_overlay: [0; CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES],
             parent_overlay_valid: [0; CYW43_FOREGROUND_PARENT_OVERLAY_BYTES],
-            baseline_state: Cyw43RuntimeState::new(),
+            // The baseline lives in its own fixed slot because the runtime
+            // state has nonzero semantic defaults. Keeping only a zero-form
+            // validity bit here lets the much larger trace remain in `.bss`.
+            baseline_state_valid: false,
             baseline_control_request: Cyw43ControlRequest {
                 bytes: [0; DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES as usize],
                 len: 0,
@@ -12474,7 +12509,9 @@ impl Cyw43ForegroundTransaction {
             frontier_started_ticks: 0,
             frontier_timeout_cycles: 0,
             frontier_polls: 0,
-            last_replayed_index: CYW43_FOREGROUND_TRACE_INDEX_NONE,
+            // No entry may be read while `completed_count == 0`, so zero is an
+            // invalid initial cursor without a file-backed sentinel byte.
+            last_replayed_index: 0,
             payload_used: 0,
             payload: [0; CYW43_FOREGROUND_TRACE_PAYLOAD_BYTES],
             entries: [Cyw43ForegroundTraceEntry::empty(); CYW43_FOREGROUND_TRACE_ACTIONS],
@@ -12492,6 +12529,7 @@ impl Cyw43ForegroundTransaction {
         self.parent_payload_offset = 0;
         self.parent_payload_len = 0;
         self.parent_overlay_valid.fill(0);
+        self.baseline_state_valid = false;
         self.deadline_replay_index = 0;
         self.deadline_count = 0;
         self.replay_index = 0;
@@ -12651,6 +12689,9 @@ impl Cyw43ForegroundTransaction {
 static CYW43_FOREGROUND_TRANSACTION: RuntimeStateSlot<Cyw43ForegroundTransaction> =
     RuntimeStateSlot::new(Cyw43ForegroundTransaction::new());
 #[cfg(target_os = "none")]
+static CYW43_FOREGROUND_BASELINE_STATE: RuntimeStateSlot<Cyw43RuntimeState> =
+    RuntimeStateSlot::new(Cyw43RuntimeState::new());
+#[cfg(target_os = "none")]
 static CYW43_FOREGROUND_TURN_ID: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(target_os = "none")]
@@ -12728,9 +12769,14 @@ fn cyw43_foreground_poll_retained_deadline(deadline: RuntimeDeadline) -> Option<
 }
 
 #[cfg(target_os = "none")]
-fn cyw43_foreground_restore_baseline() {
+fn cyw43_foreground_restore_baseline() -> bool {
     CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
-        CYW43_RUNTIME_STATE.with_mut(|state| *state = transaction.baseline_state);
+        if !transaction.baseline_state_valid {
+            return false;
+        }
+        CYW43_FOREGROUND_BASELINE_STATE.with_ref(|baseline_state| {
+            CYW43_RUNTIME_STATE.with_mut(|state| *state = *baseline_state);
+        });
         CYW43_CONTROL_REQUEST.restore_snapshot(transaction.baseline_control_request);
         CYW43_RUNTIME_FLAGS.store(transaction.baseline_runtime_flags, Ordering::Release);
         CYW43_TX_COUNT.store(transaction.baseline_tx_count, Ordering::Release);
@@ -12741,7 +12787,8 @@ fn cyw43_foreground_restore_baseline() {
         CYW43_LAST_FAULT_FRAME_META.store(transaction.baseline_fault_frame_meta, Ordering::Release);
         CYW43_LAST_RELEASE_PHASE.store(transaction.baseline_release_phase, Ordering::Release);
         transaction.restore_parent_input();
-    });
+        true
+    })
 }
 
 #[cfg(target_os = "none")]
@@ -12764,8 +12811,13 @@ fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
         let descriptor = read_cyw43_command_descriptor_physical(command.frame);
         let shared_payload_bytes = RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-            CYW43_RUNTIME_STATE.with_ref(|state| transaction.baseline_state = *state);
-            transaction.generation = transaction.baseline_state.dpc_shared_epoch;
+            CYW43_RUNTIME_STATE.with_ref(|state| {
+                CYW43_FOREGROUND_BASELINE_STATE.with_mut(|baseline_state| {
+                    *baseline_state = *state;
+                });
+                transaction.baseline_state_valid = true;
+                transaction.generation = state.dpc_shared_epoch;
+            });
             transaction.baseline_control_request = CYW43_CONTROL_REQUEST.snapshot();
             transaction.baseline_runtime_flags = CYW43_RUNTIME_FLAGS.load(Ordering::Acquire);
             transaction.baseline_tx_count = CYW43_TX_COUNT.load(Ordering::Acquire);
@@ -12778,8 +12830,9 @@ fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
             transaction.baseline_release_phase = CYW43_LAST_RELEASE_PHASE.load(Ordering::Acquire);
             transaction.snapshot_parent_input(command, descriptor, shared_payload_bytes);
         });
-    } else {
-        cyw43_foreground_restore_baseline();
+    } else if !cyw43_foreground_restore_baseline() {
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| transaction.poisoned = true);
+        return false;
     }
     let turn_id = CYW43_FOREGROUND_TURN_ID
         .fetch_add(1, Ordering::AcqRel)
@@ -12834,7 +12887,7 @@ fn cyw43_foreground_finish_turn(
         ));
     }
     if poisoned {
-        cyw43_foreground_restore_baseline();
+        let _ = cyw43_foreground_restore_baseline();
         CYW43_RUNTIME_STATE.with_mut(|state| state.recovery_required = true);
         if issued_unknown || CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire) {
             CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
@@ -12849,7 +12902,18 @@ fn cyw43_foreground_finish_turn(
         ));
     }
     if pending || issued_unknown {
-        cyw43_foreground_restore_baseline();
+        if !cyw43_foreground_restore_baseline() {
+            CYW43_RUNTIME_STATE.with_mut(|state| state.recovery_required = true);
+            CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+            CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+            CYW43_FOREGROUND_TRANSACTION.with_mut(Cyw43ForegroundTransaction::clear);
+            cyw43_record_last_fault_with_result(FAULT_CYW43_TRANSPORT_BUS_LINK, result);
+            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+                command.sequence,
+                FAULT_CYW43_TRANSPORT_BUS_LINK,
+                result,
+            ));
+        }
         return RuntimeCommandTurn::Pending;
     }
     CYW43_FOREGROUND_TRANSACTION.with_mut(Cyw43ForegroundTransaction::clear);
@@ -34118,9 +34182,19 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // source behind. Drain exactly that retained source quantum on
                 // a later scheduler slice before returning to the idle receive;
                 // never combine it with the foreground action that completed.
+                // The Pi root server and bootstrap runtimes share seL4's maximum
+                // priority, so the yields on both sides move this TCB behind the
+                // runnable root server instead of forming a priority-255 private
+                // loop. For the level-triggered SDIO source, this one service
+                // quantum masks CARD_INT in both host registers before IRQ ack;
+                // the consumer must explicitly request the later rearm.
                 runtime_yield_current_tcb();
                 let _ = service_runtime_notification(service_badge);
                 runtime_yield_current_tcb();
+                // Re-enter from the top rather than polling another persistent
+                // source in this same slice. The next device quantum therefore
+                // requires either the bounded idle receive path or fresh root
+                // continuation authority.
                 continue;
             }
         }
@@ -34160,11 +34234,21 @@ pub fn runtime_main(task_key: usize) -> ! {
                 RuntimePendingWakeRoute::ContinueForeground => {}
                 RuntimePendingWakeRoute::ServiceNotification(badge) => {
                     let _ = service_runtime_notification(badge);
+                    // Bootstrap keeps this child and the Pi root server at the
+                    // maximum seL4 priority. Yield immediately after the single
+                    // device quantum so an already-reasserted level source
+                    // cannot win another receive before root has a scheduling
+                    // opportunity to publish the foreground continuation.
+                    runtime_yield_current_tcb();
                     continue;
                 }
                 RuntimePendingWakeRoute::Rejected => {
                     // Consume stale endpoint and bind/restart notification
                     // wakes without turning either into foreground authority.
+                    // A level IRQ may make this receive immediately ready again;
+                    // the explicit handoff prevents those rejected wakes from
+                    // becoming a maximum-priority private polling loop.
+                    runtime_yield_current_tcb();
                     continue;
                 }
             }
@@ -35253,6 +35337,37 @@ mod tests {
             sdio_interrupt_policy_registers(false, false),
             (SDHCI_INT_COMMAND_DATA_CLEAR_MASK, 0)
         );
+    }
+
+    #[test]
+    fn one_terminal_card_irq_quantum_leaves_the_level_source_masked() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.dpc_link_ready = true;
+            state.shared_epoch = 0x4359_5301;
+            state.irq_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = false;
+            state.dpc_activation_allowed = true;
+        });
+
+        assert!(sdio_publish_card_interrupt_event(
+            SDHCI_INT_CARD_INT,
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+        ));
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.card_irq_masked);
+            assert!(!state.irq_ack_pending);
+            assert_eq!(state.card_irq_captures, 1);
+            assert_eq!(
+                sdio_interrupt_policy_registers(true, state.card_irq_masked),
+                (SDHCI_INT_COMMAND_DATA_CLEAR_MASK, 0),
+                "terminal deferred service must quiesce the level source before root runs",
+            );
+        });
     }
 
     #[test]
@@ -37860,6 +37975,32 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_foreground_empty_slots_are_zero_form_and_capacity_preserving() {
+        let deadline = Cyw43ForegroundDeadline::empty();
+        assert_eq!(deadline.kind, 0);
+        assert_eq!(deadline.amount, 0);
+        assert_eq!(deadline.fallback, 0);
+        assert_eq!(
+            deadline.deadline,
+            RuntimeDeadline::Counter {
+                start: 0,
+                cycles: 0,
+            },
+        );
+
+        let entry = Cyw43ForegroundTraceEntry::empty();
+        assert_eq!(entry.command.sequence, 0);
+        assert_eq!(entry.completion.sequence, 0);
+        assert_eq!(entry.completion.code, 0);
+        assert_eq!(entry.completion.detail, 0);
+        assert_eq!(entry.completion.result, 0);
+        assert_eq!(entry.completion.frame, DriverFrameDescriptor::empty());
+        assert_eq!(CYW43_FOREGROUND_TRACE_ACTIONS, 1_024);
+        assert_eq!(CYW43_FOREGROUND_TRACE_PAYLOAD_BYTES, 128 * 1_024);
+        assert_eq!(CYW43_FOREGROUND_DEADLINES, 64);
+    }
+
+    #[test]
     fn cyw43_sdio_bus_link_publishes_sequence_last_once() {
         let command = DriverTaskCommandRecord {
             sequence: 0x8123_4567,
@@ -39324,6 +39465,77 @@ mod tests {
         assert_eq!(service_quanta, 32);
         assert_eq!(foreground_quanta + service_quanta, 64);
         assert!(gate.continuation_required());
+    }
+
+    #[test]
+    fn standalone_level_irq_reassertions_stop_after_one_service_until_root_continues() {
+        let mut retained = retained_gate_test_intake(0x8000_0042);
+        let mut gate = RuntimePendingCommandGate::new();
+        let mut service_quanta = 0usize;
+        let mut rejected_reassertions = 0usize;
+        gate.retain_after_pending();
+
+        let first = gate.route_wake(
+            &mut retained,
+            RuntimeWake::Notification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+        );
+        if let RuntimePendingWakeRoute::ServiceNotification(badge) = first {
+            assert_eq!(badge, DRIVER_RUNTIME_SDIO_IRQ_BADGE);
+            service_quanta = service_quanta.saturating_add(1);
+        } else {
+            panic!("the first standalone level IRQ must receive one service quantum");
+        }
+
+        // Both linked runtimes remain at seL4 priority 255 through bootstrap.
+        // An always-ready level source must therefore be coalesced after its
+        // first quantum rather than repeatedly winning before root can publish
+        // the next continuation grant.
+        for _ in 0..4_096 {
+            assert_eq!(
+                gate.route_wake(
+                    &mut retained,
+                    RuntimeWake::Notification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+                ),
+                RuntimePendingWakeRoute::Rejected,
+            );
+            rejected_reassertions = rejected_reassertions.saturating_add(1);
+            assert!(gate.continuation_required());
+            assert!(gate.foreground_due_after_service);
+            assert_eq!(
+                gate.deferred_service_badge, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                "rejected level badges remain durable rather than being lost",
+            );
+        }
+        assert_eq!(service_quanta, 1);
+        assert_eq!(rejected_reassertions, 4_096);
+
+        assert_eq!(
+            gate.route_wake(
+                &mut retained,
+                RuntimeWake::Notification(
+                    DRIVER_RUNTIME_ROOT_CONTINUATION_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                ),
+            ),
+            RuntimePendingWakeRoute::ContinueForeground,
+            "a fresh root grant must win after the single service quantum",
+        );
+        assert!(!gate.continuation_required());
+        assert_eq!(
+            gate.deferred_service_badge, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            "the source coalesced with foreground remains for a later boundary",
+        );
+
+        // Model a terminal foreground completion. Production publishes that
+        // completion first, then the next loop slice drains at most this one
+        // retained source quantum with scheduler handoffs on both sides.
+        gate.complete();
+        assert_eq!(
+            gate.take_deferred_service(),
+            Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+        );
+        service_quanta = service_quanta.saturating_add(1);
+        assert_eq!(gate.take_deferred_service(), None);
+        assert_eq!(service_quanta, 2);
     }
 
     #[test]

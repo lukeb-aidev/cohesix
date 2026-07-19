@@ -4211,10 +4211,7 @@ impl LocalSeatRuntime {
     fn resolve_linked_usb_poll_retained_turn(
         &mut self,
         turn: crate::hal::driver_task::DriverTaskRetainedServiceTurn,
-    ) -> Result<
-        Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
-        &'static str,
-    > {
+    ) -> Result<Option<crate::hal::driver_task::DriverTaskCompletionRecord>, &'static str> {
         match turn {
             crate::hal::driver_task::DriverTaskRetainedServiceTurn::Pending => Ok(None),
             crate::hal::driver_task::DriverTaskRetainedServiceTurn::Complete(completion) => {
@@ -4454,9 +4451,10 @@ impl LocalSeatRuntime {
                 };
                 let submitted_recovery_aux =
                     command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX;
-                let turn = crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
-                    contract, command,
-                );
+                let turn =
+                    crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn(
+                        contract, command,
+                    );
                 let completion = match self.resolve_linked_usb_poll_retained_turn(turn) {
                     Ok(None) => return LocalSeatServiceTurn::Pending,
                     Ok(Some(completion)) => completion,
@@ -4468,7 +4466,8 @@ impl LocalSeatRuntime {
                             true,
                             self.root_console_ready,
                             LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
-                                || LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire),
+                                || LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING
+                                    .load(Ordering::Acquire),
                         );
                         return LocalSeatServiceTurn::Failed(reason);
                     }

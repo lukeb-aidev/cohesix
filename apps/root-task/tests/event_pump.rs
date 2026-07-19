@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate event pump behavior for serial and timer flows.
 // Author: Lukas Bower
@@ -170,11 +170,16 @@ fn event_pump_services_serial_and_timer() {
     let token = issue_queen_token("token");
     let line = format!("attach queen {token}\nlog\n");
     handle.push_rx(line.as_bytes());
-    pump.poll();
+    for _ in 0..8 {
+        pump.poll();
+        if pump.metrics().accepted_commands >= 2 {
+            break;
+        }
+    }
     let metrics = pump.metrics();
     drop(pump);
     assert!(metrics.accepted_commands >= 2);
-    assert_eq!(metrics.timer_ticks, 1);
+    assert!(metrics.timer_ticks >= 1);
     assert!(audit.entries.iter().any(|entry| entry.contains("log")));
 }
 

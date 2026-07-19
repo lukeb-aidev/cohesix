@@ -91,12 +91,17 @@ CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE = re.compile(
     r"(?P<production_suffix>.*)$"
 )
 CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE = re.compile(
-    r"^ serial=ready local_seat=(?:ready|disabled) "
-    r"recovery=pair-restart-full-context-if-partial "
-    r"console_seq=[0-9]+ telemetry_sinks=(?:serial|serial\+queen-log) "
-    r"prompt_refresh=(?:yes|no)$"
+    r"^ serial=(?P<serial>ready|blocked) local_seat=(?:ready|disabled) "
+    r"recovery=full "
+    r"console_seq=(?P<console_seq>[0-9]+) "
+    r"telemetry_sinks=serial\+qlog\+hdmi "
+    r"prompt_refresh=yes$"
 )
-CYW43_BOOTSTRAP_RETRY_BACKOFF_MS = (1_000, 2_000, 4_000, 8_000, 16_000, 30_000)
+CYW43_BOOTSTRAP_RETRY_BACKOFF_MS = (1_000, 2_000, 4_000, 8_000)
+CYW43_BOOTSTRAP_MAX_ATTEMPTS = 5
+U64_MAX = (1 << 64) - 1
+CYW43_BOOTSTRAP_NO_ATTEMPT_MS = U64_MAX
+CYW43_BOOTSTRAP_SERIAL_RETRY_MS = 250
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
 WIFI_HINTS = ("wifi", "wi-fi", "wlan", "cyw", "brcmf", "sdio", "sdhci", "mmc")
 UBOOT_WIFI_POLICY_MISSING_MARKERS = (
@@ -11642,77 +11647,139 @@ def summarize_cyw43_bootstrap_supervisor(
     last_status = "none"
     begin_ms = 0
     scheduled_ms = 0
+    episode_start_status = "none"
+    preflight_seen = False
+    preflight_serial_ready = False
+    last_preflight_next_attempt_ms: int | None = None
+    last_console_sequence: int | None = None
 
     def mark_blocker(reason: str) -> None:
         nonlocal blocker
         if blocker is None:
             blocker = reason
 
-    for event in supervisor_events:
-        if state == "ready":
-            mark_blocker("ready-not-terminal")
+    def parse_canonical_u64(value: str) -> int | None:
+        if not value or (len(value) > 1 and value.startswith("0")):
+            return None
+        if len(value) > 20:
+            return None
+        parsed = int(value)
+        return parsed if parsed <= U64_MAX else None
 
+    for event in supervisor_events:
         match = CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE.fullmatch(event.raw)
         if match is None:
             last_status = event.fields.get("status", "malformed")
             mark_blocker("malformed-line")
             continue
 
-        if CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE.fullmatch(
+        suffix_match = CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE.fullmatch(
             match.group("production_suffix")
-        ) is None:
+        )
+        if suffix_match is None:
             # Older records remain useful for attempt/backoff diagnosis, but
             # only the current full-fidelity UART record proves that serial,
             # local-seat, recovery, console ordering, telemetry routing, and
             # prompt refresh state were emitted atomically.
             mark_blocker("production-suffix-incomplete")
+        else:
+            console_sequence = parse_canonical_u64(suffix_match.group("console_seq"))
+            if console_sequence is None:
+                mark_blocker("numeric-field-invalid")
+            else:
+                if (
+                    last_console_sequence is not None
+                    and console_sequence <= last_console_sequence
+                ):
+                    mark_blocker("console-sequence-not-monotonic")
+                last_console_sequence = console_sequence
 
-        attempt = int(match.group("attempt"))
         status = match.group("status")
-        backoff_ms = int(match.group("backoff_ms"))
-        next_attempt_ms = int(match.group("next_attempt_ms"))
         last_status = status
+        attempt = parse_canonical_u64(match.group("attempt"))
+        backoff_ms = parse_canonical_u64(match.group("backoff_ms"))
+        next_attempt_ms = parse_canonical_u64(match.group("next_attempt_ms"))
+        if attempt is None or backoff_ms is None or next_attempt_ms is None:
+            mark_blocker("numeric-field-invalid")
+            continue
 
-        previous_max_attempt = max_attempt
-        max_attempt = max(max_attempt, attempt)
+        if status == "preflight":
+            preflight_seen = True
+            if state != "none":
+                mark_blocker("invalid-preflight-order")
+            if attempt != 0:
+                mark_blocker("preflight-attempt-nonzero")
+            if suffix_match is not None:
+                preflight_serial_ready = suffix_match.group("serial") == "ready"
+                if preflight_serial_ready:
+                    if backoff_ms != 0:
+                        mark_blocker("malformed-preflight-timing")
+                elif (
+                    backoff_ms != CYW43_BOOTSTRAP_SERIAL_RETRY_MS
+                    or next_attempt_ms < CYW43_BOOTSTRAP_SERIAL_RETRY_MS
+                ):
+                    mark_blocker("malformed-preflight-timing")
+                if (
+                    last_preflight_next_attempt_ms is not None
+                    and next_attempt_ms < last_preflight_next_attempt_ms
+                ):
+                    mark_blocker("malformed-preflight-timing")
+                last_preflight_next_attempt_ms = next_attempt_ms
+            continue
+
         if attempt == 0:
             mark_blocker("attempt-zero")
             continue
-        if previous_max_attempt and attempt < previous_max_attempt:
-            mark_blocker("attempt-regression")
+        if attempt > CYW43_BOOTSTRAP_MAX_ATTEMPTS:
+            mark_blocker("attempt-overflow")
             continue
+        max_attempt = max(max_attempt, attempt)
+        if suffix_match is not None and suffix_match.group("serial") != "ready":
+            mark_blocker("serial-blocked")
 
-        if status == "begin":
+        if status in ("begin", "recovery"):
             sequence_valid = True
             if backoff_ms != 0:
                 mark_blocker("malformed-backoff-progression")
                 sequence_valid = False
             if state == "none":
-                if attempt != 1:
+                if attempt != 1 or status != "begin":
                     mark_blocker("attempt-sequence-gap")
                     sequence_valid = False
-            elif state == "transient-retry-scheduled":
+            elif state == "backoff":
                 if attempt <= current_attempt:
                     mark_blocker("attempt-regression")
                     sequence_valid = False
                 elif attempt != current_attempt + 1:
                     mark_blocker("attempt-sequence-gap")
                     sequence_valid = False
+                if status != episode_start_status:
+                    mark_blocker("episode-kind-changed")
+                    sequence_valid = False
                 if next_attempt_ms < scheduled_ms:
                     mark_blocker("malformed-backoff-progression")
+                    sequence_valid = False
+            elif state == "ready":
+                if attempt != 1 or status != "recovery":
+                    mark_blocker("invalid-status-sequence")
                     sequence_valid = False
             else:
                 mark_blocker("invalid-status-sequence")
                 sequence_valid = False
             if sequence_valid:
-                state = "begin"
+                state = "active"
                 current_attempt = attempt
                 begin_ms = next_attempt_ms
+                episode_start_status = status
             continue
 
-        if status == "transient-retry-scheduled":
+        if status == "backoff":
             transient_retries += 1
-            sequence_valid = state == "begin" and attempt == current_attempt
+            sequence_valid = (
+                state == "active"
+                and attempt == current_attempt
+                and attempt < CYW43_BOOTSTRAP_MAX_ATTEMPTS
+            )
             if not sequence_valid:
                 mark_blocker("invalid-status-sequence")
             expected_backoff_ms = CYW43_BOOTSTRAP_RETRY_BACKOFF_MS[
@@ -11730,9 +11797,12 @@ def summarize_cyw43_bootstrap_supervisor(
             continue
 
         if status == "ready":
-            sequence_valid = state == "begin" and attempt == current_attempt
+            sequence_valid = state == "active" and attempt == current_attempt
             if not sequence_valid:
-                mark_blocker("invalid-status-sequence")
+                if state == "active" and attempt < current_attempt:
+                    mark_blocker("attempt-regression")
+                else:
+                    mark_blocker("invalid-status-sequence")
             if backoff_ms != 0 or next_attempt_ms < begin_ms:
                 mark_blocker("malformed-backoff-progression")
                 sequence_valid = False
@@ -11740,9 +11810,31 @@ def summarize_cyw43_bootstrap_supervisor(
                 state = "ready"
             continue
 
-        if status.startswith("permanent-"):
+        if status == "exhausted":
+            sequence_valid = (
+                state == "active"
+                and attempt == current_attempt
+                and attempt == CYW43_BOOTSTRAP_MAX_ATTEMPTS
+            )
+            if not sequence_valid:
+                mark_blocker("invalid-status-sequence")
+            if backoff_ms != 0 or next_attempt_ms != CYW43_BOOTSTRAP_NO_ATTEMPT_MS:
+                mark_blocker("malformed-exhausted-sentinel")
+                sequence_valid = False
+            if sequence_valid:
+                state = "exhausted"
+                mark_blocker("retry-exhausted")
+            continue
+
+        if status == "permanent" or status.startswith("permanent-"):
+            sequence_valid = backoff_ms == 0 and (
+                (state == "none" and attempt == 1)
+                or (state == "active" and attempt == current_attempt)
+            )
+            if not sequence_valid:
+                mark_blocker("invalid-status-sequence")
             mark_blocker("permanent-status")
-            state = status
+            state = "permanent"
             current_attempt = attempt
             continue
 
@@ -11751,10 +11843,12 @@ def summarize_cyw43_bootstrap_supervisor(
         current_attempt = attempt
 
     if blocker is None:
-        if state == "begin":
+        if state == "active":
             blocker = "begin-not-terminal"
-        elif state == "transient-retry-scheduled":
+        elif state == "backoff":
             blocker = "scheduled-not-terminal"
+        elif state == "none" and preflight_seen and not preflight_serial_ready:
+            blocker = "serial-blocked"
         elif state != "ready":
             blocker = "ready-missing"
 

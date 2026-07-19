@@ -51,6 +51,12 @@ use crate::rust_alloc::boxed::Box;
 use crate::sel4;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::serial::pl011::Pl011;
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+use crate::serial::DEFAULT_LINE_CAPACITY;
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 use crate::uart::pl011;
 use heapless::String as HeaplessString;
@@ -439,6 +445,9 @@ fn announce_root_console_loop_start() {
     feature = "kernel",
     feature = "net-console"
 ))]
+// Linux brcmfmac bounds SDIO access-error persistence at five. Cohesix uses
+// that finite budget as an analogue for one whole retained supervisor episode;
+// this does not assert that Linux retries its complete bootstrap identically.
 const CYW43_BOOTSTRAP_MAX_ATTEMPTS: u32 = 5;
 
 #[cfg(all(
@@ -555,6 +564,43 @@ enum DeferredCyw43SupervisorPhase {
     feature = "net-console"
 ))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredNetSupervisorTerminal {
+    RetryBudgetExhausted,
+    PermanentAttachedRecoveryFailure,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const fn permanent_failure_terminal_mode(
+    network_attached: bool,
+) -> Option<DeferredNetSupervisorTerminal> {
+    if network_attached {
+        Some(DeferredNetSupervisorTerminal::PermanentAttachedRecoveryFailure)
+    } else {
+        None
+    }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const fn deferred_net_supervisor_driver_turn_allowed(
+    terminal_mode: Option<DeferredNetSupervisorTerminal>,
+) -> bool {
+    terminal_mode.is_none()
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DeferredNetRetrySchedule {
     transient_failures: u32,
     next_attempt_ms: u64,
@@ -580,9 +626,12 @@ impl DeferredNetRetrySchedule {
     }
 
     const fn attempt_number(self) -> u32 {
-        self.transient_failures
-            .saturating_add(1)
-            .min(CYW43_BOOTSTRAP_MAX_ATTEMPTS)
+        let next = self.transient_failures.saturating_add(1);
+        if next > CYW43_BOOTSTRAP_MAX_ATTEMPTS {
+            CYW43_BOOTSTRAP_MAX_ATTEMPTS
+        } else {
+            next
+        }
     }
 
     const fn exhausted(self) -> bool {
@@ -652,6 +701,94 @@ fn emit_deferred_net_operator_line<
     feature = "kernel",
     feature = "net-console"
 ))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeferredNetSupervisorStatus {
+    Preflight,
+    Begin,
+    Recovery,
+    Backoff,
+    Ready,
+    Exhausted,
+    Permanent,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+impl DeferredNetSupervisorStatus {
+    const ALL: [Self; 7] = [
+        Self::Preflight,
+        Self::Begin,
+        Self::Recovery,
+        Self::Backoff,
+        Self::Ready,
+        Self::Exhausted,
+        Self::Permanent,
+    ];
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Preflight => "preflight",
+            Self::Begin => "begin",
+            Self::Recovery => "recovery",
+            Self::Backoff => "backoff",
+            Self::Ready => "ready",
+            Self::Exhausted => "exhausted",
+            Self::Permanent => "permanent",
+        }
+    }
+
+    const fn valid_attempt(self, attempt: u32) -> bool {
+        match self {
+            Self::Preflight => attempt == 0,
+            _ => attempt != 0 && attempt <= CYW43_BOOTSTRAP_MAX_ATTEMPTS,
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+pub(crate) fn format_deferred_net_bootstrap_supervisor_status(
+    console_sequence: u64,
+    attempt: u32,
+    status: DeferredNetSupervisorStatus,
+    backoff_ms: u64,
+    next_attempt_ms: u64,
+    serial_ready: bool,
+    local_seat_enabled: bool,
+) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+    if !status.valid_attempt(attempt) {
+        return None;
+    }
+    let mut line = HeaplessString::new();
+    if write!(
+        line,
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt={} status={} backoff_ms={} next_attempt_ms={} serial={} local_seat={} recovery=full console_seq={} telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        attempt,
+        status.as_str(),
+        backoff_ms,
+        next_attempt_ms,
+        if serial_ready { "ready" } else { "blocked" },
+        if local_seat_enabled { "ready" } else { "disabled" },
+        console_sequence,
+    )
+    .is_err()
+    {
+        return None;
+    }
+    Some(line)
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
 fn emit_deferred_net_bootstrap_supervisor_status<
     'a,
     D,
@@ -665,7 +802,7 @@ fn emit_deferred_net_bootstrap_supervisor_status<
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     console_sequence: u64,
     attempt: u32,
-    status: &'static str,
+    status: DeferredNetSupervisorStatus,
     backoff_ms: u64,
     next_attempt_ms: u64,
     local_seat_enabled: bool,
@@ -678,18 +815,22 @@ fn emit_deferred_net_bootstrap_supervisor_status<
 {
     let serial_ready = !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
         || crate::serial::serial_linked_runtime_transport_active();
-    let mut line = HeaplessString::<384>::new();
-    let _ = write!(
-        line,
-        "CYW43_BOOTSTRAP_SUPERVISOR attempt={} status={} backoff_ms={} next_attempt_ms={} serial={} local_seat={} recovery=pair-restart-full-context-if-partial console_seq={} telemetry_sinks=serial+queen-log+hdmi-retained prompt_refresh=yes",
+    let Some(line) = format_deferred_net_bootstrap_supervisor_status(
+        console_sequence,
         attempt,
         status,
         backoff_ms,
         next_attempt_ms,
-        if serial_ready { "ready" } else { "blocked" },
-        if local_seat_enabled { "ready" } else { "disabled" },
-        console_sequence,
-    );
+        serial_ready,
+        local_seat_enabled,
+    ) else {
+        emit_deferred_net_operator_line(
+            pump,
+            "CYW43_BOOTSTRAP_STATUS_FORMAT_ERROR action=operator-diagnostics acceptance=red",
+            raw_fallback_allowed,
+        );
+        return;
+    };
     // Preserve the full-fidelity record without a logger prefix. Once the
     // linked route is active this is enqueue-only; its next ordinary operator
     // turn performs the flush, separately from any CYW43 operation.
@@ -762,7 +903,7 @@ where
             &mut pump,
             retry_schedule.next_status_sequence(),
             1,
-            "permanent-config-or-artifact-failure",
+            DeferredNetSupervisorStatus::Permanent,
             0,
             crate::hal::timebase().now_ms(),
             local_seat_enabled,
@@ -780,7 +921,7 @@ where
                 &mut pump,
                 retry_schedule.next_status_sequence(),
                 1,
-                "permanent-config-or-artifact-failure",
+                DeferredNetSupervisorStatus::Permanent,
                 0,
                 crate::hal::timebase().now_ms(),
                 local_seat_enabled,
@@ -792,19 +933,19 @@ where
     let mut bootstrap = Cyw43BootstrapSupervisor::new(config);
     let mut attempt_active = false;
     let mut network_attached = false;
-    let mut permanent_recovery_failure = false;
-    let mut attempts_exhausted = false;
+    let mut terminal_mode = None;
     let mut wifi_operation_started = false;
     let mut serial_retry = DeferredSerialRouteRetry::new(crate::hal::timebase().now_ms());
     let mut turn_status = DeferredCyw43TurnStatus::new();
     let mut supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
 
     loop {
-        if attempts_exhausted {
+        if !deferred_net_supervisor_driver_turn_allowed(terminal_mode) {
             // A finite failed Wi-Fi episode must not become a second boot
             // failure. Ordinary EventPump ownership keeps serial, local-seat,
             // HDMI, diagnostics, authentication, and reboot live, while the
-            // exhausted schedule prevents an implicit sixth child operation.
+            // terminal state prevents another child operation. An attached
+            // poisoned stack was quarantined before this mode was entered.
             pump.poll();
             sel4::yield_now();
             continue;
@@ -822,7 +963,7 @@ where
                             &mut pump,
                             retry_schedule.next_status_sequence(),
                             0,
-                            "serial-linked-runtime-ready",
+                            DeferredNetSupervisorStatus::Preflight,
                             0,
                             serial_now_ms,
                             local_seat_enabled,
@@ -835,7 +976,7 @@ where
                             &mut pump,
                             retry_schedule.next_status_sequence(),
                             0,
-                            "blocked-serial-linked-runtime-unproved",
+                            DeferredNetSupervisorStatus::Preflight,
                             SERIAL_LINKED_RUNTIME_RETRY_MS,
                             serial_retry.next_probe_ms,
                             local_seat_enabled,
@@ -869,7 +1010,6 @@ where
         if network_attached
             && bootstrap.is_ready()
             && !crate::drivers::driver_task_net::cyw43_recovery_required()
-            && !permanent_recovery_failure
         {
             pump.poll();
             sel4::yield_now();
@@ -881,7 +1021,7 @@ where
             // turns. Even an active serial command therefore cannot compose
             // with a Wi-Fi child operation in one scheduler iteration.
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
-            if permanent_recovery_failure || !pump.cyw43_bootstrap_may_begin() {
+            if !pump.cyw43_bootstrap_may_begin() {
                 sel4::yield_now();
                 continue;
             }
@@ -895,7 +1035,11 @@ where
                     &mut pump,
                     retry_schedule.next_status_sequence(),
                     retry_schedule.attempt_number(),
-                    if network_attached { "recovery" } else { "begin" },
+                    if network_attached {
+                        DeferredNetSupervisorStatus::Recovery
+                    } else {
+                        DeferredNetSupervisorStatus::Begin
+                    },
                     0,
                     now_ms,
                     local_seat_enabled,
@@ -952,8 +1096,19 @@ where
                     let mut detail = HeaplessString::<192>::new();
                     let _ = detail.push_str("retained supervisor completed without generation");
                     emit_deferred_net_console_failure(&mut pump, &detail, false);
-                    if network_attached {
-                        permanent_recovery_failure = true;
+                    emit_deferred_net_bootstrap_supervisor_status(
+                        &mut pump,
+                        retry_schedule.next_status_sequence(),
+                        attempt,
+                        DeferredNetSupervisorStatus::Permanent,
+                        0,
+                        now_ms,
+                        local_seat_enabled,
+                        false,
+                    );
+                    if let Some(mode) = permanent_failure_terminal_mode(network_attached) {
+                        pump.quarantine_network_service_after_cyw43_exhaustion();
+                        terminal_mode = Some(mode);
                         sel4::yield_now();
                         continue;
                     }
@@ -964,7 +1119,7 @@ where
                         &mut pump,
                         retry_schedule.next_status_sequence(),
                         attempt,
-                        "ready",
+                        DeferredNetSupervisorStatus::Ready,
                         0,
                         now_ms,
                         local_seat_enabled,
@@ -992,7 +1147,7 @@ where
                             &mut pump,
                             retry_schedule.next_status_sequence(),
                             attempt,
-                            "permanent-stack-finalize-failure",
+                            DeferredNetSupervisorStatus::Permanent,
                             0,
                             now_ms,
                             local_seat_enabled,
@@ -1011,7 +1166,7 @@ where
                         &mut pump,
                         retry_schedule.next_status_sequence(),
                         attempt,
-                        "permanent-attach-conflict",
+                        DeferredNetSupervisorStatus::Permanent,
                         0,
                         now_ms,
                         local_seat_enabled,
@@ -1023,7 +1178,7 @@ where
                     &mut pump,
                     retry_schedule.next_status_sequence(),
                     attempt,
-                    "ready",
+                    DeferredNetSupervisorStatus::Ready,
                     0,
                     now_ms,
                     local_seat_enabled,
@@ -1049,14 +1204,13 @@ where
                 let _ = write!(detail, "{err}");
                 emit_deferred_net_console_failure(&mut pump, &detail, false);
                 if crate::net::cyw43_net_console_bootstrap_error_retryable(&err) {
-                    if let Some(delay_ms) =
-                        retry_schedule.record_transient_failure(failure_now_ms)
+                    if let Some(delay_ms) = retry_schedule.record_transient_failure(failure_now_ms)
                     {
                         emit_deferred_net_bootstrap_supervisor_status(
                             &mut pump,
                             retry_schedule.next_status_sequence(),
                             attempt,
-                            "backoff",
+                            DeferredNetSupervisorStatus::Backoff,
                             delay_ms,
                             retry_schedule.next_attempt_ms,
                             local_seat_enabled,
@@ -1068,13 +1222,14 @@ where
                             &mut pump,
                             retry_schedule.next_status_sequence(),
                             attempt,
-                            "exhausted",
+                            DeferredNetSupervisorStatus::Exhausted,
                             0,
                             retry_schedule.next_attempt_ms,
                             local_seat_enabled,
                             false,
                         );
-                        attempts_exhausted = true;
+                        pump.quarantine_network_service_after_cyw43_exhaustion();
+                        terminal_mode = Some(DeferredNetSupervisorTerminal::RetryBudgetExhausted);
                     }
                     attempt_active = false;
                 } else {
@@ -1082,14 +1237,15 @@ where
                         &mut pump,
                         retry_schedule.next_status_sequence(),
                         attempt,
-                        "permanent-config-or-artifact-failure",
+                        DeferredNetSupervisorStatus::Permanent,
                         0,
                         failure_now_ms,
                         local_seat_enabled,
                         false,
                     );
-                    if network_attached {
-                        permanent_recovery_failure = true;
+                    if let Some(mode) = permanent_failure_terminal_mode(network_attached) {
+                        pump.quarantine_network_service_after_cyw43_exhaustion();
+                        terminal_mode = Some(mode);
                     } else {
                         pump.run();
                     }
@@ -1789,6 +1945,63 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
+    fn cyw43_supervisor_status_wire_record_is_lossless_at_every_numeric_bound() {
+        let mut maximum_len = 0;
+        for status in super::DeferredNetSupervisorStatus::ALL {
+            let attempt = if status == super::DeferredNetSupervisorStatus::Preflight {
+                0
+            } else {
+                super::CYW43_BOOTSTRAP_MAX_ATTEMPTS
+            };
+            let line = super::format_deferred_net_bootstrap_supervisor_status(
+                u64::MAX,
+                attempt,
+                status,
+                u64::MAX,
+                u64::MAX,
+                false,
+                false,
+            )
+            .expect("bounded supervisor status must fit the serial record");
+            maximum_len = maximum_len.max(line.len());
+            assert!(
+                line.len() <= crate::serial::DEFAULT_LINE_CAPACITY,
+                "status={status:?} len={} line={line}",
+                line.len(),
+            );
+            assert!(line.ends_with(
+                "recovery=full console_seq=18446744073709551615 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes"
+            ));
+        }
+        assert_eq!(maximum_len, crate::serial::DEFAULT_LINE_CAPACITY);
+        assert!(super::format_deferred_net_bootstrap_supervisor_status(
+            1,
+            0,
+            super::DeferredNetSupervisorStatus::Begin,
+            0,
+            0,
+            true,
+            true,
+        )
+        .is_none());
+        assert!(super::format_deferred_net_bootstrap_supervisor_status(
+            1,
+            1,
+            super::DeferredNetSupervisorStatus::Preflight,
+            0,
+            0,
+            true,
+            true,
+        )
+        .is_none());
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
     fn cyw43_bootstrap_supervisor_stops_after_five_attempts() {
         let mut supervisor = super::DeferredNetRetrySchedule::new(100);
         assert!(supervisor.attempt_due(100));
@@ -1834,6 +2047,26 @@ mod tests {
         assert!(supervisor.attempt_due(3_100));
         assert!(!supervisor.exhausted());
         assert_eq!(supervisor.record_transient_failure(3_100), Some(1_000));
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn permanent_attached_recovery_failure_never_reenters_supervisor_driver_turns() {
+        assert_eq!(super::permanent_failure_terminal_mode(false), None);
+        let terminal = super::permanent_failure_terminal_mode(true);
+        assert_eq!(
+            terminal,
+            Some(super::DeferredNetSupervisorTerminal::PermanentAttachedRecoveryFailure),
+        );
+        for _ in 0..4_096 {
+            assert!(!super::deferred_net_supervisor_driver_turn_allowed(
+                terminal
+            ));
+        }
     }
 
     #[cfg(all(

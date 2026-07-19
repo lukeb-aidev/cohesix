@@ -328,6 +328,12 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   input or fatal status.
 - A USB byte, a HID endpoint, a keyboard-ready marker, and a usable command
   parser are separate gates.
+- USB retained service has typed `Pending`, `Complete`, and `Failed` outcomes.
+  A normal multi-turn `Pending` result preserves the immutable command ticket,
+  command-ready evidence, and no-reply counters; only a terminal `Failed`
+  outcome may revoke readiness or add no-reply debt. This prevents ordinary
+  prepare/boost/commit/notify/poll phases from manufacturing USB pressure that
+  can starve keyboard input or HDMI refresh.
 - If a USB diagnostic service turn stops replying, preserve the boot evidence
   and stop submitting more commands until the bounded recovery path or a fresh
   boot.
@@ -375,17 +381,24 @@ This as-built closure is authorized by Milestone 26d task
 
 - SDIO is the sole SDHCI owner; CYW43 submits bounded bus-link operations.
 - The physical Pi profile places SDIO and CYW43 on the same driver core. Both
-  deferred runtimes retain shell-safe bootstrap priority until their own exact
-  descriptor replay completion proves the linked service route. The supervisor
-  registers and replays the SDIO owner descriptor first, lowers SDIO to its
-  steady contract priority in a separate outer turn, then registers and replays
-  the CYW43 client descriptor and lowers CYW43 in another separate outer turn.
-  Descriptor replay, priority cutover, and the next child operation never share
-  one CYW43 operation permit. Pair recovery raises and reprograms SDIO, then
-  raises and reprograms CYW43 while both are suspended; it subsequently
-  resumes, proves, and lowers SDIO before resuming, proving, and lowering
-  CYW43. There is no client-first descriptor service or legacy fallback
-  ordering.
+  deferred runtimes retain shell-safe bootstrap priority `255` through exact
+  owner-first descriptor and engine replay, firmware/control-context replay,
+  and control-plane readiness. The supervisor registers and replays the SDIO
+  owner descriptor first, then registers and replays the CYW43 client
+  descriptor; neither replay lowers a child early. After the control plane is
+  ready, one outer turn lowers SDIO to its steady contract priority and a
+  separate later turn lowers CYW43. Descriptor replay, priority cutover, and
+  the next child operation never share one CYW43 operation permit. Pair
+  recovery raises and reprograms SDIO, then raises and reprograms CYW43 while
+  both are suspended; it resumes and proves the owner before the client, keeps
+  both at priority `255` through engine and retained context replay, and lowers
+  SDIO then CYW43 only after renewed control-plane readiness. There is no
+  client-first descriptor service or legacy fallback ordering. A real
+  post-claim steady-priority failure is sticky for that episode: the same
+  generation cannot reclaim the cutover. With a sealed pair-restart context it
+  enters the exact owner-first restart, which resets the latch only at the
+  bootstrap-priority transition; an absent restart context or a cutover
+  precondition rejection remains terminal.
 - A retained one-way request cannot rely on `seL4_Yield` to schedule a child
   below the root task. HAL therefore advances a request- and
   generation-bound scheduling lease through separate ordinary EventPump
@@ -410,16 +423,21 @@ This as-built closure is authorized by Milestone 26d task
   send-only peer caps: CYW43-to-SDIO carries badge 1 and SDIO-to-CYW43 carries
   badge 2; the SDIO IRQ carries badge 159. All peer/IRQ badges remain in the low
   bits and cannot manufacture the reserved continuation bit. Because seL4
-  coalesces notification badges with bitwise OR, any wake containing peer or IRQ
-  work takes notification-service priority even if the continuation bit is also
-  present; that coalesced continuation is not banked, and foreground work
-  requires a fresh root grant. Autonomous committed-ring polling prevents a
-  lost best-effort endpoint send from stranding initial command intake, but the
-  sequence commit remains the issue boundary: once a command returns `Pending`,
-  any delayed endpoint wake is consumed and rejected, even if its immutable
-  record matches. Endpoint delivery never grants a foreground continuation. An
-  idle runtime likewise blocks for a new endpoint command instead of polling or
-  yielding.
+  coalesces notification badges with bitwise OR, the first wake containing peer
+  or IRQ work takes one notification-service quantum even when the continuation
+  bit is also present; that coalesced continuation is not banked. Once that
+  service quantum has run, later standalone level badges are retained but
+  rejected so a priority-255 runtime cannot form a private IRQ loop. A fresh
+  root continuation then admits exactly one foreground quantum, even if the
+  level badge reappears with it, and preserves that lower badge for one later
+  service boundary. Explicit scheduler handoffs follow both service and
+  rejected immediately-ready wakes. Autonomous committed-ring polling
+  prevents a lost best-effort endpoint send from stranding initial command
+  intake, but the sequence commit remains the issue boundary: once a command
+  returns `Pending`, any delayed endpoint wake is consumed and rejected, even
+  if its immutable record matches. Endpoint delivery never grants a foreground
+  continuation. An idle runtime likewise blocks for a new endpoint command
+  instead of polling or yielding.
   Request, full command fingerprint, and pair generation must match throughout;
   an issued-unknown request cannot be recommitted or renotified. Pair restart
   clears an unresolved lease only after both runtimes are suspended and fenced.
@@ -468,17 +486,38 @@ This as-built closure is authorized by Milestone 26d task
   firmware and control context. A fifth retryable failure emits
   `status=exhausted`, admits no implicit sixth pair restart, and returns
   ownership to the ordinary EventPump so serial, local-seat, HDMI, diagnostics,
-  authentication, and reboot remain live while Wi-Fi acceptance stays red. A
-  successful episode resets the finite budget for a later independently
+  authentication, and reboot remain live while Wi-Fi acceptance stays red. If
+  a stack was already attached, EventPump quarantines its network-service path
+  before entering that operator mode: passive diagnostics retain the stack
+  evidence, but no poll, buffered TCP command dispatch, or TCP flush may touch
+  the poisoned CYW43 generation. Quarantine closes any network-origin session
+  and its stream/cursor authority locally, so later serial input cannot inherit
+  authentication from an unreachable TCP peer.
+  A non-retryable failure during attached recovery, including a completion that
+  lacks ready-generation proof, emits one permanent terminal status and enters
+  the same quarantined ordinary-operator mode; it cannot remain in a
+  bootstrap-only turn that fences diagnostics forever.
+  A successful episode resets the finite budget for a later independently
   signalled steady-state recovery episode. Immutable credential,
   firmware-bundle, and descriptor-bound failures are terminal and remain
   visible to the local operator.
 - High-impact supervisor transitions use `status=begin`, `status=recovery`,
-  `status=backoff`, `status=ready`, and `status=exhausted`. They are enqueued
+  `status=backoff`, `status=ready`, `status=exhausted`, and
+  `status=permanent`. The preceding typed failure record preserves the specific
+  permanent reason. Attempt-zero `status=preflight` reports linked-serial
+  admission without consuming the five-attempt Wi-Fi budget. These records are
+  at most 256 bytes even at every integer maximum and are enqueued
   only after the Wi-Fi HAL scope is released. The serial and bounded queen-log
-  records remain authoritative, while the retained HDMI copy can be submitted
-  only during a later ordinary `Display` EventPump turn; status publication
-  cannot compose display service with the child operation that caused it.
+  records remain authoritative, while a fixed twelve-entry, episode-sized HDMI
+  FIFO preserves every start/backoff/terminal milestone during display delay.
+  The wire suffix `recovery=full telemetry_sinks=serial+qlog+hdmi` declares the
+  configured fail-closed full-pair recovery policy and all three retained sinks;
+  `qlog` denotes `/log/queen.log`, and does not claim a restart has already run.
+  Terminal status has bounded priority over older nonterminal breadcrumbs but
+  can never evict an `ACK`/`ERR`/`END` tail or prompt.
+  One retained copy can be submitted only during each later ordinary `Display`
+  EventPump turn; status publication cannot compose display service with the
+  child operation that caused it.
 - Recovery can become necessary before initial firmware-bundle admission. After
   the ordered pair restart acquires the context-replay gate, a supervisor with
   no retained bundle reacquires the manifest-selected bundle through HAL,
@@ -544,16 +583,20 @@ This as-built closure is authorized by Milestone 26d task
   HAL; even callers of the raw diagnostic helpers append their ordered record
   to the bounded `/log/queen.log` ledger instead of touching the UART. Every
   returned pending supervisor turn is retained in that software record.
-  Supervisor status, failure, and sparse
-  `CYW43_BOOTSTRAP_TURN` lines then attempt an all-or-nothing enqueue to the
-  bounded linked-serial queue after the HAL guard is released; their physical
-  serial delivery is best-effort and happens on a later operator turn. Queue
-  pressure may therefore omit a live UART copy without proving that the
-  supervisor failed to advance, while a required missing UART record still
-  leaves hardware acceptance evidence incomplete. There is no raw-UART
-  fallback after cutover. The sparse line is attempted on stage transitions
-  and power-of-two repeats, and a rejected enqueue preserves eligibility for a
-  later same-stage attempt. Local-seat service consumes only already-buffered
+  High-impact `CYW43_BOOTSTRAP_SUPERVISOR` records use a retained serial class:
+  when the ordinary background partition is full, they may evict only an older
+  nonterminal background breadcrumb and can never evict an `ACK`/`ERR`/`END`
+  tail or prompt. Their physical delivery occurs on a later operator turn.
+  The typed `[net-console] deferred failed detail=...` record immediately
+  preceding a generic `permanent` status shares that retained serial class.
+  Other nonterminal detail/result and sparse `CYW43_BOOTSTRAP_TURN` lines remain
+  best-effort; queue pressure may omit those live UART copies without proving
+  the supervisor failed to advance, while a missing retained supervisor or
+  terminal-reason record is a liveness failure. There is no raw-UART fallback
+  after cutover. A sparse turn line is
+  attempted on stage transitions and power-of-two repeats, and a rejected
+  enqueue preserves eligibility for a later same-stage attempt. Local-seat
+  service consumes only already-buffered
   bytes while Wi-Fi bootstrap or recovery owns the HAL; USB backend polling,
   HDMI echo/redraw, and network service remain fenced. During this fence,
   `attach queen <ticket>` remains available because it is parser/ticket-table
@@ -632,6 +675,10 @@ autonomous intake poll survives a lost best-effort endpoint send, and that
 delayed, stale, or mutated endpoint wakes cannot advance or alter the retained
 intake. Duplicate or stale deferred records cannot replay work or advance a
 replacement generation.
+The fixed 1,024-action trace and 128 KiB replay payload retain their full
+capacity in loader-zeroed `SHT_NOBITS` storage. Only the smaller, semantically
+nonzero CYW43 baseline snapshot is file-backed; packaging must not shrink,
+strip, or alias a runtime image to satisfy the rootfs size guard.
 Operator service runs only after the preceding scoped HAL borrow and service
 guards are released. Serial production-chain tests publish staged bytes through
 the real reciprocal ring, delay the child completion across an outer-turn

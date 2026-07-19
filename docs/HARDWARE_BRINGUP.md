@@ -548,19 +548,22 @@ failed boot keeps repeatability open rather than being hidden by extra passes.
 
 On the current shared-core linked-runtime design, the prompt-side supervisor
 must prove the SDIO owner before the CYW43 client. SDIO service registration and
-exact descriptor replay occur first; a later outer turn lowers only SDIO from
-bootstrap priority to its steady contract priority. CYW43 registration and
-descriptor replay follow, and a separate later turn lowers only CYW43. Recovery
-raises and reprograms SDIO, raises and reprograms CYW43 while both remain
-suspended, then resumes, proves, and lowers the SDIO owner before doing so for
-the CYW43 client. Each priority transition, register-programming step, resume,
-descriptor replay, steady-priority transition, and engine replay is admitted
-as its own retained operation. A capture
+exact descriptor replay occur first, followed by CYW43 registration and
+descriptor replay. Both remain at bootstrap priority `255` through engine,
+firmware, and control-context replay. Only after control-plane readiness does
+one outer turn lower SDIO to its steady contract priority; a separate later
+turn lowers CYW43. Recovery raises and reprograms SDIO, raises and reprograms
+CYW43 while both remain suspended, then resumes and proves the SDIO owner before
+the CYW43 client. It likewise keeps both at `255` through engine and retained
+context replay and performs the two owner-first lowers only after renewed
+control-plane readiness. Each priority transition, register-programming step,
+resume, descriptor replay, and engine replay is admitted as its own retained
+operation. A capture
 that stops at `CYW43_BOOTSTRAP_SUPERVISOR ... status=begin`, shows client-first
 descriptor service, or depends on a legacy root-owned Wi-Fi path is failed
 bootstrap evidence.
 
-After either member reaches its steady priority, retained one-way work uses a
+After both members reach their steady priorities, retained one-way work uses a
 request- and generation-bound scheduling lease. Separate ordinary EventPump
 turns prepare an immutable sequence-zero record, boost the reciprocal SDIO bus
 owner when required, boost the primary child, commit the nonzero sequence as
@@ -585,13 +588,18 @@ receive-only, so the child cannot self-release another quantum. Separate
 send-only peer caps deliver CYW43-to-SDIO as badge 1 and SDIO-to-CYW43 as badge
 2, while the SDIO IRQ is badge 159. Those peer/IRQ values have no overlap with
 the reserved high continuation bit. Because seL4 ORs coalesced notification
-badges, peer or IRQ work takes priority when it arrives with a root grant; that
-grant cannot be reused and a fresh root EventPump turn must release foreground
-work. Autonomous committed-ring polling still prevents a lost best-effort
-endpoint send from stranding initial command intake. After that command returns
-`Pending`, however, a delayed endpoint wake is consumed and rejected even when
-its immutable record matches; endpoint delivery is never continuation
-authority. Idle runtimes block on their command endpoint rather than spinning.
+badges, the first peer or IRQ wake takes one service quantum when it arrives
+with a root grant; that grant cannot be reused. Later standalone reassertions
+are coalesced without another service quantum until a fresh root continuation
+releases one foreground phase. That foreground grant wins even if the level
+badge reappears with it, while the lower badge remains durable for one later
+service boundary. Scheduler handoffs after service and rejected ready wakes
+prevent a priority-255 private IRQ loop. Autonomous committed-ring polling still
+prevents a lost best-effort endpoint send from stranding initial command intake.
+After that command returns `Pending`, however, a delayed endpoint wake is
+consumed and rejected even when its immutable record matches; endpoint delivery
+is never continuation authority. Idle runtimes block on their command endpoint
+rather than spinning.
 Pending-command DPC arbitration performs at most one retained DPC or foreground
 action per released quantum. A reciprocal CYW43-to-SDIO transaction uses one
 quantum to submit the immutable child-ring command and a separately released
@@ -637,6 +645,11 @@ maintenance have virtual-counter deadlines; an eight-second engine envelope
 covers the Linux-shaped one-second ALP and three-second Function 2 waits plus
 bounded handoff margin. Repeating one stage beyond that envelope without a
 terminal failure/recovery record is failed liveness evidence.
+The retained CYW43 transaction keeps its full 1,024-action and 128 KiB payload
+capacity in loader-zeroed `SHT_NOBITS` pages; the HAL loader must zero those
+pages before copying file-backed bytes. The smaller nonzero baseline snapshot
+remains file-backed, so this layout changes packaging size without changing the
+runtime aperture, replay capacity, or state semantics.
 
 Each initial bootstrap or later steady-state recovery episode is finite. The
 supervisor permits five attempts with `1/2/4/8` second virtual-counter backoffs
@@ -648,22 +661,49 @@ failures emit `status=backoff`, and success emits `status=ready`. A fifth
 retryable failure must emit exactly one `status=exhausted backoff_ms=0` record,
 retain `next_attempt_ms=18446744073709551615` as the no-deadline sentinel, and
 perform no automatic sixth child operation or pair restart. The supervisor then
-returns to the ordinary EventPump with Wi-Fi acceptance red. Paced serial and
-local-seat commands remain dispatchable: `netstats`, `nettest`, `wifi diag`,
+quarantines network service and returns to the ordinary EventPump with Wi-Fi
+acceptance red. An already-attached stack remains available to passive
+diagnostics, but its poisoned CYW43 generation receives no poll or TCP-flush
+turn. Buffered TCP commands are not dispatched, and quarantine ends the
+network-origin session and its stream/cursor authority locally before serial
+commands resume. A non-retryable attached recovery failure, including missing
+ready-generation proof, must emit one permanent terminal status, apply the same
+network quarantine, and enter the same ordinary operator mode rather than
+repeating bootstrap-only turns. Paced serial and local-seat commands remain
+dispatchable: `netstats`, `nettest`, `wifi diag`,
 `wifi probe-ht`, `usb diag`, `usb probe-kbd`, `smp activity`, authentication,
 and `reboot` must return their documented result or a typed unavailable/fenced
 error rather than being swallowed by the failed bootstrap. A successful
 episode resets the five-attempt budget only for a later independently signalled
 recovery episode.
 
-The high-impact `begin`, `recovery`, `backoff`, `ready`, and `exhausted`
-supervisor records declare
-`telemetry_sinks=serial+queen-log+hdmi-retained`. They are queued only after the
-Wi-Fi HAL guard is released. Serial and `/log/queen.log` retain the transition
-immediately; the isolated HDMI runtime may mirror it only during a later
-ordinary `Display` turn. A trace with `attempt=6`, a same-turn HDMI submit, or
-an unresponsive prompt after `status=exhausted` fails the software liveness
+The high-impact `preflight`, `begin`, `recovery`, `backoff`, `ready`,
+`exhausted`, and `permanent` supervisor records declare
+`recovery=full telemetry_sinks=serial+qlog+hdmi`; `full` names the configured
+fail-closed pair-recovery policy rather than claiming a restart already ran,
+and `qlog` names `/log/queen.log`. Attempt-zero `status=preflight` records
+linked-serial readiness without consuming a Wi-Fi attempt. A typed failure line
+immediately before generic `status=permanent` retains the terminal reason. Every
+supervisor line fits the fixed 256-byte serial record at its numeric maxima.
+They are queued only after the Wi-Fi HAL guard is released. Serial and
+`/log/queen.log` retain the transition
+immediately; a fixed twelve-entry FIFO retains a complete worst-case episode
+without overwriting delayed milestones, and the isolated HDMI runtime mirrors
+at most one entry during each later ordinary `Display` turn. A trace with
+`attempt=6`, a same-turn HDMI submit, a lost queued terminal status, an attached
+network poll after any terminal recovery status, or an unresponsive prompt after
+`status=exhausted` or a permanent terminal status fails the software liveness
 contract even before Wi-Fi RF acceptance is considered.
+
+USB retained polling is likewise typed. A `Pending` prepare, boost, commit,
+notify, or completion-poll phase is progress, not a no-reply event: it must
+preserve the ticket, command-ready state, and counters. Only terminal `Failed`
+may revoke readiness and add no-reply debt. Sustained `usb status` evidence with
+normal input but no-reply growth proportional to retained phase count is a
+software regression rather than a keyboard fault. A retained USB, serial, or
+HDMI lease fault is device-local: pre-issue failure clears that request and
+issued-unknown failure poisons it, but neither may request CYW43/SDIO pair
+recovery.
 
 If recovery occurs before the initial firmware bundle was admitted, the
 ordered pair restart first acquires context-replay ownership. A later retained
@@ -685,10 +725,15 @@ miss must not disable Wi-Fi for the remainder of the boot. While a Wi-Fi HAL
 scope is held, serial uses only that proved
 linked route and local-seat handling consumes already-buffered bytes only; USB
 backend polling, HDMI/echo re-entry, and network polling remain fenced until the
-scope is released. `CYW43_BOOTSTRAP_SUPERVISOR` and deferred failure/result
-records are retained in the bounded `/log/queen.log` ledger and attempt a
-bounded linked-serial enqueue. An accepted serial record flushes on a later
-operator turn; delivery is not guaranteed when that queue is saturated. Every
+scope is released. High-impact `CYW43_BOOTSTRAP_SUPERVISOR` lifecycle records
+are retained in the bounded `/log/queen.log` ledger and given bounded physical-
+console priority: a terminal `ready`, `exhausted`, or `permanent` record may
+evict only an older nonterminal background record, never an `ACK`/`ERR`/`END`,
+prompt, or in-progress command line. The typed `[net-console] deferred failed
+detail=...` record immediately preceding generic `permanent` shares the
+retained serial class. Other nonterminal detail/result and sparse turn records
+remain best-effort under saturation. An accepted physical-console record
+flushes on a later operator turn. Every
 root raw-UART helper must also route only to `/log/queen.log` after cutover. A
 raw-UART breadcrumb that bypasses the linked runtime is failed
 operator-ownership evidence, while an absent required linked-serial line is

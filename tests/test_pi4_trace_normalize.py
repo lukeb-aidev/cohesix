@@ -13503,15 +13503,18 @@ def bootstrap_supervisor_line(
     status: str,
     backoff_ms: int,
     next_attempt_ms: int,
+    console_seq: int = 17,
+    *,
+    serial: str = "ready",
 ) -> str:
     """Return one full-fidelity persistent-bootstrap supervisor record."""
 
     return (
         f"CYW43_BOOTSTRAP_SUPERVISOR attempt={attempt} status={status} "
         f"backoff_ms={backoff_ms} next_attempt_ms={next_attempt_ms} "
-        "serial=ready local_seat=ready "
-        "recovery=pair-restart-full-context-if-partial "
-        "console_seq=17 telemetry_sinks=serial+queen-log prompt_refresh=yes"
+        f"serial={serial} local_seat=ready recovery=full "
+        f"console_seq={console_seq} "
+        "telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes"
     )
 
 
@@ -13537,8 +13540,8 @@ def test_bootstrap_supervisor_accepts_terminal_first_attempt_ready() -> None:
 
     events = normalizer.parse_events(
         [
-            bootstrap_supervisor_line(1, "begin", 0, 500),
-            bootstrap_supervisor_line(1, "ready", 0, 500),
+            bootstrap_supervisor_line(1, "begin", 0, 500, 1),
+            bootstrap_supervisor_line(1, "ready", 0, 500, 2),
         ]
     )
 
@@ -13557,8 +13560,8 @@ def test_bootstrap_supervisor_accepts_production_raw_uart_suffix() -> None:
 
     events = normalizer.parse_events(
         [
-            bootstrap_supervisor_line(1, "begin", 0, 500),
-            bootstrap_supervisor_line(1, "ready", 0, 500),
+            bootstrap_supervisor_line(1, "begin", 0, 500, 1),
+            bootstrap_supervisor_line(1, "ready", 0, 500, 2),
         ]
     )
 
@@ -13577,21 +13580,26 @@ def test_bootstrap_supervisor_accepts_production_raw_uart_suffix() -> None:
         " serial=ready local_seat=ready",
         (
             " serial=ready local_seat=ready "
-            "recovery=pair-restart-full-context-if-partial"
+            "recovery=full"
         ),
         (
             " serial=ready local_seat=ready "
-            "recovery=pair-restart-full-context-if-partial console_seq=17"
+            "recovery=full console_seq=17"
         ),
         (
             " serial=ready local_seat=ready "
-            "recovery=pair-restart-full-context-if-partial console_seq=17 "
-            "telemetry_sinks=serial+queen-log"
+            "recovery=full console_seq=17 "
+            "telemetry_sinks=serial+qlog+hdmi"
         ),
         (
             " serial=ready local_seat=ready "
-            "recovery=pair-restart-full-context-if-partial console_seq=17 "
-            "telemetry_sinks=serial+queen-log prompt_refresh="
+            "recovery=full console_seq=17 "
+            "telemetry_sinks=serial+qlog+hdmi prompt_refresh="
+        ),
+        (
+            " serial=ready local_seat=ready "
+            "recovery=full console_seq=17 "
+            "telemetry_sinks=serial+qlog+hdmi prompt_refresh=no"
         ),
     ],
 )
@@ -13607,7 +13615,7 @@ def test_bootstrap_supervisor_truncated_production_suffix_is_diagnostic_only(
     record = normalizer.summarize_gates(
         normalizer.parse_events(
             [
-                bootstrap_supervisor_line(1, "begin", 0, 500),
+                bootstrap_supervisor_line(1, "begin", 0, 500, 1),
                 ready_prefix + suffix,
             ]
         )
@@ -13627,21 +13635,50 @@ def test_bootstrap_supervisor_truncated_production_suffix_is_diagnostic_only(
     )
 
 
-def test_bootstrap_supervisor_accepts_multiple_transient_retries_then_ready() -> None:
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("attempt=1", "attempt=01"),
+        ("backoff_ms=0", "backoff_ms=00"),
+        (
+            "next_attempt_ms=500",
+            "next_attempt_ms=18446744073709551616",
+        ),
+        ("console_seq=2", "console_seq=18446744073709551616"),
+    ],
+)
+def test_bootstrap_supervisor_rejects_noncanonical_or_oversized_u64_fields(
+    old: str, new: str
+) -> None:
+    """Evidence numbers must be canonical values representable by production."""
+
+    lines = [
+        bootstrap_supervisor_line(1, "begin", 0, 500, 1),
+        bootstrap_supervisor_line(1, "ready", 0, 500, 2).replace(old, new, 1),
+    ]
+    if old == "attempt=1":
+        lines[0] = lines[0].replace(old, new, 1)
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "numeric-field-invalid"
+
+
+def test_bootstrap_supervisor_accepts_multiple_backoffs_then_ready() -> None:
     """Monotonic 1/2-second retry progression may close at a later ready."""
 
     events = normalizer.parse_events(
         [
-            bootstrap_supervisor_line(1, "begin", 0, 100),
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
             bootstrap_supervisor_line(
-                1, "transient-retry-scheduled", 1_000, 1_200
+                1, "backoff", 1_000, 1_200, 2
             ),
-            bootstrap_supervisor_line(2, "begin", 0, 1_200),
+            bootstrap_supervisor_line(2, "begin", 0, 1_200, 3),
             bootstrap_supervisor_line(
-                2, "transient-retry-scheduled", 2_000, 3_300
+                2, "backoff", 2_000, 3_300, 4
             ),
-            bootstrap_supervisor_line(3, "begin", 0, 3_300),
-            bootstrap_supervisor_line(3, "ready", 0, 3_350),
+            bootstrap_supervisor_line(3, "begin", 0, 3_300, 5),
+            bootstrap_supervisor_line(3, "ready", 0, 3_350, 6),
         ]
     )
 
@@ -13659,6 +13696,147 @@ def test_bootstrap_supervisor_accepts_multiple_transient_retries_then_ready() ->
     )
 
 
+def test_bootstrap_supervisor_preflight_does_not_consume_an_attempt() -> None:
+    """A recovered serial preflight precedes, but does not poison, attempt one."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(
+                0, "preflight", 250, 350, 1, serial="blocked"
+            ),
+            bootstrap_supervisor_line(
+                0, "preflight", 0, 400, 2, serial="ready"
+            ),
+            bootstrap_supervisor_line(1, "begin", 0, 400, 3),
+            bootstrap_supervisor_line(1, "ready", 0, 500, 4),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 1
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+
+
+def test_bootstrap_supervisor_blocked_preflight_remains_acceptance_red() -> None:
+    """A serial-blocked preflight without a later episode is diagnostic only."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                bootstrap_supervisor_line(
+                    0, "preflight", 250, 350, 1, serial="blocked"
+                )
+            ]
+        )
+    ).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 0
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "serial-blocked"
+
+
+@pytest.mark.parametrize(
+    ("lines", "expected_blocker"),
+    [
+        (
+            [bootstrap_supervisor_line(0, "preflight", 1, 350, 1)],
+            "malformed-preflight-timing",
+        ),
+        (
+            [
+                bootstrap_supervisor_line(
+                    0, "preflight", 0, 350, 1, serial="blocked"
+                )
+            ],
+            "malformed-preflight-timing",
+        ),
+        (
+            [
+                bootstrap_supervisor_line(
+                    0, "preflight", 250, 249, 1, serial="blocked"
+                )
+            ],
+            "malformed-preflight-timing",
+        ),
+        (
+            [
+                bootstrap_supervisor_line(
+                    0, "preflight", 250, 500, 1, serial="blocked"
+                ),
+                bootstrap_supervisor_line(
+                    0, "preflight", 250, 499, 2, serial="blocked"
+                ),
+            ],
+            "malformed-preflight-timing",
+        ),
+    ],
+)
+def test_bootstrap_supervisor_rejects_malformed_preflight_timing(
+    lines: list[str], expected_blocker: str
+) -> None:
+    """Preflight proof preserves the linked-serial 250 ms retry contract."""
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == expected_blocker
+
+
+def test_bootstrap_supervisor_accepts_later_independent_recovery_episode() -> None:
+    """Ready resets the five-attempt cursor for a later attached recovery."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 2),
+            bootstrap_supervisor_line(1, "recovery", 0, 500, 3),
+            bootstrap_supervisor_line(1, "backoff", 1_000, 1_500, 4),
+            bootstrap_supervisor_line(2, "recovery", 0, 1_500, 5),
+            bootstrap_supervisor_line(2, "ready", 0, 1_600, 6),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 2
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 1
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+
+
+def test_bootstrap_supervisor_accepts_bounded_exhaustion_as_terminal_red() -> None:
+    """The fifth failure must close with the exact no-attempt sentinel."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "backoff", 1_000, 1_100, 2),
+            bootstrap_supervisor_line(2, "begin", 0, 1_100, 3),
+            bootstrap_supervisor_line(2, "backoff", 2_000, 3_100, 4),
+            bootstrap_supervisor_line(3, "begin", 0, 3_100, 5),
+            bootstrap_supervisor_line(3, "backoff", 4_000, 7_100, 6),
+            bootstrap_supervisor_line(4, "begin", 0, 7_100, 7),
+            bootstrap_supervisor_line(4, "backoff", 8_000, 15_100, 8),
+            bootstrap_supervisor_line(5, "begin", 0, 15_100, 9),
+            bootstrap_supervisor_line(
+                5, "exhausted", 0, (1 << 64) - 1, 10
+            ),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 5
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 4
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "exhausted"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "retry-exhausted"
+
+
 @pytest.mark.parametrize(
     ("lines", "expected_blocker"),
     [
@@ -13666,41 +13844,46 @@ def test_bootstrap_supervisor_accepts_multiple_transient_retries_then_ready() ->
         ([bootstrap_supervisor_line(1, "begin", 0, 100)], "begin-not-terminal"),
         (
             [
-                bootstrap_supervisor_line(1, "begin", 0, 100),
+                bootstrap_supervisor_line(1, "begin", 0, 100, 1),
                 bootstrap_supervisor_line(
-                    1, "transient-retry-scheduled", 1_000, 1_100
+                    1, "backoff", 1_000, 1_100, 2
                 ),
             ],
             "scheduled-not-terminal",
         ),
         (
             [
-                bootstrap_supervisor_line(1, "begin", 0, 100),
+                bootstrap_supervisor_line(1, "begin", 0, 100, 1),
                 bootstrap_supervisor_line(
-                    1, "transient-retry-scheduled", 999, 1_100
+                    1, "backoff", 999, 1_100, 2
                 ),
             ],
             "malformed-backoff-progression",
         ),
         (
             [
-                bootstrap_supervisor_line(1, "begin", 0, 100),
+                bootstrap_supervisor_line(1, "begin", 0, 100, 1),
                 bootstrap_supervisor_line(
-                    1, "transient-retry-scheduled", 1_000, 1_100
+                    1, "backoff", 1_000, 1_100, 2
                 ),
-                bootstrap_supervisor_line(2, "begin", 0, 1_100),
-                bootstrap_supervisor_line(1, "ready", 0, 1_100),
+                bootstrap_supervisor_line(2, "begin", 0, 1_100, 3),
+                bootstrap_supervisor_line(1, "ready", 0, 1_100, 4),
             ],
             "attempt-regression",
         ),
         (
             [
-                bootstrap_supervisor_line(1, "begin", 0, 100),
-                bootstrap_supervisor_line(
-                    1, "permanent-config-or-artifact-failure", 0, 200
-                ),
+                bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+                bootstrap_supervisor_line(1, "permanent", 0, 200, 2),
             ],
             "permanent-status",
+        ),
+        (
+            [
+                bootstrap_supervisor_line(1, "begin", 0, 100, 2),
+                bootstrap_supervisor_line(1, "ready", 0, 200, 1),
+            ],
+            "console-sequence-not-monotonic",
         ),
         (
             [
@@ -13737,12 +13920,12 @@ def test_bootstrap_ready_clears_only_transient_supervisor_blocker() -> None:
             "wifi: preserved_failure source=live "
             "stage=cyw43-load-firmware-fail "
             "exact=cyw43-device-on-timeout-before-ht",
-            bootstrap_supervisor_line(1, "begin", 0, 100),
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
             bootstrap_supervisor_line(
-                1, "transient-retry-scheduled", 1_000, 1_100
+                1, "backoff", 1_000, 1_100, 2
             ),
-            bootstrap_supervisor_line(2, "begin", 0, 1_100),
-            bootstrap_supervisor_line(2, "ready", 0, 1_200),
+            bootstrap_supervisor_line(2, "begin", 0, 1_100, 3),
+            bootstrap_supervisor_line(2, "ready", 0, 1_200, 4),
         ]
     )
 
