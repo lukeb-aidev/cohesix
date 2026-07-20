@@ -21,7 +21,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | QEMU current source | Target-qualified Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. | Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 current source, offline | Pi-qualified Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. | A board boot, current-image device readiness, TCP, or benchmark result. |
-| Pi 4 current image, live | Exact image `40b3af92f5ed` / `06c56ee47689cb2789de6239822d8edc95cbb9452ded521f4c7e0854f488fc19` reaches Wi-Fi Gate 6, then its first one-block Function 1 firmware request times out waiting for `DATA_END`. | Gates 7-10, Wi-Fi L2/IP/TCP, `cohsh`, repeatability, and performance remain unclaimed until the corrected Linux-ordered PIO candidate is rebuilt, flashed, and captured. |
+| Pi 4 current image, live | Exact image `3538d28eee83` / `f8b1cc9063de3f36d94b347c47cb10843c739ba6f864c088c11e26777a36482d` reaches Wi-Fi Gate 6. Its first 64-byte Function 1 firmware CMD53 is accepted and filled, but the controller retains `DATA_INHIBIT`, `DAT_ACTIVE`, and block count 1 with no `DATA_END`. | Gates 7-10, Wi-Fi L2/IP/TCP, `cohsh`, repeatability, and performance remain unclaimed until the manifest/HAL-admitted BCM2835 DMA candidate is rebuilt, flashed, and captured. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
 active. It may be newer than checked-in records, but only the repository's
@@ -386,6 +386,17 @@ USB-keyboard `ping` must still return. If any tail is absent, stop sending input
 and preserve the sample. A merged or overlapped serial transcript is not
 acceptance evidence.
 
+The command effects are intentionally distinct. `wifi diag`, `usb diag`,
+`netstats`, and `smp activity` read retained state and must not submit a device
+operation; `wifi diag` labels cached progress as `last_progress` and
+`superseded=yes` when a terminal fault is newer. On the physical linked-runtime
+profile, `wifi probe-ht` reports cached state or a typed runtime-required error
+and never starts a root-owned live probe. `nettest` actively starts the bounded
+network self-test, while `usb probe-kbd` actively advances one retained
+keyboard-enumeration attempt per later local-seat turn. Run the active commands
+only after their preceding passive response has returned its terminal status
+and prompt.
+
 The serial log must contain the exact read-back sealed build marker before any
 current-image claim is made. The current bootstrap-supervisor record counts only
 with its complete production ownership/recovery and console-ordering suffix; a
@@ -633,52 +644,42 @@ that shows multiple foreground phases after one endpoint rendezvous or shared
 grant, or foreground progress caused only by a peer/IRQ badge without a valid
 grant, fails the one-operation-per-turn contract.
 
-Each Pi data request also follows the selected `mmc-bcm2835` host contract:
-refresh `TIMEOUT_CONTROL=0x0e`; perform immediate 16-bit block-size then
-block-count read/modify/write operations; preserve boundary argument 7 in the
-block-size field; and retain the full request-local `INT_STATUS` sample when
-the response arrives. The owner acknowledges every sampled command/data bit
-except asynchronous `CARD_INT`, then carries coalesced buffer-ready and
-`DATA_END` evidence into later retained PIO turns. A stale ready bit in
-`PRESENT_STATE` without a retained or newly sampled ready interrupt is not
-completion. Next-run `wifi: evidence sdio_regs` output records power,
-present-state, interrupt-status, response, and block-size/count registers so a
-pre-RF stop can be classified without depending on a later-overwritten log.
+The newest exact captures are
+`pi4-serial-20260721-063257.log` and the authenticated, paced reboot sidecar
+`pi4-serial-20260721-064156-3538d28-W02-pyserial.log`, boot-paired with
+`tcpdump-wifi-20260721-063254.pcap` and
+`tcpdump-usb-eth-20260721-063254.pcap`. Both boots identify marker commit
+`3538d28eee83` and image id
+`f8b1cc9063de3f36d94b347c47cb10843c739ba6f864c088c11e26777a36482d`.
+Gate 1 is direct and Gates 2-5 are explicitly inference-only. Gate 6 stops on
+the first 64-byte/count-1 Function 1 firmware CMD53 at backplane address
+`0x00198000`. The command has a clean R5 response and exact payload digest, but
+the pre-containment snapshot is `PRESENT_STATE=0x01ef0006`,
+`INT_STATUS=0x00000000`, and `BLOCK_SIZE_COUNT=0x00017040`: the data path stays
+active/inhibited and the block count never decrements. This eliminates a lost
+`DATA_END`, post-transfer W1C, stale payload, or safe replay as the primary
+cause. Recovery poisons the generation, restarts the pair in bounded order,
+and exhausts after five attempts without an endless loop.
 
-The newest exact capture is `pi4-serial-20260720-221540.log`, boot-paired with
-`tcpdump-wifi-20260720-221537.pcap` and
-`tcpdump-usb-eth-20260720-221537.pcap`. It identifies marker commit
-`40b3af92f5ed` and image id
-`06c56ee47689cb2789de6239822d8edc95cbb9452ded521f4c7e0854f488fc19`.
-Gates 2-5 are inferred from the later Gate-6 request, while Gate 1 has direct
-runtime power/reset proof. Gate 6 stops on the first 64-byte/count-1 Function 1
-firmware CMD53 at backplane address `0x00198000`: command response and FIFO
-admission complete, but the owner times out waiting for `DATA_END`. This
-falsifies the prior claim that reducing the host request to one PIO block was
-itself sufficient. The published `PRESENT_STATE`, `INT_STATUS`, and block
-registers were sampled only after containment in this image, so they cannot be
-used as terminal-controller proof. Analysis is bounded to the serial boot
-interval because both tcpdump writers continued afterward; within that paired
-interval neither capture contains a Pi Wi-Fi MAC, EAPOL, DHCP, ARP, IP, ICMP,
-TCP, or console-port frame. This is a pre-firmware/RF host-transfer failure,
-not evidence against association, EAPOL, DHCP, or shared TCP.
+Within the conservative boot slice, neither paired capture contains the Pi
+Wi-Fi MAC, EAPOL, DHCP, ARP, IP, ICMP, TCP, or console-port traffic. The Wi-Fi
+capture is managed Ethernet rather than monitor mode, so it cannot prove an
+absence of over-air EAPOL; it does corroborate that this boot never reached the
+host network path. TCP, association, DHCP, and `cohsh` remain downstream and
+must not be changed to treat this pre-firmware transport failure.
 
-Linux's SDIO core splits requests by the host's `max_blk_count`, while the Pi
-`mmc-bcm2835` driver normally assigns data requests to an admitted DMA channel.
-The linked Cohesix SDIO owner has no such channel: its sole low DMA page is the
-firmware-mailbox request buffer. It therefore retains the explicitly declared
-one-block PIO limit for this focused candidate, but now closes the remaining
-direct `mmc-bcm2835` PIO deltas: AArch64 `readl`/`writel` ordering around SDHCI
-and FIFO access, no unsampled buffer-ready W1C after the final FIFO word, and
-terminal register capture before containment. The original bulk-transfer mode
-still remains block mode across its incrementing count-1 requests; no byte,
-clock, width, replay, root-owned, or legacy fallback is restored. If this exact
-candidate retains the same terminal failure on hardware, the next change is a
-coherent manifest/HAL/runtime BCM DMA replacement for the data-transfer
-mechanism, not a selectable second launch path and not another timing or
-PIO-geometry guess. That DMA change must separately declare controller/channel
-and low-memory buffer authority and is intentionally not mixed into this
-diagnostic build.
+The resulting source candidate replaces the sole linked-runtime data engine,
+not the launch path. The generated SDIO runtime now declares SDHCI, firmware
+mailbox, and BCM2835 DMA MMIO plus one mailbox page, one control-block page,
+and two bounce pages. The HAL admits physical DMA channel 4 from the selected
+`0x07f5` mask; the runtime uses SDIO DREQ 11, FIFO bus address `0x7e300020`,
+and low-RAM `0xc0000000` aliasing. Every CMD53 uses that external engine and a
+missing or invalid DMA resource fails closed—there is no PIO or legacy
+fallback. The bounded 8-KiB shared stage becomes one count-128 block request
+when the 32-KiB backplane window permits. Success
+requires both DMA control-block completion and SDHCI `DATA_END`; failure
+captures both engines before bounded channel abort/reset and generation
+poisoning. This is source design until a rebuilt exact image proves it on Pi.
 
 The earlier `pi4-serial-20260719-180716.log` capture identified a separate
 pre-command continuation-liveness failure: SDIO engine initialization completed
@@ -834,13 +835,15 @@ the one ordered restart. That fifth failure retains
 perform no automatic sixth child operation or pair restart. The supervisor then
 quarantines network service and returns to the ordinary EventPump with Wi-Fi
 acceptance red. An already-attached stack remains available to passive
-diagnostics, but its poisoned CYW43 generation receives no poll or TCP-flush
-turn. Buffered TCP commands are not dispatched, and quarantine ends the
-network-origin session and its stream/cursor authority locally before serial
-commands resume. A non-retryable attached recovery failure, including missing
-ready-generation proof, must emit one permanent terminal status, apply the same
-network quarantine, and enter the same ordinary operator mode rather than
-repeating bootstrap-only turns. Paced serial and local-seat commands remain
+diagnostics only through immutable terminal and owner-ring evidence; its
+retained live DHCP/EAPOL/TCP status is stale and must not be read or allowed to
+supersede the terminal gate. The poisoned CYW43 generation receives no status,
+poll, or TCP-flush turn. Buffered TCP commands are not dispatched, and
+quarantine ends the network-origin session and its stream/cursor authority
+locally before serial commands resume. A non-retryable attached recovery
+failure, including missing ready-generation proof, must emit one permanent
+terminal status, apply the same network quarantine, and enter the same ordinary
+operator mode rather than repeating bootstrap-only turns. Paced serial and local-seat commands remain
 dispatchable: `netstats`, `nettest`, `wifi diag`,
 `wifi probe-ht`, `usb diag`, `usb probe-kbd`, `smp activity`, authentication,
 and `reboot` must return their documented result or a typed unavailable/fenced

@@ -81,13 +81,13 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
     DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
     DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
-    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
-    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
-    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1680,6 +1680,14 @@ const PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES: &[usize] = &[0xFE30_0000];
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES: &[usize] = &[0xFE00_B000];
 #[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES: &[usize] = &[0xFE00_7000];
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_BCM2835_DMA_AVAILABLE_CHANNEL_MASK: u16 = 0x07f5;
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL: usize = 4;
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL_STRIDE: usize = 0x100;
+#[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_NO_MMIO_BASES: &[usize] = &[];
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES: &[usize] = &[0xFD50_0000, 0xFE50_0000, 0x7D50_0000];
@@ -1875,6 +1883,10 @@ fn generated_cyw43_sdio_bus_link_descriptor(
 const PI4_VL805_DMA_BUS_ALIAS_OR: u64 = 0x0000_0004_0000_0000;
 #[cfg(feature = "kernel")]
 const PI4_VL805_DMA_BUS_ALIAS_AND: u64 = 0x0000_0000_ffff_ffff;
+#[cfg(feature = "kernel")]
+const PI4_SDIO_DMA_BUS_ALIAS_OR: u64 = 0x0000_0000_c000_0000;
+#[cfg(feature = "kernel")]
+const PI4_SDIO_DMA_BUS_ALIAS_AND: u64 = 0x0000_0000_3fff_ffff;
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1928,6 +1940,8 @@ impl RuntimeInitDescriptorBuilder {
             }
             driver_task::DriverTaskHotPath::SdioHost => {
                 let topology = generated_cyw43_sdio_topology()?;
+                descriptor.bus_alias_or = PI4_SDIO_DMA_BUS_ALIAS_OR;
+                descriptor.bus_alias_and = PI4_SDIO_DMA_BUS_ALIAS_AND;
                 descriptor.bus_link_count = 1;
                 descriptor.bus_links[0] =
                     generated_cyw43_sdio_bus_link_descriptor(spec.hot_path, topology)?;
@@ -2076,24 +2090,24 @@ impl RuntimeInitDescriptorBuilder {
         first_page_index: u16,
         paddr_contiguous: bool,
     ) -> Result<(), HalError> {
+        if kind == DRIVER_RUNTIME_RESOURCE_KIND_DMA {
+            let tag = if hot_path == driver_task::DriverTaskHotPath::SdioHost {
+                DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST
+            } else {
+                DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA
+            };
+            return self.add_tagged_dma_resource_range(
+                tag,
+                vaddr,
+                first_paddr,
+                pages,
+                first_page_index,
+                paddr_contiguous,
+            );
+        }
         let page_count = u16::try_from(pages)
             .map_err(|_| HalError::Unsupported("driver-runtime-init-buffer-range-pages"))?;
         let (tag, flags) = match kind {
-            DRIVER_RUNTIME_RESOURCE_KIND_DMA => {
-                let mut flags = DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
-                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE;
-                if paddr_contiguous {
-                    flags |= DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS;
-                }
-                (
-                    if hot_path == driver_task::DriverTaskHotPath::SdioHost {
-                        DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST
-                    } else {
-                        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA
-                    },
-                    flags,
-                )
-            }
             DRIVER_RUNTIME_RESOURCE_KIND_SHARED => (
                 if hot_path == driver_task::DriverTaskHotPath::Cyw43Wifi {
                     DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL
@@ -2108,6 +2122,34 @@ impl RuntimeInitDescriptorBuilder {
         };
         self.add_resource_range(DriverRuntimeResourceRangeDescriptor::new(
             kind,
+            flags,
+            tag,
+            vaddr as u64,
+            first_paddr as u64,
+            (pages as u64).saturating_mul(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES),
+            page_count,
+            first_page_index,
+        ))
+    }
+
+    fn add_tagged_dma_resource_range(
+        &mut self,
+        tag: u32,
+        vaddr: usize,
+        first_paddr: usize,
+        pages: usize,
+        first_page_index: u16,
+        paddr_contiguous: bool,
+    ) -> Result<(), HalError> {
+        let page_count = u16::try_from(pages)
+            .map_err(|_| HalError::Unsupported("driver-runtime-init-dma-range-pages"))?;
+        let mut flags = DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+            | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE;
+        if paddr_contiguous {
+            flags |= DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS;
+        }
+        self.add_resource_range(DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
             flags,
             tag,
             vaddr as u64,
@@ -3723,33 +3765,72 @@ impl<'a> KernelHal<'a> {
         }
         let page_bytes = 1usize << sel4::PAGE_BITS;
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
-        if hot_path == driver_task::DriverTaskHotPath::SdioHost && pages == 2 {
-            for (&sdhci_base, &pwrseq_base) in PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES
+        if hot_path == driver_task::DriverTaskHotPath::SdioHost && pages != 3 {
+            return Err(HalError::Unsupported(
+                "driver-runtime-sdio-mmio-page-budget",
+            ));
+        }
+        if hot_path == driver_task::DriverTaskHotPath::SdioHost {
+            for ((&sdhci_base, &pwrseq_base), &dma_base) in PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES
                 .iter()
                 .zip(PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES.iter())
+                .zip(PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES.iter())
             {
                 if !runtime_candidate_covers_pages(&self.env, sdhci_base, 1)
                     || !runtime_candidate_covers_pages(&self.env, pwrseq_base, 1)
+                    || !runtime_candidate_covers_pages(&self.env, dma_base, 1)
                 {
                     continue;
+                }
+                // The pinned BCM2711 device tree admits channels 0, 2, and
+                // 4-10 through mask 0x07f5. Channels 0/2/3 have special-use
+                // restrictions, while the binding identifies 1/3/6/7 as
+                // firmware-used. Channel 4 is therefore the lowest admitted
+                // ordinary channel for this sole Cohesix DMA owner.
+                // Its 0x100-byte register bank begins at page offset 0x400.
+                let dma_channel_bit = 1u16
+                    .checked_shl(PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL as u32)
+                    .ok_or(HalError::Unsupported("driver-runtime-sdio-dma-channel"))?;
+                let dma_channel_offset = PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL
+                    .checked_mul(PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL_STRIDE)
+                    .ok_or(HalError::Unsupported("driver-runtime-sdio-dma-channel"))?;
+                if PI4_DRIVER_RUNTIME_BCM2835_DMA_AVAILABLE_CHANNEL_MASK & dma_channel_bit == 0
+                    || dma_channel_offset
+                        .checked_add(PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL_STRIDE)
+                        .is_none_or(|end| end > page_bytes)
+                {
+                    return Err(HalError::Unsupported("driver-runtime-sdio-dma-channel"));
                 }
                 let first_page_index = init_descriptor
                     .as_deref()
                     .map(|builder| builder.descriptor.mmio_page_count)
                     .unwrap_or(0);
-                for (page, paddr) in [sdhci_base, pwrseq_base].into_iter().enumerate() {
+                for (page, paddr) in [sdhci_base, pwrseq_base, dma_base].into_iter().enumerate() {
                     let vaddr = runtime_region_page_vaddr(region, page)
                         .ok_or(HalError::Unsupported("driver-runtime-mmio-vaddr"))?;
-                    self.env
-                        .map_device_page_into_vspace(
-                            paddr,
-                            vspace,
-                            vaddr,
-                            rights,
-                            runtime_uncached_xn_attributes(),
-                            tracker,
-                        )
-                        .map_err(HalError::Sel4)?;
+                    if page == 2 {
+                        self.env
+                            .map_exclusive_device_page_into_vspace(
+                                paddr,
+                                vspace,
+                                vaddr,
+                                rights,
+                                runtime_uncached_xn_attributes(),
+                                tracker,
+                            )
+                            .map_err(HalError::Sel4)?;
+                    } else {
+                        self.env
+                            .map_device_page_into_vspace(
+                                paddr,
+                                vspace,
+                                vaddr,
+                                rights,
+                                runtime_uncached_xn_attributes(),
+                                tracker,
+                            )
+                            .map_err(HalError::Sel4)?;
+                    }
                     if let Some(builder) = init_descriptor.as_deref_mut() {
                         builder.add_mmio_page(paddr)?;
                     }
@@ -3764,16 +3845,29 @@ impl<'a> KernelHal<'a> {
                     )?;
                     builder.add_tagged_mmio_resource_range(
                         DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
-                        region.vaddr.saturating_add(page_bytes),
+                        region
+                            .vaddr
+                            .checked_add(page_bytes)
+                            .ok_or(HalError::Unsupported("driver-runtime-mmio-vaddr"))?,
                         pwrseq_base,
                         1,
                         first_page_index.saturating_add(1),
+                    )?;
+                    builder.add_tagged_mmio_resource_range(
+                        DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+                        region
+                            .vaddr
+                            .checked_add(page_bytes.saturating_mul(2))
+                            .ok_or(HalError::Unsupported("driver-runtime-mmio-vaddr"))?,
+                        dma_base,
+                        1,
+                        first_page_index.saturating_add(2),
                     )?;
                 }
                 return Ok(true);
             }
             return Err(HalError::Unsupported(
-                "driver-runtime-sdio-pwrseq-mmio-not-covered",
+                "driver-runtime-sdio-dma-mmio-not-covered",
             ));
         }
         for &base in runtime_mmio_candidate_bases(hot_path) {
@@ -3835,6 +3929,10 @@ impl<'a> KernelHal<'a> {
         if pages == 0 {
             return Ok(false);
         }
+        let sdio_dma_owned = dma_owned && hot_path == driver_task::DriverTaskHotPath::SdioHost;
+        if sdio_dma_owned && pages != 4 {
+            return Err(HalError::Unsupported("driver-runtime-sdio-dma-page-budget"));
+        }
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
         // Runtime DMA buffers and root-shared payload/control pages cross TCBs
         // without runtime-side EL0 cache maintenance.
@@ -3852,6 +3950,8 @@ impl<'a> KernelHal<'a> {
             .unwrap_or(0);
         let mut first_paddr = 0usize;
         let mut paddr_contiguous = true;
+        let mut sdio_dma_arena_first_paddr = 0usize;
+        let mut sdio_dma_arena_paddr_contiguous = true;
         if dma_owned {
             let mut frames: AllocVec<UnmappedRamFrame> = AllocVec::new();
             frames
@@ -3860,7 +3960,7 @@ impl<'a> KernelHal<'a> {
             for page in 0..pages {
                 let _ = runtime_region_page_vaddr(region, page)
                     .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?;
-                let frame = if hot_path == driver_task::DriverTaskHotPath::SdioHost && pages == 1 {
+                let frame = if sdio_dma_owned {
                     self.env
                         .alloc_unmapped_ram_frame_low_attr(attr)
                         .map_err(HalError::Sel4)?
@@ -3870,12 +3970,8 @@ impl<'a> KernelHal<'a> {
                         .map_err(HalError::Sel4)?
                 };
                 let paddr = frame.paddr();
-                if hot_path == driver_task::DriverTaskHotPath::SdioHost
-                    && (paddr > 0x3fff_ffff || paddr & 0xf != 0)
-                {
-                    return Err(HalError::Unsupported(
-                        "driver-runtime-sdio-pwrseq-request-address",
-                    ));
+                if sdio_dma_owned && (paddr > 0x3fff_ffff || paddr & 0xf != 0) {
+                    return Err(HalError::Unsupported("driver-runtime-sdio-dma-address"));
                 }
                 if page == 0 {
                     first_paddr = paddr;
@@ -3883,6 +3979,21 @@ impl<'a> KernelHal<'a> {
                     && !runtime_region_paddr_is_contiguous(first_paddr, page, page_bytes, paddr)
                 {
                     paddr_contiguous = false;
+                }
+                if sdio_dma_owned {
+                    if page == 1 {
+                        sdio_dma_arena_first_paddr = paddr;
+                    } else if page > 1
+                        && sdio_dma_arena_paddr_contiguous
+                        && !runtime_region_paddr_is_contiguous(
+                            sdio_dma_arena_first_paddr,
+                            page - 1,
+                            page_bytes,
+                            paddr,
+                        )
+                    {
+                        sdio_dma_arena_paddr_contiguous = false;
+                    }
                 }
                 frames.push(frame);
             }
@@ -3939,19 +4050,43 @@ impl<'a> KernelHal<'a> {
             }
         }
         if let Some(builder) = init_descriptor.as_deref_mut() {
-            builder.add_buffer_resource_range(
-                hot_path,
-                if dma_owned {
-                    DRIVER_RUNTIME_RESOURCE_KIND_DMA
-                } else {
-                    DRIVER_RUNTIME_RESOURCE_KIND_SHARED
-                },
-                region.vaddr,
-                first_paddr,
-                pages,
-                first_page_index,
-                paddr_contiguous,
-            )?;
+            if sdio_dma_owned {
+                builder.add_tagged_dma_resource_range(
+                    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+                    region.vaddr,
+                    first_paddr,
+                    1,
+                    first_page_index,
+                    true,
+                )?;
+                builder.add_tagged_dma_resource_range(
+                    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                    region
+                        .vaddr
+                        .checked_add(page_bytes)
+                        .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?,
+                    sdio_dma_arena_first_paddr,
+                    pages - 1,
+                    first_page_index
+                        .checked_add(1)
+                        .ok_or(HalError::Unsupported("driver-runtime-init-dma-range-index"))?,
+                    sdio_dma_arena_paddr_contiguous,
+                )?;
+            } else {
+                builder.add_buffer_resource_range(
+                    hot_path,
+                    if dma_owned {
+                        DRIVER_RUNTIME_RESOURCE_KIND_DMA
+                    } else {
+                        DRIVER_RUNTIME_RESOURCE_KIND_SHARED
+                    },
+                    region.vaddr,
+                    first_paddr,
+                    pages,
+                    first_page_index,
+                    paddr_contiguous,
+                )?;
+            }
         }
         Ok(true)
     }
@@ -5254,6 +5389,22 @@ mod tests {
             super::PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES,
             &[0xFE00_B000]
         );
+        assert_eq!(
+            super::PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES,
+            &[0xFE00_7000]
+        );
+        assert_eq!(super::PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL, 4);
+        assert_ne!(
+            super::PI4_DRIVER_RUNTIME_BCM2835_DMA_AVAILABLE_CHANNEL_MASK
+                & (1 << super::PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL),
+            0
+        );
+        assert_eq!(
+            super::PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES[0]
+                + super::PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL
+                    * super::PI4_DRIVER_RUNTIME_BCM2835_DMA_CHANNEL_STRIDE,
+            0xFE00_7400
+        );
         assert!(!sdio.contains(&0x7E30_0000));
         assert!(!super::PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES.contains(&0x7E00_B000));
     }
@@ -5609,6 +5760,133 @@ mod tests {
             0,
             0,
             64,
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_init_descriptor_builder_records_sdio_dma_authority() {
+        let hot_path = super::driver_task::DriverTaskHotPath::SdioHost;
+        let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
+            hot_path, 256, 16, 3, 4, 32, false, true,
+        );
+        let mut builder = super::RuntimeInitDescriptorBuilder::new(
+            spec,
+            super::driver_task::DRIVER_TASK_ROLE_SDIO_BIT,
+            runtime_init_test_task_key(hot_path),
+            runtime_init_test_artifact_hash(hot_path),
+        )
+        .unwrap();
+        let page_bytes = pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as usize;
+        for paddr in [0xFE30_0000, 0xFE00_B000, 0xFE00_7000] {
+            builder.add_mmio_page(paddr).unwrap();
+        }
+        builder
+            .add_tagged_mmio_resource_range(
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+                super::driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR,
+                0xFE30_0000,
+                1,
+                0,
+            )
+            .unwrap();
+        builder
+            .add_tagged_mmio_resource_range(
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+                super::driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR + page_bytes,
+                0xFE00_B000,
+                1,
+                1,
+            )
+            .unwrap();
+        builder
+            .add_tagged_mmio_resource_range(
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+                super::driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR + 2 * page_bytes,
+                0xFE00_7000,
+                1,
+                2,
+            )
+            .unwrap();
+
+        let dma_paddrs = [0x0010_0000, 0x0020_0000, 0x0030_0000, 0x0040_0000];
+        for paddr in dma_paddrs {
+            builder.add_dma_page(paddr).unwrap();
+        }
+        builder
+            .add_tagged_dma_resource_range(
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+                super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR,
+                dma_paddrs[0],
+                1,
+                0,
+                true,
+            )
+            .unwrap();
+        builder
+            .add_tagged_dma_resource_range(
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR + page_bytes,
+                dma_paddrs[1],
+                3,
+                1,
+                false,
+            )
+            .unwrap();
+
+        for index in 0..32 {
+            builder
+                .add_shared_page(0x1000_0000 + index * page_bytes)
+                .unwrap();
+        }
+        builder
+            .add_buffer_resource_range(
+                hot_path,
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+                super::driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR,
+                0x1000_0000,
+                32,
+                0,
+                true,
+            )
+            .unwrap();
+
+        let descriptor = builder.finish().unwrap();
+        assert_eq!(descriptor.bus_alias_or, super::PI4_SDIO_DMA_BUS_ALIAS_OR);
+        assert_eq!(descriptor.bus_alias_and, super::PI4_SDIO_DMA_BUS_ALIAS_AND);
+        assert!(descriptor.has_resource_range_at(
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+            (super::driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR + 2 * page_bytes) as u64,
+            1,
+        ));
+        assert!(descriptor.has_resource_range_at(
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+            super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR as u64,
+            1,
+        ));
+        assert!(descriptor.has_resource_range_at(
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+            (super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR + page_bytes) as u64,
+            3,
+        ));
+        let dma_arena = descriptor.resource_ranges[..usize::from(descriptor.resource_range_count)]
+            .iter()
+            .find(|range| range.tag == pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA)
+            .expect("SDIO DMA arena range");
+        assert_eq!(dma_arena.first_page_index, 1);
+        assert_eq!(
+            dma_arena.flags & pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
+            0
+        );
+        assert!(descriptor.valid_for_resources(
+            hot_path.as_u32(),
+            super::driver_task::DRIVER_TASK_ROLE_SDIO_BIT as u32,
+            3,
+            4,
+            32,
         ));
     }
 

@@ -1573,6 +1573,8 @@ pub const DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL: u32 = 10;
 pub const DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ: u32 = 11;
 /// Low, uncached, runtime-private request page for the Pi firmware mailbox.
 pub const DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST: u32 = 12;
+/// BCM2711 BCM2835 DMA-controller MMIO owned by the linked SDIO runtime.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA: u32 = 13;
 
 /// Bus link flag: child runtime issues requests to the linked bus owner.
 pub const DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT: u32 = 1 << 0;
@@ -3244,6 +3246,29 @@ mod tests {
         assert!(core::mem::size_of::<DriverRuntimeInitDescriptor>() <= 1536);
         assert_eq!(core::mem::align_of::<DriverRuntimeInitDescriptor>(), 8);
         assert!(DRIVER_RUNTIME_INIT_MAX_DMA_PAGES >= 80);
+    }
+
+    #[test]
+    fn bcm2835_dma_tag_identifies_linked_sdio_mmio_authority() {
+        assert_eq!(DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA, 13);
+        assert_ne!(
+            DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST
+        );
+        let range = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+            DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+            0x7020_2000,
+            0xFE00_7000,
+            DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+            1,
+            2,
+        );
+        assert!(range.valid());
+        assert_eq!(range.first_page_index, 2);
     }
 
     #[test]

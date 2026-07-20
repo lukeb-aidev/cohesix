@@ -115,12 +115,13 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
     DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
     DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
-    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
-    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
-    DRIVER_RUNTIME_RING_PROGRESS_BYTES, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+    DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_RING_PROGRESS_BYTES,
+    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN,
@@ -744,6 +745,7 @@ const SDHCI_ARGUMENT: usize = 0x08;
 const SDHCI_TRANSFER_MODE: usize = 0x0c;
 const SDHCI_COMMAND: usize = 0x0e;
 const SDHCI_RESPONSE: usize = 0x10;
+#[cfg(test)]
 const SDHCI_BUFFER: usize = 0x20;
 const SDHCI_PRESENT_STATE: usize = 0x24;
 const SDHCI_INT_STATUS: usize = 0x30;
@@ -760,7 +762,9 @@ const SDHCI_CMD_DATA: u16 = 0x20;
 const SDHCI_CMD_INHIBIT: u32 = 1 << 0;
 const SDHCI_DATA_INHIBIT: u32 = 1 << 1;
 const SDHCI_DAT_ACTIVE: u32 = 1 << 2;
+#[cfg(test)]
 const SDHCI_SPACE_AVAILABLE: u32 = 1 << 10;
+#[cfg(test)]
 const SDHCI_DATA_AVAILABLE: u32 = 1 << 11;
 const SDHCI_INT_RESPONSE: u32 = 1 << 0;
 const SDHCI_INT_DATA_END: u32 = 1 << 1;
@@ -783,9 +787,7 @@ const SDHCI_INT_DATA_MASK: u32 = SDHCI_INT_DATA_END
     | SDHCI_INT_DATA_TIMEOUT
     | SDHCI_INT_DATA_CRC
     | SDHCI_INT_DATA_END_BIT;
-const SDHCI_INT_DATA_ERROR_MASK: u32 =
-    SDHCI_INT_ERROR | SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC | SDHCI_INT_DATA_END_BIT;
-const SDHCI_INT_DATA_FINISH_MASK: u32 = SDHCI_INT_DATA_END | SDHCI_INT_DATA_ERROR_MASK;
+const SDHCI_INT_PIO_READY_MASK: u32 = SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_AVAIL;
 // Linux treats the complete SDHCI error-summary range as terminal, including
 // the upper current-limit, Auto CMD, ADMA, tuning, response, and vendor bits.
 // Restricting this to the named command/data suberrors can leave an upper-bit
@@ -812,8 +814,8 @@ const GENET_REQUIRED_SHARED_PAGES: u16 = 32;
 const CYW43_REQUIRED_MMIO_PAGES: u16 = 0;
 const CYW43_REQUIRED_DMA_PAGES: u16 = 0;
 const CYW43_REQUIRED_SHARED_PAGES: u16 = 64;
-const SDIO_REQUIRED_MMIO_PAGES: u16 = 2;
-const SDIO_REQUIRED_DMA_PAGES: u16 = 1;
+const SDIO_REQUIRED_MMIO_PAGES: u16 = 3;
+const SDIO_REQUIRED_DMA_PAGES: u16 = 4;
 const SDIO_REQUIRED_SHARED_PAGES: u16 = 32;
 const PCIE_REQUIRED_MMIO_PAGES: u16 = 10;
 const PCIE_REQUIRED_SHARED_PAGES: u16 = 16;
@@ -1532,19 +1534,19 @@ const SDIO_INTERRUPT_ENABLE_MASK: u8 =
 const SDIO_FUNCTION1_BLOCK_SIZE: u16 = 64;
 const SDIO_FUNCTION2_BLOCK_SIZE: u16 = 512;
 const SDIO_CMD53_BYTE_MODE_MAX: usize = 512;
-// Linux's SDIO core splits a bulk request by the host's declared
-// `max_blk_count`. The isolated Cohesix owner has no bcm2835 DMA-channel
-// authority: its single admitted DMA page belongs to the firmware mailbox.
-// Advertise the capability of the linked polled-PIO owner truthfully instead
-// of submitting the 64-block request that physical hardware strands after the
-// controller's two-block FIFO has filled.
-const SDIO_LINKED_PIO_MAX_BLOCK_COUNT: u16 = 1;
+// Linux's brcmfmac RAM path chunks at the 32-KiB backplane window and lets the
+// SDIO core batch up to the host/count limits. Cohesix retains one child
+// operation per outer event turn and one bounded 8-KiB shared stage, so the
+// closest linked-runtime adaptation is one 128-block DMA request per full
+// stage, split only for the true tail, aperture, or CMD53-count boundary.
+const SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT: u16 =
+    (CYW43_FIRMWARE_STAGE_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16;
 const CYW43_FIRMWARE_TAIL_PAD_MAX_BYTES: usize = 4096;
 const CYW43_FIRMWARE_TRANSPORT_ALIGNMENT: u32 = 4;
 const CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES: usize =
-    SDIO_FUNCTION1_BLOCK_SIZE as usize * SDIO_LINKED_PIO_MAX_BLOCK_COUNT as usize;
+    SDIO_FUNCTION1_BLOCK_SIZE as usize * SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT as usize;
 const SDIO_FAULT_TELEMETRY_MAGIC: u32 = 0x5344_494f;
-const SDIO_FAULT_TELEMETRY_VERSION: u32 = 1;
+const SDIO_FAULT_TELEMETRY_VERSION: u32 = 2;
 const SDIO_FAULT_TELEMETRY_ARG_OFFSET: usize = 8;
 const SDIO_FAULT_TELEMETRY_CMD_FLAGS_OFFSET: usize = 12;
 const SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET: usize = 16;
@@ -1557,10 +1559,54 @@ const SDIO_FAULT_TELEMETRY_FAILURE_OFFSET: usize = 40;
 const SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET: usize = 44;
 const SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET: usize = 48;
 const SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET: usize = 52;
-const SDIO_FAULT_TELEMETRY_BYTES_EXTENDED: u16 = 56;
+const SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET: usize = 56;
+const SDIO_FAULT_TELEMETRY_DMA_CONBLK_AD_OFFSET: usize = 60;
+const SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET: usize = 64;
+const SDIO_FAULT_TELEMETRY_DMA_UNAVAILABLE: u32 = u32::MAX;
+const SDIO_FAULT_TELEMETRY_BYTES_EXTENDED: u16 = 68;
 const SDIO_FAULT_TELEMETRY_BYTES: u16 = SDIO_FAULT_TELEMETRY_BYTES_EXTENDED;
 const SDIO_FAULT_TELEMETRY_FRAME_OFFSET: usize = DRIVER_TASK_RING_FRAME_OFFSET + 512;
 const DMA_CACHE_LINE_BYTES: usize = 64;
+const SDIO_DMA_MMIO_PAGE_INDEX: usize = 2;
+const SDIO_DMA_PWRSEQ_PAGE_INDEX: usize = 0;
+const SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX: usize = 1;
+const SDIO_DMA_BOUNCE_FIRST_PAGE_INDEX: usize = 2;
+const SDIO_DMA_BOUNCE_PAGE_COUNT: usize = 2;
+const SDIO_DMA_CONTROL_BLOCK_BYTES: usize = 32;
+const SDIO_DMA_MAX_CONTROL_BLOCKS: usize = SDIO_DMA_BOUNCE_PAGE_COUNT;
+const SDIO_DMA_MAX_TRANSFER_BYTES: usize = SDIO_DMA_BOUNCE_PAGE_COUNT * DRIVER_TASK_RING_PAGE_BYTES;
+const BCM2835_DMA_CHANNEL: usize = 4;
+const BCM2835_DMA_CHANNEL_STRIDE: usize = 0x100;
+const BCM2835_DMA_CHANNEL_OFFSET: usize = BCM2835_DMA_CHANNEL * BCM2835_DMA_CHANNEL_STRIDE;
+const BCM2835_DMA_CS: usize = 0x00;
+const BCM2835_DMA_CONBLK_AD: usize = 0x04;
+const BCM2835_DMA_NEXTCONBK: usize = 0x1c;
+const BCM2835_DMA_CS_ACTIVE: u32 = 1 << 0;
+#[cfg(test)]
+const BCM2835_DMA_CS_END: u32 = 1 << 1;
+const BCM2835_DMA_CS_ERR: u32 = 1 << 8;
+const BCM2835_DMA_CS_ABORT: u32 = 1 << 30;
+const BCM2835_DMA_CS_RESET: u32 = 1 << 31;
+const BCM2835_DMA_TI_WAIT_RESP: u32 = 1 << 3;
+const BCM2835_DMA_TI_DEST_INC: u32 = 1 << 4;
+const BCM2835_DMA_TI_DEST_DREQ: u32 = 1 << 6;
+const BCM2835_DMA_TI_SRC_INC: u32 = 1 << 8;
+const BCM2835_DMA_TI_SRC_DREQ: u32 = 1 << 10;
+const BCM2835_DMA_DREQ_SDHOST: u32 = 11;
+const BCM2835_DMA_TI_PER_MAP_SHIFT: u32 = 16;
+const BCM2835_DMA_TI_PER_MAP_SDHOST: u32 = BCM2835_DMA_DREQ_SDHOST << BCM2835_DMA_TI_PER_MAP_SHIFT;
+const BCM2835_DMA_TI_WRITE: u32 = BCM2835_DMA_TI_WAIT_RESP
+    | BCM2835_DMA_TI_DEST_DREQ
+    | BCM2835_DMA_TI_SRC_INC
+    | BCM2835_DMA_TI_PER_MAP_SDHOST;
+const BCM2835_DMA_TI_READ: u32 = BCM2835_DMA_TI_WAIT_RESP
+    | BCM2835_DMA_TI_SRC_DREQ
+    | BCM2835_DMA_TI_DEST_INC
+    | BCM2835_DMA_TI_PER_MAP_SDHOST;
+const BCM2835_DMA_FIFO_BUS_ADDR: u32 = 0x7e30_0020;
+const BCM2835_DMA_RAM_BUS_ALIAS_OR: u64 = 0xc000_0000;
+const BCM2835_DMA_RAM_BUS_ALIAS_AND: u64 = 0x3fff_ffff;
+const BCM2835_DMA_ABORT_FALLBACK_POLLS: usize = 128;
 const CYW43_SDIO_FAST_CLOCK_HZ: u32 = 50_000_000;
 const CYW43_SDIO_DEFAULT_SPEED_CLOCK_HZ: u32 = 25_000_000;
 const SBSDIO_WATERMARK: u32 = 0x10008;
@@ -1665,12 +1711,14 @@ const CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS: usize = 32;
 const CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS: u64 = 20;
 const CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS: usize = 5_000;
 const CYW43_RX_IDLE_TRACE_MAGIC: u32 = 0x4352_5854;
-const CYW43_RX_IDLE_TRACE_VERSION: u16 = 9;
+const CYW43_RX_IDLE_TRACE_VERSION: u16 = 10;
 const CYW43_RX_IDLE_TRACE_V8_BYTES: usize = 180;
 const CYW43_RX_IDLE_TRACE_DPC_EVENTS_CONSUMED_OFFSET: usize = CYW43_RX_IDLE_TRACE_V8_BYTES;
 const CYW43_RX_IDLE_TRACE_DPC_EPOCH_ERRORS_OFFSET: usize = 184;
 const CYW43_RX_IDLE_TRACE_DPC_SEQUENCE_ERRORS_OFFSET: usize = 188;
-const CYW43_RX_IDLE_TRACE_BYTES: u16 = 192;
+const CYW43_RX_IDLE_TRACE_V9_BYTES: usize = 192;
+const CYW43_RX_IDLE_TRACE_DPC_OWNER_REARMS_OFFSET: usize = CYW43_RX_IDLE_TRACE_V9_BYTES;
+const CYW43_RX_IDLE_TRACE_BYTES: u16 = 196;
 const CYW43_SERVICE_REASON_NONE: u16 = 0;
 const CYW43_SERVICE_REASON_BACKGROUND_RX: u16 = 1;
 const CYW43_SERVICE_REASON_ETH_TX: u16 = 2;
@@ -3238,6 +3286,7 @@ struct Cyw43RuntimeState {
     dpc_pending_epoch: u32,
     dpc_active_sequence: u32,
     dpc_events_consumed: u32,
+    dpc_owner_rearms: u32,
     dpc_epoch_errors: u32,
     dpc_sequence_errors: u32,
     dpc_cursor: Cyw43DpcCursor,
@@ -3371,6 +3420,7 @@ impl Cyw43RuntimeState {
             dpc_pending_epoch: 0,
             dpc_active_sequence: 0,
             dpc_events_consumed: 0,
+            dpc_owner_rearms: 0,
             dpc_epoch_errors: 0,
             dpc_sequence_errors: 0,
             dpc_cursor: Cyw43DpcCursor::empty(),
@@ -3393,6 +3443,7 @@ impl Cyw43RuntimeState {
         self.dpc_pending_epoch = 0;
         self.dpc_active_sequence = 0;
         self.dpc_events_consumed = 0;
+        self.dpc_owner_rearms = 0;
         self.dpc_cursor.reset();
         self.reset_control_exchange();
         self.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START;
@@ -5916,6 +5967,7 @@ fn cyw43_complete_generation_commit(
     state.dpc_shared_epoch = requested;
     state.dpc_pending_epoch = 0;
     state.dpc_active_sequence = 0;
+    state.dpc_owner_rearms = 0;
     state.recovery_required = false;
     CYW43_SDIO_BUS_LINK_SEQ.store(
         cyw43_sdio_bus_link_sequence_seed(requested),
@@ -7366,6 +7418,9 @@ fn descriptor_resources_ready_checked(
         HOT_PATH_SDIO_HOST => {
             let pwrseq_vaddr =
                 DRIVER_TASK_DEVICE_MMIO_VADDR.saturating_add(DRIVER_TASK_RING_PAGE_BYTES);
+            let dma_mmio_vaddr = DRIVER_TASK_DEVICE_MMIO_VADDR.saturating_add(
+                SDIO_DMA_MMIO_PAGE_INDEX.saturating_mul(DRIVER_TASK_RING_PAGE_BYTES),
+            );
             if mmio_pages < SDIO_REQUIRED_MMIO_PAGES
                 || !descriptor_has_resource_range_at(
                     descriptor,
@@ -7379,6 +7434,13 @@ fn descriptor_resources_ready_checked(
                     DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
                     DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
                     pwrseq_vaddr as u64,
+                    1,
+                )
+                || !descriptor_has_resource_range_at(
+                    descriptor,
+                    DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+                    DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+                    dma_mmio_vaddr as u64,
                     1,
                 )
             {
@@ -7400,6 +7462,17 @@ fn descriptor_resources_ready_checked(
                     DRIVER_TASK_DMA_BUFFER_VADDR as u64,
                     1,
                 )
+                || !descriptor_has_resource_range_at(
+                    descriptor,
+                    DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                    DRIVER_TASK_DMA_BUFFER_VADDR.saturating_add(
+                        SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX
+                            .saturating_mul(DRIVER_TASK_RING_PAGE_BYTES),
+                    ) as u64,
+                    (1 + SDIO_DMA_BOUNCE_PAGE_COUNT) as u16,
+                )
+                || sdio_external_dma_authority_from_descriptor(descriptor).is_none()
             {
                 publish_resource_check_progress(
                     progress,
@@ -9288,7 +9361,7 @@ fn cyw43_runtime_service_dpc_event() -> bool {
         CYW43_DPC_DEFERRED.store(true, Ordering::Release);
     }
     if should_rearm_owner {
-        runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT);
+        let _ = cyw43_publish_owner_rearm_notification();
     }
     serviced
 }
@@ -9605,6 +9678,23 @@ fn runtime_signal_notification(slot: u32) {
 
 #[cfg(not(target_os = "none"))]
 fn runtime_signal_notification(_slot: u32) {}
+
+fn cyw43_publish_owner_rearm_notification() -> bool {
+    let admitted = CYW43_RUNTIME_STATE.with_mut(|state| {
+        if !state.dpc_link_ready || state.dpc_shared_epoch == 0 {
+            return false;
+        }
+        // This is generation-scoped publication truth, distinct from the
+        // SOURCE_ASSERTED_EMPTY preserve/rearm diagnostic at trace offset 176.
+        // Increment only at the actual reciprocal OwnerRearm signal path.
+        state.dpc_owner_rearms = state.dpc_owner_rearms.saturating_add(1);
+        true
+    });
+    if admitted {
+        runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT);
+    }
+    admitted
+}
 
 fn sdio_record_dpc_health(ack_failed: bool) {
     let (card_irq_masked, ack_pending, poisoned) = SDIO_RUNTIME_STATE.with_ref(|state| {
@@ -10133,17 +10223,18 @@ fn service_sdio_descriptor_command_with_owner<O: SdioDescriptorOwner>(
     if !desc.valid() {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
+    // CMD53 byte mode has a nine-bit count field where zero represents 512
+    // bytes. A larger descriptor length cannot be represented in the card
+    // argument even though the host and external-DMA engines could accept it.
+    // Reject that geometry before either engine observes the descriptor;
+    // otherwise, for example, 1,024 host/DMA bytes would be paired with a card
+    // count of 512 and leave the issued generation ambiguous.
     if matches!(
         desc.op,
         DRIVER_RUNTIME_SDIO_OP_CMD53_READ | DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
-    ) && desc.function == 1
-        && desc.block_count > SDIO_LINKED_PIO_MAX_BLOCK_COUNT
+    ) && desc.block_count == 0
+        && usize::from(desc.len) > SDIO_CMD53_BYTE_MODE_MAX
     {
-        // The linked Function-1 firmware/backplane owner has no data-DMA
-        // channel. Match Linux SDIO's host-capability split at the producer
-        // boundary and fail closed if a stale or malformed client tries to
-        // bypass that declaration. Function 2 keeps its separately bounded
-        // frame-transfer shapes.
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
     if desc.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET {
@@ -11088,6 +11179,7 @@ fn sdio_owner_path_quiescent() -> bool {
 
 fn sdio_owner_path_quiescent_with<I: SdioTransferIo>(io: &mut I) -> bool {
     io.read32(SDHCI_PRESENT_STATE) & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) == 0
+        && sdio_external_dma_path_quiescent_with(io)
 }
 
 fn sdio_contain_descriptor_failure(owner_timeout_us: u32) -> bool {
@@ -11100,8 +11192,17 @@ fn sdio_contain_descriptor_failure_with<I: SdioTransferIo>(
     owner_timeout_us: u32,
 ) -> bool {
     let mut containment_deadline = sdio_fresh_containment_deadline(owner_timeout_us);
-    sdio_recover_command_path_until_with(io, &mut containment_deadline)
-        && sdio_owner_path_quiescent_with(io)
+    // The immutable SDHCI terminal frame is captured by the caller before
+    // entering containment. Quiesce/reset the private external-DMA channel
+    // first, then reset the SDHCI command/data paths, matching Linux's two
+    // engine failure fence without replaying the issued descriptor.
+    let dma_ok = sdio_external_dma_abort_until_with(io, &mut containment_deadline);
+    // Containment fences are independent obligations. Even a failed DMA
+    // abort/reset must not short-circuit SDHCI command/data reset while DREQ
+    // or DATA_INHIBIT may still be live.
+    let host_ok = sdio_recover_command_path_until_with(io, &mut containment_deadline);
+    let quiescent = sdio_owner_path_quiescent_with(io);
+    dma_ok && host_ok && quiescent
 }
 
 fn sdio_poison_owner_path() {
@@ -12920,6 +13021,7 @@ fn sdio_write_fault_telemetry_frame_with<I: SdioTransferIo>(
 ) -> DriverFrameDescriptor {
     let offset = SDIO_FAULT_TELEMETRY_FRAME_OFFSET;
     let (payload_edge, payload_sum) = sdio_fault_payload_digest_with(io, flags, payload_frame);
+    let (dma_cs, dma_conblk_ad, dma_nextcb) = sdio_external_dma_terminal_telemetry_with(io);
     write_ring_u32(offset, SDIO_FAULT_TELEMETRY_MAGIC);
     write_ring_u32(offset + 4, SDIO_FAULT_TELEMETRY_VERSION);
     write_ring_u32(offset + SDIO_FAULT_TELEMETRY_ARG_OFFSET, arg);
@@ -12971,6 +13073,12 @@ fn sdio_write_fault_telemetry_frame_with<I: SdioTransferIo>(
         offset + SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET,
         payload_sum,
     );
+    write_ring_u32(offset + SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET, dma_cs);
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_DMA_CONBLK_AD_OFFSET,
+        dma_conblk_ad,
+    );
+    write_ring_u32(offset + SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET, dma_nextcb);
     DriverFrameDescriptor {
         offset: offset as u32,
         len: SDIO_FAULT_TELEMETRY_BYTES,
@@ -13145,6 +13253,77 @@ fn sdio_execute_transfer_until(
     )
 }
 
+fn sdio_wait_external_dma_request_until_with<I: SdioTransferIo>(
+    io: &mut I,
+    cmd: u16,
+    flags: u16,
+    frame: DriverFrameDescriptor,
+    write: bool,
+    authority: SdioExternalDmaAuthority,
+    owner_deadline: &mut RuntimeDeadline,
+) -> Option<u32> {
+    let mut response_seen = flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE != 0;
+    let mut response0 = 0u32;
+    let mut data_end_seen = false;
+    let mut dma_complete = false;
+    while !io.deadline_expired(owner_deadline) {
+        let status = io.read32(SDHCI_INT_STATUS);
+        let ack = sdhci_request_snapshot_ack_bits(status);
+        if ack != 0 {
+            io.write32(SDHCI_INT_STATUS, ack);
+        }
+        if status & SDHCI_INT_ALL_ERROR_MASK != 0 {
+            let stage = if response_seen {
+                SDIO_TRANSFER_FAILURE_STAGE_DATA_END
+            } else {
+                SDIO_TRANSFER_FAILURE_STAGE_COMMAND
+            };
+            sdio_record_interrupt_transfer_failure(stage, status);
+            return None;
+        }
+        if !response_seen && status & SDHCI_INT_RESPONSE != 0 {
+            response0 = io.read32(SDHCI_RESPONSE);
+            response_seen = true;
+            if let Some(r5) = sdio_r5_error(cmd, response0) {
+                sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_RESPONSE, r5);
+                return None;
+            }
+        }
+        data_end_seen |= status & SDHCI_INT_DATA_END != 0;
+
+        let dma_cs = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CS);
+        if dma_cs & BCM2835_DMA_CS_ERR != 0 {
+            sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, dma_cs);
+            return None;
+        }
+        // bcm2835-dma treats a zero current CB as the authoritative idle /
+        // completion signal. ACTIVE is not reliable after the terminal CB.
+        dma_complete |=
+            io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CONBLK_AD) == 0;
+        if response_seen && data_end_seen && dma_complete {
+            if !sdio_settle_transfer_data_path_until_with(io, owner_deadline) {
+                return None;
+            }
+            if !write && !sdio_external_dma_copy_read_payload_with(io, authority, frame) {
+                sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, 0);
+                return None;
+            }
+            return Some(response0);
+        }
+        io.poll_pause();
+    }
+    let status = io.read32(SDHCI_INT_STATUS);
+    let stage = if !response_seen {
+        SDIO_TRANSFER_FAILURE_STAGE_COMMAND
+    } else if !dma_complete {
+        SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
+    } else {
+        SDIO_TRANSFER_FAILURE_STAGE_DATA_END
+    };
+    sdio_record_interrupt_transfer_failure(stage, status);
+    None
+}
+
 fn sdio_execute_transfer_until_with<I: SdioTransferIo>(
     io: &mut I,
     cmd: u16,
@@ -13173,6 +13352,45 @@ fn sdio_execute_transfer_until_with<I: SdioTransferIo>(
         );
         return None;
     }
+    let dma_authority = if has_data {
+        let Some(authority) = io.external_dma_authority() else {
+            // Production admits exactly one data lane: external DMA. A
+            // missing/malformed authority is terminal and can never fall back
+            // to SDHCI BUFFER PIO.
+            sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, 0);
+            return None;
+        };
+        let dma_conblk = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CONBLK_AD);
+        let dma_cs = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CS);
+        if dma_conblk != 0 || dma_cs & BCM2835_DMA_CS_ERR != 0 {
+            // The fixed CB and bounce pages remain owned by the preceding DMA
+            // generation until CONBLK_AD is zero and ERROR is clear. Snapshot
+            // the stale engine without touching those pages or issuing the
+            // card command; descriptor-level containment will abort/reset both
+            // engines and this command is never replayed as issued work.
+            let status = if dma_cs & BCM2835_DMA_CS_ERR != 0 {
+                dma_cs
+            } else {
+                dma_conblk
+            };
+            sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, status);
+            return None;
+        }
+        if !sdio_external_dma_prepare_for_authority_with(
+            io,
+            authority,
+            frame,
+            write,
+            block_size,
+            block_count.max(1),
+        ) {
+            sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, 0);
+            return None;
+        }
+        Some(authority)
+    } else {
+        None
+    };
     io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     if has_data || short_busy_response {
         // Linux mmc-bcm2835 refreshes the maximum hardware timeout for every
@@ -13182,7 +13400,8 @@ fn sdio_execute_transfer_until_with<I: SdioTransferIo>(
     if has_data {
         // Match mmc-bcm2835 rather than the iProc shadow model: each halfword
         // is an immediate 32-bit RMW, and the size includes Linux's standard
-        // 512-KiB DMA-boundary field even though this owner currently uses PIO.
+        // 512-KiB DMA-boundary field. External BCM2835 DMA is a separate engine,
+        // so SDHCI_TRNS_DMA deliberately remains clear.
         io.write16(SDHCI_BLOCK_SIZE, sdio_host_block_size(block_size));
         io.write16(SDHCI_BLOCK_COUNT, block_count.max(1));
     } else {
@@ -13193,6 +13412,21 @@ fn sdio_execute_transfer_until_with<I: SdioTransferIo>(
         io.write16(SDHCI_TRANSFER_MODE, sdio_transfer_mode(write, block_count));
     }
     io.write16(SDHCI_COMMAND, sdio_make_command(cmd, flags, has_data));
+    if let Some(authority) = dma_authority {
+        // Pinned bcm2835-mmc sends COMMAND before dma_async_issue_pending.
+        // Start immediately; waiting for RESPONSE first can miss the FIFO DREQ
+        // window and was the key semantic gap in the former PIO path.
+        sdio_external_dma_start_with(io, authority);
+        return sdio_wait_external_dma_request_until_with(
+            io,
+            cmd,
+            flags,
+            frame,
+            write,
+            authority,
+            owner_deadline,
+        );
+    }
     let cmd_status = sdio_wait_request_int_until_with(io, owner_deadline);
     if cmd_status & SDHCI_INT_ALL_ERROR_MASK != 0 || cmd_status & SDHCI_INT_RESPONSE == 0 {
         sdio_record_interrupt_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_COMMAND, cmd_status);
@@ -13215,11 +13449,6 @@ fn sdio_execute_transfer_until_with<I: SdioTransferIo>(
     }
     if let Some(r5) = sdio_r5_error(cmd, response0) {
         sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_RESPONSE, r5);
-        return None;
-    }
-    if has_data
-        && !sdio_transfer_frame_until_with(io, frame, write, block_size, cmd_status, owner_deadline)
-    {
         return None;
     }
     Some(response0)
@@ -16399,38 +16628,6 @@ const fn sdio_transfer_mode(write: bool, block_count: u16) -> u16 {
     transfer
 }
 
-const fn sdio_pio_ready_burst_len(block_size: u16, remaining: usize) -> usize {
-    let host_window = block_size as usize;
-    if host_window == 0 || remaining < host_window {
-        remaining
-    } else {
-        host_window
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SdioPioBlockAdmission {
-    ConsumeReadyInterrupt,
-    DrainPresentBlock,
-}
-
-impl SdioPioBlockAdmission {
-    const fn consumes_ready_interrupt(self) -> bool {
-        matches!(self, Self::ConsumeReadyInterrupt)
-    }
-}
-
-const fn sdio_pio_block_admission(
-    first_ready_interrupt_pending: bool,
-    present_ready: bool,
-) -> SdioPioBlockAdmission {
-    if first_ready_interrupt_pending || !present_ready {
-        SdioPioBlockAdmission::ConsumeReadyInterrupt
-    } else {
-        SdioPioBlockAdmission::DrainPresentBlock
-    }
-}
-
 #[cfg(not(target_os = "none"))]
 fn sdio_execute_command(
     _cmd: u16,
@@ -16538,6 +16735,178 @@ fn sdio_make_command(cmd: u16, flags: u16, data: bool) -> u16 {
     (cmd << 8) | command
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SdioExternalDmaAuthority {
+    channel_vaddr: usize,
+    control_block_vaddr: usize,
+    control_block_bus_addr: u32,
+    bounce_vaddrs: [usize; SDIO_DMA_BOUNCE_PAGE_COUNT],
+    bounce_bus_addrs: [u32; SDIO_DMA_BOUNCE_PAGE_COUNT],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Bcm2835DmaControlBlock {
+    transfer_info: u32,
+    source: u32,
+    destination: u32,
+    transfer_len: u32,
+    stride: u32,
+    next: u32,
+}
+
+const fn sdio_external_dma_control_block_count(len: usize) -> Option<usize> {
+    if len == 0 || len > SDIO_DMA_MAX_TRANSFER_BYTES {
+        None
+    } else {
+        Some(len.div_ceil(DRIVER_TASK_RING_PAGE_BYTES))
+    }
+}
+
+const fn sdio_external_dma_segment_len(len: usize, index: usize) -> Option<usize> {
+    if index >= SDIO_DMA_MAX_CONTROL_BLOCKS {
+        return None;
+    }
+    let start = index.saturating_mul(DRIVER_TASK_RING_PAGE_BYTES);
+    if start >= len {
+        return None;
+    }
+    let remaining = len - start;
+    Some(if remaining < DRIVER_TASK_RING_PAGE_BYTES {
+        remaining
+    } else {
+        DRIVER_TASK_RING_PAGE_BYTES
+    })
+}
+
+const fn sdio_external_dma_ram_bus_addr(paddr: u64) -> Option<u32> {
+    // The Pi 4's legacy DMA0-14 window can address only the first 1 GiB of
+    // RAM through the C0000000 alias. Reject high memory before applying the
+    // alias; masking it would silently redirect DMA into unrelated low RAM.
+    if paddr > BCM2835_DMA_RAM_BUS_ALIAS_AND || paddr & 0x3 != 0 {
+        return None;
+    }
+    let bus = (paddr & BCM2835_DMA_RAM_BUS_ALIAS_AND) | BCM2835_DMA_RAM_BUS_ALIAS_OR;
+    if bus > u32::MAX as u64 {
+        None
+    } else {
+        Some(bus as u32)
+    }
+}
+
+fn sdio_external_dma_unique_resource_range(
+    descriptor: &DriverRuntimeInitDescriptor,
+    kind: u16,
+    tag: u32,
+) -> Option<DriverRuntimeResourceRangeDescriptor> {
+    let mut found = None;
+    let mut index = 0usize;
+    while index < descriptor_resource_range_count(descriptor) {
+        let range = descriptor.resource_ranges[index];
+        if range.kind == kind && range.tag == tag {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(range);
+        }
+        index += 1;
+    }
+    found
+}
+
+fn sdio_external_dma_authority_from_descriptor(
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<SdioExternalDmaAuthority> {
+    if !descriptor_valid_ref(descriptor)
+        || descriptor.hot_path != HOT_PATH_SDIO_HOST
+        || descriptor.mmio_page_count != SDIO_REQUIRED_MMIO_PAGES
+        || descriptor.dma_page_count != SDIO_REQUIRED_DMA_PAGES
+        || descriptor.bus_alias_or != BCM2835_DMA_RAM_BUS_ALIAS_OR
+        || descriptor.bus_alias_and != BCM2835_DMA_RAM_BUS_ALIAS_AND
+    {
+        return None;
+    }
+    let dma_mmio = sdio_external_dma_unique_resource_range(
+        descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+        DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+    )?;
+    let pwrseq = sdio_external_dma_unique_resource_range(
+        descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+    )?;
+    let arena = sdio_external_dma_unique_resource_range(
+        descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    )?;
+    let expected_dma_mmio_vaddr = DRIVER_TASK_DEVICE_MMIO_VADDR
+        .checked_add(SDIO_DMA_MMIO_PAGE_INDEX.checked_mul(DRIVER_TASK_RING_PAGE_BYTES)?)?;
+    let expected_pwrseq_vaddr = DRIVER_TASK_DMA_BUFFER_VADDR
+        .checked_add(SDIO_DMA_PWRSEQ_PAGE_INDEX.checked_mul(DRIVER_TASK_RING_PAGE_BYTES)?)?;
+    let expected_arena_vaddr = DRIVER_TASK_DMA_BUFFER_VADDR
+        .checked_add(SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX.checked_mul(DRIVER_TASK_RING_PAGE_BYTES)?)?;
+    let arena_pages = 1usize.checked_add(SDIO_DMA_BOUNCE_PAGE_COUNT)?;
+    let arena_bytes = arena_pages.checked_mul(DRIVER_TASK_RING_PAGE_BYTES)?;
+    if !dma_mmio.valid()
+        || dma_mmio.vaddr != expected_dma_mmio_vaddr as u64
+        || dma_mmio.page_count != 1
+        || dma_mmio.first_page_index != SDIO_DMA_MMIO_PAGE_INDEX as u16
+        || dma_mmio.bytes != DRIVER_TASK_RING_PAGE_BYTES as u64
+        || BCM2835_DMA_CHANNEL_OFFSET
+            .checked_add(BCM2835_DMA_NEXTCONBK + core::mem::size_of::<u32>())?
+            > dma_mmio.bytes as usize
+        || !pwrseq.valid()
+        || pwrseq.vaddr != expected_pwrseq_vaddr as u64
+        || pwrseq.page_count != 1
+        || pwrseq.first_page_index != SDIO_DMA_PWRSEQ_PAGE_INDEX as u16
+        || pwrseq.bytes != DRIVER_TASK_RING_PAGE_BYTES as u64
+        || !arena.valid()
+        || arena.vaddr != expected_arena_vaddr as u64
+        || usize::from(arena.page_count) != arena_pages
+        || arena.first_page_index != SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX as u16
+        || arena.bytes != arena_bytes as u64
+    {
+        return None;
+    }
+    let control_block_paddr = runtime_resource_paddr_at(descriptor, arena, 0)?;
+    let control_block_bus_addr = sdio_external_dma_ram_bus_addr(control_block_paddr)?;
+    if expected_arena_vaddr & (SDIO_DMA_CONTROL_BLOCK_BYTES - 1) != 0
+        || control_block_bus_addr as usize & (SDIO_DMA_CONTROL_BLOCK_BYTES - 1) != 0
+        || control_block_paddr & (DRIVER_TASK_RING_PAGE_BYTES as u64 - 1) != 0
+    {
+        return None;
+    }
+    let mut bounce_vaddrs = [0usize; SDIO_DMA_BOUNCE_PAGE_COUNT];
+    let mut bounce_bus_addrs = [0u32; SDIO_DMA_BOUNCE_PAGE_COUNT];
+    let mut bounce_paddrs = [0u64; SDIO_DMA_BOUNCE_PAGE_COUNT];
+    let mut index = 0usize;
+    while index < SDIO_DMA_BOUNCE_PAGE_COUNT {
+        let descriptor_page_index = SDIO_DMA_BOUNCE_FIRST_PAGE_INDEX.checked_add(index)?;
+        let arena_page_index =
+            descriptor_page_index.checked_sub(SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX)?;
+        let arena_offset = arena_page_index.checked_mul(DRIVER_TASK_RING_PAGE_BYTES)?;
+        let paddr = runtime_resource_paddr_at(descriptor, arena, arena_offset)?;
+        if paddr & (DRIVER_TASK_RING_PAGE_BYTES as u64 - 1) != 0
+            || paddr == control_block_paddr
+            || bounce_paddrs[..index].contains(&paddr)
+        {
+            return None;
+        }
+        bounce_paddrs[index] = paddr;
+        bounce_vaddrs[index] = expected_arena_vaddr.checked_add(arena_offset)?;
+        bounce_bus_addrs[index] = sdio_external_dma_ram_bus_addr(paddr)?;
+        index += 1;
+    }
+    Some(SdioExternalDmaAuthority {
+        channel_vaddr: expected_dma_mmio_vaddr.checked_add(BCM2835_DMA_CHANNEL_OFFSET)?,
+        control_block_vaddr: expected_arena_vaddr,
+        control_block_bus_addr,
+        bounce_vaddrs,
+        bounce_bus_addrs,
+    })
+}
+
 trait SdioTransferIo {
     fn read8(&mut self, offset: usize) -> u8;
     fn read16(&mut self, offset: usize) -> u16;
@@ -16545,9 +16914,15 @@ trait SdioTransferIo {
     fn write8(&mut self, offset: usize, value: u8);
     fn write16(&mut self, offset: usize, value: u16);
     fn write32(&mut self, offset: usize, value: u32);
-    fn write_buffer32(&mut self, value: u32);
     fn read_payload_byte(&mut self, offset: usize) -> u8;
     fn write_payload_byte(&mut self, offset: usize, value: u8);
+    fn external_dma_authority(&mut self) -> Option<SdioExternalDmaAuthority>;
+    fn external_dma_read32(&mut self, addr: usize) -> u32;
+    fn external_dma_write32(&mut self, addr: usize, value: u32);
+    fn external_dma_read_byte(&mut self, addr: usize) -> u8;
+    fn external_dma_write_byte(&mut self, addr: usize, value: u8);
+    fn external_dma_store_barrier(&mut self);
+    fn external_dma_load_barrier(&mut self);
     fn deadline_expired(&mut self, deadline: &mut RuntimeDeadline) -> bool;
     fn poll_pause(&mut self);
     fn injected_reset_failure(&mut self, _mask: u8) -> bool {
@@ -16582,16 +16957,71 @@ impl SdioTransferIo for SdioMmioTransferIo {
         sdio_write32(offset, value);
     }
 
-    fn write_buffer32(&mut self, value: u32) {
-        sdio_write_buffer32(value);
-    }
-
     fn read_payload_byte(&mut self, offset: usize) -> u8 {
         read_runtime_payload_byte(offset)
     }
 
     fn write_payload_byte(&mut self, offset: usize, value: u8) {
         write_runtime_payload_byte(offset, value);
+    }
+
+    fn external_dma_authority(&mut self) -> Option<SdioExternalDmaAuthority> {
+        sdio_external_dma_authority_from_descriptor(&RUNTIME_DESCRIPTOR.load())
+    }
+
+    fn external_dma_read32(&mut self, addr: usize) -> u32 {
+        #[cfg(target_os = "none")]
+        {
+            // SAFETY: external-DMA authority admission bounds `addr` to the
+            // mapped channel-4 register page handed exclusively to the SDIO
+            // runtime.
+            let value = unsafe { core::ptr::read_volatile(addr as *const u32) };
+            // Page_Uncached is not itself proof of Device-memory ordering.
+            // Match Linux readl semantics: the volatile load completes before
+            // later CB/payload observations are admitted.
+            dma_load_barrier();
+            return value;
+        }
+        #[cfg(not(target_os = "none"))]
+        {
+            let _ = addr;
+            0
+        }
+    }
+
+    fn external_dma_write32(&mut self, addr: usize, value: u32) {
+        #[cfg(target_os = "none")]
+        {
+            // Match Linux writel semantics for an uncached-but-not-proven-
+            // Device mapping: publish prior CB/payload stores before the
+            // controller register write. SDHCI's post-write SD-clock delay is
+            // controller-specific and does not apply to BCM2835 DMA registers.
+            dma_store_barrier();
+            // SAFETY: external-DMA authority admission bounds `addr` to the
+            // mapped channel-4 register page handed exclusively to the SDIO
+            // runtime.
+            unsafe { core::ptr::write_volatile(addr as *mut u32, value) };
+        }
+        #[cfg(not(target_os = "none"))]
+        {
+            let _ = (addr, value);
+        }
+    }
+
+    fn external_dma_read_byte(&mut self, addr: usize) -> u8 {
+        read_dma_byte(addr)
+    }
+
+    fn external_dma_write_byte(&mut self, addr: usize, value: u8) {
+        write_dma_byte(addr, value);
+    }
+
+    fn external_dma_store_barrier(&mut self) {
+        dma_store_barrier();
+    }
+
+    fn external_dma_load_barrier(&mut self) {
+        dma_load_barrier();
     }
 
     fn deadline_expired(&mut self, deadline: &mut RuntimeDeadline) -> bool {
@@ -16614,6 +17044,255 @@ impl SdioTransferIo for SdioMmioTransferIo {
             false
         }
     }
+}
+
+fn sdio_external_dma_write_memory_u32<I: SdioTransferIo>(io: &mut I, addr: usize, value: u32) {
+    for byte_index in 0..core::mem::size_of::<u32>() {
+        io.external_dma_write_byte(
+            addr + byte_index,
+            ((value >> (byte_index * 8)) & 0xff) as u8,
+        );
+    }
+}
+
+#[cfg(test)]
+fn sdio_external_dma_read_memory_u32<I: SdioTransferIo>(io: &mut I, addr: usize) -> u32 {
+    let mut value = 0u32;
+    for byte_index in 0..core::mem::size_of::<u32>() {
+        value |= u32::from(io.external_dma_read_byte(addr + byte_index)) << (byte_index * 8);
+    }
+    value
+}
+
+fn sdio_external_dma_control_block(
+    authority: SdioExternalDmaAuthority,
+    write: bool,
+    transfer_len: usize,
+    index: usize,
+) -> Option<Bcm2835DmaControlBlock> {
+    let segment_len = sdio_external_dma_segment_len(transfer_len, index)?;
+    let control_block_count = sdio_external_dma_control_block_count(transfer_len)?;
+    if index >= control_block_count || segment_len > u32::MAX as usize {
+        return None;
+    }
+    let bounce_bus = authority.bounce_bus_addrs[index];
+    let next = if index + 1 == control_block_count {
+        0
+    } else {
+        authority
+            .control_block_bus_addr
+            .checked_add(((index + 1) * SDIO_DMA_CONTROL_BLOCK_BYTES) as u32)?
+    };
+    if next != 0 && next as usize & (SDIO_DMA_CONTROL_BLOCK_BYTES - 1) != 0 {
+        return None;
+    }
+    Some(Bcm2835DmaControlBlock {
+        transfer_info: if write {
+            BCM2835_DMA_TI_WRITE
+        } else {
+            BCM2835_DMA_TI_READ
+        },
+        source: if write {
+            bounce_bus
+        } else {
+            BCM2835_DMA_FIFO_BUS_ADDR
+        },
+        destination: if write {
+            BCM2835_DMA_FIFO_BUS_ADDR
+        } else {
+            bounce_bus
+        },
+        transfer_len: segment_len as u32,
+        stride: 0,
+        next,
+    })
+}
+
+fn sdio_external_dma_write_control_block<I: SdioTransferIo>(
+    io: &mut I,
+    addr: usize,
+    block: Bcm2835DmaControlBlock,
+) {
+    sdio_external_dma_write_memory_u32(io, addr, block.transfer_info);
+    sdio_external_dma_write_memory_u32(io, addr + 4, block.source);
+    sdio_external_dma_write_memory_u32(io, addr + 8, block.destination);
+    sdio_external_dma_write_memory_u32(io, addr + 12, block.transfer_len);
+    sdio_external_dma_write_memory_u32(io, addr + 16, block.stride);
+    sdio_external_dma_write_memory_u32(io, addr + 20, block.next);
+    sdio_external_dma_write_memory_u32(io, addr + 24, 0);
+    sdio_external_dma_write_memory_u32(io, addr + 28, 0);
+}
+
+#[cfg(test)]
+fn sdio_external_dma_prepare_with<I: SdioTransferIo>(
+    io: &mut I,
+    frame: DriverFrameDescriptor,
+    write: bool,
+    block_size: u16,
+    block_count: u16,
+) -> Option<SdioExternalDmaAuthority> {
+    let authority = io.external_dma_authority()?;
+    sdio_external_dma_prepare_for_authority_with(
+        io,
+        authority,
+        frame,
+        write,
+        block_size,
+        block_count,
+    )
+    .then_some(authority)
+}
+
+fn sdio_external_dma_prepare_for_authority_with<I: SdioTransferIo>(
+    io: &mut I,
+    authority: SdioExternalDmaAuthority,
+    frame: DriverFrameDescriptor,
+    write: bool,
+    block_size: u16,
+    block_count: u16,
+) -> bool {
+    let transfer_len = usize::from(frame.len);
+    let Some(expected_len) = usize::from(block_size).checked_mul(usize::from(block_count)) else {
+        return false;
+    };
+    let Some(control_block_count) = sdio_external_dma_control_block_count(transfer_len) else {
+        return false;
+    };
+    if block_size == 0 || block_count == 0 || transfer_len != expected_len {
+        return false;
+    }
+    for index in 0..control_block_count {
+        let Some(segment_len) = sdio_external_dma_segment_len(transfer_len, index) else {
+            return false;
+        };
+        let Some(payload_offset) = index.checked_mul(DRIVER_TASK_RING_PAGE_BYTES) else {
+            return false;
+        };
+        for byte_index in 0..segment_len {
+            let value = if write {
+                io.read_payload_byte(frame.offset as usize + payload_offset + byte_index)
+            } else {
+                0
+            };
+            io.external_dma_write_byte(authority.bounce_vaddrs[index] + byte_index, value);
+        }
+        let Some(block) = sdio_external_dma_control_block(authority, write, transfer_len, index)
+        else {
+            return false;
+        };
+        sdio_external_dma_write_control_block(
+            io,
+            authority.control_block_vaddr + index * SDIO_DMA_CONTROL_BLOCK_BYTES,
+            block,
+        );
+    }
+    // The DMA pages are runtime-private uncached mappings. A store barrier is
+    // sufficient to publish both bounce payload and CB chain before the
+    // channel's CONBLK_AD becomes visible.
+    io.external_dma_store_barrier();
+    true
+}
+
+fn sdio_external_dma_start_with<I: SdioTransferIo>(
+    io: &mut I,
+    authority: SdioExternalDmaAuthority,
+) {
+    // Match bcm2835-dma's legacy-channel start order after SDHCI COMMAND:
+    // reset the private channel, load the first 32-byte-aligned CB, then set
+    // ACTIVE. Cohesix polls CONBLK_AD and intentionally omits DMA INT_EN from
+    // TI; the source driver uses the same TI plus INT_EN for its IRQ callback.
+    io.external_dma_write32(
+        authority.channel_vaddr + BCM2835_DMA_CS,
+        BCM2835_DMA_CS_RESET,
+    );
+    io.external_dma_write32(
+        authority.channel_vaddr + BCM2835_DMA_CONBLK_AD,
+        authority.control_block_bus_addr,
+    );
+    io.external_dma_write32(
+        authority.channel_vaddr + BCM2835_DMA_CS,
+        BCM2835_DMA_CS_ACTIVE,
+    );
+}
+
+fn sdio_external_dma_copy_read_payload_with<I: SdioTransferIo>(
+    io: &mut I,
+    authority: SdioExternalDmaAuthority,
+    frame: DriverFrameDescriptor,
+) -> bool {
+    let transfer_len = usize::from(frame.len);
+    let Some(control_block_count) = sdio_external_dma_control_block_count(transfer_len) else {
+        return false;
+    };
+    io.external_dma_load_barrier();
+    for index in 0..control_block_count {
+        let Some(segment_len) = sdio_external_dma_segment_len(transfer_len, index) else {
+            return false;
+        };
+        let payload_offset = index * DRIVER_TASK_RING_PAGE_BYTES;
+        for byte_index in 0..segment_len {
+            let value = io.external_dma_read_byte(authority.bounce_vaddrs[index] + byte_index);
+            io.write_payload_byte(frame.offset as usize + payload_offset + byte_index, value);
+        }
+    }
+    true
+}
+
+fn sdio_external_dma_terminal_telemetry_with<I: SdioTransferIo>(io: &mut I) -> (u32, u32, u32) {
+    let Some(authority) = io.external_dma_authority() else {
+        return (
+            SDIO_FAULT_TELEMETRY_DMA_UNAVAILABLE,
+            SDIO_FAULT_TELEMETRY_DMA_UNAVAILABLE,
+            SDIO_FAULT_TELEMETRY_DMA_UNAVAILABLE,
+        );
+    };
+    let channel = authority.channel_vaddr;
+    (
+        io.external_dma_read32(channel + BCM2835_DMA_CS),
+        io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD),
+        io.external_dma_read32(channel + BCM2835_DMA_NEXTCONBK),
+    )
+}
+
+fn sdio_external_dma_path_quiescent_with<I: SdioTransferIo>(io: &mut I) -> bool {
+    let Some(authority) = io.external_dma_authority() else {
+        return true;
+    };
+    let conblk = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CONBLK_AD);
+    let cs = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CS);
+    conblk == 0 && cs & BCM2835_DMA_CS_ERR == 0
+}
+
+fn sdio_external_dma_abort_until_with<I: SdioTransferIo>(
+    io: &mut I,
+    deadline: &mut RuntimeDeadline,
+) -> bool {
+    let Some(authority) = io.external_dma_authority() else {
+        return true;
+    };
+    let channel = authority.channel_vaddr;
+    if io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD) != 0 {
+        io.external_dma_write32(channel + BCM2835_DMA_NEXTCONBK, 0);
+        let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
+        io.external_dma_write32(
+            channel + BCM2835_DMA_CS,
+            cs | BCM2835_DMA_CS_ABORT | BCM2835_DMA_CS_ACTIVE,
+        );
+        let mut polls = BCM2835_DMA_ABORT_FALLBACK_POLLS;
+        while polls != 0 && !io.deadline_expired(deadline) {
+            if io.external_dma_read32(channel + BCM2835_DMA_CS) & BCM2835_DMA_CS_ABORT == 0 {
+                break;
+            }
+            polls -= 1;
+            io.poll_pause();
+        }
+        let cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
+        io.external_dma_write32(channel + BCM2835_DMA_CS, cs & !BCM2835_DMA_CS_ACTIVE);
+    }
+    io.external_dma_write32(channel + BCM2835_DMA_CS, BCM2835_DMA_CS_RESET);
+    io.external_dma_store_barrier();
+    io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD) == 0
+        && io.external_dma_read32(channel + BCM2835_DMA_CS) & BCM2835_DMA_CS_ERR == 0
 }
 
 fn sdio_wait_inhibit_clear(wait_data: bool) -> bool {
@@ -16656,13 +17335,6 @@ fn sdio_wait_inhibit_clear_until_with<I: SdioTransferIo>(
     false
 }
 
-const fn sdhci_wait_int_ack_bits(mask: u32, status: u32) -> u32 {
-    // Phase-local waits preserve status owned by a later phase. The command
-    // entry path uses `sdio_wait_request_int_until_with` instead so it can
-    // retain and dispatch one complete Linux-shaped request snapshot.
-    status & (mask | SDHCI_INT_ALL_ERROR_MASK) & !SDHCI_INT_CARD_INT
-}
-
 const fn sdhci_request_snapshot_ack_bits(status: u32) -> u32 {
     status & SDHCI_INT_COMMAND_DATA_CLEAR_MASK & !SDHCI_INT_CARD_INT
 }
@@ -16686,138 +17358,6 @@ fn sdio_wait_request_int_until_with<I: SdioTransferIo>(
         io.poll_pause();
     }
     0
-}
-
-fn sdio_wait_int_until_with<I: SdioTransferIo>(
-    io: &mut I,
-    mask: u32,
-    deadline: &mut RuntimeDeadline,
-) -> u32 {
-    while !io.deadline_expired(deadline) {
-        let status = io.read32(SDHCI_INT_STATUS);
-        if status & (mask | SDHCI_INT_ALL_ERROR_MASK) != 0 {
-            let ack = sdhci_wait_int_ack_bits(mask, status);
-            if ack != 0 {
-                io.write32(SDHCI_INT_STATUS, ack);
-            }
-            return status;
-        }
-        io.poll_pause();
-    }
-    0
-}
-
-const fn sdhci_present_buffer_ready_mask(write: bool) -> u32 {
-    if write {
-        SDHCI_SPACE_AVAILABLE
-    } else {
-        SDHCI_DATA_AVAILABLE
-    }
-}
-
-const fn sdhci_interrupt_buffer_ready_mask(write: bool) -> u32 {
-    if write {
-        SDHCI_INT_SPACE_AVAIL
-    } else {
-        SDHCI_INT_DATA_AVAIL
-    }
-}
-
-fn sdio_transfer_frame_until_with<I: SdioTransferIo>(
-    io: &mut I,
-    frame: DriverFrameDescriptor,
-    write: bool,
-    block_size: u16,
-    retained_request_status: u32,
-    owner_deadline: &mut RuntimeDeadline,
-) -> bool {
-    let mut offset = 0usize;
-    let present_ready_mask = sdhci_present_buffer_ready_mask(write);
-    let interrupt_ready_mask = sdhci_interrupt_buffer_ready_mask(write);
-    let mut retained_ready_pending = retained_request_status & interrupt_ready_mask != 0;
-    let mut first_ready_interrupt_pending = !retained_ready_pending;
-    while offset < frame.len as usize && !io.deadline_expired(owner_deadline) {
-        let present_ready = io.read32(SDHCI_PRESENT_STATE) & present_ready_mask != 0;
-        if retained_ready_pending {
-            // The retained ready bit is request-owned, but it is only a
-            // wakeup. PRESENT must independently prove FIFO ownership. If the
-            // edge was early, discard the software credit and require a fresh
-            // edge rather than authorizing BUFFER from stale PRESENT state.
-            retained_ready_pending = false;
-            first_ready_interrupt_pending = !present_ready;
-        }
-        let admission = sdio_pio_block_admission(first_ready_interrupt_pending, present_ready);
-        if admission.consumes_ready_interrupt() {
-            let status = sdio_wait_int_until_with(io, interrupt_ready_mask, owner_deadline);
-            if status & SDHCI_INT_ALL_ERROR_MASK != 0 || status & interrupt_ready_mask == 0 {
-                sdio_record_interrupt_transfer_failure(
-                    SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT,
-                    status,
-                );
-                return false;
-            }
-            first_ready_interrupt_pending = false;
-            // The interrupt is only a wakeup. Linux clears the data-status
-            // edge and then independently requires PRESENT_STATE ownership
-            // before touching BUFFER. Re-sample on the next iteration so a
-            // stale or early edge can never authorize a whole block write.
-            continue;
-        }
-        // Linux clears the entry DATA_MASK interrupt before calling
-        // `sdhci_transfer_pio()`, then drains every full PRESENT-ready block
-        // without touching INT_STATUS. Preserve a ready edge that relatches
-        // during this drain; if PRESENT deasserts, the next outer iteration
-        // consumes that edge. A per-block W1C here can erase the only credit
-        // for the next FIFO episode and strand a partially completed request.
-        let block_end = offset + sdio_pio_ready_burst_len(block_size, frame.len as usize - offset);
-        // One ready admission owns one complete SDHCI block. PRESENT_STATE is
-        // a block-level contract, not a per-word flow-control signal; Linux
-        // likewise transfers the entire block once admitted.
-        while offset < block_end {
-            let word_len = (block_end - offset).min(4);
-            if write {
-                let mut word = 0u32;
-                for byte_index in 0..word_len {
-                    word |= u32::from(
-                        io.read_payload_byte(frame.offset as usize + offset + byte_index),
-                    ) << (byte_index * 8);
-                }
-                io.write_buffer32(word);
-            } else {
-                let word = io.read32(SDHCI_BUFFER);
-                for byte_index in 0..word_len {
-                    io.write_payload_byte(
-                        frame.offset as usize + offset + byte_index,
-                        ((word >> (byte_index * 8)) & 0xff) as u8,
-                    );
-                }
-            }
-            offset = offset.saturating_add(word_len);
-        }
-    }
-    if offset != frame.len as usize {
-        sdio_record_interrupt_transfer_failure(
-            SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT,
-            io.read32(SDHCI_INT_STATUS),
-        );
-        return false;
-    }
-    // This is the sole linked-owner PIO path. As in Linux mmc-bcm2835, the
-    // immutable request snapshot and phase waits own every W1C. Do not issue a
-    // synthetic ready-bit clear after the FIFO drain: a coalesced DATA_END or
-    // next ready edge may already be live in the controller status register.
-    let retained_finish = retained_request_status & SDHCI_INT_DATA_FINISH_MASK;
-    let status = if retained_finish != 0 {
-        retained_finish
-    } else {
-        sdio_wait_int_until_with(io, SDHCI_INT_DATA_FINISH_MASK, owner_deadline)
-    };
-    if status & SDHCI_INT_ALL_ERROR_MASK == 0 && status & SDHCI_INT_DATA_END != 0 {
-        sdio_settle_transfer_data_path_until_with(io, owner_deadline)
-    } else {
-        sdio_record_interrupt_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_END, status);
-        false
-    }
 }
 
 fn sdio_settle_transfer_data_path_until_with<I: SdioTransferIo>(
@@ -20666,6 +21206,22 @@ fn cyw43_write_control_tx_fault_telemetry_frame(
         offset + SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET,
         payload_sum,
     );
+    // This compatibility frame is synthesized by the CYW43 runtime after the
+    // SDIO owner failed to provide its immutable terminal frame. CYW43 has no
+    // DMA-controller authority, so all-ones explicitly means unavailable; it
+    // must not be decoded as an external-DMA channel that never started.
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET,
+        SDIO_FAULT_TELEMETRY_DMA_UNAVAILABLE,
+    );
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_DMA_CONBLK_AD_OFFSET,
+        SDIO_FAULT_TELEMETRY_DMA_UNAVAILABLE,
+    );
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET,
+        SDIO_FAULT_TELEMETRY_DMA_UNAVAILABLE,
+    );
     DriverFrameDescriptor {
         offset: offset as u32,
         len: SDIO_FAULT_TELEMETRY_BYTES,
@@ -23826,6 +24382,10 @@ fn cyw43_stage_rx_idle_trace(
     write_ring_u32(
         offset + CYW43_RX_IDLE_TRACE_DPC_SEQUENCE_ERRORS_OFFSET,
         state.dpc_sequence_errors,
+    );
+    write_ring_u32(
+        offset + CYW43_RX_IDLE_TRACE_DPC_OWNER_REARMS_OFFSET,
+        state.dpc_owner_rearms,
     );
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(
@@ -35896,9 +36456,9 @@ fn sdio_read32(_offset: usize) -> u32 {
 #[cfg(target_os = "none")]
 fn sdio_write32(offset: usize, value: u32) {
     // Raspberry Pi's `mmc-bcm2835` WiFi host integration is 32-bit-only and
-    // delays ordinary register writes by at least two SD clocks. FIFO writes
-    // use the driver's separate raw-write path and therefore bypass this
-    // register-write delay in `sdio_write_buffer32`.
+    // delays ordinary register writes by at least two SD clocks. Cohesix has
+    // no SDHCI BUFFER/PIO data path; the separate BCM2835 DMA engine owns all
+    // request payload movement.
     // SAFETY: The SDIO runtime maps the declared SDHCI MMIO page at
     // `DRIVER_TASK_DEVICE_MMIO_VADDR`; all offsets used by callers are bounded
     // aligned register constants within that page.
@@ -35917,27 +36477,6 @@ fn sdio_write32(offset: usize, value: u32) {
 
 #[cfg(not(target_os = "none"))]
 fn sdio_write32(_offset: usize, _value: u32) {}
-
-#[cfg(target_os = "none")]
-fn sdio_write_buffer32(value: u32) {
-    // Raspberry Pi Linux uses `mmc_raw_writel()` for the SDHCI FIFO so a
-    // complete admitted PIO block is emitted without the inter-register delay.
-    // SAFETY: The SDIO runtime owns the admitted MMIO aperture and BUFFER is a
-    // bounded aligned register within it. The caller has already proved block
-    // ownership through the request's data-ready event and PRESENT_STATE.
-    // Linux's raw FIFO write still orders preceding payload reads before the
-    // device store; it only omits the bcm2835 two-SD-clock register delay.
-    dma_store_barrier();
-    unsafe {
-        core::ptr::write_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + SDHCI_BUFFER) as *mut u32,
-            value,
-        );
-    }
-}
-
-#[cfg(not(target_os = "none"))]
-fn sdio_write_buffer32(_value: u32) {}
 
 const fn sdio_merge_u16_word(word: u32, offset: usize, value: u16) -> u32 {
     let shift = ((offset & 0x2) * 8) as u32;
@@ -36275,7 +36814,13 @@ const fn sdio_interrupt_policy_registers(dpc_ready: bool, card_irq_masked: bool)
     } else {
         0
     };
-    (SDHCI_INT_COMMAND_DATA_CLEAR_MASK | card_enable, card_enable)
+    // External BCM2835 DMA is Cohesix's sole production data lane. Keep the
+    // PIO-ready sources disabled exactly as Linux does while use_dma is true;
+    // command/data completion and error status remain enabled and polled.
+    (
+        (SDHCI_INT_COMMAND_DATA_CLEAR_MASK & !SDHCI_INT_PIO_READY_MASK) | card_enable,
+        card_enable,
+    )
 }
 
 fn sdio_program_interrupt_policy() {
@@ -37486,6 +38031,12 @@ mod tests {
     const TEST_SDIO_MODEL_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
     const TEST_SDIO_MODEL_EVENTS: usize = 128;
     const TEST_SDIO_MODEL_WRITES: usize = 2_048;
+    const TEST_SDIO_DMA_CHANNEL_VADDR: usize = DRIVER_TASK_DEVICE_MMIO_VADDR
+        + SDIO_DMA_MMIO_PAGE_INDEX * DRIVER_TASK_RING_PAGE_BYTES
+        + BCM2835_DMA_CHANNEL_OFFSET;
+    const TEST_SDIO_DMA_CONTROL_BLOCK_BUS: u32 = 0xc100_0000;
+    const TEST_SDIO_DMA_BOUNCE0_BUS: u32 = 0xc100_1000;
+    const TEST_SDIO_DMA_BOUNCE1_BUS: u32 = 0xc100_2000;
 
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
     struct TestSdioModelEvent {
@@ -37500,7 +38051,6 @@ mod tests {
     struct TestSdioModelWrite {
         offset: usize,
         value: u32,
-        fifo: bool,
     }
 
     struct TestSdioHostIo {
@@ -37511,6 +38061,8 @@ mod tests {
         fifo_len: usize,
         fifo_words: usize,
         fifo_read_offset: usize,
+        sdhci_buffer_accesses: usize,
+        payload_writes_while_dma_active: usize,
         transfer_mode_shadow: u32,
         transfer_mode_shadow_valid: bool,
         command_status: u32,
@@ -37518,8 +38070,17 @@ mod tests {
         command_present_clear: u32,
         command_response: u32,
         data_end_after_words: usize,
-        pio_ready_episode_words: usize,
         clear_data_state_on_end: bool,
+        dma_authority_available: bool,
+        dma_cs: u32,
+        dma_conblk: u32,
+        dma_next: u32,
+        dma_started: usize,
+        dma_complete_on_start: bool,
+        dma_complete_after_polls: usize,
+        dma_error_on_start: bool,
+        dma_transfer_pending: bool,
+        dma_reset_stuck: bool,
         reset_stuck: bool,
         reset_failures_remaining: usize,
         scrub_diagnostic_registers_on_reset: bool,
@@ -37541,6 +38102,8 @@ mod tests {
                 fifo_len: 0,
                 fifo_words: 0,
                 fifo_read_offset: 0,
+                sdhci_buffer_accesses: 0,
+                payload_writes_while_dma_active: 0,
                 transfer_mode_shadow: 0,
                 transfer_mode_shadow_valid: false,
                 command_status: 0,
@@ -37548,8 +38111,17 @@ mod tests {
                 command_present_clear: 0,
                 command_response: 0,
                 data_end_after_words: 0,
-                pio_ready_episode_words: 0,
                 clear_data_state_on_end: true,
+                dma_authority_available: true,
+                dma_cs: 0,
+                dma_conblk: 0,
+                dma_next: 0,
+                dma_started: 0,
+                dma_complete_on_start: true,
+                dma_complete_after_polls: 0,
+                dma_error_on_start: false,
+                dma_transfer_pending: false,
+                dma_reset_stuck: false,
                 reset_stuck: false,
                 reset_failures_remaining: 0,
                 scrub_diagnostic_registers_on_reset: false,
@@ -37581,13 +38153,9 @@ mod tests {
             self.event_count += 1;
         }
 
-        fn record_write(&mut self, offset: usize, value: u32, fifo: bool) {
+        fn record_write(&mut self, offset: usize, value: u32) {
             assert!(self.write_count < self.writes.len());
-            self.writes[self.write_count] = TestSdioModelWrite {
-                offset,
-                value,
-                fifo,
-            };
+            self.writes[self.write_count] = TestSdioModelWrite { offset, value };
             self.write_count += 1;
         }
 
@@ -37633,19 +38201,6 @@ mod tests {
             }
         }
 
-        fn close_ready_episode_if_due(&mut self) {
-            if self.pio_ready_episode_words == 0
-                || self.fifo_words == 0
-                || self.fifo_words % self.pio_ready_episode_words != 0
-                || (self.data_end_after_words != 0 && self.fifo_words >= self.data_end_after_words)
-            {
-                return;
-            }
-            let present = self.register(SDHCI_PRESENT_STATE)
-                & !(SDHCI_SPACE_AVAILABLE | SDHCI_DATA_AVAILABLE);
-            self.set_register(SDHCI_PRESENT_STATE, present);
-        }
-
         fn command_committed(&mut self) {
             self.set_register(SDHCI_RESPONSE, self.command_response);
             let status = self.register(SDHCI_INT_STATUS) | self.command_status;
@@ -37658,15 +38213,113 @@ mod tests {
         fn write_offsets(&self) -> impl Iterator<Item = usize> + '_ {
             self.writes[..self.write_count]
                 .iter()
-                .filter(|write| !write.fifo)
                 .map(|write| write.offset)
         }
 
         fn command_issue_count(&self) -> usize {
             self.writes[..self.write_count]
                 .iter()
-                .filter(|write| !write.fifo && write.offset == (SDHCI_COMMAND & !0x3))
+                .filter(|write| write.offset == (SDHCI_COMMAND & !0x3))
                 .count()
+        }
+
+        fn external_dma_authority_value(&self) -> SdioExternalDmaAuthority {
+            SdioExternalDmaAuthority {
+                channel_vaddr: TEST_SDIO_DMA_CHANNEL_VADDR,
+                control_block_vaddr: DRIVER_TASK_DMA_BUFFER_VADDR
+                    + SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX * DRIVER_TASK_RING_PAGE_BYTES,
+                control_block_bus_addr: TEST_SDIO_DMA_CONTROL_BLOCK_BUS,
+                bounce_vaddrs: [
+                    DRIVER_TASK_DMA_BUFFER_VADDR
+                        + SDIO_DMA_BOUNCE_FIRST_PAGE_INDEX * DRIVER_TASK_RING_PAGE_BYTES,
+                    DRIVER_TASK_DMA_BUFFER_VADDR
+                        + (SDIO_DMA_BOUNCE_FIRST_PAGE_INDEX + 1) * DRIVER_TASK_RING_PAGE_BYTES,
+                ],
+                bounce_bus_addrs: [TEST_SDIO_DMA_BOUNCE0_BUS, TEST_SDIO_DMA_BOUNCE1_BUS],
+            }
+        }
+
+        fn dma_bus_to_vaddr(&self, bus: u32) -> Option<usize> {
+            let authority = self.external_dma_authority_value();
+            if bus >= authority.control_block_bus_addr
+                && bus
+                    < authority
+                        .control_block_bus_addr
+                        .saturating_add(DRIVER_TASK_RING_PAGE_BYTES as u32)
+            {
+                return Some(
+                    authority.control_block_vaddr
+                        + bus.saturating_sub(authority.control_block_bus_addr) as usize,
+                );
+            }
+            for index in 0..SDIO_DMA_BOUNCE_PAGE_COUNT {
+                if bus >= authority.bounce_bus_addrs[index]
+                    && bus
+                        < authority.bounce_bus_addrs[index]
+                            .saturating_add(DRIVER_TASK_RING_PAGE_BYTES as u32)
+                {
+                    return Some(
+                        authority.bounce_vaddrs[index]
+                            + bus.saturating_sub(authority.bounce_bus_addrs[index]) as usize,
+                    );
+                }
+            }
+            None
+        }
+
+        fn execute_external_dma_chain(&mut self) {
+            let mut control_block_bus = self.dma_conblk;
+            let mut blocks = 0usize;
+            while control_block_bus != 0 {
+                assert!(blocks < SDIO_DMA_MAX_CONTROL_BLOCKS);
+                let control_block_vaddr = self
+                    .dma_bus_to_vaddr(control_block_bus)
+                    .expect("test DMA control block bus address maps");
+                let transfer_info = read_dma_u32(control_block_vaddr);
+                let source = read_dma_u32(control_block_vaddr + 4);
+                let destination = read_dma_u32(control_block_vaddr + 8);
+                let transfer_len = read_dma_u32(control_block_vaddr + 12) as usize;
+                let next = read_dma_u32(control_block_vaddr + 20);
+                if transfer_info == BCM2835_DMA_TI_WRITE {
+                    assert_eq!(destination, BCM2835_DMA_FIFO_BUS_ADDR);
+                    let source_vaddr = self
+                        .dma_bus_to_vaddr(source)
+                        .expect("test DMA write source maps");
+                    assert!(self.fifo_len + transfer_len <= self.fifo.len());
+                    for index in 0..transfer_len {
+                        self.fifo[self.fifo_len + index] = read_dma_byte(source_vaddr + index);
+                    }
+                    self.fifo_len += transfer_len;
+                } else {
+                    assert_eq!(transfer_info, BCM2835_DMA_TI_READ);
+                    assert_eq!(source, BCM2835_DMA_FIFO_BUS_ADDR);
+                    let destination_vaddr = self
+                        .dma_bus_to_vaddr(destination)
+                        .expect("test DMA read destination maps");
+                    assert!(self.fifo_read_offset + transfer_len <= self.fifo_len);
+                    for index in 0..transfer_len {
+                        write_dma_byte(
+                            destination_vaddr + index,
+                            self.fifo[self.fifo_read_offset + index],
+                        );
+                    }
+                    self.fifo_read_offset += transfer_len;
+                }
+                self.fifo_words = self.fifo_words.saturating_add(transfer_len.div_ceil(4));
+                control_block_bus = next;
+                blocks += 1;
+            }
+            self.complete_data_if_due();
+        }
+
+        fn complete_external_dma(&mut self) {
+            if !self.dma_transfer_pending {
+                return;
+            }
+            self.execute_external_dma_chain();
+            self.dma_conblk = 0;
+            self.dma_cs = BCM2835_DMA_CS_END;
+            self.dma_transfer_pending = false;
         }
     }
 
@@ -37685,21 +38338,10 @@ mod tests {
         }
 
         fn read32(&mut self, offset: usize) -> u32 {
-            if offset != SDHCI_BUFFER {
-                return self.register(offset);
+            if offset == SDHCI_BUFFER {
+                self.sdhci_buffer_accesses = self.sdhci_buffer_accesses.saturating_add(1);
             }
-            let mut word = 0u32;
-            for byte_index in 0..4 {
-                let offset = self.fifo_read_offset + byte_index;
-                if offset < self.fifo_len {
-                    word |= u32::from(self.fifo[offset]) << (byte_index * 8);
-                }
-            }
-            self.fifo_read_offset = self.fifo_read_offset.saturating_add(4);
-            self.fifo_words = self.fifo_words.saturating_add(1);
-            self.complete_data_if_due();
-            self.close_ready_episode_if_due();
-            word
+            self.register(offset)
         }
 
         fn write8(&mut self, offset: usize, value: u8) {
@@ -37758,25 +38400,16 @@ mod tests {
         }
 
         fn write32(&mut self, offset: usize, value: u32) {
-            self.record_write(offset, value, false);
+            if offset == SDHCI_BUFFER {
+                self.sdhci_buffer_accesses = self.sdhci_buffer_accesses.saturating_add(1);
+            }
+            self.record_write(offset, value);
             if offset == SDHCI_INT_STATUS {
                 let retained = self.register(offset) & !value;
                 self.set_register(offset, retained);
             } else {
                 self.set_register(offset, value);
             }
-        }
-
-        fn write_buffer32(&mut self, value: u32) {
-            self.record_write(SDHCI_BUFFER, value, true);
-            assert!(self.fifo_len + 4 <= self.fifo.len());
-            for byte_index in 0..4 {
-                self.fifo[self.fifo_len + byte_index] = ((value >> (byte_index * 8)) & 0xff) as u8;
-            }
-            self.fifo_len += 4;
-            self.fifo_words = self.fifo_words.saturating_add(1);
-            self.complete_data_if_due();
-            self.close_ready_episode_if_due();
         }
 
         fn read_payload_byte(&mut self, offset: usize) -> u8 {
@@ -37788,12 +38421,77 @@ mod tests {
         }
 
         fn write_payload_byte(&mut self, offset: usize, value: u8) {
+            if self.dma_conblk != 0 {
+                self.payload_writes_while_dma_active =
+                    self.payload_writes_while_dma_active.saturating_add(1);
+            }
             if self.use_runtime_payload {
                 write_runtime_payload_byte(offset, value);
             } else {
                 self.payload[offset] = value;
             }
         }
+
+        fn external_dma_authority(&mut self) -> Option<SdioExternalDmaAuthority> {
+            self.dma_authority_available
+                .then(|| self.external_dma_authority_value())
+        }
+
+        fn external_dma_read32(&mut self, addr: usize) -> u32 {
+            match addr.saturating_sub(TEST_SDIO_DMA_CHANNEL_VADDR) {
+                BCM2835_DMA_CS => self.dma_cs,
+                BCM2835_DMA_CONBLK_AD => self.dma_conblk,
+                BCM2835_DMA_NEXTCONBK => self.dma_next,
+                _ => 0,
+            }
+        }
+
+        fn external_dma_write32(&mut self, addr: usize, value: u32) {
+            self.record_write(addr, value);
+            match addr.saturating_sub(TEST_SDIO_DMA_CHANNEL_VADDR) {
+                BCM2835_DMA_CS if value == BCM2835_DMA_CS_RESET => {
+                    if !self.dma_reset_stuck {
+                        self.dma_cs = 0;
+                        self.dma_conblk = 0;
+                        self.dma_next = 0;
+                        self.dma_transfer_pending = false;
+                    }
+                }
+                BCM2835_DMA_CS if value & BCM2835_DMA_CS_ABORT != 0 => {
+                    self.dma_cs = 0;
+                    self.dma_conblk = 0;
+                    self.dma_transfer_pending = false;
+                }
+                BCM2835_DMA_CS if value & BCM2835_DMA_CS_ACTIVE != 0 => {
+                    self.dma_started = self.dma_started.saturating_add(1);
+                    if self.dma_error_on_start {
+                        self.dma_cs = BCM2835_DMA_CS_ERR;
+                    } else {
+                        self.dma_cs = BCM2835_DMA_CS_ACTIVE;
+                        self.dma_transfer_pending = true;
+                        if self.dma_complete_on_start {
+                            self.complete_external_dma();
+                        }
+                    }
+                }
+                BCM2835_DMA_CS => self.dma_cs = value,
+                BCM2835_DMA_CONBLK_AD => self.dma_conblk = value,
+                BCM2835_DMA_NEXTCONBK => self.dma_next = value,
+                _ => {}
+            }
+        }
+
+        fn external_dma_read_byte(&mut self, addr: usize) -> u8 {
+            read_dma_byte(addr)
+        }
+
+        fn external_dma_write_byte(&mut self, addr: usize, value: u8) {
+            write_dma_byte(addr, value);
+        }
+
+        fn external_dma_store_barrier(&mut self) {}
+
+        fn external_dma_load_barrier(&mut self) {}
 
         fn deadline_expired(&mut self, deadline: &mut RuntimeDeadline) -> bool {
             runtime_deadline_expired(deadline)
@@ -37802,6 +38500,12 @@ mod tests {
         fn poll_pause(&mut self) {
             self.polls = self.polls.saturating_add(1);
             self.apply_poll_events();
+            if self.dma_transfer_pending
+                && self.dma_complete_after_polls != 0
+                && self.polls >= self.dma_complete_after_polls
+            {
+                self.complete_external_dma();
+            }
         }
 
         fn injected_reset_failure(&mut self, _mask: u8) -> bool {
@@ -38192,6 +38896,152 @@ mod tests {
     }
 
     #[test]
+    fn sdio_external_dma_authority_is_exact_and_supports_noncontiguous_pages() {
+        let descriptor = descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+        let authority = sdio_external_dma_authority_from_descriptor(&descriptor)
+            .expect("sealed SDIO descriptor owns channel 4 and the private DMA arena");
+        assert_eq!(authority.channel_vaddr, TEST_SDIO_DMA_CHANNEL_VADDR);
+        assert_eq!(authority.control_block_bus_addr, 0xe000_1000);
+        assert_eq!(authority.bounce_bus_addrs, [0xe000_2000, 0xe000_3000]);
+
+        let mut bad_alias = descriptor;
+        bad_alias.bus_alias_or = 0x4000_0000;
+        bad_alias = seal_descriptor_for_test(bad_alias, HOT_PATH_SDIO_HOST);
+        assert!(sdio_external_dma_authority_from_descriptor(&bad_alias).is_none());
+
+        let dma_mmio_index = descriptor.resource_ranges
+            [..usize::from(descriptor.resource_range_count)]
+            .iter()
+            .position(|range| {
+                range.kind == DRIVER_RUNTIME_RESOURCE_KIND_MMIO
+                    && range.tag == DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA
+            })
+            .expect("BCM2835 DMA MMIO range");
+        let mut wrong_channel_page = descriptor;
+        wrong_channel_page.resource_ranges[dma_mmio_index].vaddr +=
+            DRIVER_RUNTIME_RESOURCE_PAGE_BYTES;
+        wrong_channel_page = seal_descriptor_for_test(wrong_channel_page, HOT_PATH_SDIO_HOST);
+        assert!(sdio_external_dma_authority_from_descriptor(&wrong_channel_page).is_none());
+
+        let mut extra_mmio_authority = descriptor;
+        extra_mmio_authority.mmio_page_count = SDIO_REQUIRED_MMIO_PAGES + 1;
+        extra_mmio_authority.mmio_pages[usize::from(SDIO_REQUIRED_MMIO_PAGES)] =
+            pi4_driver_abi::DriverRuntimePageDescriptor::new(0x1000_3000);
+        extra_mmio_authority = seal_descriptor_for_test(extra_mmio_authority, HOT_PATH_SDIO_HOST);
+        assert!(sdio_external_dma_authority_from_descriptor(&extra_mmio_authority).is_none());
+
+        let arena_index = descriptor.resource_ranges
+            [..usize::from(descriptor.resource_range_count)]
+            .iter()
+            .position(|range| {
+                range.kind == DRIVER_RUNTIME_RESOURCE_KIND_DMA
+                    && range.tag == DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA
+            })
+            .expect("external-DMA arena range");
+        let mut high_memory = descriptor;
+        high_memory.resource_ranges[arena_index].paddr = 0x4000_0000;
+        high_memory = seal_descriptor_for_test(high_memory, HOT_PATH_SDIO_HOST);
+        assert!(sdio_external_dma_authority_from_descriptor(&high_memory).is_none());
+
+        let mut duplicate_arena = descriptor;
+        let duplicate_index = usize::from(duplicate_arena.resource_range_count);
+        duplicate_arena.resource_ranges[duplicate_index] =
+            duplicate_arena.resource_ranges[arena_index];
+        duplicate_arena.resource_range_count =
+            duplicate_arena.resource_range_count.saturating_add(1);
+        duplicate_arena = seal_descriptor_for_test(duplicate_arena, HOT_PATH_SDIO_HOST);
+        assert!(sdio_external_dma_authority_from_descriptor(&duplicate_arena).is_none());
+
+        let mut aliased_pages = descriptor;
+        aliased_pages.resource_ranges[arena_index].flags &=
+            !DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS;
+        aliased_pages.dma_pages[SDIO_DMA_BOUNCE_FIRST_PAGE_INDEX].paddr =
+            aliased_pages.dma_pages[SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX].paddr;
+        aliased_pages = seal_descriptor_for_test(aliased_pages, HOT_PATH_SDIO_HOST);
+        assert!(sdio_external_dma_authority_from_descriptor(&aliased_pages).is_none());
+
+        let mut noncontiguous = descriptor;
+        noncontiguous.resource_ranges[arena_index].flags &=
+            !DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS;
+        noncontiguous.dma_pages[SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX].paddr = 0x2100_0000;
+        noncontiguous.dma_pages[SDIO_DMA_BOUNCE_FIRST_PAGE_INDEX].paddr = 0x2200_0000;
+        noncontiguous.dma_pages[SDIO_DMA_BOUNCE_FIRST_PAGE_INDEX + 1].paddr = 0x2300_0000;
+        noncontiguous = seal_descriptor_for_test(noncontiguous, HOT_PATH_SDIO_HOST);
+        let authority = sdio_external_dma_authority_from_descriptor(&noncontiguous)
+            .expect("page-table DMA arena may be physically discontiguous");
+        assert_eq!(authority.control_block_bus_addr, 0xe100_0000);
+        assert_eq!(authority.bounce_bus_addrs, [0xe200_0000, 0xe300_0000]);
+    }
+
+    #[test]
+    fn sdio_init_rejects_dma_alias_and_high_memory_before_card_service() {
+        let _guard = test_guard();
+        let descriptor = descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+        let arena_index = descriptor.resource_ranges
+            [..usize::from(descriptor.resource_range_count)]
+            .iter()
+            .position(|range| {
+                range.kind == DRIVER_RUNTIME_RESOURCE_KIND_DMA
+                    && range.tag == DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA
+            })
+            .expect("external-DMA arena range");
+
+        let mut bad_alias = descriptor;
+        bad_alias.bus_alias_and = u64::MAX;
+        bad_alias = seal_descriptor_for_test(bad_alias, HOT_PATH_SDIO_HOST);
+        let mut high_memory = descriptor;
+        high_memory.resource_ranges[arena_index].paddr = 0x4000_0000;
+        high_memory = seal_descriptor_for_test(high_memory, HOT_PATH_SDIO_HOST);
+
+        for malformed in [bad_alias, high_memory] {
+            reset_runtime_for_test();
+            assert!(!descriptor_resources_ready(&malformed, HOT_PATH_SDIO_HOST));
+            let runtime_init = DriverTaskCommandRecord {
+                sequence: 0x5300,
+                opcode: OPCODE_SERVICE,
+                flags: 0,
+                arg0: HOT_PATH_SDIO_HOST,
+                arg1: ROLE_SDIO,
+                aux0: DRIVER_RUNTIME_INIT_AUX,
+                aux1: 0,
+                budget: budget(),
+                frame: DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+                    flags: 0,
+                },
+            };
+            assert_eq!(
+                service_runtime_init_for_test(
+                    runtime_task_key_for_hot_path(HOT_PATH_SDIO_HOST),
+                    runtime_init,
+                    malformed,
+                ),
+                DriverTaskCompletionRecord::progress(0x5300, HOT_PATH_SDIO_HOST)
+            );
+            let engine_init = DriverTaskCommandRecord {
+                sequence: 0x5301,
+                opcode: OPCODE_SERVICE,
+                flags: 0,
+                arg0: HOT_PATH_SDIO_HOST,
+                arg1: ROLE_SDIO,
+                aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+                aux1: 0,
+                budget: budget(),
+                frame: DriverFrameDescriptor::empty(),
+            };
+            assert_eq!(
+                service_command(0, engine_init),
+                DriverTaskCompletionRecord::fault(
+                    0x5301,
+                    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED as u16,
+                )
+            );
+            assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.initialized));
+        }
+    }
+
+    #[test]
     fn sdio_irq_bind_failure_is_not_a_service_route() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -38408,19 +39258,26 @@ mod tests {
         );
         assert_eq!(
             sdio_interrupt_policy_registers(true, true),
-            (SDHCI_INT_COMMAND_DATA_CLEAR_MASK, 0),
+            (
+                SDHCI_INT_COMMAND_DATA_CLEAR_MASK & !SDHCI_INT_PIO_READY_MASK,
+                0,
+            ),
             "mmc-bcm2835 masks CARD_INT in both enable registers"
         );
         assert_eq!(
             sdio_interrupt_policy_registers(true, false),
             (
-                SDHCI_INT_COMMAND_DATA_CLEAR_MASK | SDHCI_INT_CARD_INT,
+                (SDHCI_INT_COMMAND_DATA_CLEAR_MASK & !SDHCI_INT_PIO_READY_MASK)
+                    | SDHCI_INT_CARD_INT,
                 SDHCI_INT_CARD_INT,
             )
         );
         assert_eq!(
             sdio_interrupt_policy_registers(false, false),
-            (SDHCI_INT_COMMAND_DATA_CLEAR_MASK, 0)
+            (
+                SDHCI_INT_COMMAND_DATA_CLEAR_MASK & !SDHCI_INT_PIO_READY_MASK,
+                0,
+            )
         );
     }
 
@@ -38449,7 +39306,10 @@ mod tests {
             assert_eq!(state.card_irq_captures, 1);
             assert_eq!(
                 sdio_interrupt_policy_registers(true, state.card_irq_masked),
-                (SDHCI_INT_COMMAND_DATA_CLEAR_MASK, 0),
+                (
+                    SDHCI_INT_COMMAND_DATA_CLEAR_MASK & !SDHCI_INT_PIO_READY_MASK,
+                    0,
+                ),
                 "terminal deferred service must quiesce the level source before root runs",
             );
         });
@@ -39241,6 +40101,34 @@ mod tests {
             dpc_consumer_wake_route(&ring, epoch),
             DpcConsumerWakeRoute::OwnerRearm
         );
+    }
+
+    #[test]
+    fn dpc_owner_rearm_counter_tracks_actual_publications_per_generation() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        assert!(!cyw43_publish_owner_rearm_notification());
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.dpc_shared_epoch = 0x4359_5301;
+        });
+
+        assert!(cyw43_publish_owner_rearm_notification());
+        assert!(cyw43_publish_owner_rearm_notification());
+        CYW43_RUNTIME_STATE.with_ref(|state| assert_eq!(state.dpc_owner_rearms, 2));
+
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            let next = state.dpc_shared_epoch.wrapping_add(1);
+            state.dpc_pending_epoch = next;
+            assert!(cyw43_complete_generation_commit(
+                state,
+                DriverTaskCompletionRecord::progress(0x8000_5302, next),
+                0x8000_5302,
+            ));
+            assert_eq!(state.dpc_owner_rearms, 0);
+        });
+        assert!(cyw43_publish_owner_rearm_notification());
+        CYW43_RUNTIME_STATE.with_ref(|state| assert_eq!(state.dpc_owner_rearms, 1));
     }
 
     #[test]
@@ -41581,26 +42469,69 @@ mod tests {
                     1,
                 );
                 range_index += 1;
+                descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+                    DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+                    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+                    DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
+                    DRIVER_TASK_DEVICE_MMIO_VADDR as u64
+                        + (SDIO_DMA_MMIO_PAGE_INDEX as u64) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                    0x1000_2000,
+                    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                    1,
+                    SDIO_DMA_MMIO_PAGE_INDEX as u16,
+                );
+                range_index += 1;
             }
         }
         if dma_pages != 0 {
-            descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
-                DRIVER_RUNTIME_RESOURCE_KIND_DMA,
-                DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
-                    | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
-                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
-                if hot_path == HOT_PATH_SDIO_HOST {
-                    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST
-                } else {
-                    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA
-                },
-                DRIVER_TASK_DMA_BUFFER_VADDR as u64,
-                0x2000_0000,
-                u64::from(dma_pages) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
-                dma_pages,
-                0,
-            );
-            range_index += 1;
+            if hot_path == HOT_PATH_SDIO_HOST {
+                descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+                    DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+                    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
+                    DRIVER_TASK_DMA_BUFFER_VADDR as u64,
+                    0x2000_0000,
+                    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                    1,
+                    SDIO_DMA_PWRSEQ_PAGE_INDEX as u16,
+                );
+                range_index += 1;
+                descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+                    DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+                    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                    DRIVER_TASK_DMA_BUFFER_VADDR as u64
+                        + (SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX as u64)
+                            * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                    0x2000_1000,
+                    (1 + SDIO_DMA_BOUNCE_PAGE_COUNT as u64) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                    (1 + SDIO_DMA_BOUNCE_PAGE_COUNT) as u16,
+                    SDIO_DMA_CONTROL_BLOCK_PAGE_INDEX as u16,
+                );
+                range_index += 1;
+                descriptor.bus_alias_or = BCM2835_DMA_RAM_BUS_ALIAS_OR;
+                descriptor.bus_alias_and = BCM2835_DMA_RAM_BUS_ALIAS_AND;
+            } else {
+                descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+                    DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                        | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+                    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                    DRIVER_TASK_DMA_BUFFER_VADDR as u64,
+                    0x2000_0000,
+                    u64::from(dma_pages) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                    dma_pages,
+                    0,
+                );
+                range_index += 1;
+            }
         }
         if shared_pages != 0 {
             descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
@@ -49877,21 +50808,23 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_rx_idle_trace_v9_layout_is_additive() {
-        assert_eq!(CYW43_RX_IDLE_TRACE_VERSION, 9);
+    fn cyw43_rx_idle_trace_v10_layout_is_additive() {
+        assert_eq!(CYW43_RX_IDLE_TRACE_VERSION, 10);
         assert_eq!(CYW43_RX_IDLE_TRACE_V8_BYTES, 180);
         assert_eq!(CYW43_RX_IDLE_TRACE_DPC_EVENTS_CONSUMED_OFFSET, 180);
         assert_eq!(CYW43_RX_IDLE_TRACE_DPC_EPOCH_ERRORS_OFFSET, 184);
         assert_eq!(CYW43_RX_IDLE_TRACE_DPC_SEQUENCE_ERRORS_OFFSET, 188);
-        assert_eq!(CYW43_RX_IDLE_TRACE_BYTES, 192);
+        assert_eq!(CYW43_RX_IDLE_TRACE_V9_BYTES, 192);
+        assert_eq!(CYW43_RX_IDLE_TRACE_DPC_OWNER_REARMS_OFFSET, 192);
+        assert_eq!(CYW43_RX_IDLE_TRACE_BYTES, 196);
         assert_eq!(
-            CYW43_RX_IDLE_TRACE_DPC_SEQUENCE_ERRORS_OFFSET + core::mem::size_of::<u32>(),
+            CYW43_RX_IDLE_TRACE_DPC_OWNER_REARMS_OFFSET + core::mem::size_of::<u32>(),
             usize::from(CYW43_RX_IDLE_TRACE_BYTES)
         );
     }
 
     #[test]
-    fn cyw43_rx_idle_trace_v9_appends_dpc_counters_without_prefix_drift() {
+    fn cyw43_rx_idle_trace_v10_appends_owner_rearms_without_v9_prefix_drift() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -49900,6 +50833,7 @@ mod tests {
         state.dpc_events_consumed = 0x1122_3344;
         state.dpc_epoch_errors = 0x5566_7788;
         state.dpc_sequence_errors = 0x99aa_bbcc;
+        state.dpc_owner_rearms = 0x0bad_cafe;
 
         let frame = cyw43_stage_rx_idle_trace(
             &state,
@@ -49929,24 +50863,28 @@ mod tests {
             ),
             0x99aa_bbcc
         );
+        assert_eq!(
+            read_ring_u32(
+                DRIVER_TASK_RING_FRAME_OFFSET + CYW43_RX_IDLE_TRACE_DPC_OWNER_REARMS_OFFSET
+            ),
+            0x0bad_cafe
+        );
 
-        let mut v8_prefix = [0u8; CYW43_RX_IDLE_TRACE_V8_BYTES];
-        for (index, byte) in v8_prefix.iter_mut().enumerate() {
+        let mut v9_prefix = [0u8; CYW43_RX_IDLE_TRACE_V9_BYTES];
+        for (index, byte) in v9_prefix.iter_mut().enumerate() {
             *byte = read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index);
         }
-        state.dpc_events_consumed = 1;
-        state.dpc_epoch_errors = 2;
-        state.dpc_sequence_errors = 3;
+        state.dpc_owner_rearms = 1;
         let _ = cyw43_stage_rx_idle_trace(
             &state,
             DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NO_RFRAME,
             0x4359_5301,
         );
-        for (index, expected) in v8_prefix.iter().copied().enumerate() {
+        for (index, expected) in v9_prefix.iter().copied().enumerate() {
             assert_eq!(
                 read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index),
                 expected,
-                "v8 prefix byte {index} changed"
+                "v9 prefix byte {index} changed"
             );
         }
     }
@@ -53225,7 +54163,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_runtime_int_ack_preserves_other_phase_and_card_interrupt() {
+    fn sdio_runtime_request_snapshot_ack_preserves_card_interrupt() {
         let upper_error = 1 << 24;
         let status = SDHCI_INT_RESPONSE
             | SDHCI_INT_DATA_AVAIL
@@ -53233,18 +54171,6 @@ mod tests {
             | SDHCI_INT_CARD_INT
             | SDHCI_INT_ERROR
             | upper_error;
-        assert_eq!(
-            sdhci_wait_int_ack_bits(SDHCI_INT_RESPONSE, status),
-            SDHCI_INT_RESPONSE | SDHCI_INT_ERROR | upper_error
-        );
-        assert_eq!(
-            sdhci_wait_int_ack_bits(SDHCI_INT_DATA_AVAIL, status),
-            SDHCI_INT_DATA_AVAIL | SDHCI_INT_ERROR | upper_error
-        );
-        assert_eq!(
-            sdhci_wait_int_ack_bits(SDHCI_INT_DATA_FINISH_MASK, status),
-            SDHCI_INT_DATA_END | SDHCI_INT_ERROR | upper_error
-        );
         assert_eq!(SDHCI_INT_ALL_ERROR_MASK, 0xffff_8000);
         assert_eq!(SDHCI_INT_COMMAND_DATA_CLEAR_MASK & SDHCI_INT_CARD_INT, 0);
         assert_eq!(
@@ -53256,23 +54182,20 @@ mod tests {
                 | upper_error
         );
         assert_ne!(SDHCI_INT_COMMAND_DATA_CLEAR_MASK & upper_error, 0);
-        assert_ne!(SDHCI_INT_DATA_FINISH_MASK & SDHCI_INT_DATA_END, 0);
-        assert_ne!(SDHCI_INT_DATA_FINISH_MASK & SDHCI_INT_DATA_CRC, 0);
-        assert_ne!(SDHCI_INT_DATA_FINISH_MASK & SDHCI_INT_ERROR, 0);
     }
 
     #[test]
     fn cyw43_backplane_upload_uses_one_linux_normal_lane() {
         assert_eq!(
             CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
-            SDIO_FUNCTION1_BLOCK_SIZE as usize
+            CYW43_FIRMWARE_STAGE_BYTES
         );
-        assert!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES < CYW43_FIRMWARE_STAGE_BYTES);
+        assert_eq!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES, 8 * 1024);
         assert_eq!(
             CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES % SDIO_FUNCTION1_BLOCK_SIZE as usize,
             0
         );
-        assert_eq!(SDIO_LINKED_PIO_MAX_BLOCK_COUNT, 1);
+        assert_eq!(SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT, 128);
         assert!(cyw43_backplane_uses_bulk_block_mode(false, 2048));
         assert!(!cyw43_backplane_uses_bulk_block_mode(
             false,
@@ -53280,18 +54203,14 @@ mod tests {
         ));
         assert_eq!(
             cyw43_backplane_write_chunk_shape(false, true, 2048),
-            (
-                SDIO_FUNCTION1_BLOCK_SIZE as usize,
-                SDIO_FUNCTION1_BLOCK_SIZE,
-                1
-            )
+            (2048, SDIO_FUNCTION1_BLOCK_SIZE, 32)
         );
         assert_eq!(
             cyw43_backplane_write_chunk_shape(false, true, CYW43_FIRMWARE_STAGE_BYTES),
             (
                 CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                SDIO_LINKED_PIO_MAX_BLOCK_COUNT
+                SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT
             )
         );
         assert_eq!(
@@ -53299,7 +54218,7 @@ mod tests {
             (
                 CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                SDIO_LINKED_PIO_MAX_BLOCK_COUNT
+                SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT
             )
         );
         assert_eq!(
@@ -53377,7 +54296,7 @@ mod tests {
 
     #[test]
     fn cyw43_linked_pre_release_owner_upload_has_no_alternate_lane() {
-        let upload_block_count = SDIO_LINKED_PIO_MAX_BLOCK_COUNT;
+        let upload_block_count = SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT;
         let block_arg = sdio_cmd53_arg(
             true,
             1,
@@ -53391,7 +54310,8 @@ mod tests {
         assert_eq!(block_arg & 0x1ff, u32::from(upload_block_count));
         let transfer = sdio_transfer_mode(true, upload_block_count);
         assert_ne!(transfer & SDHCI_TRNS_BLK_CNT_EN, 0);
-        assert_eq!(transfer & SDHCI_TRNS_MULTI, 0);
+        assert_ne!(transfer & SDHCI_TRNS_MULTI, 0);
+        assert_eq!(transfer & 1, 0, "external DMA must not set SDHCI_TRNS_DMA");
         assert_eq!(
             sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, SDHCI_INT_ERROR),
             (SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT << 24) | SDHCI_INT_ERROR
@@ -53399,8 +54319,8 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_linked_pio_firmware_cursor_advances_by_linux_host_limited_commands() {
-        let expected = 4_096usize;
+    fn cyw43_linked_dma_firmware_cursor_advances_by_linux_host_limited_commands() {
+        let expected = CYW43_FIRMWARE_STAGE_BYTES;
         let base = CYW43_RAM_BASE_4345;
         let mut remaining = expected;
         let mut advanced = 0usize;
@@ -53412,7 +54332,7 @@ mod tests {
                 cyw43_backplane_write_chunk_shape(false, bulk_block_mode, remaining);
             assert_eq!(block_size, SDIO_FUNCTION1_BLOCK_SIZE);
             assert_eq!(chunk_len, CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES);
-            assert_eq!(block_count, SDIO_LINKED_PIO_MAX_BLOCK_COUNT);
+            assert_eq!(block_count, SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT);
             let addr = cyw43_backplane_function_addr(base + advanced as u32);
             let arg = sdio_cmd53_arg(
                 true,
@@ -53435,21 +54355,21 @@ mod tests {
                 0,
                 "ticket {commands} must increment its address"
             );
-            assert_eq!(arg & 0x1ff, u32::from(SDIO_LINKED_PIO_MAX_BLOCK_COUNT));
+            assert_eq!(arg & 0x1ff, u32::from(SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT));
             advanced += chunk_len;
             remaining -= chunk_len;
             commands += 1;
         }
-        assert_eq!(commands, 64);
+        assert_eq!(commands, 1);
         assert_eq!(advanced, expected);
     }
 
     #[test]
-    fn cyw43_linked_pio_firmware_stops_at_every_exact_failure_cut() {
+    fn cyw43_linked_dma_firmware_stops_at_every_exact_failure_cut() {
         let _guard = test_guard();
-        const FIRMWARE_BYTES: usize = 4_096;
+        const FIRMWARE_BYTES: usize = CYW43_FIRMWARE_STAGE_BYTES;
         const EXPECTED_COMMANDS: usize = FIRMWARE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
-        assert_eq!(EXPECTED_COMMANDS, 64);
+        assert_eq!(EXPECTED_COMMANDS, 1);
 
         for cut in 0..=EXPECTED_COMMANDS {
             reset_runtime_for_test();
@@ -53473,7 +54393,7 @@ mod tests {
                         1,
                         failed_addr,
                         true,
-                        SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                        SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT,
                         CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
                     ),
                 );
@@ -53517,7 +54437,7 @@ mod tests {
                         1,
                         addr,
                         SDIO_FUNCTION1_BLOCK_SIZE,
-                        SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                        SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT,
                         CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
                     ),
                     expected_count,
@@ -54200,28 +55120,6 @@ mod tests {
     }
 
     #[test]
-    fn sdio_pio_readiness_masks_stay_in_their_register_namespaces() {
-        assert_eq!(sdhci_present_buffer_ready_mask(true), SDHCI_SPACE_AVAILABLE);
-        assert_eq!(sdhci_present_buffer_ready_mask(false), SDHCI_DATA_AVAILABLE);
-        assert_eq!(
-            sdhci_interrupt_buffer_ready_mask(true),
-            SDHCI_INT_SPACE_AVAIL
-        );
-        assert_eq!(
-            sdhci_interrupt_buffer_ready_mask(false),
-            SDHCI_INT_DATA_AVAIL
-        );
-        assert_eq!(
-            sdhci_present_buffer_ready_mask(true) & sdhci_interrupt_buffer_ready_mask(true),
-            0
-        );
-        assert_eq!(
-            sdhci_present_buffer_ready_mask(false) & sdhci_interrupt_buffer_ready_mask(false),
-            0
-        );
-    }
-
-    #[test]
     fn sdio_descriptor_cmd53_byte_mode_keeps_descriptor_zero_and_host_one_block() {
         let flags = DRIVER_RUNTIME_SDIO_FLAG_DATA
             | DRIVER_RUNTIME_SDIO_FLAG_WRITE
@@ -54354,7 +55252,7 @@ mod tests {
             );
             let expected_commands =
                 CYW43_FIRMWARE_STAGE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
-            assert_eq!(expected_commands, 128);
+            assert_eq!(expected_commands, 1);
             assert_eq!(test_sdio_cmd53_transfer_count(1, true), expected_commands);
             for ordinal in 0..expected_commands {
                 let addr = cyw43_backplane_function_addr(
@@ -54365,7 +55263,7 @@ mod tests {
                         1,
                         addr,
                         SDIO_FUNCTION1_BLOCK_SIZE,
-                        SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                        SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT,
                         CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
                     ),
                     1,
@@ -54676,8 +55574,8 @@ mod tests {
             cyw43_sdio_operating_clock_hz(false),
             CYW43_SDIO_DEFAULT_SPEED_CLOCK_HZ
         );
-        assert_eq!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES, 64);
-        assert_eq!(SDIO_LINKED_PIO_MAX_BLOCK_COUNT, 1);
+        assert_eq!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES, 8 * 1024);
+        assert_eq!(SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT, 128);
     }
     #[test]
     fn cyw43_runtime_stream_completion_requires_declared_total_lengths() {
@@ -55046,7 +55944,7 @@ mod tests {
         assert_eq!(
             io.writes[..io.write_count]
                 .iter()
-                .filter(|write| { !write.fifo && write.offset == (SDHCI_HOST_CONTROL & !0x3) })
+                .filter(|write| write.offset == (SDHCI_HOST_CONTROL & !0x3))
                 .count(),
             2,
             "the bcm2835 set_ios duplicate HOST_CONTROL write is one owned config turn",
@@ -55084,7 +55982,7 @@ mod tests {
         assert_eq!(
             io.writes[..io.write_count]
                 .iter()
-                .filter(|write| { !write.fifo && write.offset == (SDHCI_HOST_CONTROL & !0x3) })
+                .filter(|write| write.offset == (SDHCI_HOST_CONTROL & !0x3))
                 .count(),
             0,
             "a failed pre-config recovery must not enter set_ios",
@@ -55512,6 +56410,92 @@ mod tests {
     }
 
     #[test]
+    fn sdio_descriptor_accepts_exact_cmd53_byte_mode_ceiling_once() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        for index in 0..SDIO_CMD53_BYTE_MODE_MAX {
+            write_runtime_payload_byte(data_offset + index, (index as u8).wrapping_mul(29));
+        }
+        let desc = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 1,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
+            data_offset: data_offset as u16,
+            len: SDIO_CMD53_BYTE_MODE_MAX as u16,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+            timeout_us: 100_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        assert!(desc.valid());
+        let command = stage_sdio_descriptor_service_command(0x5300_0200, desc);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
+        io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+        io.data_end_after_words = SDIO_CMD53_BYTE_MODE_MAX / 4;
+
+        let completion = service_sdio_descriptor_command_with_io(command, &mut io);
+
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::progress(0x5300_0200, SDIO_CMD53_BYTE_MODE_MAX as u32)
+        );
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
+        assert_eq!(io.fifo_len, SDIO_CMD53_BYTE_MODE_MAX);
+        assert_eq!(
+            io.register(SDHCI_ARGUMENT) & 0x1ff,
+            0,
+            "the card's zero count must represent exactly 512 byte-mode bytes"
+        );
+        assert!(sdio_owner_path_quiescent_with(&mut io));
+    }
+
+    #[test]
+    fn sdio_descriptor_rejects_unrepresentable_cmd53_byte_mode_before_issue() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        for (case, (op, len)) in [
+            (DRIVER_RUNTIME_SDIO_OP_CMD53_READ, 513u16),
+            (DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE, 1_024u16),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let sequence = 0x5300_0201 + case as u32;
+            let desc = DriverRuntimeSdioCommandDescriptor {
+                op,
+                function: 1,
+                response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+                addr: cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
+                data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+                len,
+                flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+                timeout_us: 100_000,
+                ..DriverRuntimeSdioCommandDescriptor::empty()
+            };
+            assert!(desc.valid(), "case {case} must reach the geometry fence");
+            let command = stage_sdio_descriptor_service_command(sequence, desc);
+            let mut io = TestSdioHostIo::new();
+            io.use_runtime_payload = true;
+
+            let completion = service_sdio_descriptor_command_with_io(command, &mut io);
+
+            assert_eq!(
+                completion,
+                DriverTaskCompletionRecord::fault(sequence, FAULT_REJECTED_COMMAND),
+                "case {case}"
+            );
+            assert_eq!(io.command_issue_count(), 0, "case {case}");
+            assert_eq!(io.dma_started, 0, "case {case}");
+            assert_eq!(io.sdhci_buffer_accesses, 0, "case {case}");
+        }
+    }
+
+    #[test]
     fn sdio_descriptor_production_seam_copies_cmd53_read_payload_exactly() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
@@ -55562,11 +56546,11 @@ mod tests {
     }
 
     #[test]
-    fn sdio_descriptor_production_seam_writes_exact_linked_pio_firmware_block() {
+    fn sdio_descriptor_production_seam_writes_exact_linked_dma_firmware_block() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
-        const FIRMWARE_BYTES: usize = SDIO_FUNCTION1_BLOCK_SIZE as usize;
-        const BLOCK_COUNT: u16 = SDIO_LINKED_PIO_MAX_BLOCK_COUNT;
+        const FIRMWARE_BYTES: usize = CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
+        const BLOCK_COUNT: u16 = SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT;
         assert_eq!(
             FIRMWARE_BYTES,
             usize::from(SDIO_FUNCTION1_BLOCK_SIZE) * usize::from(BLOCK_COUNT)
@@ -55627,26 +56611,134 @@ mod tests {
             sdio_host_block_size(SDIO_FUNCTION1_BLOCK_SIZE)
         );
         assert_eq!(io.read16(SDHCI_BLOCK_COUNT), BLOCK_COUNT);
-        assert_eq!(io.read16(SDHCI_TRANSFER_MODE) & SDHCI_TRNS_MULTI, 0);
+        assert_ne!(io.read16(SDHCI_TRANSFER_MODE) & SDHCI_TRNS_MULTI, 0);
+        assert_eq!(io.read16(SDHCI_TRANSFER_MODE) & 1, 0);
         assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(
+            io.sdhci_buffer_accesses, 0,
+            "the production CMD53 data lane must never access SDHCI BUFFER"
+        );
         assert!(sdio_owner_path_quiescent_with(&mut io));
         assert_eq!(SDIO_CMD_COUNT.load(Ordering::Acquire), 1);
         assert_eq!(SDIO_RUNTIME_STATE.with_ref(|state| state.commands), 1);
         let block_writes: Vec<_> = io.writes[..io.write_count]
             .iter()
-            .filter(|write| !write.fifo && write.offset == SDHCI_BLOCK_SIZE)
+            .filter(|write| write.offset == SDHCI_BLOCK_SIZE)
             .map(|write| write.value)
             .collect();
-        assert_eq!(block_writes, vec![0x0000_7040, 0x0001_7040]);
+        assert_eq!(
+            block_writes,
+            vec![0x0000_7040, (u32::from(BLOCK_COUNT) << 16) | 0x0000_7040]
+        );
+        let authority = io.external_dma_authority_value();
+        let cb0 = authority.control_block_vaddr;
+        let cb1 = cb0 + SDIO_DMA_CONTROL_BLOCK_BYTES;
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb0), 0x000b_0148);
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb0 + 4),
+            TEST_SDIO_DMA_BOUNCE0_BUS
+        );
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb0 + 8),
+            0x7e30_0020
+        );
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb0 + 12),
+            DRIVER_TASK_RING_PAGE_BYTES as u32
+        );
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb0 + 20),
+            TEST_SDIO_DMA_CONTROL_BLOCK_BUS + SDIO_DMA_CONTROL_BLOCK_BYTES as u32
+        );
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb1), 0x000b_0148);
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb1 + 4),
+            TEST_SDIO_DMA_BOUNCE1_BUS
+        );
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb1 + 8),
+            0x7e30_0020
+        );
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb1 + 12),
+            DRIVER_TASK_RING_PAGE_BYTES as u32
+        );
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb1 + 20), 0);
+    }
+
+    #[test]
+    fn sdio_external_dma_read_control_blocks_split_at_bounce_page_boundaries() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        const TRANSFER_BYTES: u16 = 5_000;
+        let mut io = TestSdioHostIo::new();
+        let authority = sdio_external_dma_prepare_with(
+            &mut io,
+            DriverFrameDescriptor {
+                offset: 0,
+                len: TRANSFER_BYTES,
+                flags: 0,
+            },
+            false,
+            1_000,
+            5,
+        )
+        .expect("two-page external-DMA read geometry");
+        let cb0 = authority.control_block_vaddr;
+        let cb1 = cb0 + SDIO_DMA_CONTROL_BLOCK_BYTES;
+
+        assert_eq!(BCM2835_DMA_CHANNEL_OFFSET, 0x400);
+        assert_eq!(BCM2835_DMA_FIFO_BUS_ADDR, 0x7e30_0020);
+        assert_eq!(BCM2835_DMA_TI_WRITE, 0x000b_0148);
+        assert_eq!(BCM2835_DMA_TI_READ, 0x000b_0418);
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb0), 0x000b_0418);
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb0 + 4),
+            0x7e30_0020
+        );
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb0 + 8),
+            TEST_SDIO_DMA_BOUNCE0_BUS
+        );
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb0 + 12),
+            DRIVER_TASK_RING_PAGE_BYTES as u32
+        );
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb0 + 16), 0);
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb0 + 20),
+            TEST_SDIO_DMA_CONTROL_BLOCK_BUS + SDIO_DMA_CONTROL_BLOCK_BYTES as u32
+        );
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb0 + 24), 0);
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb0 + 28), 0);
+
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb1), 0x000b_0418);
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb1 + 4),
+            0x7e30_0020
+        );
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb1 + 8),
+            TEST_SDIO_DMA_BOUNCE1_BUS
+        );
+        assert_eq!(
+            sdio_external_dma_read_memory_u32(&mut io, cb1 + 12),
+            u32::from(TRANSFER_BYTES) - DRIVER_TASK_RING_PAGE_BYTES as u32
+        );
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb1 + 16), 0);
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb1 + 20), 0);
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb1 + 24), 0);
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb1 + 28), 0);
     }
 
     #[test]
     fn firmware_host_limited_descriptors_cross_controller_once_per_outer_turn() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
-        const FIRMWARE_BYTES: usize = 4_096;
+        const FIRMWARE_BYTES: usize = CYW43_FIRMWARE_STAGE_BYTES;
         const COMMANDS: usize = FIRMWARE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
-        assert_eq!(COMMANDS, 64);
+        assert_eq!(COMMANDS, 1);
         let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
         let flags = DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
             | DRIVER_RUNTIME_SDIO_FLAG_DATA
@@ -55669,7 +56761,7 @@ mod tests {
                 1,
                 addr,
                 true,
-                SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT,
                 CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
             );
             let descriptor = sdio_bus_link_cmd53_descriptor(
@@ -55682,7 +56774,7 @@ mod tests {
                     flags: 0,
                 },
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT,
                 0,
             )
             .expect("host-limited firmware descriptor must encode");
@@ -55769,7 +56861,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_descriptor_rejects_multiblock_pio_request_before_issue() {
+    fn sdio_descriptor_accepts_multiblock_only_through_external_dma() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
         const BLOCK_COUNT: u16 = 64;
@@ -55797,17 +56889,118 @@ mod tests {
         let command = stage_sdio_descriptor_service_command(0x5341, desc);
         let mut io = TestSdioHostIo::new();
         io.use_runtime_payload = true;
+        io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
+        io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+        io.data_end_after_words = FIRMWARE_BYTES / 4;
 
         assert_eq!(
             service_sdio_descriptor_command_with_io(command, &mut io),
-            DriverTaskCompletionRecord::fault(0x5341, FAULT_REJECTED_COMMAND)
+            DriverTaskCompletionRecord::progress(0x5341, FIRMWARE_BYTES as u32)
         );
-        assert_eq!(io.command_issue_count(), 0);
-        assert_eq!(io.write_count, 0);
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
+
+        reset_sdio_descriptor_seam_for_test();
+        let command = stage_sdio_descriptor_service_command(0x5342, desc);
+        let mut no_dma = TestSdioHostIo::new();
+        no_dma.use_runtime_payload = true;
+        no_dma.dma_authority_available = false;
+        let completion = service_sdio_descriptor_command_with_io(command, &mut no_dma);
+        assert_eq!(completion.code, COMPLETION_FAULT);
+        assert_eq!(completion.detail, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED);
+        assert_eq!(no_dma.command_issue_count(), 0);
+        assert_eq!(no_dma.dma_started, 0);
+        assert_eq!(
+            no_dma.sdhci_buffer_accesses, 0,
+            "missing external-DMA authority must fail before SDHCI BUFFER access"
+        );
     }
 
     #[test]
-    fn sdio_descriptor_production_seam_preserves_delayed_coalesced_response_and_data() {
+    fn sdio_stale_dma_generation_is_contained_before_fixed_memory_reuse() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        let len = usize::from(SDIO_FUNCTION1_BLOCK_SIZE);
+        for index in 0..len {
+            write_runtime_payload_byte(data_offset + index, 0x30u8.wrapping_add(index as u8));
+        }
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 1,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
+            data_offset: data_offset as u16,
+            len: len as u16,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+            timeout_us: 100_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let command = stage_sdio_descriptor_service_command(0x5343, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        let authority = io.external_dma_authority_value();
+        for index in 0..(SDIO_DMA_CONTROL_BLOCK_BYTES * SDIO_DMA_MAX_CONTROL_BLOCKS) {
+            write_dma_byte(
+                authority.control_block_vaddr + index,
+                0x5au8.wrapping_add(index as u8),
+            );
+        }
+        for index in 0..len {
+            write_dma_byte(
+                authority.bounce_vaddrs[0] + index,
+                0xc3u8.wrapping_sub(index as u8),
+            );
+        }
+        io.dma_cs = BCM2835_DMA_CS_ACTIVE;
+        io.dma_conblk = TEST_SDIO_DMA_CONTROL_BLOCK_BUS;
+
+        let completion = service_sdio_descriptor_command_with_io(command, &mut io);
+
+        assert_eq!(completion.code, COMPLETION_FAULT);
+        assert_eq!(completion.detail, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED);
+        assert_eq!(
+            sdio_transfer_failure_stage(completion.result),
+            SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
+        );
+        assert_eq!(
+            completion.frame.flags,
+            DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED
+        );
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.dma_started, 0);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
+        assert_eq!(
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET),
+            BCM2835_DMA_CS_ACTIVE
+        );
+        assert_eq!(
+            read_ring_u32(
+                SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_DMA_CONBLK_AD_OFFSET
+            ),
+            TEST_SDIO_DMA_CONTROL_BLOCK_BUS
+        );
+        for index in 0..(SDIO_DMA_CONTROL_BLOCK_BYTES * SDIO_DMA_MAX_CONTROL_BLOCKS) {
+            assert_eq!(
+                read_dma_byte(authority.control_block_vaddr + index),
+                0x5au8.wrapping_add(index as u8),
+                "stale control-block byte {index}"
+            );
+        }
+        for index in 0..len {
+            assert_eq!(
+                read_dma_byte(authority.bounce_vaddrs[0] + index),
+                0xc3u8.wrapping_sub(index as u8),
+                "stale bounce byte {index}"
+            );
+        }
+        assert!(sdio_owner_path_quiescent_with(&mut io));
+        assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned));
+    }
+
+    #[test]
+    fn sdio_descriptor_production_seam_accepts_dma_before_delayed_response() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
         let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
@@ -55859,6 +57052,7 @@ mod tests {
             assert_eq!(io.fifo[index], (index as u8).wrapping_add(0x40));
         }
         assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(io.dma_started, 1);
         assert!(sdio_owner_path_quiescent_with(&mut io));
         assert!(io.writes[..io.write_count].iter().any(|write| {
             write.offset == SDHCI_INT_STATUS
@@ -55866,48 +57060,175 @@ mod tests {
         }));
         let mut status_writes = io.writes[..io.write_count]
             .iter()
-            .filter(|write| !write.fifo && write.offset == SDHCI_INT_STATUS);
+            .filter(|write| write.offset == SDHCI_INT_STATUS);
         assert_eq!(
             status_writes.next().map(|write| write.value),
             Some(SDHCI_INT_COMMAND_DATA_CLEAR_MASK)
         );
         assert_eq!(
             status_writes.next().map(|write| write.value),
-            Some(SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL)
+            Some(SDHCI_INT_DATA_END)
         );
         assert_eq!(
             status_writes.next().map(|write| write.value),
-            Some(SDHCI_INT_DATA_END)
+            Some(SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL)
         );
         assert_eq!(
             status_writes.next(),
             None,
-            "Linux PIO dispatch must not W1C a synthetic ready mask after the final FIFO word"
+            "external DMA must acknowledge only observed SDHCI request bits"
         );
-        let snapshot_ack_index = io.writes[..io.write_count]
+        let command_index = io.writes[..io.write_count]
             .iter()
             .position(|write| {
-                !write.fifo
-                    && write.offset == SDHCI_INT_STATUS
-                    && write.value == SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL
+                write.offset == SDHCI_TRANSFER_MODE
+                    && (write.value >> 16) as u16
+                        == sdio_make_command(
+                            SDIO_CMD53,
+                            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+                                | DRIVER_RUNTIME_SDIO_FLAG_DATA
+                                | DRIVER_RUNTIME_SDIO_FLAG_WRITE,
+                            true,
+                        )
             })
-            .expect("request snapshot acknowledgement must be recorded");
-        let first_fifo_index = io.writes[..io.write_count]
+            .expect("paired SDHCI COMMAND write must be recorded");
+        let dma_active_index = io.writes[..io.write_count]
             .iter()
-            .position(|write| write.fifo)
-            .expect("PIO transfer must write the FIFO");
-        let last_fifo_index = io.writes[..io.write_count]
-            .iter()
-            .rposition(|write| write.fifo)
-            .expect("PIO transfer must write the FIFO");
+            .position(|write| {
+                write.offset == TEST_SDIO_DMA_CHANNEL_VADDR + BCM2835_DMA_CS
+                    && write.value == BCM2835_DMA_CS_ACTIVE
+            })
+            .expect("external DMA ACTIVE write must be recorded");
         let data_end_ack_index = io.writes[..io.write_count]
             .iter()
-            .rposition(|write| {
-                !write.fifo && write.offset == SDHCI_INT_STATUS && write.value == SDHCI_INT_DATA_END
-            })
+            .position(|write| write.offset == SDHCI_INT_STATUS && write.value == SDHCI_INT_DATA_END)
             .expect("DATA_END acknowledgement must be recorded");
-        assert!(snapshot_ack_index < first_fifo_index);
-        assert!(last_fifo_index < data_end_ack_index);
+        let response_ack_index = io.writes[..io.write_count]
+            .iter()
+            .position(|write| {
+                write.offset == SDHCI_INT_STATUS
+                    && write.value == SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL
+            })
+            .expect("response acknowledgement must be recorded");
+        assert!(command_index < dma_active_index);
+        assert!(data_end_ack_index < response_ack_index);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
+    }
+
+    #[test]
+    fn sdio_external_dma_join_waits_for_later_dma_before_read_publication() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        const LEN: usize = 64;
+        let mut io = TestSdioHostIo::new();
+        io.fifo_len = LEN;
+        for (index, byte) in io.fifo[..LEN].iter_mut().enumerate() {
+            *byte = 0xa5 ^ (index as u8).wrapping_mul(7);
+        }
+        io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_DATA_END | SDHCI_INT_DATA_AVAIL;
+        io.command_present_set = SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+        io.data_end_after_words = LEN / 4;
+        io.dma_complete_on_start = false;
+        io.dma_complete_after_polls = 3;
+        let mut deadline = RuntimeDeadline::Iterations { remaining: 16 };
+
+        assert!(sdio_execute_transfer_until_with(
+            &mut io,
+            SDIO_CMD53,
+            0,
+            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT | DRIVER_RUNTIME_SDIO_FLAG_DATA,
+            DriverFrameDescriptor {
+                offset: 0,
+                len: LEN as u16,
+                flags: 0,
+            },
+            LEN as u16,
+            1,
+            &mut deadline,
+        )
+        .is_some());
+        assert_eq!(
+            io.polls, 3,
+            "CONBLK_AD must join the earlier SDHCI completion"
+        );
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(io.payload_writes_while_dma_active, 0);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
+        for index in 0..LEN {
+            assert_eq!(io.payload[index], 0xa5 ^ (index as u8).wrapping_mul(7));
+        }
+    }
+
+    #[test]
+    fn sdio_external_dma_join_rejects_missing_dma_completion() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut io = TestSdioHostIo::new();
+        io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_DATA_END | SDHCI_INT_SPACE_AVAIL;
+        io.dma_complete_on_start = false;
+        let mut deadline = RuntimeDeadline::Iterations { remaining: 16 };
+
+        assert!(sdio_execute_transfer_until_with(
+            &mut io,
+            SDIO_CMD53,
+            0,
+            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+                | DRIVER_RUNTIME_SDIO_FLAG_DATA
+                | DRIVER_RUNTIME_SDIO_FLAG_WRITE,
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 64,
+                flags: 0,
+            },
+            64,
+            1,
+            &mut deadline,
+        )
+        .is_none());
+        assert_eq!(
+            sdio_transfer_failure_stage(sdio_last_transfer_failure()),
+            SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
+        );
+        assert_eq!(io.dma_started, 1);
+        assert_ne!(io.dma_conblk, 0);
+        assert_eq!(io.fifo_words, 0);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
+    }
+
+    #[test]
+    fn sdio_data_requests_without_dma_authority_fail_before_command_for_both_directions() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        for write in [false, true] {
+            let mut io = TestSdioHostIo::new();
+            io.dma_authority_available = false;
+            let mut deadline = RuntimeDeadline::Iterations { remaining: 16 };
+            let flags = DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+                | DRIVER_RUNTIME_SDIO_FLAG_DATA
+                | if write {
+                    DRIVER_RUNTIME_SDIO_FLAG_WRITE
+                } else {
+                    0
+                };
+            assert!(sdio_execute_transfer_until_with(
+                &mut io,
+                SDIO_CMD53,
+                0,
+                flags,
+                DriverFrameDescriptor {
+                    offset: 0,
+                    len: 64,
+                    flags: 0,
+                },
+                64,
+                1,
+                &mut deadline,
+            )
+            .is_none());
+            assert_eq!(io.command_issue_count(), 0);
+            assert_eq!(io.dma_started, 0);
+            assert_eq!(io.sdhci_buffer_accesses, 0);
+        }
     }
 
     #[test]
@@ -56085,38 +57406,6 @@ mod tests {
     }
 
     #[test]
-    fn sdio_pio_first_block_requires_interrupt_then_present_ownership() {
-        assert_eq!(
-            sdio_pio_ready_burst_len(SDIO_FUNCTION1_BLOCK_SIZE, CYW43_FIRMWARE_STAGE_BYTES),
-            SDIO_FUNCTION1_BLOCK_SIZE as usize
-        );
-        assert_eq!(sdio_pio_ready_burst_len(512, 128), 128);
-        assert_eq!(sdio_pio_ready_burst_len(0, 128), 128);
-
-        // An idle controller can expose stale PRESENT readiness before a new
-        // request owns the FIFO. The first block must therefore consume the
-        // request's ready interrupt even when PRESENT already reads ready.
-        assert_eq!(
-            sdio_pio_block_admission(true, true),
-            SdioPioBlockAdmission::ConsumeReadyInterrupt
-        );
-        assert!(sdio_pio_block_admission(true, true).consumes_ready_interrupt());
-        assert_eq!(
-            sdio_pio_block_admission(true, false),
-            SdioPioBlockAdmission::ConsumeReadyInterrupt
-        );
-        assert_eq!(
-            sdio_pio_block_admission(false, false),
-            SdioPioBlockAdmission::ConsumeReadyInterrupt
-        );
-        assert_eq!(
-            sdio_pio_block_admission(false, true),
-            SdioPioBlockAdmission::DrainPresentBlock
-        );
-        assert!(!sdio_pio_block_admission(false, true).consumes_ready_interrupt());
-    }
-
-    #[test]
     fn sdio_production_lifecycle_model_writes_one_owned_block_and_preserves_card_int() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -56153,6 +57442,7 @@ mod tests {
         assert_eq!(io.fifo_len, 64);
         assert_eq!(&io.fifo[..64], &io.payload[..64]);
         assert_eq!(io.fifo_words, 16);
+        assert_eq!(io.dma_started, 1);
         assert_eq!(io.read8(SDHCI_TIMEOUT_CONTROL), SDHCI_TIMEOUT_VALUE);
         assert_eq!(io.register(SDHCI_INT_STATUS), SDHCI_INT_CARD_INT);
         assert!(io.writes[..io.write_count]
@@ -56185,8 +57475,21 @@ mod tests {
         );
         assert!(io.writes[..io.write_count].iter().any(|write| {
             write.offset == SDHCI_INT_STATUS
-                && write.value == SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL
+                && write.value == SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_END
         }));
+        let command_index = io.writes[..io.write_count]
+            .iter()
+            .position(|write| write.offset == SDHCI_TRANSFER_MODE)
+            .expect("paired SDHCI command write");
+        let dma_active_index = io.writes[..io.write_count]
+            .iter()
+            .position(|write| {
+                write.offset == TEST_SDIO_DMA_CHANNEL_VADDR + BCM2835_DMA_CS
+                    && write.value == BCM2835_DMA_CS_ACTIVE
+            })
+            .expect("external DMA ACTIVE write");
+        assert!(command_index < dma_active_index);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
     }
 
     #[test]
@@ -56217,7 +57520,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_production_lifecycle_model_rejects_stale_present_without_request_ready() {
+    fn sdio_external_dma_does_not_depend_on_stale_pio_present() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut io = TestSdioHostIo::new();
@@ -56244,10 +57547,15 @@ mod tests {
             ),
             None
         );
-        assert_eq!(io.fifo_words, 0);
+        assert_eq!(io.fifo_words, 16);
+        assert_eq!(io.dma_started, 1);
         assert_eq!(
             sdio_transfer_failure_stage(sdio_last_transfer_failure()),
-            SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
+            SDIO_TRANSFER_FAILURE_STAGE_DATA_END
+        );
+        assert_eq!(
+            io.sdhci_buffer_accesses, 0,
+            "stale SDHCI readiness cannot activate a BUFFER fallback lane"
         );
     }
 
@@ -56302,6 +57610,170 @@ mod tests {
     }
 
     #[test]
+    fn sdio_fault_telemetry_v2_distinguishes_dma_terminal_states() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        for (dma_cs, dma_conblk, dma_next) in [
+            (0, 0, 0),
+            (
+                BCM2835_DMA_CS_ACTIVE,
+                TEST_SDIO_DMA_CONTROL_BLOCK_BUS,
+                TEST_SDIO_DMA_CONTROL_BLOCK_BUS + SDIO_DMA_CONTROL_BLOCK_BYTES as u32,
+            ),
+            (BCM2835_DMA_CS_END, 0, 0),
+            (BCM2835_DMA_CS_ERR, TEST_SDIO_DMA_CONTROL_BLOCK_BUS, 0),
+        ] {
+            let mut io = TestSdioHostIo::new();
+            io.dma_cs = dma_cs;
+            io.dma_conblk = dma_conblk;
+            io.dma_next = dma_next;
+            let frame = sdio_write_fault_telemetry_frame_with(
+                &mut io,
+                SDIO_CMD53,
+                0,
+                DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT | DRIVER_RUNTIME_SDIO_FLAG_DATA,
+                64,
+                64,
+                1,
+                sdio_transfer_mode(false, 1),
+                sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, dma_cs),
+                DriverFrameDescriptor {
+                    offset: 0,
+                    len: 64,
+                    flags: 0,
+                },
+            );
+            assert_eq!(frame.len, 68);
+            assert_eq!(read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + 4), 2);
+            assert_eq!(
+                read_ring_u32(
+                    SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET
+                ),
+                dma_cs
+            );
+            assert_eq!(
+                read_ring_u32(
+                    SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_DMA_CONBLK_AD_OFFSET
+                ),
+                dma_conblk
+            );
+            assert_eq!(
+                read_ring_u32(
+                    SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET
+                ),
+                dma_next
+            );
+        }
+
+        let mut unavailable = TestSdioHostIo::new();
+        unavailable.dma_authority_available = false;
+        let _ = sdio_write_fault_telemetry_frame_with(
+            &mut unavailable,
+            SDIO_CMD53,
+            0,
+            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT | DRIVER_RUNTIME_SDIO_FLAG_DATA,
+            64,
+            64,
+            1,
+            sdio_transfer_mode(false, 1),
+            0,
+            DriverFrameDescriptor::empty(),
+        );
+        for dma_offset in [
+            SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET,
+            SDIO_FAULT_TELEMETRY_DMA_CONBLK_AD_OFFSET,
+            SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET,
+        ] {
+            assert_eq!(
+                read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + dma_offset),
+                SDIO_FAULT_TELEMETRY_DMA_UNAVAILABLE
+            );
+        }
+    }
+
+    #[test]
+    fn sdio_dma_error_telemetry_is_immutable_across_containment_reset() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let flags = DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+            | DRIVER_RUNTIME_SDIO_FLAG_DATA
+            | DRIVER_RUNTIME_SDIO_FLAG_WRITE;
+        let desc = sdio_bus_link_cmd53_descriptor(
+            SDIO_CMD53,
+            sdio_cmd53_arg(true, 1, BACKPLANE_32BIT_FLAG, true, 0, 64),
+            flags,
+            DriverFrameDescriptor {
+                offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u32,
+                len: 64,
+                flags: 0,
+            },
+            64,
+            1,
+            0,
+        )
+        .expect("faulting external-DMA descriptor");
+        let command = stage_sdio_descriptor_service_command(0x53d0, desc);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.command_status = SDHCI_INT_RESPONSE;
+        io.dma_error_on_start = true;
+
+        let completion = service_sdio_descriptor_command_with_io(command, &mut io);
+
+        assert_eq!(completion.code, COMPLETION_FAULT);
+        assert_eq!(completion.detail, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED);
+        assert_eq!(completion.frame.len, SDIO_FAULT_TELEMETRY_BYTES);
+        assert_eq!(
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET),
+            BCM2835_DMA_CS_ERR
+        );
+        assert_eq!(
+            read_ring_u32(
+                SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_DMA_CONBLK_AD_OFFSET
+            ),
+            TEST_SDIO_DMA_CONTROL_BLOCK_BUS
+        );
+        assert_eq!(io.dma_cs, 0, "containment reset must occur after telemetry");
+        assert_eq!(io.dma_conblk, 0);
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
+    }
+
+    #[test]
+    fn sdio_dma_abort_failure_still_attempts_sdhci_reset() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut io = TestSdioHostIo::new();
+        io.dma_cs = BCM2835_DMA_CS_ERR;
+        io.dma_reset_stuck = true;
+        io.set_register(SDHCI_PRESENT_STATE, SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE);
+
+        assert!(!sdio_contain_descriptor_failure_with(&mut io, 100_000));
+        let dma_reset_index = io.writes[..io.write_count]
+            .iter()
+            .position(|write| {
+                write.offset == TEST_SDIO_DMA_CHANNEL_VADDR + BCM2835_DMA_CS
+                    && write.value == BCM2835_DMA_CS_RESET
+            })
+            .expect("DMA reset must be attempted");
+        let host_reset_index = io.writes[..io.write_count]
+            .iter()
+            .position(|write| {
+                write.offset == (SDHCI_SOFTWARE_RESET & !0x3)
+                    && sdio_extract_u8_word(write.value, SDHCI_SOFTWARE_RESET)
+                        & (SDHCI_RESET_CMD | SDHCI_RESET_DATA)
+                        != 0
+            })
+            .expect("SDHCI reset must run even after DMA containment failure");
+        assert!(dma_reset_index < host_reset_index);
+        assert_eq!(
+            io.register(SDHCI_PRESENT_STATE) & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT),
+            0
+        );
+    }
+
+    #[test]
     fn sdio_production_data_wait_rejects_upper_controller_error_immediately() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -56338,16 +57810,18 @@ mod tests {
         let result = sdio_last_transfer_failure();
         assert_eq!(
             sdio_transfer_failure_stage(result),
-            SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
+            SDIO_TRANSFER_FAILURE_STAGE_DATA_END
         );
         assert_ne!(result & SDHCI_INT_ERROR, 0);
         assert_eq!(sdio_last_transfer_raw_error_status(), upper_error);
         assert_eq!(io.polls, 1, "upper error must terminate the data wait");
-        assert_eq!(io.fifo_words, 0);
+        assert_eq!(io.fifo_words, 16);
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
     }
 
     #[test]
-    fn sdio_production_lifecycle_model_requires_new_edge_after_early_ready() {
+    fn sdio_external_dma_ignores_pio_ready_edges() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut io = TestSdioHostIo::new();
@@ -56380,8 +57854,10 @@ mod tests {
             &mut deadline,
         )
         .is_some());
-        assert_eq!(io.polls, 1);
+        assert_eq!(io.polls, 0);
         assert_eq!(io.fifo_words, 16);
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
     }
 
     #[test]
@@ -56447,16 +57923,13 @@ mod tests {
             SDIO_TRANSFER_FAILURE_STAGE_DATA_END
         );
         assert_eq!(
-            io.writes[..io.write_count]
-                .iter()
-                .filter(|write| write.fifo)
-                .count(),
-            16
+            io.sdhci_buffer_accesses, 0,
+            "missing DATA_END must contain external DMA without BUFFER fallback"
         );
     }
 
     #[test]
-    fn sdio_pio_model_drains_explicit_multiblock_ready_episodes() {
+    fn sdio_external_dma_multiblock_ignores_pio_ready_episodes() {
         let _guard = test_guard();
         reset_runtime_for_test();
         const MODEL_BYTES: usize = 4_096;
@@ -56468,7 +57941,6 @@ mod tests {
         io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
         io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
         io.data_end_after_words = MODEL_BYTES / 4;
-        io.pio_ready_episode_words = SDIO_FUNCTION1_BLOCK_SIZE as usize / 4;
         for poll in 1..block_count as usize {
             io.push_event(TestSdioModelEvent {
                 poll,
@@ -56505,11 +57977,13 @@ mod tests {
             .map(|write| write.value)
             .expect("multiblock command write must be present");
         assert_ne!(command_word as u16 & SDHCI_TRNS_MULTI, 0);
+        assert_eq!(command_word as u16 & 1, 0);
         assert_eq!(
-            io.polls,
-            block_count as usize - 1,
-            "each later block requires a new FIFO-ready episode"
+            io.polls, 0,
+            "external DMA completion cannot depend on SDHCI BUFFER-ready episodes"
         );
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
     }
 
     #[test]
@@ -56729,7 +58203,6 @@ mod tests {
         assert_eq!(io.write_count, expected_offsets.len());
         for (write, expected_offset) in io.writes[..io.write_count].iter().zip(expected_offsets) {
             assert_eq!(write.offset, expected_offset);
-            assert!(!write.fifo);
         }
         assert_eq!(
             sdio_extract_u8_word(io.writes[3].value, SDHCI_HOST_CONTROL),

@@ -426,8 +426,8 @@ const SDHCI_INT_DATA_TIMEOUT: u32 = 1 << 20;
 const SDHCI_INT_DATA_CRC: u32 = 1 << 21;
 const SDHCI_INT_DATA_END_BIT: u32 = 1 << 22;
 const SDIO_FAULT_TELEMETRY_MAGIC: u32 = 0x5344_494f;
-const SDIO_FAULT_TELEMETRY_VERSION: u32 = 1;
-const SDIO_FAULT_TELEMETRY_BYTES: usize = 56;
+const SDIO_FAULT_TELEMETRY_VERSION: u32 = 2;
+const SDIO_FAULT_TELEMETRY_BYTES: usize = 68;
 const SDIO_FAULT_TELEMETRY_ARG_OFFSET: usize = 8;
 const SDIO_FAULT_TELEMETRY_CMD_FLAGS_OFFSET: usize = 12;
 const SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET: usize = 16;
@@ -440,6 +440,9 @@ const SDIO_FAULT_TELEMETRY_FAILURE_OFFSET: usize = 40;
 const SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET: usize = 44;
 const SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET: usize = 48;
 const SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET: usize = 52;
+const SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET: usize = 56;
+const SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET: usize = 60;
+const SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET: usize = 64;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -496,6 +499,7 @@ static CYW43_SERVICE_LAST_PRE_SOURCE: AtomicU32 = AtomicU32::new(0);
 static CYW43_SERVICE_LAST_POST_SOURCE: AtomicU32 = AtomicU32::new(0);
 static CYW43_DPC_CLIENT_GENERATION: AtomicU32 = AtomicU32::new(0);
 static CYW43_DPC_CLIENT_CONSUMED: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_REARMS: AtomicU32 = AtomicU32::new(0);
 static CYW43_DPC_CLIENT_EPOCH_ERRORS: AtomicU32 = AtomicU32::new(0);
 static CYW43_DPC_CLIENT_SEQUENCE_ERRORS: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_RX: AtomicU32 = AtomicU32::new(0);
@@ -3699,6 +3703,9 @@ pub(crate) struct Cyw43SdioOwnerFaultStatus {
     pub payload_last: u8,
     pub payload_xor: u8,
     pub payload_sum: u32,
+    pub dma_cs: u32,
+    pub dma_conblk: u32,
+    pub dma_nextcb: u32,
 }
 
 #[cfg(feature = "kernel")]
@@ -3765,7 +3772,9 @@ const CYW43_RX_IDLE_TRACE_VERSION_V7: u16 = 7;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_VERSION_V8: u16 = 8;
 #[cfg(feature = "kernel")]
-const CYW43_RX_IDLE_TRACE_VERSION: u16 = 9;
+const CYW43_RX_IDLE_TRACE_VERSION_V9: u16 = 9;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_VERSION: u16 = 10;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_BYTES: usize = 40;
 #[cfg(feature = "kernel")]
@@ -3784,6 +3793,8 @@ const CYW43_RX_IDLE_TRACE_V7_BYTES: usize = 172;
 const CYW43_RX_IDLE_TRACE_V8_BYTES: usize = 180;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_V9_BYTES: usize = 192;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_V10_BYTES: usize = 196;
 #[cfg(feature = "kernel")]
 const CYW43_SERVICE_CHANNEL_NONE: u16 = 0xffff;
 #[cfg(feature = "kernel")]
@@ -3881,12 +3892,14 @@ struct Cyw43RxIdleTrace {
     dpc_events_consumed: u32,
     dpc_epoch_errors: u32,
     dpc_sequence_errors: u32,
+    dpc_owner_rearms: u32,
 }
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Cyw43DpcClientCounters {
     consumed: u32,
+    rearms: u32,
     epoch_errors: u32,
     sequence_errors: u32,
 }
@@ -3928,6 +3941,7 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
         && version != CYW43_RX_IDLE_TRACE_VERSION_V6
         && version != CYW43_RX_IDLE_TRACE_VERSION_V7
         && version != CYW43_RX_IDLE_TRACE_VERSION_V8
+        && version != CYW43_RX_IDLE_TRACE_VERSION_V9
         && version != CYW43_RX_IDLE_TRACE_VERSION
     {
         return None;
@@ -3953,7 +3967,10 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
     if version == CYW43_RX_IDLE_TRACE_VERSION_V8 && bytes.len() < CYW43_RX_IDLE_TRACE_V8_BYTES {
         return None;
     }
-    if version == CYW43_RX_IDLE_TRACE_VERSION && bytes.len() < CYW43_RX_IDLE_TRACE_V9_BYTES {
+    if version == CYW43_RX_IDLE_TRACE_VERSION_V9 && bytes.len() < CYW43_RX_IDLE_TRACE_V9_BYTES {
+        return None;
+    }
+    if version == CYW43_RX_IDLE_TRACE_VERSION && bytes.len() < CYW43_RX_IDLE_TRACE_V10_BYTES {
         return None;
     }
     Some(Cyw43RxIdleTrace {
@@ -4016,6 +4033,7 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
         dpc_events_consumed: cyw43_read_le_u32(bytes, 180).unwrap_or(0),
         dpc_epoch_errors: cyw43_read_le_u32(bytes, 184).unwrap_or(0),
         dpc_sequence_errors: cyw43_read_le_u32(bytes, 188).unwrap_or(0),
+        dpc_owner_rearms: cyw43_read_le_u32(bytes, 192).unwrap_or(0),
     })
 }
 
@@ -4028,6 +4046,7 @@ fn cache_cyw43_dpc_client_counters(trace: Cyw43RxIdleTrace) {
         return;
     };
     CYW43_DPC_CLIENT_CONSUMED.store(trace.dpc_events_consumed, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_REARMS.store(trace.dpc_owner_rearms, Ordering::Relaxed);
     CYW43_DPC_CLIENT_EPOCH_ERRORS.store(trace.dpc_epoch_errors, Ordering::Relaxed);
     CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(trace.dpc_sequence_errors, Ordering::Relaxed);
     CYW43_DPC_CLIENT_GENERATION.store(ring.epoch, Ordering::Release);
@@ -4040,6 +4059,7 @@ fn cyw43_dpc_client_counters(generation: u32) -> Option<Cyw43DpcClientCounters> 
     }
     let counters = Cyw43DpcClientCounters {
         consumed: CYW43_DPC_CLIENT_CONSUMED.load(Ordering::Relaxed),
+        rearms: CYW43_DPC_CLIENT_REARMS.load(Ordering::Relaxed),
         epoch_errors: CYW43_DPC_CLIENT_EPOCH_ERRORS.load(Ordering::Relaxed),
         sequence_errors: CYW43_DPC_CLIENT_SEQUENCE_ERRORS.load(Ordering::Relaxed),
     };
@@ -4065,11 +4085,11 @@ fn cyw43_sdio_dpc_diagnostic_from(
         captures: ring.producer.saturating_add(ring.overruns),
         published: ring.producer,
         consumed: ring.consumer,
-        rearms: if masked {
-            ring.consumer.saturating_sub(1)
-        } else {
-            ring.consumer
-        },
+        // This is the runtime's measured CARD_INT rearm count from the
+        // generation-bound RX-idle trace. Deriving it from the consumer index
+        // made the Gate-10 rearms-vs-captures check tautological and could
+        // conceal a masked level source that was never re-enabled.
+        rearms: client.rearms,
         overruns: ring.overruns,
         epoch_errors: client.epoch_errors,
         sequence_errors: client.sequence_errors,
@@ -5902,6 +5922,13 @@ pub(crate) fn test_clear_cyw43_runtime_replay_status() {
     finish_cyw43_bootstrap_causal_fault_capture();
     clear_cyw43_runtime_command_fault_status();
     *SDIO_LAST_RUNTIME_REPLAY_STATUS.lock() = None;
+}
+
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_record_cyw43_runtime_command_fault_status(
+    status: Cyw43RuntimeCommandFaultStatus,
+) {
+    record_cyw43_runtime_command_fault_status(status);
 }
 
 #[cfg(feature = "kernel")]
@@ -13776,7 +13803,7 @@ fn emit_cyw43_host_eapol_rxtrace_detail(
     let mut line = heapless::String::<2048>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_HOST_EAPOL_RXTRACE contract={} lane={} flags=0x{:04x} detail=0x{:04x} probe_len={} source=0x{:08x} prefix=0x{:08x} digest=0x{:08x} rframe=0x{:04x} firstread_reads={} block_reads={} rframe_reads={} request_len={} block_size={} block_count={} retx_sample=0x{:04x} retx_action={} queue_depth={} queue_high_water={} cmd53_arg=0x{:08x} cmd53_fn={} cmd53_addr=0x{:05x} cmd53_write={} cmd53_mode={} cmd53_inc={} cmd53_count={} transfer_result=0x{:08x} payload_before=0x{:08x} payload_after=0x{:08x} source_flags=0x{:04x} pre_source=0x{:08x} post_source=0x{:08x} pre_fresh={} pre_asserted={} pre_failed={} post_fresh={} post_asserted={} post_failed={} source_asserted_ever={} pre_int=0x{:08x} post_int=0x{:08x} pre_sdhci=0x{:08x} post_sdhci=0x{:08x} first_nonzero={} first_nonzero_off={} first_nonzero_byte=0x{:02x} fifo_window_req=0x{:08x} fifo_window_programmed=0x{:08x} fifo_window_readback=0x{:08x} fifo_window_flags=0x{:04x} fifo_window_ok={} source_empty_polls={} irq_preserve_count={} irq_preserve_reason={} irq_preserve_int=0x{:08x} irq_preserve_ack=0x{:08x} irq_episode_preserves={} irq_episode_rearms={} trace_seq={} start_ticks_lo=0x{:08x} pre_sample_delta_ticks={} transfer_delta_ticks={} post_sample_delta_ticks={}",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_RXTRACE contract={} lane={} flags=0x{:04x} detail=0x{:04x} probe_len={} source=0x{:08x} prefix=0x{:08x} digest=0x{:08x} rframe=0x{:04x} firstread_reads={} block_reads={} rframe_reads={} request_len={} block_size={} block_count={} retx_sample=0x{:04x} retx_action={} queue_depth={} queue_high_water={} cmd53_arg=0x{:08x} cmd53_fn={} cmd53_addr=0x{:05x} cmd53_write={} cmd53_mode={} cmd53_inc={} cmd53_count={} transfer_result=0x{:08x} payload_before=0x{:08x} payload_after=0x{:08x} source_flags=0x{:04x} pre_source=0x{:08x} post_source=0x{:08x} pre_fresh={} pre_asserted={} pre_failed={} post_fresh={} post_asserted={} post_failed={} source_asserted_ever={} pre_int=0x{:08x} post_int=0x{:08x} pre_sdhci=0x{:08x} post_sdhci=0x{:08x} first_nonzero={} first_nonzero_off={} first_nonzero_byte=0x{:02x} fifo_window_req=0x{:08x} fifo_window_programmed=0x{:08x} fifo_window_readback=0x{:08x} fifo_window_flags=0x{:04x} fifo_window_ok={} source_empty_polls={} irq_preserve_count={} irq_preserve_reason={} irq_preserve_int=0x{:08x} irq_preserve_ack=0x{:08x} irq_episode_preserves={} irq_episode_rearms={} dpc_owner_rearms={} trace_seq={} start_ticks_lo=0x{:08x} pre_sample_delta_ticks={} transfer_delta_ticks={} post_sample_delta_ticks={}",
         contract.name,
         lane,
         trace.flags,
@@ -13835,6 +13862,7 @@ fn emit_cyw43_host_eapol_rxtrace_detail(
         trace.rx_irq_preserve_ack_bits,
         trace.rx_irq_episode_preserves,
         trace.rx_irq_episode_rearms,
+        trace.dpc_owner_rearms,
         trace.sequence,
         trace.start_ticks_lo,
         trace.pre_sample_delta_ticks,
@@ -16608,6 +16636,7 @@ fn fail_closed_cyw43_generation_recovery() {
     CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
     CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
     CYW43_ASSIGNED_IPV4_BE.store(0, Ordering::Release);
+    CYW43_DPC_CLIENT_REARMS.store(0, Ordering::Relaxed);
     CYW43_DPC_CLIENT_GENERATION.store(0, Ordering::Release);
     CYW43_ANY_FRAME_NEXT_CHANNEL.store(0, Ordering::Release);
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
@@ -17438,6 +17467,9 @@ struct SdioFaultTelemetry {
     payload_last: u8,
     payload_xor: u8,
     payload_sum: u32,
+    dma_cs: u32,
+    dma_conblk: u32,
+    dma_nextcb: u32,
 }
 
 #[cfg(feature = "kernel")]
@@ -17476,6 +17508,9 @@ impl SdioFaultTelemetry {
             payload_last: ((payload_edge >> 8) & 0xff) as u8,
             payload_xor: ((payload_edge >> 16) & 0xff) as u8,
             payload_sum: le_u32_at(bytes, SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET)?,
+            dma_cs: le_u32_at(bytes, SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET)?,
+            dma_conblk: le_u32_at(bytes, SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET)?,
+            dma_nextcb: le_u32_at(bytes, SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET)?,
         })
     }
 
@@ -17568,7 +17603,7 @@ fn derive_cyw43_sdio_owner_fault_emission(
     let retry = if ai_control_primary || probe_pmucontrol_primary {
         "none"
     } else {
-        cyw43_owner_retry_label(snapshot, detail)
+        cyw43_owner_retry_label(snapshot, detail, result)
     };
     Cyw43SdioOwnerFaultEmission {
         status: Cyw43SdioOwnerFaultStatus {
@@ -17615,6 +17650,9 @@ fn derive_cyw43_sdio_owner_fault_emission(
             payload_last: snapshot.payload_last,
             payload_xor: snapshot.payload_xor,
             payload_sum: snapshot.payload_sum,
+            dma_cs: snapshot.dma_cs,
+            dma_conblk: snapshot.dma_conblk,
+            dma_nextcb: snapshot.dma_nextcb,
         },
         effective_target,
         owner_suboffset,
@@ -17665,7 +17703,7 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
     let mut line = heapless::String::<1024>::new();
     let _ = write!(
         line,
-        "CYW43_SDIO_OWNER_FAULT contract={} stage={} op={} cmd={} arg=0x{:08x} fn={} f1_addr=0x{:05x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} inc={} write={} mode={} len={} blksz={} blkcnt={} cmd53_count={} desc_blkcnt={} host_blkcnt={} tm=0x{:04x} host=0x{:02x} host_mode={} power=0x{:02x} clock=0x{:04x} clock_state={} present=0x{:08x} int=0x{:08x} resp0=0x{:08x} blkreg=0x{:08x} detail=0x{:04x} reason={} xfer_stage={} xfer_status=0x{:06x} xfer_reason={} r5=0x{:04x} owner_window={} lane={} retry={}",
+        "CYW43_SDIO_OWNER_FAULT contract={} stage={} op={} cmd={} arg=0x{:08x} fn={} f1_addr=0x{:05x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} inc={} write={} mode={} len={} blksz={} blkcnt={} cmd53_count={} desc_blkcnt={} host_blkcnt={} tm=0x{:04x} host=0x{:02x} host_mode={} power=0x{:02x} clock=0x{:04x} clock_state={} present=0x{:08x} int=0x{:08x} resp0=0x{:08x} blkreg=0x{:08x} dma_cs=0x{:08x} dma_conblk=0x{:08x} dma_nextcb=0x{:08x} detail=0x{:04x} reason={} xfer_stage={} xfer_status=0x{:06x} xfer_reason={} r5=0x{:04x} owner_window={} lane={} retry={}",
         contract.name,
         stage,
         descriptor.op,
@@ -17696,6 +17734,9 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         snapshot.int_status,
         snapshot.response0,
         snapshot.block_size_count_reg,
+        snapshot.dma_cs,
+        snapshot.dma_conblk,
+        snapshot.dma_nextcb,
         completion.detail,
         cyw43_runtime_fault_reason(completion.detail),
         sdio_transfer_failure_stage_label(result),
@@ -17937,15 +17978,19 @@ const fn cyw43_owner_probe_pmucontrol_primary(
 }
 
 #[cfg(feature = "kernel")]
-const fn cyw43_owner_retry_label(snapshot: SdioFaultTelemetry, detail: u16) -> &'static str {
+const fn cyw43_owner_retry_label(
+    snapshot: SdioFaultTelemetry,
+    detail: u16,
+    result: u32,
+) -> &'static str {
     if snapshot.cmd != 53 {
         "none"
     } else if detail == 0x5329 {
-        "linux-normal-owner-replay-exhausted"
-    } else if snapshot.cmd53_block_mode() {
-        "linux-normal-block"
+        "generation-recovery-required"
+    } else if sdio_transfer_failure_stage(result) == 1 {
+        "pre-issue-retry-admissible"
     } else {
-        "linux-byte-remainder"
+        "no-replay-issued-unknown"
     }
 }
 
@@ -18004,7 +18049,7 @@ const fn sdio_transfer_finish_error_label(status: u32) -> &'static str {
     } else if status & SDHCI_INT_ERROR != 0 {
         "sdhci-transfer-finish-error"
     } else {
-        "sdhci-transfer-finish"
+        "sdhci-data-end-deadline"
     }
 }
 
@@ -21585,6 +21630,7 @@ mod tests {
         CYW43_SERVICE_LAST_PRE_SOURCE.store(0, Ordering::Release);
         CYW43_SERVICE_LAST_POST_SOURCE.store(0, Ordering::Release);
         CYW43_DPC_CLIENT_CONSUMED.store(0, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_REARMS.store(0, Ordering::Relaxed);
         CYW43_DPC_CLIENT_EPOCH_ERRORS.store(0, Ordering::Relaxed);
         CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(0, Ordering::Relaxed);
         CYW43_DPC_CLIENT_GENERATION.store(0, Ordering::Release);
@@ -30254,22 +30300,33 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn rx_idle_trace_v9_decodes_dpc_client_counters_and_retains_v8() {
-        let mut v9 = [0u8; CYW43_RX_IDLE_TRACE_V9_BYTES];
-        v9[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
-        v9[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION.to_le_bytes());
-        v9[180..184].copy_from_slice(&17u32.to_le_bytes());
-        v9[184..188].copy_from_slice(&2u32.to_le_bytes());
-        v9[188..192].copy_from_slice(&3u32.to_le_bytes());
-        let decoded = cyw43_rx_idle_trace(&v9).expect("v9 trace must decode");
+    fn rx_idle_trace_v10_decodes_actual_dpc_rearms_and_retains_v9() {
+        let mut v10 = [0u8; CYW43_RX_IDLE_TRACE_V10_BYTES];
+        v10[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
+        v10[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION.to_le_bytes());
+        v10[180..184].copy_from_slice(&17u32.to_le_bytes());
+        v10[184..188].copy_from_slice(&2u32.to_le_bytes());
+        v10[188..192].copy_from_slice(&3u32.to_le_bytes());
+        v10[192..196].copy_from_slice(&19u32.to_le_bytes());
+        let decoded = cyw43_rx_idle_trace(&v10).expect("v10 trace must decode");
         assert_eq!(decoded.version, CYW43_RX_IDLE_TRACE_VERSION);
         assert_eq!(decoded.dpc_events_consumed, 17);
         assert_eq!(decoded.dpc_epoch_errors, 2);
         assert_eq!(decoded.dpc_sequence_errors, 3);
+        assert_eq!(decoded.dpc_owner_rearms, 19);
         assert_eq!(
-            cyw43_rx_idle_trace(&v9[..CYW43_RX_IDLE_TRACE_V8_BYTES]),
+            cyw43_rx_idle_trace(&v10[..CYW43_RX_IDLE_TRACE_V9_BYTES]),
             None
         );
+
+        let mut v9 = [0u8; CYW43_RX_IDLE_TRACE_V9_BYTES];
+        v9[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
+        v9[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION_V9.to_le_bytes());
+        v9[180..184].copy_from_slice(&7u32.to_le_bytes());
+        let decoded = cyw43_rx_idle_trace(&v9).expect("v9 trace must remain supported");
+        assert_eq!(decoded.version, CYW43_RX_IDLE_TRACE_VERSION_V9);
+        assert_eq!(decoded.dpc_events_consumed, 7);
+        assert_eq!(decoded.dpc_owner_rearms, 0);
 
         let mut v8 = [0u8; CYW43_RX_IDLE_TRACE_V8_BYTES];
         v8[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
@@ -30293,6 +30350,7 @@ mod tests {
             },
             Cyw43DpcClientCounters {
                 consumed: 11,
+                rearms: 10,
                 epoch_errors: 3,
                 sequence_errors: 4,
             },
@@ -30318,6 +30376,7 @@ mod tests {
             },
             Cyw43DpcClientCounters {
                 consumed: 12,
+                rearms: 13,
                 epoch_errors: 0,
                 sequence_errors: 0,
             },
@@ -30335,6 +30394,7 @@ mod tests {
         assert_eq!(cyw43_dpc_client_counters(4), None);
 
         CYW43_DPC_CLIENT_CONSUMED.store(6, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_REARMS.store(5, Ordering::Relaxed);
         CYW43_DPC_CLIENT_EPOCH_ERRORS.store(1, Ordering::Relaxed);
         CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(2, Ordering::Relaxed);
         CYW43_DPC_CLIENT_GENERATION.store(4, Ordering::Release);
@@ -30342,6 +30402,7 @@ mod tests {
             cyw43_dpc_client_counters(4),
             Some(Cyw43DpcClientCounters {
                 consumed: 6,
+                rearms: 5,
                 epoch_errors: 1,
                 sequence_errors: 2,
             })
@@ -32005,6 +32066,17 @@ mod tests {
             SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET,
             0x0000_4444,
         );
+        put_le_u32(&mut bytes, SDIO_FAULT_TELEMETRY_DMA_CS_OFFSET, 0x0000_0002);
+        put_le_u32(
+            &mut bytes,
+            SDIO_FAULT_TELEMETRY_DMA_CONBLK_OFFSET,
+            0xc010_2000,
+        );
+        put_le_u32(
+            &mut bytes,
+            SDIO_FAULT_TELEMETRY_DMA_NEXTCB_OFFSET,
+            0xc010_2020,
+        );
 
         let snapshot = SdioFaultTelemetry::decode(&bytes).expect("valid telemetry");
 
@@ -32026,6 +32098,9 @@ mod tests {
         assert_eq!(snapshot.payload_last, 0x22);
         assert_eq!(snapshot.payload_xor, 0x33);
         assert_eq!(snapshot.payload_sum, 0x4444);
+        assert_eq!(snapshot.dma_cs, 0x0000_0002);
+        assert_eq!(snapshot.dma_conblk, 0xc010_2000);
+        assert_eq!(snapshot.dma_nextcb, 0xc010_2020);
         assert_eq!(
             sdio_transfer_failure_stage_label(snapshot.failure_result),
             "response"
@@ -32081,6 +32156,9 @@ mod tests {
             payload_last: 0,
             payload_xor: 0,
             payload_sum: 0,
+            dma_cs: 0,
+            dma_conblk: 0,
+            dma_nextcb: 0,
         };
 
         assert_eq!(txglomalign.cmd53_function(), 2);
@@ -32122,7 +32200,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_owner_retry_label_reports_actual_sdio_lane() {
+    fn cyw43_owner_retry_label_reports_generation_safe_replay_contract() {
         let primary = SdioFaultTelemetry {
             arg: (1 << 31) | (1 << 28) | (1 << 27) | (1 << 26),
             cmd: 53,
@@ -32143,6 +32221,9 @@ mod tests {
             payload_last: 0,
             payload_xor: 0,
             payload_sum: 0,
+            dma_cs: 0,
+            dma_conblk: 0,
+            dma_nextcb: 0,
         };
         let byte = SdioFaultTelemetry {
             arg: (1 << 31) | (1 << 28) | (1 << 26) | 64,
@@ -32164,10 +32245,13 @@ mod tests {
             payload_last: 0,
             payload_xor: 0,
             payload_sum: 0,
+            dma_cs: 0,
+            dma_conblk: 0,
+            dma_nextcb: 0,
         };
         assert_eq!(
-            cyw43_owner_retry_label(primary, 0x5103),
-            "linux-normal-block"
+            cyw43_owner_retry_label(primary, 0x5103, 0x0400_0000),
+            "no-replay-issued-unknown"
         );
         assert_eq!(
             cyw43_owner_retry_label(
@@ -32176,17 +32260,22 @@ mod tests {
                     clock_control: 0x0007,
                     ..primary
                 },
-                0x5103
+                0x5103,
+                0x0400_0000,
             ),
-            "linux-normal-block"
+            "no-replay-issued-unknown"
         );
         assert_eq!(
-            cyw43_owner_retry_label(byte, 0x5103),
-            "linux-byte-remainder"
+            cyw43_owner_retry_label(byte, 0x5103, 0x0400_0000),
+            "no-replay-issued-unknown"
         );
         assert_eq!(
-            cyw43_owner_retry_label(byte, 0x5329),
-            "linux-normal-owner-replay-exhausted"
+            cyw43_owner_retry_label(byte, 0x5329, 0x0400_0000),
+            "generation-recovery-required"
+        );
+        assert_eq!(
+            cyw43_owner_retry_label(byte, 0x5103, 0x0100_0000),
+            "pre-issue-retry-admissible"
         );
         let card_command = SdioFaultTelemetry {
             cmd: 5,
@@ -32195,7 +32284,10 @@ mod tests {
             block_count: 0,
             ..byte
         };
-        assert_eq!(cyw43_owner_retry_label(card_command, 0x5325), "none");
+        assert_eq!(
+            cyw43_owner_retry_label(card_command, 0x5325, 0x0100_0000),
+            "none"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -32225,6 +32317,9 @@ mod tests {
             payload_last: 0,
             payload_xor: 0,
             payload_sum: 0,
+            dma_cs: 0,
+            dma_conblk: 0,
+            dma_nextcb: 0,
         };
 
         assert!(cyw43_owner_ai_control_primary(descriptor, snapshot, 0x5325));
@@ -32392,6 +32487,9 @@ mod tests {
             payload_last: 0,
             payload_xor: 0,
             payload_sum: 0,
+            dma_cs: 0,
+            dma_conblk: 0,
+            dma_nextcb: 0,
         };
 
         assert_eq!(
@@ -33517,6 +33615,9 @@ mod tests {
             payload_last: 0,
             payload_xor: 0,
             payload_sum: 0,
+            dma_cs: 0,
+            dma_conblk: 0,
+            dma_nextcb: 0,
         };
         let later_owner = Cyw43SdioOwnerFaultStatus {
             stage: later.stage,

@@ -2775,9 +2775,9 @@ impl DriverRuntimeImageSpec {
                 self.id
             );
         }
-        if self.hot_path == "sdio-host" && (self.mmio_pages != 2 || self.dma_pages != 1) {
+        if self.hot_path == "sdio-host" && (self.mmio_pages != 3 || self.dma_pages != 4) {
             bail!(
-                "driver runtime image {} for sdio-host must declare exactly 2 mmio pages and 1 dma page for SDHCI plus WiFi pwrseq",
+                "driver runtime image {} for sdio-host must declare exactly 3 mmio pages and 4 dma pages for SDHCI, WiFi pwrseq, and BCM2835 DMA",
                 self.id
             );
         }
@@ -2958,8 +2958,8 @@ mod tests {
             stack_pages: 1,
             ipc_pages: 1,
             ring_pages: 1,
-            mmio_pages: if hot_path == "sdio-host" { 2 } else { 1 },
-            dma_pages: 1,
+            mmio_pages: if hot_path == "sdio-host" { 3 } else { 1 },
+            dma_pages: if hot_path == "sdio-host" { 4 } else { 1 },
             shared_buffer_pages: 1,
             root_context_required: true,
             hardware_state_migrated: false,
@@ -3011,20 +3011,42 @@ mod tests {
     }
 
     #[test]
-    fn sdio_runtime_requires_exact_power_sequence_resources() {
+    fn sdio_runtime_requires_exact_linked_dma_resources() {
         let mut image = driver_runtime_image("sdio-host");
-        image.mmio_pages = 1;
-        let err = image.validate().expect_err("missing mailbox page rejected");
+        image.mmio_pages = 2;
+        let err = image
+            .validate()
+            .expect_err("missing BCM2835 DMA MMIO page rejected");
         assert!(err
             .to_string()
-            .contains("exactly 2 mmio pages and 1 dma page"));
+            .contains("exactly 3 mmio pages and 4 dma pages"));
 
         let mut image = driver_runtime_image("sdio-host");
-        image.dma_pages = 0;
-        let err = image.validate().expect_err("missing request page rejected");
+        image.mmio_pages = 4;
+        let err = image
+            .validate()
+            .expect_err("excess SDIO MMIO authority rejected");
         assert!(err
             .to_string()
-            .contains("exactly 2 mmio pages and 1 dma page"));
+            .contains("exactly 3 mmio pages and 4 dma pages"));
+
+        let mut image = driver_runtime_image("sdio-host");
+        image.dma_pages = 3;
+        let err = image
+            .validate()
+            .expect_err("missing SDIO DMA arena page rejected");
+        assert!(err
+            .to_string()
+            .contains("exactly 3 mmio pages and 4 dma pages"));
+
+        let mut image = driver_runtime_image("sdio-host");
+        image.dma_pages = 5;
+        let err = image
+            .validate()
+            .expect_err("excess SDIO DMA authority rejected");
+        assert!(err
+            .to_string()
+            .contains("exactly 3 mmio pages and 4 dma pages"));
     }
 
     #[test]

@@ -339,6 +339,13 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   response-body records cannot consume the three linked-serial protocol-tail
   slots reserved for the terminal ACK/END and prompt, so backpressure cannot
   strand the physical-response fence or block later serial/USB input.
+- `wifi diag` is likewise a single cached read: it never performs the old
+  dump/probe/dump sequence, and retained progress is explicitly labelled as
+  historical when a newer terminal fault exists. `netstats` and `smp activity`
+  are passive retained-counter reports. In contrast, `nettest` starts the
+  bounded network self-test and `usb probe-kbd` advances one retained
+  enumeration attempt, so operators must wait for each command's terminal
+  status before sending the next burst.
 - If a USB diagnostic service turn stops replying, preserve the boot evidence
   and stop submitting more commands until the bounded recovery path or a fresh
   boot.
@@ -387,7 +394,13 @@ This as-built closure is authorized by Milestone 26d task
 - SDIO is the sole SDHCI owner; CYW43 submits bounded bus-link operations.
 - Linux `mmc-bcm2835`/MMC-SDIO and `brcmfmac` ordering is the behavioral
   reliability oracle, adapted to the linked-runtime authority boundary rather
-  than copied as a root-owned driver. CYW43 engine initialization is
+  than copied as a root-owned driver. The external-DMA adaptation was checked
+  against Raspberry Pi Linux commit
+  `89050b1059997d38d55462b323b099a6436dc10d`; the audited
+  `bcm2835-mmc.c` and `bcm2835-dma.c` SHA-256 digests are respectively
+  `8c12ad975529715bc05f6573a70d74488c62d78b5f35384df5aa6f3fe4cb1683`
+  and `936f55cca6cb9989f24d72bce8f6788c94fa101110ef815aae219b7f6dbec6eb`.
+  CYW43 engine initialization is
   descriptor- and local-state-only: it cannot submit an SDIO child. Root first
   completes the irreversible SDIO producer handoff; only then may the first
   retained `TRANSPORT_INIT` turn request one generation reset from the SDIO
@@ -494,44 +507,50 @@ This as-built closure is authorized by Milestone 26d task
   loops or legacy driver fallbacks.
 - Root-task must not wait synchronously for CMD52/CMD53 credit, firmware
   replies, or RX drain work.
-- Each SDHCI data request follows the selected Pi 4 `mmc-bcm2835` register
-  contract. The owner refreshes `TIMEOUT_CONTROL=0x0e`, then performs the two
-  immediate 16-bit read/modify/write operations used by that driver: block size
-  first, with boundary argument 7 (`0x7040` for a 64-byte firmware block and
-  `0x7200` for a 512-byte Function 2 frame), followed by block count. It does
-  not replace those writes with an iProc-style combined register store. At
-  command completion the owner retains one immutable `INT_STATUS` snapshot,
-  clears the complete request-local command/data mask sampled there while
-  preserving asynchronous `CARD_INT`, and consumes coalesced buffer-ready and
-  `DATA_END` state from that snapshot. A stale `PRESENT_STATE` ready bit alone
-  is never completion evidence, and a ready interrupt sampled with the response
-  cannot be lost merely because its hardware latch was acknowledged before the
-  later retained PIO turn. SDHCI `readl`/`writel` access also preserves the
-  AArch64 device-ordering barriers used by Linux. FIFO stores omit only the
-  ordinary two-SD-clock register delay; they retain the `writel` store barrier.
-  Once the final PIO block is emitted, the owner does not perform a second
-  unsampled buffer-ready W1C. It re-reads `INT_STATUS` for `DATA_END` exactly as
-  `mmc-bcm2835` does, so a completion that coalesces with the final FIFO store
-  cannot be erased by cleanup.
-- Linux normally services a Pi `mmc-bcm2835` data request through the host's
-  admitted DMA channel and makes the SDIO core split bulk requests by
-  `max_blk_count`. The linked Cohesix SDIO owner has no data-DMA authority:
-  its single low DMA page is exclusively the firmware-mailbox request buffer.
-  It therefore declares a Function 1 polled-PIO limit of one 64-byte block and
-  applies the same Linux SDIO split rule before crossing the reciprocal ring.
-  The mode decision belongs to the original transfer, so an aligned 4,096-byte
-  firmware span is exactly 64 incrementing block-mode CMD53 requests with
-  count 1; it never degenerates into a 512-byte byte-mode tail. Only a true
-  sub-block tail or backplane-window edge uses Function 1 byte mode. Each exact
-  completion advances the retained prefix by 64 bytes, and each request still
-  requires its own submit/grant/poll outer turns. The SDIO owner rejects a
-  Function 1 multiblock descriptor before issue. Function 2 retains its
-  separately bounded SDPCM frame shapes; no width, clock, byte-mode, root-owned,
-  or legacy fallback is introduced.
+- Each SDHCI request follows the selected Pi 4 `mmc-bcm2835` register contract.
+  The owner refreshes `TIMEOUT_CONTROL=0x0e`, performs the immediate 16-bit
+  block-size then block-count writes used by that driver, preserves boundary
+  argument 7, writes argument/transfer-mode/command, and starts the external
+  BCM2835 DMA engine immediately after command issue. The external engine does
+  not set `SDHCI_TRNS_DMA`; that bit belongs to SDHCI's internal DMA mode, not
+  Linux's `dmaengine` path. SDHCI `readl`/`writel` access retains the AArch64
+  device-ordering barriers used by Linux, and asynchronous `CARD_INT` remains
+  outside request-local W1C ownership.
+- The compiler-declared SDIO owner has exactly three MMIO pages and four low,
+  uncached DMA pages. MMIO page 0 owns SDHCI at `0xfe300000`, page 1 owns the
+  firmware mailbox aperture, and page 2 owns the BCM2835 DMA controller at
+  `0xfe007000`; only physical channel 4 at offset `0x400` is admitted. DMA page
+  0 remains the mailbox request, page 1 holds 32-byte-aligned legacy control
+  blocks, and pages 2-3 are the SDIO bounce arena. Channel 4 uses SDIO DREQ 11,
+  peripheral bus address `0x7e300020`, and the low-RAM bus alias
+  `physical | 0xc0000000`. Missing, aliased, high-memory, misaligned, or
+  incorrectly tagged resources fail descriptor admission before command issue.
+- Cohesix intentionally has one production SDIO data lane: external DMA for
+  every CMD53. There is no selectable PIO, byte-lane, root-owned, lower-clock,
+  narrower-bus, or legacy fallback. This is the linked-runtime adaptation of
+  Linux's DMA-capable host behavior: Linux may retain PIO below its configured
+  DMA barrier, while Cohesix fails closed instead because maintaining two
+  physical data engines would create divergent ownership and recovery paths.
+  Function 1 firmware streaming uses the existing bounded 8,192-byte shared
+  stage as one incrementing block-mode request with 64-byte blocks and count
+  128 whenever the 32-KiB backplane window permits. This is the closest bounded
+  linked-runtime adaptation of Linux's larger `brcmf_sdiod_ramrw` batching;
+  only the window boundary, CMD53 count bound, or true final remainder changes
+  the protocol request length, never the transfer engine.
+- Noncontiguous bounce pages produce one immutable control block per physical
+  segment. Writes copy the reciprocal-ring payload into the bounce arena before
+  the DMA store barrier; reads apply the DMA load barrier before copying back.
+  Completion requires both `CONBLK_AD == 0` with no DMA `CS.ERROR` and SDHCI
+  `DATA_END`, in either arrival order. A deadline or either-engine error records
+  pre-containment SDHCI and DMA state, clears `NEXTCB`, performs the bounded
+  channel-local abort/reset, resets the SDHCI command/data path, and returns an
+  issued-unknown result. It never replays that action in the same generation.
 - A failed owner transfer snapshots present state, interrupt status, response,
-  host/power/clock state, and block-size/count before command/data containment
-  clears or resets the controller. The returned fault frame therefore describes
-  the terminal request, not the recovered host. Root renders mandatory
+  host/power/clock state, block-size/count, and DMA `CS`, `CONBLK_AD`, and
+  `NEXTCB` before command/data containment clears or resets either engine. The
+  returned fault frame therefore describes the terminal request, not the
+  recovered host. Root classifies absent DMA authority, never-started, active
+  or stuck, error, and chain-exhausted states and renders mandatory
   `reason`, `result`, `clock_state`, parent-request length, child-transfer
   length, and direct-versus-inferred gate fields on separate bounded lines so
   serial truncation cannot silently change the diagnosis.
@@ -654,6 +673,10 @@ This as-built closure is authorized by Milestone 26d task
   sequence and channel identity must be preserved.
 - A fixed event ring must report overrun, drop, stale epoch, and malformed
   entries explicitly.
+- Gate 10 consumes the generation-scoped v10 client trace. Its DPC `rearms`
+  field counts actual owner-notification publications after consumed events;
+  the distinct source-asserted-empty episode-rearm counter is diagnostic only
+  and cannot be substituted for owner liveness.
 - Physical-Pi Wi-Fi bootstrap is supervised after the serial/local-seat prompt.
   One bootstrap or recovery episode permits at most five attempts, separated
   by bounded `1/2/4/8` second virtual-counter backoffs. This finite bound is
@@ -677,10 +700,14 @@ This as-built closure is authorized by Milestone 26d task
   ownership to the ordinary EventPump so serial, local-seat, HDMI, diagnostics,
   authentication, and reboot remain live while Wi-Fi acceptance stays red. If
   a stack was already attached, EventPump quarantines its network-service path
-  before entering that operator mode: passive diagnostics retain the stack
-  evidence, but no poll, buffered TCP command dispatch, or TCP flush may touch
-  the poisoned CYW43 generation. Quarantine closes any network-origin session
-  and its stream/cursor authority locally, so later serial input cannot inherit
+  before entering that operator mode. The stack reference remains retained for
+  storage ownership only; passive diagnostics use immutable terminal and owner
+  ring evidence and reject retained DHCP, EAPOL, and acceptance state as stale.
+  No status read, poll, buffered TCP command dispatch, or TCP flush may touch
+  the poisoned CYW43 generation. Terminal gate evidence also clamps direct gate
+  proof before rendering later gates, so a stale formerly healthy stack cannot
+  overrule the new fault. Quarantine closes any network-origin session and its
+  stream/cursor authority locally, so later serial input cannot inherit
   authentication from an unreachable TCP peer.
   A non-retryable failure during attached recovery, including a completion that
   lacks ready-generation proof, emits one permanent terminal status and enters
@@ -946,7 +973,9 @@ second command remains buffered until its predecessor's cursor ends. CYW43
 tests prove data-ready work stays on the ordinary one-operation poll path.
 Saturation tests preserve the stream
 cursor and three-record response-tail reserve, retain the prompt in the backlog,
-and allow only `BackgroundLine` preemption. Cutover tests route an explicitly
+and let an in-flight physical response evict stale lifecycle mirrors only after
+all lower-impact background lines are gone; lifecycle producers cannot evict
+response bodies or protocol tails. Cutover tests route an explicitly
 raw diagnostic only to `/log/queen.log`; reboot tests prove later commands
 remain fenced, FIFO acceptance is not UART wire-idle proof, and reset cannot
 fire until a later reset-only turn after the complete ACK and transmitter-idle
