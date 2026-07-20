@@ -18066,37 +18066,18 @@ const fn cyw43_linux_probe_function2_disabled_value(ioex: u8) -> u8 {
 }
 
 fn cyw43_linux_probe_write_pmucontrol(state: &mut Cyw43RuntimeState, value: u32) -> bool {
-    #[cfg(all(not(target_os = "none"), test))]
-    if TEST_CYW43_PROBE_PMUCONTROL_WRITE_FAIL.swap(false, Ordering::AcqRel) {
-        return false;
-    }
-    if !cyw43_backplane_set_window(state, CYW43_CHIPCOMMON_PMUCONTROL_ADDR) {
-        return false;
-    }
-    let base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
-    for (index, byte) in value.to_le_bytes().iter().copied().enumerate() {
-        let Some(byte_addr) = base.checked_add(index as u32) else {
-            cyw43_record_last_fault(FAULT_CYW43_BACKPLANE_WINDOW);
-            return false;
-        };
-        if !cyw43_sdio_cmd52_write(1, byte_addr, byte) {
-            return false;
-        }
-    }
-    true
+    // Linux brcmf_sdiod_writel() sets the 4-byte backplane-access flag and
+    // publishes PMUCONTROL with one incrementing CMD53.  Splitting the word
+    // into CMD52 bytes commits RES_RELOAD before the tail bytes and is not
+    // transaction-equivalent: BCM43455 can reject the final 0x603 byte after
+    // the trigger has already fired.  Keep this as the sole, atomic owner path.
+    cyw43_backplane_write_u32(state, CYW43_CHIPCOMMON_PMUCONTROL_ADDR, value)
 }
 
 fn cyw43_linux_probe_read_pmucontrol(state: &mut Cyw43RuntimeState) -> Option<u32> {
-    if !cyw43_backplane_set_window(state, CYW43_CHIPCOMMON_PMUCONTROL_ADDR) {
-        return None;
-    }
-    let base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
-    let mut bytes = [0u8; 4];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        let byte_addr = base.checked_add(index as u32)?;
-        *byte = cyw43_sdio_cmd52_read(1, byte_addr)?;
-    }
-    Some(u32::from_le_bytes(bytes))
+    // Match Linux brcmf_sdiod_readl(): PMUCONTROL is a single flagged
+    // Function-1 word transaction, never four independently visible bytes.
+    cyw43_backplane_read_u32(state, CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
 }
 
 fn cyw43_configure_linux_probe_attach_state(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
@@ -27808,9 +27789,6 @@ static TEST_CYW43_TOHOST_MAILBOX_READ_FAIL: AtomicU32 = AtomicU32::new(0);
 static TEST_CYW43_TOSB_MAILBOX_ACK_FAIL: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(all(not(target_os = "none"), test))]
-static TEST_CYW43_PROBE_PMUCONTROL_WRITE_FAIL: AtomicBool = AtomicBool::new(false);
-
-#[cfg(all(not(target_os = "none"), test))]
 static TEST_SDIO_CMD52_NONE_RESPONSE_KEY: AtomicU32 =
     AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
 
@@ -27909,7 +27887,6 @@ fn reset_test_sdio_cmd52_read_responses() {
     TEST_CYW43_TOHOST_MAILBOX_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_CYW43_TOHOST_MAILBOX_READ_FAIL.store(0, Ordering::Release);
     TEST_CYW43_TOSB_MAILBOX_ACK_FAIL.store(0, Ordering::Release);
-    TEST_CYW43_PROBE_PMUCONTROL_WRITE_FAIL.store(false, Ordering::Release);
     TEST_SDIO_CMD52_NONE_RESPONSE_KEY.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
 }
 
@@ -28021,11 +27998,6 @@ fn test_sdio_cmd52_read_chipclkcsr_response(value: u8) {
 #[cfg(all(not(target_os = "none"), test))]
 fn test_sdio_cmd52_read_arm_resetctrl_response(value: u8) {
     TEST_SDIO_CMD52_ARM_RESETCTRL_RESPONSE.store(u32::from(value), Ordering::Release);
-}
-
-#[cfg(all(not(target_os = "none"), test))]
-fn test_cyw43_probe_pmucontrol_write_fail_once() {
-    TEST_CYW43_PROBE_PMUCONTROL_WRITE_FAIL.store(true, Ordering::Release);
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -37671,6 +37643,10 @@ mod tests {
     }
 
     static TEST_REAL_SDIO_CONTROLLER_ISSUES: AtomicUsize = AtomicUsize::new(0);
+    static TEST_REAL_SDIO_CONTROLLER_CMD53_ISSUES: AtomicUsize = AtomicUsize::new(0);
+    static TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD: AtomicU32 = AtomicU32::new(u32::MAX);
+    static TEST_REAL_SDIO_CONTROLLER_FAIL_ARG: AtomicU32 = AtomicU32::new(u32::MAX);
+    static TEST_REAL_SDIO_CONTROLLER_FAIL_R5: AtomicU32 = AtomicU32::new(0);
     static TEST_REAL_SDIO_CONTROLLER_SEQUENCE: AtomicU32 = AtomicU32::new(0x8000_7000);
 
     struct TestRealSdioControllerBridgeGuard;
@@ -37683,6 +37659,10 @@ mod tests {
 
     fn enable_real_sdio_controller_bridge() -> TestRealSdioControllerBridgeGuard {
         TEST_REAL_SDIO_CONTROLLER_ISSUES.store(0, Ordering::Release);
+        TEST_REAL_SDIO_CONTROLLER_CMD53_ISSUES.store(0, Ordering::Release);
+        TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.store(u32::MAX, Ordering::Release);
+        TEST_REAL_SDIO_CONTROLLER_FAIL_ARG.store(u32::MAX, Ordering::Release);
+        TEST_REAL_SDIO_CONTROLLER_FAIL_R5.store(0, Ordering::Release);
         TEST_REAL_SDIO_CONTROLLER_SEQUENCE.store(0x8000_7000, Ordering::Release);
         TEST_SDIO_CONTROLLER_BRIDGE.with_mut(|bridge| {
             assert!(
@@ -37694,18 +37674,33 @@ mod tests {
         TestRealSdioControllerBridgeGuard
     }
 
+    fn fail_real_sdio_controller_next_arg_with_r5(arg: u32, r5: u32) {
+        assert_ne!(arg, u32::MAX);
+        assert_ne!(r5 & SDIO_R5_STATUS_MASK, 0);
+        TEST_REAL_SDIO_CONTROLLER_FAIL_R5.store(r5, Ordering::Release);
+        TEST_REAL_SDIO_CONTROLLER_FAIL_ARG.store(arg, Ordering::Release);
+    }
+
     fn service_test_transfer_through_real_sdio_controller(
         record: TestSdioTransferRecord,
-        _frame: DriverFrameDescriptor,
+        frame: DriverFrameDescriptor,
     ) -> Option<u32> {
-        if record.cmd != SDIO_CMD52 {
-            return None;
-        }
         let write = record.arg & (1 << 31) != 0;
         let function = ((record.arg >> 28) & 0x7) as u8;
         let addr = (record.arg >> 9) & 0x1ffff;
-        let value = (record.arg & 0xff) as u8;
-        let descriptor = sdio_bus_link_cmd52_descriptor(write, function, addr, record.timeout_us)?;
+        let descriptor = match record.cmd {
+            SDIO_CMD52 => sdio_bus_link_cmd52_descriptor(write, function, addr, record.timeout_us)?,
+            SDIO_CMD53 => sdio_bus_link_cmd53_descriptor(
+                record.cmd,
+                record.arg,
+                record.flags,
+                frame,
+                record.block_size,
+                record.block_count,
+                record.timeout_us,
+            )?,
+            _ => return None,
+        };
         // Target execution uses distinct root->CYW43 and CYW43->SDIO ring
         // pages. The host model reuses one byte array, so preserve the actual
         // parent descriptor while the child occupies its reciprocal ring slot.
@@ -37715,17 +37710,45 @@ mod tests {
             flags: 0,
         };
         let parent_descriptor = read_cyw43_command_descriptor(parent_frame);
-        if write {
-            write_runtime_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value);
+        if record.cmd == SDIO_CMD52 && write {
+            write_runtime_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, (record.arg & 0xff) as u8);
+        } else if record.cmd == SDIO_CMD53 && write {
+            for index in 0..usize::from(frame.len) {
+                write_runtime_payload_byte(
+                    CYW43_SDIO_BUS_LINK_DATA_OFFSET + index,
+                    read_runtime_payload_byte(frame.offset as usize + index),
+                );
+            }
         }
         let sequence = TEST_REAL_SDIO_CONTROLLER_SEQUENCE.fetch_add(1, Ordering::AcqRel);
         let command = stage_sdio_descriptor_service_command(sequence, descriptor);
         let mut io = TestSdioHostIo::new();
         io.use_runtime_payload = true;
-        io.command_status = SDHCI_INT_RESPONSE;
-        if !write {
+        if record.cmd == SDIO_CMD52 {
+            io.command_status = SDHCI_INT_RESPONSE;
+        } else if write {
+            io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
+            io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+            io.data_end_after_words = usize::from(frame.len).div_ceil(4);
+        } else {
+            let len = usize::from(frame.len);
+            io.fifo_len = len;
+            for index in 0..len {
+                io.fifo[index] = read_runtime_payload_byte(frame.offset as usize + index);
+            }
+            io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_DATA_AVAIL;
+            io.command_present_set = SDHCI_DATA_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+            io.data_end_after_words = len.div_ceil(4);
+        }
+        if record.cmd == SDIO_CMD52 && !write {
             io.command_response =
                 u32::from(test_sdio_cmd52_read_response(function, addr).unwrap_or_default());
+        }
+        if TEST_REAL_SDIO_CONTROLLER_FAIL_ARG
+            .compare_exchange(record.arg, u32::MAX, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            io.command_response = TEST_REAL_SDIO_CONTROLLER_FAIL_R5.swap(0, Ordering::AcqRel);
         }
         let completion = service_sdio_descriptor_command_with_io(command, &mut io);
         if let Some(parent_descriptor) = parent_descriptor {
@@ -37737,12 +37760,28 @@ mod tests {
             "one descriptor must issue one controller command"
         );
         TEST_REAL_SDIO_CONTROLLER_ISSUES.fetch_add(issues, Ordering::AcqRel);
+        if record.cmd == SDIO_CMD53 {
+            TEST_REAL_SDIO_CONTROLLER_CMD53_ISSUES.fetch_add(issues, Ordering::AcqRel);
+        }
         if completion.sequence != sequence {
             return None;
         }
+        if record.cmd == SDIO_CMD53
+            && write
+            && function == 1
+            && addr == cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
+            && frame.len == 4
+        {
+            let mut word = 0u32;
+            for index in 0..4 {
+                word |= u32::from(io.fifo[index]) << (index * 8);
+            }
+            TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.store(word, Ordering::Release);
+        }
         if write && completion.code == COMPLETION_PROGRESS {
             Some(completion.result)
-        } else if !write
+        } else if record.cmd == SDIO_CMD52
+            && !write
             && completion.code == COMPLETION_FRAME_READY
             && completion.frame.offset as usize == CYW43_SDIO_BUS_LINK_DATA_OFFSET
             && completion.frame.len == 1
@@ -37750,6 +37789,19 @@ mod tests {
             Some(u32::from(read_runtime_payload_byte(
                 CYW43_SDIO_BUS_LINK_DATA_OFFSET,
             )))
+        } else if record.cmd == SDIO_CMD53
+            && !write
+            && completion.code == COMPLETION_FRAME_READY
+            && completion.frame.offset as usize == CYW43_SDIO_BUS_LINK_DATA_OFFSET
+            && completion.frame.len == frame.len
+        {
+            for index in 0..usize::from(frame.len) {
+                write_runtime_payload_byte(
+                    frame.offset as usize + index,
+                    read_runtime_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET + index),
+                );
+            }
+            Some(completion.result)
         } else {
             None
         }
@@ -51668,28 +51720,60 @@ mod tests {
             })
             .expect("CARDCTRL write");
             let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
+            let pmu_function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
+            let pmu_read_arg = sdio_cmd53_arg(false, 1, pmu_function_addr, true, 0, 4);
+            let pmu_write_arg = sdio_cmd53_arg(true, 1, pmu_function_addr, true, 0, 4);
             let pmu_read_index = test_sdio_first_transfer_index(|record| {
-                record.cmd == SDIO_CMD52 && record.arg == sdio_cmd52_arg(false, 1, pmu_base, 0)
+                record.cmd == SDIO_CMD53 && record.arg == pmu_read_arg
             })
-            .expect("PMUCONTROL CMD52 read");
+            .expect("PMUCONTROL atomic CMD53 read");
             let pmu_write_index = test_sdio_first_transfer_index(|record| {
-                record.cmd == SDIO_CMD52 && record.arg == sdio_cmd52_arg(true, 1, pmu_base, 0)
+                record.cmd == SDIO_CMD53 && record.arg == pmu_write_arg
             })
-            .expect("PMUCONTROL CMD52 write");
-            for (index, byte) in [0u8, 0x40, 0, 0].iter().copied().enumerate() {
-                assert!(test_sdio_transfer_seen(|record| {
-                    record.cmd == SDIO_CMD52
-                        && record.arg == sdio_cmd52_arg(false, 1, pmu_base + index as u32, 0)
-                }));
-                assert!(test_sdio_transfer_seen(|record| {
-                    record.cmd == SDIO_CMD52
-                        && record.arg == sdio_cmd52_arg(true, 1, pmu_base + index as u32, byte)
-                }));
-            }
-            assert!(!test_sdio_transfer_seen(|record| {
+            .expect("PMUCONTROL atomic CMD53 write");
+            assert_eq!(
+                test_sdio_transfer_count(|record| {
+                    record.cmd == SDIO_CMD53 && record.arg == pmu_read_arg
+                }),
+                1,
+            );
+            assert_eq!(
+                test_sdio_transfer_count(|record| {
+                    record.cmd == SDIO_CMD53 && record.arg == pmu_write_arg
+                }),
+                1,
+            );
+            assert_eq!(
+                test_sdio_transfer_count(|record| {
+                    record.cmd == SDIO_CMD53
+                        && sdio_cmd53_arg_function(record.arg) == 1
+                        && sdio_cmd53_arg_addr(record.arg) == pmu_function_addr
+                }),
+                2,
+            );
+            assert!(test_sdio_transfer_seen(|record| {
                 record.cmd == SDIO_CMD53
-                    && sdio_cmd53_arg_addr(record.arg)
-                        == cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
+                    && record.arg == pmu_read_arg
+                    && record.flags
+                        == DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+                    && record.block_size == 4
+                    && record.block_count == 0
+            }));
+            assert!(test_sdio_transfer_seen(|record| {
+                record.cmd == SDIO_CMD53
+                    && record.arg == pmu_write_arg
+                    && record.flags
+                        == DRIVER_RUNTIME_SDIO_FLAG_DATA
+                            | DRIVER_RUNTIME_SDIO_FLAG_WRITE
+                            | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+                    && record.block_size == 4
+                    && record.block_count == 0
+            }));
+            assert!(!test_sdio_transfer_seen(|record| {
+                record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                    let addr = sdio_cmd53_arg_addr(record.arg);
+                    addr >= pmu_base && addr < pmu_base + 4
+                }
             }));
             let f2_read_index = test_sdio_first_transfer_index(|record| {
                 record.cmd == SDIO_CMD52
@@ -51809,13 +51893,30 @@ mod tests {
                     );
                 }
                 FAULT_CYW43_PROBE_PMUCONTROL_READ => {
-                    test_sdio_cmd52_read_none_once(
-                        1,
-                        CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK,
+                    test_sdio_transfer_fail_next_arg(
+                        SDIO_CMD53,
+                        sdio_cmd53_arg(
+                            false,
+                            1,
+                            cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
+                            true,
+                            0,
+                            4,
+                        ),
                     );
                 }
                 FAULT_CYW43_PROBE_PMUCONTROL_WRITE => {
-                    test_cyw43_probe_pmucontrol_write_fail_once();
+                    test_sdio_transfer_fail_next_arg(
+                        SDIO_CMD53,
+                        sdio_cmd53_arg(
+                            true,
+                            1,
+                            cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
+                            true,
+                            0,
+                            4,
+                        ),
+                    );
                 }
                 FAULT_CYW43_PROBE_F2_DISABLE_READ => {
                     test_sdio_cmd52_read_none_once(0, SDIO_CCCR_IOEX);
@@ -51848,53 +51949,650 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_probe_pmucontrol_cmd52_primary_fails_each_byte_without_cmd53() {
+    fn cyw43_probe_pmucontrol_uses_one_atomic_cmd53_word_without_cmd52() {
         let _guard = test_guard();
         let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
-        for index in 0..4u32 {
+        let pmu_function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
+        let read_arg = sdio_cmd53_arg(false, 1, pmu_function_addr, true, 0, 4);
+        let write_arg = sdio_cmd53_arg(true, 1, pmu_function_addr, true, 0, 4);
+
+        reset_runtime_for_test();
+        test_sdio_cmd52_read_cardctrl_response(0xa0);
+        test_sdio_cmd52_read_ioex_response(0xa6);
+        test_sdio_cmd52_read_chipclkcsr_response(SBSDIO_ALP_AVAIL_REQ | SBSDIO_ALP_AVAIL);
+        let mut state = Cyw43RuntimeState::new();
+        state.transport_ready = true;
+        state.sdio_transport_enumerated = true;
+
+        assert_eq!(cyw43_prepare_firmware_upload_transport(&mut state), Ok(()));
+        assert_eq!(
+            test_sdio_transfer_count(|record| record.cmd == SDIO_CMD53 && record.arg == read_arg),
+            1,
+        );
+        assert_eq!(
+            test_sdio_transfer_count(|record| record.cmd == SDIO_CMD53 && record.arg == write_arg),
+            1,
+        );
+        assert_eq!(
+            test_sdio_transfer_count(|record| {
+                record.cmd == SDIO_CMD53
+                    && sdio_cmd53_arg_function(record.arg) == 1
+                    && sdio_cmd53_arg_addr(record.arg) == pmu_function_addr
+            }),
+            2,
+        );
+        assert!(!test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                let addr = sdio_cmd53_arg_addr(record.arg);
+                addr >= pmu_base && addr < pmu_base + 4
+            }
+        }));
+
+        for (arg, expected) in [
+            (read_arg, FAULT_CYW43_PROBE_PMUCONTROL_READ),
+            (write_arg, FAULT_CYW43_PROBE_PMUCONTROL_WRITE),
+        ] {
             reset_runtime_for_test();
             test_sdio_cmd52_read_cardctrl_response(0xa0);
             test_sdio_cmd52_read_ioex_response(0xa6);
             test_sdio_cmd52_read_chipclkcsr_response(SBSDIO_ALP_AVAIL_REQ | SBSDIO_ALP_AVAIL);
-            test_sdio_cmd52_read_none_once(1, pmu_base + index);
+            test_sdio_transfer_fail_next_arg(SDIO_CMD53, arg);
             let mut state = Cyw43RuntimeState::new();
             state.transport_ready = true;
             state.sdio_transport_enumerated = true;
 
             assert_eq!(
                 cyw43_prepare_firmware_upload_transport(&mut state),
-                Err(FAULT_CYW43_PROBE_PMUCONTROL_READ)
+                Err(expected)
+            );
+            assert_eq!(
+                test_sdio_transfer_count(|record| record.cmd == SDIO_CMD53 && record.arg == arg),
+                1,
             );
             assert!(!test_sdio_transfer_seen(|record| {
-                record.cmd == SDIO_CMD53
-                    && sdio_cmd53_arg_addr(record.arg)
-                        == cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
+                record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                    let addr = sdio_cmd53_arg_addr(record.arg);
+                    addr >= pmu_base && addr < pmu_base + 4
+                }
             }));
         }
+    }
 
-        for (index, byte) in [0u8, 0x40, 0, 0].iter().copied().enumerate() {
-            reset_runtime_for_test();
+    #[test]
+    fn firmware_prep_probe_attach_crosses_real_sdio_controller_seam_exactly() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        init_cyw43_engine_for_test();
+        reset_test_sdio_transfer_log();
+        let _bridge = enable_real_sdio_controller_bridge();
+        let sequence = 0x61f0;
+        let generation = 0x61f1;
+        let pmu_function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
+        let pmu_read_arg = sdio_cmd53_arg(false, 1, pmu_function_addr, true, 0, 4);
+        let pmu_write_arg = sdio_cmd53_arg(true, 1, pmu_function_addr, true, 0, 4);
+        let observed_pmucontrol = 0x0177_0181;
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+        let command = cyw43_descriptor_command(sequence);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.transport_ready = true;
+            state.dpc_shared_epoch = generation;
+            state.firmware_prep.parent_sequence = sequence;
+            state.firmware_prep.generation = generation;
+            state.firmware_prep.phase = Cyw43FirmwarePrepPhase::ProbeAttach;
+            state.backplane_window = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_WINDOW_MASK;
+            state.backplane_window_valid = true;
+        });
+        test_sdio_cmd52_read_cardctrl_response(0xa0);
+        test_sdio_cmd52_read_ioex_response(0xa6);
+        write_ring_u32(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET, observed_pmucontrol);
+
+        assert_eq!(
+            service_command_turn(0, command),
+            RuntimeCommandTurn::Pending,
+        );
+        assert!(
+            CYW43_RUNTIME_STATE
+                .with_ref(|state| state.firmware_prep.phase == Cyw43FirmwarePrepPhase::ClockSdOnly),
+            "the host helper must complete probe attach through the real controller seam",
+        );
+        assert_eq!(
+            test_sdio_transfer_count(
+                |record| record.cmd == SDIO_CMD53 && record.arg == pmu_read_arg
+            ),
+            1,
+        );
+        assert_eq!(
+            test_sdio_transfer_count(
+                |record| record.cmd == SDIO_CMD53 && record.arg == pmu_write_arg
+            ),
+            1,
+        );
+        assert_eq!(
+            test_sdio_transfer_count(|record| {
+                record.cmd == SDIO_CMD53
+                    && sdio_cmd53_arg_function(record.arg) == 1
+                    && sdio_cmd53_arg_addr(record.arg) == pmu_function_addr
+            }),
+            2,
+        );
+        assert_eq!(
+            TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire),
+            6,
+            "probe attach must issue CARDCTRL, PMUCONTROL, and IOEx exactly once each",
+        );
+        assert_eq!(
+            TEST_REAL_SDIO_CONTROLLER_CMD53_ISSUES.load(Ordering::Acquire),
+            2,
+            "PMUCONTROL must cross the real SDIO controller exactly once per direction",
+        );
+        assert_eq!(
+            TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.load(Ordering::Acquire),
+            cyw43_linux_probe_pmucontrol_value(observed_pmucontrol),
+            "the atomic FIFO word must preserve the observed PMU value and add RES_RELOAD",
+        );
+        let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
+        assert!(!test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                let addr = sdio_cmd53_arg_addr(record.arg);
+                addr >= pmu_base && addr < pmu_base + 4
+            }
+        }));
+    }
+
+    #[test]
+    fn probe_attach_pmu_cmd53_r5_failures_are_terminal_at_real_controller_seam() {
+        let _guard = test_guard();
+        let pmu_function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
+        let read_arg = sdio_cmd53_arg(false, 1, pmu_function_addr, true, 0, 4);
+        let write_arg = sdio_cmd53_arg(true, 1, pmu_function_addr, true, 0, 4);
+        let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
+
+        for (
+            failed_arg,
+            expected_detail,
+            expected_parent_result,
+            expected_issues,
+            expected_cmd53_issues,
+        ) in [
+            (
+                read_arg,
+                FAULT_CYW43_PROBE_PMUCONTROL_READ,
+                CYW43_CHIPCOMMON_PMUCONTROL_ADDR,
+                3,
+                1,
+            ),
+            (
+                write_arg,
+                FAULT_CYW43_PROBE_PMUCONTROL_WRITE,
+                cyw43_linux_probe_pmucontrol_value(0x0177_0181),
+                4,
+                2,
+            ),
+        ] {
+            reset_sdio_descriptor_seam_for_test();
+            init_cyw43_engine_for_test();
+            reset_test_sdio_transfer_log();
+            let bridge = enable_real_sdio_controller_bridge();
+            let sequence = 0x61e0u32.wrapping_add(u32::from(expected_detail));
+            let generation = sequence.wrapping_add(1);
+            stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            });
+            let command = cyw43_descriptor_command(sequence);
+            CYW43_RUNTIME_STATE.with_mut(|state| {
+                state.transport_ready = true;
+                state.dpc_shared_epoch = generation;
+                state.firmware_prep.parent_sequence = sequence;
+                state.firmware_prep.generation = generation;
+                state.firmware_prep.phase = Cyw43FirmwarePrepPhase::ProbeAttach;
+                state.backplane_window = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_WINDOW_MASK;
+                state.backplane_window_valid = true;
+            });
             test_sdio_cmd52_read_cardctrl_response(0xa0);
             test_sdio_cmd52_read_ioex_response(0xa6);
-            test_sdio_cmd52_read_chipclkcsr_response(SBSDIO_ALP_AVAIL_REQ | SBSDIO_ALP_AVAIL);
-            test_sdio_transfer_fail_next_arg(
-                SDIO_CMD52,
-                sdio_cmd52_arg(true, 1, pmu_base + index as u32, byte),
-            );
-            let mut state = Cyw43RuntimeState::new();
-            state.transport_ready = true;
-            state.sdio_transport_enumerated = true;
+            write_ring_u32(CYW43_BACKPLANE_WORD_SCRATCH_OFFSET, 0x0177_0181);
+            fail_real_sdio_controller_next_arg_with_r5(failed_arg, SDIO_R5_ERROR);
 
+            let completion = match service_command_turn(0, command) {
+                RuntimeCommandTurn::Complete(completion) => completion,
+                RuntimeCommandTurn::Pending => {
+                    panic!("a controller-rejected PMU word must fail the parent command")
+                }
+            };
+            assert_eq!(completion.detail, expected_detail);
+            assert_eq!(completion.result, expected_parent_result);
             assert_eq!(
-                cyw43_prepare_firmware_upload_transport(&mut state),
-                Err(FAULT_CYW43_PROBE_PMUCONTROL_WRITE)
+                sdio_last_transfer_failure(),
+                sdio_transfer_failure_result(
+                    SDIO_TRANSFER_FAILURE_STAGE_RESPONSE,
+                    SDIO_R5_ERROR,
+                ),
+                "the owner must retain the exact controller R5 failure beneath the typed parent fault",
+            );
+            assert_eq!(
+                TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire),
+                expected_issues,
+            );
+            assert_eq!(
+                TEST_REAL_SDIO_CONTROLLER_CMD53_ISSUES.load(Ordering::Acquire),
+                expected_cmd53_issues,
+            );
+            assert_eq!(
+                test_sdio_transfer_count(
+                    |record| record.cmd == SDIO_CMD53 && record.arg == failed_arg
+                ),
+                1,
+                "the issued PMU action must not replay",
+            );
+            if failed_arg == read_arg {
+                assert_eq!(
+                    test_sdio_transfer_count(
+                        |record| record.cmd == SDIO_CMD53 && record.arg == write_arg
+                    ),
+                    0,
+                    "a rejected read cannot expose the PMU write",
+                );
+            }
+            assert_eq!(
+                test_sdio_transfer_count(|record| {
+                    record.cmd == SDIO_CMD52
+                        && sdio_cmd53_arg_function(record.arg) == 0
+                        && sdio_cmd53_arg_addr(record.arg) == SDIO_CCCR_IOEX
+                }),
+                0,
+                "probe attach must stop before Function 2 policy",
             );
             assert!(!test_sdio_transfer_seen(|record| {
-                record.cmd == SDIO_CMD53
-                    && sdio_cmd53_arg_addr(record.arg)
-                        == cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
+                record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                    let addr = sdio_cmd53_arg_addr(record.arg);
+                    addr >= pmu_base && addr < pmu_base + 4
+                }
             }));
+
+            let issues_before_replay = TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire);
+            let replay = match service_command_turn(0, command) {
+                RuntimeCommandTurn::Complete(completion) => completion,
+                RuntimeCommandTurn::Pending => {
+                    panic!("the retained failed parent must replay its typed failure")
+                }
+            };
+            assert_eq!(replay, completion);
+            assert_eq!(
+                TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire),
+                issues_before_replay,
+                "same-generation failure replay must perform no controller operation",
+            );
+            drop(bridge);
         }
+    }
+
+    #[test]
+    fn probe_attach_pmu_cmd53_owner_operations_require_distinct_turns() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        let function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
+        let observed = 0x0177_0181;
+        let requested = cyw43_linux_probe_pmucontrol_value(observed);
+        let requested_bytes = requested.to_le_bytes();
+        let read_arg = sdio_cmd53_arg(false, 1, function_addr, true, 0, 4);
+        let read_flags = DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT;
+        let read_descriptor = sdio_bus_link_cmd53_descriptor(
+            SDIO_CMD53,
+            read_arg,
+            read_flags,
+            DriverFrameDescriptor {
+                offset: data_offset as u32,
+                len: 4,
+                flags: 0,
+            },
+            4,
+            0,
+            0,
+        )
+        .expect("probe PMU read descriptor must encode");
+        let read_command = DriverTaskCommandRecord {
+            flags: read_flags,
+            ..stage_sdio_descriptor_service_command(0x8000_5333, read_descriptor)
+        };
+        let parent = retained_gate_test_intake(0x8000_0042).command;
+        let mut transaction = Cyw43ForegroundTransaction::new();
+        transaction.generation = 0x4359_5334;
+        let mut ring = TestReciprocalRecordRing;
+        let ticket_identity = |ticket: Cyw43ForegroundActionTicket| {
+            (
+                ticket.parent_sequence,
+                ticket.generation,
+                ticket.owner_sequence,
+                ticket.ordinal,
+                ticket.issued_turn_id,
+            )
+        };
+
+        assert!(transaction.begin_turn(parent, 1));
+        transaction.prepared_sequence = read_command.sequence;
+        transaction.prepared_descriptor = read_descriptor;
+        transaction.prepared_descriptor_valid = true;
+        transaction.prepared_write_len = 0;
+        assert!(cyw43_foreground_reserve_frontier(
+            &mut transaction,
+            read_command,
+        ));
+        let read_entry = transaction.frontier;
+        assert!(transaction.frontier_ticket_valid());
+        assert_eq!(read_entry.ticket.ordinal, 0);
+        assert_eq!(read_entry.ticket.issued_turn_id, 1);
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, false, false, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Submit,
+        );
+        assert!(runtime_ring_write_completion_staged(
+            &mut ring,
+            DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND),
+        ));
+        assert!(runtime_ring_write_command_staged(
+            &mut ring,
+            cyw43_sdio_bus_link_staged_command(read_command),
+        ));
+        transaction.retain_frontier_submit(1, 100);
+        assert!(runtime_ring_commit_command_sequence(
+            &mut ring,
+            read_command.sequence,
+        ));
+        let read_owner_command = runtime_ring_read_command_stable(&ring)
+            .expect("sequence-last PMU read must be owner-visible");
+        assert_eq!(
+            read_owner_command,
+            DriverTaskCommandRecord {
+                sequence: read_command.sequence,
+                ..cyw43_sdio_bus_link_staged_command(read_command)
+            },
+        );
+        assert_eq!(
+            runtime_command_admission(read_owner_command, 0),
+            RuntimeCommandAdmission::OneWay,
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
+            Cyw43ForegroundFrontierRoute::Defer,
+            "the PMU read submit turn cannot poll or issue the write",
+        );
+
+        assert!(transaction.begin_turn(parent, 2));
+        transaction.retain_frontier_completion_poll();
+        let (first, second) = runtime_ring_read_completion_stable(&ring)
+            .expect("staged reset completion must remain readable");
+        assert_eq!(
+            Cyw43SdioChildState::new(read_command.sequence).completion(first, second),
+            Cyw43SdioChildCompletion::Waiting,
+        );
+        transaction.retain_frontier_wait(1, true);
+        assert!(transaction.turn.action_consumed);
+        assert!(transaction.turn.pending);
+        assert_eq!(
+            ticket_identity(read_entry.ticket),
+            ticket_identity(transaction.frontier.ticket),
+        );
+
+        assert!(transaction.begin_turn(parent, 3));
+        transaction.retain_frontier_grant(1);
+        assert!(transaction.turn.action_consumed);
+        assert!(transaction.turn.pending);
+        let mut read_io = TestSdioHostIo::new();
+        read_io.use_runtime_payload = true;
+        read_io.fifo[..4].copy_from_slice(&observed.to_le_bytes());
+        read_io.fifo_len = 4;
+        read_io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_DATA_AVAIL;
+        read_io.command_present_set = SDHCI_DATA_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+        read_io.data_end_after_words = 1;
+        let read_completion =
+            service_sdio_descriptor_command_with_io(read_owner_command, &mut read_io);
+        assert_eq!(read_io.command_issue_count(), 1);
+        assert_eq!(
+            read_completion,
+            DriverTaskCompletionRecord::frame_ready_at(0x8000_5333, data_offset as u32, 4),
+        );
+        assert!(cyw43_foreground_completion_matches(
+            read_entry,
+            read_completion,
+        ));
+        assert!(runtime_ring_write_completion_staged(
+            &mut ring,
+            runtime_staged_completion(read_completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut ring,
+            read_completion.sequence,
+        ));
+        assert_eq!(
+            u32::from_le_bytes([
+                read_runtime_payload_byte(data_offset),
+                read_runtime_payload_byte(data_offset + 1),
+                read_runtime_payload_byte(data_offset + 2),
+                read_runtime_payload_byte(data_offset + 3),
+            ]),
+            observed,
+        );
+
+        assert!(transaction.begin_turn(parent, 4));
+        transaction.retain_frontier_completion_poll();
+        let (first, second) = runtime_ring_read_completion_stable(&ring)
+            .expect("exact PMU read completion must be stable");
+        let exact_read =
+            match Cyw43SdioChildState::new(read_command.sequence).completion(first, second) {
+                Cyw43SdioChildCompletion::Exact(completion) => completion,
+                Cyw43SdioChildCompletion::Waiting => {
+                    panic!("the exact PMU read completion must be admitted")
+                }
+            };
+        assert!(transaction.commit_frontier_completion(exact_read));
+        assert_eq!(transaction.turn.completed_count, 1);
+        assert_eq!(
+            cyw43_foreground_frontier_route(
+                transaction.turn.replay_index,
+                transaction.turn.completed_count,
+                true,
+                false,
+                false,
+                transaction.turn.action_consumed,
+                true,
+                false,
+                false,
+            ),
+            Cyw43ForegroundFrontierRoute::Defer,
+            "the PMU read completion turn cannot issue the write",
+        );
+
+        assert!(transaction.begin_turn(parent, 5));
+        transaction.prepared_sequence = read_command.sequence;
+        transaction.prepared_descriptor = read_descriptor;
+        transaction.prepared_descriptor_valid = true;
+        transaction.prepared_write_len = 0;
+        assert!(cyw43_foreground_prepared_matches(
+            &transaction,
+            transaction.entries[0],
+            read_command,
+        ));
+        assert_eq!(transaction.turn.replay_cached_child(), Some(0));
+        for (index, byte) in requested_bytes.into_iter().enumerate() {
+            write_runtime_payload_byte(data_offset + index, byte);
+        }
+        let write_arg = sdio_cmd53_arg(true, 1, function_addr, true, 0, 4);
+        let write_flags = DRIVER_RUNTIME_SDIO_FLAG_DATA
+            | DRIVER_RUNTIME_SDIO_FLAG_WRITE
+            | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT;
+        let write_descriptor = sdio_bus_link_cmd53_descriptor(
+            SDIO_CMD53,
+            write_arg,
+            write_flags,
+            DriverFrameDescriptor {
+                offset: data_offset as u32,
+                len: 4,
+                flags: 0,
+            },
+            4,
+            0,
+            0,
+        )
+        .expect("probe PMU write descriptor must encode");
+        let write_command = DriverTaskCommandRecord {
+            flags: write_flags,
+            ..stage_sdio_descriptor_service_command(0x8000_5334, write_descriptor)
+        };
+        transaction.prepared_sequence = write_command.sequence;
+        transaction.prepared_descriptor = write_descriptor;
+        transaction.prepared_descriptor_valid = true;
+        transaction.prepared_write_len = 4;
+        transaction.prepared_write[..4].copy_from_slice(&requested_bytes);
+        assert!(cyw43_foreground_reserve_frontier(
+            &mut transaction,
+            write_command,
+        ));
+        let write_entry = transaction.frontier;
+        assert!(transaction.frontier_ticket_valid());
+        assert_eq!(write_entry.ticket.ordinal, 1);
+        assert!(write_entry.ticket.issued_turn_id > read_entry.ticket.issued_turn_id);
+        assert!(runtime_ring_write_completion_staged(
+            &mut ring,
+            DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND),
+        ));
+        assert!(runtime_ring_write_command_staged(
+            &mut ring,
+            cyw43_sdio_bus_link_staged_command(write_command),
+        ));
+        transaction.retain_frontier_submit(5, 100);
+        assert!(runtime_ring_commit_command_sequence(
+            &mut ring,
+            write_command.sequence,
+        ));
+        let write_owner_command = runtime_ring_read_command_stable(&ring)
+            .expect("sequence-last PMU write must be owner-visible");
+        assert_eq!(
+            write_owner_command,
+            DriverTaskCommandRecord {
+                sequence: write_command.sequence,
+                ..cyw43_sdio_bus_link_staged_command(write_command)
+            },
+        );
+        assert_eq!(
+            runtime_command_admission(write_owner_command, read_command.sequence),
+            RuntimeCommandAdmission::OneWay,
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(1, 1, true, true, false, true, true, false, false),
+            Cyw43ForegroundFrontierRoute::Defer,
+            "the PMU write submit turn cannot also poll",
+        );
+
+        assert!(transaction.begin_turn(parent, 6));
+        transaction.retain_frontier_completion_poll();
+        let (first, second) = runtime_ring_read_completion_stable(&ring)
+            .expect("second staged reset completion must remain readable");
+        assert_eq!(
+            Cyw43SdioChildState::new(write_command.sequence).completion(first, second),
+            Cyw43SdioChildCompletion::Waiting,
+        );
+        transaction.retain_frontier_wait(2, true);
+        assert!(transaction.turn.action_consumed);
+        assert_eq!(
+            ticket_identity(write_entry.ticket),
+            ticket_identity(transaction.frontier.ticket),
+        );
+
+        assert!(transaction.begin_turn(parent, 7));
+        transaction.retain_frontier_grant(2);
+        assert!(transaction.turn.action_consumed);
+        assert!(transaction.turn.pending);
+        let mut write_io = TestSdioHostIo::new();
+        write_io.use_runtime_payload = true;
+        write_io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
+        write_io.command_present_set =
+            SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+        write_io.data_end_after_words = 1;
+        let write_completion =
+            service_sdio_descriptor_command_with_io(write_owner_command, &mut write_io);
+        assert_eq!(write_io.command_issue_count(), 1);
+        assert_eq!(
+            write_completion,
+            DriverTaskCompletionRecord::progress(0x8000_5334, 4),
+        );
+        assert_eq!(&write_io.fifo[..4], &requested_bytes);
+        assert!(cyw43_foreground_completion_matches(
+            write_entry,
+            write_completion,
+        ));
+        assert!(runtime_ring_write_completion_staged(
+            &mut ring,
+            runtime_staged_completion(write_completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut ring,
+            write_completion.sequence,
+        ));
+
+        assert!(transaction.begin_turn(parent, 8));
+        transaction.retain_frontier_completion_poll();
+        let (first, second) = runtime_ring_read_completion_stable(&ring)
+            .expect("exact PMU write completion must be stable");
+        let exact_write =
+            match Cyw43SdioChildState::new(write_command.sequence).completion(first, second) {
+                Cyw43SdioChildCompletion::Exact(completion) => completion,
+                Cyw43SdioChildCompletion::Waiting => {
+                    panic!("the exact PMU write completion must be admitted")
+                }
+            };
+        assert!(transaction.commit_frontier_completion(exact_write));
+        assert_eq!(transaction.turn.completed_count, 2);
+        assert_eq!(
+            cyw43_foreground_frontier_route(
+                transaction.turn.replay_index,
+                transaction.turn.completed_count,
+                true,
+                false,
+                false,
+                transaction.turn.action_consumed,
+                true,
+                false,
+                false,
+            ),
+            Cyw43ForegroundFrontierRoute::Defer,
+            "the PMU write completion turn cannot issue a following child",
+        );
+
+        assert!(transaction.begin_turn(parent, 9));
+        for (ordinal, (command, descriptor, write_bytes)) in [
+            (read_command, read_descriptor, &[][..]),
+            (write_command, write_descriptor, &requested_bytes[..]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            transaction.prepared_sequence = command.sequence;
+            transaction.prepared_descriptor = descriptor;
+            transaction.prepared_descriptor_valid = true;
+            transaction.prepared_write_len = write_bytes.len() as u16;
+            transaction.prepared_write[..write_bytes.len()].copy_from_slice(write_bytes);
+            assert!(cyw43_foreground_prepared_matches(
+                &transaction,
+                transaction.entries[ordinal],
+                command,
+            ));
+            assert_eq!(transaction.turn.replay_cached_child(), Some(ordinal as u16),);
+        }
+        assert_eq!(transaction.turn.replay_cached_child(), None);
+        assert_eq!(transaction.turn.replay_index, 2);
+        assert_eq!(transaction.turn.completed_count, 2);
+        assert_eq!(
+            cyw43_foreground_frontier_route(2, 2, false, false, false, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Submit,
+            "only a fresh turn after both cached PMU actions may submit the next child",
+        );
+        assert_eq!(read_io.command_issue_count(), 1);
+        assert_eq!(write_io.command_issue_count(), 1);
     }
 
     #[test]

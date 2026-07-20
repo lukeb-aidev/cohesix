@@ -715,6 +715,11 @@ SoCRAM/upload preparation`. The zero write is the required `CLK_SDONLY` edge
 before the asynchronous firmware-download ALP request. Each zero write, ALP
 request, ALP read, retained five-millisecond virtual-counter settle, and
 one-second absolute-deadline observation consumes its own outer EventPump turn.
+PMUCONTROL follows Linux's `readl`/`writel` transaction shape: one incrementing
+four-byte Function 1 CMD53 with the backplane 2/4-byte flag for the read, and
+one for the write. Splitting the word across CMD52 addresses `0x600..0x603`
+can expose `RES_RELOAD` before the tail bytes and is prohibited; there is no
+CMD52 fallback or same-generation replay after an ambiguous word operation.
 The cursor checkpoints after every completed phase, so unavailable ALP cannot
 consume the 1,024-entry foreground trace. Production timing permits about 200
 five-millisecond reads inside the absolute one-second window; a separate

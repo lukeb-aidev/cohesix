@@ -545,7 +545,12 @@ This as-built closure is authorized by Milestone 26d task
   `PMUCONTROL.RES_RELOAD`, Function 2 disable, `CHIPCLKCSR=0`, a fresh
   `ALP_AVAIL_REQ`, ALP readiness, and SoCRAM upload preparation. The
   `CHIPCLKCSR=0` edge is Linux's `CLK_SDONLY` boundary between probe attach and
-  the asynchronous firmware callback; omitting it is invalid.
+  the asynchronous firmware callback; omitting it is invalid. As in Linux
+  `brcmf_sdiod_readl()`/`brcmf_sdiod_writel()`, each PMUCONTROL read or write is
+  one incrementing four-byte Function 1 CMD53 with the backplane 2/4-byte flag.
+  Four independent CMD52 bytes are invalid because they expose a partially
+  committed `RES_RELOAD` trigger; no CMD52 or alternate-address fallback is
+  permitted after the word operation is issued.
 
   The fresh firmware-download ALP request retains the same absolute one-second
   PMU deadline and validates its first readback, but unavailable reads are

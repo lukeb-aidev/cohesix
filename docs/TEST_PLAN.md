@@ -608,6 +608,11 @@ ownership, and a second same-generation preparation must all perform zero
 replay. Exercise the exact clock-zero, request, and read descriptors through
 the production parent-command plus staged-owner-descriptor/controller seam and
 prove one controller issue per descriptor without a fabricated completion.
+The same real reciprocal seam must prove PMUCONTROL uses exactly one
+incrementing, flagged, four-byte Function 1 CMD53 read and exactly one matching
+write, each on its own outer turn. No Function 1 CMD52 may target any byte in
+`0x600..0x603`; injected read/write failure must terminate with `0x5333` or
+`0x5334` and must not select another transport shape.
 
 Firmware-release coverage must drive the production release cursor through the
 production parent-command plus staged-owner-descriptor/controller seam. Prove
