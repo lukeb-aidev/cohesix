@@ -737,6 +737,9 @@ const USB_HID_LED_SCROLL_LOCK: u8 = 1 << 2;
 
 const SDHCI_BLOCK_SIZE: usize = 0x04;
 const SDHCI_BLOCK_COUNT: usize = 0x06;
+const SDHCI_BLOCK_SIZE_MASK: u16 = 0x0fff;
+const SDHCI_DEFAULT_BOUNDARY_ARG: u16 = 7;
+const SDHCI_DEFAULT_BOUNDARY: u16 = SDHCI_DEFAULT_BOUNDARY_ARG << 12;
 const SDHCI_ARGUMENT: usize = 0x08;
 const SDHCI_TRANSFER_MODE: usize = 0x0c;
 const SDHCI_COMMAND: usize = 0x0e;
@@ -796,6 +799,7 @@ const SDHCI_INT_WAIT_ACK_MASK: u32 = SDHCI_INT_CMD_MASK
     | SDHCI_INT_ALL_ERROR_MASK;
 const SDHCI_INT_COMMAND_DATA_CLEAR_MASK: u32 = SDHCI_INT_WAIT_ACK_MASK;
 const SDHCI_CMD_WAIT_LOOPS: usize = 100_000;
+const SDHCI_TIMEOUT_VALUE: u8 = 0x0e;
 
 const USB_REQUIRED_MMIO_PAGES: u16 = 16;
 const USB_REQUIRED_DMA_PAGES: u16 = (XHCI_DMA_ZERO_BYTES / DRIVER_TASK_RING_PAGE_BYTES) as u16;
@@ -12805,6 +12809,10 @@ const fn sdio_transfer_mode_from_flags(flags: u16, block_count: u16) -> u16 {
     transfer
 }
 
+const fn sdio_host_block_size(block_size: u16) -> u16 {
+    SDHCI_DEFAULT_BOUNDARY | (block_size & SDHCI_BLOCK_SIZE_MASK)
+}
+
 const fn sdio_descriptor_host_block_count(desc_block_count: u16, flags: u16) -> u16 {
     if flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0 && desc_block_count == 0 {
         1
@@ -13107,8 +13115,16 @@ fn sdio_execute_transfer_until_with<I: SdioTransferIo>(
         return None;
     }
     io.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+    if has_data || short_busy_response {
+        // Linux mmc-bcm2835 refreshes the maximum hardware timeout for every
+        // data or busy request; RESET_ALL is allowed to clear this register.
+        io.write8(SDHCI_TIMEOUT_CONTROL, SDHCI_TIMEOUT_VALUE);
+    }
     if has_data {
-        io.write16(SDHCI_BLOCK_SIZE, block_size);
+        // Match mmc-bcm2835 rather than the iProc shadow model: each halfword
+        // is an immediate 32-bit RMW, and the size includes Linux's standard
+        // 512-KiB DMA-boundary field even though this owner currently uses PIO.
+        io.write16(SDHCI_BLOCK_SIZE, sdio_host_block_size(block_size));
         io.write16(SDHCI_BLOCK_COUNT, block_count.max(1));
     } else {
         io.write16(SDHCI_TRANSFER_MODE, 0);
@@ -13118,7 +13134,7 @@ fn sdio_execute_transfer_until_with<I: SdioTransferIo>(
         io.write16(SDHCI_TRANSFER_MODE, sdio_transfer_mode(write, block_count));
     }
     io.write16(SDHCI_COMMAND, sdio_make_command(cmd, flags, has_data));
-    let cmd_status = sdio_wait_int_until_with(io, SDHCI_INT_RESPONSE, owner_deadline);
+    let cmd_status = sdio_wait_request_int_until_with(io, owner_deadline);
     if cmd_status & SDHCI_INT_ALL_ERROR_MASK != 0 || cmd_status & SDHCI_INT_RESPONSE == 0 {
         sdio_record_interrupt_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_COMMAND, cmd_status);
         return None;
@@ -13142,7 +13158,9 @@ fn sdio_execute_transfer_until_with<I: SdioTransferIo>(
         sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_RESPONSE, r5);
         return None;
     }
-    if has_data && !sdio_transfer_frame_until_with(io, frame, write, block_size, owner_deadline) {
+    if has_data
+        && !sdio_transfer_frame_until_with(io, frame, write, block_size, cmd_status, owner_deadline)
+    {
         return None;
     }
     Some(response0)
@@ -16580,13 +16598,35 @@ fn sdio_wait_inhibit_clear_until_with<I: SdioTransferIo>(
 }
 
 const fn sdhci_wait_int_ack_bits(mask: u32, status: u32) -> u32 {
-    // Linux snapshots one interrupt status word, clears it, then dispatches
-    // both command and data handlers from that retained snapshot. This polled
-    // owner advances those phases separately, so it must leave a co-arriving
-    // DATA_AVAIL/DATA_END (or RESPONSE during a data wait) latched for the
-    // later phase. Clearing every positive bit here loses that only edge and
-    // makes a valid short CMD53 read time out in `data-wait`.
+    // Phase-local waits preserve status owned by a later phase. The command
+    // entry path uses `sdio_wait_request_int_until_with` instead so it can
+    // retain and dispatch one complete Linux-shaped request snapshot.
     status & (mask | SDHCI_INT_ALL_ERROR_MASK) & !SDHCI_INT_CARD_INT
+}
+
+const fn sdhci_request_snapshot_ack_bits(status: u32) -> u32 {
+    status & SDHCI_INT_COMMAND_DATA_CLEAR_MASK & !SDHCI_INT_CARD_INT
+}
+
+fn sdio_wait_request_int_until_with<I: SdioTransferIo>(
+    io: &mut I,
+    deadline: &mut RuntimeDeadline,
+) -> u32 {
+    while !io.deadline_expired(deadline) {
+        let status = io.read32(SDHCI_INT_STATUS);
+        if status & (SDHCI_INT_RESPONSE | SDHCI_INT_ALL_ERROR_MASK) != 0 {
+            // mmc-bcm2835 reads one status word, W1Cs every sampled command
+            // and data bit, then gives that immutable snapshot to both the
+            // command and data handlers. Keep CARD_INT live for the DPC lane.
+            let ack = sdhci_request_snapshot_ack_bits(status);
+            if ack != 0 {
+                io.write32(SDHCI_INT_STATUS, ack);
+            }
+            return status;
+        }
+        io.poll_pause();
+    }
+    0
 }
 
 fn sdio_wait_int_until_with<I: SdioTransferIo>(
@@ -16629,14 +16669,24 @@ fn sdio_transfer_frame_until_with<I: SdioTransferIo>(
     frame: DriverFrameDescriptor,
     write: bool,
     block_size: u16,
+    retained_request_status: u32,
     owner_deadline: &mut RuntimeDeadline,
 ) -> bool {
     let mut offset = 0usize;
-    let mut first_ready_interrupt_pending = true;
     let present_ready_mask = sdhci_present_buffer_ready_mask(write);
     let interrupt_ready_mask = sdhci_interrupt_buffer_ready_mask(write);
+    let mut retained_ready_pending = retained_request_status & interrupt_ready_mask != 0;
+    let mut first_ready_interrupt_pending = !retained_ready_pending;
     while offset < frame.len as usize && !io.deadline_expired(owner_deadline) {
         let present_ready = io.read32(SDHCI_PRESENT_STATE) & present_ready_mask != 0;
+        if retained_ready_pending {
+            // The retained ready bit is request-owned, but it is only a
+            // wakeup. PRESENT must independently prove FIFO ownership. If the
+            // edge was early, discard the software credit and require a fresh
+            // edge rather than authorizing BUFFER from stale PRESENT state.
+            retained_ready_pending = false;
+            first_ready_interrupt_pending = !present_ready;
+        }
         let admission = sdio_pio_block_admission(first_ready_interrupt_pending, present_ready);
         if admission.consumes_ready_interrupt() {
             let status = sdio_wait_int_until_with(io, interrupt_ready_mask, owner_deadline);
@@ -16694,7 +16744,12 @@ fn sdio_transfer_frame_until_with<I: SdioTransferIo>(
         return false;
     }
     io.write32(SDHCI_INT_STATUS, SDHCI_INT_DATA_READY_MASK);
-    let status = sdio_wait_int_until_with(io, SDHCI_INT_DATA_FINISH_MASK, owner_deadline);
+    let retained_finish = retained_request_status & SDHCI_INT_DATA_FINISH_MASK;
+    let status = if retained_finish != 0 {
+        retained_finish
+    } else {
+        sdio_wait_int_until_with(io, SDHCI_INT_DATA_FINISH_MASK, owner_deadline)
+    };
     if status & SDHCI_INT_ALL_ERROR_MASK == 0 && status & SDHCI_INT_DATA_END != 0 {
         sdio_settle_transfer_data_path_until_with(io, owner_deadline)
     } else {
@@ -36466,7 +36521,7 @@ fn sdio_linux_wifi_power_cycle_turn() -> SdioPwrseqTurn {
             }
         }
         SdioPwrseqPhase::ProgramStartupClock => {
-            sdio_write8(SDHCI_TIMEOUT_CONTROL, 0x0e);
+            sdio_write8(SDHCI_TIMEOUT_CONTROL, SDHCI_TIMEOUT_VALUE);
             sdio_program_interrupt_policy();
             sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
             let _ = sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
@@ -37340,7 +37395,7 @@ mod tests {
 
     const TEST_SDIO_MODEL_REG_WORDS: usize = 64;
     const TEST_SDIO_MODEL_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
-    const TEST_SDIO_MODEL_EVENTS: usize = 8;
+    const TEST_SDIO_MODEL_EVENTS: usize = 128;
     const TEST_SDIO_MODEL_WRITES: usize = 2_048;
 
     #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -37374,6 +37429,7 @@ mod tests {
         command_present_clear: u32,
         command_response: u32,
         data_end_after_words: usize,
+        pio_ready_episode_words: usize,
         clear_data_state_on_end: bool,
         reset_stuck: bool,
         reset_failures_remaining: usize,
@@ -37402,6 +37458,7 @@ mod tests {
                 command_present_clear: 0,
                 command_response: 0,
                 data_end_after_words: 0,
+                pio_ready_episode_words: 0,
                 clear_data_state_on_end: true,
                 reset_stuck: false,
                 reset_failures_remaining: 0,
@@ -37485,6 +37542,19 @@ mod tests {
             }
         }
 
+        fn close_ready_episode_if_due(&mut self) {
+            if self.pio_ready_episode_words == 0
+                || self.fifo_words == 0
+                || self.fifo_words % self.pio_ready_episode_words != 0
+                || (self.data_end_after_words != 0 && self.fifo_words >= self.data_end_after_words)
+            {
+                return;
+            }
+            let present = self.register(SDHCI_PRESENT_STATE)
+                & !(SDHCI_SPACE_AVAILABLE | SDHCI_DATA_AVAILABLE);
+            self.set_register(SDHCI_PRESENT_STATE, present);
+        }
+
         fn command_committed(&mut self) {
             self.set_register(SDHCI_RESPONSE, self.command_response);
             let status = self.register(SDHCI_INT_STATUS) | self.command_status;
@@ -37537,6 +37607,7 @@ mod tests {
             self.fifo_read_offset = self.fifo_read_offset.saturating_add(4);
             self.fifo_words = self.fifo_words.saturating_add(1);
             self.complete_data_if_due();
+            self.close_ready_episode_if_due();
             word
         }
 
@@ -37606,6 +37677,7 @@ mod tests {
             self.fifo_len += 4;
             self.fifo_words = self.fifo_words.saturating_add(1);
             self.complete_data_if_due();
+            self.close_ready_episode_if_due();
         }
 
         fn read_payload_byte(&mut self, offset: usize) -> u8 {
@@ -53076,6 +53148,14 @@ mod tests {
         );
         assert_eq!(SDHCI_INT_ALL_ERROR_MASK, 0xffff_8000);
         assert_eq!(SDHCI_INT_COMMAND_DATA_CLEAR_MASK & SDHCI_INT_CARD_INT, 0);
+        assert_eq!(
+            sdhci_request_snapshot_ack_bits(status),
+            SDHCI_INT_RESPONSE
+                | SDHCI_INT_DATA_AVAIL
+                | SDHCI_INT_DATA_END
+                | SDHCI_INT_ERROR
+                | upper_error
+        );
         assert_ne!(SDHCI_INT_COMMAND_DATA_CLEAR_MASK & upper_error, 0);
         assert_ne!(SDHCI_INT_DATA_FINISH_MASK & SDHCI_INT_DATA_END, 0);
         assert_ne!(SDHCI_INT_DATA_FINISH_MASK & SDHCI_INT_DATA_CRC, 0);
@@ -55166,13 +55246,22 @@ mod tests {
             );
         }
         assert_eq!(io.register(SDHCI_ARGUMENT), arg);
-        assert_eq!(io.read16(SDHCI_BLOCK_SIZE), SDIO_FUNCTION1_BLOCK_SIZE);
+        assert_eq!(
+            io.read16(SDHCI_BLOCK_SIZE),
+            sdio_host_block_size(SDIO_FUNCTION1_BLOCK_SIZE)
+        );
         assert_eq!(io.read16(SDHCI_BLOCK_COUNT), BLOCK_COUNT);
         assert_ne!(io.read16(SDHCI_TRANSFER_MODE) & SDHCI_TRNS_MULTI, 0);
         assert_eq!(io.command_issue_count(), 1);
         assert!(sdio_owner_path_quiescent_with(&mut io));
         assert_eq!(SDIO_CMD_COUNT.load(Ordering::Acquire), 1);
         assert_eq!(SDIO_RUNTIME_STATE.with_ref(|state| state.commands), 1);
+        let block_writes: Vec<_> = io.writes[..io.write_count]
+            .iter()
+            .filter(|write| !write.fifo && write.offset == SDHCI_BLOCK_SIZE)
+            .map(|write| write.value)
+            .collect();
+        assert_eq!(block_writes, vec![0x0000_7040, 0x0040_7040]);
     }
 
     #[test]
@@ -55229,6 +55318,10 @@ mod tests {
         }
         assert_eq!(io.command_issue_count(), 1);
         assert!(sdio_owner_path_quiescent_with(&mut io));
+        assert!(io.writes[..io.write_count].iter().any(|write| {
+            write.offset == SDHCI_INT_STATUS
+                && write.value == SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL
+        }));
     }
 
     #[test]
@@ -55474,6 +55567,7 @@ mod tests {
         assert_eq!(io.fifo_len, 64);
         assert_eq!(&io.fifo[..64], &io.payload[..64]);
         assert_eq!(io.fifo_words, 16);
+        assert_eq!(io.read8(SDHCI_TIMEOUT_CONTROL), SDHCI_TIMEOUT_VALUE);
         assert_eq!(io.register(SDHCI_INT_STATUS), SDHCI_INT_CARD_INT);
         assert!(io.writes[..io.write_count]
             .iter()
@@ -55482,6 +55576,7 @@ mod tests {
 
         let mut offsets = io.write_offsets();
         assert_eq!(offsets.next(), Some(SDHCI_INT_STATUS));
+        assert_eq!(offsets.next(), Some(SDHCI_TIMEOUT_CONTROL & !0x3));
         assert_eq!(offsets.next(), Some(SDHCI_BLOCK_SIZE));
         assert_eq!(offsets.next(), Some(SDHCI_BLOCK_SIZE));
         assert_eq!(offsets.next(), Some(SDHCI_ARGUMENT));
@@ -55502,6 +55597,10 @@ mod tests {
                 true,
             )
         );
+        assert!(io.writes[..io.write_count].iter().any(|write| {
+            write.offset == SDHCI_INT_STATUS
+                && write.value == SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL
+        }));
     }
 
     #[test]
@@ -55700,6 +55799,36 @@ mod tests {
     }
 
     #[test]
+    fn sdio_production_lifecycle_retains_data_end_from_command_snapshot() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut io = TestSdioHostIo::new();
+        io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_END;
+        io.command_present_set = SDHCI_SPACE_AVAILABLE;
+        let mut deadline = RuntimeDeadline::Iterations { remaining: 64 };
+
+        assert!(sdio_execute_transfer_until_with(
+            &mut io,
+            SDIO_CMD53,
+            0,
+            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+                | DRIVER_RUNTIME_SDIO_FLAG_DATA
+                | DRIVER_RUNTIME_SDIO_FLAG_WRITE,
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 64,
+                flags: 0,
+            },
+            64,
+            1,
+            &mut deadline,
+        )
+        .is_some());
+        assert_eq!(io.fifo_words, 16);
+        assert_eq!(io.register(SDHCI_INT_STATUS), 0);
+    }
+
+    #[test]
     fn sdio_production_lifecycle_model_reports_missing_data_end_without_internal_recovery() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -55756,6 +55885,16 @@ mod tests {
         io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
         io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
         io.data_end_after_words = CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / 4;
+        io.pio_ready_episode_words = SDIO_FUNCTION1_BLOCK_SIZE as usize / 4;
+        for poll in 1..block_count as usize {
+            io.push_event(TestSdioModelEvent {
+                poll,
+                status_set: SDHCI_INT_SPACE_AVAIL,
+                present_set: SDHCI_SPACE_AVAILABLE,
+                present_clear: 0,
+                clock_stable: false,
+            });
+        }
         let mut deadline = RuntimeDeadline::Iterations { remaining: 512 };
 
         assert!(sdio_execute_transfer_until_with(
@@ -55786,6 +55925,11 @@ mod tests {
             .map(|write| write.value)
             .expect("multiblock command write must be present");
         assert_ne!(command_word as u16 & SDHCI_TRNS_MULTI, 0);
+        assert_eq!(
+            io.polls,
+            block_count as usize - 1,
+            "each later block requires a new FIFO-ready episode"
+        );
     }
 
     #[test]
@@ -56031,6 +56175,8 @@ mod tests {
 
     #[test]
     fn sdio_bcm2835_register_access_matches_linux_32bit_contract() {
+        assert_eq!(sdio_host_block_size(SDIO_FUNCTION1_BLOCK_SIZE), 0x7040);
+        assert_eq!(sdio_host_block_size(SDIO_FUNCTION2_BLOCK_SIZE), 0x7200);
         let block_size = sdio_merge_u16_word(0, SDHCI_BLOCK_SIZE, SDIO_FUNCTION1_BLOCK_SIZE);
         assert_eq!(
             sdio_merge_u16_word(block_size, SDHCI_BLOCK_COUNT, 23),

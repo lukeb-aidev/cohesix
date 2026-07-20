@@ -11483,6 +11483,15 @@ where
                     owner_fault.clock_state,
                 ));
                 self.emit_console_line(status.as_str());
+                let registers = format_message(format_args!(
+                    "wifi: evidence sdio_regs power=0x{:02x} present=0x{:08x} int_status=0x{:08x} response0=0x{:08x} block_size_count=0x{:08x}",
+                    owner_fault.power_control,
+                    owner_fault.present_state,
+                    owner_fault.int_status,
+                    owner_fault.response0,
+                    owner_fault.block_size_count_reg,
+                ));
+                self.emit_console_line(registers.as_str());
                 let payload = format_message(format_args!(
                     "wifi: evidence sdio_payload chunk_off={} payload_off={} first=0x{:02x} last=0x{:02x} xor=0x{:02x} sum=0x{:08x} owner_window={}",
                     owner_fault.chunk_offset,

@@ -1285,6 +1285,54 @@ def test_gate_proof_accepts_ready_with_oldgood_replay_contracts(
     assert "WIFI_CLM_VERSION_PROOF=yes" in result.stdout
     assert "SDIO_IRQ158_INBAND_PROOF=yes" in result.stdout
     assert "WIFI_DPC_PROOF=yes" in result.stdout
+    assert "WIFI_GATE7_COMPLETE=yes" in result.stdout
+    assert "WIFI_GATE7_SEEN=7a>7b>7c>7d>7e" in result.stdout
+    assert "WIFI_GATE7_LAST=7e" in result.stdout
+    assert "WIFI_GATE7_MISSING=none" in result.stdout
+
+
+def test_gate_proof_rejects_wifi_ready_with_incomplete_gate7_handshake(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Latest-subgate telemetry cannot hide a missing Gate 7 handshake step."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    lines = [
+        line
+        for line in [
+            *_strong_driver_task_proof_lines(),
+            *_oldgood_wifi_replay_lines(),
+        ]
+        if "kind=gtk" not in line
+    ]
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-wifi-ready",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "WIFI_SUBGATE=7e" in result.stdout
+    assert "WIFI_GATE7_COMPLETE=no" in result.stdout
+    assert "WIFI_GATE7_SEEN=7a>7b>7c" in result.stdout
+    assert "WIFI_GATE7_MISSING=7d" in result.stdout
+    assert "WIFI_GATE7_COMPLETE expected yes got no" in result.stderr
 
 
 def test_gate_proof_rejects_wifi_ready_without_dpc_proof(

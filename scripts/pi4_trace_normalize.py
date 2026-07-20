@@ -536,6 +536,16 @@ class WifiGate7Subgate:
 
 
 @dataclass(frozen=True)
+class WifiGate7Proof:
+    """Ordered host-EAPOL Gate 7a through 7e completion proof."""
+
+    complete: bool = False
+    seen: str = "none"
+    last: str = "none"
+    missing: str = "7a"
+
+
+@dataclass(frozen=True)
 class WifiDpcProof:
     """Latest exact CYW43/SDIO DPC proof plus fail-closed verdict."""
 
@@ -581,6 +591,10 @@ class GateSummary:
     wifi_subgate_status: str = "none"
     wifi_subgate_reason: str = "none"
     wifi_subgate_line: int = 0
+    wifi_gate7_complete: bool = False
+    wifi_gate7_seen: str = "none"
+    wifi_gate7_last: str = "none"
+    wifi_gate7_missing: str = "7a"
     usb_oldgood_replay: bool = False
     usb_oldgood_last: str = "none"
     usb_oldgood_missing: str = "not-run"
@@ -815,6 +829,10 @@ class GateSummary:
             "WIFI_SUBGATE_STATUS": self.wifi_subgate_status,
             "WIFI_SUBGATE_REASON": self.wifi_subgate_reason,
             "WIFI_SUBGATE_LINE": self.wifi_subgate_line,
+            "WIFI_GATE7_COMPLETE": "yes" if self.wifi_gate7_complete else "no",
+            "WIFI_GATE7_SEEN": self.wifi_gate7_seen,
+            "WIFI_GATE7_LAST": self.wifi_gate7_last,
+            "WIFI_GATE7_MISSING": self.wifi_gate7_missing,
             "USB_OLDGOOD_REPLAY": "yes" if self.usb_oldgood_replay else "no",
             "USB_OLDGOOD_LAST": self.usb_oldgood_last,
             "USB_OLDGOOD_MISSING": self.usb_oldgood_missing,
@@ -11300,6 +11318,50 @@ def wifi_forbidden_shortcut(event: TraceEvent) -> bool:
     )
 
 
+def summarize_wifi_gate7_proof(events: Iterable[TraceEvent]) -> WifiGate7Proof:
+    """Require one attempt's ordered, explicit host-EAPOL Gate 7 proof."""
+
+    event_list = list(events)
+    if any(wifi_forbidden_shortcut(event) for event in event_list):
+        return WifiGate7Proof(missing="forbidden-shortcut")
+
+    steps: tuple[tuple[str, bool, Callable[[TraceEvent], bool]], ...] = (
+        ("7a", True, wifi_join_request_step),
+        ("7b", True, wifi_association_link_step),
+        ("7c", True, lambda event: wifi_eapol_message_step(event, "m1")),
+        ("7d", False, lambda event: wifi_eapol_message_step(event, "m2")),
+        ("7d", False, lambda event: wifi_eapol_message_step(event, "m3")),
+        ("7d", False, lambda event: wifi_eapol_message_step(event, "m4")),
+        ("7d", False, lambda event: wifi_key_install_step(event, "ptk")),
+        ("7d", True, lambda event: wifi_key_install_step(event, "gtk")),
+        ("7e", True, wifi_secure_release_step),
+    )
+    index = 0
+    completed: list[str] = []
+    for event in event_list:
+        # A later accepted primary join owns a new association/EAPOL attempt.
+        # Discard all earlier attempt proof so a retry cannot splice its late
+        # handshake into an older attempt's 7a/7b/7c prefix.
+        if wifi_join_request_step(event):
+            index = 1
+            completed = ["7a"]
+            continue
+        if index >= len(steps):
+            continue
+        subgate, closes_subgate, matcher = steps[index]
+        if not matcher(event):
+            continue
+        if closes_subgate:
+            completed.append(subgate)
+        index += 1
+
+    seen = ">".join(completed) if completed else "none"
+    last = completed[-1] if completed else "none"
+    if index == len(steps):
+        return WifiGate7Proof(True, seen, last, "none")
+    return WifiGate7Proof(False, seen, last, steps[index][0])
+
+
 CYW43_CAPTURE_FIRMWARE_LEN = 609_309
 CYW43_CAPTURE_RAW_NVRAM_LEN = 2_074
 CYW43_CAPTURE_NVRAM_UPLOAD_LEN = 1_744
@@ -12606,6 +12668,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     wifi_subgate = summarize_wifi_gate7_subgate_detail(
         event_list, wifi_gate, wifi_blocker
     )
+    wifi_gate7 = (
+        WifiGate7Proof(missing="not-selected")
+        if wifi_blocker == "not-selected"
+        else summarize_wifi_gate7_proof(event_list)
+    )
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -12617,6 +12684,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_subgate_status=wifi_subgate.status,
         wifi_subgate_reason=wifi_subgate.reason,
         wifi_subgate_line=wifi_subgate.line,
+        wifi_gate7_complete=wifi_gate7.complete,
+        wifi_gate7_seen=wifi_gate7.seen,
+        wifi_gate7_last=wifi_gate7.last,
+        wifi_gate7_missing=wifi_gate7.missing,
         usb_oldgood_replay=usb_oldgood.replay,
         usb_oldgood_last=usb_oldgood.last,
         usb_oldgood_missing=usb_oldgood.missing,
@@ -14017,6 +14088,11 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
             blockers.append("wifi-gate-incomplete")
         if record.get("WIFI_BLOCKER") != "none":
             blockers.append("wifi-blocked")
+        if record.get("WIFI_GATE7_COMPLETE") != "yes":
+            blockers.append("wifi-gate7-subgates-incomplete")
+        wifi_gate7_missing = str(record.get("WIFI_GATE7_MISSING", "7a"))
+        if wifi_gate7_missing != "none":
+            blockers.append(f"wifi-gate7-{wifi_gate7_missing}-missing")
         if record.get("WIFI_OLDGOOD_REPLAY") != "yes":
             blockers.append("wifi-oldgood-replay-missing")
         if record.get("WIFI_OLDGOOD_MISSING") != "none":

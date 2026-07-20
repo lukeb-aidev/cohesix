@@ -494,6 +494,19 @@ This as-built closure is authorized by Milestone 26d task
   loops or legacy driver fallbacks.
 - Root-task must not wait synchronously for CMD52/CMD53 credit, firmware
   replies, or RX drain work.
+- Each SDHCI data request follows the selected Pi 4 `mmc-bcm2835` register
+  contract. The owner refreshes `TIMEOUT_CONTROL=0x0e`, then performs the two
+  immediate 16-bit read/modify/write operations used by that driver: block size
+  first, with boundary argument 7 (`0x7040` for a 64-byte firmware block and
+  `0x7200` for a 512-byte Function 2 frame), followed by block count. It does
+  not replace those writes with an iProc-style combined register store. At
+  command completion the owner retains one immutable `INT_STATUS` snapshot,
+  clears the complete request-local command/data mask sampled there while
+  preserving asynchronous `CARD_INT`, and consumes coalesced buffer-ready and
+  `DATA_END` state from that snapshot. A stale `PRESENT_STATE` ready bit alone
+  is never completion evidence, and a ready interrupt sampled with the response
+  cannot be lost merely because its hardware latch was acknowledged before the
+  later retained PIO turn.
 - Firmware-preparation probe attach follows Linux `brcmf_sdio_kso_init`
   exactly: read `SLEEPCSR` once and write `KSO` once only when the bit is
   absent. It does not poll `KSO` or require `DEVON` at this stage; the later
@@ -823,6 +836,17 @@ This as-built closure is authorized by Milestone 26d task
   record into serial only after the active TX action and input fence permit it.
 - Association alone is not acceptance. Require DHCP, raw TCP/`cohsh`, clean
   counters, and repeated current-image boots with paired network evidence.
+  Gate 7 is likewise an ordered proof, not the latest reported frontier:
+  `7a` is the accepted primary join submission, `7b` is association plus link,
+  `7c` is explicit host receipt of M1, `7d` requires ordered M2, M3, M4, PTK,
+  and GTK completion, and `7e` is secure host-EAPOL release of DHCP/data. Full
+  proof is bound to the latest accepted primary join in the boot slice; every
+  later accepted join resets the ordered cursor so retries cannot splice
+  sub-gates from different association/EAPOL attempts. Full
+  acceptance requires `WIFI_GATE7_COMPLETE=yes`,
+  `WIFI_GATE7_SEEN=7a>7b>7c>7d>7e`, `WIFI_GATE7_LAST=7e`, and
+  `WIFI_GATE7_MISSING=none`. Firmware-supplicant or condensed secure summaries
+  cannot satisfy this host-EAPOL chain.
 
 The July 19 pre-fix image (`df7196c7bc56`, image id
 `2fb39b8be336200d73082e0b00d265900da50041d24af31d28a7120d5264357d`)

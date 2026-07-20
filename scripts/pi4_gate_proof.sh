@@ -119,8 +119,8 @@ Options:
   --require-usb-ready        Require USB gate 10, USB_BLOCKER=none, and the
                              linked old-good USB replay contract.
   --require-wifi-ready       Require WiFi gate 10, DHCP, nettest, authenticated
-                             TCP bytes, healthy DPC, and the linked old-good
-                             CYW43 replay contract.
+                             TCP bytes, healthy DPC, ordered Gate 7a-7e proof,
+                             and the linked old-good CYW43 replay contract.
   --require-wired-ready      Require netstats to report active=wired.
   --require-driver-task-proof
                              Require driver-task substrate, capset, fault,
@@ -570,6 +570,10 @@ run_normalizer() {
         args+=("--expect-min" "TCP_RX_BYTES=1")
         args+=("--expect" "WIFI_DPC_PROOF=yes")
         args+=("--expect" "WIFI_DPC_REASON=none")
+        args+=("--expect" "WIFI_GATE7_COMPLETE=yes")
+        args+=("--expect" "WIFI_GATE7_SEEN=7a>7b>7c>7d>7e")
+        args+=("--expect" "WIFI_GATE7_LAST=7e")
+        args+=("--expect" "WIFI_GATE7_MISSING=none")
         args+=("--expect" "WIFI_OLDGOOD_REPLAY=yes")
         args+=("--expect" "WIFI_OLDGOOD_MISSING=none")
         args+=("--expect" "WIFI_FIRMWARE_IDENTITY_PROOF=yes")

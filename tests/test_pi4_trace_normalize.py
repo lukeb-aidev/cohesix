@@ -1147,6 +1147,10 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_SUBGATE_STATUS": "none",
         "WIFI_SUBGATE_REASON": "none",
         "WIFI_SUBGATE_LINE": 0,
+        "WIFI_GATE7_COMPLETE": "no",
+        "WIFI_GATE7_SEEN": "none",
+        "WIFI_GATE7_LAST": "none",
+        "WIFI_GATE7_MISSING": "7a",
         "USB_OLDGOOD_REPLAY": "no",
         "USB_OLDGOOD_LAST": "none",
         "USB_OLDGOOD_MISSING": "cold-boot-unseeded",
@@ -13192,6 +13196,113 @@ def test_gate_summary_accepts_oldgood_wifi_resource_replay_contract() -> None:
     assert record["WIFI_OLDGOOD_MISSING"] == "none"
     assert record["WIFI_SUBGATE"] == "7e"
     assert record["WIFI_SUBGATE_NAME"] == "secure-release"
+    assert record["WIFI_GATE7_COMPLETE"] == "yes"
+    assert record["WIFI_GATE7_SEEN"] == "7a>7b>7c>7d>7e"
+    assert record["WIFI_GATE7_LAST"] == "7e"
+    assert record["WIFI_GATE7_MISSING"] == "none"
+
+
+@pytest.mark.parametrize(
+    ("removed", "seen", "last", "missing"),
+    [
+        ("CYW43_DRIVER_TASK_JOIN_REQUEST", "none", "none", "7a"),
+        ("association-proof", "7a", "7a", "7b"),
+        ("msg=m1", "7a>7b", "7b", "7c"),
+        ("msg=m2", "7a>7b>7c", "7c", "7d"),
+        ("msg=m3", "7a>7b>7c", "7c", "7d"),
+        ("msg=m4", "7a>7b>7c", "7c", "7d"),
+        ("kind=ptk", "7a>7b>7c", "7c", "7d"),
+        ("kind=gtk", "7a>7b>7c", "7c", "7d"),
+        ("status=secure", "7a>7b>7c>7d", "7d", "7e"),
+    ],
+)
+def test_gate7_ordered_proof_fails_closed_at_every_host_eapol_cut(
+    removed: str,
+    seen: str,
+    last: str,
+    missing: str,
+) -> None:
+    lines = oldgood_wifi_resource_replay_lines()
+    if removed == "association-proof":
+        lines = [
+            line
+            for line in lines
+            if "associated=yes link_up=yes" not in line
+            and "wifi_assoc=1 wifi_link=1" not in line
+        ]
+    else:
+        lines = [line for line in lines if removed not in line]
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE7_SEEN"] == seen
+    assert record["WIFI_GATE7_LAST"] == last
+    assert record["WIFI_GATE7_MISSING"] == missing
+
+
+def test_gate7_ordered_proof_rejects_reordered_handshake_steps() -> None:
+    lines = oldgood_wifi_resource_replay_lines()
+    m2_index = oldgood_wifi_line_index(lines, "msg=m2")
+    m3_index = oldgood_wifi_line_index(lines, "msg=m3")
+    lines[m2_index], lines[m3_index] = lines[m3_index], lines[m2_index]
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE7_SEEN"] == "7a>7b>7c"
+    assert record["WIFI_GATE7_LAST"] == "7c"
+    assert record["WIFI_GATE7_MISSING"] == "7d"
+
+
+def test_gate7_ordered_proof_does_not_stitch_across_join_attempts() -> None:
+    lines = oldgood_wifi_resource_replay_lines()
+    m2_index = oldgood_wifi_line_index(lines, "msg=m2")
+    lines.insert(
+        m2_index,
+        "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+        "path=primary-bsscfg:join action=ready ssid_len=7 result=0x00000000",
+    )
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE7_SEEN"] == "7a>7b"
+    assert record["WIFI_GATE7_LAST"] == "7b"
+    assert record["WIFI_GATE7_MISSING"] == "7c"
+
+
+def test_gate7_ordered_proof_rejects_firmware_supplicant_shortcut() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+            "path=primary-bsscfg:join action=ready result=0x00000000",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=required "
+            "associated=yes link_up=yes eapol_rx=0",
+            JOIN_COMPLETE_SECURE,
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=secure "
+            "associated=yes link_up=yes eapol_rx=2",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE7_SEEN"] == "none"
+    assert record["WIFI_GATE7_MISSING"] == "forbidden-shortcut"
+
+
+def test_boot_acceptance_requires_complete_ordered_wifi_gate7_proof() -> None:
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(oldgood_wifi_resource_replay_lines())
+    ).to_record()
+    record["WIFI_GATE7_COMPLETE"] = "no"
+    record["WIFI_GATE7_MISSING"] = "7d"
+
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert "wifi-gate7-subgates-incomplete" in blockers
+    assert "wifi-gate7-7d-missing" in blockers
 
 
 def test_gate_summary_accepts_linked_runtime_wifi_harness_replay_contract() -> None:

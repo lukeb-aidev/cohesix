@@ -426,6 +426,11 @@ For Wi-Fi, use `--require-wifi-ready` instead of the wired gate and retain the
 boot-paired Wi-Fi packet capture. The normalizer must prove association, host
 EAPOL completion, DHCP, ARP/data progress, healthy DPC state, `nettest`, and
 authenticated TCP bytes; an association or DHCP line alone is insufficient.
+It must also report `WIFI_GATE7_COMPLETE=yes`, the exact retained history
+`WIFI_GATE7_SEEN=7a>7b>7c>7d>7e`, `WIFI_GATE7_LAST=7e`, and
+`WIFI_GATE7_MISSING=none`. A latest-frontier `WIFI_SUBGATE=7e` cannot replace
+ordered proof of primary join, association/link, M1, M2/M3/M4 plus PTK/GTK,
+and secure release.
 
 ### 7. Prove Raw TCP Before REST
 
@@ -627,6 +632,18 @@ path may privately yield, resignal, or poll itself into another action. A trace
 that shows multiple foreground phases after one endpoint rendezvous or shared
 grant, or foreground progress caused only by a peer/IRQ badge without a valid
 grant, fails the one-operation-per-turn contract.
+
+Each Pi data request also follows the selected `mmc-bcm2835` host contract:
+refresh `TIMEOUT_CONTROL=0x0e`; perform immediate 16-bit block-size then
+block-count read/modify/write operations; preserve boundary argument 7 in the
+block-size field; and retain the full request-local `INT_STATUS` sample when
+the response arrives. The owner acknowledges every sampled command/data bit
+except asynchronous `CARD_INT`, then carries coalesced buffer-ready and
+`DATA_END` evidence into later retained PIO turns. A stale ready bit in
+`PRESENT_STATE` without a retained or newly sampled ready interrupt is not
+completion. Next-run `wifi: evidence sdio_regs` output records power,
+present-state, interrupt-status, response, and block-size/count registers so a
+pre-RF stop can be classified without depending on a later-overwritten log.
 
 The newest exact pre-fix capture is
 `pi4-serial-20260719-180716.log`, boot-paired with
