@@ -1796,6 +1796,13 @@ impl PendingConsoleOutputKind {
     const fn is_high_impact(self) -> bool {
         matches!(self, Self::HighImpactLine)
     }
+
+    const fn may_use_protocol_tail_reserve(self) -> bool {
+        matches!(
+            self,
+            Self::TerminalLine | Self::ResponseTailLine | Self::ResponseTailPrompt
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -3784,23 +3791,17 @@ where
         text: &str,
     ) -> bool {
         let high_impact = kind.is_high_impact();
-        let response_priority = !kind.is_background()
+        let response_ordered = !kind.is_background()
             && !high_impact
             && self.physical_response_barrier != PhysicalResponseBarrier::Idle;
-        let capacity = if matches!(
-            kind,
-            PendingConsoleOutputKind::BackgroundLine
-                | PendingConsoleOutputKind::HighImpactLine
-                | PendingConsoleOutputKind::Line
-        ) && !response_priority
-        {
+        let capacity = if kind.may_use_protocol_tail_reserve() {
             CONSOLE_OUTPUT_BACKLOG_LINES
-                .saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE)
         } else {
             CONSOLE_OUTPUT_BACKLOG_LINES
+                .saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE)
         };
         if self.pending_console_output.len() >= capacity {
-            if response_priority || high_impact {
+            if response_ordered || high_impact {
                 let eviction = self
                     .pending_console_output
                     .iter()
@@ -3829,7 +3830,7 @@ where
                 .saturating_add(1);
             return false;
         };
-        let insert_at = if response_priority {
+        let insert_at = if response_ordered {
             self.pending_console_output
                 .iter()
                 .position(|queued| queued.kind.is_background() || queued.kind.is_high_impact())
@@ -6310,11 +6311,16 @@ where
                             local_seat.backend_keyboard_polling_enabled(),
                         )
                     };
-                    this.emit_usb_status(
-                        backend_attached,
-                        polling_enabled,
-                        Some("action=diag-passive"),
-                    );
+                    let summary = format_message(format_args!(
+                        "usb: local-seat attached={} polling={} action=diag-passive source=cached",
+                        Self::yes_no(backend_attached),
+                        if polling_enabled {
+                            "enabled"
+                        } else {
+                            "deferred"
+                        },
+                    ));
+                    this.emit_console_line(summary.as_str());
                     this.emit_console_line(
                         "usb: diag action=probe-skipped reason=linked-runtime-only use=usb-status",
                     );
@@ -6378,10 +6384,16 @@ where
 
     #[cfg(feature = "kernel")]
     fn mirror_usb_debug_hdmi_frontier(&mut self, subcommand: &str) {
-        let line = format_message(format_args!(
-            "[drivers] USB {} complete: full diagnostics on serial; HDMI preserved",
-            subcommand
-        ));
+        let line = if subcommand == "diag" {
+            format_message(format_args!(
+                "[drivers] USB diag complete: compact gate report on serial; HDMI preserved"
+            ))
+        } else {
+            format_message(format_args!(
+                "[drivers] USB {} complete: full diagnostics on serial; HDMI preserved",
+                subcommand
+            ))
+        };
         let Some(local_seat) = self.local_seat.as_mut() else {
             self.pending_usb_debug_hdmi_frontier = Some(line);
             return;
@@ -6463,14 +6475,6 @@ where
         polling_enabled: bool,
         action_detail: Option<&str>,
     ) {
-        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-        {
-            if polling_enabled {
-                if let Some(local_seat) = self.local_seat.as_mut() {
-                    local_seat.poll_backend_keyboard();
-                }
-            }
-        }
         #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
         #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
@@ -6794,26 +6798,25 @@ where
             } else {
                 "linked-runtime-no-detail"
             };
-            let mut runtime_line = HeaplessString::<384>::new();
-            let _ = FmtWrite::write_fmt(
-                &mut runtime_line,
-                format_args!(
-                    "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x} result=0x{:08x} progress_gate={} progress_phase={} progress_phase_name={}",
-                    Self::yes_no(keyboard_ready),
-                    Self::yes_no(first_report),
-                    Self::yes_no(first_byte),
-                    first_byte_source,
-                    proof_gate,
-                    next_step,
-                    blocker,
-                    linked_detail,
-                    linked_result,
-                    linked_progress_gate,
-                    linked_progress.map_or(0, |progress| progress.phase),
-                    linked_progress.map_or("none", |progress| progress.phase_name),
-                ),
+            let runtime_line = Self::format_usb_runtime_gate_line(
+                keyboard_ready,
+                first_report,
+                first_byte,
+                first_byte_source,
+                proof_gate,
+                blocker,
+                next_step,
             );
             self.emit_console_line(runtime_line.as_str());
+            let runtime_detail_line = format_message(format_args!(
+                "usb: runtime_detail detail=0x{:04x} result=0x{:08x} progress_gate={} progress_phase={} progress_phase_name={}",
+                linked_detail,
+                linked_result,
+                linked_progress_gate,
+                linked_progress.map_or(0, |progress| progress.phase),
+                linked_progress.map_or("none", |progress| progress.phase_name),
+            ));
+            self.emit_console_line(runtime_detail_line.as_str());
             let acceptance_line = format_message(format_args!(
                 "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} command_ready={} usable={} prompt_polling={} input_observation={} death_proof=no note=first_byte_is_input_evidence_not_readiness_gate",
                 Self::yes_no(proof_gate >= 3),
@@ -7046,6 +7049,47 @@ where
             proof_gate = 9;
         }
         proof_gate
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_usb_runtime_gate_line(
+        keyboard_ready: bool,
+        first_report: bool,
+        first_byte: bool,
+        first_byte_source: &str,
+        proof_gate: u8,
+        blocker: &str,
+        next_step: &str,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        if FmtWrite::write_fmt(
+            &mut line,
+            format_args!(
+                "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source={} proof_gate={} target_gate=10 blocker={} next={}",
+                Self::yes_no(keyboard_ready),
+                Self::yes_no(first_report),
+                Self::yes_no(first_byte),
+                first_byte_source,
+                proof_gate,
+                blocker,
+                next_step,
+            ),
+        )
+        .is_err()
+        {
+            line.clear();
+            let _ = FmtWrite::write_fmt(
+                &mut line,
+                format_args!(
+                    "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source=bounded proof_gate={} target_gate=10 blocker=record-overflow next=usb-status",
+                    Self::yes_no(keyboard_ready),
+                    Self::yes_no(first_report),
+                    Self::yes_no(first_byte),
+                    proof_gate,
+                ),
+            );
+        }
+        line
     }
 
     #[cfg(feature = "kernel")]
@@ -23343,6 +23387,34 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_runtime_gate_record_preserves_worst_case_bounded_labels() {
+        let line = KernelConsoleTestPump::format_usb_runtime_gate_line(
+            true,
+            true,
+            true,
+            "local-seat-queue-diagnostic",
+            10,
+            "usb-engine-init-resource-subcheck-no-reply",
+            "inspect-usb-runtime-init-descriptor-ranges-and-bus-link",
+        );
+
+        assert!(
+            line.contains("first_byte_source=local-seat-queue-diagnostic"),
+            "{line}"
+        );
+        assert!(
+            line.contains("blocker=usb-engine-init-resource-subcheck-no-reply"),
+            "{line}"
+        );
+        assert!(
+            line.ends_with("next=inspect-usb-runtime-init-descriptor-ranges-and-bus-link"),
+            "{line}"
+        );
+        assert!(line.len() <= DEFAULT_LINE_CAPACITY);
+    }
+
     #[test]
     fn usb_pending_enumeration_counts_as_service_and_input_pressure() {
         assert!(local_seat_usb_service_pending_state(
@@ -24615,6 +24687,53 @@ mod tests {
                 .expect("protocol tail retains the prompt")
                 .kind,
             PendingConsoleOutputKind::ResponseTailPrompt,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn physical_response_body_cannot_consume_protocol_tail_reserve() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+
+        let body_capacity =
+            CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE;
+        for index in 0..CONSOLE_OUTPUT_BACKLOG_LINES {
+            let line = format!("response-body-{index}");
+            assert_eq!(
+                pump.queue_physical_console_output(PendingConsoleOutputKind::Line, line.as_str(),),
+                index < body_capacity,
+                "ordinary response body must stop before the protocol-tail reserve",
+            );
+        }
+        assert_eq!(pump.pending_console_output.len(), body_capacity);
+
+        pump.emit_ack_ok("USB", Some("detail=tail-reserved"));
+        assert!(
+            pump.queue_physical_console_output(PendingConsoleOutputKind::ResponseTailLine, "END",)
+        );
+        pump.emit_prompt();
+
+        assert_eq!(
+            pump.pending_console_output.len(),
+            CONSOLE_OUTPUT_BACKLOG_LINES
+        );
+        let tail = &pump.pending_console_output[body_capacity..];
+        assert_eq!(tail[0].kind, PendingConsoleOutputKind::TerminalLine);
+        assert_eq!(tail[0].text.as_str(), "OK USB detail=tail-reserved");
+        assert_eq!(tail[1].kind, PendingConsoleOutputKind::ResponseTailLine);
+        assert_eq!(tail[1].text.as_str(), "END");
+        assert_eq!(tail[2].kind, PendingConsoleOutputKind::ResponseTailPrompt);
+        assert_eq!(tail[2].text.as_str(), CONSOLE_PROMPT);
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailQueued
         );
     }
 
@@ -27580,7 +27699,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn serial_usb_diag_command_skips_live_probe_without_arming_background_polling() {
+    fn serial_usb_diag_command_is_passive_with_keyboard_polling_enabled() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -27594,14 +27713,24 @@ mod tests {
             line_bytes: 64,
             buffer_lines: 8,
         });
+        local_seat.enable_backend_keyboard_polling();
+        let backend_poll_calls_before = local_seat.keyboard_trace().backend_poll_calls;
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
             .with_local_seat(&mut local_seat)
             .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"usb diag\n");
-        for _ in 0..4 {
-            pump.poll();
-        }
+        pump.poll();
+
+        assert_eq!(
+            pump.local_seat
+                .as_ref()
+                .expect("local seat remains attached")
+                .keyboard_trace()
+                .backend_poll_calls,
+            backend_poll_calls_before,
+            "passive diagnostics must not poll an enabled USB runtime"
+        );
 
         let transcript: Vec<u8> = pump
             .serial_mut()
@@ -27612,8 +27741,12 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("usb: local-seat attached=no polling=deferred action=diag-passive"),
+            rendered.contains("usb: local-seat attached=no polling=enabled action=diag-passive"),
             "{rendered}"
+        );
+        assert!(
+            !rendered.contains("usb: runtime_queue"),
+            "compact gate diagnostics must not prepend the verbose status report: {rendered}"
         );
         assert!(
             rendered.contains(
@@ -27643,12 +27776,221 @@ mod tests {
             rendered.contains("OK USB detail=subcommand=diag"),
             "{rendered}"
         );
-        assert!(!local_seat.backend_keyboard_polling_enabled());
+        assert!(local_seat.backend_keyboard_polling_enabled());
         let mirrored = local_seat.mirrored_lines_snapshot();
         assert_eq!(mirrored.len(), 1, "{mirrored:?}");
-        assert!(mirrored[0].contains("USB diag complete"), "{mirrored:?}");
+        assert!(
+            mirrored[0].contains("USB diag complete: compact gate report on serial"),
+            "{mirrored:?}"
+        );
         assert_eq!(local_seat.dropped_mirrored_lines(), 0);
+        assert_eq!(
+            local_seat.keyboard_trace().backend_poll_calls,
+            0,
+            "passive diagnostics must not poll the USB runtime"
+        );
+        assert!(
+            rendered
+                .lines()
+                .filter(|line| line.starts_with("usb:"))
+                .count()
+                <= CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE,
+            "compact diagnostic body must fit before the protocol-tail reserve: {rendered}"
+        );
         assert!(rendered.contains("cohesix> "), "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_serial_usb_diag_retires_fence_and_preserves_serial_and_usb_input() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4096, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        let backend_poll_calls_before = local_seat.keyboard_trace().backend_poll_calls;
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(b"usb diag\n"),
+            9
+        );
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
+        pump.serial_mut().driver_mut().reset_io_call_counts();
+
+        pump.poll();
+        pump.poll();
+        assert_eq!(
+            pump.local_seat
+                .as_ref()
+                .expect("local seat remains attached")
+                .keyboard_trace()
+                .backend_poll_calls,
+            backend_poll_calls_before,
+            "Serial and Dispatch phases must not poll the enabled USB runtime"
+        );
+        assert!(pump.pending_console_output.iter().any(|output| {
+            output
+                .text
+                .as_str()
+                .contains("usb: gate 10 name=command-input-ready")
+        }));
+        assert!(pump.pending_console_output.iter().any(|output| {
+            output
+                .text
+                .as_str()
+                .contains("OK USB detail=subcommand=diag")
+        }));
+        assert!(pump
+            .pending_console_output
+            .iter()
+            .any(|output| { output.kind == PendingConsoleOutputKind::ResponseTailPrompt }));
+        assert!(
+            pump.pending_console_output.len() <= CONSOLE_OUTPUT_BACKLOG_LINES,
+            "linked diagnostic queue must remain bounded"
+        );
+
+        let mut transcript = Vec::new();
+        for _ in 0..2048 {
+            pump.poll();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if pump.physical_response_barrier == PhysicalResponseBarrier::Idle
+                && pump.pending_console_output.is_empty()
+                && transcript
+                    .windows(b"OK USB detail=subcommand=diag".len())
+                    .any(|window| window == b"OK USB detail=subcommand=diag")
+            {
+                break;
+            }
+        }
+        let diag_end = transcript.len();
+        let diag_rendered = core::str::from_utf8(transcript.as_slice())
+            .expect("linked diagnostic transcript must be utf8");
+        let mut previous_gate = None;
+        for gate in 1..=10 {
+            let needle = format!("usb: gate {gate} ");
+            let position = diag_rendered.find(needle.as_str()).unwrap_or_else(|| {
+                panic!("Gate {gate} must survive linked-serial backpressure: {diag_rendered}")
+            });
+            if let Some(previous) = previous_gate {
+                assert!(
+                    previous < position,
+                    "USB gates must remain ordered: {diag_rendered}"
+                );
+            }
+            previous_gate = Some(position);
+        }
+        let gate10 = previous_gate.expect("ten USB gates must be present");
+        let ack = diag_rendered
+            .find("OK USB detail=subcommand=diag")
+            .unwrap_or_else(|| {
+                panic!(
+                    "USB ACK must survive linked-serial backpressure: barrier={:?} backlog={} transcript={diag_rendered}",
+                    pump.physical_response_barrier,
+                    pump.pending_console_output.len(),
+                )
+            });
+        let prompt = diag_rendered
+            .rfind(CONSOLE_PROMPT)
+            .expect("USB diagnostic prompt must drain");
+        assert!(gate10 < ack && ack < prompt, "{diag_rendered}");
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::Idle,
+            "USB diagnostic response fence must retire"
+        );
+        assert!(pump.pending_console_output.is_empty());
+
+        assert_eq!(
+            crate::serial::test_inject_linked_runtime_only_rx(b"ping\n"),
+            5
+        );
+        for _ in 0..512 {
+            pump.poll();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if transcript[diag_end..]
+                .windows(b"OK PING reply=pong".len())
+                .any(|window| window == b"OK PING reply=pong")
+                && pump.physical_response_barrier == PhysicalResponseBarrier::Idle
+            {
+                break;
+            }
+        }
+        assert!(
+            transcript[diag_end..]
+                .windows(b"PONG".len())
+                .any(|window| window == b"PONG"),
+            "serial input must remain live after usb diag"
+        );
+        assert!(
+            transcript[diag_end..]
+                .windows(b"OK PING reply=pong".len())
+                .any(|window| window == b"OK PING reply=pong"),
+            "serial command tail must remain live after usb diag"
+        );
+
+        let usb_start = transcript.len();
+        assert_eq!(
+            pump.local_seat
+                .as_mut()
+                .expect("local seat remains attached")
+                .enqueue_keyboard_bytes(b"ping\n"),
+            5
+        );
+        for _ in 0..512 {
+            pump.poll();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if transcript[usb_start..]
+                .windows(b"OK PING reply=pong".len())
+                .any(|window| window == b"OK PING reply=pong")
+                && pump.physical_response_barrier == PhysicalResponseBarrier::Idle
+            {
+                break;
+            }
+        }
+        assert!(
+            transcript[usb_start..]
+                .windows(b"PONG".len())
+                .any(|window| window == b"PONG"),
+            "buffered USB input must remain live after usb diag"
+        );
+        assert!(
+            transcript[usb_start..]
+                .windows(b"OK PING reply=pong".len())
+                .any(|window| window == b"OK PING reply=pong"),
+            "USB command tail must remain live after usb diag"
+        );
+        assert_eq!(
+            pump.serial_mut().driver_mut().io_call_counts(),
+            (0, 0),
+            "linked diagnostics must never re-enter the generic serial backend"
+        );
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::Idle
+        );
+        assert!(pump.pending_console_output.is_empty());
     }
 
     #[cfg(feature = "kernel")]

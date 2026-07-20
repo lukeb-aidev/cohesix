@@ -379,8 +379,12 @@ usb probe-kbd
 smp activity
 ```
 
-If `usb diag` echoes but does not return, stop sending input and preserve the
-sample. A merged or overlapped serial transcript is not acceptance evidence.
+`usb diag` returns the compact cached ten-gate report; use `usb status` only
+when the additional counter detail is needed. A complete response includes
+Gate 10, `OK USB`, and the prompt, after which both a serial `ping` and a
+USB-keyboard `ping` must still return. If any tail is absent, stop sending input
+and preserve the sample. A merged or overlapped serial transcript is not
+acceptance evidence.
 
 The serial log must contain the exact read-back sealed build marker before any
 current-image claim is made. The current bootstrap-supervisor record counts only

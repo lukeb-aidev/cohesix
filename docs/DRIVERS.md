@@ -334,6 +334,11 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   outcome may revoke readiness or add no-reply debt. This prevents ordinary
   prepare/boost/commit/notify/poll phases from manufacturing USB pressure that
   can starve keyboard input or HDMI refresh.
+- `usb diag` is a cached, passive, compact ten-gate report. It does not poll
+  the USB runtime or prepend the verbose `usb status` counters. Ordinary
+  response-body records cannot consume the three linked-serial protocol-tail
+  slots reserved for the terminal ACK/END and prompt, so backpressure cannot
+  strand the physical-response fence or block later serial/USB input.
 - If a USB diagnostic service turn stops replying, preserve the boot evidence
   and stop submitting more commands until the bounded recovery path or a fresh
   boot.

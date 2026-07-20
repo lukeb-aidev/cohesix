@@ -854,6 +854,12 @@ Local-seat coverage must prove the retained USB attach and keyboard cursors
 issue one immutable linked-runtime request or poll one exact completion per
 outer turn, including one outer turn for each explicit `usb probe-kbd` attempt.
 It must prove probe policy restoration and immutable command fingerprints.
+The real linked-serial path must also prove that the passive compact `usb diag`
+performs no USB poll, emits Gates 1 through 10, preserves `OK USB` and the
+prompt within the three-record protocol-tail reserve, retires the physical
+response fence, and then accepts fresh commands from both serial and buffered
+USB input. Saturation coverage must prove ordinary response-body lines cannot
+consume those tail slots even while response ordering is active.
 Display coverage must prove an attach miss is retained and that attach and frame
 submission cannot share an outer turn. The current synchronous PCIe HAL
 prerequisite runs before EventPump construction as local bookkeeping and
