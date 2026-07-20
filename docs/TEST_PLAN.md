@@ -523,8 +523,17 @@ same-generation replay, root-owned SDIO, or a legacy fallback.
 
 The CYW43 software-closure gate is authorized by Milestone 26d task
 `m26d-cyw43-hardware-free-closure` and Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`. It exercises the production
-reciprocal runtime-ring integration point under the ordinary EventPump. Each
+`m26b-wifi-sdio-notification-dpc-closure`. It exercises the host-testable
+production transaction data and state transitions (`begin_turn`, frontier
+reservation, retained submit, completion miss, continuation grant, immutable
+ticket/completion validation, completion commit, and cached replay). The host
+ring adapter executes the production sequence-last command publication, stable
+owner intake, sequence-last completion publication, and stable client read,
+stages the reciprocal owner descriptor, and obtains the completion from the real
+descriptor/controller service path rather than fabricating a direct result.
+Physical mapped addresses, cache-maintenance effects, seL4 notification
+send/receive, and target transaction entry/exit remain target-compile checked
+and require Pi proof. Under the ordinary EventPump, each
 outer turn opens one monotonic CYW43 operation permit and may execute no more
 than one child-runtime or HAL operation; a rejected second attempt must leave
 the retained ticket, deadline, payload fingerprint, generation, and cursor
@@ -574,6 +583,49 @@ and prove that cursor checkpoints—not foreground-trace growth—carry the last
 `CHIPCLKCSR` value, poll count, and deadline. The request must be issued once,
 the action trace for each checkpoint must remain bounded, and reaching trace
 capacity must never substitute for the one-second timeout.
+
+Firmware-preparation coverage must separately drive the production op-9 cursor
+through passive cores, KSO, CARDCTRL, PMUCONTROL, Function 2 disable,
+`CHIPCLKCSR=0`, `ALP_AVAIL_REQ`, ALP polling, and SoCRAM preparation. Tests must
+prove the zero write precedes the single ALP request on initial attach, every
+child operation and deadline observation consumes a distinct outer turn, and
+unavailable reads are separated by retained five-millisecond virtual-counter
+settles under the absolute one-second deadline. Production-timing tests must
+prove that one second and five milliseconds derive from the permitted counter
+and permit about 200 physical reads, with terminal timeout on a later zero-I/O
+deadline turn carrying exact ALP detail and last `CHIPCLKCSR`. A separate
+structural checkpoint test may deliberately install an extended synthetic
+counter deadline, hold ALP unavailable for more than 1,024 reads, and then make
+it ready; that test proves the cursor advances without `0x5310`, trace growth,
+or a second request, but is not production wall-clock proof. Function 1 enable
+must likewise retain separate `IOEx` read, one-shot `IOEx.F1` write, `IORx`
+poll, and deadline turns; an extended structural test must exceed 1,024
+unavailable reads without trace growth or a second write, while production
+remains bounded by the one-second elapsed deadline. Stale owner or
+issued-unknown completion must perform zero same-generation I/O.
+Stale request/generation, a failed `0x5337` SD-only write, issued-unknown
+ownership, and a second same-generation preparation must all perform zero
+replay. Exercise the exact clock-zero, request, and read descriptors through
+the production parent-command plus staged-owner-descriptor/controller seam and
+prove one controller issue per descriptor without a fabricated completion.
+
+Firmware-release coverage must drive the production release cursor through the
+production parent-command plus staged-owner-descriptor/controller seam. Prove
+one new child issue per outer EventPump turn and exact Linux ordering from
+stale interrupt clear to DPC activation. Exercise 51 retained ARMCR4
+clear/settle/read cycles, the exact
+200-attempt no-counter HT fallback, final-success Function 2 readiness on poll
+3,000, and final-success firmware readiness on poll 1,000 without trace or
+deadline-table poisoning. Separately use an explicitly extended synthetic
+counter deadline for more than 1,024 HT reads to stress checkpoint capacity;
+that structural case is not the production one-second timing contract.
+`IOEx.F2` must be written exactly once; the 20-millisecond SD-only
+fence, HT settles, and all deadline observations must be zero-I/O turns.
+Mutating the request sequence, generation, or reset vector, resubmitting after
+an issued-unknown action, or repeating a terminal failure must perform no
+child I/O. `firmware_execution_started` and `firmware_released` must remain
+false until the exact RESETCTRL-clear and DPC-activation completions,
+respectively.
 
 Card-init tests must prove CMD7 uses the R1b short-busy response and distinguish
 the pre-command entry-inhibit wait from a post-command busy timeout. Only the

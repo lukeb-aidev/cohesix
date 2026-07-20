@@ -4017,6 +4017,7 @@ def normalize_wifi_blocker(value: str) -> str:
         "21302": "cyw43-probe-function2-disable-write",
         "0x5336": "cyw43-probe-function2-disable-write",
         "21303": "cyw43-probe-sdonly-clock",
+        "0x5337": "cyw43-probe-sdonly-clock",
         "0x5338": "cyw43-release-intstatus-clear",
     }
     if lower in probe_attach_faults:
@@ -4285,6 +4286,7 @@ def normalize_wifi_exact(value: str) -> str:
         "21302": "cyw43-probe-function2-disable-write",
         "0x5336": "cyw43-probe-function2-disable-write",
         "21303": "cyw43-probe-sdonly-clock",
+        "0x5337": "cyw43-probe-sdonly-clock",
         "0x5338": "cyw43-release-intstatus-clear",
     }
     if lower in cyw43_transport_details:

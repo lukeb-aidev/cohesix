@@ -18069,6 +18069,7 @@ pub(crate) const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
         0x5334 => "cyw43-probe-pmucontrol-write",
         0x5335 => "cyw43-probe-function2-disable-read",
         0x5336 => "cyw43-probe-function2-disable-write",
+        0x5337 => "cyw43-probe-sdonly-clock",
         0x5338 => "cyw43-release-intstatus-clear",
         0x53ff => "cyw43-command",
         DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START => "cyw43-transport-phase-start",
@@ -30630,6 +30631,10 @@ mod tests {
             "cyw43-probe-function2-disable-write"
         );
         assert_eq!(
+            cyw43_runtime_fault_reason(0x5337),
+            "cyw43-probe-sdonly-clock"
+        );
+        assert_eq!(
             cyw43_runtime_fault_reason(0x5338),
             "cyw43-release-intstatus-clear"
         );
@@ -30653,11 +30658,12 @@ mod tests {
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x532d));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x532f));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5330));
-        for detail in [0x5331, 0x5332, 0x5333, 0x5334, 0x5335, 0x5336, 0x5338] {
+        for detail in [
+            0x5331, 0x5332, 0x5333, 0x5334, 0x5335, 0x5336, 0x5337, 0x5338,
+        ] {
             assert!(cyw43_fault_detail_allows_sdio_owner_recovery(detail));
             assert!(!cyw43_fault_detail_allows_same_command_retry(detail));
         }
-        assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5337));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x532e));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5302));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5306));

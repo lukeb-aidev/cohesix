@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import pathlib
 from collections.abc import Iterable
 
@@ -204,6 +205,148 @@ class NoReadyThenController(FakeController):
             self.notes.append(f"below-ready snapshot rejected for {label}")
             raise pi4_serial_reboot.SerialMarkerTimeout(f"timeout for {label}")
         return super().read_until(markers, timeout_s, label=label)
+
+
+def redaction_controller(
+    secret: bytes,
+    replacement: bytes = b"<queen-ticket>",
+) -> tuple[pi4_serial_reboot.RedactingSerialController, io.BytesIO]:
+    """Build a serial-free controller instance for streaming-redaction tests."""
+
+    output = io.BytesIO()
+    controller = object.__new__(pi4_serial_reboot.RedactingSerialController)
+    controller._redactions = [(secret, replacement)]
+    controller._redaction_carry = b""
+    controller._pending_annotations = []
+    controller._write_safe = output.write
+    return controller, output
+
+
+def multi_redaction_controller(
+    redactions: list[tuple[bytes, bytes]],
+) -> tuple[pi4_serial_reboot.RedactingSerialController, io.BytesIO]:
+    """Build a controller with several possibly overlapping secrets."""
+
+    controller, output = redaction_controller(*redactions[0])
+    controller._redactions = redactions
+    return controller, output
+
+
+@pytest.mark.parametrize("split", range(len(b"secret-ticket") + 1))
+def test_serial_redaction_hides_ticket_at_every_two_chunk_boundary(split: int) -> None:
+    """No split point may expose any byte of a complete Queen ticket."""
+
+    secret = b"secret-ticket"
+    controller, output = redaction_controller(secret)
+    controller._record(b"before:" + secret[:split])
+    controller._record(secret[split:] + b":after")
+    controller._flush_redaction_carry()
+
+    assert output.getvalue() == b"before:<queen-ticket>:after"
+    assert secret not in output.getvalue()
+
+
+def test_serial_redaction_hides_ticket_with_single_byte_chunks() -> None:
+    """Adversarial one-byte reads must remain both lossless and secret-free."""
+
+    secret = b"secret-ticket"
+    controller, output = redaction_controller(secret)
+    for byte in b"prefix-" + secret + b"-suffix":
+        controller._record(bytes([byte]))
+    controller._flush_redaction_carry()
+
+    assert output.getvalue() == b"prefix-<queen-ticket>-suffix"
+    assert secret not in output.getvalue()
+
+
+def test_serial_redaction_conceals_incomplete_secret_on_close() -> None:
+    """A truncated serial echo must not publish a recognizable ticket prefix."""
+
+    secret = b"secret-ticket"
+    controller, output = redaction_controller(secret)
+    controller._record(b"prefix-" + secret[:7])
+    controller._flush_redaction_carry()
+
+    assert output.getvalue() == b"prefix-<redacted-partial>"
+    assert secret[:7] not in output.getvalue()
+
+
+@pytest.mark.parametrize("split", range(len(b"abab") + 1))
+def test_serial_redaction_handles_self_overlapping_secret(split: int) -> None:
+    """A complete secret followed by its own prefix must never leak."""
+
+    controller, output = redaction_controller(b"aba", b"<ticket>")
+    payload = b"abab"
+    controller._record(payload[:split])
+    controller._record(payload[split:])
+    controller._flush_redaction_carry()
+
+    assert output.getvalue() == b"<ticket>b"
+    assert b"aba" not in output.getvalue()
+
+
+def test_serial_redaction_prefers_longest_of_overlapping_secrets() -> None:
+    """A shorter configured prefix must not expose a longer secret suffix."""
+
+    controller, output = multi_redaction_controller(
+        [(b"ab", b"<short>"), (b"aba", b"<long>")]
+    )
+    for byte in b"xabayab":
+        controller._record(bytes([byte]))
+    controller._flush_redaction_carry()
+
+    assert output.getvalue() == b"x<long>y<short>"
+    assert b"aba" not in output.getvalue()
+
+
+def test_host_note_cannot_bisect_streaming_serial_secret() -> None:
+    """Host annotations must preserve a pending serial-secret prefix."""
+
+    secret = b"secret-ticket"
+    controller, output = redaction_controller(secret)
+    controller._record(b"secret-")
+    controller.note("interleave")
+    controller._record(b"ticket")
+    controller._flush_redaction_carry()
+
+    assert output.getvalue() == b"<queen-ticket>\n[host] interleave\n"
+    assert secret not in output.getvalue()
+
+
+def test_host_note_follows_complete_serial_prompt_without_reordering() -> None:
+    """Ordinary serial evidence must be written before a later host action."""
+
+    controller, output = redaction_controller(b"secret-ticket")
+    controller._record(b"OK ATTACH\ncohesix>")
+    controller.note("send reboot")
+    controller._flush_redaction_carry()
+
+    assert output.getvalue() == b"OK ATTACH\ncohesix>\n[host] send reboot\n"
+
+
+def test_serial_timeout_tail_conceals_truncated_secret_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Timeout diagnostics must use the same streaming-safe finalizer as logs."""
+
+    controller, _ = redaction_controller(b"secret-ticket")
+
+    class TimeoutSerial:
+        def __init__(self) -> None:
+            self.reads = [b"tail:secret-tic", b""]
+
+        def read(self, _size: int) -> bytes:
+            return self.reads.pop(0) if self.reads else b""
+
+    controller._serial = TimeoutSerial()
+    times = iter((0.0, 0.0, 2.0))
+    monkeypatch.setattr(pi4_serial_reboot.time, "monotonic", lambda: next(times))
+
+    with pytest.raises(pi4_serial_reboot.SerialMarkerTimeout) as caught:
+        controller.read_until((b"never",), 1.0, label="redacted marker")
+
+    assert "secret-tic" not in str(caught.value)
+    assert "<redacted-partial>" in str(caught.value)
 
 
 def test_saved_wifi_uses_old_root_menu_option_one() -> None:
@@ -504,6 +647,7 @@ def test_reboot_from_root_clears_line_and_pings_before_auth(monkeypatch: pytest.
             b"cohesix>",
             b"OK PING\ncohesix>",
             b"OK ATTACH\nrole=queen\ncohesix>",
+            b"OK REBOOT detail=scheduled\n",
             b"U-Boot 2026\n" + ROOT_MENU_SAVED,
         ]
     )
@@ -533,6 +677,7 @@ def test_reboot_from_root_accepts_interleaved_attach_role_proof(
             b"cohesix>",
             b"OK PING\ncohesix>",
             b"OK ATTAC[local-seat] redraw\nH role=queen\ncohesix>",
+            b"OK REBOOT detail=scheduled\n",
             b"U-Boot 2026\n" + ROOT_MENU_SAVED,
         ]
     )
@@ -548,6 +693,31 @@ def test_reboot_from_root_accepts_interleaved_attach_role_proof(
 
     assert controller.sent == ["", "ping", "attach queen secret-ticket", "reboot"]
     assert ROOT_MENU_SAVED in snapshot
+
+
+def test_reboot_from_root_rejects_uboot_without_scheduled_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """U-Boot chatter alone cannot prove that Cohesix accepted reboot."""
+
+    controller = FakeController(
+        [
+            b"cohesix>",
+            b"OK PING\ncohesix>",
+            b"OK ATTACH role=queen\ncohesix>",
+            b"U-Boot 2026\n" + ROOT_MENU_SAVED,
+        ]
+    )
+    monkeypatch.setattr(pi4_serial_reboot, "mint_ticket", lambda *_args: "secret-ticket")
+
+    with pytest.raises(AssertionError):
+        pi4_serial_reboot.reboot_from_root(
+            controller,
+            REPO_ROOT,
+            pathlib.Path("cohsh"),
+            pathlib.Path("config.toml"),
+            30,
+        )
 
 
 def test_saved_wifi_refuses_default_settings_when_policy_missing() -> None:

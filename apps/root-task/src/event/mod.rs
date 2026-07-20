@@ -11450,6 +11450,19 @@ where
                     owner_fault.owner_window,
                 ));
                 self.emit_console_line(payload.as_str());
+            } else if fault.detail == 0x5337 {
+                let cmd52 = format_message(format_args!(
+                    "wifi: evidence sdio_cmd52 func=1 addr=0x0001000e write=yes value=0x00 op={} descriptor_status={} source=cyw43-probe-sdonly-clock",
+                    fault.op,
+                    Self::wifi_cyw43_fault_descriptor_status(fault.detail),
+                ));
+                self.emit_console_line(cmd52.as_str());
+            } else if fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP {
+                let operation = format_message(format_args!(
+                    "wifi: evidence sdio_operation op={} stage={} detail=0x{:04x} exact_owner_telemetry=required source=cyw43-firmware-prep",
+                    fault.op, fault.stage, fault.detail,
+                ));
+                self.emit_console_line(operation.as_str());
             } else if !Self::wifi_runtime_fault_is_sdio_card_select(fault) {
                 let cmd53 = format_message(format_args!(
                     "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} len={} increment={} block_mode={} op={} descriptor_status={} transfer_stage={} transfer_status=0x{:06x} r5=0x{:04x} source=cyw43-descriptor",
@@ -11548,6 +11561,9 @@ where
         }
         if Self::wifi_runtime_fault_is_transport_no_reply(fault) {
             return 3;
+        }
+        if Self::wifi_runtime_fault_is_probe_attach(fault) {
+            return Self::wifi_cyw43_fault_gate(fault.detail);
         }
         if Self::wifi_runtime_fault_is_firmware_stream(fault) {
             return 6;
@@ -12423,7 +12439,7 @@ where
             0x531a..=0x5323 => 5,
             0x5329 => 6,
             0x532a..=0x532e => 7,
-            0x5331..=0x5336 => 5,
+            0x5331..=0x5337 => 5,
             0x5338 => 6,
             _ => 8,
         }
@@ -12438,6 +12454,9 @@ where
         }
         if Self::wifi_runtime_fault_is_transport_no_reply(fault) {
             return "slice-cyw43-transport-init-and-inspect-nested-sdio-owner";
+        }
+        if Self::wifi_runtime_fault_is_probe_attach(fault) {
+            return Self::wifi_cyw43_fault_next_action(fault.detail);
         }
         if Self::wifi_runtime_fault_is_firmware_stream(fault) {
             return "inspect-cyw43-firmware-shared-payload-and-sdio-owner-transfer";
@@ -12494,6 +12513,7 @@ where
             0x5333 | 0x5334 => "inspect-probe-pmucontrol-cmd52-word-primary",
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
             0x5331..=0x5336 => "inspect-linux-probe-attach-state",
+            0x5337 => "inspect-probe-sdonly-clock-before-firmware-alp",
             0x5338 => "inspect-pre-release-intstatus-clear",
             _ => "inspect-cyw43-runtime-fault-stage",
         }
@@ -12554,6 +12574,14 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn wifi_runtime_fault_is_probe_attach(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> bool {
+        fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP
+            && matches!(fault.detail, 0x5331..=0x5337)
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_runtime_fault_is_transport_no_reply(
         fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
     ) -> bool {
@@ -12589,7 +12617,7 @@ where
     ) -> &'static str {
         match fault.op {
             2 | 3 => "1",
-            7 | 8 | 9 | 10 => "2",
+            7 | 8 | 10 => "2",
             _ => "unknown",
         }
     }
@@ -12600,7 +12628,7 @@ where
     ) -> &'static str {
         match fault.op {
             2 | 3 => "yes",
-            7 | 8 | 9 | 10 => "no",
+            7 | 8 | 10 => "no",
             _ => "unknown",
         }
     }
@@ -12611,7 +12639,7 @@ where
     ) -> &'static str {
         match fault.op {
             2 | 3 => "linux-normal",
-            7 | 8 | 9 | 10 => "fifo-fixed",
+            7 | 8 | 10 => "fifo-fixed",
             _ => "unknown",
         }
     }
@@ -23959,12 +23987,14 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn wifi_probe_attach_faults_stay_at_gate_five() {
-        for detail in 0x5331..=0x5336 {
+        for detail in 0x5331..=0x5337 {
             assert_eq!(KernelConsoleTestPump::wifi_cyw43_fault_gate(detail), 5);
             assert_eq!(
                 KernelConsoleTestPump::wifi_cyw43_fault_next_action(detail),
                 if matches!(detail, 0x5333 | 0x5334) {
                     "inspect-probe-pmucontrol-cmd52-word-primary"
+                } else if detail == 0x5337 {
+                    "inspect-probe-sdonly-clock-before-firmware-alp"
                 } else {
                     "inspect-linux-probe-attach-state"
                 }
@@ -23974,6 +24004,46 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_cyw43_fault_next_action(0x5338),
             "inspect-pre-release-intstatus-clear"
+        );
+
+        let sdonly_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-prep",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x5337,
+            reason: "cyw43-probe-sdonly-clock",
+            result: 0,
+        };
+        assert!(KernelConsoleTestPump::wifi_runtime_fault_is_probe_attach(
+            sdonly_fault
+        ));
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_gate(sdonly_fault),
+            5,
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_next_action(sdonly_fault),
+            "inspect-probe-sdonly-clock-before-firmware-alp",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_fault_cmd53_function(sdonly_fault),
+            "unknown",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_fault_cmd53_increment(sdonly_fault),
+            "unknown",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_fault_cmd53_mode(sdonly_fault),
+            "unknown",
         );
     }
 

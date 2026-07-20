@@ -700,6 +700,42 @@ count, then closes that foreground transaction. Thus a long, still-within-
 deadline ALP wait does not accumulate against the retained transaction's
 1,024-action trace or use trace exhaustion as a timeout.
 
+The preceding Function 1 enable is retained by the same rule: `IOEx` read,
+one-shot `IOEx.F1` write, each `IORx` read, and each deadline observation are
+separate outer turns under Linux's one-second fallback. Issued-unknown or stale
+ownership invalidates transport readiness, resets the transport cursor to
+`START`, and requires the typed SDIO generation reset before any prior attach
+edge can be considered again.
+
+Firmware preparation repeats neither that initial trace nor the initial
+`FORCE_ALP` policy. It uses a second request- and generation-bound cursor with
+the Linux order `ARMCR4/D11 passive -> KSO -> CARDCTRL.WLANRESET ->
+PMUCONTROL.RES_RELOAD -> IOEx.F2=0 -> CHIPCLKCSR=0 -> ALP_AVAIL_REQ ->
+SoCRAM/upload preparation`. The zero write is the required `CLK_SDONLY` edge
+before the asynchronous firmware-download ALP request. Each zero write, ALP
+request, ALP read, retained five-millisecond virtual-counter settle, and
+one-second absolute-deadline observation consumes its own outer EventPump turn.
+The cursor checkpoints after every completed phase, so unavailable ALP cannot
+consume the 1,024-entry foreground trace. Production timing permits about 200
+five-millisecond reads inside the absolute one-second window; a separate
+extended-deadline host stress may exceed 1,024 reads only to prove checkpoint
+capacity. Exact fault `0x5337` identifies the SD-only write, stays at Gate 5,
+and leaves only through a new-generation pair restart. Duplicate or failed
+preparation in the same generation is not re-primed.
+
+Firmware release is also an ordinary EventPump continuation, not a private
+driver call chain. Its retained cursor orders stale interrupt clear, optional
+reset vector, ARMCR4 disable/assert and bounded RESETCTRL release, the
+20-millisecond SD-only fence, one-second paced HT wait, `FORCE_HT`, mailbox
+version, one-shot Function 2 `IOEx`, three-second `IORx` wait, Function 2
+configuration, one-second firmware-mailbox wait, final interrupt arm, and DPC
+activation. The 51 ARM attempts, 200 HT polls, 3,000 Function 2 fallback polls,
+and 1,000 mailbox fallback polls each advance through distinct outer turns and
+checkpoint before the next phase. They therefore cannot overflow the
+foreground trace or retained-deadline table. A poisoned or stale generation
+performs no same-command replay; ARM execution and firmware release are
+published only after their exact irreversible child completions.
+
 Serial evidence should name the exact frontier rather than leaving the generic
 backplane marker as an ALP diagnosis: ALP request, ALP poll, FORCE_ALP, its
 65-microsecond settle, the Pi pull-up-policy skip, ChipCommon read, and each

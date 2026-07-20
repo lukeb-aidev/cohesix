@@ -7589,6 +7589,7 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         "21300": "cyw43-probe-pmucontrol-write",
         "0x5335": "cyw43-probe-function2-disable-read",
         "21302": "cyw43-probe-function2-disable-write",
+        "0x5337": "cyw43-probe-sdonly-clock",
         "0x5338": "cyw43-release-intstatus-clear",
         "0x5324": "cyw43-transport-card-cmd0",
         "21285": "cyw43-transport-card-cmd5-ocr",
@@ -7605,6 +7606,9 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
 
     for raw, expected in cases.items():
         assert normalizer.normalize_wifi_blocker(raw) == expected
+
+    assert normalizer.normalize_wifi_exact("0x5337") == "cyw43-probe-sdonly-clock"
+    assert normalizer.normalize_wifi_exact("21303") == "cyw43-probe-sdonly-clock"
 
 
 def test_post_release_dpc_activation_fault_is_a_gate_seven_hardware_frontier() -> None:

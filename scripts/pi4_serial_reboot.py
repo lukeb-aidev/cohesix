@@ -110,23 +110,52 @@ class RedactingSerialController:
         self._log = log_path.open("ab")
         self._redactions: list[tuple[bytes, bytes]] = []
         self._redaction_carry = b""
+        self._pending_annotations: list[bytes] = []
         self._echo = echo
         self._char_delay_s = char_delay_s
 
     def close(self) -> None:
-        if self._redaction_carry:
-            self._write_safe(self._redact(self._redaction_carry))
-            self._redaction_carry = b""
+        self._flush_redaction_carry()
         self._log.close()
         self._serial.close()
 
     def add_redaction(self, secret: str, replacement: str) -> None:
-        self._redactions.append((secret.encode(), replacement.encode()))
+        encoded = secret.encode()
+        if not encoded:
+            raise ValueError("serial redaction secret must not be empty")
+        self._redactions.append((encoded, replacement.encode()))
 
-    def _redact(self, data: bytes) -> bytes:
-        for secret, replacement in self._redactions:
-            data = data.replace(secret, replacement)
-        return data
+    def _matching_redaction(self, data: bytes, offset: int) -> tuple[int, bytes] | None:
+        """Return the longest configured secret beginning at ``offset``."""
+
+        matches = [
+            (len(secret), replacement)
+            for secret, replacement in self._redactions
+            if data.startswith(secret, offset)
+        ]
+        return max(matches, default=None, key=lambda match: match[0])
+
+    def _redact_final(self, data: bytes) -> bytes:
+        """Redact complete secrets and conceal any trailing secret prefix."""
+
+        if not self._redactions:
+            return data
+        redacted = bytearray()
+        offset = 0
+        while offset < len(data):
+            match = self._matching_redaction(data, offset)
+            if match is not None:
+                length, replacement = match
+                redacted.extend(replacement)
+                offset += length
+                continue
+            suffix = data[offset:]
+            if any(secret.startswith(suffix) for secret, _ in self._redactions):
+                redacted.extend(b"<redacted-partial>")
+                break
+            redacted.append(data[offset])
+            offset += 1
+        return bytes(redacted)
 
     def _write_safe(self, data: bytes) -> None:
         self._log.write(data)
@@ -135,22 +164,53 @@ class RedactingSerialController:
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
 
+    def _flush_redaction_carry(self) -> None:
+        if self._redaction_carry:
+            self._write_safe(self._redact_final(self._redaction_carry))
+            self._redaction_carry = b""
+        self._flush_pending_annotations()
+
+    def _flush_pending_annotations(self) -> None:
+        for annotation in self._pending_annotations:
+            self._write_safe(annotation)
+        self._pending_annotations.clear()
+
     def _record(self, data: bytes) -> None:
         if not self._redactions:
             self._write_safe(data)
             return
         pending = self._redaction_carry + data
-        keep = max((len(secret) - 1 for secret, _ in self._redactions), default=0)
-        if len(pending) <= keep:
-            self._redaction_carry = pending
-            return
-        safe_len = len(pending) - keep
-        safe = self._redact(pending[:safe_len])
-        self._redaction_carry = pending[safe_len:]
-        self._write_safe(safe)
+        redacted = bytearray()
+        offset = 0
+        while offset < len(pending):
+            suffix = pending[offset:]
+            if any(
+                len(secret) > len(suffix) and secret.startswith(suffix)
+                for secret, _ in self._redactions
+            ):
+                break
+            match = self._matching_redaction(pending, offset)
+            if match is not None:
+                length, replacement = match
+                redacted.extend(replacement)
+                offset += length
+            else:
+                redacted.append(pending[offset])
+                offset += 1
+        self._redaction_carry = pending[offset:]
+        if redacted:
+            self._write_safe(bytes(redacted))
+        if not self._redaction_carry:
+            self._flush_pending_annotations()
 
     def note(self, text: str) -> None:
-        self._record(f"\n[host] {text}\n".encode())
+        """Write a host annotation without disturbing serial-stream redaction."""
+
+        annotation = self._redact_final(f"\n[host] {text}\n".encode())
+        if self._redaction_carry:
+            self._pending_annotations.append(annotation)
+        else:
+            self._write_safe(annotation)
 
     def send_line(
         self,
@@ -190,7 +250,9 @@ class RedactingSerialController:
             snapshot = bytes(seen)
             if any(serial_marker_seen(snapshot, marker) for marker in needles):
                 return snapshot
-        tail = self._redact(bytes(seen[-2048:])).decode("utf-8", errors="replace")
+        tail = self._redact_final(bytes(seen[-2048:])).decode(
+            "utf-8", errors="replace"
+        )
         raise SerialMarkerTimeout(f"timed out waiting for {label}; tail={tail!r}")
 
     def drain_for(self, duration_s: float, *, label: str) -> bytes:
@@ -516,11 +578,19 @@ def reboot_from_root(
         label="Queen attach OK",
     )
     controller.send_line("reboot")
-    snapshot = controller.read_until(
-        (b"U-Boot ", *ROOT_MENU_MARKERS),
-        uboot_timeout_s,
-        label="U-Boot after reboot",
+    reboot_ack = controller.read_until(
+        (b"OK REBOOT detail=scheduled",),
+        10,
+        label="scheduled reboot ACK",
     )
+    if b"U-Boot " in reboot_ack or any(marker in reboot_ack for marker in ROOT_MENU_MARKERS):
+        snapshot = reboot_ack
+    else:
+        snapshot = controller.read_until(
+            (b"U-Boot ", *ROOT_MENU_MARKERS),
+            uboot_timeout_s,
+            label="U-Boot after reboot",
+        )
     return read_menu_snapshot(
         controller,
         60,

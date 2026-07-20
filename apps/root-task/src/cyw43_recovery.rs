@@ -37,6 +37,7 @@ pub(crate) const fn fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool
             | 0x5334
             | 0x5335
             | 0x5336
+            | 0x5337
             | 0x5338
     )
 }
@@ -71,11 +72,12 @@ mod tests {
         assert!(fault_detail_allows_sdio_owner_recovery(0x532d));
         assert!(fault_detail_allows_sdio_owner_recovery(0x532f));
         assert!(fault_detail_allows_sdio_owner_recovery(0x5330));
-        for detail in [0x5331, 0x5332, 0x5333, 0x5334, 0x5335, 0x5336, 0x5338] {
+        for detail in [
+            0x5331, 0x5332, 0x5333, 0x5334, 0x5335, 0x5336, 0x5337, 0x5338,
+        ] {
             assert!(fault_detail_allows_sdio_owner_recovery(detail));
             assert!(!fault_detail_allows_same_command_retry(detail));
         }
-        assert!(!fault_detail_allows_sdio_owner_recovery(0x5337));
         assert!(!fault_detail_allows_sdio_owner_recovery(0x532e));
         assert!(!fault_detail_allows_sdio_owner_recovery(0x5302));
         assert!(!fault_detail_allows_sdio_owner_recovery(0x5306));

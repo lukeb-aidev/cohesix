@@ -497,7 +497,13 @@ This as-built closure is authorized by Milestone 26d task
   foreground trace as a surrogate one-second KSO timer.
 - Function 1 enable uses the SDIO CIS timeout when that field is eventually
   carried by the ABI; the current fixed profile uses Linux's one-second
-  fallback. Backplane attach is a generation- and request-bound retained
+  fallback. Its generation- and request-bound cursor separates the `IOEx`
+  read, the single `IOEx.F1` write, every `IORx` read, and every deadline
+  observation into distinct outer EventPump turns. A slow valid card can pass
+  more than 1,024 structural-test reads without growing the foreground trace;
+  production remains bounded by the one-second elapsed deadline. Stale or
+  issued-unknown ownership poisons the cursor and permits no same-generation
+  replay. Backplane attach is a generation- and request-bound retained
   cursor with explicit `ALP request`, `ALP poll`, `FORCE_ALP`, `FORCE_ALP
   settle`, `pull-up policy`, `ChipCommon read`, and `complete` phases. ALP
   availability uses one absolute one-second elapsed deadline. Each exact
@@ -532,6 +538,47 @@ This as-built closure is authorized by Milestone 26d task
   operations. Each child submission, continuation grant, completion poll, and
   retained deadline poll remains a separate outer EventPump turn; a terminal
   child or deadline poll cannot compose the next attach action into that turn.
+- Firmware download has a distinct retained preparation cursor; it does not
+  reuse the initial backplane-attach trace or enter an immediate descriptor
+  loop. The immutable root request and SDIO generation own the cursor through
+  ARMCR4/D11 passive setup, KSO, `CARDCTRL.WLANRESET`,
+  `PMUCONTROL.RES_RELOAD`, Function 2 disable, `CHIPCLKCSR=0`, a fresh
+  `ALP_AVAIL_REQ`, ALP readiness, and SoCRAM upload preparation. The
+  `CHIPCLKCSR=0` edge is Linux's `CLK_SDONLY` boundary between probe attach and
+  the asynchronous firmware callback; omitting it is invalid.
+
+  The fresh firmware-download ALP request retains the same absolute one-second
+  PMU deadline and validates its first readback, but unavailable reads are
+  spaced by retained five-millisecond virtual-counter settles. The CMD52 read,
+  each settle observation, and the absolute-deadline observation return on
+  separate outer turns, checkpointing and clearing the foreground action trace
+  after each completed phase. The production one-second/five-millisecond
+  contract permits about 200 physical reads; an extended-deadline structural
+  test drives more than 1,024 reads solely to prove checkpoint capacity, not
+  wall-clock behavior. A stale request or generation, issued-unknown child,
+  terminal failure, or second preparation in the same generation performs no
+  replay; only the ordered pair restart may create a new preparation cursor.
+  Fault `0x5337` names failure of the SD-only clock write, remains at Wi-Fi Gate
+  5, and admits new-generation SDIO-owner recovery but never same-command retry.
+- Firmware release has its own immutable request- and generation-owned cursor;
+  the immediate descriptor path is fail-closed. It checkpoints the ordered
+  Linux transition through stale-interrupt clear, optional reset vector,
+  ARMCR4 disable/assert, retained RESETCTRL clear/50-microsecond settle/read,
+  the 20-millisecond `CLK_SDONLY` fence, paced HT readiness, `FORCE_HT`, mailbox
+  version, Function 2 enable, dongle masks/sideband, core-ready proof, firmware
+  mailbox proof, final interrupt arm, and DPC activation. The bounded ARM clear
+  loop, every HT read/settle/deadline observation, every `IORx` read/deadline
+  observation, and every firmware-mailbox read/deadline observation are
+  separate outer EventPump turns. Function 2 `IOEx` is issued exactly once.
+  Delayed success at the 51/200/3,000/1,000 bounds cannot consume the
+  1,024-action foreground trace or 64-slot deadline table.
+
+  `firmware_execution_started` is published only after the exact ARMCR4
+  RESETCTRL-clear completion; `firmware_released` is published only after the
+  exact generation-bound DPC activation completion. Any stale owner,
+  generation change, reset-vector mutation, issued-unknown child, or retained
+  terminal failure rejects all further same-generation release I/O. Only the
+  deterministic CYW43/SDIO pair restart may establish a new release owner.
 - Function 2 enable is one `IOEx` write followed by elapsed `IORx` polling for
   up to three seconds. A transient miss does not clear/re-enable F2 or start a
   raw-spin retry. Post-release write readiness likewise does not re-prime F2
@@ -780,11 +827,22 @@ compatibility oracle only, never current proof or authority to restore timing
 loops, same-generation replay, root-owned SDIO, or a legacy fallback. Exact
 capture names and pairing are recorded in [HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md).
 
-Hardware-free validation executes the production reciprocal runtime-ring and
-descriptor-to-SDHCI transfer path against a deterministic controller model,
-injects failure at every production pair-restart action plus the modeled
-CARD_INT/notification substeps and persistent outer fences, and exercises
-adversarial DPC schedules. Tests assert the central permit never records more
+Hardware-free validation executes the shared state transitions used by the
+production no-allocation foreground transaction: `begin_turn`, frontier
+reservation, submit retention, completion-miss retention, continuation-grant
+retention, immutable identity/completion validation, completion commit, and
+cached replay. The host ring adapter executes the same sequence-last command
+publication, stable owner intake, sequence-last completion publication, and
+stable client read used by the mapped target ring. It stages the real reciprocal
+descriptor and obtains its completion from the descriptor-to-SDHCI transfer
+path against a deterministic controller model; it does not fabricate a direct
+success completion. The physical mapped addresses, cache-maintenance effects,
+seL4 notification send/receive, and target transaction entry/exit remain
+target-compile checked and require Pi proof. The hardware-free suite injects
+failure at every production
+pair-restart action plus the modeled CARD_INT/notification substeps and
+persistent outer fences, and exercises adversarial DPC schedules. Tests assert
+the central permit never records more
 than one child operation in an outer turn, that 256 retained polls consume 256
 turns, that every failure cut resumes or fails deterministically, and that
 reciprocal-ring association/EAPOL/maintenance faults return before supervisor
