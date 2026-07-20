@@ -42,7 +42,8 @@ pub mod virtio_mmio;
 use crate::affinity::{self, DriverAffinityTarget};
 #[cfg(feature = "kernel")]
 use crate::hal::driver_task::{
-    DriverTaskBootstrapReport, DriverTaskContract, DriverTaskContractError, DriverTaskRuntimeProof,
+    DriverTaskBootstrapFailure, DriverTaskBootstrapFailureReason, DriverTaskBootstrapReport,
+    DriverTaskContract, DriverTaskContractError, DriverTaskRuntimeProof,
     CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT, HDMI_TEXT_DRIVER_TASK_CONTRACT,
     PCIE_ROOT_DRIVER_TASK_CONTRACT, RTL8139_DRIVER_TASK_CONTRACT, SDIO_HOST_DRIVER_TASK_CONTRACT,
     SERIAL_DRIVER_TASK_CONTRACT, USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
@@ -1394,6 +1395,35 @@ fn physical_pi_driver_task_bootstrap_contracts() -> &'static [DriverTaskContract
         driver_task::Pi4PreRootNetBootstrapSelection::Disabled => {
             PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_BASE
         }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn selected_pi4_early_child_mmio_pages(
+    selection: driver_task::Pi4PreRootNetBootstrapSelection,
+) -> &'static [usize] {
+    match selection {
+        driver_task::Pi4PreRootNetBootstrapSelection::Wifi => {
+            PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES
+        }
+        driver_task::Pi4PreRootNetBootstrapSelection::Wired
+        | driver_task::Pi4PreRootNetBootstrapSelection::Disabled => &[],
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn classify_driver_task_bootstrap_failure(err: HalError) -> DriverTaskBootstrapFailureReason {
+    match err {
+        HalError::Unsupported("driver-runtime-sdio-dma-mmio-pre-admission-missing") => {
+            DriverTaskBootstrapFailureReason::SdioDmaMmioPreAdmissionMissing
+        }
+        HalError::Unsupported("driver-runtime-sdio-dma-mmio-not-covered") => {
+            DriverTaskBootstrapFailureReason::SdioDmaMmioNotCovered
+        }
+        HalError::Unsupported("driver-runtime-sdio-owner-handle-missing") => {
+            DriverTaskBootstrapFailureReason::SdioOwnerHandleMissing
+        }
+        _ => DriverTaskBootstrapFailureReason::Other,
     }
 }
 
@@ -3035,6 +3065,24 @@ impl<'a> KernelHal<'a> {
         self.env.consume_bootstrap_slots(slots);
     }
 
+    /// Admits selected child-only MMIO pages before higher root MMIO mappings
+    /// advance the same seL4 device-untyped cursor.
+    ///
+    /// The retained capability is HAL-owned and unmapped in root. Runtime
+    /// bootstrap later maps it once into the isolated child VSpace and consumes
+    /// the admission record so root cannot discover or alias it.
+    pub fn admit_selected_pi4_runtime_mmio(&mut self) -> Result<usize, HalError> {
+        let pages = selected_pi4_early_child_mmio_pages(
+            driver_task::pi4_pre_root_net_bootstrap_selection(),
+        );
+        for &paddr in pages {
+            self.env
+                .admit_device_page_for_child(paddr)
+                .map_err(HalError::Sel4)?;
+        }
+        Ok(pages.len())
+    }
+
     /// Returns the underlying bootinfo pointer.
     pub fn bootinfo(&self) -> &'a sel4_sys::seL4_BootInfo {
         self.env.bootinfo()
@@ -3103,6 +3151,7 @@ impl<'a> KernelHal<'a> {
             broad_caps_leaked: 0,
             ..DriverTaskBootstrapReport::default()
         };
+        driver_task::clear_wifi_driver_task_bootstrap_failure();
 
         let use_isolated_vspace =
             driver_task::physical_pi_driver_task_bootstrap_requires_isolated_vspace();
@@ -3162,6 +3211,14 @@ impl<'a> KernelHal<'a> {
                     let _ = driver_task::register_pi4_bus_ring_service(*contract);
                     if self.driver_tasks.push(handle).is_err() {
                         report.failed_count = report.failed_count.saturating_add(1);
+                        if let Some(task_key) = driver_task::driver_task_contract_key(*contract) {
+                            driver_task::publish_wifi_driver_task_bootstrap_failure(
+                                DriverTaskBootstrapFailure {
+                                    task_key,
+                                    reason: DriverTaskBootstrapFailureReason::Other,
+                                },
+                            );
+                        }
                         let mut line = heapless::String::<192>::new();
                         let _ = fmt::write(
                             &mut line,
@@ -3230,6 +3287,14 @@ impl<'a> KernelHal<'a> {
                     crate::bootstrap::log::force_uart_line(line.as_str());
                 }
                 Err(err) => {
+                    if let Some(task_key) = driver_task::driver_task_contract_key(*contract) {
+                        driver_task::publish_wifi_driver_task_bootstrap_failure(
+                            DriverTaskBootstrapFailure {
+                                task_key,
+                                reason: classify_driver_task_bootstrap_failure(err),
+                            },
+                        );
+                    }
                     driver_task::clear_driver_task_transport(*contract);
                     report.failed_count = report.failed_count.saturating_add(1);
                     let mut line = heapless::String::<192>::new();
@@ -3776,6 +3841,14 @@ impl<'a> KernelHal<'a> {
                 .zip(PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES.iter())
                 .zip(PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES.iter())
             {
+                if !self
+                    .env
+                    .device_page_admitted_for_child_without_root_mapping(dma_base)
+                {
+                    return Err(HalError::Unsupported(
+                        "driver-runtime-sdio-dma-mmio-pre-admission-missing",
+                    ));
+                }
                 if !runtime_candidate_covers_pages(&self.env, sdhci_base, 1)
                     || !runtime_candidate_covers_pages(&self.env, pwrseq_base, 1)
                     || !runtime_candidate_covers_pages(&self.env, dma_base, 1)
@@ -3810,7 +3883,7 @@ impl<'a> KernelHal<'a> {
                         .ok_or(HalError::Unsupported("driver-runtime-mmio-vaddr"))?;
                     if page == 2 {
                         self.env
-                            .map_exclusive_device_page_into_vspace(
+                            .map_admitted_device_page_exclusively_into_vspace(
                                 paddr,
                                 vspace,
                                 vaddr,
@@ -5407,6 +5480,29 @@ mod tests {
         );
         assert!(!sdio.contains(&0x7E30_0000));
         assert!(!super::PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES.contains(&0x7E00_B000));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pi4_wifi_early_child_admission_precedes_root_mailbox_mapping() {
+        use super::driver_task::Pi4PreRootNetBootstrapSelection;
+
+        assert_eq!(
+            super::selected_pi4_early_child_mmio_pages(Pi4PreRootNetBootstrapSelection::Wifi),
+            super::PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES,
+        );
+        assert!(
+            super::selected_pi4_early_child_mmio_pages(Pi4PreRootNetBootstrapSelection::Wired)
+                .is_empty()
+        );
+        assert!(super::selected_pi4_early_child_mmio_pages(
+            Pi4PreRootNetBootstrapSelection::Disabled
+        )
+        .is_empty());
+        assert!(
+            super::PI4_DRIVER_RUNTIME_BCM2835_DMA_MMIO_BASES[0]
+                < super::PI4_DRIVER_RUNTIME_WIFI_PWRSEQ_MMIO_BASES[0]
+        );
     }
 
     #[cfg(feature = "kernel")]

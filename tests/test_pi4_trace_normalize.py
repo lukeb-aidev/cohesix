@@ -2958,6 +2958,42 @@ def test_gate_summary_tracks_wifi_startup_blackbox_gates() -> None:
     assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
 
 
+@pytest.mark.parametrize(
+    "exact",
+    [
+        "driver-runtime-sdio-dma-mmio-pre-admission-missing",
+        "driver-runtime-sdio-dma-mmio-not-covered",
+        "driver-runtime-sdio-owner-handle-missing",
+        "driver-task-bootstrap-failed",
+    ],
+)
+def test_gate_summary_tracks_wifi_runtime_resource_admission_prerequisite(
+    exact: str,
+) -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: prerequisite name=runtime-resource-admission status=fail "
+            f"contract=sdio-host fault_detail={exact} next=runtime-power-reset",
+            "wifi: gate 1 name=runtime-power-reset status=blocked "
+            "evidence=power=unknown reset=unknown dependency=runtime-resource-admission "
+            "next=sdio-card-select",
+            "wifi: evidence boundary proof=gate-frontier direct_proof_gate=0 "
+            "inferred_frontier_gate=0 proof_gate=0 frontier_gate=0 "
+            f"failing_gate=1 target_gate=10 failure_domain={exact}",
+            "wifi: next_action=repair-sdio-runtime-resource-admission "
+            f"blocker={exact} proof_gate=0 target_gate=10 source=debug-handle-unavailable",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 0
+    assert gates.wifi_blocker == exact
+    assert gates.wifi_exact == exact
+    assert gates.wifi_phase == "runtime-resource-admission"
+    assert gates.wifi_blocker_line == 1
+
+
 def test_gate_summary_keeps_early_wifi_startup_failure_over_later_no_reply() -> None:
     events = normalizer.parse_events(
         [

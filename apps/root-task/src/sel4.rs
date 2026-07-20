@@ -3961,6 +3961,7 @@ struct DeviceFrameCacheEntry {
     source_cap: seL4_CPtr,
     root_cap: Option<seL4_CPtr>,
     root_vaddr: Option<usize>,
+    exclusive_child_admission: bool,
 }
 
 const ROOT_DEVICE_CACHE_BCM2711_BUS_START: usize = 0x7e00_0000;
@@ -4482,6 +4483,42 @@ impl<'a> KernelEnv<'a> {
             || self.untyped.device_coverage(paddr, PAGE_BITS).is_some()
     }
 
+    /// Returns whether HAL retained the page solely as an unmapped child
+    /// admission capability.
+    #[must_use]
+    pub fn device_page_admitted_for_child_without_root_mapping(&self, paddr: usize) -> bool {
+        self.cached_device_frame_for_paddr(paddr)
+            .is_some_and(|entry| {
+                entry.exclusive_child_admission
+                    && entry.root_cap.is_none()
+                    && entry.root_vaddr.is_none()
+            })
+    }
+
+    /// Retypes and retains an unmapped HAL capability for a later child-VSpace map.
+    ///
+    /// seL4 device-untyped allocation is monotonic within an untyped. A later
+    /// root mapping at a higher physical address can therefore make an earlier
+    /// device page permanently unreachable. Runtime bootstrap uses this method
+    /// to admit exact low MMIO pages in physical order without creating a root
+    /// mapping or exposing a root-owned steady-state device path.
+    pub fn admit_device_page_for_child(&mut self, paddr: usize) -> Result<seL4_CPtr, seL4_Error> {
+        if let Some(cached) = self.cached_device_frame_for_paddr(paddr) {
+            return if cached.exclusive_child_admission
+                && cached.root_cap.is_none()
+                && cached.root_vaddr.is_none()
+            {
+                Ok(cached.source_cap)
+            } else {
+                Err(sel4_sys::seL4_IllegalOperation)
+            };
+        }
+        let frame_slot =
+            self.retype_device_page_for_paddr(paddr, "driver-vspace-device-admission")?;
+        self.remember_device_frame_cap(paddr, frame_slot, true)?;
+        Ok(frame_slot)
+    }
+
     fn dump_bootinfo_window_once(&self, label: &str) {
         if BOOTINFO_WINDOW_DUMPED
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -4738,6 +4775,9 @@ impl<'a> KernelEnv<'a> {
         tracker: &mut VSpaceTableTracker,
     ) -> Result<seL4_CPtr, seL4_Error> {
         if let Some(cached) = self.cached_device_frame_for_paddr(paddr) {
+            if cached.exclusive_child_admission {
+                return Err(sel4_sys::seL4_IllegalOperation);
+            }
             return self.map_page_copy_into_vspace(
                 cached.source_cap,
                 vspace,
@@ -4749,8 +4789,37 @@ impl<'a> KernelEnv<'a> {
         }
         let frame_slot = self.retype_device_page_for_paddr(paddr, "driver-vspace-device")?;
         self.map_page_cap_into_vspace(frame_slot, vspace, vaddr, rights, attr, tracker)?;
-        self.remember_device_frame_cap(paddr, frame_slot)?;
+        self.remember_device_frame_cap(paddr, frame_slot, false)?;
         Ok(frame_slot)
+    }
+
+    /// Consumes one pre-admitted, root-unmapped device capability into a child VSpace.
+    ///
+    /// On success the admission cache entry is removed, so later root
+    /// `map_device` calls cannot discover the source capability and create a
+    /// competing alias. The mapping capability remains live in the init CNode
+    /// solely as the seL4 object backing the child mapping.
+    pub fn map_admitted_device_page_exclusively_into_vspace(
+        &mut self,
+        paddr: usize,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<seL4_CPtr, seL4_Error> {
+        let Some(index) = self.device_frame_cache.iter().position(|entry| {
+            entry.paddr == paddr
+                && entry.exclusive_child_admission
+                && entry.root_cap.is_none()
+                && entry.root_vaddr.is_none()
+        }) else {
+            return Err(sel4_sys::seL4_IllegalOperation);
+        };
+        let source_cap = self.device_frame_cache[index].source_cap;
+        self.map_page_cap_into_vspace(source_cap, vspace, vaddr, rights, attr, tracker)?;
+        let _ = self.device_frame_cache.remove(index);
+        Ok(source_cap)
     }
 
     /// Maps one previously unclaimed device page exclusively into a child VSpace.
@@ -4963,13 +5032,18 @@ impl<'a> KernelEnv<'a> {
         &mut self,
         paddr: usize,
         source_cap: seL4_CPtr,
+        exclusive_child_admission: bool,
     ) -> Result<(), seL4_Error> {
-        if self
+        if let Some(entry) = self
             .device_frame_cache
             .iter()
-            .any(|entry| entry.paddr == paddr)
+            .find(|entry| entry.paddr == paddr)
         {
-            return Ok(());
+            return if entry.exclusive_child_admission == exclusive_child_admission {
+                Ok(())
+            } else {
+                Err(sel4_sys::seL4_IllegalOperation)
+            };
         }
         self.device_frame_cache
             .push(DeviceFrameCacheEntry {
@@ -4977,6 +5051,7 @@ impl<'a> KernelEnv<'a> {
                 source_cap,
                 root_cap: None,
                 root_vaddr: None,
+                exclusive_child_admission,
             })
             .map_err(|_| seL4_NotEnoughMemory)
     }
@@ -4993,6 +5068,9 @@ impl<'a> KernelEnv<'a> {
             .iter_mut()
             .find(|entry| entry.paddr == paddr)
         {
+            if entry.exclusive_child_admission {
+                return Err(sel4_sys::seL4_IllegalOperation);
+            }
             entry.root_cap = Some(root_cap);
             entry.root_vaddr = Some(root_vaddr);
             return Ok(());
@@ -5003,6 +5081,7 @@ impl<'a> KernelEnv<'a> {
                 source_cap,
                 root_cap: Some(root_cap),
                 root_vaddr: Some(root_vaddr),
+                exclusive_child_admission: false,
             })
             .map_err(|_| seL4_NotEnoughMemory)
     }
@@ -5011,6 +5090,9 @@ impl<'a> KernelEnv<'a> {
         let Some(cached) = self.cached_device_frame_for_paddr(paddr) else {
             return Ok(None);
         };
+        if cached.exclusive_child_admission {
+            return Err(sel4_sys::seL4_IllegalOperation);
+        }
         if let (Some(root_cap), Some(root_vaddr)) = (cached.root_cap, cached.root_vaddr) {
             return Ok(Some(DeviceFrame {
                 cap: root_cap,
@@ -6667,7 +6749,7 @@ mod tests {
     }
 
     #[test]
-    fn child_device_page_admission_accepts_cached_hal_capability() {
+    fn child_device_page_admission_distinguishes_unmapped_and_root_mapped_caps() {
         let mut bootinfo = blank_bootinfo_for_tests();
         store_bootinfo_empty_region(
             &mut bootinfo.empty,
@@ -6679,8 +6761,10 @@ mod tests {
         let bootinfo_ref: &'static mut seL4_BootInfo = Box::leak(Box::new(bootinfo));
         let mut env = KernelEnv::new(bootinfo_ref, None, ReservedVaddrRanges::new());
         let mailbox_paddr = 0xfe00_b000;
+        let dma_paddr = 0xfe00_7000;
 
         assert!(!env.device_page_available_for_child(mailbox_paddr));
+        assert!(!env.device_page_admitted_for_child_without_root_mapping(dma_paddr));
         assert!(env
             .device_frame_cache
             .push(DeviceFrameCacheEntry {
@@ -6688,10 +6772,38 @@ mod tests {
                 source_cap: 0x123,
                 root_cap: Some(0x124),
                 root_vaddr: Some(0xa000_0000),
+                exclusive_child_admission: false,
+            })
+            .is_ok());
+        assert!(env
+            .device_frame_cache
+            .push(DeviceFrameCacheEntry {
+                paddr: dma_paddr,
+                source_cap: 0x125,
+                root_cap: None,
+                root_vaddr: None,
+                exclusive_child_admission: true,
             })
             .is_ok());
 
         assert!(env.device_page_available_for_child(mailbox_paddr));
+        assert!(env.device_page_available_for_child(dma_paddr));
+        assert!(!env.device_page_admitted_for_child_without_root_mapping(mailbox_paddr));
+        assert!(env.device_page_admitted_for_child_without_root_mapping(dma_paddr));
+
+        let mut tracker = VSpaceTableTracker::new();
+        assert_eq!(
+            env.map_device_page_into_vspace(
+                dma_paddr,
+                0x200,
+                0x4000_0000,
+                seL4_CapRights_ReadWrite,
+                DEVICE_VM_ATTRIBUTES,
+                &mut tracker,
+            ),
+            Err(sel4_sys::seL4_IllegalOperation),
+        );
+        assert_eq!(tracker.mapped_table_count(), 0);
     }
 
     #[test]
@@ -6848,6 +6960,29 @@ mod tests {
         assert!(catalog.device_coverage(0xfd50_8000, PAGE_BITS).is_none());
         assert!(catalog.device_coverage(0xfd50_9000, PAGE_BITS).is_none());
         assert!(catalog.device_coverage(0xfd50_a000, PAGE_BITS).is_some());
+    }
+
+    #[test]
+    fn sdio_dma_page_must_be_admitted_before_higher_mailbox_page() {
+        const DEVICE_BASE: usize = 0xfe00_0000;
+        const DMA_PAGE: usize = 0xfe00_7000;
+        const MAILBOX_PAGE: usize = 0xfe00_b000;
+
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.untyped.start = 0x300;
+        bootinfo.untyped.end = 0x301;
+        bootinfo.untypedList[0].paddr = DEVICE_BASE as u64;
+        bootinfo.untypedList[0].sizeBits = 21;
+        bootinfo.untypedList[0].isDevice = 1;
+
+        let mut ascending = UntypedCatalog::new(&bootinfo, None);
+        assert!(ascending.device_coverage(DMA_PAGE, PAGE_BITS).is_some());
+        ascending.record_usage(0, (DMA_PAGE - DEVICE_BASE + PAGE_SIZE) as u128);
+        assert!(ascending.device_coverage(MAILBOX_PAGE, PAGE_BITS).is_some());
+
+        let mut reversed = UntypedCatalog::new(&bootinfo, None);
+        reversed.record_usage(0, (MAILBOX_PAGE - DEVICE_BASE + PAGE_SIZE) as u128);
+        assert!(reversed.device_coverage(DMA_PAGE, PAGE_BITS).is_none());
     }
 
     #[test]

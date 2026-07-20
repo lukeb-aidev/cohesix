@@ -695,6 +695,175 @@ pub struct DriverTaskRuntimeProof {
     pub broad_caps_leaked: usize,
 }
 
+/// Bounded, typed reason retained for the first driver-task bootstrap failure.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(u8)]
+pub enum DriverTaskBootstrapFailureReason {
+    /// No bootstrap failure has been published.
+    #[default]
+    None = 0,
+    /// The selected SDIO DMA-controller page was not admitted before root MMIO.
+    SdioDmaMmioPreAdmissionMissing = 1,
+    /// The selected SDIO DMA-controller page had no remaining device-untyped coverage.
+    SdioDmaMmioNotCovered = 2,
+    /// CYW43 could not bind its mandatory SDIO owner handle.
+    SdioOwnerHandleMissing = 3,
+    /// A different bounded bootstrap operation failed.
+    Other = 255,
+}
+
+impl DriverTaskBootstrapFailureReason {
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::SdioDmaMmioPreAdmissionMissing,
+            2 => Self::SdioDmaMmioNotCovered,
+            3 => Self::SdioOwnerHandleMissing,
+            0 => Self::None,
+            _ => Self::Other,
+        }
+    }
+
+    /// Stable diagnostic label for serial and evidence tooling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::SdioDmaMmioPreAdmissionMissing => {
+                "driver-runtime-sdio-dma-mmio-pre-admission-missing"
+            }
+            Self::SdioDmaMmioNotCovered => "driver-runtime-sdio-dma-mmio-not-covered",
+            Self::SdioOwnerHandleMissing => "driver-runtime-sdio-owner-handle-missing",
+            Self::Other => "driver-task-bootstrap-failed",
+        }
+    }
+}
+
+/// First retained driver-task bootstrap failure for later diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTaskBootstrapFailure {
+    /// Stable driver-task key.
+    pub task_key: usize,
+    /// Typed failure reason.
+    pub reason: DriverTaskBootstrapFailureReason,
+}
+
+impl DriverTaskBootstrapFailure {
+    /// Stable contract name for serial evidence.
+    #[must_use]
+    pub const fn contract_name(self) -> &'static str {
+        match self.task_key {
+            DRIVER_TASK_KEY_SERIAL => "serial",
+            DRIVER_TASK_KEY_USB_LOCAL_SEAT => "usb-local-seat",
+            DRIVER_TASK_KEY_HDMI_TEXT => "hdmi-text",
+            DRIVER_TASK_KEY_BCMGENET_V5 => "bcmgenet-v5",
+            DRIVER_TASK_KEY_CYW43455 => "cyw43455",
+            DRIVER_TASK_KEY_RTL8139 => "rtl8139",
+            DRIVER_TASK_KEY_VIRTIO_NET => "virtio-net",
+            DRIVER_TASK_KEY_SDIO_HOST => "sdio-host",
+            DRIVER_TASK_KEY_PCIE_ROOT => "pcie-root",
+            _ => "unknown",
+        }
+    }
+
+    /// Whether this failure belongs to the selected Wi-Fi runtime pair.
+    #[must_use]
+    pub const fn affects_wifi_pair(self) -> bool {
+        matches!(
+            self.task_key,
+            DRIVER_TASK_KEY_CYW43455 | DRIVER_TASK_KEY_SDIO_HOST
+        )
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn encode_wifi_driver_task_bootstrap_failure(failure: DriverTaskBootstrapFailure) -> u32 {
+    (((failure.task_key as u32).saturating_add(1)) << 8) | failure.reason as u32
+}
+
+#[cfg(feature = "kernel")]
+const fn decode_wifi_driver_task_bootstrap_failure(
+    encoded: u32,
+) -> Option<DriverTaskBootstrapFailure> {
+    if encoded == 0 {
+        return None;
+    }
+    Some(DriverTaskBootstrapFailure {
+        task_key: ((encoded >> 8) as usize).saturating_sub(1),
+        reason: DriverTaskBootstrapFailureReason::from_u8(encoded as u8),
+    })
+}
+
+#[cfg(feature = "kernel")]
+const fn wifi_bootstrap_failure_should_replace(
+    retained: Option<DriverTaskBootstrapFailure>,
+    candidate: DriverTaskBootstrapFailure,
+) -> bool {
+    match retained {
+        None => true,
+        Some(current) => {
+            current.task_key != DRIVER_TASK_KEY_SDIO_HOST
+                && candidate.task_key == DRIVER_TASK_KEY_SDIO_HOST
+        }
+    }
+}
+
+/// Retains the causal Wi-Fi-pair bootstrap failure for passive diagnostics.
+///
+/// The SDIO owner is the dependency root, so its failure replaces a dependent
+/// CYW43 owner-handle failure even when the latter is observed first. Failures
+/// from unrelated runtimes can never consume this diagnostic slot.
+#[cfg(feature = "kernel")]
+pub fn publish_wifi_driver_task_bootstrap_failure(failure: DriverTaskBootstrapFailure) {
+    if !failure.affects_wifi_pair() || failure.reason == DriverTaskBootstrapFailureReason::None {
+        return;
+    }
+    let candidate = encode_wifi_driver_task_bootstrap_failure(failure);
+    let mut current = DRIVER_TASK_WIFI_BOOTSTRAP_FAILURE.load(Ordering::Acquire);
+    loop {
+        if !wifi_bootstrap_failure_should_replace(
+            decode_wifi_driver_task_bootstrap_failure(current),
+            failure,
+        ) {
+            return;
+        }
+        match DRIVER_TASK_WIFI_BOOTSTRAP_FAILURE.compare_exchange_weak(
+            current,
+            candidate,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+/// Returns the causal Wi-Fi-pair bootstrap failure, when one was retained.
+#[must_use]
+pub fn wifi_driver_task_bootstrap_failure() -> Option<DriverTaskBootstrapFailure> {
+    #[cfg(feature = "kernel")]
+    {
+        return decode_wifi_driver_task_bootstrap_failure(
+            DRIVER_TASK_WIFI_BOOTSTRAP_FAILURE.load(Ordering::Acquire),
+        );
+    }
+    #[cfg(not(feature = "kernel"))]
+    {
+        None
+    }
+}
+
+/// Clears retained Wi-Fi bootstrap failure state before a substrate bootstrap.
+#[cfg(feature = "kernel")]
+pub(crate) fn clear_wifi_driver_task_bootstrap_failure() {
+    DRIVER_TASK_WIFI_BOOTSTRAP_FAILURE.store(0, Ordering::Release);
+}
+
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_clear_wifi_driver_task_bootstrap_failure() {
+    clear_wifi_driver_task_bootstrap_failure();
+}
+
 /// Bootstrap report published by the HAL after creating driver TCBs.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DriverTaskBootstrapReport {
@@ -2058,6 +2227,8 @@ static DRIVER_TASK_SUBSTRATE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 static DRIVER_TASK_CONFIGURED_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_FAILED_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_WIFI_BOOTSTRAP_FAILURE: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_LIVE_TCB_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
@@ -14594,6 +14765,24 @@ fn driver_task_acceptance_next_action(reason: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_bootstrap_failure_supersedes_only_dependent_cyw43_failure() {
+        let cyw43 = DriverTaskBootstrapFailure {
+            task_key: DRIVER_TASK_KEY_CYW43455,
+            reason: DriverTaskBootstrapFailureReason::SdioOwnerHandleMissing,
+        };
+        let sdio = DriverTaskBootstrapFailure {
+            task_key: DRIVER_TASK_KEY_SDIO_HOST,
+            reason: DriverTaskBootstrapFailureReason::SdioDmaMmioNotCovered,
+        };
+
+        assert!(wifi_bootstrap_failure_should_replace(None, cyw43));
+        assert!(wifi_bootstrap_failure_should_replace(Some(cyw43), sdio));
+        assert!(!wifi_bootstrap_failure_should_replace(Some(sdio), cyw43));
+        assert!(!wifi_bootstrap_failure_should_replace(Some(sdio), sdio));
+    }
     #[cfg(feature = "kernel")]
     use core::sync::atomic::Ordering;
 

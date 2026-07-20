@@ -149,6 +149,10 @@ watermark. Retyping or mapping a higher page can make an earlier page in the
 same device-untyped region unavailable until the children are revoked. HAL
 therefore must:
 
+- pre-admit any lower child-only page before a root mapping consumes a higher
+  page from the same device untyped, retain that capability without a root
+  VSpace mapping, and consume the admission exactly once into the selected
+  child VSpace;
 - confirm `device_coverage(paddr, PAGE_BITS)` before mapping each page;
 - map every multi-page aperture in ascending physical-page order;
 - verify `page_get_address`/`ARMPageGetAddress` equals the requested physical
@@ -525,6 +529,12 @@ This as-built closure is authorized by Milestone 26d task
   peripheral bus address `0x7e300020`, and the low-RAM bus alias
   `physical | 0xc0000000`. Missing, aliased, high-memory, misaligned, or
   incorrectly tagged resources fail descriptor admission before command issue.
+  Because `0xfe007000` and the firmware mailbox at `0xfe00b000` share the
+  generated 21-bit seL4 device untyped, HAL admits the lower DMA-controller
+  page before pre-seeding the higher root mailbox mapping. The retained DMA
+  capability is never mapped in root and is removed from HAL's discovery cache
+  after its one mapping into the SDIO child. This is resource ordering for the
+  sole external-DMA lane, not a second launch path or fallback.
 - Cohesix intentionally has one production SDIO data lane: external DMA for
   every CMD53. There is no selectable PIO, byte-lane, root-owned, lower-clock,
   narrower-bus, or legacy fallback. This is the linked-runtime adaptation of

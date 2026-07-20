@@ -21,7 +21,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | QEMU current source | Target-qualified Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. | Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 current source, offline | Pi-qualified Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. | A board boot, current-image device readiness, TCP, or benchmark result. |
-| Pi 4 current image, live | Exact image `3538d28eee83` / `f8b1cc9063de3f36d94b347c47cb10843c739ba6f864c088c11e26777a36482d` reaches Wi-Fi Gate 6. Its first 64-byte Function 1 firmware CMD53 is accepted and filled, but the controller retains `DATA_INHIBIT`, `DAT_ACTIVE`, and block count 1 with no `DATA_END`. | Gates 7-10, Wi-Fi L2/IP/TCP, `cohsh`, repeatability, and performance remain unclaimed until the manifest/HAL-admitted BCM2835 DMA candidate is rebuilt, flashed, and captured. |
+| Pi 4 current image, live | Exact image `b52223b185ac` / `19f106e47c37cfc930196efca27883b577ab7c33b00f4107dffecabd7eed1293` reaches root console/local-seat, but SDIO child construction fails with `driver-runtime-sdio-dma-mmio-not-covered`; CYW43 then lacks its mandatory owner. Mailbox preseed advanced the common device-untyped cursor past the lower DMA-controller page. | No Wi-Fi gate, association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The ordered child-only admission fix remains source-only until rebuilt, flashed, and captured. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
 active. It may be newer than checked-in records, but only the repository's
@@ -644,7 +644,24 @@ that shows multiple foreground phases after one endpoint rendezvous or shared
 grant, or foreground progress caused only by a peer/IRQ badge without a valid
 grant, fails the one-operation-per-turn contract.
 
-The newest exact captures are
+The newest exact capture is `pi4-serial-20260721-081349.log`, boot-paired with
+`tcpdump-wifi-20260721-081347.pcap` and
+`tcpdump-usb-eth-20260721-081347.pcap`. It identifies marker commit
+`b52223b185ac` and image id
+`19f106e47c37cfc930196efca27883b577ab7c33b00f4107dffecabd7eed1293`.
+The first causal failure is
+`driver-runtime-sdio-dma-mmio-not-covered`; the dependent CYW43 failure is
+`driver-runtime-sdio-owner-handle-missing`. Neither linked runtime starts, so
+this is a resource-admission prerequisite failure before Gate 1, not a board
+power/reset observation. The source correction performs Wi-Fi-selected early
+admission before mailbox preseed and emits
+`DRIVER_TASK_EARLY_MMIO_ADMISSION selection=Wifi pages=1 owner=hal-unmapped-child-cap status=ready`.
+That marker proves retention only; successful SDIO child construction and
+owner-state evidence must still prove exclusive consumption. `wifi diag`
+retains the exact prerequisite failure separately while keeping canonical Gate
+1 named `runtime-power-reset` and blocked.
+
+The preceding exact captures are
 `pi4-serial-20260721-063257.log` and the authenticated, paced reboot sidecar
 `pi4-serial-20260721-064156-3538d28-W02-pyserial.log`, boot-paired with
 `tcpdump-wifi-20260721-063254.pcap` and
@@ -661,7 +678,7 @@ active/inhibited and the block count never decrements. This eliminates a lost
 cause. Recovery poisons the generation, restarts the pair in bounded order,
 and exhausts after five attempts without an endless loop.
 
-Within the conservative boot slice, neither paired capture contains the Pi
+Within either conservative boot slice, neither paired capture contains the Pi
 Wi-Fi MAC, EAPOL, DHCP, ARP, IP, ICMP, TCP, or console-port traffic. The Wi-Fi
 capture is managed Ethernet rather than monitor mode, so it cannot prove an
 absence of over-air EAPOL; it does corroborate that this boot never reached the

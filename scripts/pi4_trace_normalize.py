@@ -1255,6 +1255,22 @@ def startup_diag_gate(raw: str, domain: str) -> int | None:
         return None
 
 
+def wifi_runtime_admission_prerequisite(event: TraceEvent) -> str | None:
+    """Return a typed pre-Gate-1 runtime-admission failure."""
+
+    raw = event.raw.lower()
+    if not raw.startswith("wifi: prerequisite"):
+        return None
+    if event.fields.get("name", "").lower() != "runtime-resource-admission":
+        return None
+    if event.fields.get("status", "").lower() != "fail":
+        return None
+    exact = normalize_wifi_exact(
+        event.fields.get("fault_detail") or event.fields.get("reason") or ""
+    )
+    return exact if exact != "none" else None
+
+
 def usb_bootloader_handoff_evidence(event: TraceEvent) -> bool:
     """Return true when a USB event carries active bootloader handoff state."""
 
@@ -5709,6 +5725,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
+        runtime_admission_failure = wifi_runtime_admission_prerequisite(event)
+        if runtime_admission_failure is not None:
+            gate = 0
+            blocker = runtime_admission_failure
+            early_startup_blackbox_gate = 0
+            early_startup_blackbox_blocker = runtime_admission_failure
+            continue
         if (
             "driver_task_resource_init" in raw
             and fields.get("stage") == "cyw43-firmware-recover"
@@ -7151,6 +7174,17 @@ def summarize_terminal_wifi_diag_failure(
     boundary_proves_terminal = False
     for event in events:
         raw = event.raw.lower()
+        runtime_admission_failure = wifi_runtime_admission_prerequisite(event)
+        if runtime_admission_failure is not None:
+            terminal = (
+                0,
+                runtime_admission_failure,
+                "runtime-resource-admission",
+                event.line,
+            )
+            causal_preserved = False
+            boundary_proves_terminal = False
+            continue
         diag_gate = startup_diag_gate(raw, "wifi")
         if diag_gate is None:
             if terminal is not None and raw.startswith("wifi: evidence boundary"):

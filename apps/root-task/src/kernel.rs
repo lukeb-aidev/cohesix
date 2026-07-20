@@ -4521,8 +4521,35 @@ fn bootstrap<P: Platform>(
     if consumed_slots > 0 {
         hal.consume_bootstrap_slots(consumed_slots);
     }
-    // Keep low Pi4 MMIO pages ahead of driver-child VSpace mappings so later
-    // root diagnostics and child runtimes share one HAL-owned frame cap.
+    // Admit lower, child-only MMIO before root maps higher pages from the same
+    // monotonic seL4 device untyped. This retains no root VSpace alias; the
+    // selected runtime consumes the HAL capability exactly once during child
+    // construction.
+    match hal.admit_selected_pi4_runtime_mmio() {
+        Ok(pages) => {
+            let mut line = heapless::String::<192>::new();
+            let _ = write!(
+                line,
+                "DRIVER_TASK_EARLY_MMIO_ADMISSION selection={:?} pages={} owner=hal-unmapped-child-cap status=ready",
+                crate::hal::driver_task::pi4_pre_root_net_bootstrap_selection(),
+                pages,
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+        Err(err) => {
+            let mut line = heapless::String::<192>::new();
+            let _ = write!(
+                line,
+                "DRIVER_TASK_EARLY_MMIO_ADMISSION selection={:?} owner=hal-unmapped-child-cap status=failed err={}",
+                crate::hal::driver_task::pi4_pre_root_net_bootstrap_selection(),
+                err,
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+    }
+    // Keep root-consumed Pi4 MMIO behind the selected child-only admission so
+    // later root diagnostics and child runtimes share only explicitly cached
+    // HAL frame capabilities.
     crate::hal::pi4_wifi::preseed_mailbox_mmio(hal);
     #[cfg(feature = "release-pi4")]
     match crate::reboot::register_bcm2711_pm_watchdog(hal) {

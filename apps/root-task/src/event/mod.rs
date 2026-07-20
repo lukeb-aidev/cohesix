@@ -5111,9 +5111,13 @@ where
             }
         });
         #[cfg(feature = "net-console")]
-        let net = self.net.as_ref().map(|net| SmpNetActivitySnapshot {
-            counters: net.stats(),
-        });
+        let net = if self.network_service_quarantined {
+            None
+        } else {
+            self.net.as_ref().map(|net| SmpNetActivitySnapshot {
+                counters: net.stats(),
+            })
+        };
 
         SmpActivitySnapshot {
             now_ms: self.now_ms,
@@ -5525,6 +5529,14 @@ where
 
     #[cfg(feature = "net-console")]
     fn emit_smp_activity_net(&mut self) {
+        if self.network_service_quarantined {
+            let line = format_message(format_args!(
+                "[smp] activity net attached={} state=quarantined counters=unavailable",
+                Self::yes_no(self.net.is_some()),
+            ));
+            self.emit_console_line(line.as_str());
+            return;
+        }
         let Some(net) = self.net.as_ref() else {
             self.emit_console_line("[smp] activity net attached=no feature=net-console");
             return;
@@ -10342,19 +10354,31 @@ where
         let current_net_unavailable_detail = if self.network_service_quarantined {
             None
         } else {
-            self.net_unavailable_detail.as_ref()
+            self.net_unavailable_detail.clone()
         };
         let host_eapol_exact = current_net_unavailable_detail
             .as_ref()
             .and_then(|cause| Self::wifi_host_eapol_exact_from_cause(cause.as_str()));
         let host_eapol_exact =
             host_eapol_exact.or_else(|| self.wifi_host_eapol_exact_from_current_net_status());
-        let fault = if live_net_supersedes_runtime || host_eapol_exact.is_some() {
+        let bootstrap_failure = if live_net_supersedes_runtime {
+            None
+        } else {
+            crate::hal::driver_task::wifi_driver_task_bootstrap_failure()
+        };
+        let bootstrap_exact = bootstrap_failure.map(|failure| failure.reason.as_str());
+        let fault = if live_net_supersedes_runtime
+            || host_eapol_exact.is_some()
+            || bootstrap_failure.is_some()
+        {
             None
         } else {
             Self::wifi_diag_cyw43_runtime_command_fault_status()
         };
-        let recovery_fault = if live_net_supersedes_runtime || host_eapol_exact.is_some() {
+        let recovery_fault = if live_net_supersedes_runtime
+            || host_eapol_exact.is_some()
+            || bootstrap_failure.is_some()
+        {
             None
         } else {
             Self::wifi_diag_cyw43_recovery_command_fault_status(fault)
@@ -10364,6 +10388,7 @@ where
         if source == "debug-handle-unavailable"
             && current_net_unavailable_detail.is_none()
             && host_eapol_exact.is_none()
+            && bootstrap_failure.is_none()
             && fault.is_none()
             && sdio_status.is_none()
             && !progress_present
@@ -10373,12 +10398,22 @@ where
         }
         if current_net_unavailable_detail.is_none()
             && host_eapol_exact.is_none()
+            && bootstrap_failure.is_none()
             && fault.is_none()
             && sdio_status.is_none()
             && !progress_present
             && !live_net_supersedes_runtime
         {
             return false;
+        }
+
+        if let Some(failure) = bootstrap_failure {
+            let detail = format_message(format_args!(
+                "wifi: driver-task bootstrap failure contract={} reason={} stage=runtime-resource-admission source={source}",
+                failure.contract_name(),
+                failure.reason.as_str(),
+            ));
+            self.emit_console_line(detail.as_str());
         }
 
         if let Some(frontier) = live_net_frontier.as_ref() {
@@ -10426,7 +10461,12 @@ where
         } else {
             source
         };
-        self.emit_wifi_driver_task_startup_blackbox(fault, host_eapol_exact, evidence_source);
+        self.emit_wifi_driver_task_startup_blackbox(
+            fault,
+            bootstrap_exact.or(host_eapol_exact),
+            bootstrap_failure,
+            evidence_source,
+        );
         // The blackbox record above already emits the causal fault, immutable
         // request, owner telemetry, and next action. Do not duplicate that
         // body after the ten gates: duplicate records used bounded linked-
@@ -11225,6 +11265,7 @@ where
             fault,
             None,
             None,
+            None,
             "snapshot",
         );
     }
@@ -11234,6 +11275,7 @@ where
         &mut self,
         fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
         explicit_exact_error: Option<&str>,
+        bootstrap_failure: Option<crate::hal::driver_task::DriverTaskBootstrapFailure>,
         source: &str,
     ) {
         let recorder = format_message(format_args!(
@@ -11249,6 +11291,7 @@ where
             fault,
             sdio_runtime_status,
             explicit_exact_error,
+            bootstrap_failure,
             source,
         );
     }
@@ -11262,6 +11305,7 @@ where
         fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
         sdio_runtime_status: Option<crate::drivers::driver_task_net::SdioRuntimeReplayStatus>,
         explicit_exact_error: Option<&str>,
+        bootstrap_failure: Option<crate::hal::driver_task::DriverTaskBootstrapFailure>,
         source: &str,
     ) {
         let live_net_frontier = self.wifi_live_net_frontier();
@@ -11273,6 +11317,7 @@ where
         };
         let explicit_join_security =
             Self::wifi_exact_error_is_join_security_blocker(explicit_exact_error);
+        let runtime_bootstrap_failed = bootstrap_failure.is_some();
         let fault = if live_net_supersedes_runtime {
             None
         } else {
@@ -11308,7 +11353,9 @@ where
             .and_then(|progress| Self::wifi_sdio_runtime_progress_gate(progress.phase));
         let cyw43_progress_gate = cyw43_runtime_progress
             .and_then(|progress| Self::wifi_cyw43_runtime_progress_gate(progress.phase));
-        let driver_task_gate: Option<u8> = if explicit_join_security {
+        let driver_task_gate: Option<u8> = if runtime_bootstrap_failed {
+            Some(1)
+        } else if explicit_join_security {
             Some(8)
         } else {
             cyw43_fault_gate
@@ -11423,7 +11470,7 @@ where
             } else {
                 Self::wifi_live_net_blocker(frontier)
             }
-        } else if explicit_join_security {
+        } else if runtime_bootstrap_failed || explicit_join_security {
             exact_error
         } else if let Some(fault) = fault {
             fault.reason
@@ -11446,6 +11493,8 @@ where
             } else {
                 "run-dhcp-and-report-lease-state"
             }
+        } else if runtime_bootstrap_failed {
+            "repair-sdio-runtime-resource-admission"
         } else if explicit_join_security {
             "inspect-host-eapol-rx-path"
         } else if let Some(fault) = fault {
@@ -11558,16 +11607,33 @@ where
             self.emit_console_line(action_line.as_str());
         }
 
+        if let Some(failure) = bootstrap_failure {
+            let prerequisite = format_message(format_args!(
+                "wifi: prerequisite name=runtime-resource-admission status=fail contract={} fault_detail={} next=runtime-power-reset",
+                failure.contract_name(),
+                failure.reason.as_str(),
+            ));
+            self.emit_console_line(prerequisite.as_str());
+        }
         self.emit_wifi_gate_line(
             1,
             "runtime-power-reset",
-            Self::wifi_startup_gate_status(1, direct_proof_gate, failing_gate),
+            if runtime_bootstrap_failed {
+                "blocked"
+            } else {
+                Self::wifi_startup_gate_status(1, direct_proof_gate, failing_gate)
+            },
             format_args!(
-                "power={} reset={} pwrseq_status={} pwrseq_phase={} source={}",
+                "power={} reset={} pwrseq_status={} pwrseq_phase={} dependency={} source={}",
                 gate1_power,
                 gate1_reset,
                 sdio_runtime_status.map_or("unknown", |status| status.status),
                 sdio_runtime_progress.map_or("none", |progress| progress.phase_name),
+                if runtime_bootstrap_failed {
+                    "runtime-resource-admission"
+                } else {
+                    "none"
+                },
                 source,
             ),
             "sdio-card-select",
@@ -14907,7 +14973,15 @@ where
             Command::NetStats => {
                 #[cfg(feature = "net-console")]
                 {
-                    if let Some(net) = self.net.as_mut() {
+                    if self.network_service_quarantined {
+                        self.metrics.denied_commands += 1;
+                        cmd_status = "err";
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Cut,
+                            Some("detail=network-quarantined"),
+                        );
+                    } else if let Some(net) = self.net.as_mut() {
                         let stats = net.stats();
                         let report = net.self_test_report();
                         let status = net.status_report();
@@ -16961,6 +17035,7 @@ mod tests {
         crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
             crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
         );
+        crate::hal::driver_task::test_clear_wifi_driver_task_bootstrap_failure();
     }
 
     #[cfg(feature = "kernel")]
@@ -17166,6 +17241,7 @@ mod tests {
             None,
             None,
             Some(fault),
+            None,
             None,
             None,
             "linked-runtime-test",
@@ -20375,6 +20451,59 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn smp_activity_hides_quarantined_network_state_and_rates() {
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 512, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 7 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.active_driver = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.status.tcp_ready = true;
+        net.status.ip.push_str("192.168.50.23").unwrap();
+        net.counters.rx_packets = 999;
+        net.counters.tx_packets = 777;
+        net.counters.tcp_rx_bytes = 65_535;
+        net.counters.wifi_host_eapol_secure = 1;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.network_service_quarantined = true;
+
+        pump.handle_command(Command::Smp {
+            mode: SmpMode::Activity,
+        })
+        .unwrap();
+        pump.handle_command(Command::Smp {
+            mode: SmpMode::Activity,
+        })
+        .unwrap();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered
+                .contains("[smp] activity net attached=yes state=quarantined counters=unavailable"),
+            "{rendered}"
+        );
+        for stale in [
+            "[smp] activity net-link",
+            "[smp] activity net-io",
+            "[smp] activity net-tcp",
+            "[smp] activity net-wifi",
+            "192.168.50.23",
+            "rx=999",
+            "tx=777",
+        ] {
+            assert!(!rendered.contains(stale), "stale={stale} {rendered}");
+        }
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn smp_activity_includes_wifi_telemetry_when_wifi_active() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -21860,6 +21989,43 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("netstats: wifi_assoc="), "{rendered}");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn netstats_rejects_quarantined_network_without_stale_counters() {
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 512, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.active_driver = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.status.tcp_ready = true;
+        net.status.ip.push_str("192.168.50.23").unwrap();
+        net.counters.rx_packets = 999;
+        net.counters.tcp_auth_sessions = 7;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.network_service_quarantined = true;
+        pump.serial_mut().driver_mut().push_rx(b"netstats\n");
+
+        pump.poll();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR NETSTATS reason=cut detail=network-quarantined"),
+            "{rendered}"
+        );
+        for stale in ["netstats:", "netstatus:", "nettest:", "192.168.50.23"] {
+            assert!(!rendered.contains(stale), "stale={stale} {rendered}");
+        }
     }
 
     #[cfg(feature = "net-console")]
@@ -27586,6 +27752,13 @@ mod tests {
     #[test]
     fn serial_wifi_diag_reports_cached_driver_task_failure_without_hal_debug_handle() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::hal::driver_task::publish_wifi_driver_task_bootstrap_failure(
+            crate::hal::driver_task::DriverTaskBootstrapFailure {
+                task_key: crate::hal::driver_task::DRIVER_TASK_KEY_SDIO_HOST,
+                reason:
+                    crate::hal::driver_task::DriverTaskBootstrapFailureReason::SdioDmaMmioNotCovered,
+            },
+        );
         let driver = LoopbackSerial::<2048>::new();
         let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -27619,7 +27792,19 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 1 name=runtime-power-reset status=fail"),
+            rendered.contains("wifi: driver-task bootstrap failure contract=sdio-host reason=driver-runtime-sdio-dma-mmio-not-covered stage=runtime-resource-admission"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: prerequisite name=runtime-resource-admission status=fail contract=sdio-host fault_detail=driver-runtime-sdio-dma-mmio-not-covered next=runtime-power-reset"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 1 name=runtime-power-reset status=blocked evidence=power=unknown reset=unknown pwrseq_status=unknown pwrseq_phase=none dependency=runtime-resource-admission"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: next_action=repair-sdio-runtime-resource-admission blocker=driver-runtime-sdio-dma-mmio-not-covered proof_gate=0"),
             "{rendered}"
         );
         assert!(rendered.contains("wifi: next_action="), "{rendered}");
