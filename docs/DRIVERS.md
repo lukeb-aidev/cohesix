@@ -489,6 +489,12 @@ This as-built closure is authorized by Milestone 26d task
   loops or legacy driver fallbacks.
 - Root-task must not wait synchronously for CMD52/CMD53 credit, firmware
   replies, or RX drain work.
+- Firmware-preparation probe attach follows Linux `brcmf_sdio_kso_init`
+  exactly: read `SLEEPCSR` once and write `KSO` once only when the bit is
+  absent. It does not poll `KSO` or require `DEVON` at this stage; the later
+  runtime wake transition owns the bounded `KSO|DEVON` readback. This keeps
+  probe attach from inventing a stronger device contract or consuming the
+  foreground trace as a surrogate one-second KSO timer.
 - Function 1 enable uses the SDIO CIS timeout when that field is eventually
   carried by the ABI; the current fixed profile uses Linux's one-second
   fallback. Backplane attach is a generation- and request-bound retained

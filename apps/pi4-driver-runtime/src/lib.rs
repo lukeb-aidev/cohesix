@@ -1626,9 +1626,6 @@ const CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_POLLS: usize = SDHCI_INIT_SPINS / 1
 const CYW43_POST_RELEASE_HT_TIMEOUT_MS: u64 = 1_000;
 const CYW43_POST_RELEASE_HT_POLL_ATTEMPTS: usize = 200;
 const CYW43_POST_RELEASE_HT_POLL_INTERVAL_US: u32 = 5_000;
-const CYW43_KSO_READBACK_TIMEOUT_MS: u64 = 1_000;
-const CYW43_KSO_READBACK_POLLS: usize = 20_000;
-const CYW43_KSO_READBACK_INTERVAL_US: u32 = 50;
 const CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS: u64 = 3_000;
 const CYW43_FUNCTION2_WRITE_READY_TIMEOUT_MS: u64 = 100;
 const CYW43_FUNCTION2_WRITE_READY_POLLS: usize = 128;
@@ -17072,10 +17069,6 @@ const fn cyw43_kso_request_value(sleepcsr: u8) -> u8 {
     sleepcsr | SBSDIO_FUNC1_SLEEPCSR_KSO_EN
 }
 
-const fn cyw43_kso_ready(sleepcsr: u8) -> bool {
-    sleepcsr & SBSDIO_FUNC1_SLEEPCSR_KSO_EN != 0
-}
-
 fn cyw43_initialize_kso_before_firmware_upload() -> Result<u8, u16> {
     let Some(current) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_SLEEPCSR) else {
         cyw43_record_last_fault_with_result(FAULT_CYW43_BACKPLANE_KSO, 0);
@@ -17086,35 +17079,12 @@ fn cyw43_initialize_kso_before_firmware_upload() -> Result<u8, u16> {
         cyw43_record_last_fault_with_result(FAULT_CYW43_BACKPLANE_KSO, u32::from(current));
         return Err(FAULT_CYW43_BACKPLANE_KSO);
     }
-    #[cfg(not(target_os = "none"))]
-    {
-        return Ok(requested);
-    }
-    #[cfg(target_os = "none")]
-    {
-        let mut last = current;
-        let mut poll = 0usize;
-        let mut deadline = runtime_deadline_from_millis_or_iterations(
-            CYW43_KSO_READBACK_TIMEOUT_MS,
-            CYW43_KSO_READBACK_POLLS,
-        );
-        while !runtime_deadline_iteration_cap_reached(&deadline, poll, CYW43_KSO_READBACK_POLLS)
-            && !runtime_deadline_expired(&mut deadline)
-        {
-            let Some(readback) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_SLEEPCSR) else {
-                cyw43_record_last_fault_with_result(FAULT_CYW43_BACKPLANE_KSO, u32::from(last));
-                return Err(FAULT_CYW43_BACKPLANE_KSO);
-            };
-            last = readback;
-            if cyw43_kso_ready(readback) {
-                return Ok(readback);
-            }
-            runtime_settle_micros(CYW43_KSO_READBACK_INTERVAL_US, SDHCI_INIT_SPINS / 20);
-            poll = poll.saturating_add(1);
-        }
-        cyw43_record_last_fault_with_result(FAULT_CYW43_BACKPLANE_KSO, u32::from(last));
-        Err(FAULT_CYW43_BACKPLANE_KSO)
-    }
+    // Match Linux brcmf_sdio_kso_init(): probe attach reads SLEEPCSR once and
+    // sets KSO only when absent. The later runtime wake path owns the bounded
+    // KSO|DEVON readback loop. Polling here both imposed a stronger contract
+    // than Linux and could exhaust the retained foreground trace before the
+    // firmware-preparation transaction reached its next SDIO action.
+    Ok(requested)
 }
 
 const fn cyw43_linux_probe_cardctrl_value(cardctrl: u8) -> u8 {
@@ -49724,8 +49694,6 @@ mod tests {
 
         assert_eq!(cyw43_kso_request_value(0xa0), 0xa1);
         assert_eq!(cyw43_kso_request_value(0xa1), 0xa1);
-        assert!(!cyw43_kso_ready(0xa0));
-        assert!(cyw43_kso_ready(0xa1));
         assert_eq!(cyw43_linux_probe_cardctrl_value(0xa0), 0xa2);
         assert_eq!(cyw43_linux_probe_pmucontrol_value(0xa500_0001), 0xa500_4001);
         assert_eq!(cyw43_linux_probe_function2_disabled_value(0xa6), 0xa2);
@@ -49769,6 +49737,16 @@ mod tests {
             };
             let read_index = test_sdio_first_transfer_index(kso_read).expect("KSO read");
             let write_index = test_sdio_first_transfer_index(kso_write).expect("KSO write");
+            assert_eq!(
+                test_sdio_transfer_count(kso_read),
+                1,
+                "Linux probe attach reads SLEEPCSR exactly once and does not poll KSO readback",
+            );
+            assert_eq!(
+                test_sdio_transfer_count(kso_write),
+                1,
+                "Linux probe attach sets a missing KSO bit exactly once",
+            );
             let cardctrl_read_index = test_sdio_first_transfer_index(|record| {
                 record.cmd == SDIO_CMD52
                     && record.arg == sdio_cmd52_arg(false, 0, SDIO_CCCR_BRCM_CARDCTRL, 0)
@@ -49999,9 +49977,6 @@ mod tests {
         assert_eq!(CYW43_POST_RELEASE_HT_TIMEOUT_MS, 1_000);
         assert_eq!(CYW43_POST_RELEASE_HT_POLL_ATTEMPTS, 200);
         assert_eq!(CYW43_POST_RELEASE_HT_POLL_INTERVAL_US, 5_000);
-        assert_eq!(CYW43_KSO_READBACK_TIMEOUT_MS, 1_000);
-        assert_eq!(CYW43_KSO_READBACK_POLLS, 20_000);
-        assert_eq!(CYW43_KSO_READBACK_INTERVAL_US, 50);
         assert_eq!(CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS, 3_000);
         assert_eq!(CYW43_CONTROL_EXCHANGE_TIMEOUT_MS, 2_500);
         assert_eq!(CYW43_TX_CREDIT_TIMEOUT_MS, 100);
