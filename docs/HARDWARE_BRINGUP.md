@@ -21,7 +21,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | QEMU current source | Target-qualified Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. | Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 current source, offline | Pi-qualified Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. | A board boot, current-image device readiness, TCP, or benchmark result. |
-| Pi 4 current image, live | Revalidation pending after full build, verified flash/readback, and fresh boot. | Wi-Fi, GENET, USB/local-seat, raw TCP, `cohsh`, repeatability, and performance remain unclaimed until captured. |
+| Pi 4 current image, live | Exact image `74833ee84ebf` / `69513dad7dd96df505c32a3235d78e227211b86aabb4b7eba1826a22b9c4c819` reaches Wi-Fi Gate 6, then the first Function 1 firmware request stops after two of 64 PIO blocks. | Gates 7-10, Wi-Fi L2/IP/TCP, `cohsh`, repeatability, and performance remain unclaimed until the host-limited request split is rebuilt, flashed, and captured. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
 active. It may be newer than checked-in records, but only the repository's
@@ -645,19 +645,39 @@ completion. Next-run `wifi: evidence sdio_regs` output records power,
 present-state, interrupt-status, response, and block-size/count registers so a
 pre-RF stop can be classified without depending on a later-overwritten log.
 
-The newest exact pre-fix capture is
-`pi4-serial-20260719-180716.log`, boot-paired with
-`tcpdump-wifi-20260719-180713.pcap` and
-`tcpdump-usb-eth-20260719-180713.pcap`. It identifies marker commit
-`df7196c7bc56` and image id
-`2fb39b8be336200d73082e0b00d265900da50041d24af31d28a7120d5264357d`.
-SDIO engine initialization completed and CYW43 engine initialization began, but
-recovery started before the first transport/firmware command. The supervisor
-then remained on logical attempt 1 while replaying SDIO engine work for more
-than seven million outer turns. The paired captures contain no Pi Wi-Fi MAC,
-EAPOL, DHCP, ARP, IP, or TCP traffic, so this is a pre-wire ownership/liveness
-failure rather than evidence against the already-proven association, EAPOL,
-DHCP, or shared TCP logic.
+The newest exact capture is `pi4-serial-20260720-213121.log`, boot-paired with
+`tcpdump-wifi-20260720-213118.pcap` and
+`tcpdump-usb-eth-20260720-213118.pcap`. It identifies marker commit
+`74833ee84ebf` and image id
+`69513dad7dd96df505c32a3235d78e227211b86aabb4b7eba1826a22b9c4c819`.
+Gates 1-5 complete, but Gate 6 stops on the first 4,096-byte Function 1
+firmware CMD53 at backplane address `0x00198000`. The clean R5 response and
+`BLOCK_SIZE_COUNT=0x003e7040` prove that exactly two 64-byte blocks were
+accepted before the polled-PIO request received no next buffer-ready,
+`DATA_END`, or error evidence. The paired Wi-Fi capture contains no Pi MAC,
+EAPOL, DHCP, ARP, IP, ICMP, TCP, or console-port traffic. This is therefore a
+pre-firmware/RF host-transfer failure, not evidence against association,
+EAPOL, DHCP, or shared TCP.
+
+Linux's SDIO core splits requests by the host's `max_blk_count`, while the Pi
+`mmc-bcm2835` driver normally assigns data requests to an admitted DMA channel.
+The linked Cohesix SDIO owner has no such channel: its sole low DMA page is the
+firmware-mailbox request buffer. The software fix truthfully limits Function 1
+polled PIO to one 64-byte block per immutable request. An original 4,096-byte
+bulk transfer remains block mode for all 64 incrementing requests, including
+the point where 512 bytes remain; only a genuine sub-block tail or backplane
+window edge becomes byte mode. Each child operation retains the existing
+one-submit/grant/poll-per-outer-turn rule, advances only an exactly completed
+prefix, and admits no width, clock, root-owned, or legacy fallback. Function 2
+SDPCM frame shapes are deliberately unchanged. This change remains host-side
+until a rebuilt exact image passes a new physical capture.
+
+The earlier `pi4-serial-20260719-180716.log` capture identified a separate
+pre-command continuation-liveness failure: SDIO engine initialization completed
+and CYW43 engine initialization began, but the supervisor replayed SDIO engine
+work for more than seven million outer turns. It is retained as historical
+evidence for the shared continuation-grant correction, not the current first
+failure.
 
 Production-chain inspection found the exact stranded edge. Successful SDIO
 handoff had correctly deleted root's command endpoint, but a delegated

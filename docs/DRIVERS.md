@@ -507,6 +507,21 @@ This as-built closure is authorized by Milestone 26d task
   is never completion evidence, and a ready interrupt sampled with the response
   cannot be lost merely because its hardware latch was acknowledged before the
   later retained PIO turn.
+- Linux normally services a Pi `mmc-bcm2835` data request through the host's
+  admitted DMA channel and makes the SDIO core split bulk requests by
+  `max_blk_count`. The linked Cohesix SDIO owner has no data-DMA authority:
+  its single low DMA page is exclusively the firmware-mailbox request buffer.
+  It therefore declares a Function 1 polled-PIO limit of one 64-byte block and
+  applies the same Linux SDIO split rule before crossing the reciprocal ring.
+  The mode decision belongs to the original transfer, so an aligned 4,096-byte
+  firmware span is exactly 64 incrementing block-mode CMD53 requests with
+  count 1; it never degenerates into a 512-byte byte-mode tail. Only a true
+  sub-block tail or backplane-window edge uses Function 1 byte mode. Each exact
+  completion advances the retained prefix by 64 bytes, and each request still
+  requires its own submit/grant/poll outer turns. The SDIO owner rejects a
+  Function 1 multiblock descriptor before issue. Function 2 retains its
+  separately bounded SDPCM frame shapes; no width, clock, byte-mode, root-owned,
+  or legacy fallback is introduced.
 - Firmware-preparation probe attach follows Linux `brcmf_sdio_kso_init`
   exactly: read `SLEEPCSR` once and write `KSO` once only when the bit is
   absent. It does not poll `KSO` or require `DEVON` at this stage; the later

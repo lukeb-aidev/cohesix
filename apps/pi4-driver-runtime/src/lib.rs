@@ -1533,9 +1533,17 @@ const SDIO_INTERRUPT_ENABLE_MASK: u8 =
 const SDIO_FUNCTION1_BLOCK_SIZE: u16 = 64;
 const SDIO_FUNCTION2_BLOCK_SIZE: u16 = 512;
 const SDIO_CMD53_BYTE_MODE_MAX: usize = 512;
+// Linux's SDIO core splits a bulk request by the host's declared
+// `max_blk_count`. The isolated Cohesix owner has no bcm2835 DMA-channel
+// authority: its single admitted DMA page belongs to the firmware mailbox.
+// Advertise the capability of the linked polled-PIO owner truthfully instead
+// of submitting the 64-block request that physical hardware strands after the
+// controller's two-block FIFO has filled.
+const SDIO_LINKED_PIO_MAX_BLOCK_COUNT: u16 = 1;
 const CYW43_FIRMWARE_TAIL_PAD_MAX_BYTES: usize = 4096;
 const CYW43_FIRMWARE_TRANSPORT_ALIGNMENT: u32 = 4;
-const CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES: usize = CYW43_FIRMWARE_STAGE_BYTES / 2;
+const CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES: usize =
+    SDIO_FUNCTION1_BLOCK_SIZE as usize * SDIO_LINKED_PIO_MAX_BLOCK_COUNT as usize;
 const SDIO_FAULT_TELEMETRY_MAGIC: u32 = 0x5344_494f;
 const SDIO_FAULT_TELEMETRY_VERSION: u32 = 1;
 const SDIO_FAULT_TELEMETRY_ARG_OFFSET: usize = 8;
@@ -10124,6 +10132,19 @@ fn service_sdio_descriptor_command_with_owner<O: SdioDescriptorOwner>(
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     };
     if !desc.valid() {
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
+    }
+    if matches!(
+        desc.op,
+        DRIVER_RUNTIME_SDIO_OP_CMD53_READ | DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+    ) && desc.function == 1
+        && desc.block_count > SDIO_LINKED_PIO_MAX_BLOCK_COUNT
+    {
+        // The linked Function-1 firmware/backplane owner has no data-DMA
+        // channel. Match Linux SDIO's host-capability split at the producer
+        // boundary and fail closed if a stale or malformed client tries to
+        // bypass that declaration. Function 2 keeps its separately bounded
+        // frame-transfer shapes.
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
     if desc.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET {
@@ -19876,17 +19897,25 @@ const fn cyw43_backplane_cmd53_increment() -> bool {
     true
 }
 
+const fn cyw43_backplane_uses_bulk_block_mode(
+    firmware_released: bool,
+    transfer_len: usize,
+) -> bool {
+    !firmware_released && transfer_len > SDIO_CMD53_BYTE_MODE_MAX
+}
+
 fn cyw43_backplane_write_chunk_shape(
     firmware_released: bool,
+    bulk_block_mode: bool,
     remaining: usize,
 ) -> (usize, u16, u16) {
     if firmware_released {
         let chunk_len = remaining.min(SDIO_FUNCTION2_BLOCK_SIZE as usize);
         (chunk_len, chunk_len as u16, 1)
-    } else if remaining > SDIO_CMD53_BYTE_MODE_MAX {
+    } else if bulk_block_mode && remaining >= SDIO_FUNCTION1_BLOCK_SIZE as usize {
         let block_len = SDIO_FUNCTION1_BLOCK_SIZE as usize;
         let max_block_len = CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES.min(511 * block_len);
-        let block_count = (remaining.min(max_block_len) / block_len).min(511);
+        let block_count = remaining.min(max_block_len) / block_len;
         let chunk_len = block_count * SDIO_FUNCTION1_BLOCK_SIZE as usize;
         (chunk_len, SDIO_FUNCTION1_BLOCK_SIZE, block_count as u16)
     } else {
@@ -20002,11 +20031,13 @@ fn cyw43_flush_firmware_stage(state: &mut Cyw43RuntimeState) -> bool {
         cyw43_record_firmware_range_fault(CYW43_FIRMWARE_RANGE_STAGE_ADDR);
         return false;
     };
+    let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(state.firmware_released, len);
     match cyw43_backplane_write_ring_result(
         state,
         flush_addr,
         CYW43_FIRMWARE_STAGE_OFFSET + flush_offset,
         len - flush_offset,
+        bulk_block_mode,
     ) {
         Ok(()) => {
             cyw43_reset_firmware_stage(state);
@@ -20113,7 +20144,8 @@ fn cyw43_backplane_write_ring(
     ring_offset: usize,
     len: usize,
 ) -> bool {
-    cyw43_backplane_write_ring_result(state, addr, ring_offset, len).is_ok()
+    let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(state.firmware_released, len);
+    cyw43_backplane_write_ring_result(state, addr, ring_offset, len, bulk_block_mode).is_ok()
 }
 
 fn cyw43_backplane_write_ring_result(
@@ -20121,6 +20153,7 @@ fn cyw43_backplane_write_ring_result(
     addr: u32,
     ring_offset: usize,
     len: usize,
+    bulk_block_mode: bool,
 ) -> Result<(), usize> {
     let mut done = 0usize;
     while done < len {
@@ -20146,7 +20179,11 @@ fn cyw43_backplane_write_ring_result(
         let (chunk_len, block_size, block_count) = if edge_byte_mode {
             (shape_remaining, shape_remaining as u16, 0)
         } else {
-            cyw43_backplane_write_chunk_shape(state.firmware_released, shape_remaining)
+            cyw43_backplane_write_chunk_shape(
+                state.firmware_released,
+                bulk_block_mode,
+                shape_remaining,
+            )
         };
         let frame = DriverFrameDescriptor {
             offset: (ring_offset + done) as u32,
@@ -53166,51 +53203,69 @@ mod tests {
     fn cyw43_backplane_upload_uses_one_linux_normal_lane() {
         assert_eq!(
             CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
-            CYW43_FIRMWARE_STAGE_BYTES / 2
+            SDIO_FUNCTION1_BLOCK_SIZE as usize
         );
         assert!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES < CYW43_FIRMWARE_STAGE_BYTES);
         assert_eq!(
             CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES % SDIO_FUNCTION1_BLOCK_SIZE as usize,
             0
         );
+        assert_eq!(SDIO_LINKED_PIO_MAX_BLOCK_COUNT, 1);
+        assert!(cyw43_backplane_uses_bulk_block_mode(false, 2048));
+        assert!(!cyw43_backplane_uses_bulk_block_mode(
+            false,
+            SDIO_CMD53_BYTE_MODE_MAX
+        ));
         assert_eq!(
-            cyw43_backplane_write_chunk_shape(false, 2048),
-            (2048, SDIO_FUNCTION1_BLOCK_SIZE, 32)
-        );
-        assert_eq!(
-            cyw43_backplane_write_chunk_shape(false, CYW43_FIRMWARE_STAGE_BYTES),
+            cyw43_backplane_write_chunk_shape(false, true, 2048),
             (
-                CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
+                SDIO_FUNCTION1_BLOCK_SIZE as usize,
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
+                1
             )
         );
         assert_eq!(
-            cyw43_backplane_write_chunk_shape(false, 32 * 1024),
+            cyw43_backplane_write_chunk_shape(false, true, CYW43_FIRMWARE_STAGE_BYTES),
             (
                 CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
+                SDIO_LINKED_PIO_MAX_BLOCK_COUNT
             )
         );
         assert_eq!(
-            cyw43_backplane_write_chunk_shape(false, SDIO_FUNCTION1_BLOCK_SIZE as usize),
+            cyw43_backplane_write_chunk_shape(false, true, 32 * 1024),
+            (
+                CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
+                SDIO_FUNCTION1_BLOCK_SIZE,
+                SDIO_LINKED_PIO_MAX_BLOCK_COUNT
+            )
+        );
+        assert_eq!(
+            cyw43_backplane_write_chunk_shape(false, true, SDIO_FUNCTION1_BLOCK_SIZE as usize),
+            (
+                SDIO_FUNCTION1_BLOCK_SIZE as usize,
+                SDIO_FUNCTION1_BLOCK_SIZE,
+                1
+            )
+        );
+        assert_eq!(
+            cyw43_backplane_write_chunk_shape(false, false, SDIO_FUNCTION1_BLOCK_SIZE as usize),
             (
                 SDIO_FUNCTION1_BLOCK_SIZE as usize,
                 SDIO_FUNCTION1_BLOCK_SIZE,
                 0
             )
         );
-        assert_eq!(cyw43_backplane_write_chunk_shape(false, 4), (4, 4, 0));
+        assert_eq!(cyw43_backplane_write_chunk_shape(false, true, 4), (4, 4, 0));
         assert_eq!(
-            cyw43_backplane_write_chunk_shape(true, 2048),
+            cyw43_backplane_write_chunk_shape(true, false, 2048),
             (
                 SDIO_FUNCTION2_BLOCK_SIZE as usize,
                 SDIO_FUNCTION2_BLOCK_SIZE,
                 1
             )
         );
-        assert_eq!(cyw43_backplane_write_chunk_shape(true, 4), (4, 4, 1));
+        assert_eq!(cyw43_backplane_write_chunk_shape(true, false, 4), (4, 4, 1));
         assert_eq!(cyw43_sdio_operating_clock_hz(true), 50_000_000);
         assert_eq!(cyw43_sdio_operating_clock_hz(false), 25_000_000);
     }
@@ -53260,8 +53315,7 @@ mod tests {
 
     #[test]
     fn cyw43_linked_pre_release_owner_upload_has_no_alternate_lane() {
-        let upload_block_count =
-            (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16;
+        let upload_block_count = SDIO_LINKED_PIO_MAX_BLOCK_COUNT;
         let block_arg = sdio_cmd53_arg(
             true,
             1,
@@ -53275,7 +53329,7 @@ mod tests {
         assert_eq!(block_arg & 0x1ff, u32::from(upload_block_count));
         let transfer = sdio_transfer_mode(true, upload_block_count);
         assert_ne!(transfer & SDHCI_TRNS_BLK_CNT_EN, 0);
-        assert_ne!(transfer & SDHCI_TRNS_MULTI, 0);
+        assert_eq!(transfer & SDHCI_TRNS_MULTI, 0);
         assert_eq!(
             sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, SDHCI_INT_ERROR),
             (SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT << 24) | SDHCI_INT_ERROR
@@ -53283,26 +53337,132 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_linked_pio_firmware_cursor_advances_by_linux_multiblock_commands() {
-        let expected = CYW43_FIRMWARE_STAGE_BYTES;
+    fn cyw43_linked_pio_firmware_cursor_advances_by_linux_host_limited_commands() {
+        let expected = 4_096usize;
+        let base = CYW43_RAM_BASE_4345;
         let mut remaining = expected;
         let mut advanced = 0usize;
         let mut commands = 0usize;
+        let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(false, expected);
+        assert!(bulk_block_mode);
         while remaining != 0 {
             let (chunk_len, block_size, block_count) =
-                cyw43_backplane_write_chunk_shape(false, remaining);
+                cyw43_backplane_write_chunk_shape(false, bulk_block_mode, remaining);
             assert_eq!(block_size, SDIO_FUNCTION1_BLOCK_SIZE);
             assert_eq!(chunk_len, CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES);
-            assert_eq!(
+            assert_eq!(block_count, SDIO_LINKED_PIO_MAX_BLOCK_COUNT);
+            let addr = cyw43_backplane_function_addr(base + advanced as u32);
+            let arg = sdio_cmd53_arg(
+                true,
+                1,
+                addr,
+                cyw43_backplane_cmd53_increment(),
                 block_count,
-                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
+                chunk_len as u16,
             );
+            assert!(sdio_cmd53_arg_write(arg));
+            assert_eq!(sdio_cmd53_arg_function(arg), 1);
+            assert_eq!(sdio_cmd53_arg_addr(arg), addr);
+            assert_ne!(
+                arg & (1 << 27),
+                0,
+                "ticket {commands} must stay in block mode"
+            );
+            assert_ne!(
+                arg & (1 << 26),
+                0,
+                "ticket {commands} must increment its address"
+            );
+            assert_eq!(arg & 0x1ff, u32::from(SDIO_LINKED_PIO_MAX_BLOCK_COUNT));
             advanced += chunk_len;
             remaining -= chunk_len;
             commands += 1;
         }
-        assert_eq!(commands, 2);
+        assert_eq!(commands, 64);
         assert_eq!(advanced, expected);
+    }
+
+    #[test]
+    fn cyw43_linked_pio_firmware_stops_at_every_exact_failure_cut() {
+        let _guard = test_guard();
+        const FIRMWARE_BYTES: usize = 4_096;
+        const EXPECTED_COMMANDS: usize = FIRMWARE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
+        assert_eq!(EXPECTED_COMMANDS, 64);
+
+        for cut in 0..=EXPECTED_COMMANDS {
+            reset_runtime_for_test();
+            let mut state = Cyw43RuntimeState::new();
+            state.backplane_window = CYW43_RAM_BASE_4345 & BACKPLANE_WINDOW_MASK;
+            state.backplane_window_valid = true;
+            for index in 0..FIRMWARE_BYTES {
+                write_runtime_payload_byte(
+                    CYW43_FIRMWARE_STAGE_OFFSET + index,
+                    (index as u8).wrapping_mul(29),
+                );
+            }
+            if cut < EXPECTED_COMMANDS {
+                let failed_addr = cyw43_backplane_function_addr(
+                    CYW43_RAM_BASE_4345 + (cut * CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES) as u32,
+                );
+                test_sdio_transfer_fail_next_arg(
+                    SDIO_CMD53,
+                    sdio_cmd53_arg(
+                        true,
+                        1,
+                        failed_addr,
+                        true,
+                        SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                        CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
+                    ),
+                );
+            }
+
+            let outcome = cyw43_backplane_write_ring_result(
+                &mut state,
+                CYW43_RAM_BASE_4345,
+                CYW43_FIRMWARE_STAGE_OFFSET,
+                FIRMWARE_BYTES,
+                true,
+            );
+            assert_eq!(
+                outcome,
+                if cut == EXPECTED_COMMANDS {
+                    Ok(())
+                } else {
+                    Err(cut * CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES)
+                },
+                "failure cut {cut} must commit only its completed prefix",
+            );
+            assert_eq!(
+                test_sdio_cmd53_transfer_count(1, true),
+                if cut == EXPECTED_COMMANDS {
+                    EXPECTED_COMMANDS
+                } else {
+                    cut + 1
+                },
+            );
+            for ordinal in 0..EXPECTED_COMMANDS {
+                let addr = cyw43_backplane_function_addr(
+                    CYW43_RAM_BASE_4345 + (ordinal * CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES) as u32,
+                );
+                let expected_count = if cut == EXPECTED_COMMANDS || ordinal <= cut {
+                    1
+                } else {
+                    0
+                };
+                assert_eq!(
+                    test_sdio_cmd53_write_shape_count(
+                        1,
+                        addr,
+                        SDIO_FUNCTION1_BLOCK_SIZE,
+                        SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                        CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
+                    ),
+                    expected_count,
+                    "failure cut {cut}, firmware ticket {ordinal}",
+                );
+            }
+        }
     }
 
     #[test]
@@ -54117,12 +54277,14 @@ mod tests {
         );
         assert!(CYW43_FIRMWARE_STAGE_BYTES > SDIO_CMD53_BYTE_MODE_MAX);
         for chunk in 0..2usize {
+            reset_test_sdio_transfer_log();
             for index in 0..CYW43_FIRMWARE_STAGE_BYTES {
                 write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, chunk as u8);
             }
+            let target_addr = CYW43_RAM_BASE_4345 + (chunk * CYW43_FIRMWARE_STAGE_BYTES) as u32;
             assert!(cyw43_stage_firmware_chunk(
                 &mut state,
-                CYW43_RAM_BASE_4345 + (chunk * CYW43_FIRMWARE_STAGE_BYTES) as u32,
+                target_addr,
                 DRIVER_TASK_RING_FRAME_OFFSET,
                 CYW43_FIRMWARE_STAGE_BYTES,
                 false
@@ -54132,6 +54294,32 @@ mod tests {
                 read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET),
                 chunk as u8
             );
+            let expected_commands =
+                CYW43_FIRMWARE_STAGE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
+            assert_eq!(expected_commands, 128);
+            assert_eq!(test_sdio_cmd53_transfer_count(1, true), expected_commands);
+            for ordinal in 0..expected_commands {
+                let addr = cyw43_backplane_function_addr(
+                    target_addr + (ordinal * CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES) as u32,
+                );
+                assert_eq!(
+                    test_sdio_cmd53_write_shape_count(
+                        1,
+                        addr,
+                        SDIO_FUNCTION1_BLOCK_SIZE,
+                        SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                        CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
+                    ),
+                    1,
+                    "firmware ticket {ordinal} must be issued exactly once",
+                );
+            }
+            assert!(!test_sdio_transfer_seen(|record| {
+                record.cmd == SDIO_CMD53
+                    && sdio_cmd53_arg_function(record.arg) == 1
+                    && sdio_cmd53_arg_write(record.arg)
+                    && record.block_count == 0
+            }));
         }
     }
 
@@ -54430,7 +54618,8 @@ mod tests {
             cyw43_sdio_operating_clock_hz(false),
             CYW43_SDIO_DEFAULT_SPEED_CLOCK_HZ
         );
-        assert!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES > SDIO_CMD53_BYTE_MODE_MAX);
+        assert_eq!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES, 64);
+        assert_eq!(SDIO_LINKED_PIO_MAX_BLOCK_COUNT, 1);
     }
     #[test]
     fn cyw43_runtime_stream_completion_requires_declared_total_lengths() {
@@ -54732,7 +54921,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_transfer_mode_sets_multi_for_multiblock_firmware_chunks() {
+    fn sdio_transfer_mode_encodes_generic_multiblock_requests() {
         let byte_write = sdio_transfer_mode(true, 1);
         assert_ne!(byte_write & SDHCI_TRNS_BLK_CNT_EN, 0);
         assert_eq!(byte_write & SDHCI_TRNS_MULTI, 0);
@@ -54747,14 +54936,14 @@ mod tests {
         assert_eq!(single_write & SDHCI_TRNS_MULTI, 0);
         assert_eq!(single_write & SDHCI_TRNS_READ, 0);
 
-        let firmware_write = sdio_transfer_mode(true, 23);
-        assert_ne!(firmware_write & SDHCI_TRNS_BLK_CNT_EN, 0);
-        assert_ne!(firmware_write & SDHCI_TRNS_MULTI, 0);
-        assert_eq!(firmware_write & SDHCI_TRNS_READ, 0);
+        let multiblock_write = sdio_transfer_mode(true, 23);
+        assert_ne!(multiblock_write & SDHCI_TRNS_BLK_CNT_EN, 0);
+        assert_ne!(multiblock_write & SDHCI_TRNS_MULTI, 0);
+        assert_eq!(multiblock_write & SDHCI_TRNS_READ, 0);
 
-        let firmware_read = sdio_transfer_mode(false, 23);
-        assert_ne!(firmware_read & SDHCI_TRNS_MULTI, 0);
-        assert_ne!(firmware_read & SDHCI_TRNS_READ, 0);
+        let multiblock_read = sdio_transfer_mode(false, 23);
+        assert_ne!(multiblock_read & SDHCI_TRNS_MULTI, 0);
+        assert_ne!(multiblock_read & SDHCI_TRNS_READ, 0);
     }
 
     #[test]
@@ -55186,11 +55375,11 @@ mod tests {
     }
 
     #[test]
-    fn sdio_descriptor_production_seam_writes_exact_4096_byte_firmware_fifo() {
+    fn sdio_descriptor_production_seam_writes_exact_linked_pio_firmware_block() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
-        const FIRMWARE_BYTES: usize = 4_096;
-        const BLOCK_COUNT: u16 = 64;
+        const FIRMWARE_BYTES: usize = SDIO_FUNCTION1_BLOCK_SIZE as usize;
+        const BLOCK_COUNT: u16 = SDIO_LINKED_PIO_MAX_BLOCK_COUNT;
         assert_eq!(
             FIRMWARE_BYTES,
             usize::from(SDIO_FUNCTION1_BLOCK_SIZE) * usize::from(BLOCK_COUNT)
@@ -55221,7 +55410,7 @@ mod tests {
             BLOCK_COUNT,
             0,
         )
-        .expect("4096-byte firmware descriptor must encode");
+        .expect("host-limited firmware descriptor must encode");
         assert_eq!(desc.block_size, SDIO_FUNCTION1_BLOCK_SIZE);
         assert_eq!(desc.block_count, BLOCK_COUNT);
         let command = stage_sdio_descriptor_service_command(0x5340, desc);
@@ -55251,7 +55440,7 @@ mod tests {
             sdio_host_block_size(SDIO_FUNCTION1_BLOCK_SIZE)
         );
         assert_eq!(io.read16(SDHCI_BLOCK_COUNT), BLOCK_COUNT);
-        assert_ne!(io.read16(SDHCI_TRANSFER_MODE) & SDHCI_TRNS_MULTI, 0);
+        assert_eq!(io.read16(SDHCI_TRANSFER_MODE) & SDHCI_TRNS_MULTI, 0);
         assert_eq!(io.command_issue_count(), 1);
         assert!(sdio_owner_path_quiescent_with(&mut io));
         assert_eq!(SDIO_CMD_COUNT.load(Ordering::Acquire), 1);
@@ -55261,7 +55450,173 @@ mod tests {
             .filter(|write| !write.fifo && write.offset == SDHCI_BLOCK_SIZE)
             .map(|write| write.value)
             .collect();
-        assert_eq!(block_writes, vec![0x0000_7040, 0x0040_7040]);
+        assert_eq!(block_writes, vec![0x0000_7040, 0x0001_7040]);
+    }
+
+    #[test]
+    fn firmware_host_limited_descriptors_cross_controller_once_per_outer_turn() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        const FIRMWARE_BYTES: usize = 4_096;
+        const COMMANDS: usize = FIRMWARE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
+        assert_eq!(COMMANDS, 64);
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        let flags = DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+            | DRIVER_RUNTIME_SDIO_FLAG_DATA
+            | DRIVER_RUNTIME_SDIO_FLAG_WRITE;
+        let mut parent_turn = Cyw43ForegroundTurnState::new();
+        let mut controller_issues = 0usize;
+
+        for ordinal in 0..COMMANDS {
+            for index in 0..CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES {
+                write_runtime_payload_byte(
+                    data_offset + index,
+                    (ordinal as u8).wrapping_add(index as u8),
+                );
+            }
+            let addr = cyw43_backplane_function_addr(
+                CYW43_RAM_BASE_4345 + (ordinal * CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES) as u32,
+            );
+            let arg = sdio_cmd53_arg(
+                true,
+                1,
+                addr,
+                true,
+                SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
+            );
+            let descriptor = sdio_bus_link_cmd53_descriptor(
+                SDIO_CMD53,
+                arg,
+                flags,
+                DriverFrameDescriptor {
+                    offset: data_offset as u32,
+                    len: CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
+                    flags: 0,
+                },
+                SDIO_FUNCTION1_BLOCK_SIZE,
+                SDIO_LINKED_PIO_MAX_BLOCK_COUNT,
+                0,
+            )
+            .expect("host-limited firmware descriptor must encode");
+            let sequence = 0x8000_6400u32.wrapping_add(ordinal as u32);
+            let command = stage_sdio_descriptor_service_command(sequence, descriptor);
+            let mut io = TestSdioHostIo::new();
+            io.use_runtime_payload = true;
+            io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
+            io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+            io.data_end_after_words = CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / 4;
+
+            let completion = service_sdio_descriptor_command_with_io(command, &mut io);
+            assert_eq!(
+                completion,
+                DriverTaskCompletionRecord::progress(
+                    sequence,
+                    CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u32,
+                ),
+            );
+            assert_eq!(io.command_issue_count(), 1);
+            controller_issues += io.command_issue_count();
+            let entry = Cyw43ForegroundTraceEntry {
+                ticket: Cyw43ForegroundActionTicket {
+                    parent_sequence: 0x6400,
+                    generation: 0x4359_6400,
+                    owner_sequence: sequence,
+                    ordinal: ordinal as u16,
+                    issued_turn_id: (ordinal + 1) as u64,
+                },
+                command,
+                descriptor,
+                completion: DriverTaskCompletionRecord::idle(0),
+                write_offset: data_offset as u32,
+                write_len: CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
+                read_offset: 0,
+                read_len: 0,
+                read_from_owner: false,
+                local_read_frame: DriverFrameDescriptor::empty(),
+            };
+            assert!(cyw43_foreground_completion_matches(entry, completion));
+
+            parent_turn.complete_child_poll();
+            assert_eq!(parent_turn.completed_count, (ordinal + 1) as u16);
+            assert_eq!(
+                cyw43_foreground_frontier_route(
+                    parent_turn.replay_index,
+                    parent_turn.completed_count,
+                    false,
+                    false,
+                    false,
+                    parent_turn.action_consumed,
+                    true,
+                    false,
+                    false,
+                ),
+                Cyw43ForegroundFrontierRoute::Defer,
+                "ticket {ordinal} completion cannot issue ticket {} in the same turn",
+                ordinal + 1,
+            );
+            assert_eq!(controller_issues, ordinal + 1);
+
+            parent_turn.begin_turn();
+            for replay_index in 0..parent_turn.completed_count {
+                assert_eq!(
+                    cyw43_foreground_frontier_route(
+                        parent_turn.replay_index,
+                        parent_turn.completed_count,
+                        false,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false,
+                        false,
+                    ),
+                    Cyw43ForegroundFrontierRoute::Cached,
+                );
+                assert_eq!(parent_turn.replay_cached_child(), Some(replay_index));
+            }
+            assert_eq!(controller_issues, ordinal + 1);
+        }
+        assert_eq!(controller_issues, COMMANDS);
+        assert_eq!(SDIO_CMD_COUNT.load(Ordering::Acquire), COMMANDS as u32);
+    }
+
+    #[test]
+    fn sdio_descriptor_rejects_multiblock_pio_request_before_issue() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        const BLOCK_COUNT: u16 = 64;
+        const FIRMWARE_BYTES: usize = SDIO_FUNCTION1_BLOCK_SIZE as usize * BLOCK_COUNT as usize;
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        let addr = cyw43_backplane_function_addr(CYW43_RAM_BASE_4345);
+        let arg = sdio_cmd53_arg(true, 1, addr, true, BLOCK_COUNT, FIRMWARE_BYTES as u16);
+        let flags = DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+            | DRIVER_RUNTIME_SDIO_FLAG_DATA
+            | DRIVER_RUNTIME_SDIO_FLAG_WRITE;
+        let desc = sdio_bus_link_cmd53_descriptor(
+            SDIO_CMD53,
+            arg,
+            flags,
+            DriverFrameDescriptor {
+                offset: data_offset as u32,
+                len: FIRMWARE_BYTES as u16,
+                flags: 0,
+            },
+            SDIO_FUNCTION1_BLOCK_SIZE,
+            BLOCK_COUNT,
+            0,
+        )
+        .expect("ABI-valid stale multiblock descriptor must encode");
+        let command = stage_sdio_descriptor_service_command(0x5341, desc);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+
+        assert_eq!(
+            service_sdio_descriptor_command_with_io(command, &mut io),
+            DriverTaskCompletionRecord::fault(0x5341, FAULT_REJECTED_COMMAND)
+        );
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.write_count, 0);
     }
 
     #[test]
@@ -55870,21 +56225,18 @@ mod tests {
     }
 
     #[test]
-    fn sdio_production_lifecycle_model_drains_linux_multiblock_pio() {
+    fn sdio_pio_model_drains_explicit_multiblock_ready_episodes() {
         let _guard = test_guard();
         reset_runtime_for_test();
+        const MODEL_BYTES: usize = 4_096;
         let mut io = TestSdioHostIo::new();
-        for (index, byte) in io.payload[..CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES]
-            .iter_mut()
-            .enumerate()
-        {
+        for (index, byte) in io.payload[..MODEL_BYTES].iter_mut().enumerate() {
             *byte = (index as u8).wrapping_mul(17);
         }
-        let block_count =
-            (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16;
+        let block_count = (MODEL_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16;
         io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
         io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
-        io.data_end_after_words = CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / 4;
+        io.data_end_after_words = MODEL_BYTES / 4;
         io.pio_ready_episode_words = SDIO_FUNCTION1_BLOCK_SIZE as usize / 4;
         for poll in 1..block_count as usize {
             io.push_event(TestSdioModelEvent {
@@ -55906,7 +56258,7 @@ mod tests {
                 | DRIVER_RUNTIME_SDIO_FLAG_WRITE,
             DriverFrameDescriptor {
                 offset: 0,
-                len: CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
+                len: MODEL_BYTES as u16,
                 flags: 0,
             },
             SDIO_FUNCTION1_BLOCK_SIZE,
@@ -55914,11 +56266,8 @@ mod tests {
             &mut deadline,
         )
         .is_some());
-        assert_eq!(io.fifo_len, CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES);
-        assert_eq!(
-            &io.fifo[..CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES],
-            &io.payload[..CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES]
-        );
+        assert_eq!(io.fifo_len, MODEL_BYTES);
+        assert_eq!(&io.fifo[..MODEL_BYTES], &io.payload[..MODEL_BYTES]);
         let command_word = io.writes[..io.write_count]
             .iter()
             .find(|write| write.offset == SDHCI_TRANSFER_MODE)
