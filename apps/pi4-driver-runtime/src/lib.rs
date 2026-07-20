@@ -783,7 +783,6 @@ const SDHCI_INT_DATA_MASK: u32 = SDHCI_INT_DATA_END
     | SDHCI_INT_DATA_TIMEOUT
     | SDHCI_INT_DATA_CRC
     | SDHCI_INT_DATA_END_BIT;
-const SDHCI_INT_DATA_READY_MASK: u32 = SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_AVAIL;
 const SDHCI_INT_DATA_ERROR_MASK: u32 =
     SDHCI_INT_ERROR | SDHCI_INT_DATA_TIMEOUT | SDHCI_INT_DATA_CRC | SDHCI_INT_DATA_END_BIT;
 const SDHCI_INT_DATA_FINISH_MASK: u32 = SDHCI_INT_DATA_END | SDHCI_INT_DATA_ERROR_MASK;
@@ -10200,12 +10199,14 @@ fn service_sdio_descriptor_command_with_owner<O: SdioDescriptorOwner>(
             &mut owner_deadline,
         ) else {
             let result = sdio_last_transfer_failure();
+            // Snapshot the failed request before containment clears status,
+            // resets the command/data paths, or cycles the SD clock.
+            let mut telemetry =
+                owner.write_fault_telemetry_frame(cmd, desc.addr, flags, 0, 1, 0, 0, result, frame);
             let contained = owner.contain_failure(owner_timeout_us);
             if !contained {
                 owner.poison_path();
             }
-            let mut telemetry =
-                owner.write_fault_telemetry_frame(cmd, desc.addr, flags, 0, 1, 0, 0, result, frame);
             telemetry.flags = if contained {
                 DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED
             } else {
@@ -10224,12 +10225,12 @@ fn service_sdio_descriptor_command_with_owner<O: SdioDescriptorOwner>(
                 SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
                 owner.present_state(),
             );
+            let mut telemetry =
+                owner.write_fault_telemetry_frame(cmd, desc.addr, flags, 0, 1, 0, 0, result, frame);
             let contained = owner.contain_failure(owner_timeout_us);
             if !contained {
                 owner.poison_path();
             }
-            let mut telemetry =
-                owner.write_fault_telemetry_frame(cmd, desc.addr, flags, 0, 1, 0, 0, result, frame);
             telemetry.flags = if contained {
                 DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED
             } else {
@@ -10322,8 +10323,21 @@ fn service_sdio_descriptor_command_with_owner<O: SdioDescriptorOwner>(
     );
     let mut result = 0;
     let mut contained = true;
+    let transfer_mode = sdio_transfer_mode_from_flags(flags, block_count);
+    let mut terminal_telemetry = None;
     if response0.is_none() {
         result = sdio_last_transfer_failure();
+        terminal_telemetry = Some(owner.write_fault_telemetry_frame(
+            cmd,
+            arg,
+            flags,
+            frame.len,
+            block_size,
+            block_count,
+            transfer_mode,
+            result,
+            frame,
+        ));
         // Descriptor service owns containment. The transfer deadline is
         // normally exhausted when a failure is reported, so recovery must
         // receive a fresh bounded deadline rather than reusing that expired
@@ -10348,6 +10362,20 @@ fn service_sdio_descriptor_command_with_owner<O: SdioDescriptorOwner>(
                 if retry_result != 0 {
                     result = retry_result;
                 }
+                // The retry is a distinct controller attempt. Replace the
+                // first snapshot before containing this final failure so the
+                // completion can never report stale registers from attempt 1.
+                terminal_telemetry = Some(owner.write_fault_telemetry_frame(
+                    cmd,
+                    arg,
+                    flags,
+                    frame.len,
+                    block_size,
+                    block_count,
+                    transfer_mode,
+                    result,
+                    frame,
+                ));
                 contained = owner.contain_failure(owner_timeout_us);
             }
         }
@@ -10359,6 +10387,17 @@ fn service_sdio_descriptor_command_with_owner<O: SdioDescriptorOwner>(
         );
         sdio_record_transfer_failure_result(result);
         response0 = None;
+        terminal_telemetry = Some(owner.write_fault_telemetry_frame(
+            cmd,
+            arg,
+            flags,
+            frame.len,
+            block_size,
+            block_count,
+            transfer_mode,
+            result,
+            frame,
+        ));
         contained = owner.contain_failure(owner_timeout_us);
     }
     let Some(response0) = response0 else {
@@ -10369,18 +10408,17 @@ fn service_sdio_descriptor_command_with_owner<O: SdioDescriptorOwner>(
             owner.poison_path();
         }
         sdio_record_transfer_failure_result(result);
-        let transfer_mode = sdio_transfer_mode_from_flags(flags, block_count);
-        let mut telemetry = owner.write_fault_telemetry_frame(
-            cmd,
-            arg,
-            flags,
-            frame.len,
-            block_size,
-            block_count,
-            transfer_mode,
-            result,
-            frame,
-        );
+        let Some(mut telemetry) = terminal_telemetry else {
+            // Every terminal transfer path must have captured its immutable
+            // register frame before containment. Fail closed without reading
+            // reset state if that internal invariant is ever broken.
+            owner.poison_path();
+            return DriverTaskCompletionRecord::fault_with_result(
+                command.sequence,
+                FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                result,
+            );
+        };
         telemetry.flags = if contained {
             DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED
         } else {
@@ -16764,7 +16802,10 @@ fn sdio_transfer_frame_until_with<I: SdioTransferIo>(
         );
         return false;
     }
-    io.write32(SDHCI_INT_STATUS, SDHCI_INT_DATA_READY_MASK);
+    // This is the sole linked-owner PIO path. As in Linux mmc-bcm2835, the
+    // immutable request snapshot and phase waits own every W1C. Do not issue a
+    // synthetic ready-bit clear after the FIFO drain: a coalesced DATA_END or
+    // next ready edge may already be live in the controller status register.
     let retained_finish = retained_request_status & SDHCI_INT_DATA_FINISH_MASK;
     let status = if retained_finish != 0 {
         retained_finish
@@ -35839,7 +35880,12 @@ fn sdio_read32(offset: usize) -> u32 {
     // SAFETY: The SDIO runtime maps the declared SDHCI MMIO page at
     // `DRIVER_TASK_DEVICE_MMIO_VADDR`; all offsets used by callers are bounded
     // register constants within that page.
-    unsafe { core::ptr::read_volatile((DRIVER_TASK_DEVICE_MMIO_VADDR + offset) as *const u32) }
+    let value =
+        unsafe { core::ptr::read_volatile((DRIVER_TASK_DEVICE_MMIO_VADDR + offset) as *const u32) };
+    // Match Linux readl() ordering: no later memory access may be observed
+    // before the device register value that authorizes it.
+    dma_load_barrier();
+    value
 }
 
 #[cfg(not(target_os = "none"))]
@@ -35856,6 +35902,9 @@ fn sdio_write32(offset: usize, value: u32) {
     // SAFETY: The SDIO runtime maps the declared SDHCI MMIO page at
     // `DRIVER_TASK_DEVICE_MMIO_VADDR`; all offsets used by callers are bounded
     // aligned register constants within that page.
+    // Match Linux writel() ordering: publish all preceding memory accesses
+    // before the controller observes this register update.
+    dma_store_barrier();
     unsafe {
         core::ptr::write_volatile((DRIVER_TASK_DEVICE_MMIO_VADDR + offset) as *mut u32, value);
     }
@@ -35876,6 +35925,9 @@ fn sdio_write_buffer32(value: u32) {
     // SAFETY: The SDIO runtime owns the admitted MMIO aperture and BUFFER is a
     // bounded aligned register within it. The caller has already proved block
     // ownership through the request's data-ready event and PRESENT_STATE.
+    // Linux's raw FIFO write still orders preceding payload reads before the
+    // device store; it only omits the bcm2835 two-SD-clock register delay.
+    dma_store_barrier();
     unsafe {
         core::ptr::write_volatile(
             (DRIVER_TASK_DEVICE_MMIO_VADDR + SDHCI_BUFFER) as *mut u32,
@@ -37470,6 +37522,7 @@ mod tests {
         clear_data_state_on_end: bool,
         reset_stuck: bool,
         reset_failures_remaining: usize,
+        scrub_diagnostic_registers_on_reset: bool,
         clock_stable_on_enable: bool,
         polls: usize,
         events: [TestSdioModelEvent; TEST_SDIO_MODEL_EVENTS],
@@ -37499,6 +37552,7 @@ mod tests {
                 clear_data_state_on_end: true,
                 reset_stuck: false,
                 reset_failures_remaining: 0,
+                scrub_diagnostic_registers_on_reset: false,
                 clock_stable_on_enable: false,
                 polls: 0,
                 events: [TestSdioModelEvent::default(); TEST_SDIO_MODEL_EVENTS],
@@ -37653,6 +37707,14 @@ mod tests {
             let word = self.register(aligned);
             self.write32(aligned, sdio_merge_u8_word(word, offset, value));
             if offset == SDHCI_SOFTWARE_RESET && !self.reset_stuck {
+                if self.scrub_diagnostic_registers_on_reset {
+                    // Make containment visibly destructive so service-level
+                    // tests can prove fault telemetry was captured first.
+                    self.set_register(SDHCI_RESPONSE, 0xd1a6_0001);
+                    self.set_register(SDHCI_HOST_CONTROL, 0xd1a6_0002);
+                    self.set_register(SDHCI_CLOCK_CONTROL, 0xd1a6_0003);
+                    self.set_register(SDHCI_BLOCK_SIZE, 0xd1a6_0004);
+                }
                 let cleared = sdio_merge_u8_word(self.register(aligned), offset, 0);
                 self.set_register(aligned, cleared);
                 let present = self.register(SDHCI_PRESENT_STATE)
@@ -54238,11 +54300,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_data_ready_mask_clears_only_buffer_ready_bits() {
-        assert_eq!(
-            SDHCI_INT_DATA_READY_MASK,
-            SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_AVAIL
-        );
+    fn sdio_function2_read_is_never_replayable() {
         assert!(!sdio_descriptor_transfer_retryable(
             DriverRuntimeSdioCommandDescriptor {
                 op: DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
@@ -55088,7 +55146,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_descriptor_production_seam_raw_card_fault_telemetry_uses_injected_owner() {
+    fn sdio_descriptor_raw_card_fault_captures_registers_before_containment() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
         let desc = DriverRuntimeSdioCommandDescriptor {
@@ -55103,7 +55161,7 @@ mod tests {
         let mut io = TestSdioHostIo::new();
         io.command_status = SDHCI_INT_DATA_CRC;
         io.command_response = 0xa55a_3cc3;
-        io.command_present_set = SDHCI_SPACE_AVAILABLE;
+        io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_CMD_INHIBIT;
         let host_control = SDHCI_HOST_CONTROL_4BIT;
         let power_control = SDHCI_POWER_330 | SDHCI_POWER_ON;
         let host_power = sdio_merge_u8_word(
@@ -55119,6 +55177,7 @@ mod tests {
         );
         let block_register = 0x0020_0040;
         io.set_register(SDHCI_BLOCK_SIZE, block_register);
+        io.scrub_diagnostic_registers_on_reset = true;
 
         let completion = service_sdio_descriptor_command_with_io(command, &mut io);
 
@@ -55134,7 +55193,7 @@ mod tests {
         );
         assert_eq!(
             read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_PRESENT_OFFSET),
-            SDHCI_SPACE_AVAILABLE,
+            SDHCI_SPACE_AVAILABLE | SDHCI_CMD_INHIBIT,
         );
         assert_eq!(
             read_ring_u32(
@@ -55162,6 +55221,27 @@ mod tests {
             ),
             block_register,
         );
+        assert_eq!(
+            io.register(SDHCI_RESPONSE),
+            0xd1a6_0001,
+            "containment must occur after the response snapshot"
+        );
+        assert_eq!(
+            io.register(SDHCI_HOST_CONTROL),
+            0xd1a6_0002,
+            "containment must occur after the host/power snapshot"
+        );
+        assert_eq!(
+            io.register(SDHCI_BLOCK_SIZE),
+            0xd1a6_0004,
+            "containment must occur after the block-register snapshot"
+        );
+        assert_eq!(
+            io.register(SDHCI_PRESENT_STATE),
+            SDHCI_SPACE_AVAILABLE,
+            "the injected command/data reset retains unrelated FIFO readiness"
+        );
+        assert_eq!(io.register(SDHCI_INT_STATUS), 0);
         assert_eq!(io.command_issue_count(), 1);
         assert!(sdio_owner_path_quiescent_with(&mut io));
         assert_eq!(SDIO_CMD_COUNT.load(Ordering::Acquire), 0);
@@ -55204,7 +55284,7 @@ mod tests {
         );
         assert_eq!(
             read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_PRESENT_OFFSET),
-            0,
+            SDHCI_CMD_INHIBIT,
         );
         assert_eq!(io.command_issue_count(), 1);
         assert!(sdio_owner_path_quiescent_with(&mut io));
@@ -55322,6 +55402,113 @@ mod tests {
         );
         assert_eq!(io.command_issue_count(), 1);
         assert!(SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned));
+    }
+
+    #[test]
+    fn sdio_descriptor_retry_replaces_pre_containment_telemetry_with_final_attempt() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        for index in 0..4 {
+            write_runtime_payload_byte(data_offset + index, 0x40 + index as u8);
+        }
+        let desc = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 1,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
+            data_offset: data_offset as u16,
+            len: 4,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+            timeout_us: 100_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let command = stage_sdio_descriptor_service_command(0x52f3, desc);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        // Attempt 1 expires before issue. Containment clears this inhibit and
+        // admits exactly one retry, whose issued command fails terminally.
+        io.set_register(SDHCI_PRESENT_STATE, SDHCI_DATA_INHIBIT);
+        io.command_status = SDHCI_INT_DATA_CRC;
+        io.command_response = 0xcafe_0102;
+        io.command_present_set = SDHCI_SPACE_AVAILABLE;
+        io.scrub_diagnostic_registers_on_reset = true;
+
+        let completion = service_sdio_descriptor_command_with_io(command, &mut io);
+
+        let final_result =
+            sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_COMMAND, SDHCI_INT_DATA_CRC);
+        assert_eq!(completion.code, COMPLETION_FAULT);
+        assert_eq!(completion.detail, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED);
+        assert_eq!(completion.result, final_result);
+        assert_eq!(io.command_issue_count(), 1, "only the retry may issue");
+        assert_eq!(
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_PRESENT_OFFSET),
+            SDHCI_SPACE_AVAILABLE,
+            "attempt-1 DATA_INHIBIT telemetry must be replaced"
+        );
+        assert_eq!(
+            read_ring_u32(
+                SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_INT_STATUS_OFFSET
+            ),
+            SDHCI_INT_DATA_CRC
+        );
+        assert_eq!(
+            read_ring_u32(
+                SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_RESPONSE0_OFFSET
+            ),
+            0xcafe_0102
+        );
+        assert_eq!(
+            read_ring_u32(SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_FAILURE_OFFSET),
+            final_result
+        );
+        assert_eq!(
+            read_ring_u32(
+                SDIO_FAULT_TELEMETRY_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET
+            ),
+            u32::from(sdio_host_block_size(4)) | (1 << 16)
+        );
+        assert_eq!(io.register(SDHCI_RESPONSE), 0xd1a6_0001);
+        assert!(sdio_owner_path_quiescent_with(&mut io));
+        assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned));
+    }
+
+    #[test]
+    fn sdio_descriptor_retry_success_does_not_publish_stale_fault_frame() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        for index in 0..4 {
+            write_runtime_payload_byte(data_offset + index, 0x80 + index as u8);
+        }
+        let desc = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 1,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: cyw43_backplane_function_addr(CYW43_RAM_BASE_4345 + 4),
+            data_offset: data_offset as u16,
+            len: 4,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+            timeout_us: 100_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let command = stage_sdio_descriptor_service_command(0x52f4, desc);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.set_register(SDHCI_PRESENT_STATE, SDHCI_DATA_INHIBIT);
+        io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
+        io.command_response = 0x5a;
+        io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+        io.data_end_after_words = 1;
+
+        let completion = service_sdio_descriptor_command_with_io(command, &mut io);
+
+        assert_eq!(completion, DriverTaskCompletionRecord::progress(0x52f4, 4));
+        assert_eq!(completion.frame, DriverFrameDescriptor::empty());
+        assert_eq!(io.command_issue_count(), 1, "only the retry may issue");
+        assert_eq!(sdio_last_transfer_failure(), 0);
+        assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned));
     }
 
     #[test]
@@ -55677,6 +55864,50 @@ mod tests {
             write.offset == SDHCI_INT_STATUS
                 && write.value == SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL
         }));
+        let mut status_writes = io.writes[..io.write_count]
+            .iter()
+            .filter(|write| !write.fifo && write.offset == SDHCI_INT_STATUS);
+        assert_eq!(
+            status_writes.next().map(|write| write.value),
+            Some(SDHCI_INT_COMMAND_DATA_CLEAR_MASK)
+        );
+        assert_eq!(
+            status_writes.next().map(|write| write.value),
+            Some(SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL)
+        );
+        assert_eq!(
+            status_writes.next().map(|write| write.value),
+            Some(SDHCI_INT_DATA_END)
+        );
+        assert_eq!(
+            status_writes.next(),
+            None,
+            "Linux PIO dispatch must not W1C a synthetic ready mask after the final FIFO word"
+        );
+        let snapshot_ack_index = io.writes[..io.write_count]
+            .iter()
+            .position(|write| {
+                !write.fifo
+                    && write.offset == SDHCI_INT_STATUS
+                    && write.value == SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL
+            })
+            .expect("request snapshot acknowledgement must be recorded");
+        let first_fifo_index = io.writes[..io.write_count]
+            .iter()
+            .position(|write| write.fifo)
+            .expect("PIO transfer must write the FIFO");
+        let last_fifo_index = io.writes[..io.write_count]
+            .iter()
+            .rposition(|write| write.fifo)
+            .expect("PIO transfer must write the FIFO");
+        let data_end_ack_index = io.writes[..io.write_count]
+            .iter()
+            .rposition(|write| {
+                !write.fifo && write.offset == SDHCI_INT_STATUS && write.value == SDHCI_INT_DATA_END
+            })
+            .expect("DATA_END acknowledgement must be recorded");
+        assert!(snapshot_ack_index < first_fifo_index);
+        assert!(last_fifo_index < data_end_ack_index);
     }
 
     #[test]

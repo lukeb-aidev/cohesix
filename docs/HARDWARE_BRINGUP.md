@@ -21,7 +21,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | QEMU current source | Target-qualified Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. | Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 current source, offline | Pi-qualified Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. | A board boot, current-image device readiness, TCP, or benchmark result. |
-| Pi 4 current image, live | Exact image `74833ee84ebf` / `69513dad7dd96df505c32a3235d78e227211b86aabb4b7eba1826a22b9c4c819` reaches Wi-Fi Gate 6, then the first Function 1 firmware request stops after two of 64 PIO blocks. | Gates 7-10, Wi-Fi L2/IP/TCP, `cohsh`, repeatability, and performance remain unclaimed until the host-limited request split is rebuilt, flashed, and captured. |
+| Pi 4 current image, live | Exact image `40b3af92f5ed` / `06c56ee47689cb2789de6239822d8edc95cbb9452ded521f4c7e0854f488fc19` reaches Wi-Fi Gate 6, then its first one-block Function 1 firmware request times out waiting for `DATA_END`. | Gates 7-10, Wi-Fi L2/IP/TCP, `cohsh`, repeatability, and performance remain unclaimed until the corrected Linux-ordered PIO candidate is rebuilt, flashed, and captured. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
 active. It may be newer than checked-in records, but only the repository's
@@ -645,32 +645,40 @@ completion. Next-run `wifi: evidence sdio_regs` output records power,
 present-state, interrupt-status, response, and block-size/count registers so a
 pre-RF stop can be classified without depending on a later-overwritten log.
 
-The newest exact capture is `pi4-serial-20260720-213121.log`, boot-paired with
-`tcpdump-wifi-20260720-213118.pcap` and
-`tcpdump-usb-eth-20260720-213118.pcap`. It identifies marker commit
-`74833ee84ebf` and image id
-`69513dad7dd96df505c32a3235d78e227211b86aabb4b7eba1826a22b9c4c819`.
-Gates 1-5 complete, but Gate 6 stops on the first 4,096-byte Function 1
-firmware CMD53 at backplane address `0x00198000`. The clean R5 response and
-`BLOCK_SIZE_COUNT=0x003e7040` prove that exactly two 64-byte blocks were
-accepted before the polled-PIO request received no next buffer-ready,
-`DATA_END`, or error evidence. The paired Wi-Fi capture contains no Pi MAC,
-EAPOL, DHCP, ARP, IP, ICMP, TCP, or console-port traffic. This is therefore a
-pre-firmware/RF host-transfer failure, not evidence against association,
-EAPOL, DHCP, or shared TCP.
+The newest exact capture is `pi4-serial-20260720-221540.log`, boot-paired with
+`tcpdump-wifi-20260720-221537.pcap` and
+`tcpdump-usb-eth-20260720-221537.pcap`. It identifies marker commit
+`40b3af92f5ed` and image id
+`06c56ee47689cb2789de6239822d8edc95cbb9452ded521f4c7e0854f488fc19`.
+Gates 2-5 are inferred from the later Gate-6 request, while Gate 1 has direct
+runtime power/reset proof. Gate 6 stops on the first 64-byte/count-1 Function 1
+firmware CMD53 at backplane address `0x00198000`: command response and FIFO
+admission complete, but the owner times out waiting for `DATA_END`. This
+falsifies the prior claim that reducing the host request to one PIO block was
+itself sufficient. The published `PRESENT_STATE`, `INT_STATUS`, and block
+registers were sampled only after containment in this image, so they cannot be
+used as terminal-controller proof. Analysis is bounded to the serial boot
+interval because both tcpdump writers continued afterward; within that paired
+interval neither capture contains a Pi Wi-Fi MAC, EAPOL, DHCP, ARP, IP, ICMP,
+TCP, or console-port frame. This is a pre-firmware/RF host-transfer failure,
+not evidence against association, EAPOL, DHCP, or shared TCP.
 
 Linux's SDIO core splits requests by the host's `max_blk_count`, while the Pi
 `mmc-bcm2835` driver normally assigns data requests to an admitted DMA channel.
 The linked Cohesix SDIO owner has no such channel: its sole low DMA page is the
-firmware-mailbox request buffer. The software fix truthfully limits Function 1
-polled PIO to one 64-byte block per immutable request. An original 4,096-byte
-bulk transfer remains block mode for all 64 incrementing requests, including
-the point where 512 bytes remain; only a genuine sub-block tail or backplane
-window edge becomes byte mode. Each child operation retains the existing
-one-submit/grant/poll-per-outer-turn rule, advances only an exactly completed
-prefix, and admits no width, clock, root-owned, or legacy fallback. Function 2
-SDPCM frame shapes are deliberately unchanged. This change remains host-side
-until a rebuilt exact image passes a new physical capture.
+firmware-mailbox request buffer. It therefore retains the explicitly declared
+one-block PIO limit for this focused candidate, but now closes the remaining
+direct `mmc-bcm2835` PIO deltas: AArch64 `readl`/`writel` ordering around SDHCI
+and FIFO access, no unsampled buffer-ready W1C after the final FIFO word, and
+terminal register capture before containment. The original bulk-transfer mode
+still remains block mode across its incrementing count-1 requests; no byte,
+clock, width, replay, root-owned, or legacy fallback is restored. If this exact
+candidate retains the same terminal failure on hardware, the next change is a
+coherent manifest/HAL/runtime BCM DMA replacement for the data-transfer
+mechanism, not a selectable second launch path and not another timing or
+PIO-geometry guess. That DMA change must separately declare controller/channel
+and low-memory buffer authority and is intentionally not mixed into this
+diagnostic build.
 
 The earlier `pi4-serial-20260719-180716.log` capture identified a separate
 pre-command continuation-liveness failure: SDIO engine initialization completed

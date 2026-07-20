@@ -506,7 +506,13 @@ This as-built closure is authorized by Milestone 26d task
   `DATA_END` state from that snapshot. A stale `PRESENT_STATE` ready bit alone
   is never completion evidence, and a ready interrupt sampled with the response
   cannot be lost merely because its hardware latch was acknowledged before the
-  later retained PIO turn.
+  later retained PIO turn. SDHCI `readl`/`writel` access also preserves the
+  AArch64 device-ordering barriers used by Linux. FIFO stores omit only the
+  ordinary two-SD-clock register delay; they retain the `writel` store barrier.
+  Once the final PIO block is emitted, the owner does not perform a second
+  unsampled buffer-ready W1C. It re-reads `INT_STATUS` for `DATA_END` exactly as
+  `mmc-bcm2835` does, so a completion that coalesces with the final FIFO store
+  cannot be erased by cleanup.
 - Linux normally services a Pi `mmc-bcm2835` data request through the host's
   admitted DMA channel and makes the SDIO core split bulk requests by
   `max_blk_count`. The linked Cohesix SDIO owner has no data-DMA authority:
@@ -522,6 +528,13 @@ This as-built closure is authorized by Milestone 26d task
   Function 1 multiblock descriptor before issue. Function 2 retains its
   separately bounded SDPCM frame shapes; no width, clock, byte-mode, root-owned,
   or legacy fallback is introduced.
+- A failed owner transfer snapshots present state, interrupt status, response,
+  host/power/clock state, and block-size/count before command/data containment
+  clears or resets the controller. The returned fault frame therefore describes
+  the terminal request, not the recovered host. Root renders mandatory
+  `reason`, `result`, `clock_state`, parent-request length, child-transfer
+  length, and direct-versus-inferred gate fields on separate bounded lines so
+  serial truncation cannot silently change the diagnosis.
 - Firmware-preparation probe attach follows Linux `brcmf_sdio_kso_init`
   exactly: read `SLEEPCSR` once and write `KSO` once only when the bit is
   absent. It does not poll `KSO` or require `DEVON` at this stage; the later

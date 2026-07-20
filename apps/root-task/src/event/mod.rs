@@ -10065,6 +10065,145 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_cyw43_fault_summary(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+        evidence: bool,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        if evidence {
+            format_message(format_args!(
+                "wifi: evidence cyw43 detail=0x{:04x} reason={} result=0x{:08x} stage={} op={}",
+                fault.detail, fault.reason, fault.result, fault.stage, fault.op,
+            ))
+        } else {
+            format_message(format_args!(
+                "wifi: cyw43 fault detail=0x{:04x} reason={} result=0x{:08x} stage={} op={}",
+                fault.detail, fault.reason, fault.result, fault.stage, fault.op,
+            ))
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_cyw43_fault_request(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+        evidence: bool,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let prefix = if evidence {
+            "wifi: evidence cyw43_request"
+        } else {
+            "wifi: cyw43 request"
+        };
+        format_message(format_args!(
+            "{} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} request_scope=parent-stage",
+            prefix,
+            fault.op,
+            fault.flags,
+            fault.target_addr,
+            fault.payload_offset,
+            fault.payload_len,
+            fault.total_len,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_cyw43_fault_control(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+        evidence: bool,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let prefix = if evidence {
+            "wifi: evidence cyw43_control"
+        } else {
+            "wifi: cyw43 control"
+        };
+        format_message(format_args!(
+            "{} op={} cmd={} cmd_hex=0x{:08x} id={} header_mode={} response_len={}",
+            prefix,
+            fault.op,
+            fault.control_cmd,
+            fault.control_cmd,
+            fault.control_id,
+            fault.control_header_mode,
+            fault.control_response_len,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_sdio_owner_identity(
+        fault: crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence sdio_owner cmd={} func={} op={} stage={} addr=0x{:08x} target=0x{:08x} effective=0x{:08x} source=owner-terminal",
+            fault.cmd,
+            fault.function,
+            fault.op,
+            fault.stage,
+            fault.addr,
+            fault.target_addr,
+            fault.effective_target,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_sdio_owner_transfer(
+        fault: crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence sdio_owner_transfer chunk_off={} payload_off={} len={} len_scope=child-transfer cmd53_count={} desc_blkcnt={} host_blkcnt={} increment={} block_mode={} mode={}",
+            fault.chunk_offset,
+            fault.payload_offset,
+            fault.len,
+            fault.cmd53_count,
+            fault.desc_block_count,
+            fault.host_block_count,
+            Self::yes_no(fault.increment),
+            Self::yes_no(fault.block_mode),
+            Self::wifi_sdio_owner_mode_label(fault),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_sdio_transfer_status(
+        fault: crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence sdio_status descriptor_status={} transfer_stage={} transfer_status=0x{:06x} transfer_reason={} r5=0x{:04x} retry={}",
+            fault.reason,
+            fault.transfer_stage,
+            fault.transfer_status,
+            fault.transfer_reason,
+            fault.r5,
+            fault.retry,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_sdio_host_status(
+        fault: crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence sdio_host clock_state={} clock=0x{:04x} host=0x{:02x} host_mode={}",
+            fault.clock_state, fault.clock_control, fault.host_control, fault.host_mode,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_boundary_proof(
+        active_blocker: &str,
+        direct_proof_gate: u8,
+        inferred_frontier_gate: u8,
+        failing_gate: u8,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence boundary proof=gate-frontier direct_proof_gate={} inferred_frontier_gate={} proof_gate={} frontier_gate={} failing_gate={} target_gate=10 failure_domain={}",
+            direct_proof_gate,
+            inferred_frontier_gate,
+            inferred_frontier_gate,
+            inferred_frontier_gate,
+            failing_gate,
+            active_blocker,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_driver_task_runtime_snapshot_if_present(
         &mut self,
         command: WifiDebugCommand,
@@ -10157,27 +10296,15 @@ where
         };
         self.emit_wifi_driver_task_startup_blackbox(fault, host_eapol_exact, evidence_source);
         if let Some(fault) = fault {
-            let fault_line = format_message(format_args!(
-                "wifi: cyw43 fault stage={} op={} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} detail=0x{:04x} reason={} result=0x{:08x}",
-                fault.stage,
-                fault.op,
-                fault.target_addr,
-                fault.payload_offset,
-                fault.payload_len,
-                fault.total_len,
-                fault.control_cmd,
-                fault.control_cmd,
-                fault.control_id,
-                fault.control_header_mode,
-                fault.control_response_len,
-                fault.detail,
-                fault.reason,
-                fault.result,
-            ));
+            let fault_line = Self::wifi_diag_cyw43_fault_summary(fault, false);
             self.emit_console_line(fault_line.as_str());
+            let request_line = Self::wifi_diag_cyw43_fault_request(fault, false);
+            self.emit_console_line(request_line.as_str());
+            let control_line = Self::wifi_diag_cyw43_fault_control(fault, false);
+            self.emit_console_line(control_line.as_str());
             let next = Self::wifi_runtime_fault_next_action(fault);
             let next_line = format_message(format_args!(
-                "wifi: linked_runtime next_action={} source={} recovery_contract=block-primary+progress-bounded-owner-replay",
+                "wifi: linked_runtime next_action={} source={} recovery_contract=block-primary+generation-poison+pair-restart-no-replay",
                 next, source
             ));
             self.emit_console_line(next_line.as_str());
@@ -11418,25 +11545,12 @@ where
         );
         if let Some(fault) = fault {
             let owner_fault = Self::wifi_diag_cyw43_sdio_owner_fault_status(fault);
-            let fault_line = format_message(format_args!(
-                "wifi: evidence cyw43 stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} detail=0x{:04x} reason={} result=0x{:08x}",
-                fault.stage,
-                fault.op,
-                fault.flags,
-                fault.target_addr,
-                fault.payload_offset,
-                fault.payload_len,
-                fault.total_len,
-                fault.control_cmd,
-                fault.control_cmd,
-                fault.control_id,
-                fault.control_header_mode,
-                fault.control_response_len,
-                fault.detail,
-                fault.reason,
-                fault.result,
-            ));
+            let fault_line = Self::wifi_diag_cyw43_fault_summary(fault, true);
             self.emit_console_line(fault_line.as_str());
+            let request_line = Self::wifi_diag_cyw43_fault_request(fault, true);
+            self.emit_console_line(request_line.as_str());
+            let control_line = Self::wifi_diag_cyw43_fault_control(fault, true);
+            self.emit_console_line(control_line.as_str());
             if Self::wifi_runtime_fault_is_sdio_card_select(fault) {
                 let sdio_command = format_message(format_args!(
                     "wifi: evidence sdio_command command={} attempt={} card_bits=0x{:04x} stage={} detail=0x{:04x} result=0x{:08x}",
@@ -11450,39 +11564,14 @@ where
                 self.emit_console_line(sdio_command.as_str());
             }
             if let Some(owner_fault) = owner_fault {
-                let sdio_owner = format_message(format_args!(
-                    "wifi: evidence sdio_owner cmd={} func={} addr=0x{:08x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} len={} cmd53_count={} desc_blkcnt={} host_blkcnt={} increment={} block_mode={} mode={} op={} source=owner-terminal",
-                    owner_fault.cmd,
-                    owner_fault.function,
-                    owner_fault.addr,
-                    owner_fault.target_addr,
-                    owner_fault.effective_target,
-                    owner_fault.chunk_offset,
-                    owner_fault.payload_offset,
-                    owner_fault.len,
-                    owner_fault.cmd53_count,
-                    owner_fault.desc_block_count,
-                    owner_fault.host_block_count,
-                    Self::yes_no(owner_fault.increment),
-                    Self::yes_no(owner_fault.block_mode),
-                    Self::wifi_sdio_owner_mode_label(owner_fault),
-                    owner_fault.op,
-                ));
+                let sdio_owner = Self::wifi_diag_sdio_owner_identity(owner_fault);
                 self.emit_console_line(sdio_owner.as_str());
-                let status = format_message(format_args!(
-                    "wifi: evidence sdio_status descriptor_status={} transfer_stage={} transfer_status=0x{:06x} transfer_reason={} r5=0x{:04x} retry={} host=0x{:02x} host_mode={} clock=0x{:04x} clock_state={}",
-                    owner_fault.reason,
-                    owner_fault.transfer_stage,
-                    owner_fault.transfer_status,
-                    owner_fault.transfer_reason,
-                    owner_fault.r5,
-                    owner_fault.retry,
-                    owner_fault.host_control,
-                    owner_fault.host_mode,
-                    owner_fault.clock_control,
-                    owner_fault.clock_state,
-                ));
+                let owner_transfer = Self::wifi_diag_sdio_owner_transfer(owner_fault);
+                self.emit_console_line(owner_transfer.as_str());
+                let status = Self::wifi_diag_sdio_transfer_status(owner_fault);
                 self.emit_console_line(status.as_str());
+                let host = Self::wifi_diag_sdio_host_status(owner_fault);
+                self.emit_console_line(host.as_str());
                 let registers = format_message(format_args!(
                     "wifi: evidence sdio_regs power=0x{:02x} present=0x{:08x} int_status=0x{:08x} response0=0x{:08x} block_size_count=0x{:08x}",
                     owner_fault.power_control,
@@ -11538,14 +11627,15 @@ where
         } else {
             proof_gate
         };
-        let boundary = format_message(format_args!(
-            "wifi: evidence boundary console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio failure_domain={} direct_proof_gate={} proof_gate={} frontier_gate={} failing_gate={} target_gate=10",
+        self.emit_console_line(
+            "wifi: evidence boundary context=driver-task console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio",
+        );
+        let boundary = Self::wifi_diag_boundary_proof(
             active_blocker,
             direct_proof_gate,
             reported_proof_gate,
-            reported_proof_gate,
             failing_gate,
-        ));
+        );
         self.emit_console_line(boundary.as_str());
         let next = format_message(format_args!(
             "wifi: next_action={} blocker={} proof_gate={} target_gate=10 source={}",
@@ -23832,6 +23922,147 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn wifi_fault_diagnostics_preserve_required_fields_within_line_capacity() {
+        let fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-chunk",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            flags: 0,
+            target_addr: 0x0019_8000,
+            payload_offset: 0,
+            payload_len: 8_192,
+            total_len: 609_309,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x5103,
+            reason: "sdio-descriptor-transfer-failed",
+            result: 0x0400_0000,
+        };
+        let owner = crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus {
+            stage: "cyw43-firmware-chunk",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            cmd: 53,
+            arg: 0,
+            function: 1,
+            addr: 0x0000_8000,
+            target_addr: 0x0019_8000,
+            effective_target: 0x0019_8000,
+            chunk_offset: 0,
+            payload_offset: 0,
+            increment: true,
+            write: true,
+            block_mode: true,
+            len: 64,
+            block_size: 64,
+            block_count: 1,
+            cmd53_count: 1,
+            desc_block_count: 1,
+            host_block_count: 1,
+            transfer_mode: 0,
+            host_control: 0x02,
+            host_mode: "4bit+bcm2835-no-hispd",
+            power_control: 0x0f,
+            clock_control: 0x0307,
+            clock_state: "internal+stable+card",
+            present_state: 0x01ef_0000,
+            int_status: 0,
+            response0: 0x0000_1000,
+            block_size_count_reg: 0x0001_7040,
+            detail: 0x5103,
+            reason: "sdio-descriptor-transfer-failed",
+            transfer_stage: "data-end",
+            transfer_status: 0,
+            transfer_reason: "sdhci-transfer-finish",
+            r5: 0,
+            owner_window: "sdio-shared-8192",
+            retry: "linux-normal-block",
+            payload_first: 0x98,
+            payload_last: 0xbe,
+            payload_xor: 0,
+            payload_sum: 0x28e8,
+        };
+
+        let evidence_summary = KernelConsoleTestPump::wifi_diag_cyw43_fault_summary(fault, true);
+        let fault_summary = KernelConsoleTestPump::wifi_diag_cyw43_fault_summary(fault, false);
+        let request = KernelConsoleTestPump::wifi_diag_cyw43_fault_request(fault, true);
+        let control = KernelConsoleTestPump::wifi_diag_cyw43_fault_control(fault, true);
+        let owner_identity = KernelConsoleTestPump::wifi_diag_sdio_owner_identity(owner);
+        let owner_transfer = KernelConsoleTestPump::wifi_diag_sdio_owner_transfer(owner);
+        let transfer_status = KernelConsoleTestPump::wifi_diag_sdio_transfer_status(owner);
+        let host_status = KernelConsoleTestPump::wifi_diag_sdio_host_status(owner);
+        let boundary = KernelConsoleTestPump::wifi_diag_boundary_proof(
+            "sdio-descriptor-transfer-failed",
+            1,
+            5,
+            6,
+        );
+
+        assert!(
+            evidence_summary.contains("reason=sdio-descriptor-transfer-failed")
+                && evidence_summary.contains("result=0x04000000")
+                && evidence_summary.contains("stage=cyw43-firmware-chunk"),
+            "{evidence_summary}"
+        );
+        assert!(
+            fault_summary.contains("reason=sdio-descriptor-transfer-failed")
+                && fault_summary.contains("result=0x04000000")
+                && fault_summary.contains("stage=cyw43-firmware-chunk"),
+            "{fault_summary}"
+        );
+        assert!(
+            request.contains("payload_len=8192") && request.contains("request_scope=parent-stage"),
+            "{request}"
+        );
+        assert!(control.contains("header_mode=not-control"), "{control}");
+        assert!(
+            owner_identity.contains("source=owner-terminal"),
+            "{owner_identity}"
+        );
+        assert!(
+            owner_transfer.contains("len=64")
+                && owner_transfer.contains("len_scope=child-transfer")
+                && owner_transfer.contains("cmd53_count=1"),
+            "{owner_transfer}"
+        );
+        assert!(
+            transfer_status.contains("transfer_reason=sdhci-transfer-finish")
+                && transfer_status.contains("transfer_status=0x000000"),
+            "{transfer_status}"
+        );
+        assert!(
+            host_status.contains("clock_state=internal+stable+card")
+                && host_status.contains("clock=0x0307"),
+            "{host_status}"
+        );
+        assert!(
+            boundary.contains("direct_proof_gate=1")
+                && boundary.contains("inferred_frontier_gate=5")
+                && boundary.contains("failure_domain=sdio-descriptor-transfer-failed"),
+            "{boundary}"
+        );
+        for line in [
+            evidence_summary,
+            fault_summary,
+            request,
+            control,
+            owner_identity,
+            owner_transfer,
+            transfer_status,
+            host_status,
+            boundary,
+        ] {
+            assert!(
+                line.len() < DEFAULT_LINE_CAPACITY,
+                "diagnostic line must be strictly shorter than {DEFAULT_LINE_CAPACITY} bytes: {line}"
+            );
+        }
+        const BOUNDARY_CONTEXT: &str = "wifi: evidence boundary context=driver-task console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio";
+        assert!(BOUNDARY_CONTEXT.len() < DEFAULT_LINE_CAPACITY);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_backplane_progress_names_every_retained_attach_frontier() {
         for (phase, blocker, next_action) in [
             (
@@ -26994,7 +27225,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: evidence boundary console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio failure_domain=host-eapol-required direct_proof_gate=7"
+                "wifi: evidence boundary proof=gate-frontier direct_proof_gate=7 inferred_frontier_gate=7 proof_gate=7 frontier_gate=7 failing_gate=8 target_gate=10 failure_domain=host-eapol-required"
             ),
             "{rendered}"
         );
@@ -27004,10 +27235,7 @@ mod tests {
             ),
             "{rendered}"
         );
-        assert!(
-            !rendered.contains("wifi: cyw43 fault stage=cyw43-control-exchange"),
-            "{rendered}"
-        );
+        assert!(!rendered.contains("wifi: cyw43 fault "), "{rendered}");
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -27048,7 +27276,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: evidence boundary console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio failure_domain=wifi-host-eapol-pending direct_proof_gate=7"
+                "wifi: evidence boundary proof=gate-frontier direct_proof_gate=7 inferred_frontier_gate=7 proof_gate=7 frontier_gate=7 failing_gate=8 target_gate=10 failure_domain=wifi-host-eapol-pending"
             ),
             "{rendered}"
         );
@@ -27099,7 +27327,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: evidence boundary console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio failure_domain=wifi-host-eapol-pending direct_proof_gate=7"
+                "wifi: evidence boundary proof=gate-frontier direct_proof_gate=7 inferred_frontier_gate=7 proof_gate=7 frontier_gate=7 failing_gate=8 target_gate=10 failure_domain=wifi-host-eapol-pending"
             ),
             "{rendered}"
         );
@@ -27109,7 +27337,7 @@ mod tests {
             ),
             "{rendered}"
         );
-        assert!(!rendered.contains("wifi: cyw43 fault stage="), "{rendered}");
+        assert!(!rendered.contains("wifi: cyw43 fault "), "{rendered}");
         assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
     }
 
