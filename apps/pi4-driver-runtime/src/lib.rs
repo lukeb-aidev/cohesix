@@ -128,7 +128,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE,
-    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW,
@@ -2980,7 +2980,7 @@ enum Cyw43BackplaneAttachPhase {
     AlpDeadline,
     ForceAlp,
     ForceAlpSettle,
-    PullupClear,
+    PullupPolicy,
     ChipCommonRead,
     Complete,
 }
@@ -10758,11 +10758,10 @@ fn sdio_generation_reprobe_cmd52_allowed(desc: DriverRuntimeSdioCommandDescripto
                             || v == (SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_FORCE_ALP)
                 )
         }
-        // Linux disables the CYW43's extra SDIO pull-ups during buscore
-        // attach. Admit only the exact write in a fresh generation; an
-        // issued-unknown completion poisons that generation and is never
-        // replayed.
-        SBSDIO_FUNC1_SDIOPULLUP => write && value == Some(0),
+        // Pi 4 skips the optional extra-pull-up write because an issued fault
+        // can poison the next command. Recovery must not gain authority to
+        // replay an operation that production never admits.
+        SBSDIO_FUNC1_SDIOPULLUP => false,
         SBSDIO_FUNC1_SBADDRLOW => !write || value == Some(window_low),
         SBSDIO_FUNC1_SBADDRMID => !write || value == Some(window_mid),
         SBSDIO_FUNC1_SBADDRHIGH => !write || value == Some(window_high),
@@ -18733,26 +18732,24 @@ fn cyw43_backplane_transport_init_step(
                 aux0,
             );
             if runtime_deadline_expired(&mut state.backplane_attach.deadline) {
-                state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupClear;
+                state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupPolicy;
             }
             Ok(false)
         }
-        Cyw43BackplaneAttachPhase::PullupClear => {
-            // Match brcmfmac after FORCE_ALP settles: clear the Broadcom extra
-            // pull-up before opening the first backplane window. This is one
-            // immutable CMD52 action in its own outer turn. Any failure is
-            // terminal for the generation because an issued-unknown write may
-            // not be replayed or bypassed.
+        Cyw43BackplaneAttachPhase::PullupPolicy => {
+            // Linux performs this Broadcom extra-pull-up write as best effort.
+            // On this Pi 4/mmc-bcm2835 path, however, the write can fail after
+            // issue and poison the immediately following CMD52 with
+            // END_BIT/INDEX errors. A host reset cannot prove whether that
+            // issued write reached the card, so continuing would violate the
+            // no-replay/issued-unknown generation contract. Cohesix therefore
+            // adapts the optional Linux step by preserving its retained turn
+            // while performing no child/HAL operation.
             publish_runtime_progress(
                 sequence,
-                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED,
                 aux0,
             );
-            if !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_SDIOPULLUP, 0) {
-                state.backplane_attach.poisoned = true;
-                state.recovery_required = true;
-                return Err(cyw43_take_last_fault_detail().unwrap_or(FAULT_CYW43_BACKPLANE_ALP));
-            }
             state.backplane_attach.phase = Cyw43BackplaneAttachPhase::ChipCommonRead;
             Ok(false)
         }
@@ -40118,13 +40115,12 @@ mod tests {
         assert!(sdio_generation_reprobe_op_allowed(caps_read));
         assert!(sdio_generation_reprobe_op_allowed(card_width));
         assert!(sdio_generation_reprobe_op_allowed(card_speed));
-        assert!(sdio_generation_reprobe_op_allowed(disable_extra_pullups));
+        assert!(!sdio_generation_reprobe_op_allowed(disable_extra_pullups));
         for value in u8::MIN..=u8::MAX {
             write_runtime_payload_byte(usize::from(payload) + 6, value);
-            assert_eq!(
-                sdio_generation_reprobe_op_allowed(disable_extra_pullups),
-                value == 0,
-                "only the exact pull-up clear may be reprobed for a new generation"
+            assert!(
+                !sdio_generation_reprobe_op_allowed(disable_extra_pullups),
+                "pull-up reprobe value {value:#04x} must remain forbidden"
             );
         }
         assert!(sdio_generation_reprobe_op_allowed(host_one_bit_fast));
@@ -60813,7 +60809,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_pullup_clear_consumes_one_retained_turn_and_one_exact_sdio_operation() {
+    fn cyw43_pullup_policy_consumes_one_retained_turn_without_an_sdio_operation() {
         let _guard = test_guard();
         reset_runtime_for_test();
         reset_test_sdio_transfer_log();
@@ -60822,7 +60818,7 @@ mod tests {
         state.dpc_shared_epoch = 7;
         state.backplane_attach.parent_sequence = sequence;
         state.backplane_attach.generation = state.dpc_shared_epoch;
-        state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupClear;
+        state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupPolicy;
 
         assert_eq!(
             cyw43_backplane_transport_init_step(
@@ -60836,19 +60832,15 @@ mod tests {
             state.backplane_attach.phase,
             Cyw43BackplaneAttachPhase::ChipCommonRead
         );
-        assert_eq!(test_sdio_transfer_total_count(), 1);
-        assert!(test_sdio_transfer_seen(|record| {
-            record.cmd == SDIO_CMD52
-                && record.arg == sdio_cmd52_arg(true, 1, SBSDIO_FUNC1_SDIOPULLUP, 0)
-        }));
+        assert_eq!(test_sdio_transfer_total_count(), 0);
         assert_eq!(
             read_ring_u32(DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize + 8),
-            DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED
         );
     }
 
     #[test]
-    fn cyw43_backplane_attach_clears_pullup_before_chipcommon_window() {
+    fn cyw43_backplane_attach_skips_optional_pullup_write_before_chipcommon_window() {
         let _guard = test_guard();
         reset_runtime_for_test();
         reset_test_sdio_transfer_log();
@@ -60880,11 +60872,6 @@ mod tests {
                     )
         })
         .expect("FORCE_ALP write");
-        let pullup_index = test_sdio_first_transfer_index(|record| {
-            record.cmd == SDIO_CMD52
-                && record.arg == sdio_cmd52_arg(true, 1, SBSDIO_FUNC1_SDIOPULLUP, 0)
-        })
-        .expect("extra pull-up clear");
         let (window_low, _, _) = cyw43_backplane_window_register_bytes(CYW43_CHIPCOMMON_BASE);
         let window_low_index = test_sdio_first_transfer_index(|record| {
             record.cmd == SDIO_CMD52
@@ -60893,20 +60880,19 @@ mod tests {
         .expect("ChipCommon window low write");
 
         assert!(request_index < force_index);
-        assert!(force_index < pullup_index);
-        assert!(pullup_index < window_low_index);
+        assert!(force_index < window_low_index);
         assert_eq!(
             test_sdio_transfer_count(|record| {
                 record.cmd == SDIO_CMD52
                     && (record.arg >> 28) & 0x7 == 1
                     && (record.arg >> 9) & 0x1ffff == SBSDIO_FUNC1_SDIOPULLUP
             }),
-            1
+            0
         );
     }
 
     #[test]
-    fn cyw43_generation_reprobe_trace_clears_pullup_exactly_once() {
+    fn cyw43_generation_reprobe_trace_never_targets_optional_pullup_register() {
         let _guard = test_guard();
         reset_runtime_for_test();
         reset_test_sdio_transfer_log();
@@ -60924,12 +60910,8 @@ mod tests {
                     && (record.arg >> 28) & 0x7 == 1
                     && (record.arg >> 9) & 0x1ffff == SBSDIO_FUNC1_SDIOPULLUP
             }),
-            1
+            0
         );
-        assert!(test_sdio_transfer_seen(|record| {
-            record.cmd == SDIO_CMD52
-                && record.arg == sdio_cmd52_arg(true, 1, SBSDIO_FUNC1_SDIOPULLUP, 0)
-        }));
         assert!(test_sdio_transfer_seen(|record| {
             record.cmd == SDIO_CMD52
                 && (record.arg >> 28) & 0x7 == 1
@@ -60938,21 +60920,16 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_pullup_clear_failure_poison_is_terminal_without_replay() {
+    fn cyw43_pullup_policy_rejects_a_stale_owner_without_an_sdio_operation() {
         let _guard = test_guard();
         reset_runtime_for_test();
         reset_test_sdio_transfer_log();
         let sequence = 82;
-        let generation = 8;
         let mut state = Cyw43RuntimeState::new();
-        state.dpc_shared_epoch = generation;
+        state.dpc_shared_epoch = 8;
         state.backplane_attach.parent_sequence = sequence;
-        state.backplane_attach.generation = generation;
-        state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupClear;
-        test_sdio_transfer_fail_next_arg(
-            SDIO_CMD52,
-            sdio_cmd52_arg(true, 1, SBSDIO_FUNC1_SDIOPULLUP, 0),
-        );
+        state.backplane_attach.generation = 7;
+        state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupPolicy;
 
         assert!(cyw43_backplane_transport_init_step(
             sequence,
@@ -60960,7 +60937,7 @@ mod tests {
             &mut state,
         )
         .is_err());
-        assert_eq!(test_sdio_transfer_total_count(), 1);
+        assert_eq!(test_sdio_transfer_total_count(), 0);
         assert!(state.backplane_attach.poisoned);
         assert!(state.recovery_required);
         assert!(cyw43_backplane_transport_init_step(
@@ -60969,7 +60946,7 @@ mod tests {
             &mut state,
         )
         .is_err());
-        assert_eq!(test_sdio_transfer_total_count(), 1);
+        assert_eq!(test_sdio_transfer_total_count(), 0);
         assert!(!test_sdio_transfer_seen(|record| {
             record.cmd == SDIO_CMD52 && (record.arg >> 9) & 0x1ffff == SBSDIO_FUNC1_SBADDRLOW
         }));

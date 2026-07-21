@@ -815,15 +815,16 @@ published only after their exact irreversible child completions.
 
 Serial evidence should name the exact frontier rather than leaving the generic
 backplane marker as an ALP diagnosis: ALP request, ALP poll, FORCE_ALP, its
-65-microsecond settle, the exact pull-up clear, ChipCommon read, and each
+65-microsecond settle, the Pi pull-up-policy skip, ChipCommon read, and each
 LOW/MID/HIGH backplane-window CMD52 have separate progress markers. Current Pi
-production must emit `BACKPLANE_PULLUP_CLEAR` for exactly one Function 1 CMD52
-write of zero to `SBSDIO_FUNC1_SDIOPULLUP`. Reads and nonzero values are not
-admitted. `BACKPLANE_PULLUP_SKIPPED` and
-`BACKPLANE_PULLUP_FAULT_CONTAINED` remain historical-parser-only markers. Any
-failed, issued-unknown, `OWNER_PATH_POISONED`, stale, or malformed result must
-poison the generation and request the ordered pair restart; host quiescence is
-not permission to continue or retry in place.
+production must emit `BACKPLANE_PULLUP_SKIPPED` and no Function 1 descriptor for
+`SBSDIO_FUNC1_SDIOPULLUP`. Upstream brcmfmac treats that optional write as best
+effort, but a post-issue fault on this BCM2711 path can poison the next CMD52;
+resetting the host does not prove card-side non-issue. Initial attach and
+generation reprobe therefore reject it. Any other issued-unknown,
+`OWNER_PATH_POISONED`, stale, or malformed result must poison the generation and
+request the ordered pair restart; host quiescence is not permission to continue
+or retry in place.
 Card selection uses CMD7 with the SDIO R1b short-busy response. Only the entry
 inhibit wait before `SDHCI_COMMAND` is written is retryable; a busy timeout after
 issue is retained as post-issue quiescence and cannot be replayed in-generation.

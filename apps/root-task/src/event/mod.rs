@@ -11328,11 +11328,6 @@ where
         } else {
             sdio_runtime_status
         };
-        let cyw43_fault_gate: Option<u8> = if explicit_join_security {
-            None
-        } else {
-            fault.map(Self::wifi_runtime_fault_gate)
-        };
         let sdio_replay_gate: Option<u8> =
             sdio_runtime_status.and_then(Self::wifi_sdio_runtime_replay_gate);
         let sdio_runtime_progress = if live_net_supersedes_runtime {
@@ -11353,6 +11348,17 @@ where
             .and_then(|progress| Self::wifi_sdio_runtime_progress_gate(progress.phase));
         let cyw43_progress_gate = cyw43_runtime_progress
             .and_then(|progress| Self::wifi_cyw43_runtime_progress_gate(progress.phase));
+        let cyw43_fault_gate: Option<u8> = if explicit_join_security {
+            None
+        } else {
+            fault.map(|fault| {
+                cyw43_runtime_progress
+                    .and_then(|progress| {
+                        Self::wifi_contextual_nested_sdio_fault_gate(fault, progress)
+                    })
+                    .unwrap_or_else(|| Self::wifi_runtime_fault_gate(fault))
+            })
+        };
         let cyw43_progress_suppresses_sdio_fallback =
             cyw43_runtime_progress.is_some_and(|progress| {
                 Self::wifi_cyw43_runtime_progress_suppresses_sdio_fallback(progress.phase)
@@ -11980,6 +11986,47 @@ where
             return 6;
         }
         Self::wifi_cyw43_fault_gate(fault.detail)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_contextual_nested_sdio_fault_gate(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+        progress: crate::hal::driver_task::DriverTaskRingProgressSnapshot,
+    ) -> Option<u8> {
+        // The progress record does not carry the parent op, so refine only
+        // through phases that are exclusive to that immutable fault op. The
+        // generic SDIO-owner send/wait phases are deliberately excluded: they
+        // occur under several CYW43 operations and may survive a later fault.
+        if !matches!(fault.detail, 0x5101..=0x5104)
+            || !progress.marker_valid
+            || progress.aux0 != pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_AUX
+            || !Self::wifi_cyw43_progress_phase_matches_operation(fault.op, progress.phase)
+        {
+            return None;
+        }
+        Self::wifi_cyw43_runtime_progress_gate(progress.phase)
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_cyw43_progress_phase_matches_operation(op: u16, phase: u32) -> bool {
+        match op {
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT => {
+                (phase
+                    >= pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_BEGIN
+                    && phase
+                        <= pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD7_SELECT_BEGIN)
+                    || (phase
+                        >= pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST
+                        && phase
+                            <= pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED)
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE => {
+                phase >= pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN
+                    && phase
+                        <= pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE
+            }
+            _ => false,
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -24398,6 +24445,80 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn wifi_nested_sdio_fault_uses_only_same_operation_progress_gate() {
+        let transport_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-transport-init",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x5103,
+            reason: "sdio-descriptor-transfer-failed",
+            result: 0x020c_8000,
+        };
+        let window_low = crate::hal::driver_task::DriverTaskRingProgressSnapshot {
+            marker_valid: true,
+            sequence: 3,
+            phase: pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW,
+            phase_name: "cyw43-backplane-window-low",
+            aux0: pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        };
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_contextual_nested_sdio_fault_gate(
+                transport_fault,
+                window_low,
+            ),
+            Some(5)
+        );
+
+        let unrelated_firmware_fault =
+            crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+                stage: "cyw43-firmware-chunk",
+                op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+                ..transport_fault
+            };
+        assert_eq!(
+            KernelConsoleTestPump::wifi_contextual_nested_sdio_fault_gate(
+                unrelated_firmware_fault,
+                window_low,
+            ),
+            None,
+            "stale transport progress must not relabel a firmware transfer fault"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_gate(unrelated_firmware_fault),
+            6
+        );
+
+        let explicit_backplane_fault =
+            crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+                detail: 0x5321,
+                reason: "cyw43-backplane-window",
+                ..transport_fault
+            };
+        assert_eq!(
+            KernelConsoleTestPump::wifi_contextual_nested_sdio_fault_gate(
+                explicit_backplane_fault,
+                window_low,
+            ),
+            None,
+            "an explicit fault detail must retain its own gate mapping"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_gate(explicit_backplane_fault),
+            5
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_fault_diagnostics_preserve_required_fields_within_line_capacity() {
         let fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
             stage: "cyw43-firmware-chunk",
@@ -27912,6 +28033,80 @@ mod tests {
         );
         assert!(
             rendered.contains("phase_name=cyw43-control-rx-poll-begin"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-replay-failure"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_diag_attributes_transport_sdio_fault_to_backplane_gate() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            cyw43,
+            3,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        crate::drivers::driver_task_net::test_record_cyw43_runtime_command_fault_status(
+            crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+                stage: "cyw43-transport-init",
+                op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+                flags: 0,
+                target_addr: 0,
+                payload_offset: 0,
+                payload_len: 0,
+                total_len: 0,
+                control_cmd: 0,
+                control_id: 0,
+                control_header_mode: "not-control",
+                control_response_len: 0,
+                detail: 0x5103,
+                reason: "sdio-descriptor-transfer-failed",
+                result: 0x020c_8000,
+            },
+        );
+
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        let mut transcript = Vec::new();
+        for _ in 0..256 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        }
+
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("wifi: cyw43 last_progress marker_valid=yes sequence=3 phase=454 phase_name=cyw43-backplane-window-low"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 5 name=backplane-window status=fail"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 6 name=firmware-upload status=blocked"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("inferred_frontier_gate=4")
+                && rendered.contains("failing_gate=5")
+                && rendered.contains("failure_domain=sdio-descriptor-transfer-failed"),
             "{rendered}"
         );
         assert!(

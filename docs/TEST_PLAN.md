@@ -653,18 +653,17 @@ The first read must validate the request's writable bits while allowing only
 the asynchronous availability bits to differ. Boundary tests must prove the
 absolute one-second deadline, including that its terminal observation spends a
 turn and cannot issue another CMD52. Per-command progress must identify ALP
-request/poll, FORCE_ALP/settle, `BACKPLANE_PULLUP_CLEAR`, ChipCommon read, and
+request/poll, FORCE_ALP/settle, `BACKPLANE_PULLUP_SKIPPED`, ChipCommon read, and
 each LOW/MID/HIGH window CMD52 so a generic backplane phase cannot misclassify
 the stalled command.
 
-The production pull-up-clear turn must perform exactly one immutable Function 1
-CMD52 write of zero to `SBSDIO_FUNC1_SDIOPULLUP` and return before the first
-ChipCommon action. Full initial-attach and generation-reprobe traces must each
-contain that descriptor exactly once; reprobe admission must accept only that
-write and reject reads or nonzero values. A stale owner/generation, failed
-completion, or issued-unknown result must poison the generation and perform no
-same-generation replay. Legacy phase 451/452 parser tests may preserve
-old-capture decodability, but `BACKPLANE_PULLUP_SKIPPED` and
+The production pull-up-policy turn must perform exactly zero CMD52, CMD53,
+child-runtime, or HAL operations and return before the first ChipCommon action.
+Full initial-attach and generation-reprobe traces must contain zero descriptors
+targeting `SBSDIO_FUNC1_SDIOPULLUP`; the reprobe admission test must reject that
+address for every value. A stale owner or generation must still be rejected
+without I/O. Legacy phase 451/452 parser tests may preserve old-capture
+decodability, but `BACKPLANE_PULLUP_CLEAR` and
 `BACKPLANE_PULLUP_FAULT_CONTAINED` cannot satisfy current-image acceptance.
 
 Pair-restart coverage must preserve the 22 logical
