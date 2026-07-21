@@ -273,6 +273,8 @@ pub fn main(ctx: BootContext) -> ! {
             {
                 pump = attach_network(pump, None, net_unavailable_detail.take());
             }
+            #[cfg(all(feature = "net-console", feature = "kernel"))]
+            pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
             // Publish serial/local-seat before touching the potentially slow
             // physical Wi-Fi bootstrap. The supervisor below polls these
             // operator surfaces between complete, fenced retry attempts.
@@ -746,6 +748,10 @@ impl DeferredNetSupervisorStatus {
             _ => attempt != 0 && attempt <= CYW43_BOOTSTRAP_MAX_ATTEMPTS,
         }
     }
+
+    const fn releases_hdmi_console_ready(self) -> bool {
+        matches!(self, Self::Ready | Self::Exhausted | Self::Permanent)
+    }
 }
 
 #[cfg(all(
@@ -799,7 +805,11 @@ fn format_deferred_net_bootstrap_supervisor_semantic_status(
         backoff_ms,
         next_attempt_ms,
         if serial_ready { "ready" } else { "blocked" },
-        if local_seat_enabled { "ready" } else { "disabled" },
+        if local_seat_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
     )
     .is_err()
     {
@@ -825,7 +835,7 @@ pub(crate) fn format_deferred_net_bootstrap_supervisor_display_status(
     let mut line = HeaplessString::new();
     let failed = match status {
         DeferredNetSupervisorStatus::Preflight if serial_ready => {
-            line.push_str("[drivers] WiFi operator path ready; bootstrap pending")
+            line.push_str("[drivers] WiFi bootstrap pending; operator diagnostics available")
                 .is_err()
         }
         DeferredNetSupervisorStatus::Preflight => {
@@ -966,8 +976,11 @@ fn emit_deferred_net_bootstrap_supervisor_status<
     // turn performs the flush, separately from any CYW43 operation. Before
     // cutover, pass only the semantic payload to the raw route because that
     // route appends its own ordering suffix.
-    if !pump.queue_cyw43_bootstrap_supervisor_status(linked_line.as_str(), display_line.as_str())
-        && raw_fallback_allowed
+    if !pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
+        linked_line.as_str(),
+        display_line.as_str(),
+        status.releases_hdmi_console_ready(),
+    ) && raw_fallback_allowed
     {
         let raw_console_sequence = match u32::try_from(console_sequence) {
             Ok(sequence) => sequence,
@@ -2105,7 +2118,7 @@ mod tests {
         )
         .expect("preflight supervisor semantic record must fit");
 
-        assert!(semantic.ends_with("serial=blocked local_seat=ready recovery=full"));
+        assert!(semantic.ends_with("serial=blocked local_seat=enabled recovery=full"));
         for routing_field in ["console_seq=", "telemetry_sinks=", "prompt_refresh="] {
             assert_eq!(
                 semantic.matches(routing_field).count(),
@@ -2215,7 +2228,7 @@ mod tests {
                 super::DeferredNetSupervisorStatus::Preflight,
                 0,
                 true,
-                "[drivers] WiFi operator path ready; bootstrap pending",
+                "[drivers] WiFi bootstrap pending; operator diagnostics available",
             ),
             (
                 0,
@@ -2277,6 +2290,12 @@ mod tests {
             assert_eq!(line.as_str(), expected);
             assert!(!line.contains("CYW43_BOOTSTRAP_SUPERVISOR"));
         }
+        assert!(!super::DeferredNetSupervisorStatus::Preflight.releases_hdmi_console_ready());
+        assert!(!super::DeferredNetSupervisorStatus::Begin.releases_hdmi_console_ready());
+        assert!(!super::DeferredNetSupervisorStatus::Backoff.releases_hdmi_console_ready());
+        assert!(super::DeferredNetSupervisorStatus::Ready.releases_hdmi_console_ready());
+        assert!(super::DeferredNetSupervisorStatus::Exhausted.releases_hdmi_console_ready());
+        assert!(super::DeferredNetSupervisorStatus::Permanent.releases_hdmi_console_ready());
     }
 
     #[cfg(all(

@@ -707,7 +707,18 @@ This as-built closure is authorized by Milestone 26d task
   field counts actual owner-notification publications after consumed events;
   the distinct source-asserted-empty episode-rearm counter is diagnostic only
   and cannot be substituted for owner liveness.
-- Physical-Pi Wi-Fi bootstrap is supervised after the serial/local-seat prompt.
+- Physical-Pi Wi-Fi bootstrap is supervised after the serial prompt. Buffered
+  USB command fencing remains live during that finite episode, but HDMI keeps
+  its interactive ready banner and prompt deferred until the supervisor emits
+  `ready`, `exhausted`, or `permanent` and USB command admission is proven.
+  Pre-terminal HDMI text reports startup/diagnostic availability only. The
+  linked display schedules its canonical attach snapshot once, immediately at
+  successful attach and before queued incremental startup text can drain.
+  Pre-terminal USB bytes remain parser-buffered without opening an unprompted
+  HDMI row. Later Wi-Fi milestones are inserted above an open command row with
+  that exact prompt and typed row restored and cleared to end-of-line; a closed
+  command retains its newline before response text, rather than restarting a
+  viewport redraw.
   One bootstrap or recovery episode permits at most five attempts, separated
   by bounded `1/2/4/8` second virtual-counter backoffs. This finite bound is
   analogous to brcmfmac's `BRCMF_SDIO_MAX_ACCESS_ERRORS = 5` SDIO-access error
@@ -835,12 +846,15 @@ This as-built closure is authorized by Milestone 26d task
   nonterminal background breadcrumb and can never evict an `ACK`/`ERR`/`END`
   tail or prompt. Serial and `/log/queen.log` retain the exact machine record.
   The twelve-entry HDMI FIFO retains one concise typed `[drivers] WiFi ...`
-  rendering of each transition in the same order; HDMI does not receive or
-  display the machine record verbatim. Thus
+  rendering of each transition in the same order, with a separate bounded
+  terminal reserve if delayed display service has already filled that FIFO;
+  HDMI does not receive or display the machine record verbatim. Thus
   `telemetry_sinks=serial+qlog+hdmi` declares the configured semantic routing
   targets, not byte-identical formatting or delivery proof. When HDMI is
   available and its bounded FIFO admits the transition, one display rendering
   is submitted only on a later `Display` turn.
+  The machine record reports `local_seat=enabled|disabled`; this is manifest
+  configuration, not USB keyboard command-ready proof.
   The typed `[net-console] deferred failed detail=...` record immediately
   preceding a generic `permanent` status shares that retained serial class.
   Other nonterminal detail/result and sparse `CYW43_BOOTSTRAP_TURN` lines remain

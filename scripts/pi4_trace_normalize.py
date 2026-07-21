@@ -91,7 +91,8 @@ CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE = re.compile(
     r"(?P<production_suffix>.*)$"
 )
 CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE = re.compile(
-    r"^ serial=(?P<serial>ready|blocked) local_seat=(?:ready|disabled) "
+    r"^ serial=(?P<serial>ready|blocked) "
+    r"local_seat=(?:enabled|disabled|ready) "
     r"recovery=full "
     r"console_seq=(?P<console_seq>[0-9]+) "
     r"telemetry_sinks=serial\+qlog\+hdmi "

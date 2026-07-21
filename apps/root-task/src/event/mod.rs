@@ -1937,6 +1937,13 @@ impl PendingConsoleOutput {
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingCyw43BootstrapHdmiMilestone {
+    text: HeaplessString<DEFAULT_LINE_CAPACITY>,
+    releases_console_ready: bool,
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WifiDebugCommand {
     Help,
@@ -2078,10 +2085,10 @@ where
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_pending: bool,
     #[cfg(feature = "kernel")]
-    pending_cyw43_bootstrap_hdmi_milestones: HeaplessDeque<
-        HeaplessString<DEFAULT_LINE_CAPACITY>,
-        CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY,
-    >,
+    pending_cyw43_bootstrap_hdmi_milestones:
+        HeaplessDeque<PendingCyw43BootstrapHdmiMilestone, CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY>,
+    #[cfg(feature = "kernel")]
+    pending_cyw43_bootstrap_hdmi_terminal_milestone: Option<PendingCyw43BootstrapHdmiMilestone>,
     #[cfg(feature = "kernel")]
     pending_cyw43_bootstrap_serial_milestones: HeaplessDeque<
         HeaplessString<DEFAULT_LINE_CAPACITY>,
@@ -2089,6 +2096,8 @@ where
     >,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_last_operator_turn_was_display: bool,
+    #[cfg(feature = "kernel")]
+    cyw43_bootstrap_hdmi_ready_deferred: bool,
     local_seat: Option<&'a mut LocalSeatRuntime>,
     #[cfg(test)]
     test_pi4_debug_commands: bool,
@@ -2241,9 +2250,13 @@ where
             #[cfg(feature = "kernel")]
             pending_cyw43_bootstrap_hdmi_milestones: HeaplessDeque::new(),
             #[cfg(feature = "kernel")]
+            pending_cyw43_bootstrap_hdmi_terminal_milestone: None,
+            #[cfg(feature = "kernel")]
             pending_cyw43_bootstrap_serial_milestones: HeaplessDeque::new(),
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_last_operator_turn_was_display: false,
+            #[cfg(feature = "kernel")]
+            cyw43_bootstrap_hdmi_ready_deferred: false,
             local_seat: None,
             #[cfg(test)]
             test_pi4_debug_commands: false,
@@ -2798,24 +2811,61 @@ where
         serial_line: &str,
         hdmi_line: &str,
     ) -> bool {
+        self.queue_cyw43_bootstrap_supervisor_status_with_terminal(serial_line, hdmi_line, false)
+    }
+
+    /// Queue a supervisor record and mark whether it ends the startup episode.
+    ///
+    /// The marker travels in the same retained display sequence as the text,
+    /// with one terminal reserve behind a saturated ordinary FIFO. This keeps
+    /// the final HDMI banner and prompt behind delayed Wi-Fi milestones while
+    /// preserving one linked display operation per turn.
+    #[cfg(feature = "kernel")]
+    pub fn queue_cyw43_bootstrap_supervisor_status_with_terminal(
+        &mut self,
+        serial_line: &str,
+        hdmi_line: &str,
+        releases_console_ready: bool,
+    ) -> bool {
         if self.local_seat.is_some() {
             let mut milestone = HeaplessString::new();
             if milestone.push_str(hdmi_line).is_err() {
                 return false;
             }
-            if self
+            let retained = PendingCyw43BootstrapHdmiMilestone {
+                text: milestone,
+                releases_console_ready,
+            };
+            match self
                 .pending_cyw43_bootstrap_hdmi_milestones
-                .push_back(milestone)
-                .is_ok()
+                .push_back(retained)
             {
-                self.cyw43_bootstrap_hdmi_pending = true;
-            } else {
-                // The finite supervisor episode is sized to fit this queue.
-                // Preserve existing HDMI milestones without coupling HDMI
-                // backpressure to the independent serial/log route below.
-                crate::log_buffer::append_log_line(
-                    "CYW43_BOOTSTRAP_HDMI_QUEUE status=full action=preserve-existing-milestones",
-                );
+                Ok(()) => {
+                    self.cyw43_bootstrap_hdmi_pending = true;
+                }
+                Err(terminal)
+                    if terminal.releases_console_ready
+                        && self
+                            .pending_cyw43_bootstrap_hdmi_terminal_milestone
+                            .is_none() =>
+                {
+                    // A terminal status is a liveness transition, not optional
+                    // display chatter. Retain it behind every already-queued
+                    // milestone even if delayed HDMI service filled the normal
+                    // FIFO, so the ready banner and prompt cannot stay fenced.
+                    self.pending_cyw43_bootstrap_hdmi_terminal_milestone = Some(terminal);
+                    self.cyw43_bootstrap_hdmi_pending = true;
+                    crate::log_buffer::append_log_line(
+                        "CYW43_BOOTSTRAP_HDMI_QUEUE status=terminal-reserved action=release-after-retained-milestones",
+                    );
+                }
+                Err(_) => {
+                    // Preserve existing HDMI milestones without coupling HDMI
+                    // backpressure to the independent serial/log route below.
+                    crate::log_buffer::append_log_line(
+                        "CYW43_BOOTSTRAP_HDMI_QUEUE status=full action=preserve-existing-milestones",
+                    );
+                }
             }
         }
         self.queue_cyw43_bootstrap_operator_line(serial_line)
@@ -2831,17 +2881,29 @@ where
         if self.reboot_pending || self.physical_console_response_pending() {
             return false;
         }
-        let milestone_pending = !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty();
+        let milestone_pending = !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty()
+            || self
+                .pending_cyw43_bootstrap_hdmi_terminal_milestone
+                .is_some();
         if !milestone_pending && !self.cyw43_bootstrap_hdmi_pending {
             return false;
         }
         let Some(runtime) = self.local_seat.as_mut() else {
             self.pending_cyw43_bootstrap_hdmi_milestones.clear();
+            self.pending_cyw43_bootstrap_hdmi_terminal_milestone = None;
             self.cyw43_bootstrap_hdmi_pending = false;
             return false;
         };
-        if let Some(line) = self.pending_cyw43_bootstrap_hdmi_milestones.pop_front() {
-            runtime.mirror_high_impact_line(line.as_str());
+        let milestone = self
+            .pending_cyw43_bootstrap_hdmi_milestones
+            .pop_front()
+            .or_else(|| self.pending_cyw43_bootstrap_hdmi_terminal_milestone.take());
+        if let Some(milestone) = milestone {
+            runtime.mirror_high_impact_line(milestone.text.as_str());
+            if milestone.releases_console_ready && self.cyw43_bootstrap_hdmi_ready_deferred {
+                runtime.mark_cyw43_bootstrap_terminal_for_hdmi();
+                self.cyw43_bootstrap_hdmi_ready_deferred = false;
+            }
         }
         if runtime.pump_linked_hdmi_once() {
             self.metrics.local_seat_hdmi_pump_turns =
@@ -2849,8 +2911,23 @@ where
         }
         self.cyw43_bootstrap_hdmi_pending =
             !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty()
+                || self
+                    .pending_cyw43_bootstrap_hdmi_terminal_milestone
+                    .is_some()
                 || runtime.linked_hdmi_pending_work();
         true
+    }
+
+    /// Keep only the HDMI ready banner and prompt behind the Wi-Fi terminal.
+    ///
+    /// The serial prompt and buffered USB command fence remain active before
+    /// the five-attempt episode begins.
+    #[cfg(feature = "kernel")]
+    pub fn defer_local_seat_hdmi_ready_until_cyw43_terminal(&mut self) {
+        self.cyw43_bootstrap_hdmi_ready_deferred = true;
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.defer_hdmi_console_ready_until_cyw43_terminal();
+        }
     }
 
     /// Whether a deferred CYW43 bootstrap may begin after an ordinary pump.
@@ -3359,7 +3436,16 @@ where
         let local_seat_command_ready = if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();
             let command_ready = runtime.usb_keyboard_command_ready_latched();
-            if command_ready {
+            #[cfg(feature = "kernel")]
+            let hdmi_ready_deferred = self.cyw43_bootstrap_hdmi_ready_deferred;
+            #[cfg(not(feature = "kernel"))]
+            let hdmi_ready_deferred = false;
+            if hdmi_ready_deferred {
+                runtime.mirror_line("Cohesix startup in progress; serial console available");
+            } else if runtime.hdmi_console_ready_line_emitted() {
+                // The linked USB admission transition already queued the final
+                // banner. Do not duplicate it from the root-console surface.
+            } else if command_ready {
                 runtime.mirror_line("Cohesix console ready");
             } else {
                 runtime.mirror_line("Cohesix serial console ready");
@@ -18431,6 +18517,129 @@ mod tests {
             .any(|line| line.as_str() == CONSOLE_PROMPT));
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn deferred_wifi_hdmi_ready_releases_only_after_terminal_milestone() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 96,
+            buffer_lines: 16,
+        });
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat);
+            pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
+            pump.announce_console_ready();
+
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .hdmi_bootstrap_terminal_ready());
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| {
+                    line.as_str() == "Cohesix startup in progress; serial console available"
+                }));
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| line.as_str() == "Cohesix serial console ready"));
+
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin",
+                "[drivers] WiFi bootstrap attempt 1/5 starting",
+                false,
+            ));
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=5 status=exhausted",
+                "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active",
+                true,
+            ));
+
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .hdmi_bootstrap_terminal_ready());
+            pump.local_seat
+                .as_mut()
+                .unwrap()
+                .release_linked_hdmi_console_for_test(CONSOLE_PROMPT);
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| line.as_str() == "Cohesix console ready"));
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .hdmi_bootstrap_terminal_ready());
+            let runtime = pump.local_seat.as_mut().unwrap();
+            runtime.release_linked_hdmi_console_for_test(CONSOLE_PROMPT);
+            runtime.release_linked_hdmi_console_for_test(CONSOLE_PROMPT);
+        }
+
+        let lines = local_seat.mirrored_lines_snapshot();
+        let begin = lines
+            .iter()
+            .position(|line| line == "[drivers] WiFi bootstrap attempt 1/5 starting")
+            .expect("begin milestone reaches HDMI first");
+        let terminal = lines
+            .iter()
+            .position(|line| {
+                line == "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active"
+            })
+            .expect("terminal milestone reaches HDMI");
+        let ready = lines
+            .iter()
+            .position(|line| line == "Cohesix console ready")
+            .expect("one final ready banner follows the terminal milestone");
+        let prompt = lines
+            .iter()
+            .position(|line| line == CONSOLE_PROMPT)
+            .expect("interactive prompt follows the ready banner");
+        assert!(begin < terminal);
+        assert!(terminal < ready);
+        assert!(ready < prompt);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.as_str() == "Cohesix console ready")
+                .count(),
+            1
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.as_str() == CONSOLE_PROMPT)
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn console_ready_announcement_is_idempotent() {
         let driver = LoopbackSerial::<8192>::new();
@@ -26012,7 +26221,7 @@ mod tests {
             assert_eq!(
                 pump.pending_cyw43_bootstrap_hdmi_milestones
                     .back()
-                    .map(|line| line.as_str()),
+                    .map(|milestone| milestone.text.as_str()),
                 Some(display.as_str()),
             );
 
@@ -26375,7 +26584,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn delayed_cyw43_hdmi_fifo_retains_all_twelve_production_milestones() {
+    fn delayed_cyw43_hdmi_fifo_retains_full_queue_and_terminal_release() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -26495,14 +26704,26 @@ mod tests {
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_local_seat(&mut local_seat);
+            pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
             for (status, display) in statuses.iter().zip(&displays) {
-                assert!(pump
-                    .queue_cyw43_bootstrap_supervisor_status(status.as_str(), display.as_str(),));
+                assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
+                    status.as_str(),
+                    display.as_str(),
+                    false,
+                ));
             }
             assert_eq!(
                 pump.pending_cyw43_bootstrap_hdmi_milestones.len(),
                 CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY
             );
+            assert!(pump
+                .pending_cyw43_bootstrap_hdmi_terminal_milestone
+                .is_none());
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .hdmi_bootstrap_terminal_ready());
             let serial_statuses: Vec<String> = pump
                 .pending_console_output
                 .iter()
@@ -26527,7 +26748,7 @@ mod tests {
             let retained: Vec<String> = pump
                 .pending_cyw43_bootstrap_hdmi_milestones
                 .iter()
-                .map(|line| line.as_str().to_owned())
+                .map(|milestone| milestone.text.as_str().to_owned())
                 .collect();
             assert_eq!(
                 retained,
@@ -26537,16 +26758,16 @@ mod tests {
                     .collect::<Vec<_>>()
             );
 
-            // Saturate the independent serial chatter budget. The thirteenth
-            // HDMI record is rejected without overwriting the FIFO, while its
-            // terminal serial copy evicts only lower-impact chatter.
+            // Saturate the independent serial chatter budget. A thirteenth
+            // terminal HDMI record must be retained behind the full FIFO;
+            // otherwise delayed display service could fence readiness forever.
             pump.physical_response_barrier = PhysicalResponseBarrier::Idle;
             let typed_failure = "[net-console] deferred failed detail=thirteenth-attempt-rejected";
             assert!(pump.queue_cyw43_bootstrap_operator_line(typed_failure));
             assert_eq!(
                 pump.pending_cyw43_bootstrap_hdmi_milestones
                     .iter()
-                    .map(|line| line.as_str().to_owned())
+                    .map(|milestone| milestone.text.as_str().to_owned())
                     .collect::<Vec<_>>(),
                 retained,
                 "typed serial failures must not consume HDMI milestone slots"
@@ -26561,19 +26782,27 @@ mod tests {
                     line.as_str(),
                 ));
             }
-            assert!(pump.queue_cyw43_bootstrap_supervisor_status(
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
                 rejected.as_str(),
                 rejected_display.as_str(),
+                true,
             ));
             let retained_after_rejection: Vec<String> = pump
                 .pending_cyw43_bootstrap_hdmi_milestones
                 .iter()
-                .map(|line| line.as_str().to_owned())
+                .map(|milestone| milestone.text.as_str().to_owned())
                 .collect();
             assert_eq!(retained_after_rejection, retained);
             assert!(!retained_after_rejection
                 .iter()
                 .any(|line| line == rejected.as_str()));
+            assert!(pump
+                .pending_cyw43_bootstrap_hdmi_terminal_milestone
+                .as_ref()
+                .is_some_and(|milestone| {
+                    milestone.text.as_str() == rejected_display.as_str()
+                        && milestone.releases_console_ready
+                }));
             assert!(pump.pending_console_output.iter().any(|output| {
                 output.kind == PendingConsoleOutputKind::HighImpactLine
                     && output.text.as_str() == rejected.as_str()
@@ -26592,10 +26821,22 @@ mod tests {
 
             let mut display_turns = 0usize;
             for _ in 0..64 {
-                let before = pump.pending_cyw43_bootstrap_hdmi_milestones.len();
+                let before = pump
+                    .pending_cyw43_bootstrap_hdmi_milestones
+                    .len()
+                    .saturating_add(usize::from(
+                        pump.pending_cyw43_bootstrap_hdmi_terminal_milestone
+                            .is_some(),
+                    ));
                 pump.poll_cyw43_bootstrap_supervisor_event_turn();
                 let _ = crate::serial::test_take_linked_runtime_only_tx();
-                let after = pump.pending_cyw43_bootstrap_hdmi_milestones.len();
+                let after = pump
+                    .pending_cyw43_bootstrap_hdmi_milestones
+                    .len()
+                    .saturating_add(usize::from(
+                        pump.pending_cyw43_bootstrap_hdmi_terminal_milestone
+                            .is_some(),
+                    ));
                 assert!(before.saturating_sub(after) <= 1);
                 if after < before {
                     display_turns = display_turns.saturating_add(1);
@@ -26604,8 +26845,15 @@ mod tests {
                     break;
                 }
             }
-            assert_eq!(display_turns, CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY);
+            assert_eq!(display_turns, CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY + 1);
             assert!(pump.pending_cyw43_bootstrap_hdmi_milestones.is_empty());
+            assert!(pump
+                .pending_cyw43_bootstrap_hdmi_terminal_milestone
+                .is_none());
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .is_some_and(|runtime| runtime.hdmi_bootstrap_terminal_ready()));
         }
 
         let mirrored: Vec<String> = local_seat
@@ -26619,6 +26867,7 @@ mod tests {
             displays
                 .iter()
                 .map(|line| line.as_str().to_owned())
+                .chain(core::iter::once(rejected_display.as_str().to_owned()))
                 .collect::<Vec<_>>()
         );
     }

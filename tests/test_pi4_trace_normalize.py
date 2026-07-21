@@ -13817,7 +13817,7 @@ def bootstrap_supervisor_line(
     return (
         f"CYW43_BOOTSTRAP_SUPERVISOR attempt={attempt} status={status} "
         f"backoff_ms={backoff_ms} next_attempt_ms={next_attempt_ms} "
-        f"serial={serial} local_seat=ready recovery=full "
+        f"serial={serial} local_seat=enabled recovery=full "
         f"console_seq={console_seq} "
         "telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes"
     )
