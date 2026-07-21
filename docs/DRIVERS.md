@@ -412,6 +412,21 @@ This as-built closure is authorized by Milestone 26d task
   startup host configuration, `CMD0`, discovery `CMD5(0)`, bounded ready
   `CMD5(OCR)`, `CMD3`, and `CMD7` with the required short-busy R1b response. Generation
   reset completion, enumeration, and generation commit remain separate turns.
+  After CMD7, a request- and generation-bound card-lane cursor reads CCCR
+  revision and capabilities on separate outer turns. It rejects an unsupported
+  revision, missing `CAP_SMB`, or a low-speed card without `4BLS` before any
+  FBR or firmware write; Cohesix does not create a compatibility lane. It then
+  reads CCCR `SPEED`, requires SHS, enables and verifies EHS, programs the
+  selected high-speed host clock while the host remains one-bit, read-modify-writes
+  and verifies CCCR `IF` while preserving non-width bits, and only then
+  programs the host for four-bit operation. Function 1 block size 64,
+  Function 2 block size 512, and Function 1 enable follow only after that
+  retained adoption completes. Stale ownership, a changed generation, or an
+  issued-unknown completion poisons the lane and requires ordered pair
+  recovery. During an admitted E to E+1 pair reset, the rebuilt card facts are
+  owned by pending epoch E+1 even while reciprocal commands still traverse the
+  old sealed link; the exact generation commit makes E+1 active without
+  relabeling or reusing any E-owned fact.
   Same-command retries are admitted only for an entry-inhibit result proving
   the command register was never written. A CMD7 busy timeout is recorded as
   post-issue quiescence; command, response, busy, and later failure stages are
@@ -518,8 +533,10 @@ This as-built closure is authorized by Milestone 26d task
   BCM2835 DMA engine immediately after command issue. The external engine does
   not set `SDHCI_TRNS_DMA`; that bit belongs to SDHCI's internal DMA mode, not
   Linux's `dmaengine` path. SDHCI `readl`/`writel` access retains the AArch64
-  device-ordering barriers used by Linux, and asynchronous `CARD_INT` remains
-  outside request-local W1C ownership.
+  device-ordering barriers used by Linux. Request-local interrupt policy
+  enables and acknowledges `DMA_END` as progress/status, but `DMA_END` never
+  substitutes for `DATA_END`; asynchronous `CARD_INT` remains outside
+  request-local W1C ownership.
 - The compiler-declared SDIO owner has exactly three MMIO pages and four low,
   uncached DMA pages. MMIO page 0 owns SDHCI at `0xfe300000`, page 1 owns the
   firmware mailbox aperture, and page 2 owns the BCM2835 DMA controller at
@@ -541,20 +558,23 @@ This as-built closure is authorized by Milestone 26d task
   Linux's DMA-capable host behavior: Linux may retain PIO below its configured
   DMA barrier, while Cohesix fails closed instead because maintaining two
   physical data engines would create divergent ownership and recovery paths.
-  Function 1 firmware streaming uses the existing bounded 8,192-byte shared
-  stage as one incrementing block-mode request with 64-byte blocks and count
-  128 whenever the 32-KiB backplane window permits. This is the closest bounded
-  linked-runtime adaptation of Linux's larger `brcmf_sdiod_ramrw` batching;
-  only the window boundary, CMD53 count bound, or true final remainder changes
-  the protocol request length, never the transfer engine.
+  Function 1 firmware streaming retains the bounded 8,192-byte shared stage,
+  but drains it as at most four 2-KiB Linux `MEMBLOCK`-aligned CMD53 commands.
+  Each full command uses 64-byte blocks with count 32 and consumes its own
+  outer EventPump operation. Window edges and the true final remainder may
+  shorten a command; they do not select another transfer engine or
+  compatibility boot lane. Block mode is legal only after retained `CAP_SMB`
+  proof.
 - Noncontiguous bounce pages produce one immutable control block per physical
   segment. Writes copy the reciprocal-ring payload into the bounce arena before
   the DMA store barrier; reads apply the DMA load barrier before copying back.
   Completion requires both `CONBLK_AD == 0` with no DMA `CS.ERROR` and SDHCI
-  `DATA_END`, in either arrival order. A deadline or either-engine error records
-  pre-containment SDHCI and DMA state, clears `NEXTCB`, performs the bounded
-  channel-local abort/reset, resets the SDHCI command/data path, and returns an
-  issued-unknown result. It never replays that action in the same generation.
+  `DATA_END`, in either arrival order. `DMA_END` is enabled and acknowledged
+  as Linux-shaped progress only; it cannot satisfy either terminal join
+  condition. A deadline or either-engine error records pre-containment SDHCI
+  and DMA state, clears `NEXTCB`, performs the bounded channel-local
+  abort/reset, resets the SDHCI command/data path, and returns an issued-unknown
+  result. It never replays that action in the same generation.
 - A failed owner transfer snapshots present state, interrupt status, response,
   host/power/clock state, block-size/count, and DMA `CS`, `CONBLK_AD`, and
   `NEXTCB` before command/data containment clears or resets either engine. The
@@ -591,23 +611,21 @@ This as-built closure is authorized by Milestone 26d task
 
   After `FORCE_ALP`, the retained cursor preserves the 65 microsecond settle.
   Both nonterminal and terminal deadline observations consume their admitted
-  turn. A later `pull-up policy` turn deliberately does not issue
-  `SBSDIO_FUNC1_SDIOPULLUP=0` on the current BCM2711 profile. Upstream brcmfmac
-  issues that optional write with a null error sink, but Cohesix hardware
-  evidence showed that its failed CMD52 can poison the following command, and
-  the linked owner cannot prove safe continuation after issued-unknown
-  ownership. The policy turn publishes `BACKPLANE_PULLUP_SKIPPED`, performs no
-  child-runtime/HAL operation, and returns; only a later turn may begin the
-  ChipCommon window. Initial attach and generation reprobe reject every
-  descriptor targeting `SBSDIO_FUNC1_SDIOPULLUP`.
+  turn. A later pull-up-clear turn issues exactly one immutable Function 1
+  CMD52 write of zero to `SBSDIO_FUNC1_SDIOPULLUP`, matching the pinned
+  `brcmfmac` sequence, and returns before the first ChipCommon access.
+  Admission permits only that exact write; reads and nonzero values fail
+  closed. A failed, stale, or issued-unknown completion poisons the generation
+  and requires ordered pair recovery. It cannot be replayed or treated as a
+  contained success.
 
   Attach diagnostics identify the exact retained frontier with distinct
   `BACKPLANE_ALP_REQUEST`, `BACKPLANE_ALP_POLL`,
   `BACKPLANE_FORCE_ALP`, `BACKPLANE_FORCE_ALP_SETTLE`,
-  `BACKPLANE_PULLUP_SKIPPED`, and `BACKPLANE_CHIPCOMMON_READ` progress.
-  `BACKPLANE_PULLUP_CLEAR` and `BACKPLANE_PULLUP_FAULT_CONTAINED` describe
-  legacy captures only and are not current-image acceptance progress. The first
-  ChipCommon access additionally
+  `BACKPLANE_PULLUP_CLEAR`, and `BACKPLANE_CHIPCOMMON_READ` progress.
+  `BACKPLANE_PULLUP_SKIPPED` and `BACKPLANE_PULLUP_FAULT_CONTAINED` are
+  historical-parser-only markers and cannot satisfy current-image acceptance.
+  The first ChipCommon access additionally
   publishes `BACKPLANE_WINDOW_LOW`, `BACKPLANE_WINDOW_MID`, and
   `BACKPLANE_WINDOW_HIGH` immediately before the matching CMD52 programming
   operations. Each child submission, continuation grant, completion poll, and

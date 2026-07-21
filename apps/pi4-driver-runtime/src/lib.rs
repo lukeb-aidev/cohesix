@@ -1521,6 +1521,7 @@ const SDIO_FBR_BLKSIZE: u32 = 0x10;
 const SDIO_BUS_WIDTH_MASK: u8 = 0x03;
 const SDIO_BUS_WIDTH_4BIT: u8 = 0x02;
 const SDIO_CCCR_REV_MASK: u8 = 0x0f;
+const SDIO_CCCR_REV_1_20: u8 = 0x02;
 const SDIO_CCCR_REV_3_00: u8 = 0x03;
 const SDIO_CCCR_CAP_SMB: u8 = 0x02;
 const SDIO_CCCR_CAP_LSC: u8 = 0x40;
@@ -1547,8 +1548,7 @@ const SDIO_CMD53_BYTE_MODE_MAX: usize = 512;
 // brcmfmac downloads RAM in 2-KiB MEMBLOCK units. Retain the same request
 // boundary while the linked runtime streams the larger fixed shared stage one
 // child operation per EventPump turn.
-const SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT: u16 =
-    2048 / SDIO_FUNCTION1_BLOCK_SIZE;
+const SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT: u16 = 2048 / SDIO_FUNCTION1_BLOCK_SIZE;
 const CYW43_FIRMWARE_TAIL_PAD_MAX_BYTES: usize = 4096;
 const CYW43_FIRMWARE_TRANSPORT_ALIGNMENT: u32 = 4;
 const CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES: usize =
@@ -3701,6 +3701,10 @@ impl Cyw43RuntimeState {
 
     fn invalidate_card_adoption(&mut self) {
         self.card_lane.reset();
+        self.invalidate_card_adoption_facts();
+    }
+
+    fn invalidate_card_adoption_facts(&mut self) {
         self.card_cccr_revision = 0;
         self.card_cccr_caps = 0;
         self.card_cccr_caps_valid = false;
@@ -7941,6 +7945,8 @@ fn sdio_wifi_pwrseq_mailbox_turn(
 
 #[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
 static TEST_SDIO_WIFI_PWRSEQ_CALLS: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static TEST_CYW43_HOST_CONFIG_CALLS: AtomicU32 = AtomicU32::new(0);
 #[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
 static TEST_SDIO_WIFI_PWRSEQ_LEVELS: AtomicU32 = AtomicU32::new(0);
 
@@ -13674,6 +13680,8 @@ fn sdio_execute_via_bus_link(
 fn cyw43_configure_sdio_host(target_hz: u32, flags: u16) -> bool {
     #[cfg(not(target_os = "none"))]
     {
+        #[cfg(test)]
+        TEST_CYW43_HOST_CONFIG_CALLS.fetch_add(1, Ordering::AcqRel);
         return sdio_apply_host_config(target_hz, flags);
     }
     #[cfg(target_os = "none")]
@@ -14736,6 +14744,7 @@ fn cyw43_poison_retained_generation(state: &mut Cyw43RuntimeState) {
     cyw43_mark_issued_unknown(state);
     state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START;
     state.backplane_window_valid = false;
+    state.invalidate_card_adoption_facts();
     state.card_lane.poisoned = true;
     state.f1_enable.poisoned = true;
     state.backplane_attach.poisoned = true;
@@ -17576,11 +17585,15 @@ const CYW43_CARD_INIT_PHASE_DONE: u8 = 6;
 #[cfg(not(target_os = "none"))]
 fn cyw43_transport_init(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
     let mut count = 0usize;
+    // Host-only compatibility tests still drive the production retained
+    // cursor synchronously. Give those turns a valid immutable owner identity;
+    // sequence zero remains rejected before the first card operation.
+    let sequence = 0x8000_0001;
     let host_step_limit = CYW43_BACKPLANE_FORCE_ALP_SETTLE_FALLBACK_SPINS
         .saturating_add(CYW43_TRANSPORT_PHASE_LIMIT)
         .saturating_add(32);
     while count < host_step_limit {
-        if cyw43_transport_init_step(0, DRIVER_RUNTIME_CYW43_COMMAND_AUX, state)?
+        if cyw43_transport_init_step(sequence, DRIVER_RUNTIME_CYW43_COMMAND_AUX, state)?
             == DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY
         {
             return Ok(());
@@ -17693,11 +17706,19 @@ fn cyw43_transport_init_step(
                     // EventPump turn observes the retained DONE phase.
                     return Ok(state.transport_detail);
                 }
-                if !state.card_lane_ready
-                    && !cyw43_configure_linux_normal_lane_step(sequence, state)?
-                {
+                if !cyw43_configure_linux_normal_lane_step(sequence, state)? {
                     return Ok(state.transport_detail);
                 }
+            }
+            if !cyw43_card_adoption_proven(state) {
+                cyw43_record_last_fault_with_result(
+                    FAULT_CYW43_TRANSPORT_CARD_INIT,
+                    u32::from(state.card_cccr_revision) << 24
+                        | u32::from(state.card_cccr_caps) << 16
+                        | u32::from(state.card_lane.phase as u8) << 8
+                        | u32::from(state.card_lane.poisoned),
+                );
+                return Err(cyw43_fail_card_lane(state, FAULT_CYW43_TRANSPORT_CARD_INIT));
             }
             state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY;
             publish_runtime_progress(
@@ -17835,6 +17856,30 @@ fn cyw43_transport_init_step(
 
 const fn cyw43_transport_card_init_required(sdio_transport_enumerated: bool) -> bool {
     !sdio_transport_enumerated
+}
+
+const fn cyw43_card_adoption_generation(state: &Cyw43RuntimeState) -> u32 {
+    if state.dpc_pending_epoch != 0 {
+        state.dpc_pending_epoch
+    } else {
+        state.dpc_shared_epoch
+    }
+}
+
+const fn cyw43_card_adoption_proven(state: &Cyw43RuntimeState) -> bool {
+    state.card_lane_ready
+        && state.card_cccr_caps_valid
+        && state.card_cccr_revision >= SDIO_CCCR_REV_1_20
+        && state.card_cccr_revision <= SDIO_CCCR_REV_3_00
+        && state.card_lane.revision == state.card_cccr_revision
+        && state.card_lane.caps == state.card_cccr_caps
+        && state.card_cccr_caps & SDIO_CCCR_CAP_SMB != 0
+        && state.card_multi_block
+        && state.card_high_speed
+        && state.card_interface_control & SDIO_BUS_WIDTH_MASK == SDIO_BUS_WIDTH_4BIT
+        && !state.card_lane.poisoned
+        && matches!(state.card_lane.phase, Cyw43CardLanePhase::Complete)
+        && state.card_lane.generation == cyw43_card_adoption_generation(state)
 }
 
 fn cyw43_sdio_card_init_step(
@@ -18275,17 +18320,9 @@ fn cyw43_enable_sdio_function1_step(
 
 fn cyw43_card_lane_owner_matches(sequence: u32, state: &Cyw43RuntimeState) -> bool {
     state.card_lane.parent_sequence == sequence
-        && state.card_lane.generation == state.dpc_shared_epoch
-        && {
-            #[cfg(target_os = "none")]
-            {
-                sequence != 0 && state.dpc_shared_epoch != 0
-            }
-            #[cfg(not(target_os = "none"))]
-            {
-                true
-            }
-        }
+        && state.card_lane.generation == cyw43_card_adoption_generation(state)
+        && sequence != 0
+        && cyw43_card_adoption_generation(state) != 0
 }
 
 fn cyw43_reject_stale_card_lane(sequence: u32, state: &mut Cyw43RuntimeState) -> u16 {
@@ -18294,6 +18331,7 @@ fn cyw43_reject_stale_card_lane(sequence: u32, state: &mut Cyw43RuntimeState) ->
         ^ state.card_lane.generation.rotate_left(9)
         ^ state.dpc_shared_epoch.rotate_left(15);
     state.card_lane.poisoned = true;
+    state.invalidate_card_adoption_facts();
     state.recovery_required = true;
     #[cfg(target_os = "none")]
     {
@@ -18317,8 +18355,14 @@ fn cyw43_fail_card_lane(state: &mut Cyw43RuntimeState, detail: u16) -> u16 {
     state.card_lane.failure_detail = detail;
     state.card_lane.failure_result = result;
     state.card_lane.failure_frame = frame;
-    state.card_lane_ready = false;
+    state.card_lane.poisoned = true;
+    state.invalidate_card_adoption_facts();
     state.recovery_required = true;
+    #[cfg(target_os = "none")]
+    {
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+    }
     detail
 }
 
@@ -18334,6 +18378,9 @@ fn cyw43_configure_linux_normal_lane_step(
     sequence: u32,
     state: &mut Cyw43RuntimeState,
 ) -> Result<bool, u16> {
+    if sequence == 0 || cyw43_card_adoption_generation(state) == 0 {
+        return Err(cyw43_reject_stale_card_lane(sequence, state));
+    }
     if state.card_lane.phase != Cyw43CardLanePhase::CccrRevisionRead
         && !cyw43_card_lane_owner_matches(sequence, state)
     {
@@ -18349,25 +18396,23 @@ fn cyw43_configure_linux_normal_lane_step(
     match state.card_lane.phase {
         Cyw43CardLanePhase::CccrRevisionRead => {
             state.card_lane.parent_sequence = sequence;
-            state.card_lane.generation = state.dpc_shared_epoch;
+            state.card_lane.generation = cyw43_card_adoption_generation(state);
             state.card_lane.failure_detail = FAULT_NONE;
             state.card_lane.failure_result = 0;
             state.card_lane.failure_frame = DriverFrameDescriptor::empty();
             let Some(revision) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_CCCR) else {
-                return Err(cyw43_fail_card_lane(
-                    state,
-                    FAULT_CYW43_TRANSPORT_CARD_INIT,
-                ));
+                return Err(cyw43_fail_card_lane(state, FAULT_CYW43_TRANSPORT_CARD_INIT));
             };
-            if revision == u8::MAX || revision & SDIO_CCCR_REV_MASK > SDIO_CCCR_REV_3_00 {
+            let cccr_revision = revision & SDIO_CCCR_REV_MASK;
+            if revision == u8::MAX
+                || cccr_revision < SDIO_CCCR_REV_1_20
+                || cccr_revision > SDIO_CCCR_REV_3_00
+            {
                 cyw43_record_last_fault_with_result(
                     FAULT_CYW43_TRANSPORT_CARD_INIT,
                     u32::from(revision),
                 );
-                return Err(cyw43_fail_card_lane(
-                    state,
-                    FAULT_CYW43_TRANSPORT_CARD_INIT,
-                ));
+                return Err(cyw43_fail_card_lane(state, FAULT_CYW43_TRANSPORT_CARD_INIT));
             }
             state.card_lane.revision = revision;
             state.card_lane.phase = Cyw43CardLanePhase::CccrCapsRead;
@@ -18375,10 +18420,7 @@ fn cyw43_configure_linux_normal_lane_step(
         }
         Cyw43CardLanePhase::CccrCapsRead => {
             let Some(caps) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_CAPS) else {
-                return Err(cyw43_fail_card_lane(
-                    state,
-                    FAULT_CYW43_TRANSPORT_CARD_INIT,
-                ));
+                return Err(cyw43_fail_card_lane(state, FAULT_CYW43_TRANSPORT_CARD_INIT));
             };
             if state.card_cccr_caps_valid
                 && (state.card_cccr_revision != state.card_lane.revision
@@ -18391,10 +18433,7 @@ fn cyw43_configure_linux_normal_lane_step(
                         | (u32::from(state.card_cccr_revision) << 8)
                         | u32::from(state.card_cccr_caps),
                 );
-                return Err(cyw43_fail_card_lane(
-                    state,
-                    FAULT_CYW43_TRANSPORT_CARD_INIT,
-                ));
+                return Err(cyw43_fail_card_lane(state, FAULT_CYW43_TRANSPORT_CARD_INIT));
             }
             if caps & SDIO_CCCR_CAP_SMB == 0
                 || (caps & SDIO_CCCR_CAP_LSC != 0 && caps & SDIO_CCCR_CAP_4BLS == 0)
@@ -18408,10 +18447,7 @@ fn cyw43_configure_linux_normal_lane_step(
                     FAULT_CYW43_TRANSPORT_CARD_INIT,
                     (u32::from(state.card_lane.revision) << 8) | u32::from(caps),
                 );
-                return Err(cyw43_fail_card_lane(
-                    state,
-                    FAULT_CYW43_TRANSPORT_CARD_INIT,
-                ));
+                return Err(cyw43_fail_card_lane(state, FAULT_CYW43_TRANSPORT_CARD_INIT));
             }
             state.card_lane.caps = caps;
             state.card_cccr_revision = state.card_lane.revision;
@@ -18430,8 +18466,18 @@ fn cyw43_configure_linux_normal_lane_step(
             };
             state.card_lane.desired_speed = speed | SDIO_CCCR_SPEED_EHS;
             if speed & SDIO_CCCR_SPEED_SHS == 0 {
-                state.card_high_speed = false;
-                state.card_lane.phase = Cyw43CardLanePhase::HostClock;
+                // The fixed Pi CYW43 profile has one high-speed production
+                // lane. Linux derives a standard-speed clock from CIS data;
+                // this ABI does not carry that value, so a hard-coded
+                // lower-clock compatibility path would not be equivalent.
+                cyw43_record_last_fault_with_result(
+                    FAULT_CYW43_TRANSPORT_HIGH_SPEED,
+                    u32::from(speed),
+                );
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_HIGH_SPEED,
+                ));
             } else if speed & SDIO_CCCR_SPEED_EHS != 0 {
                 state.card_high_speed = true;
                 state.card_lane.phase = Cyw43CardLanePhase::HostClock;
@@ -18502,11 +18548,7 @@ fn cyw43_configure_linux_normal_lane_step(
             Ok(false)
         }
         Cyw43CardLanePhase::InterfaceWrite => {
-            if !cyw43_sdio_cmd52_write(
-                0,
-                SDIO_CCCR_IF,
-                state.card_lane.desired_interface,
-            ) {
+            if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IF, state.card_lane.desired_interface) {
                 return Err(cyw43_fail_card_lane(
                     state,
                     FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH,
@@ -18517,10 +18559,7 @@ fn cyw43_configure_linux_normal_lane_step(
         }
         Cyw43CardLanePhase::InterfaceReadback => {
             let readback = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IF);
-            if !cyw43_card_bus_width_readback_matches(
-                readback,
-                state.card_lane.desired_interface,
-            ) {
+            if !cyw43_card_bus_width_readback_matches(readback, state.card_lane.desired_interface) {
                 if let Some(value) = readback {
                     cyw43_record_last_fault_with_result(
                         FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH,
@@ -20697,34 +20736,6 @@ fn cyw43_sdio_cmd52_write(function: u8, addr: u32, value: u8) -> bool {
     }
 }
 
-fn cyw43_set_card_bus_width(state: &mut Cyw43RuntimeState, width: u8) -> bool {
-    let Some(interface) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IF) else {
-        cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH);
-        return false;
-    };
-    let desired = (interface & !SDIO_BUS_WIDTH_MASK) | (width & SDIO_BUS_WIDTH_MASK);
-    if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IF, desired) {
-        cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH);
-        return false;
-    }
-    #[cfg(not(target_os = "none"))]
-    {
-        state.card_interface_control = desired;
-        true
-    }
-    #[cfg(target_os = "none")]
-    {
-        if cyw43_card_bus_width_readback_matches(cyw43_sdio_cmd52_read(0, SDIO_CCCR_IF), desired)
-        {
-            state.card_interface_control = desired;
-            true
-        } else {
-            cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH);
-            false
-        }
-    }
-}
-
 const fn cyw43_card_bus_width_readback_matches(readback: Option<u8>, width: u8) -> bool {
     match readback {
         Some(value) => value & SDIO_BUS_WIDTH_MASK == width & SDIO_BUS_WIDTH_MASK,
@@ -20986,11 +20997,8 @@ fn cyw43_flush_firmware_stage(state: &mut Cyw43RuntimeState) -> bool {
         cyw43_record_firmware_range_fault(CYW43_FIRMWARE_RANGE_STAGE_ADDR);
         return false;
     };
-    let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(
-        state.firmware_released,
-        state.card_multi_block,
-        len,
-    );
+    let bulk_block_mode =
+        cyw43_backplane_uses_bulk_block_mode(state.firmware_released, state.card_multi_block, len);
     match cyw43_backplane_write_ring_result(
         state,
         flush_addr,
@@ -21103,11 +21111,8 @@ fn cyw43_backplane_write_ring(
     ring_offset: usize,
     len: usize,
 ) -> bool {
-    let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(
-        state.firmware_released,
-        state.card_multi_block,
-        len,
-    );
+    let bulk_block_mode =
+        cyw43_backplane_uses_bulk_block_mode(state.firmware_released, state.card_multi_block, len);
     cyw43_backplane_write_ring_result(state, addr, ring_offset, len, bulk_block_mode).is_ok()
 }
 
@@ -39255,6 +39260,7 @@ mod tests {
         SDIO_CMD_COUNT.store(0, Ordering::Release);
         TEST_SDIO_RESET_FAIL_ONCE_MASK.store(0, Ordering::Release);
         TEST_SDIO_WIFI_PWRSEQ_CALLS.store(0, Ordering::Release);
+        TEST_CYW43_HOST_CONFIG_CALLS.store(0, Ordering::Release);
         TEST_SDIO_WIFI_PWRSEQ_LEVELS.store(0, Ordering::Release);
         TEST_SDIO_WIFI_PWRSEQ_CONFIGS.store(0, Ordering::Release);
         TEST_SDIO_WIFI_PWRSEQ_POSTS.store(0, Ordering::Release);
@@ -43580,6 +43586,354 @@ mod tests {
         assert!(!cyw43_card_init_ready_poll_allowed(100));
         assert_eq!(CYW43_SDIO_CMD0_SETTLE_US, 1_000);
         assert_eq!(CYW43_SDIO_CMD5_READY_POLL_INTERVAL_US, 10_000);
+    }
+
+    #[test]
+    fn cyw43_card_lane_adopts_linux_order_with_at_most_one_sdio_action_per_turn() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.dpc_shared_epoch = 7;
+        test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+        test_sdio_cmd52_read_caps_response(SDIO_CCCR_CAP_SMB);
+        test_sdio_cmd52_read_speed_response(SDIO_CCCR_SPEED_SHS);
+        test_sdio_cmd52_read_if_response(0xa1);
+
+        let sequence = 0x8000_5300;
+        let mut complete = false;
+        let mut turns = 0usize;
+        while !complete {
+            let before = test_sdio_transfer_total_count()
+                + TEST_CYW43_HOST_CONFIG_CALLS.load(Ordering::Acquire) as usize;
+            complete = cyw43_configure_linux_normal_lane_step(sequence, &mut state)
+                .expect("the validated Linux card lane must advance");
+            if state.card_lane.phase == Cyw43CardLanePhase::SpeedReadback {
+                test_sdio_cmd52_read_speed_response(SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS);
+            }
+            if state.card_lane.phase == Cyw43CardLanePhase::InterfaceReadback {
+                test_sdio_cmd52_read_if_response(0xa2);
+            }
+            let after = test_sdio_transfer_total_count()
+                + TEST_CYW43_HOST_CONFIG_CALLS.load(Ordering::Acquire) as usize;
+            assert!(
+                after.saturating_sub(before) <= 1,
+                "one outer card-lane turn issued more than one SDIO/host action",
+            );
+            turns = turns.saturating_add(1);
+            assert!(turns <= 16, "the retained card lane did not terminate");
+        }
+
+        assert_eq!(turns, 10);
+        assert_eq!(state.card_lane.phase, Cyw43CardLanePhase::Complete);
+        assert_eq!(state.card_lane.parent_sequence, sequence);
+        assert_eq!(state.card_lane.generation, 7);
+        assert_eq!(state.card_cccr_revision, SDIO_CCCR_REV_3_00);
+        assert_eq!(state.card_cccr_caps, SDIO_CCCR_CAP_SMB);
+        assert!(state.card_cccr_caps_valid);
+        assert!(state.card_multi_block);
+        assert!(state.card_high_speed);
+        assert!(state.card_lane_ready);
+        assert!(cyw43_card_adoption_proven(&state));
+        assert_eq!(state.card_interface_control, 0xa2);
+        assert_eq!(test_sdio_transfer_total_count(), 8);
+        assert_eq!(TEST_CYW43_HOST_CONFIG_CALLS.load(Ordering::Acquire), 2,);
+        assert_eq!(test_sdio_cmd52_read_count(0, SDIO_CCCR_CCCR), 1);
+        assert_eq!(test_sdio_cmd52_read_count(0, SDIO_CCCR_CAPS), 1);
+        assert_eq!(test_sdio_cmd52_read_count(0, SDIO_CCCR_SPEED), 2);
+        assert_eq!(test_sdio_cmd52_read_count(0, SDIO_CCCR_IF), 2);
+        assert!(test_sdio_cmd52_write_seen(
+            0,
+            SDIO_CCCR_SPEED,
+            SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS,
+        ));
+        assert!(test_sdio_cmd52_write_seen(0, SDIO_CCCR_IF, 0xa2,));
+        let read = |addr| sdio_cmd52_arg(false, 0, addr, 0);
+        let write = |addr, value| sdio_cmd52_arg(true, 0, addr, value);
+        for (index, arg, ordinal) in [
+            (0, read(SDIO_CCCR_CCCR), 0),
+            (1, read(SDIO_CCCR_CAPS), 0),
+            (2, read(SDIO_CCCR_SPEED), 0),
+            (
+                3,
+                write(SDIO_CCCR_SPEED, SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS),
+                0,
+            ),
+            (4, read(SDIO_CCCR_SPEED), 1),
+            (5, read(SDIO_CCCR_IF), 0),
+            (6, write(SDIO_CCCR_IF, 0xa2), 0),
+            (7, read(SDIO_CCCR_IF), 1),
+        ] {
+            assert_eq!(
+                test_sdio_transfer_index(
+                    |record| record.cmd == SDIO_CMD52 && record.arg == arg,
+                    ordinal,
+                ),
+                Some(index),
+            );
+        }
+    }
+
+    #[test]
+    fn cyw43_card_lane_rejects_unsupported_caps_before_fbr_or_firmware_io() {
+        let _guard = test_guard();
+        for unsupported_caps in [0, SDIO_CCCR_CAP_LSC | SDIO_CCCR_CAP_SMB] {
+            reset_runtime_for_test();
+            let mut state = Cyw43RuntimeState::new();
+            state.dpc_shared_epoch = 9;
+            test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+            test_sdio_cmd52_read_caps_response(unsupported_caps);
+            let sequence = 0x8000_5301;
+
+            assert_eq!(
+                cyw43_configure_linux_normal_lane_step(sequence, &mut state),
+                Ok(false),
+            );
+            assert_eq!(
+                cyw43_configure_linux_normal_lane_step(sequence, &mut state),
+                Err(FAULT_CYW43_TRANSPORT_CARD_INIT),
+            );
+            let issued = test_sdio_transfer_total_count();
+            assert_eq!(issued, 2);
+            assert_eq!(state.card_lane.phase, Cyw43CardLanePhase::Failed);
+            assert!(state.recovery_required);
+            assert!(!state.card_lane_ready);
+            assert!(!state.card_multi_block);
+            assert_eq!(
+                cyw43_configure_linux_normal_lane_step(sequence, &mut state),
+                Err(FAULT_CYW43_TRANSPORT_CARD_INIT),
+                "a terminal card-contract failure must replay only its cached fault",
+            );
+            assert_eq!(test_sdio_transfer_total_count(), issued);
+            assert_eq!(test_sdio_cmd53_transfer_count(1, true), 0);
+            assert!(!test_sdio_cmd52_write_seen(
+                0,
+                SDIO_CCCR_FBR_BASE + SDIO_FBR_BLKSIZE,
+                SDIO_FUNCTION1_BLOCK_SIZE as u8,
+            ));
+        }
+    }
+
+    #[test]
+    fn cyw43_card_lane_rejects_revision_without_linux_speed_register_contract() {
+        let _guard = test_guard();
+        for revision in [0, 1, 4, u8::MAX] {
+            reset_runtime_for_test();
+            let mut state = Cyw43RuntimeState::new();
+            state.dpc_shared_epoch = 10;
+            test_sdio_cmd52_read_cccr_response(revision);
+            let sequence = 0x8000_5302;
+
+            assert_eq!(
+                cyw43_configure_linux_normal_lane_step(sequence, &mut state),
+                Err(FAULT_CYW43_TRANSPORT_CARD_INIT),
+            );
+            assert_eq!(test_sdio_transfer_total_count(), 1);
+            assert_eq!(state.card_lane.phase, Cyw43CardLanePhase::Failed);
+            assert!(state.card_lane.poisoned);
+            assert!(state.recovery_required);
+            assert!(!state.card_cccr_caps_valid);
+            assert!(!state.card_lane_ready);
+            assert_eq!(
+                cyw43_configure_linux_normal_lane_step(sequence, &mut state),
+                Err(FAULT_CYW43_TRANSPORT_CARD_INIT),
+            );
+            assert_eq!(test_sdio_transfer_total_count(), 1);
+        }
+    }
+
+    #[test]
+    fn cyw43_card_lane_stale_owner_poisons_generation_without_io_or_resume() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.dpc_shared_epoch = 11;
+        test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+
+        let owner = 0x8000_5302;
+        assert_eq!(
+            cyw43_configure_linux_normal_lane_step(owner, &mut state),
+            Ok(false),
+        );
+        let issued = test_sdio_transfer_total_count();
+        assert_eq!(issued, 1);
+        assert_eq!(
+            cyw43_configure_linux_normal_lane_step(owner.wrapping_add(1), &mut state),
+            Err(FAULT_CYW43_TRANSPORT_BUS_LINK),
+        );
+        assert!(state.card_lane.poisoned);
+        assert!(state.recovery_required);
+        assert_eq!(test_sdio_transfer_total_count(), issued);
+        assert_eq!(
+            cyw43_configure_linux_normal_lane_step(owner, &mut state),
+            Err(FAULT_CYW43_TRANSPORT_BUS_LINK),
+            "the original owner cannot resume a poisoned generation",
+        );
+        assert_eq!(test_sdio_transfer_total_count(), issued);
+    }
+
+    #[test]
+    fn cyw43_card_lane_generation_change_invalidates_derived_authority_without_io() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.dpc_shared_epoch = 12;
+        test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+        let owner = 0x8000_5303;
+
+        assert_eq!(
+            cyw43_configure_linux_normal_lane_step(owner, &mut state),
+            Ok(false),
+        );
+        state.card_cccr_revision = SDIO_CCCR_REV_3_00;
+        state.card_cccr_caps = SDIO_CCCR_CAP_SMB;
+        state.card_cccr_caps_valid = true;
+        state.card_multi_block = true;
+        state.card_high_speed = true;
+        state.card_interface_control = SDIO_BUS_WIDTH_4BIT;
+        state.card_lane_ready = true;
+        let issued = test_sdio_transfer_total_count();
+
+        state.dpc_shared_epoch = state.dpc_shared_epoch.wrapping_add(1);
+        assert_eq!(
+            cyw43_configure_linux_normal_lane_step(owner, &mut state),
+            Err(FAULT_CYW43_TRANSPORT_BUS_LINK),
+        );
+        assert_eq!(test_sdio_transfer_total_count(), issued);
+        assert!(state.card_lane.poisoned);
+        assert!(!state.card_cccr_caps_valid);
+        assert!(!state.card_multi_block);
+        assert!(!state.card_high_speed);
+        assert_eq!(state.card_interface_control, 0);
+        assert!(!state.card_lane_ready);
+    }
+
+    #[test]
+    fn cyw43_card_lane_rejects_zero_owner_or_generation_before_first_io() {
+        let _guard = test_guard();
+        for (sequence, generation) in [(0, 14), (0x8000_5304, 0)] {
+            reset_runtime_for_test();
+            let mut state = Cyw43RuntimeState::new();
+            state.dpc_shared_epoch = generation;
+            test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+
+            assert_eq!(
+                cyw43_configure_linux_normal_lane_step(sequence, &mut state),
+                Err(FAULT_CYW43_TRANSPORT_BUS_LINK),
+            );
+            assert_eq!(test_sdio_transfer_total_count(), 0);
+            assert!(state.card_lane.poisoned);
+            assert!(state.recovery_required);
+            assert!(!state.card_lane_ready);
+        }
+    }
+
+    #[test]
+    fn cyw43_recovery_card_adoption_binds_pending_generation_through_commit() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        let reset_sequence = 0x8000_5305;
+        let owner_sequence = 0x8000_5306;
+        let current = 15;
+        let requested = dpc_generation_next(current);
+        state.dpc_shared_epoch = current;
+        state.sdio_transport_enumerated = true;
+
+        assert!(cyw43_complete_generation_reset(
+            &mut state,
+            DriverTaskCompletionRecord::progress(reset_sequence, requested),
+            reset_sequence,
+            requested,
+        ));
+        assert_eq!(state.dpc_shared_epoch, current);
+        assert_eq!(state.dpc_pending_epoch, requested);
+        state.card_init_phase = CYW43_CARD_INIT_PHASE_DONE;
+        test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+        test_sdio_cmd52_read_caps_response(SDIO_CCCR_CAP_SMB);
+        test_sdio_cmd52_read_speed_response(SDIO_CCCR_SPEED_SHS);
+        test_sdio_cmd52_read_if_response(0x01);
+
+        let mut complete = false;
+        for _ in 0..10 {
+            complete = cyw43_configure_linux_normal_lane_step(owner_sequence, &mut state)
+                .expect("the recovery card lane must advance under its pending generation");
+            if state.card_lane.phase == Cyw43CardLanePhase::SpeedReadback {
+                test_sdio_cmd52_read_speed_response(SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS);
+            }
+            if state.card_lane.phase == Cyw43CardLanePhase::InterfaceReadback {
+                test_sdio_cmd52_read_if_response(SDIO_BUS_WIDTH_4BIT);
+            }
+            if complete {
+                break;
+            }
+        }
+        assert!(complete);
+        assert_eq!(state.card_lane.generation, requested);
+        assert_eq!(state.dpc_shared_epoch, current);
+        assert!(cyw43_card_adoption_proven(&state));
+
+        assert!(cyw43_complete_generation_commit(
+            &mut state,
+            DriverTaskCompletionRecord::progress(reset_sequence, requested),
+            reset_sequence,
+        ));
+        assert_eq!(state.dpc_shared_epoch, requested);
+        assert_eq!(state.dpc_pending_epoch, 0);
+        assert_eq!(state.card_lane.generation, requested);
+        assert!(cyw43_card_adoption_proven(&state));
+    }
+
+    #[test]
+    fn cyw43_fresh_enumeration_cannot_bypass_incomplete_lane_proof() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        let sequence = 0x8000_5307;
+        state.bus_link_ready = true;
+        state.dpc_shared_epoch = 16;
+        state.sdio_transport_enumerated = false;
+        state.card_init_phase = CYW43_CARD_INIT_PHASE_DONE;
+        state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY;
+        state.card_lane.phase = Cyw43CardLanePhase::Complete;
+        state.card_lane.parent_sequence = sequence;
+        state.card_lane.generation = state.dpc_shared_epoch;
+        state.card_lane.revision = SDIO_CCCR_REV_3_00;
+        state.card_lane.caps = SDIO_CCCR_CAP_SMB;
+        state.card_lane_ready = true;
+
+        assert_eq!(
+            cyw43_transport_init_step(sequence, DRIVER_RUNTIME_CYW43_COMMAND_AUX, &mut state,),
+            Err(FAULT_CYW43_TRANSPORT_CARD_INIT),
+        );
+        assert_eq!(test_sdio_transfer_total_count(), 0);
+        assert_eq!(
+            state.transport_detail,
+            DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY,
+        );
+        assert_eq!(state.card_lane.phase, Cyw43CardLanePhase::Failed);
+        assert!(state.card_lane.poisoned);
+        assert!(state.recovery_required);
+        assert!(!state.card_lane_ready);
+    }
+
+    #[test]
+    fn cyw43_enumerated_card_cannot_bypass_missing_lane_proof() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.bus_link_ready = true;
+        state.sdio_transport_enumerated = true;
+        state.dpc_shared_epoch = 13;
+        state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY;
+
+        assert_eq!(
+            cyw43_transport_init_step(0x8000_5304, DRIVER_RUNTIME_CYW43_COMMAND_AUX, &mut state,),
+            Err(FAULT_CYW43_TRANSPORT_CARD_INIT),
+        );
+        assert_eq!(test_sdio_transfer_total_count(), 0);
+        assert!(state.card_lane.poisoned);
+        assert!(state.recovery_required);
+        assert!(!state.card_lane_ready);
     }
 
     #[test]
@@ -55707,6 +56061,11 @@ mod tests {
         state.initialized = true;
         state.transport_ready = true;
         state.firmware_upload_prepared = true;
+        state.card_cccr_revision = SDIO_CCCR_REV_3_00;
+        state.card_cccr_caps = SDIO_CCCR_CAP_SMB;
+        state.card_cccr_caps_valid = true;
+        state.card_lane_ready = true;
+        state.card_multi_block = true;
 
         assert_eq!(
             CYW43_FIRMWARE_STAGE_BYTES,
@@ -59480,6 +59839,15 @@ mod tests {
         state.dpc_link_ready = true;
         state.dpc_shared_epoch = 0x6201;
         state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY;
+        state.card_lane.phase = Cyw43CardLanePhase::Complete;
+        state.card_lane.generation = state.dpc_shared_epoch;
+        state.card_cccr_revision = SDIO_CCCR_REV_3_00;
+        state.card_cccr_caps = SDIO_CCCR_CAP_SMB;
+        state.card_cccr_caps_valid = true;
+        state.card_lane_ready = true;
+        state.card_multi_block = true;
+        state.card_high_speed = true;
+        state.card_interface_control = SDIO_BUS_WIDTH_4BIT;
 
         cyw43_poison_retained_generation(&mut state);
 
@@ -59487,6 +59855,12 @@ mod tests {
         assert!(!state.transport_ready);
         assert!(!state.firmware_released);
         assert!(state.recovery_required);
+        assert!(state.card_lane.poisoned);
+        assert!(!state.card_cccr_caps_valid);
+        assert!(!state.card_lane_ready);
+        assert!(!state.card_multi_block);
+        assert!(!state.card_high_speed);
+        assert_eq!(state.card_interface_control, 0);
         assert_eq!(
             state.transport_detail,
             DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START
@@ -60569,8 +60943,7 @@ mod tests {
         .is_err());
         assert_eq!(test_sdio_transfer_total_count(), 1);
         assert!(!test_sdio_transfer_seen(|record| {
-            record.cmd == SDIO_CMD52
-                && (record.arg >> 9) & 0x1ffff == SBSDIO_FUNC1_SBADDRLOW
+            record.cmd == SDIO_CMD52 && (record.arg >> 9) & 0x1ffff == SBSDIO_FUNC1_SBADDRLOW
         }));
     }
 

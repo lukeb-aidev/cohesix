@@ -571,10 +571,10 @@ child/service/HAL operation composed into the grant turn.
 
 Backplane-attach coverage must drive the production retained cursor through
 ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, the Pi
-pull-up-policy skip, LOW/MID/HIGH window programming, the first ChipCommon read,
-and completion. Each child submission, continuation grant, child completion
-poll, retained deadline observation, and zero-operation policy transition must
-consume its own outer EventPump turn.
+pull-up clear, LOW/MID/HIGH window programming, the first ChipCommon read, and
+completion. Each child submission, continuation grant, child completion poll,
+retained deadline observation, and pull-up-clear operation must consume its own
+outer EventPump turn.
 The terminal child poll and terminal deadline observation must return before a
 following action can issue. Tests must hold ALP unavailable for more than 1,024
 exact reads under a still-live virtual-counter deadline, then make it available,
@@ -634,23 +634,37 @@ respectively.
 Card-init tests must prove CMD7 uses the R1b short-busy response and distinguish
 the pre-command entry-inhibit wait from a post-command busy timeout. Only the
 former may retry; the latter must be classified issued-unknown and leave through
-pair recovery without same-generation replay.
+pair recovery without same-generation replay. After CMD7, production-chain
+coverage must drive the retained card-lane cursor through CCCR revision and
+capability reads, SPEED read/write/readback, host clock while one-bit, CCCR IF
+read/modify/write/readback, and final host-width programming in that exact
+order. Every child or host operation consumes a separate outer EventPump turn.
+The fixed Pi lane must reject CCCR revisions below 1.20, missing `CAP_SMB`, a
+low-speed card without `4BLS`, a card without SHS, a changed request or
+generation, and an enumerated-card flag without matching completed lane proof.
+Every rejection clears derived width/speed/multi-block authority, poisons the
+generation, performs no FBR or firmware operation, and cannot resume or replay
+in-generation. Recovery coverage must run reset, retained card adoption, and
+exact commit end to end, proving that adoption is owned by pending epoch E+1
+before commit and remains valid when E+1 becomes active. Zero request or
+generation identity must fail before the first CCCR read.
 
 The first read must validate the request's writable bits while allowing only
 the asynchronous availability bits to differ. Boundary tests must prove the
 absolute one-second deadline, including that its terminal observation spends a
 turn and cannot issue another CMD52. Per-command progress must identify ALP
-request/poll, FORCE_ALP/settle, `BACKPLANE_PULLUP_SKIPPED`, ChipCommon read, and
+request/poll, FORCE_ALP/settle, `BACKPLANE_PULLUP_CLEAR`, ChipCommon read, and
 each LOW/MID/HIGH window CMD52 so a generic backplane phase cannot misclassify
 the stalled command.
 
-The production pull-up-policy turn must perform exactly zero CMD52, CMD53,
-child-runtime, or HAL operations and return before the first ChipCommon action.
-Full initial-attach and generation-reprobe traces must contain zero descriptors
-targeting `SBSDIO_FUNC1_SDIOPULLUP`; the reprobe admission test must reject that
-address for every value. A stale owner or generation must still be rejected
-without I/O. Legacy phase 451/452 parser tests may preserve old-capture
-decodability, but `BACKPLANE_PULLUP_CLEAR` and
+The production pull-up-clear turn must perform exactly one immutable Function 1
+CMD52 write of zero to `SBSDIO_FUNC1_SDIOPULLUP` and return before the first
+ChipCommon action. Full initial-attach and generation-reprobe traces must each
+contain that descriptor exactly once; reprobe admission must accept only that
+write and reject reads or nonzero values. A stale owner/generation, failed
+completion, or issued-unknown result must poison the generation and perform no
+same-generation replay. Legacy phase 451/452 parser tests may preserve
+old-capture decodability, but `BACKPLANE_PULLUP_SKIPPED` and
 `BACKPLANE_PULLUP_FAULT_CONTAINED` cannot satisfy current-image acceptance.
 
 Pair-restart coverage must preserve the 22 logical
@@ -873,7 +887,7 @@ a root-owned steady USB backend.
 
 Host tests must prove the fixed-layout pointer-free command/completion records remain primitive-only and bounded, including primitive aux fields for service-turn arguments, nonzero-progress/frame-ready-only hot-path credit, owner-state descriptor rejection when the matching runtime spec is not acceptance-eligible, owner-state acceptance requiring the explicit owner hot-path mask plus acceptance-eligible runtime images, the separate root-context diagnostic versus pointer-free selector registration classes, the common `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit forced onto transitional root-context ring commands, and the one-way command flag used by send-only bootstrap/background turns so isolated runtimes do not call `Reply` without a reply cap. Runtime-init records must carry primitive MMIO/DMA/shared physical page metadata, fixed virtual bases, semantic resource ranges for large apertures and large buffer arenas, bus-address policy, optional IRQ descriptors, optional bus-link descriptors, and framebuffer metadata without root pointers.
 
-The physical Pi profile now requires isolated child VSpaces for driver bootstrap, loads isolated `pi4-driver-*` runtime image payloads only from the raw driver-runtime CPIO embedded into the Pi 4 root-task image by `scripts/pi4-image-build.sh`, maps all bounded `PT_LOAD` pages declared by generated `code-pages`, and uses fixed command/completion rings instead of shared-root service TCBs. The staged U-Boot CPIO remains audit/packaging evidence and is not a runtime fallback on the physical Pi profile. `scripts/pi4-image-build.sh` strips the root-task ELF copy injected into the derived seL4 archive and proves exact newc membership independently. The 4 MiB rootfs guard remains on the system payload CPIO produced by the QEMU/release packaging path; it does not apply to the seL4 elfloader archive that contains the root-task ELF. Seven generated runtime specs are acceptance-eligible (`root_context_required=false`, `hardware_state_migrated=true`); each has a generated 256-page code aperture that must contain the current 203-page runtime ELF span, and `sdio-host` is generated with one HAL-declared SDHCI MMIO page, one noncontiguous HAL-declared firmware-mailbox MMIO page, one channel-bounded BCM2835 DMA-controller MMIO page, one private low mailbox page, one low control-block page, two low CMD53 bounce pages, and 32 shared pages. Current Pi proof requires `DRIVER_TASK_EARLY_MMIO_ADMISSION selection=Wifi pages=1 owner=hal-unmapped-child-cap status=ready` before mailbox preseed and before `DRIVER_TASK_RUNTIME_ENTRY`/`DRIVER_TASK_BOOT contract=sdio-host`; wired and disabled boots require the same ready record with `pages=0`. Early admission alone is not ownership proof: successful exclusive SDIO mapping, descriptor construction, owner state, and runtime service proof remain mandatory. Host coverage must prove the generated `root_task.driver_images` table covers all seven hot paths, declares at least the 16-page xHCI minimum aperture, reserves the descriptor-backed runtime budgets (`usb` 128 DMA/32 shared, `hdmi` 0 DMA/16 shared plus framebuffer, `genet` 64 DMA/32 shared, `cyw43` 0 DMA/64 shared, `sdio` 3 MMIO/4 DMA/32 shared, `pcie` 16 shared, `serial` 4 shared), and checks the separate `pi4-driver-*` runtime package for host and `aarch64-unknown-none`. SDIO runtime tests must prove that every CMD53 takes the external-DMA path, control blocks remain 32-byte aligned and split only at admitted physical-page boundaries, command issue precedes immediate channel activation, completion requires both DMA-chain exhaustion and SDHCI `DATA_END` in either order, a timeout or either-engine fault performs bounded channel-local abort/reset, and missing or malformed DMA resources fail closed without PIO, root-owned, or same-generation replay.
+The physical Pi profile now requires isolated child VSpaces for driver bootstrap, loads isolated `pi4-driver-*` runtime image payloads only from the raw driver-runtime CPIO embedded into the Pi 4 root-task image by `scripts/pi4-image-build.sh`, maps all bounded `PT_LOAD` pages declared by generated `code-pages`, and uses fixed command/completion rings instead of shared-root service TCBs. The staged U-Boot CPIO remains audit/packaging evidence and is not a runtime fallback on the physical Pi profile. `scripts/pi4-image-build.sh` strips the root-task ELF copy injected into the derived seL4 archive and proves exact newc membership independently. The 4 MiB rootfs guard remains on the system payload CPIO produced by the QEMU/release packaging path; it does not apply to the seL4 elfloader archive that contains the root-task ELF. Seven generated runtime specs are acceptance-eligible (`root_context_required=false`, `hardware_state_migrated=true`); each has a generated 256-page code aperture that must contain the current 203-page runtime ELF span, and `sdio-host` is generated with one HAL-declared SDHCI MMIO page, one noncontiguous HAL-declared firmware-mailbox MMIO page, one channel-bounded BCM2835 DMA-controller MMIO page, one private low mailbox page, one low control-block page, two low CMD53 bounce pages, and 32 shared pages. Current Pi proof requires `DRIVER_TASK_EARLY_MMIO_ADMISSION selection=Wifi pages=1 owner=hal-unmapped-child-cap status=ready` before mailbox preseed and before `DRIVER_TASK_RUNTIME_ENTRY`/`DRIVER_TASK_BOOT contract=sdio-host`; wired and disabled boots require the same ready record with `pages=0`. Early admission alone is not ownership proof: successful exclusive SDIO mapping, descriptor construction, owner state, and runtime service proof remain mandatory. Host coverage must prove the generated `root_task.driver_images` table covers all seven hot paths, declares at least the 16-page xHCI minimum aperture, reserves the descriptor-backed runtime budgets (`usb` 128 DMA/32 shared, `hdmi` 0 DMA/16 shared plus framebuffer, `genet` 64 DMA/32 shared, `cyw43` 0 DMA/64 shared, `sdio` 3 MMIO/4 DMA/32 shared, `pcie` 16 shared, `serial` 4 shared), and checks the separate `pi4-driver-*` runtime package for host and `aarch64-unknown-none`. SDIO runtime tests must prove that every CMD53 takes the external-DMA path, control blocks remain 32-byte aligned and split only at admitted physical-page boundaries, command issue precedes immediate channel activation, request-local `DMA_END` is enabled and acknowledged but never substitutes for `DATA_END`, completion requires both DMA-chain exhaustion and SDHCI `DATA_END` in either order, a timeout or either-engine fault performs bounded channel-local abort/reset, and missing or malformed DMA resources fail closed without PIO, root-owned, or same-generation replay. Firmware tests must prove that one retained 8-KiB stage drains as four separately admitted 2-KiB `MEMBLOCK` commands of 32 64-byte blocks after exact `CAP_SMB` proof, with a shorter command only at a backplane-window edge or the true final remainder.
 The focused adversarial cases include
 `sdio_init_rejects_dma_alias_and_high_memory_before_card_service`,
 `sdio_external_dma_join_waits_for_later_dma_before_read_publication`,

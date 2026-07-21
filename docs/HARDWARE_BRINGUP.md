@@ -21,7 +21,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | QEMU current source | Target-qualified Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. | Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 current source, offline | Pi-qualified Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. | A board boot, current-image device readiness, TCP, or benchmark result. |
-| Pi 4 current image, live | Exact image `b52223b185ac` / `19f106e47c37cfc930196efca27883b577ab7c33b00f4107dffecabd7eed1293` reaches root console/local-seat, but SDIO child construction fails with `driver-runtime-sdio-dma-mmio-not-covered`; CYW43 then lacks its mandatory owner. Mailbox preseed advanced the common device-untyped cursor past the lower DMA-controller page. | No Wi-Fi gate, association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The ordered child-only admission fix remains source-only until rebuilt, flashed, and captured. |
+| Pi 4 current image, live | Exact image `cfc034bb5417` / `d3b4acf30a59af1cbdf3c0a9d6401dd7193552fc17250707164ef3287d379738` starts both linked runtimes and reaches Gate 6. Its first 8-KiB/count-128 firmware CMD53 receives a clean R5, fills the 128-byte host FIFO, then stalls with `DATA_END` absent and BCM2835 DMA held by DREQ. | No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. Retained card adoption, mandatory pull-up clear, `DMA_END` handling, and 2-KiB `MEMBLOCK` commands remain source-only until rebuilt, flashed, and captured. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
 active. It may be newer than checked-in records, but only the repository's
@@ -644,22 +644,18 @@ that shows multiple foreground phases after one endpoint rendezvous or shared
 grant, or foreground progress caused only by a peer/IRQ badge without a valid
 grant, fails the one-operation-per-turn contract.
 
-The newest exact capture is `pi4-serial-20260721-081349.log`, boot-paired with
-`tcpdump-wifi-20260721-081347.pcap` and
-`tcpdump-usb-eth-20260721-081347.pcap`. It identifies marker commit
-`b52223b185ac` and image id
-`19f106e47c37cfc930196efca27883b577ab7c33b00f4107dffecabd7eed1293`.
-The first causal failure is
-`driver-runtime-sdio-dma-mmio-not-covered`; the dependent CYW43 failure is
-`driver-runtime-sdio-owner-handle-missing`. Neither linked runtime starts, so
-this is a resource-admission prerequisite failure before Gate 1, not a board
-power/reset observation. The source correction performs Wi-Fi-selected early
-admission before mailbox preseed and emits
-`DRIVER_TASK_EARLY_MMIO_ADMISSION selection=Wifi pages=1 owner=hal-unmapped-child-cap status=ready`.
-That marker proves retention only; successful SDIO child construction and
-owner-state evidence must still prove exclusive consumption. `wifi diag`
-retains the exact prerequisite failure separately while keeping canonical Gate
-1 named `runtime-power-reset` and blocked.
+The newest exact capture is `pi4-serial-20260721-191137.log`, boot-paired with
+`tcpdump-wifi-20260721-191146.pcap` and
+`tcpdump-usb-eth-20260721-191146.pcap`. It identifies marker commit
+`cfc034bb5417` and image id
+`d3b4acf30a59af1cbdf3c0a9d6401dd7193552fc17250707164ef3287d379738`.
+Early DMA-page admission and both linked-runtime starts now pass. The first
+causal failure is Gate 6's first firmware Function 1 CMD53: 8,192 bytes as
+128 64-byte blocks with argument `0x9d000080`. R5 is clean at `0x1000`, but
+the FIFO remains full, `DATA_END` never arrives, block count advances only
+from 128 to 126, and BCM2835 DMA `CS=0x21` remains held by DREQ. Neither paired
+capture contains a Pi Wi-Fi frame. This is a pre-firmware/RF transport
+boundary; association, EAPOL, DHCP, TCP, and `cohsh` remain downstream.
 
 The preceding exact captures are
 `pi4-serial-20260721-063257.log` and the authenticated, paced reboot sidecar
@@ -685,18 +681,26 @@ absence of over-air EAPOL; it does corroborate that this boot never reached the
 host network path. TCP, association, DHCP, and `cohsh` remain downstream and
 must not be changed to treat this pre-firmware transport failure.
 
-The resulting source candidate replaces the sole linked-runtime data engine,
-not the launch path. The generated SDIO runtime now declares SDHCI, firmware
+The resulting source candidate changes the sole linked-runtime lane, not the
+launch path. After CMD7, a retained request- and generation-bound cursor reads
+CCCR revision and capabilities, requires `CAP_SMB`, a legal four-bit card, and
+SHS, enables/verifies EHS, programs the high-speed clock while still one-bit,
+read-modify-writes and verifies CCCR `IF`, and only
+then switches the host to four-bit. Function block sizes and Function 1 enable
+follow that adoption. A recovery adoption is stamped with the pending E+1 epoch
+before the exact commit, so the commit cannot make freshly rebuilt card facts
+stale. The generated SDIO runtime retains SDHCI, firmware
 mailbox, and BCM2835 DMA MMIO plus one mailbox page, one control-block page,
-and two bounce pages. The HAL admits physical DMA channel 4 from the selected
-`0x07f5` mask; the runtime uses SDIO DREQ 11, FIFO bus address `0x7e300020`,
-and low-RAM `0xc0000000` aliasing. Every CMD53 uses that external engine and a
-missing or invalid DMA resource fails closed—there is no PIO or legacy
-fallback. The bounded 8-KiB shared stage becomes one count-128 block request
-when the 32-KiB backplane window permits. Success
-requires both DMA control-block completion and SDHCI `DATA_END`; failure
-captures both engines before bounded channel abort/reset and generation
-poisoning. This is source design until a rebuilt exact image proves it on Pi.
+and two bounce pages. Physical channel 4 uses SDIO DREQ 11, FIFO bus address
+`0x7e300020`, and low-RAM `0xc0000000` aliasing. Every CMD53 uses that external
+engine and a missing or invalid resource fails closed—there is no PIO or
+legacy fallback. The bounded 8-KiB shared stage now drains as at most four
+2-KiB Linux `MEMBLOCK` commands, each 32 64-byte blocks and each a distinct
+outer EventPump operation. Request-local `DMA_END` is enabled and acknowledged
+as progress only. Success still requires both DMA control-block completion and
+SDHCI `DATA_END`; failure captures both engines before bounded channel
+abort/reset and generation poisoning. These card-lane and 2-KiB changes are
+source-only until a rebuilt image proves them on Pi.
 
 The earlier `pi4-serial-20260719-180716.log` capture identified a separate
 pre-command continuation-liveness failure: SDIO engine initialization completed
@@ -758,21 +762,22 @@ terminal failure/recovery record is failed liveness evidence.
 Backplane attach advances through a retained generation-bound ALP/window cursor,
 not a synchronous private loop. One outer EventPump turn may perform one exact
 ALP request or read, one retained deadline observation, one FORCE_ALP, one
-zero-operation Pi pull-up-policy transition, one window-register CMD52, one
-ChipCommon CMD53, one continuation grant, or one completion poll. A terminal
-child or deadline poll records the result and returns; the next attach action
-requires a later turn. Each non-ready ALP read
+exact Function 1 pull-up-clear CMD52, one window-register CMD52, one ChipCommon
+CMD53, one continuation grant, or one completion poll. A terminal child or
+deadline poll records the result and returns; the next attach action requires a
+later turn. Each non-ready ALP read
 checkpoints the one-second absolute deadline, last `CHIPCLKCSR` value, and poll
 count, then closes that foreground transaction. Thus a long, still-within-
 deadline ALP wait does not accumulate against the retained transaction's
 1,024-action trace or use trace exhaustion as a timeout.
 
-The preceding Function 1 enable is retained by the same rule: `IOEx` read,
-one-shot `IOEx.F1` write, each `IORx` read, and each deadline observation are
-separate outer turns under Linux's one-second fallback. Issued-unknown or stale
-ownership invalidates transport readiness, resets the transport cursor to
-`START`, and requires the typed SDIO generation reset before any prior attach
-edge can be considered again.
+The preceding card adoption and Function 1 enable are retained by the same
+rule. CCCR revision, capabilities, `SPEED`, and `IF` operations, host-clock and
+host-width changes, `IOEx` read, one-shot `IOEx.F1` write, each `IORx` read,
+and each deadline observation are separate outer turns. Missing `CAP_SMB`, an
+illegal low-speed/four-bit contract, issued-unknown work, or stale ownership
+invalidates transport readiness and requires typed pair recovery before any
+prior edge can be considered again.
 
 Firmware preparation repeats neither that initial trace nor the initial
 `FORCE_ALP` policy. It uses a second request- and generation-bound cursor with
@@ -810,16 +815,15 @@ published only after their exact irreversible child completions.
 
 Serial evidence should name the exact frontier rather than leaving the generic
 backplane marker as an ALP diagnosis: ALP request, ALP poll, FORCE_ALP, its
-65-microsecond settle, the Pi pull-up-policy skip, ChipCommon read, and each
+65-microsecond settle, the exact pull-up clear, ChipCommon read, and each
 LOW/MID/HIGH backplane-window CMD52 have separate progress markers. Current Pi
-production must emit `BACKPLANE_PULLUP_SKIPPED` and no Function 1 descriptor for
-`SBSDIO_FUNC1_SDIOPULLUP`. Upstream brcmfmac treats that optional write as best
-effort, but a post-issue fault on this BCM2711 path can poison the next CMD52;
-resetting the host does not prove card-side non-issue. Initial attach and
-generation reprobe therefore reject it. Any other issued-unknown,
-`OWNER_PATH_POISONED`, stale, or malformed result must poison the generation and
-request the ordered pair restart; host quiescence is not permission to continue
-or retry in place.
+production must emit `BACKPLANE_PULLUP_CLEAR` for exactly one Function 1 CMD52
+write of zero to `SBSDIO_FUNC1_SDIOPULLUP`. Reads and nonzero values are not
+admitted. `BACKPLANE_PULLUP_SKIPPED` and
+`BACKPLANE_PULLUP_FAULT_CONTAINED` remain historical-parser-only markers. Any
+failed, issued-unknown, `OWNER_PATH_POISONED`, stale, or malformed result must
+poison the generation and request the ordered pair restart; host quiescence is
+not permission to continue or retry in place.
 Card selection uses CMD7 with the SDIO R1b short-busy response. Only the entry
 inhibit wait before `SDHCI_COMMAND` is written is retryable; a busy timeout after
 issue is retained as post-issue quiescence and cannot be replayed in-generation.
@@ -1010,8 +1014,8 @@ attached address/TCP readiness,
 retained generation-bound ALP/backplane attach with one request, deadline poll,
 CMD52/CMD53 child action, grant, or completion poll per outer turn, terminal
 poll separation, per-poll cursor checkpointing beyond the 1,024-action trace
-capacity, exact window/ChipCommon progress, and command-local proof before a
-contained one-shot pull-up-clear fault may advance,
+capacity, exact window/ChipCommon progress, and exact one-shot pull-up-clear
+completion with any fault poisoning the generation,
 five-phase linked EventPump arbitration with distinct NIC-service and command
 dispatch turns, retained GENET TCP response flushing with one operation per
 later `Network` phase and connection fencing, ordinary CYW43 data-ready polls,
