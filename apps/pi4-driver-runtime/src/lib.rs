@@ -128,7 +128,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_CHIPCOMMON_READ,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_FORCE_ALP_SETTLE,
-    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_LOW,
@@ -644,6 +644,7 @@ const CYW43_FIRMWARE_RANGE_STAGE_ADDR: u32 = 1 << 4;
 const CYW43_FIRMWARE_RANGE_STAGE_APPEND: u32 = 1 << 5;
 const FAULT_CYW43_COMMAND: u16 = 0x53ff;
 const FAULT_CYW43_TRANSPORT_BUS_LINK: u16 = 0x5310;
+const FAULT_CYW43_TRANSPORT_CARD_INIT: u16 = 0x5312;
 const FAULT_CYW43_TRANSPORT_F1_BLOCK_SIZE: u16 = 0x5313;
 const FAULT_CYW43_TRANSPORT_F2_BLOCK_SIZE: u16 = 0x5314;
 const FAULT_CYW43_TRANSPORT_F1_ENABLE: u16 = 0x5315;
@@ -768,6 +769,7 @@ const SDHCI_SPACE_AVAILABLE: u32 = 1 << 10;
 const SDHCI_DATA_AVAILABLE: u32 = 1 << 11;
 const SDHCI_INT_RESPONSE: u32 = 1 << 0;
 const SDHCI_INT_DATA_END: u32 = 1 << 1;
+const SDHCI_INT_DMA_END: u32 = 1 << 3;
 const SDHCI_INT_SPACE_AVAIL: u32 = 1 << 4;
 const SDHCI_INT_DATA_AVAIL: u32 = 1 << 5;
 const SDHCI_INT_CARD_INT: u32 = 1 << 8;
@@ -782,6 +784,7 @@ const SDHCI_INT_DATA_END_BIT: u32 = 1 << 22;
 const SDHCI_INT_CMD_MASK: u32 =
     SDHCI_INT_RESPONSE | SDHCI_INT_TIMEOUT | SDHCI_INT_CRC | SDHCI_INT_END_BIT | SDHCI_INT_INDEX;
 const SDHCI_INT_DATA_MASK: u32 = SDHCI_INT_DATA_END
+    | SDHCI_INT_DMA_END
     | SDHCI_INT_SPACE_AVAIL
     | SDHCI_INT_DATA_AVAIL
     | SDHCI_INT_DATA_TIMEOUT
@@ -1501,12 +1504,14 @@ const SDIO_R5_STATUS_MASK: u32 = SDIO_R5_COM_CRC_ERROR
     | SDIO_R5_OUT_OF_RANGE;
 const SDIO_R4_READY: u32 = 1 << 31;
 const SDIO_OCR_3V2_3V4: u32 = 0x00ff_8000;
+const SDIO_CCCR_CCCR: u32 = 0x00;
 const SDIO_CCCR_IOEX: u32 = 0x02;
 const SDIO_CCCR_IORX: u32 = 0x03;
 const SDIO_CCCR_IENX: u32 = 0x04;
 const SDIO_CCCR_INTX: u32 = 0x05;
 const SDIO_CCCR_ABORT: u32 = 0x06;
 const SDIO_CCCR_IF: u32 = 0x07;
+const SDIO_CCCR_CAPS: u32 = 0x08;
 const SDIO_CCCR_SPEED: u32 = 0x13;
 const SDIO_CCCR_BRCM_CARDCAP: u32 = 0xf0;
 const SDIO_CCCR_BRCM_CARDCTRL: u32 = 0xf1;
@@ -1515,6 +1520,11 @@ const SDIO_CCCR_FBR_BASE: u32 = 0x100;
 const SDIO_FBR_BLKSIZE: u32 = 0x10;
 const SDIO_BUS_WIDTH_MASK: u8 = 0x03;
 const SDIO_BUS_WIDTH_4BIT: u8 = 0x02;
+const SDIO_CCCR_REV_MASK: u8 = 0x0f;
+const SDIO_CCCR_REV_3_00: u8 = 0x03;
+const SDIO_CCCR_CAP_SMB: u8 = 0x02;
+const SDIO_CCCR_CAP_LSC: u8 = 0x40;
+const SDIO_CCCR_CAP_4BLS: u8 = 0x80;
 const SDIO_CCCR_BRCM_CARDCAP_CMD14_SUPPORT: u8 = 0x02;
 const SDIO_CCCR_BRCM_CARDCAP_CMD14_EXT: u8 = 0x04;
 const SDIO_CCCR_SPEED_SHS: u8 = 0x01;
@@ -1534,13 +1544,11 @@ const SDIO_INTERRUPT_ENABLE_MASK: u8 =
 const SDIO_FUNCTION1_BLOCK_SIZE: u16 = 64;
 const SDIO_FUNCTION2_BLOCK_SIZE: u16 = 512;
 const SDIO_CMD53_BYTE_MODE_MAX: usize = 512;
-// Linux's brcmfmac RAM path chunks at the 32-KiB backplane window and lets the
-// SDIO core batch up to the host/count limits. Cohesix retains one child
-// operation per outer event turn and one bounded 8-KiB shared stage, so the
-// closest linked-runtime adaptation is one 128-block DMA request per full
-// stage, split only for the true tail, aperture, or CMD53-count boundary.
+// brcmfmac downloads RAM in 2-KiB MEMBLOCK units. Retain the same request
+// boundary while the linked runtime streams the larger fixed shared stage one
+// child operation per EventPump turn.
 const SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT: u16 =
-    (CYW43_FIRMWARE_STAGE_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16;
+    2048 / SDIO_FUNCTION1_BLOCK_SIZE;
 const CYW43_FIRMWARE_TAIL_PAD_MAX_BYTES: usize = 4096;
 const CYW43_FIRMWARE_TRANSPORT_ALIGNMENT: u32 = 4;
 const CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES: usize =
@@ -2972,9 +2980,62 @@ enum Cyw43BackplaneAttachPhase {
     AlpDeadline,
     ForceAlp,
     ForceAlpSettle,
-    PullupPolicy,
+    PullupClear,
     ChipCommonRead,
     Complete,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43CardLanePhase {
+    CccrRevisionRead,
+    CccrCapsRead,
+    SpeedRead,
+    SpeedWrite,
+    SpeedReadback,
+    HostClock,
+    InterfaceRead,
+    InterfaceWrite,
+    InterfaceReadback,
+    HostWidth,
+    Complete,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43CardLaneCursor {
+    phase: Cyw43CardLanePhase,
+    parent_sequence: u32,
+    generation: u32,
+    revision: u8,
+    caps: u8,
+    desired_speed: u8,
+    desired_interface: u8,
+    failure_detail: u16,
+    failure_result: u32,
+    failure_frame: DriverFrameDescriptor,
+    poisoned: bool,
+}
+
+impl Cyw43CardLaneCursor {
+    const fn new() -> Self {
+        Self {
+            phase: Cyw43CardLanePhase::CccrRevisionRead,
+            parent_sequence: 0,
+            generation: 0,
+            revision: 0,
+            caps: 0,
+            desired_speed: 0,
+            desired_interface: 0,
+            failure_detail: FAULT_NONE,
+            failure_result: 0,
+            failure_frame: DriverFrameDescriptor::empty(),
+            poisoned: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3276,6 +3337,7 @@ struct Cyw43RuntimeState {
     firmware_stage_scratch: [u8; CYW43_FIRMWARE_STAGE_BYTES],
     backplane_window: u32,
     backplane_window_valid: bool,
+    card_lane: Cyw43CardLaneCursor,
     f1_enable: Cyw43SdioF1EnableCursor,
     backplane_attach: Cyw43BackplaneAttachCursor,
     firmware_prep: Cyw43FirmwarePrepCursor,
@@ -3298,6 +3360,13 @@ struct Cyw43RuntimeState {
     card_init_poll_count: u16,
     card_init_ocr: u32,
     card_init_rca: u32,
+    card_cccr_revision: u8,
+    card_cccr_caps: u8,
+    card_cccr_caps_valid: bool,
+    card_lane_ready: bool,
+    card_multi_block: bool,
+    card_high_speed: bool,
+    card_interface_control: u8,
 }
 
 impl Cyw43RuntimeState {
@@ -3410,6 +3479,7 @@ impl Cyw43RuntimeState {
             firmware_stage_scratch: [0; CYW43_FIRMWARE_STAGE_BYTES],
             backplane_window: 0,
             backplane_window_valid: false,
+            card_lane: Cyw43CardLaneCursor::new(),
             f1_enable: Cyw43SdioF1EnableCursor::new(),
             backplane_attach: Cyw43BackplaneAttachCursor::new(),
             firmware_prep: Cyw43FirmwarePrepCursor::new(),
@@ -3432,6 +3502,16 @@ impl Cyw43RuntimeState {
             card_init_poll_count: 0,
             card_init_ocr: 0,
             card_init_rca: 0,
+            card_cccr_revision: 0,
+            card_cccr_caps: 0,
+            card_cccr_caps_valid: false,
+            // A fresh runtime has no card-derived lane authority. Host tests
+            // that exercise firmware streaming in isolation must bind SMB
+            // explicitly, just as production does through CCCR adoption.
+            card_lane_ready: false,
+            card_multi_block: false,
+            card_high_speed: false,
+            card_interface_control: 0,
         }
     }
 
@@ -3467,6 +3547,7 @@ impl Cyw43RuntimeState {
         // normal generation reset intentionally preserves.
         self.reset();
         self.sdio_transport_enumerated = false;
+        self.invalidate_card_adoption();
         self.dpc_shared_epoch = 0;
         self.dpc_epoch_errors = 0;
         self.dpc_sequence_errors = 0;
@@ -3613,6 +3694,20 @@ impl Cyw43RuntimeState {
         self.card_init_poll_count = 0;
         self.card_init_ocr = 0;
         self.card_init_rca = 0;
+        if !self.sdio_transport_enumerated {
+            self.invalidate_card_adoption();
+        }
+    }
+
+    fn invalidate_card_adoption(&mut self) {
+        self.card_lane.reset();
+        self.card_cccr_revision = 0;
+        self.card_cccr_caps = 0;
+        self.card_cccr_caps_valid = false;
+        self.card_lane_ready = false;
+        self.card_multi_block = false;
+        self.card_high_speed = false;
+        self.card_interface_control = 0;
     }
 }
 
@@ -10594,7 +10689,9 @@ const fn sdio_generation_reprobe_host_config_allowed(
     let width = DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT;
     let high_speed = DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED;
     (desc.addr == SDHCI_STARTUP_CLOCK_HZ && desc.flags == 0)
+        || (desc.addr == CYW43_SDIO_FAST_CLOCK_HZ && desc.flags == high_speed)
         || (desc.addr == CYW43_SDIO_FAST_CLOCK_HZ && desc.flags == width | high_speed)
+        || (desc.addr == CYW43_SDIO_DEFAULT_SPEED_CLOCK_HZ && desc.flags == 0)
         || (desc.addr == CYW43_SDIO_DEFAULT_SPEED_CLOCK_HZ && desc.flags == width)
 }
 
@@ -10615,9 +10712,15 @@ fn sdio_generation_reprobe_cmd52_allowed(desc: DriverRuntimeSdioCommandDescripto
     let f2_base = SDIO_CCCR_FBR_BASE.saturating_mul(2);
     if desc.function == 0 {
         return match desc.addr {
+            SDIO_CCCR_CCCR | SDIO_CCCR_CAPS => !write,
             SDIO_CCCR_IOEX => !write || value == Some(SDIO_FUNC_ENABLE_1),
             SDIO_CCCR_IORX => !write,
-            SDIO_CCCR_IF => !write || value == Some(SDIO_BUS_WIDTH_4BIT),
+            SDIO_CCCR_IF => {
+                !write
+                    || value.is_some_and(|interface| {
+                        interface & SDIO_BUS_WIDTH_MASK == SDIO_BUS_WIDTH_4BIT
+                    })
+            }
             SDIO_CCCR_SPEED => !write || value == Some(SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS),
             addr if addr == f1_base + SDIO_FBR_BLKSIZE => {
                 !write || value == Some((SDIO_FUNCTION1_BLOCK_SIZE & 0xff) as u8)
@@ -10649,10 +10752,11 @@ fn sdio_generation_reprobe_cmd52_allowed(desc: DriverRuntimeSdioCommandDescripto
                             || v == (SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_FORCE_ALP)
                 )
         }
-        // Pi 4 skips the optional extra-pull-up write because an issued fault
-        // can poison the next command. Recovery must not gain authority to
-        // replay an operation that production never admits.
-        SBSDIO_FUNC1_SDIOPULLUP => false,
+        // Linux disables the CYW43's extra SDIO pull-ups during buscore
+        // attach. Admit only the exact write in a fresh generation; an
+        // issued-unknown completion poisons that generation and is never
+        // replayed.
+        SBSDIO_FUNC1_SDIOPULLUP => write && value == Some(0),
         SBSDIO_FUNC1_SBADDRLOW => !write || value == Some(window_low),
         SBSDIO_FUNC1_SBADDRMID => !write || value == Some(window_mid),
         SBSDIO_FUNC1_SBADDRHIGH => !write || value == Some(window_high),
@@ -14632,6 +14736,7 @@ fn cyw43_poison_retained_generation(state: &mut Cyw43RuntimeState) {
     cyw43_mark_issued_unknown(state);
     state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START;
     state.backplane_window_valid = false;
+    state.card_lane.poisoned = true;
     state.f1_enable.poisoned = true;
     state.backplane_attach.poisoned = true;
     state.firmware_prep.poisoned = true;
@@ -17580,10 +17685,19 @@ fn cyw43_transport_init_step(
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_ADOPT_BEGIN,
                 aux0,
             );
-            if cyw43_transport_card_init_required(state.sdio_transport_enumerated)
-                && !cyw43_sdio_card_init_step(sequence, aux0, state)?
-            {
-                return Ok(state.transport_detail);
+            if cyw43_transport_card_init_required(state.sdio_transport_enumerated) {
+                if state.card_init_phase != CYW43_CARD_INIT_PHASE_DONE {
+                    let _ = cyw43_sdio_card_init_step(sequence, aux0, state)?;
+                    // A successful CMD7 is the one child action for this
+                    // outer turn. CCCR discovery begins only when the next
+                    // EventPump turn observes the retained DONE phase.
+                    return Ok(state.transport_detail);
+                }
+                if !state.card_lane_ready
+                    && !cyw43_configure_linux_normal_lane_step(sequence, state)?
+                {
+                    return Ok(state.transport_detail);
+                }
             }
             state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY;
             publish_runtime_progress(
@@ -17650,7 +17764,6 @@ fn cyw43_transport_init_step(
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_CONFIG_BEGIN,
                 aux0,
             );
-            cyw43_configure_linux_normal_lane()?;
             state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY;
             publish_runtime_progress(
                 sequence,
@@ -17733,7 +17846,7 @@ fn cyw43_sdio_card_init_step(
     {
         let _ = sequence;
         let _ = aux0;
-        let _ = state;
+        state.card_init_phase = CYW43_CARD_INIT_PHASE_DONE;
         return Ok(true);
     }
     #[cfg(target_os = "none")]
@@ -18160,41 +18273,291 @@ fn cyw43_enable_sdio_function1_step(
     }
 }
 
-fn cyw43_enable_sdio_high_speed_timing() -> Result<bool, u16> {
-    let speed =
-        cyw43_sdio_cmd52_read(0, SDIO_CCCR_SPEED).ok_or(FAULT_CYW43_TRANSPORT_HIGH_SPEED)?;
-    if speed & SDIO_CCCR_SPEED_SHS == 0 {
-        return Ok(false);
-    }
-    let desired = speed | SDIO_CCCR_SPEED_EHS;
-    if desired != speed && !cyw43_sdio_cmd52_write(0, SDIO_CCCR_SPEED, desired) {
-        return Err(FAULT_CYW43_TRANSPORT_HIGH_SPEED);
-    }
-    let readback =
-        cyw43_sdio_cmd52_read(0, SDIO_CCCR_SPEED).ok_or(FAULT_CYW43_TRANSPORT_HIGH_SPEED)?;
-    if readback & SDIO_CCCR_SPEED_EHS == 0 {
-        return Err(FAULT_CYW43_TRANSPORT_HIGH_SPEED);
-    }
-    Ok(true)
+fn cyw43_card_lane_owner_matches(sequence: u32, state: &Cyw43RuntimeState) -> bool {
+    state.card_lane.parent_sequence == sequence
+        && state.card_lane.generation == state.dpc_shared_epoch
+        && {
+            #[cfg(target_os = "none")]
+            {
+                sequence != 0 && state.dpc_shared_epoch != 0
+            }
+            #[cfg(not(target_os = "none"))]
+            {
+                true
+            }
+        }
 }
 
-fn cyw43_configure_linux_normal_lane() -> Result<(), u16> {
-    if !cyw43_set_card_bus_width(SDIO_BUS_WIDTH_4BIT) {
-        return Err(FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH);
+fn cyw43_reject_stale_card_lane(sequence: u32, state: &mut Cyw43RuntimeState) -> u16 {
+    let fingerprint = state.card_lane.parent_sequence
+        ^ sequence.rotate_left(3)
+        ^ state.card_lane.generation.rotate_left(9)
+        ^ state.dpc_shared_epoch.rotate_left(15);
+    state.card_lane.poisoned = true;
+    state.recovery_required = true;
+    #[cfg(target_os = "none")]
+    {
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
     }
-    let high_speed = cyw43_enable_sdio_high_speed_timing()?;
-    let high_speed_flags = if high_speed {
-        DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED
-    } else {
-        0
-    };
-    if !cyw43_configure_sdio_host(
-        cyw43_sdio_operating_clock_hz(high_speed),
-        DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT | high_speed_flags,
-    ) {
-        return Err(FAULT_CYW43_TRANSPORT_HOST_BUS_WIDTH);
+    cyw43_record_last_fault_with_result(
+        FAULT_CYW43_TRANSPORT_BUS_LINK,
+        if fingerprint == 0 { 1 } else { fingerprint },
+    );
+    FAULT_CYW43_TRANSPORT_BUS_LINK
+}
+
+fn cyw43_fail_card_lane(state: &mut Cyw43RuntimeState, detail: u16) -> u16 {
+    let result = cyw43_take_last_fault_result();
+    let frame = cyw43_take_last_fault_frame();
+    cyw43_clear_last_fault();
+    cyw43_record_last_fault_with_result(detail, result);
+    cyw43_record_last_fault_frame(frame);
+    state.card_lane.phase = Cyw43CardLanePhase::Failed;
+    state.card_lane.failure_detail = detail;
+    state.card_lane.failure_result = result;
+    state.card_lane.failure_frame = frame;
+    state.card_lane_ready = false;
+    state.recovery_required = true;
+    detail
+}
+
+fn cyw43_replay_card_lane_failure(state: &Cyw43RuntimeState) -> u16 {
+    let detail = state.card_lane.failure_detail;
+    cyw43_clear_last_fault();
+    cyw43_record_last_fault_with_result(detail, state.card_lane.failure_result);
+    cyw43_record_last_fault_frame(state.card_lane.failure_frame);
+    detail
+}
+
+fn cyw43_configure_linux_normal_lane_step(
+    sequence: u32,
+    state: &mut Cyw43RuntimeState,
+) -> Result<bool, u16> {
+    if state.card_lane.phase != Cyw43CardLanePhase::CccrRevisionRead
+        && !cyw43_card_lane_owner_matches(sequence, state)
+    {
+        return Err(cyw43_reject_stale_card_lane(sequence, state));
     }
-    Ok(())
+    if state.card_lane.phase == Cyw43CardLanePhase::Failed {
+        return Err(cyw43_replay_card_lane_failure(state));
+    }
+    if state.card_lane.poisoned {
+        return Err(cyw43_reject_stale_card_lane(sequence, state));
+    }
+
+    match state.card_lane.phase {
+        Cyw43CardLanePhase::CccrRevisionRead => {
+            state.card_lane.parent_sequence = sequence;
+            state.card_lane.generation = state.dpc_shared_epoch;
+            state.card_lane.failure_detail = FAULT_NONE;
+            state.card_lane.failure_result = 0;
+            state.card_lane.failure_frame = DriverFrameDescriptor::empty();
+            let Some(revision) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_CCCR) else {
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_CARD_INIT,
+                ));
+            };
+            if revision == u8::MAX || revision & SDIO_CCCR_REV_MASK > SDIO_CCCR_REV_3_00 {
+                cyw43_record_last_fault_with_result(
+                    FAULT_CYW43_TRANSPORT_CARD_INIT,
+                    u32::from(revision),
+                );
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_CARD_INIT,
+                ));
+            }
+            state.card_lane.revision = revision;
+            state.card_lane.phase = Cyw43CardLanePhase::CccrCapsRead;
+            Ok(false)
+        }
+        Cyw43CardLanePhase::CccrCapsRead => {
+            let Some(caps) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_CAPS) else {
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_CARD_INIT,
+                ));
+            };
+            if state.card_cccr_caps_valid
+                && (state.card_cccr_revision != state.card_lane.revision
+                    || state.card_cccr_caps != caps)
+            {
+                cyw43_record_last_fault_with_result(
+                    FAULT_CYW43_TRANSPORT_CARD_INIT,
+                    (u32::from(state.card_lane.revision) << 24)
+                        | (u32::from(caps) << 16)
+                        | (u32::from(state.card_cccr_revision) << 8)
+                        | u32::from(state.card_cccr_caps),
+                );
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_CARD_INIT,
+                ));
+            }
+            if caps & SDIO_CCCR_CAP_SMB == 0
+                || (caps & SDIO_CCCR_CAP_LSC != 0 && caps & SDIO_CCCR_CAP_4BLS == 0)
+            {
+                // This Pi profile has one immutable 4-bit/multi-block lane.
+                // Linux permits 4-bit only for non-low-speed cards or cards
+                // that advertise 4BLS, and uses CMD53 block mode only with
+                // CAP_SMB. Reject a different card contract before any FBR or
+                // firmware write instead of creating a compatibility lane.
+                cyw43_record_last_fault_with_result(
+                    FAULT_CYW43_TRANSPORT_CARD_INIT,
+                    (u32::from(state.card_lane.revision) << 8) | u32::from(caps),
+                );
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_CARD_INIT,
+                ));
+            }
+            state.card_lane.caps = caps;
+            state.card_cccr_revision = state.card_lane.revision;
+            state.card_cccr_caps = caps;
+            state.card_cccr_caps_valid = true;
+            state.card_multi_block = caps & SDIO_CCCR_CAP_SMB != 0;
+            state.card_lane.phase = Cyw43CardLanePhase::SpeedRead;
+            Ok(false)
+        }
+        Cyw43CardLanePhase::SpeedRead => {
+            let Some(speed) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_SPEED) else {
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_HIGH_SPEED,
+                ));
+            };
+            state.card_lane.desired_speed = speed | SDIO_CCCR_SPEED_EHS;
+            if speed & SDIO_CCCR_SPEED_SHS == 0 {
+                state.card_high_speed = false;
+                state.card_lane.phase = Cyw43CardLanePhase::HostClock;
+            } else if speed & SDIO_CCCR_SPEED_EHS != 0 {
+                state.card_high_speed = true;
+                state.card_lane.phase = Cyw43CardLanePhase::HostClock;
+            } else {
+                state.card_lane.phase = Cyw43CardLanePhase::SpeedWrite;
+            }
+            Ok(false)
+        }
+        Cyw43CardLanePhase::SpeedWrite => {
+            if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_SPEED, state.card_lane.desired_speed) {
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_HIGH_SPEED,
+                ));
+            }
+            state.card_lane.phase = Cyw43CardLanePhase::SpeedReadback;
+            Ok(false)
+        }
+        Cyw43CardLanePhase::SpeedReadback => {
+            let Some(speed) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_SPEED) else {
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_HIGH_SPEED,
+                ));
+            };
+            if speed & SDIO_CCCR_SPEED_EHS == 0 {
+                cyw43_record_last_fault_with_result(
+                    FAULT_CYW43_TRANSPORT_HIGH_SPEED,
+                    u32::from(speed),
+                );
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_HIGH_SPEED,
+                ));
+            }
+            state.card_high_speed = true;
+            state.card_lane.phase = Cyw43CardLanePhase::HostClock;
+            Ok(false)
+        }
+        Cyw43CardLanePhase::HostClock => {
+            let flags = if state.card_high_speed {
+                DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED
+            } else {
+                0
+            };
+            if !cyw43_configure_sdio_host(
+                cyw43_sdio_operating_clock_hz(state.card_high_speed),
+                flags,
+            ) {
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_HOST_BUS_WIDTH,
+                ));
+            }
+            state.card_lane.phase = Cyw43CardLanePhase::InterfaceRead;
+            Ok(false)
+        }
+        Cyw43CardLanePhase::InterfaceRead => {
+            let Some(interface) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IF) else {
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH,
+                ));
+            };
+            state.card_lane.desired_interface =
+                (interface & !SDIO_BUS_WIDTH_MASK) | SDIO_BUS_WIDTH_4BIT;
+            state.card_lane.phase = Cyw43CardLanePhase::InterfaceWrite;
+            Ok(false)
+        }
+        Cyw43CardLanePhase::InterfaceWrite => {
+            if !cyw43_sdio_cmd52_write(
+                0,
+                SDIO_CCCR_IF,
+                state.card_lane.desired_interface,
+            ) {
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH,
+                ));
+            }
+            state.card_lane.phase = Cyw43CardLanePhase::InterfaceReadback;
+            Ok(false)
+        }
+        Cyw43CardLanePhase::InterfaceReadback => {
+            let readback = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IF);
+            if !cyw43_card_bus_width_readback_matches(
+                readback,
+                state.card_lane.desired_interface,
+            ) {
+                if let Some(value) = readback {
+                    cyw43_record_last_fault_with_result(
+                        FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH,
+                        u32::from(value),
+                    );
+                }
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH,
+                ));
+            }
+            state.card_interface_control = readback.unwrap_or(0);
+            state.card_lane.phase = Cyw43CardLanePhase::HostWidth;
+            Ok(false)
+        }
+        Cyw43CardLanePhase::HostWidth => {
+            let high_speed = if state.card_high_speed {
+                DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED
+            } else {
+                0
+            };
+            if !cyw43_configure_sdio_host(
+                cyw43_sdio_operating_clock_hz(state.card_high_speed),
+                DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT | high_speed,
+            ) {
+                return Err(cyw43_fail_card_lane(
+                    state,
+                    FAULT_CYW43_TRANSPORT_HOST_BUS_WIDTH,
+                ));
+            }
+            state.card_lane_ready = true;
+            state.card_lane.phase = Cyw43CardLanePhase::Complete;
+            Ok(true)
+        }
+        Cyw43CardLanePhase::Complete => Ok(true),
+        Cyw43CardLanePhase::Failed => Err(cyw43_replay_card_lane_failure(state)),
+    }
 }
 
 fn cyw43_backplane_attach_owner_matches(sequence: u32, state: &Cyw43RuntimeState) -> bool {
@@ -18332,24 +18695,26 @@ fn cyw43_backplane_transport_init_step(
                 aux0,
             );
             if runtime_deadline_expired(&mut state.backplane_attach.deadline) {
-                state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupPolicy;
+                state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupClear;
             }
             Ok(false)
         }
-        Cyw43BackplaneAttachPhase::PullupPolicy => {
-            // Linux performs this Broadcom extra-pull-up write as best effort.
-            // On this Pi 4/mmc-bcm2835 path, however, the write can fail after
-            // issue and poison the immediately following CMD52 with
-            // END_BIT/INDEX errors. A host reset cannot prove whether that
-            // issued write reached the card, so continuing would violate the
-            // no-replay/issued-unknown generation contract. Cohesix therefore
-            // adapts the optional Linux step by preserving its retained turn
-            // while performing no child/HAL operation.
+        Cyw43BackplaneAttachPhase::PullupClear => {
+            // Match brcmfmac after FORCE_ALP settles: clear the Broadcom extra
+            // pull-up before opening the first backplane window. This is one
+            // immutable CMD52 action in its own outer turn. Any failure is
+            // terminal for the generation because an issued-unknown write may
+            // not be replayed or bypassed.
             publish_runtime_progress(
                 sequence,
-                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED,
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
                 aux0,
             );
+            if !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_SDIOPULLUP, 0) {
+                state.backplane_attach.poisoned = true;
+                state.recovery_required = true;
+                return Err(cyw43_take_last_fault_detail().unwrap_or(FAULT_CYW43_BACKPLANE_ALP));
+            }
             state.backplane_attach.phase = Cyw43BackplaneAttachPhase::ChipCommonRead;
             Ok(false)
         }
@@ -20332,18 +20697,26 @@ fn cyw43_sdio_cmd52_write(function: u8, addr: u32, value: u8) -> bool {
     }
 }
 
-fn cyw43_set_card_bus_width(width: u8) -> bool {
-    if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IF, width) {
+fn cyw43_set_card_bus_width(state: &mut Cyw43RuntimeState, width: u8) -> bool {
+    let Some(interface) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IF) else {
+        cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH);
+        return false;
+    };
+    let desired = (interface & !SDIO_BUS_WIDTH_MASK) | (width & SDIO_BUS_WIDTH_MASK);
+    if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IF, desired) {
         cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH);
         return false;
     }
     #[cfg(not(target_os = "none"))]
     {
+        state.card_interface_control = desired;
         true
     }
     #[cfg(target_os = "none")]
     {
-        if cyw43_card_bus_width_readback_matches(cyw43_sdio_cmd52_read(0, SDIO_CCCR_IF), width) {
+        if cyw43_card_bus_width_readback_matches(cyw43_sdio_cmd52_read(0, SDIO_CCCR_IF), desired)
+        {
+            state.card_interface_control = desired;
             true
         } else {
             cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_CARD_BUS_WIDTH);
@@ -20480,9 +20853,10 @@ const fn cyw43_backplane_cmd53_increment() -> bool {
 
 const fn cyw43_backplane_uses_bulk_block_mode(
     firmware_released: bool,
+    card_multi_block: bool,
     transfer_len: usize,
 ) -> bool {
-    !firmware_released && transfer_len > SDIO_CMD53_BYTE_MODE_MAX
+    !firmware_released && card_multi_block && transfer_len > SDIO_CMD53_BYTE_MODE_MAX
 }
 
 fn cyw43_backplane_write_chunk_shape(
@@ -20612,7 +20986,11 @@ fn cyw43_flush_firmware_stage(state: &mut Cyw43RuntimeState) -> bool {
         cyw43_record_firmware_range_fault(CYW43_FIRMWARE_RANGE_STAGE_ADDR);
         return false;
     };
-    let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(state.firmware_released, len);
+    let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(
+        state.firmware_released,
+        state.card_multi_block,
+        len,
+    );
     match cyw43_backplane_write_ring_result(
         state,
         flush_addr,
@@ -20725,7 +21103,11 @@ fn cyw43_backplane_write_ring(
     ring_offset: usize,
     len: usize,
 ) -> bool {
-    let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(state.firmware_released, len);
+    let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(
+        state.firmware_released,
+        state.card_multi_block,
+        len,
+    );
     cyw43_backplane_write_ring_result(state, addr, ring_offset, len, bulk_block_mode).is_ok()
 }
 
@@ -28444,6 +28826,18 @@ static TEST_SDIO_CMD52_IORX_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52
 static TEST_SDIO_CMD52_IOEX_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
 
 #[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_CMD52_CCCR_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_CMD52_CAPS_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_CMD52_SPEED_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_CMD52_IF_RESPONSE: AtomicU32 = AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
+
+#[cfg(all(not(target_os = "none"), test))]
 static TEST_SDIO_CMD52_CARDCTRL_RESPONSE: AtomicU32 =
     AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
 
@@ -28569,6 +28963,10 @@ fn reset_test_sdio_transfer_failure() {
 fn reset_test_sdio_cmd52_read_responses() {
     TEST_SDIO_CMD52_IORX_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_SDIO_CMD52_IOEX_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
+    TEST_SDIO_CMD52_CCCR_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
+    TEST_SDIO_CMD52_CAPS_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
+    TEST_SDIO_CMD52_SPEED_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
+    TEST_SDIO_CMD52_IF_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_SDIO_CMD52_CARDCTRL_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_SDIO_CMD52_CHIPCLKCSR_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
     TEST_SDIO_CMD52_ARM_RESETCTRL_RESPONSE.store(TEST_SDIO_CMD52_RESPONSE_UNSET, Ordering::Release);
@@ -28587,6 +28985,30 @@ fn reset_test_sdio_cmd52_read_responses() {
 fn test_sdio_cmd52_read_response(function: u8, addr: u32) -> Option<u8> {
     if function == 0 && addr == SDIO_CCCR_IOEX {
         let value = TEST_SDIO_CMD52_IOEX_RESPONSE.load(Ordering::Acquire);
+        if value <= u32::from(u8::MAX) {
+            return Some(value as u8);
+        }
+    }
+    if function == 0 && addr == SDIO_CCCR_CCCR {
+        let value = TEST_SDIO_CMD52_CCCR_RESPONSE.load(Ordering::Acquire);
+        if value <= u32::from(u8::MAX) {
+            return Some(value as u8);
+        }
+    }
+    if function == 0 && addr == SDIO_CCCR_CAPS {
+        let value = TEST_SDIO_CMD52_CAPS_RESPONSE.load(Ordering::Acquire);
+        if value <= u32::from(u8::MAX) {
+            return Some(value as u8);
+        }
+    }
+    if function == 0 && addr == SDIO_CCCR_SPEED {
+        let value = TEST_SDIO_CMD52_SPEED_RESPONSE.load(Ordering::Acquire);
+        if value <= u32::from(u8::MAX) {
+            return Some(value as u8);
+        }
+    }
+    if function == 0 && addr == SDIO_CCCR_IF {
+        let value = TEST_SDIO_CMD52_IF_RESPONSE.load(Ordering::Acquire);
         if value <= u32::from(u8::MAX) {
             return Some(value as u8);
         }
@@ -28676,6 +29098,26 @@ fn test_sdio_cmd52_read_iorx_response(value: u8) {
 #[cfg(all(not(target_os = "none"), test))]
 fn test_sdio_cmd52_read_ioex_response(value: u8) {
     TEST_SDIO_CMD52_IOEX_RESPONSE.store(u32::from(value), Ordering::Release);
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_cmd52_read_cccr_response(value: u8) {
+    TEST_SDIO_CMD52_CCCR_RESPONSE.store(u32::from(value), Ordering::Release);
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_cmd52_read_caps_response(value: u8) {
+    TEST_SDIO_CMD52_CAPS_RESPONSE.store(u32::from(value), Ordering::Release);
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_cmd52_read_speed_response(value: u8) {
+    TEST_SDIO_CMD52_SPEED_RESPONSE.store(u32::from(value), Ordering::Release);
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_cmd52_read_if_response(value: u8) {
+    TEST_SDIO_CMD52_IF_RESPONSE.store(u32::from(value), Ordering::Release);
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -39642,6 +40084,19 @@ mod tests {
             addr: SDIO_CCCR_IENX,
             ..ioex_f1
         };
+        let cccr_read = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD52_READ,
+            function: 0,
+            addr: SDIO_CCCR_CCCR,
+            data_offset: payload + 8,
+            len: 1,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let caps_read = DriverRuntimeSdioCommandDescriptor {
+            addr: SDIO_CCCR_CAPS,
+            data_offset: payload + 9,
+            ..cccr_read
+        };
         let unrelated_f1 = DriverRuntimeSdioCommandDescriptor {
             addr: f1.addr.wrapping_add(4),
             ..f1
@@ -39653,17 +40108,20 @@ mod tests {
         assert!(sdio_generation_reprobe_op_allowed(card));
         assert!(sdio_generation_reprobe_op_allowed(f1));
         assert!(sdio_generation_reprobe_op_allowed(ioex_f1));
+        assert!(sdio_generation_reprobe_op_allowed(cccr_read));
+        assert!(sdio_generation_reprobe_op_allowed(caps_read));
         assert!(sdio_generation_reprobe_op_allowed(card_width));
         assert!(sdio_generation_reprobe_op_allowed(card_speed));
-        assert!(!sdio_generation_reprobe_op_allowed(disable_extra_pullups));
+        assert!(sdio_generation_reprobe_op_allowed(disable_extra_pullups));
         for value in u8::MIN..=u8::MAX {
             write_runtime_payload_byte(usize::from(payload) + 6, value);
-            assert!(
-                !sdio_generation_reprobe_op_allowed(disable_extra_pullups),
-                "pull-up reprobe value {value:#04x} must remain forbidden"
+            assert_eq!(
+                sdio_generation_reprobe_op_allowed(disable_extra_pullups),
+                value == 0,
+                "only the exact pull-up clear may be reprobed for a new generation"
             );
         }
-        assert!(!sdio_generation_reprobe_op_allowed(host_one_bit_fast));
+        assert!(sdio_generation_reprobe_op_allowed(host_one_bit_fast));
         assert!(!sdio_generation_reprobe_op_allowed(host_slow));
         assert!(!sdio_generation_reprobe_op_allowed(f2));
         assert!(!sdio_generation_reprobe_op_allowed(ioex_f2));
@@ -40634,6 +41092,10 @@ mod tests {
         test_sdio_cmd52_read_chipclkcsr_response(alp_request | SBSDIO_ALP_AVAIL);
         test_sdio_cmd52_read_ioex_response(0);
         test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_1);
+        test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+        test_sdio_cmd52_read_caps_response(SDIO_CCCR_CAP_SMB);
+        test_sdio_cmd52_read_speed_response(SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS);
+        test_sdio_cmd52_read_if_response(SDIO_BUS_WIDTH_4BIT);
         assert!(cyw43_transport_init(&mut state).is_ok());
         assert_eq!(
             state.dpc_shared_epoch,
@@ -43237,6 +43699,10 @@ mod tests {
         // Delayed/failed readiness tests override these values explicitly.
         test_sdio_cmd52_read_ioex_response(0);
         test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_1);
+        test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+        test_sdio_cmd52_read_caps_response(SDIO_CCCR_CAP_SMB);
+        test_sdio_cmd52_read_speed_response(SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS);
+        test_sdio_cmd52_read_if_response(SDIO_BUS_WIDTH_4BIT);
         let init = DriverTaskCommandRecord {
             sequence: 70,
             opcode: OPCODE_SERVICE,
@@ -43266,11 +43732,21 @@ mod tests {
         let alp_request = SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_ALP_AVAIL_REQ;
         test_sdio_cmd52_read_chipclkcsr_response(alp_request | SBSDIO_ALP_AVAIL);
         let mut transport_ready = false;
-        for attempt in 0..CYW43_TRANSPORT_PHASE_LIMIT {
-            let sequence = 170 + attempt as u32;
+        let sequence = 170;
+        let turns = CYW43_BACKPLANE_FORCE_ALP_SETTLE_FALLBACK_SPINS
+            .saturating_add(CYW43_TRANSPORT_PHASE_LIMIT)
+            .saturating_add(64);
+        for attempt in 0..turns {
+            // Every retained turn belongs to one immutable root command. A
+            // new sequence would be a different owner and must be rejected by
+            // the lane/F1/backplane cursors rather than treated as progress.
             let completion = service_command(0, cyw43_descriptor_command(sequence));
             assert_eq!(completion.sequence, sequence);
-            assert_eq!(completion.code, COMPLETION_PROGRESS);
+            let lane = CYW43_RUNTIME_STATE.with_ref(|state| state.card_lane);
+            assert_eq!(
+                completion.code, COMPLETION_PROGRESS,
+                "retained transport turn {attempt} returned {completion:?} with lane {lane:?}"
+            );
             if completion.detail == DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY {
                 assert_eq!(completion.result, 1);
                 transport_ready = true;
@@ -54168,6 +54644,7 @@ mod tests {
         let status = SDHCI_INT_RESPONSE
             | SDHCI_INT_DATA_AVAIL
             | SDHCI_INT_DATA_END
+            | SDHCI_INT_DMA_END
             | SDHCI_INT_CARD_INT
             | SDHCI_INT_ERROR
             | upper_error;
@@ -54178,6 +54655,7 @@ mod tests {
             SDHCI_INT_RESPONSE
                 | SDHCI_INT_DATA_AVAIL
                 | SDHCI_INT_DATA_END
+                | SDHCI_INT_DMA_END
                 | SDHCI_INT_ERROR
                 | upper_error
         );
@@ -54186,19 +54664,22 @@ mod tests {
 
     #[test]
     fn cyw43_backplane_upload_uses_one_linux_normal_lane() {
+        assert_eq!(CYW43_FIRMWARE_STAGE_BYTES, 8 * 1024);
+        assert_eq!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES, 2 * 1024);
         assert_eq!(
-            CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
-            CYW43_FIRMWARE_STAGE_BYTES
+            CYW43_FIRMWARE_STAGE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
+            4
         );
-        assert_eq!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES, 8 * 1024);
         assert_eq!(
             CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES % SDIO_FUNCTION1_BLOCK_SIZE as usize,
             0
         );
-        assert_eq!(SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT, 128);
-        assert!(cyw43_backplane_uses_bulk_block_mode(false, 2048));
+        assert_eq!(SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT, 32);
+        assert!(cyw43_backplane_uses_bulk_block_mode(false, true, 2048));
+        assert!(!cyw43_backplane_uses_bulk_block_mode(false, false, 2048));
         assert!(!cyw43_backplane_uses_bulk_block_mode(
             false,
+            true,
             SDIO_CMD53_BYTE_MODE_MAX
         ));
         assert_eq!(
@@ -54325,7 +54806,7 @@ mod tests {
         let mut remaining = expected;
         let mut advanced = 0usize;
         let mut commands = 0usize;
-        let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(false, expected);
+        let bulk_block_mode = cyw43_backplane_uses_bulk_block_mode(false, true, expected);
         assert!(bulk_block_mode);
         while remaining != 0 {
             let (chunk_len, block_size, block_count) =
@@ -54360,7 +54841,7 @@ mod tests {
             remaining -= chunk_len;
             commands += 1;
         }
-        assert_eq!(commands, 1);
+        assert_eq!(commands, 4);
         assert_eq!(advanced, expected);
     }
 
@@ -54369,7 +54850,7 @@ mod tests {
         let _guard = test_guard();
         const FIRMWARE_BYTES: usize = CYW43_FIRMWARE_STAGE_BYTES;
         const EXPECTED_COMMANDS: usize = FIRMWARE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
-        assert_eq!(EXPECTED_COMMANDS, 1);
+        assert_eq!(EXPECTED_COMMANDS, 4);
 
         for cut in 0..=EXPECTED_COMMANDS {
             reset_runtime_for_test();
@@ -55252,7 +55733,7 @@ mod tests {
             );
             let expected_commands =
                 CYW43_FIRMWARE_STAGE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
-            assert_eq!(expected_commands, 1);
+            assert_eq!(expected_commands, 4);
             assert_eq!(test_sdio_cmd53_transfer_count(1, true), expected_commands);
             for ordinal in 0..expected_commands {
                 let addr = cyw43_backplane_function_addr(
@@ -55574,8 +56055,8 @@ mod tests {
             cyw43_sdio_operating_clock_hz(false),
             CYW43_SDIO_DEFAULT_SPEED_CLOCK_HZ
         );
-        assert_eq!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES, 8 * 1024);
-        assert_eq!(SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT, 128);
+        assert_eq!(CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES, 2 * 1024);
+        assert_eq!(SDIO_LINKED_DMA_FIRMWARE_BLOCK_COUNT, 32);
     }
     #[test]
     fn cyw43_runtime_stream_completion_requires_declared_total_lengths() {
@@ -56633,7 +57114,6 @@ mod tests {
         );
         let authority = io.external_dma_authority_value();
         let cb0 = authority.control_block_vaddr;
-        let cb1 = cb0 + SDIO_DMA_CONTROL_BLOCK_BYTES;
         assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb0), 0x000b_0148);
         assert_eq!(
             sdio_external_dma_read_memory_u32(&mut io, cb0 + 4),
@@ -56645,26 +57125,9 @@ mod tests {
         );
         assert_eq!(
             sdio_external_dma_read_memory_u32(&mut io, cb0 + 12),
-            DRIVER_TASK_RING_PAGE_BYTES as u32
+            FIRMWARE_BYTES as u32
         );
-        assert_eq!(
-            sdio_external_dma_read_memory_u32(&mut io, cb0 + 20),
-            TEST_SDIO_DMA_CONTROL_BLOCK_BUS + SDIO_DMA_CONTROL_BLOCK_BYTES as u32
-        );
-        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb1), 0x000b_0148);
-        assert_eq!(
-            sdio_external_dma_read_memory_u32(&mut io, cb1 + 4),
-            TEST_SDIO_DMA_BOUNCE1_BUS
-        );
-        assert_eq!(
-            sdio_external_dma_read_memory_u32(&mut io, cb1 + 8),
-            0x7e30_0020
-        );
-        assert_eq!(
-            sdio_external_dma_read_memory_u32(&mut io, cb1 + 12),
-            DRIVER_TASK_RING_PAGE_BYTES as u32
-        );
-        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb1 + 20), 0);
+        assert_eq!(sdio_external_dma_read_memory_u32(&mut io, cb0 + 20), 0);
     }
 
     #[test]
@@ -56738,7 +57201,7 @@ mod tests {
         reset_sdio_descriptor_seam_for_test();
         const FIRMWARE_BYTES: usize = CYW43_FIRMWARE_STAGE_BYTES;
         const COMMANDS: usize = FIRMWARE_BYTES / CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES;
-        assert_eq!(COMMANDS, 1);
+        assert_eq!(COMMANDS, 4);
         let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
         let flags = DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
             | DRIVER_RUNTIME_SDIO_FLAG_DATA
@@ -59948,7 +60411,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_pullup_policy_consumes_one_retained_turn_without_an_sdio_operation() {
+    fn cyw43_pullup_clear_consumes_one_retained_turn_and_one_exact_sdio_operation() {
         let _guard = test_guard();
         reset_runtime_for_test();
         reset_test_sdio_transfer_log();
@@ -59957,7 +60420,7 @@ mod tests {
         state.dpc_shared_epoch = 7;
         state.backplane_attach.parent_sequence = sequence;
         state.backplane_attach.generation = state.dpc_shared_epoch;
-        state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupPolicy;
+        state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupClear;
 
         assert_eq!(
             cyw43_backplane_transport_init_step(
@@ -59971,15 +60434,19 @@ mod tests {
             state.backplane_attach.phase,
             Cyw43BackplaneAttachPhase::ChipCommonRead
         );
-        assert_eq!(test_sdio_transfer_total_count(), 0);
+        assert_eq!(test_sdio_transfer_total_count(), 1);
+        assert!(test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD52
+                && record.arg == sdio_cmd52_arg(true, 1, SBSDIO_FUNC1_SDIOPULLUP, 0)
+        }));
         assert_eq!(
             read_ring_u32(DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize + 8),
-            DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR
         );
     }
 
     #[test]
-    fn cyw43_backplane_attach_skips_optional_pullup_write_before_chipcommon_window() {
+    fn cyw43_backplane_attach_clears_pullup_before_chipcommon_window() {
         let _guard = test_guard();
         reset_runtime_for_test();
         reset_test_sdio_transfer_log();
@@ -60011,6 +60478,11 @@ mod tests {
                     )
         })
         .expect("FORCE_ALP write");
+        let pullup_index = test_sdio_first_transfer_index(|record| {
+            record.cmd == SDIO_CMD52
+                && record.arg == sdio_cmd52_arg(true, 1, SBSDIO_FUNC1_SDIOPULLUP, 0)
+        })
+        .expect("extra pull-up clear");
         let (window_low, _, _) = cyw43_backplane_window_register_bytes(CYW43_CHIPCOMMON_BASE);
         let window_low_index = test_sdio_first_transfer_index(|record| {
             record.cmd == SDIO_CMD52
@@ -60019,19 +60491,20 @@ mod tests {
         .expect("ChipCommon window low write");
 
         assert!(request_index < force_index);
-        assert!(force_index < window_low_index);
+        assert!(force_index < pullup_index);
+        assert!(pullup_index < window_low_index);
         assert_eq!(
             test_sdio_transfer_count(|record| {
                 record.cmd == SDIO_CMD52
                     && (record.arg >> 28) & 0x7 == 1
                     && (record.arg >> 9) & 0x1ffff == SBSDIO_FUNC1_SDIOPULLUP
             }),
-            0
+            1
         );
     }
 
     #[test]
-    fn cyw43_generation_reprobe_trace_never_targets_optional_pullup_register() {
+    fn cyw43_generation_reprobe_trace_clears_pullup_exactly_once() {
         let _guard = test_guard();
         reset_runtime_for_test();
         reset_test_sdio_transfer_log();
@@ -60049,11 +60522,54 @@ mod tests {
                     && (record.arg >> 28) & 0x7 == 1
                     && (record.arg >> 9) & 0x1ffff == SBSDIO_FUNC1_SDIOPULLUP
             }),
-            0
+            1
         );
         assert!(test_sdio_transfer_seen(|record| {
             record.cmd == SDIO_CMD52
+                && record.arg == sdio_cmd52_arg(true, 1, SBSDIO_FUNC1_SDIOPULLUP, 0)
+        }));
+        assert!(test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD52
                 && (record.arg >> 28) & 0x7 == 1
+                && (record.arg >> 9) & 0x1ffff == SBSDIO_FUNC1_SBADDRLOW
+        }));
+    }
+
+    #[test]
+    fn cyw43_pullup_clear_failure_poison_is_terminal_without_replay() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        reset_test_sdio_transfer_log();
+        let sequence = 82;
+        let generation = 8;
+        let mut state = Cyw43RuntimeState::new();
+        state.dpc_shared_epoch = generation;
+        state.backplane_attach.parent_sequence = sequence;
+        state.backplane_attach.generation = generation;
+        state.backplane_attach.phase = Cyw43BackplaneAttachPhase::PullupClear;
+        test_sdio_transfer_fail_next_arg(
+            SDIO_CMD52,
+            sdio_cmd52_arg(true, 1, SBSDIO_FUNC1_SDIOPULLUP, 0),
+        );
+
+        assert!(cyw43_backplane_transport_init_step(
+            sequence,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+            &mut state,
+        )
+        .is_err());
+        assert_eq!(test_sdio_transfer_total_count(), 1);
+        assert!(state.backplane_attach.poisoned);
+        assert!(state.recovery_required);
+        assert!(cyw43_backplane_transport_init_step(
+            sequence,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+            &mut state,
+        )
+        .is_err());
+        assert_eq!(test_sdio_transfer_total_count(), 1);
+        assert!(!test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD52
                 && (record.arg >> 9) & 0x1ffff == SBSDIO_FUNC1_SBADDRLOW
         }));
     }

@@ -33,20 +33,41 @@ Current terminology: a **shard** is a manifest-derived worker namespace bucket, 
 
 ## seL4 Reference Manual Alignment (v15.0.0)
 
-We treat the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)) as the authoritative description of kernel semantics. This plan
-cross-checks each milestone against the relevant chapters to ensure we remain within the manual's constraints:
-- **Chapters 2 & 3 (Kernel Services, Objects, and Capability Spaces)** drive the capability discipline, retype requirements, and CSpace
-  layout described in Milestones 0–4.
-- **Chapters 4 & 5 (Message Passing and Notifications)** inform the NineDoor 9P transport, IPC patterns, and event/endpoint handling
-  in Milestones 1–3.
-- **Chapters 6 & 7 (Threads, Execution, and Address Spaces)** govern timer/tick handling, scheduling contexts, and deterministic memory
-  budgets we rely on for the root-task event pump and worker isolation.
-- **Chapter 8 (Hardware I/O)** constrains the virtio-console/net interaction surface and informs how we integrate serial/network drivers
-  with the kernel’s interrupt/IO model.
-- **Chapters 9 & 10 (System Bootstrapping and API Reference)** describe bootinfo, CPIO loading, and syscall behaviours, underpinning
-  `scripts/qemu-run.sh`, `scripts/ci/size_guard.sh`, and all entrypoint work.
+We treat the official seL4 Reference Manual v15.0.0
+([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)) as the
+authoritative description of kernel semantics. The selected profile-specific
+seL4 build directory, generated headers, and generated metadata define which
+configuration options, object layouts, and APIs are active in an as-built
+Cohesix image. A feature described by the manual is not an as-built Cohesix
+capability unless the selected profile enables it and target evidence proves it.
 
-We revisit these sections whenever we specify new kernel interactions or manifest changes so that documentation and implementations remain aligned.
+- **Chapters 2 and 3 (Kernel Services and Objects; Capability Spaces)** govern
+  kernel object types, untyped retyping, capability derivation and revocation,
+  CSpace addressing, and capability-mediated authority.
+- **Chapters 4 and 5 (Message Passing (IPC); Notifications)** govern endpoint
+  send, receive, call, and reply semantics and notification signalling used
+  between target tasks. They do not define Secure9P, the Cohesix console
+  grammar, or host and wire transports; those remain Cohesix application
+  protocols with their own bounded contracts.
+- **Chapters 6 and 7 (Threads and Execution; Address Spaces and Virtual
+  Memory)** govern TCBs, priorities, affinities, faults, classic and MCS
+  scheduling semantics, scheduling contexts when MCS is selected, VSpaces,
+  page mappings, and address-space authority. Cooperative event-pump turns and
+  compiler-generated admission bounds are Cohesix contracts unless they are
+  explicitly backed by the corresponding kernel objects and operations.
+- **Chapter 8 (Hardware I/O)** governs kernel-visible interrupt and I/O
+  authority, mapping, delivery, and acknowledgement. It does not define virtio,
+  CYW43, SDIO, GENET, or other device-protocol semantics.
+- **Chapters 9 and 10 (System Bootstrapping; seL4 API Reference)** govern the
+  initial task environment, BootInfo, and the configuration-dependent kernel
+  ABI and API. CPIO composition, launch scripts, and the rootfs size guard are
+  Cohesix build and release contracts validated against those kernel inputs;
+  the seL4 manual does not specify them.
+
+Every new kernel interaction or manifest-controlled seL4 choice must be checked
+against both the relevant manual section and the generated artifacts for the
+selected build profile. Documentation and acceptance evidence must distinguish
+manual availability, profile selection, implementation, and target proof.
 
 ---
 
@@ -8301,9 +8322,9 @@ Changes:
   - apps/root-task/sel4.ld + scripts/pi4-image-build.sh + scripts/pi4_image_identity.py + scripts/pi4_wifi_repeatability.py — place one fixed-width marker in a dedicated file-backed root-task load section, keep the selected stamped seL4 profile tree immutable while composing the rootserver in a separately validated disposable tree, bind both pristine profile inputs plus the derived rootserver/CPIO/wrapper tuple in provenance, seal the wrapper with the domain-separated normalized digest of the complete legacy Pi image, repair and revalidate U-Boot CRCs, and require staged/read-back bytes plus every UART slice to agree on that content-derived identity.
   - scripts/cohesix-build-run.sh and focused tests/docs — keep the QEMU rootfs below the 4 MiB guard while preserving all manifest-declared runtime artifact names, bytes, and isolated-runtime lookup semantics.
   - scripts/ci, tools/rust-risk-audit, README.md, and canonical docs — make Python selection exact and recoverable, count cfg-test Rust separately from production risk, record the real linked-runtime unsafe delta, and align as-built packaging explanations with the canonical QEMU path.
-  - .github/workflows/*.yml — audit every trigger and job, consolidate required pull-request, main-branch, manual, and scheduled checks into the smallest auditable workflow set, retire stubs and jobs that invoke removed tooling, preserve mandatory Rust, generated-artifact, staged-plan, VM-boundary, and dependency gates, and use least-privilege permissions with deterministic toolchain/action pins and retained failure evidence.
+  - .github/workflows/*.yml — audit every trigger and job, consolidate required pull-request, main-branch, manual, and scheduled checks into the smallest auditable workflow set, retire stubs and jobs that invoke removed tooling, preserve clean-runner Rust, generated-artifact, Stage 01 integrity, artifact-independent VM-boundary, and dependency gates, and use least-privilege permissions with deterministic toolchain/action pins and retained failure evidence; keep Stage 02 target compilation and QEMU packaging in the provisioned macOS ARM64 evidence lane because their canonical external seL4 build trees are intentionally not vendored.
 Commands:
-  - go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+  - actionlint .github/workflows/*.yml
   - cargo metadata --locked --no-deps
   - cargo fmt --all -- --check
   - cargo clippy --workspace --all-targets -- -D warnings

@@ -2682,7 +2682,10 @@ mod tests {
 
         let mut transport = TcpTransport::new("127.0.0.1", port)
             .with_timeout(Duration::from_millis(50))
-            .with_max_retries(3)
+            // The server deliberately crosses multiple socket timeouts. Keep
+            // enough retry headroom that scheduler contention cannot turn the
+            // partial-frame invariant into a wall-clock race.
+            .with_max_retries(8)
             .with_auth_token(TEST_AUTH_TOKEN);
         let session_result = transport.attach(Role::Queen, None);
         assert!(

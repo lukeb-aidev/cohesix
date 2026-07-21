@@ -84,35 +84,26 @@ Unsupported target/stage combinations fail before the stage starts. A Pi 4 Stage
 workflow. Pull requests, merge-queue candidates, and pushes to `main` run the
 following merge-gate graph; manual dispatch runs the same graph:
 
-- `source-quality` runs the pinned workflow linter, locked metadata,
-  staged-runner inventory, generated-artifact drift guard, workspace
-  formatting, full-workspace/all-target clippy, the full workspace check, and
-  the normative Rust risk ratchet on the pinned `macos-26` ARM64 runner.
-- `workspace-tests` runs the canonical full workspace test command with one
-  deterministic test thread on `macos-26` ARM64.
-- `staged-host-gates` runs target-qualified Stages 01 and 02 in one shared QEMU
-  state directory, records QEMU and Pi 4 root-task plus Pi 4 driver-runtime
-  dependency trees, and retains the narrow evidence bundle for 14 days.
-- `qemu-packaging` builds the canonical no-run QEMU package on `macos-26`
-  ARM64, enforces the rootfs size and payload-identity checks, rechecks
-  generated outputs, and retains its build log, payload manifest, byte count,
-  and checksum for 14 days. Its macFUSE build SDK is versioned,
-  checksum-pinned, package-signature verified, and extracted without activating
-  a filesystem extension on the runner.
-- `workspace-tests`, `staged-host-gates`, and `qemu-packaging` are ordered after
-  `source-quality` for cache reuse, but still run after a quality failure unless
-  the workflow is cancelled.
-- Every macOS execution job explicitly installs the Rust components it invokes
-  and checksum-verifies its pinned ripgrep release before tests or packaging.
+- `source-and-tests` is one fail-fast `macos-26` ARM64 clean-runner gate. It
+  checksum-verifies pinned `actionlint` and ripgrep binaries, runs workflow and
+  repository policy checks, target-qualified Stage 01, generated-artifact
+  validation, workspace formatting, full-workspace/all-target Clippy, the full
+  workspace check and single-threaded workspace test suite, the normative Rust
+  risk ratchet, and artifact-independent QEMU/Pi 4 dependency-tree checks. It
+  retains runner, Stage 01, and VM-boundary evidence for 14 days.
 - `dependency-audit` runs independently on pinned Ubuntu 24.04 with exact
   `cargo-audit` and `cargo-deny` versions. It also runs on the weekly schedule
   and retains both reports for 30 days, including failure reports.
 - `ci` preserves the established required-check name as the aggregate merge
-  gate and passes only when every required pull-request job above succeeds.
+  gate and passes only when both required pull-request jobs above succeed.
 
-GitHub Actions Stages 01 and 02 are merge gates, not a claim of full Test Plan
-PASS. Stages 03-05, QEMU boot/transport evidence, and fresh Pi 4 hardware proof
-remain required whenever the active milestone calls for them.
+GitHub Actions Stage 01 is a merge gate, not a claim of full Test Plan PASS.
+Stage 02 target compilation and canonical QEMU packaging require the external,
+profile-validated QEMU and Pi 4 seL4 build trees that this repository does not
+vendor. They remain mandatory evidence on a provisioned macOS ARM64 host, but a
+clean GitHub-hosted runner must not fabricate or silently skip those inputs.
+Stages 03-05, QEMU boot/transport evidence, and fresh Pi 4 hardware proof remain
+required whenever the active milestone calls for them.
 
 ## Purpose
 Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.

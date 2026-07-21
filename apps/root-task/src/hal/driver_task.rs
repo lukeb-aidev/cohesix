@@ -21699,12 +21699,12 @@ mod tests {
                     );
                 }
                 DriverTaskHotPath::SdioHost => {
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 1);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 4);
                     assert_eq!(
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         32
                     );
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Mmio), 2);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Mmio), 3);
                 }
                 DriverTaskHotPath::PcieRoot => {
                     assert_eq!(
@@ -21744,7 +21744,7 @@ mod tests {
         assert_eq!(pcie.hot_path, DriverTaskHotPath::PcieRoot);
         assert!(genet.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 6);
         assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
-        assert_eq!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 2);
+        assert_eq!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 3);
         assert!(pcie.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 10);
     }
 

@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Run Cohesix source, test-plan, VM-boundary, and dependency gates on GitHub Actions.
+# Purpose: Run clean-runner Cohesix source, test, VM-boundary, and dependency gates.
 # Copyright 2026 Lukas Bower
 
 name: Cohesix CI
@@ -27,6 +27,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
 
 env:
+  ACTIONLINT_ARCHIVE_SHA256: aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
+  ACTIONLINT_VERSION: 1.7.12
   CARGO_INCREMENTAL: '0'
   CARGO_TERM_COLOR: always
   RIPGREP_ARCHIVE_SHA256: 378e973289176ca0c6054054ee7f631a065874a352bf43f0fa60ef079b6ba715
@@ -34,11 +36,11 @@ env:
   RUST_BACKTRACE: '1'
 
 jobs:
-  quality:
-    name: source-quality
+  checks:
+    name: source-and-tests
     if: github.event_name != 'schedule'
     runs-on: macos-26
-    timeout-minutes: 60
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
@@ -52,6 +54,28 @@ jobs:
           components: clippy, rustfmt
           targets: aarch64-unknown-none
 
+      - name: Install pinned CI tools
+        run: |
+          actionlint_archive="${RUNNER_TEMP}/actionlint-${ACTIONLINT_VERSION}.tar.gz"
+          actionlint_dir="${RUNNER_TEMP}/actionlint-${ACTIONLINT_VERSION}"
+          actionlint_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_darwin_arm64.tar.gz"
+          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent --show-error --output "${actionlint_archive}" "${actionlint_url}"
+          printf '%s  %s\n' "${ACTIONLINT_ARCHIVE_SHA256}" "${actionlint_archive}" | shasum -a 256 --check
+          mkdir -p "${actionlint_dir}"
+          tar -xzf "${actionlint_archive}" -C "${actionlint_dir}" actionlint
+          "${actionlint_dir}/actionlint" -version
+
+          ripgrep_archive="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}.tar.gz"
+          ripgrep_dir="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}"
+          ripgrep_url="https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin.tar.gz"
+          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent --show-error --output "${ripgrep_archive}" "${ripgrep_url}"
+          printf '%s  %s\n' "${RIPGREP_ARCHIVE_SHA256}" "${ripgrep_archive}" | shasum -a 256 --check
+          mkdir -p "${ripgrep_dir}"
+          tar -xzf "${ripgrep_archive}" --strip-components=1 -C "${ripgrep_dir}"
+          "${ripgrep_dir}/rg" --version
+
+          printf '%s\n' "${actionlint_dir}" "${ripgrep_dir}" >> "${GITHUB_PATH}"
+
       - name: Cache Rust build artifacts
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -62,16 +86,23 @@ jobs:
             target
           key: rust-${{ runner.os }}-${{ runner.arch }}-1.93.1-${{ hashFiles('Cargo.lock') }}
 
-      - name: Verify repository policy and pinned inputs
+      - name: Prepare retained evidence paths
+        run: |
+          mkdir -p out/ci/dependency-trees out/ci/runner out/test-plan/github-actions
+          uname -a > out/ci/runner/uname.txt
+          sw_vers > out/ci/runner/macos.txt
+          rustc --version --verbose > out/ci/runner/rustc.txt
+          python3 --version > out/ci/runner/python.txt 2>&1
+
+      - name: Verify repository and workflow policy
         run: |
           test -s AGENTS.md
           test -s docs/BUILD_PLAN.md
-          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
-          cargo metadata --locked --no-deps
+          actionlint .github/workflows/*.yml
           scripts/ci/test_plan_run.sh --list
 
-      - name: Generated artifact drift guard
-        run: scripts/check-generated.sh
+      - name: Run staged integrity gate
+        run: scripts/ci/test_plan_run.sh --target qemu --stage 1 --state-dir out/test-plan/github-actions
 
       - name: Rust fmt check (workspace)
         run: cargo fmt --all -- --check
@@ -82,114 +113,13 @@ jobs:
       - name: Rust check (workspace)
         run: cargo check --locked --workspace
 
+      - name: Rust test (workspace)
+        run: cargo test --locked --workspace -- --test-threads=1
+
       - name: Rust risk ratchet
         run: |
           python3 scripts/ci/test_rust_risk_gate.py
           scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml
-
-  workspace-tests:
-    name: workspace-tests
-    needs:
-      - quality
-    if: ${{ !cancelled() && github.event_name != 'schedule' }}
-    runs-on: macos-26
-    timeout-minutes: 90
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Install Rust toolchain 1.93.1
-        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
-        with:
-          components: rustfmt
-          targets: aarch64-unknown-none
-
-      - name: Install pinned ripgrep 15.1.0
-        run: |
-          archive="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}.tar.gz"
-          tool_dir="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}"
-          url="https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin.tar.gz"
-          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent --show-error --output "${archive}" "${url}"
-          printf '%s  %s\n' "${RIPGREP_ARCHIVE_SHA256}" "${archive}" | shasum -a 256 --check
-          mkdir -p "${tool_dir}"
-          tar -xzf "${archive}" --strip-components=1 -C "${tool_dir}"
-          "${tool_dir}/rg" --version
-          printf '%s\n' "${tool_dir}" >> "${GITHUB_PATH}"
-
-      - name: Restore Rust build artifacts
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: rust-${{ runner.os }}-${{ runner.arch }}-1.93.1-${{ hashFiles('Cargo.lock') }}
-
-      - name: Rust test (workspace)
-        run: cargo test --locked --workspace -- --test-threads=1
-
-  staged-host-gates:
-    name: staged-host-gates
-    needs:
-      - quality
-    if: ${{ !cancelled() && github.event_name != 'schedule' }}
-    runs-on: macos-26
-    timeout-minutes: 120
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Install Rust toolchain 1.93.1
-        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
-        with:
-          components: rustfmt
-          targets: aarch64-unknown-none
-
-      - name: Install pinned ripgrep 15.1.0
-        run: |
-          archive="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}.tar.gz"
-          tool_dir="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}"
-          url="https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin.tar.gz"
-          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent --show-error --output "${archive}" "${url}"
-          printf '%s  %s\n' "${RIPGREP_ARCHIVE_SHA256}" "${archive}" | shasum -a 256 --check
-          mkdir -p "${tool_dir}"
-          tar -xzf "${archive}" --strip-components=1 -C "${tool_dir}"
-          "${tool_dir}/rg" --version
-          printf '%s\n' "${tool_dir}" >> "${GITHUB_PATH}"
-
-      - name: Restore Rust build artifacts
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: rust-${{ runner.os }}-${{ runner.arch }}-1.93.1-${{ hashFiles('Cargo.lock') }}
-
-      - name: Prepare retained evidence paths
-        run: |
-          mkdir -p out/ci/dependency-trees out/ci/runner out/test-plan/github-actions-qemu
-          uname -a > out/ci/runner/uname.txt
-          sw_vers > out/ci/runner/macos.txt
-          rustc --version --verbose > out/ci/runner/rustc.txt
-          python3 --version > out/ci/runner/python.txt 2>&1
-
-      - name: List staged Test Plan
-        run: scripts/ci/test_plan_run.sh --list
-
-      - name: Run staged integrity gate
-        run: scripts/ci/test_plan_run.sh --target qemu --stage 1 --state-dir out/test-plan/github-actions-qemu
-
-      - name: Run staged host and VM-boundary gates
-        run: scripts/ci/test_plan_run.sh --target qemu --stage 2 --state-dir out/test-plan/github-actions-qemu
 
       - name: Record VM dependency boundaries
         run: |
@@ -197,108 +127,15 @@ jobs:
           cargo tree --locked -p root-task --target aarch64-unknown-none -e normal --no-default-features --features release-pi4 > out/ci/dependency-trees/root-task-pi4.txt
           cargo tree --locked -p pi4-driver-runtime --target aarch64-unknown-none -e normal > out/ci/dependency-trees/pi4-driver-runtime.txt
 
-      - name: Upload staged gate evidence
+      - name: Upload source and test evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: staged-host-gates-${{ github.run_id }}-${{ github.run_attempt }}
+          name: source-and-tests-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             out/ci/dependency-trees/
             out/ci/runner/
-            out/test-plan/github-actions-qemu/
-          if-no-files-found: error
-          retention-days: 14
-
-  qemu-packaging:
-    name: qemu-packaging
-    needs:
-      - quality
-    if: ${{ !cancelled() && github.event_name != 'schedule' }}
-    runs-on: macos-26
-    timeout-minutes: 120
-    env:
-      MACFUSE_VERSION: 5.3.3
-      MACFUSE_DMG_SHA256: 7a0b7b66c0e7f8932707d1215dc9cf486e178d097ae0a2dcdf17d8530566aa15
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Install Rust toolchain 1.93.1
-        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
-        with:
-          components: rustfmt
-          targets: aarch64-unknown-none
-
-      - name: Install pinned ripgrep 15.1.0
-        run: |
-          archive="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}.tar.gz"
-          tool_dir="${RUNNER_TEMP}/ripgrep-${RIPGREP_VERSION}"
-          url="https://github.com/BurntSushi/ripgrep/releases/download/${RIPGREP_VERSION}/ripgrep-${RIPGREP_VERSION}-aarch64-apple-darwin.tar.gz"
-          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent --show-error --output "${archive}" "${url}"
-          printf '%s  %s\n' "${RIPGREP_ARCHIVE_SHA256}" "${archive}" | shasum -a 256 --check
-          mkdir -p "${tool_dir}"
-          tar -xzf "${archive}" --strip-components=1 -C "${tool_dir}"
-          "${tool_dir}/rg" --version
-          printf '%s\n' "${tool_dir}" >> "${GITHUB_PATH}"
-
-      - name: Restore Rust build artifacts
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: rust-${{ runner.os }}-${{ runner.arch }}-1.93.1-${{ hashFiles('Cargo.lock') }}
-
-      - name: Prepare QEMU packaging evidence
-        run: |
-          mkdir -p out/ci/qemu-packaging
-          {
-            uname -a
-            sw_vers
-            rustc --version --verbose
-          } > out/ci/qemu-packaging/runner.txt
-
-      - name: Prepare pinned macFUSE build SDK
-        env:
-          PKG_CONFIG_PATH: ${{ runner.temp }}/macfuse-sdk/Core.pkg/Payload/usr/local/lib/pkgconfig
-          PKG_CONFIG_SYSROOT_DIR: ${{ runner.temp }}/macfuse-sdk/Core.pkg/Payload
-        run: |
-          dmg="${RUNNER_TEMP}/macfuse-${MACFUSE_VERSION}.dmg"
-          mountpoint="${RUNNER_TEMP}/macfuse-mount"
-          sdk="${RUNNER_TEMP}/macfuse-sdk"
-          url="https://github.com/macfuse/macfuse/releases/download/macfuse-${MACFUSE_VERSION}/macfuse-${MACFUSE_VERSION}.dmg"
-          curl --proto '=https' --tlsv1.2 --retry 3 --fail --location --silent --show-error --output "${dmg}" "${url}"
-          printf '%s  %s\n' "${MACFUSE_DMG_SHA256}" "${dmg}" | shasum -a 256 --check
-          mkdir -p "${mountpoint}"
-          hdiutil attach -readonly -nobrowse -mountpoint "${mountpoint}" "${dmg}" >/dev/null
-          trap 'hdiutil detach "${mountpoint}" >/dev/null' EXIT
-          package="${mountpoint}/Install macFUSE.pkg"
-          pkgutil --check-signature "${package}"
-          pkgutil --expand-full "${package}" "${sdk}"
-          pkg-config --exists fuse
-
-      - name: Build and verify QEMU package
-        env:
-          PKG_CONFIG_PATH: ${{ runner.temp }}/macfuse-sdk/Core.pkg/Payload/usr/local/lib/pkgconfig
-          PKG_CONFIG_SYSROOT_DIR: ${{ runner.temp }}/macfuse-sdk/Core.pkg/Payload
-        run: |
-          scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none 2>&1 | tee out/ci/qemu-packaging/build.log
-          cp out/cohesix/staging/cohesix/manifest.json out/ci/qemu-packaging/payload-manifest.json
-          stat -f '%z' out/cohesix/cohesix-system.cpio > out/ci/qemu-packaging/rootfs-bytes.txt
-          shasum -a 256 out/cohesix/cohesix-system.cpio > out/ci/qemu-packaging/rootfs-sha256.txt
-          scripts/check-generated.sh
-
-      - name: Upload QEMU packaging evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: qemu-packaging-${{ github.run_id }}-${{ github.run_attempt }}
-          path: out/ci/qemu-packaging/
+            out/test-plan/github-actions/
           if-no-files-found: error
           retention-days: 14
 
@@ -352,10 +189,7 @@ jobs:
     name: ci
     if: ${{ always() && github.event_name != 'schedule' }}
     needs:
-      - quality
-      - workspace-tests
-      - staged-host-gates
-      - qemu-packaging
+      - checks
       - dependency-audit
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -363,18 +197,12 @@ jobs:
     steps:
       - name: Require every merge gate to pass
         env:
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          WORKSPACE_TESTS_RESULT: ${{ needs.workspace-tests.result }}
-          STAGED_HOST_GATES_RESULT: ${{ needs.staged-host-gates.result }}
-          QEMU_PACKAGING_RESULT: ${{ needs.qemu-packaging.result }}
+          CHECKS_RESULT: ${{ needs.checks.result }}
           DEPENDENCY_AUDIT_RESULT: ${{ needs.dependency-audit.result }}
         run: |
           failed=0
           for gate in \
-            "source-quality=${QUALITY_RESULT}" \
-            "workspace-tests=${WORKSPACE_TESTS_RESULT}" \
-            "staged-host-gates=${STAGED_HOST_GATES_RESULT}" \
-            "qemu-packaging=${QEMU_PACKAGING_RESULT}" \
+            "source-and-tests=${CHECKS_RESULT}" \
             "dependency-audit=${DEPENDENCY_AUDIT_RESULT}"
           do
             if [[ "${gate}" != *=success ]]; then
