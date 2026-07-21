@@ -13,6 +13,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -21,6 +22,31 @@ CANONICAL_HOME = Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
 class RustRiskGateBootstrapTests(unittest.TestCase):
+    @staticmethod
+    def canonical_gate_environment() -> dict[str, str]:
+        """Return only the ambient values a non-override gate run requires."""
+        environment = {
+            "HOME": str(CANONICAL_HOME),
+            "PATH": os.environ["PATH"],
+        }
+        if "TMPDIR" in os.environ:
+            environment["TMPDIR"] = os.environ["TMPDIR"]
+        return environment
+
+    def test_canonical_gate_environment_drops_runner_overrides(self) -> None:
+        overrides = {
+            "CARGO_HOME": "/tmp/runner-cargo-home",
+            "RUSTUP_HOME": "/tmp/runner-rustup-home",
+            "RUSTUP_TOOLCHAIN": "runner-toolchain",
+            "CARGO_TARGET_AARCH64_UNKNOWN_NONE_RUNNER": "/tmp/runner",
+        }
+        with mock.patch.dict(os.environ, overrides):
+            environment = self.canonical_gate_environment()
+
+        self.assertEqual(environment["HOME"], str(CANONICAL_HOME))
+        for variable_name in overrides:
+            self.assertNotIn(variable_name, environment)
+
     @staticmethod
     def fake_cargo_environment(root: Path, marker: Path) -> dict[str, str]:
         """Return a minimal environment with a marker-writing fake Cargo."""
@@ -36,13 +62,9 @@ class RustRiskGateBootstrapTests(unittest.TestCase):
             | stat.S_IXGRP
             | stat.S_IXOTH
         )
-        environment = {
-            "HOME": str(CANONICAL_HOME),
-            "PATH": f"{root}{os.pathsep}{os.environ['PATH']}",
-            "RUST_RISK_FAKE_CARGO_MARKER": str(marker),
-        }
-        if "TMPDIR" in os.environ:
-            environment["TMPDIR"] = os.environ["TMPDIR"]
+        environment = RustRiskGateBootstrapTests.canonical_gate_environment()
+        environment["PATH"] = f"{root}{os.pathsep}{environment['PATH']}"
+        environment["RUST_RISK_FAKE_CARGO_MARKER"] = str(marker)
         return environment
 
     def test_toolchain_runner_and_linker_overrides_fail_before_cargo(self) -> None:
@@ -188,8 +210,7 @@ class RustRiskGateBootstrapTests(unittest.TestCase):
             (copied_repo / "rust-toolchain").write_text(
                 "definitely-not-installed\n"
             )
-            environment = os.environ.copy()
-            environment["HOME"] = str(CANONICAL_HOME)
+            environment = self.canonical_gate_environment()
 
             result = subprocess.run(
                 [
@@ -217,8 +238,7 @@ class RustRiskGateBootstrapTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as _temp_dir:
             system_temp = Path(tempfile.gettempdir())
             existing_bootstraps = set(system_temp.glob("cohesix-rust-risk.*"))
-            environment = os.environ.copy()
-            environment["HOME"] = str(CANONICAL_HOME)
+            environment = self.canonical_gate_environment()
             process = subprocess.Popen(
                 ["bash", str(GATE), "--counts-only"],
                 cwd=REPO_ROOT,
