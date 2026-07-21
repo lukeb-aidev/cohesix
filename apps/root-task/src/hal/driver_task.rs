@@ -9862,6 +9862,9 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
             "cyw43-sdio-owner-wait-timeout"
         }
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY => "cyw43-sdio-owner-reply",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED => {
+            "cyw43-sdio-pair-restart-required"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => "cyw43-card-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN => "cyw43-f1-block-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY => "cyw43-f1-block-ready",
@@ -15927,6 +15930,12 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn pair_restart_marker_is_actionable_across_parent_sequence_change() {
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
+            ),
+            "cyw43-sdio-pair-restart-required",
+        );
         assert!(cyw43_sdio_pair_restart_progress(
             DriverTaskRingProgressRecord {
                 magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,

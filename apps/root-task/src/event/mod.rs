@@ -11353,6 +11353,10 @@ where
             .and_then(|progress| Self::wifi_sdio_runtime_progress_gate(progress.phase));
         let cyw43_progress_gate = cyw43_runtime_progress
             .and_then(|progress| Self::wifi_cyw43_runtime_progress_gate(progress.phase));
+        let cyw43_progress_suppresses_sdio_fallback =
+            cyw43_runtime_progress.is_some_and(|progress| {
+                Self::wifi_cyw43_runtime_progress_suppresses_sdio_fallback(progress.phase)
+            });
         let driver_task_gate: Option<u8> = if runtime_bootstrap_failed {
             Some(1)
         } else if explicit_join_security {
@@ -11361,7 +11365,11 @@ where
             cyw43_fault_gate
                 .or(sdio_replay_gate)
                 .or(cyw43_progress_gate)
-                .or(sdio_progress_gate)
+                .or(if cyw43_progress_suppresses_sdio_fallback {
+                    None
+                } else {
+                    sdio_progress_gate
+                })
         };
         let live_net_channel_ready = live_net_supersedes_runtime;
         let power_ready = live_net_channel_ready
@@ -11476,8 +11484,8 @@ where
             fault.reason
         } else if let (Some(status), Some(_)) = (sdio_runtime_status, sdio_replay_gate) {
             Self::wifi_sdio_runtime_replay_blocker(status)
-        } else if let Some(progress) =
-            sdio_runtime_progress.filter(|_| sdio_progress_gate == Some(1))
+        } else if let Some(progress) = sdio_runtime_progress
+            .filter(|_| sdio_progress_gate == Some(1) && !cyw43_progress_suppresses_sdio_fallback)
         {
             Self::wifi_sdio_runtime_progress_blocker(progress.phase)
         } else if let Some(progress) = cyw43_runtime_progress {
@@ -11501,8 +11509,8 @@ where
             Self::wifi_runtime_fault_next_action(fault)
         } else if let (Some(status), Some(_)) = (sdio_runtime_status, sdio_replay_gate) {
             Self::wifi_sdio_runtime_replay_next_action(status)
-        } else if let Some(progress) =
-            sdio_runtime_progress.filter(|_| sdio_progress_gate == Some(1))
+        } else if let Some(progress) = sdio_runtime_progress
+            .filter(|_| sdio_progress_gate == Some(1) && !cyw43_progress_suppresses_sdio_fallback)
         {
             Self::wifi_sdio_runtime_progress_next_action(progress.phase)
         } else if let Some(progress) = cyw43_runtime_progress {
@@ -11546,6 +11554,15 @@ where
                 sdio_runtime_progress.map_or(0, |progress| progress.phase),
                 sdio_runtime_progress.map_or("none", |progress| progress.phase_name),
                 sdio_runtime_progress.map_or("no", |progress| Self::yes_no(progress.marker_valid)),
+            ))
+        } else if let Some(progress) = cyw43_runtime_progress.filter(|progress| {
+            Self::wifi_cyw43_runtime_progress_suppresses_sdio_fallback(progress.phase)
+        }) {
+            format_message(format_args!(
+                "stage=cyw43-transport status=progress-only phase={} phase_name={} marker_valid={} source=linked-runtime",
+                progress.phase,
+                progress.phase_name,
+                Self::yes_no(progress.marker_valid),
             ))
         } else if let Some(progress) = sdio_runtime_progress {
             format_message(format_args!(
@@ -12398,6 +12415,11 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn wifi_cyw43_runtime_progress_suppresses_sdio_fallback(phase: u32) -> bool {
+        phase == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED
+    }
+
+    #[cfg(feature = "kernel")]
     const fn wifi_cyw43_runtime_progress_blocker(phase: u32) -> &'static str {
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
@@ -12498,6 +12520,9 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY => {
                 "cyw43-sdio-owner-replied"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED => {
+                "cyw43-sdio-pair-restart-required"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => {
                 "cyw43-f1-block-size-start-no-reply"
@@ -12709,6 +12734,9 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY => {
                 "continue-cyw43-card-adoption"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED => {
+                "inspect-prior-cyw43-sdio-owner-frontier-and-restart-cause"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => {
                 "start-cyw43-f1-block-size-write-and-readback"
@@ -24660,6 +24688,25 @@ mod tests {
                 next_action
             );
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_pair_restart_progress_is_named_without_inventing_a_gate() {
+        let phase = pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED;
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_runtime_progress_gate(phase),
+            None
+        );
+        assert!(KernelConsoleTestPump::wifi_cyw43_runtime_progress_suppresses_sdio_fallback(phase),);
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_runtime_progress_blocker(phase),
+            "cyw43-sdio-pair-restart-required",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_runtime_progress_next_action(phase),
+            "inspect-prior-cyw43-sdio-owner-frontier-and-restart-cause",
+        );
     }
 
     #[cfg(feature = "kernel")]

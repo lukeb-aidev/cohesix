@@ -18358,11 +18358,6 @@ fn cyw43_fail_card_lane(state: &mut Cyw43RuntimeState, detail: u16) -> u16 {
     state.card_lane.poisoned = true;
     state.invalidate_card_adoption_facts();
     state.recovery_required = true;
-    #[cfg(target_os = "none")]
-    {
-        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
-        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
-    }
     detail
 }
 
@@ -18414,7 +18409,11 @@ fn cyw43_configure_linux_normal_lane_step(
                 );
                 return Err(cyw43_fail_card_lane(state, FAULT_CYW43_TRANSPORT_CARD_INIT));
             }
-            state.card_lane.revision = revision;
+            // SDIO_CCCR_CCCR packs the SDIO specification version in the high
+            // nibble and the CCCR specification revision in the low nibble.
+            // Linux retains those as separate facts; this lane needs only the
+            // masked CCCR revision for its immutable adoption proof.
+            state.card_lane.revision = cccr_revision;
             state.card_lane.phase = Cyw43CardLanePhase::CccrCapsRead;
             Ok(false)
         }
@@ -39248,6 +39247,7 @@ mod tests {
         CYW43_SDIO_CHILD_REAP_START_TICKS.store(0, Ordering::Release);
         CYW43_SDIO_CHILD_REAP_TIMEOUT_CYCLES.store(0, Ordering::Release);
         CYW43_SDIO_CHILD_RESTART_SIGNALLED.store(false, Ordering::Release);
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(false, Ordering::Release);
         CYW43_DPC_DEFERRED.store(false, Ordering::Release);
         CYW43_ACTIVE_PARENT_SEQUENCE.store(0, Ordering::Release);
         CYW43_LAST_FAULT_DETAIL.store(FAULT_NONE as u32, Ordering::Release);
@@ -41098,7 +41098,7 @@ mod tests {
         test_sdio_cmd52_read_chipclkcsr_response(alp_request | SBSDIO_ALP_AVAIL);
         test_sdio_cmd52_read_ioex_response(0);
         test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_1);
-        test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+        test_sdio_cmd52_read_cccr_response(0x32);
         test_sdio_cmd52_read_caps_response(SDIO_CCCR_CAP_SMB);
         test_sdio_cmd52_read_speed_response(SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS);
         test_sdio_cmd52_read_if_response(SDIO_BUS_WIDTH_4BIT);
@@ -43594,7 +43594,10 @@ mod tests {
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
         state.dpc_shared_epoch = 7;
-        test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+        // Linux decodes this packed byte as SDIO 3.0 (high nibble) and CCCR
+        // 1.20 (low nibble). A low-nibble-only fixture would hide a real-card
+        // regression in the retained adoption proof.
+        test_sdio_cmd52_read_cccr_response(0x32);
         test_sdio_cmd52_read_caps_response(SDIO_CCCR_CAP_SMB);
         test_sdio_cmd52_read_speed_response(SDIO_CCCR_SPEED_SHS);
         test_sdio_cmd52_read_if_response(0xa1);
@@ -43627,7 +43630,8 @@ mod tests {
         assert_eq!(state.card_lane.phase, Cyw43CardLanePhase::Complete);
         assert_eq!(state.card_lane.parent_sequence, sequence);
         assert_eq!(state.card_lane.generation, 7);
-        assert_eq!(state.card_cccr_revision, SDIO_CCCR_REV_3_00);
+        assert_eq!(state.card_lane.revision, SDIO_CCCR_REV_1_20);
+        assert_eq!(state.card_cccr_revision, SDIO_CCCR_REV_1_20);
         assert_eq!(state.card_cccr_caps, SDIO_CCCR_CAP_SMB);
         assert!(state.card_cccr_caps_valid);
         assert!(state.card_multi_block);
@@ -43711,6 +43715,30 @@ mod tests {
                 SDIO_FUNCTION1_BLOCK_SIZE as u8,
             ));
         }
+    }
+
+    #[test]
+    fn known_card_lane_failure_does_not_escalate_as_issued_unknown() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.dpc_shared_epoch = 9;
+        test_sdio_cmd52_read_cccr_response(0x32);
+        test_sdio_cmd52_read_caps_response(0);
+        let sequence = 0x8000_5310;
+
+        assert_eq!(
+            cyw43_configure_linux_normal_lane_step(sequence, &mut state),
+            Ok(false),
+        );
+        assert_eq!(
+            cyw43_configure_linux_normal_lane_step(sequence, &mut state),
+            Err(FAULT_CYW43_TRANSPORT_CARD_INIT),
+        );
+        assert!(state.card_lane.poisoned);
+        assert!(state.recovery_required);
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        assert!(!CYW43_DPC_DEFERRED.load(Ordering::Acquire));
     }
 
     #[test]
@@ -43848,7 +43876,7 @@ mod tests {
         assert_eq!(state.dpc_shared_epoch, current);
         assert_eq!(state.dpc_pending_epoch, requested);
         state.card_init_phase = CYW43_CARD_INIT_PHASE_DONE;
-        test_sdio_cmd52_read_cccr_response(SDIO_CCCR_REV_3_00);
+        test_sdio_cmd52_read_cccr_response(0x32);
         test_sdio_cmd52_read_caps_response(SDIO_CCCR_CAP_SMB);
         test_sdio_cmd52_read_speed_response(SDIO_CCCR_SPEED_SHS);
         test_sdio_cmd52_read_if_response(0x01);
