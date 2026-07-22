@@ -709,8 +709,15 @@ fn emit_deferred_net_operator_line<
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
-    if !pump.queue_cyw43_bootstrap_operator_line(line) && raw_fallback_allowed {
-        boot_log::force_uart_line_raw_and_log(line);
+    if !pump.queue_cyw43_bootstrap_operator_line(line) {
+        if raw_fallback_allowed {
+            boot_log::force_uart_line_raw_and_log(line);
+        } else if !crate::serial::serial_linked_runtime_transport_active() {
+            // Root UART ownership has already crossed the irreversible
+            // linked-runtime boundary. Preserve diagnostics in qlog without
+            // reacquiring UART MMIO or inventing a fallback transport.
+            crate::log_buffer::append_log_line(line);
+        }
     }
 }
 
@@ -992,20 +999,26 @@ fn emit_deferred_net_bootstrap_supervisor_status<
     // turn performs the flush, separately from any CYW43 operation. Before
     // cutover, pass only the semantic payload to the raw route because that
     // route appends its own ordering suffix.
-    if !pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
+    let queued = pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
         linked_line.as_str(),
         display_line.as_str(),
         status.releases_hdmi_console_ready(),
-    ) && raw_fallback_allowed
-    {
-        let raw_console_sequence = match u32::try_from(console_sequence) {
-            Ok(sequence) => sequence,
-            Err(_) => u32::MAX,
-        };
-        boot_log::force_uart_line_raw_and_log_with_console_seq(
-            semantic.as_str(),
-            raw_console_sequence,
-        );
+    );
+    if !queued {
+        if raw_fallback_allowed {
+            let raw_console_sequence = match u32::try_from(console_sequence) {
+                Ok(sequence) => sequence,
+                Err(_) => u32::MAX,
+            };
+            boot_log::force_uart_line_raw_and_log_with_console_seq(
+                semantic.as_str(),
+                raw_console_sequence,
+            );
+        } else if !crate::serial::serial_linked_runtime_transport_active() {
+            // The released generation must never reclaim raw UART. Keep the
+            // exact sequenced record available to authenticated diagnostics.
+            crate::log_buffer::append_log_line(linked_line.as_str());
+        }
     }
 }
 
@@ -1128,10 +1141,18 @@ where
             && !crate::serial::serial_linked_runtime_transport_active()
         {
             let serial_now_ms = crate::hal::timebase().now_ms();
-            if serial_retry.probe_due(serial_now_ms) {
-                if pump.retry_serial_linked_runtime_cutover_after_prompt(!wifi_operation_started) {
-                    serial_retry.record_ready();
-                    if !wifi_operation_started {
+            if wifi_operation_started {
+                // Once any Wi-Fi child operation has run, never re-enter the
+                // generic/current-TCB UART or USB/HDMI paths. This linked-only
+                // turn retains timer, IPC, and reboot dispatch. A lost linked
+                // serial generation fails closed and is never replaced by root
+                // UART MMIO.
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            } else {
+                let report_due = serial_retry.probe_due(serial_now_ms);
+                match pump.poll_serial_linked_runtime_cutover_after_prompt() {
+                    crate::event::SerialLinkedRuntimeCutoverTurn::Complete => {
+                        serial_retry.record_ready();
                         emit_deferred_net_bootstrap_supervisor_status(
                             pump,
                             retry_schedule.next_status_sequence(),
@@ -1143,32 +1164,23 @@ where
                             false,
                         );
                     }
-                } else {
-                    if serial_retry.record_missing_proof(serial_now_ms) && !wifi_operation_started {
-                        emit_deferred_net_bootstrap_supervisor_status(
-                            pump,
-                            retry_schedule.next_status_sequence(),
-                            0,
-                            DeferredNetSupervisorStatus::Preflight,
-                            SERIAL_LINKED_RUNTIME_RETRY_MS,
-                            serial_retry.next_probe_ms,
-                            local_seat_enabled,
-                            true,
-                        );
+                    crate::event::SerialLinkedRuntimeCutoverTurn::DrainPending
+                    | crate::event::SerialLinkedRuntimeCutoverTurn::AttachPending
+                    | crate::event::SerialLinkedRuntimeCutoverTurn::Failed => {
+                        if report_due && serial_retry.record_missing_proof(serial_now_ms) {
+                            emit_deferred_net_bootstrap_supervisor_status(
+                                pump,
+                                retry_schedule.next_status_sequence(),
+                                0,
+                                DeferredNetSupervisorStatus::Preflight,
+                                SERIAL_LINKED_RUNTIME_RETRY_MS,
+                                serial_retry.next_probe_ms,
+                                local_seat_enabled,
+                                pump.serial_root_uart_cutover_owner_active(),
+                            );
+                        }
                     }
                 }
-            } else if wifi_operation_started {
-                // Once any Wi-Fi child operation has run, never re-enter the
-                // generic/current-TCB UART or USB/HDMI paths. This linked-only
-                // turn retains timer, IPC, and reboot dispatch while waiting
-                // for the independent serial runtime retry deadline.
-                pump.poll_cyw43_bootstrap_supervisor_event_turn();
-            } else {
-                // Before the first Wi-Fi HAL operation, retain the ordinary
-                // root-UART and local-seat EventPump. A transient serial
-                // no-completion delays Wi-Fi but cannot abandon its retained
-                // supervisor for the rest of the boot.
-                pump.poll();
             }
             sel4::yield_now();
             continue;

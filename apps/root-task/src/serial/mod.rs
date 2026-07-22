@@ -269,6 +269,8 @@ static SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_RUNTIME_ATTACH_PHASE: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
+static SERIAL_ROOT_UART_RELEASED_FOR_LINKED_RUNTIME: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
 static SERIAL_INPUT_ROUTE_LOGGED: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_INPUT_RX_TRACE_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -681,6 +683,56 @@ pub(crate) enum SerialRuntimeAttachTurn {
     Failed,
 }
 
+#[cfg(feature = "kernel")]
+const fn serial_runtime_attach_phase_is_descriptor(phase: u32, attached: bool) -> bool {
+    !attached && phase == SERIAL_RUNTIME_ATTACH_DESCRIPTOR
+}
+
+/// Whether post-prompt serial attachment is still in its descriptor-only
+/// phase, before the linked runtime may touch the UART.
+///
+/// Root may keep the emergency UART responsive while this phase advances. The
+/// EventPump must establish a strict transmitter-idle fence before admitting
+/// the later init ticket and must never return to root UART I/O afterwards.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn serial_runtime_attach_descriptor_phase_active() -> bool {
+    serial_runtime_attach_phase_is_descriptor(
+        SERIAL_RUNTIME_ATTACH_PHASE.load(AtomicOrdering::Acquire),
+        serial_driver_task_runtime_attached(),
+    )
+}
+
+/// Whether descriptor or runtime attachment has failed before the caller can
+/// establish linked transport ownership.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn serial_runtime_attach_failed() -> bool {
+    SERIAL_RUNTIME_ATTACH_PHASE.load(AtomicOrdering::Acquire) == SERIAL_RUNTIME_ATTACH_FAILED
+}
+
+/// Irreversibly transfer root UART authority to the linked-runtime lane.
+///
+/// This latch is published before the first INIT ticket because INIT may touch
+/// UART MMIO before the linked client can truthfully report itself active.
+/// There is intentionally no production reset or reclaim operation.
+#[cfg(feature = "kernel")]
+pub(crate) fn release_root_uart_for_linked_runtime() {
+    SERIAL_ROOT_UART_RELEASED_FOR_LINKED_RUNTIME.store(1, AtomicOrdering::Release);
+}
+
+/// Whether root/current-TCB UART I/O is permanently forbidden for this boot.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn serial_root_uart_released_for_linked_runtime() -> bool {
+    SERIAL_ROOT_UART_RELEASED_FOR_LINKED_RUNTIME.load(AtomicOrdering::Acquire) != 0
+}
+
+#[cfg(feature = "kernel")]
+const fn serial_root_uart_direct_io_allowed(root_uart_released: bool) -> bool {
+    !root_uart_released
+}
+
 /// Advance serial linked-runtime attachment by at most one child/HAL action.
 #[cfg(feature = "kernel")]
 pub(crate) fn service_serial_driver_task_runtime_after_prompt_turn() -> SerialRuntimeAttachTurn {
@@ -715,6 +767,11 @@ pub(crate) fn service_serial_driver_task_runtime_after_prompt_turn() -> SerialRu
             }
         }
         SERIAL_RUNTIME_ATTACH_INIT => {
+            if !serial_root_uart_released_for_linked_runtime() {
+                SERIAL_RUNTIME_ATTACH_PHASE
+                    .store(SERIAL_RUNTIME_ATTACH_FAILED, AtomicOrdering::Release);
+                return SerialRuntimeAttachTurn::Failed;
+            }
             SERIAL_DRIVER_TASK_CLIENT_SERVICE_PROVEN.store(0, AtomicOrdering::Release);
             crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
                 contract,
@@ -1495,6 +1552,11 @@ where
             self.flush_tx_locked();
             return;
         }
+        #[cfg(feature = "kernel")]
+        if !serial_root_uart_direct_io_allowed(serial_root_uart_released_for_linked_runtime()) {
+            self.enqueue_tx(data);
+            return;
+        }
         with_uart_tx_lock(|| {
             self.flush_tx_blocking_unlocked();
             for &byte in data {
@@ -1510,6 +1572,12 @@ where
             self.enqueue_tx(line.as_bytes());
             self.enqueue_tx(b"\r\n");
             self.flush_tx_locked();
+            return;
+        }
+        #[cfg(feature = "kernel")]
+        if !serial_root_uart_direct_io_allowed(serial_root_uart_released_for_linked_runtime()) {
+            self.enqueue_tx(line.as_bytes());
+            self.enqueue_tx(b"\r\n");
             return;
         }
         with_uart_tx_lock(|| {
@@ -1531,6 +1599,9 @@ where
         {
             if serial_driver_task_transport_active() {
                 return self.poll_driver_task_rx_into_queue(contract);
+            }
+            if !serial_root_uart_direct_io_allowed(serial_root_uart_released_for_linked_runtime()) {
+                return false;
             }
             if serial_root_context_service_allowed() {
                 crate::hal::driver_task::register_driver_task_root_context_ring_service(
@@ -1925,6 +1996,9 @@ where
                     return;
                 }
                 self.telemetry.driver_task_budget_overrun();
+                return;
+            }
+            if !serial_root_uart_direct_io_allowed(serial_root_uart_released_for_linked_runtime()) {
                 return;
             }
             if serial_root_context_service_allowed() {
@@ -2978,6 +3052,25 @@ pub mod test_support {
 mod tests {
     use super::test_support::LoopbackSerial;
     use super::*;
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_descriptor_phase_preserves_root_uart_until_exact_handoff() {
+        assert!(serial_runtime_attach_phase_is_descriptor(
+            SERIAL_RUNTIME_ATTACH_DESCRIPTOR,
+            false,
+        ));
+        assert!(!serial_runtime_attach_phase_is_descriptor(
+            SERIAL_RUNTIME_ATTACH_INIT,
+            false,
+        ));
+        assert!(!serial_runtime_attach_phase_is_descriptor(
+            SERIAL_RUNTIME_ATTACH_DESCRIPTOR,
+            true,
+        ));
+        assert!(serial_root_uart_direct_io_allowed(false));
+        assert!(!serial_root_uart_direct_io_allowed(true));
+    }
 
     #[cfg(feature = "kernel")]
     #[repr(C, align(64))]

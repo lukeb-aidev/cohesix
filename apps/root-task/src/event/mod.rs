@@ -325,7 +325,7 @@ const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
 const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
-const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 3;
+const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 1;
 /// Serial retains first service, but queued HDMI must receive one later turn
 /// even when a large diagnostic keeps UART TX continuously backlogged.
 const LOCAL_SEAT_HDMI_MAX_SERIAL_DEFERRALS: u8 = 4;
@@ -367,9 +367,9 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS: u64 = 500;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS: u16 = 8;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS: u64 = 250;
+const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS: u64 = 0;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS: u16 = 4;
+const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS: u16 = 0;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS: u16 = 1;
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -1882,6 +1882,49 @@ enum LinkedRuntimeServicePhase {
     Display,
 }
 
+/// Outcome of one serial ownership-cutover EventPump turn.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SerialLinkedRuntimeCutoverTurn {
+    /// Root still owns the UART and its accepted bytes have not drained.
+    DrainPending,
+    /// One immutable descriptor/init/proof action ran and must resume later.
+    AttachPending,
+    /// The linked runtime owns the UART and its reciprocal service was proven.
+    Complete,
+    /// The released generation failed closed; root UART must not be reclaimed.
+    Failed,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SerialLinkedRuntimeCutoverAction {
+    ServiceRootUart,
+    AdvanceDescriptor,
+    AdvanceLinkedRuntime,
+}
+
+#[cfg(feature = "kernel")]
+const fn serial_linked_runtime_cutover_action(
+    descriptor_only: bool,
+    attach_failed: bool,
+    root_uart_released: bool,
+    root_uart_turn_due: bool,
+    root_uart_drain_observed: bool,
+) -> SerialLinkedRuntimeCutoverAction {
+    if root_uart_released {
+        SerialLinkedRuntimeCutoverAction::AdvanceLinkedRuntime
+    } else if attach_failed || root_uart_turn_due {
+        SerialLinkedRuntimeCutoverAction::ServiceRootUart
+    } else if descriptor_only {
+        SerialLinkedRuntimeCutoverAction::AdvanceDescriptor
+    } else if root_uart_drain_observed {
+        SerialLinkedRuntimeCutoverAction::AdvanceLinkedRuntime
+    } else {
+        SerialLinkedRuntimeCutoverAction::ServiceRootUart
+    }
+}
+
 #[cfg(feature = "kernel")]
 fn cyw43_bootstrap_serial_milestone(line: &str) -> bool {
     line.as_bytes().starts_with(b"CYW43_BOOTSTRAP_SUPERVISOR ")
@@ -2106,6 +2149,12 @@ where
     serial_console_turn_active: bool,
     #[cfg(feature = "kernel")]
     linked_runtime_service_phase: LinkedRuntimeServicePhase,
+    #[cfg(feature = "kernel")]
+    serial_root_uart_released_for_linked_runtime: bool,
+    #[cfg(feature = "kernel")]
+    serial_cutover_root_uart_turn_due: bool,
+    #[cfg(feature = "kernel")]
+    serial_cutover_root_uart_drain_observed: bool,
     console_input_turn_active: bool,
     console_input_turn_output_budget: usize,
     last_console_error_key: Option<ConsoleErrorKey>,
@@ -2265,6 +2314,12 @@ where
             serial_console_turn_active: false,
             #[cfg(feature = "kernel")]
             linked_runtime_service_phase: LinkedRuntimeServicePhase::Serial,
+            #[cfg(feature = "kernel")]
+            serial_root_uart_released_for_linked_runtime: false,
+            #[cfg(feature = "kernel")]
+            serial_cutover_root_uart_turn_due: true,
+            #[cfg(feature = "kernel")]
+            serial_cutover_root_uart_drain_observed: false,
             console_input_turn_active: false,
             console_input_turn_output_budget: 0,
             last_console_error_key: None,
@@ -3476,14 +3531,9 @@ where
         #[cfg(feature = "net-console")]
         self.emit_wifi_credential_warning_current_before_prompt_atomic();
         self.emit_prompt_atomic();
-        #[cfg(feature = "kernel")]
-        if crate::serial::serial_linked_runtime_transport_active() {
-            let _ = self.serial.service_linked_runtime_only_turn();
-        } else {
-            self.serial.poll_io();
-        }
-        #[cfg(not(feature = "kernel"))]
-        self.serial.poll_io();
+        // Prompt publication is enqueue/direct-output only. The next ordinary
+        // EventPump cutover turn owns serial RX/TX service, so startup cannot
+        // compose a linked serial ticket with another physical runtime action.
         let local_seat_command_ready = if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();
             let command_ready = runtime.usb_keyboard_command_ready_latched();
@@ -3608,7 +3658,7 @@ where
         }
         #[cfg(feature = "kernel")]
         {
-            let _ = self.try_serial_linked_runtime_cutover_after_prompt(true, true);
+            let _ = self.poll_serial_linked_runtime_cutover_after_prompt();
         }
         if !self.banner_emitted {
             #[cfg(feature = "kernel")]
@@ -3624,61 +3674,132 @@ where
         }
     }
 
+    /// Advance the sole root-UART to linked-runtime ownership path by one
+    /// ordinary outer EventPump turn.
+    ///
+    /// Descriptor replay is pointer-free and may progress while root still
+    /// services UART RX/TX. Before the first runtime-init turn, this method
+    /// requires both the software queue and physical transmitter to be idle,
+    /// then permanently latches root UART release. Later turns execute only
+    /// the immutable linked-runtime ticket; they never fall back to root MMIO,
+    /// HDMI, USB, or a current-TCB UART path.
     #[cfg(feature = "kernel")]
-    fn try_serial_linked_runtime_cutover_after_prompt(
+    pub(crate) fn poll_serial_linked_runtime_cutover_after_prompt(
         &mut self,
-        emit_deferred: bool,
-        _raw_uart_allowed: bool,
-    ) -> bool {
+    ) -> SerialLinkedRuntimeCutoverTurn {
+        if crate::serial::serial_root_uart_released_for_linked_runtime() {
+            self.serial_root_uart_released_for_linked_runtime = true;
+        }
         if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             || crate::serial::serial_linked_runtime_transport_active()
         {
-            return true;
+            return SerialLinkedRuntimeCutoverTurn::Complete;
         }
-        if !self.serial.root_uart_cutover_drained() {
-            return false;
+
+        crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+        debug_assert!(!self.cyw43_bootstrap_operator_turn_active);
+        self.cyw43_bootstrap_operator_turn_active = true;
+        self.reconcile_physical_response_barrier();
+        self.queue_stream_prompt_tail_if_ready();
+        if self.reboot_pending && self.reboot_ack_drain_observed {
+            self.service_pending_reboot();
+            self.cyw43_bootstrap_operator_turn_active = false;
+            return SerialLinkedRuntimeCutoverTurn::DrainPending;
+        }
+
+        let descriptor_only = crate::serial::serial_runtime_attach_descriptor_phase_active();
+        let attach_failed = crate::serial::serial_runtime_attach_failed();
+        let action = serial_linked_runtime_cutover_action(
+            descriptor_only,
+            attach_failed,
+            self.serial_root_uart_released_for_linked_runtime,
+            self.serial_cutover_root_uart_turn_due,
+            self.serial_cutover_root_uart_drain_observed,
+        );
+        if action == SerialLinkedRuntimeCutoverAction::ServiceRootUart {
+            self.serial_console_turn_active = true;
+            let serial_rx_activity = self.serial.poll_io();
+            let serial_input = self.consume_serial();
+            self.serial_console_turn_active = false;
+
+            let root_uart_activity = serial_rx_activity || serial_input;
+            if descriptor_only {
+                // Root UART service and descriptor replay occupy alternating
+                // outer turns. This preserves operator input without composing
+                // two physical/HAL operations in one scheduler iteration.
+                self.serial_cutover_root_uart_turn_due = false;
+                self.serial_cutover_root_uart_drain_observed = false;
+            } else if attach_failed {
+                // A descriptor failure happened before ownership release, so
+                // the emergency root UART remains live while Wi-Fi stays
+                // fenced. No second serial generation is created.
+                self.serial_cutover_root_uart_turn_due = true;
+                self.serial_cutover_root_uart_drain_observed = false;
+            } else {
+                let drained = !root_uart_activity && self.serial.root_uart_cutover_drained();
+                self.serial_cutover_root_uart_drain_observed = drained;
+                self.serial_cutover_root_uart_turn_due = !drained;
+            }
+            self.cyw43_bootstrap_operator_turn_active = false;
+            return if attach_failed {
+                SerialLinkedRuntimeCutoverTurn::Failed
+            } else {
+                SerialLinkedRuntimeCutoverTurn::DrainPending
+            };
+        }
+
+        if action == SerialLinkedRuntimeCutoverAction::AdvanceLinkedRuntime
+            && !self.serial_root_uart_released_for_linked_runtime
+        {
+            // This is the one-way ownership boundary. The strict root-UART
+            // drain was observed on the preceding outer turn. Even an
+            // ambiguous init result must fail closed rather than reclaim MMIO.
+            crate::serial::release_root_uart_for_linked_runtime();
+            self.serial_root_uart_released_for_linked_runtime = true;
+            self.serial_cutover_root_uart_drain_observed = false;
         }
         let attach = crate::serial::service_serial_driver_task_runtime_after_prompt_turn();
-        let cutover_ready = attach == crate::serial::SerialRuntimeAttachTurn::Complete
-            && crate::serial::serial_driver_task_interactive_cutover_allowed()
-            && self
-                .serial
-                .use_driver_task_client_after_attach_without_root_flush();
-        if cutover_ready {
-            let _ = self.try_emit_serial_line_with_kind(
-                "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
-                PendingConsoleOutputKind::Line,
-            );
-            let _ = self.try_emit_serial_line_with_kind(
-                "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover acceptance=green reason=driver-task-service-proven",
-                PendingConsoleOutputKind::Line,
-            );
-            return true;
+        if action == SerialLinkedRuntimeCutoverAction::AdvanceDescriptor {
+            self.serial_cutover_root_uart_turn_due = true;
         }
-        if emit_deferred {
-            let status = match attach {
-                crate::serial::SerialRuntimeAttachTurn::Pending => "pending",
-                crate::serial::SerialRuntimeAttachTurn::Failed => "failed",
-                crate::serial::SerialRuntimeAttachTurn::Complete => "cutover-rejected",
-            };
-            let mut line = HeaplessString::<192>::new();
-            let _ = write!(
-                line,
-                "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status={status} acceptance=red reason=driver-task-service-proof-missing"
-            );
-            crate::log_buffer::append_log_line(line.as_str());
-        }
-        false
+        let outcome = match attach {
+            crate::serial::SerialRuntimeAttachTurn::Pending => {
+                SerialLinkedRuntimeCutoverTurn::AttachPending
+            }
+            crate::serial::SerialRuntimeAttachTurn::Failed => {
+                SerialLinkedRuntimeCutoverTurn::Failed
+            }
+            crate::serial::SerialRuntimeAttachTurn::Complete => {
+                let cutover_ready = self.serial_root_uart_released_for_linked_runtime
+                    && crate::serial::serial_driver_task_interactive_cutover_allowed()
+                    && self
+                        .serial
+                        .use_driver_task_client_after_attach_without_root_flush();
+                if cutover_ready {
+                    let _ = self.try_emit_serial_line_with_kind(
+                        "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
+                        PendingConsoleOutputKind::Line,
+                    );
+                    let _ = self.try_emit_serial_line_with_kind(
+                        "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover acceptance=green reason=driver-task-service-proven",
+                        PendingConsoleOutputKind::Line,
+                    );
+                    SerialLinkedRuntimeCutoverTurn::Complete
+                } else {
+                    SerialLinkedRuntimeCutoverTurn::Failed
+                }
+            }
+        };
+        self.cyw43_bootstrap_operator_turn_active = false;
+        outcome
     }
 
-    /// Retry the prompt-side linked serial cutover without abandoning the
-    /// ordinary root-UART event loop after one transient no-completion result.
+    /// Whether the emergency root UART still owns the serial cutover lane.
     #[cfg(feature = "kernel")]
-    pub fn retry_serial_linked_runtime_cutover_after_prompt(
-        &mut self,
-        raw_uart_allowed: bool,
-    ) -> bool {
-        self.try_serial_linked_runtime_cutover_after_prompt(false, raw_uart_allowed)
+    #[must_use]
+    pub(crate) fn serial_root_uart_cutover_owner_active(&self) -> bool {
+        !self.serial_root_uart_released_for_linked_runtime
+            && !crate::serial::serial_root_uart_released_for_linked_runtime()
     }
 
     /// Run the cooperative pump until shutdown.
@@ -4455,7 +4576,9 @@ where
                     Some("physical-input-active")
                 } else if !first_attempt_due && self.serial.interactive_input_active() {
                     Some("serial-input-active")
-                } else if self.now_ms < self.post_prompt_local_seat_attach_not_before_ms {
+                } else if self.now_ms < self.post_prompt_local_seat_attach_not_before_ms
+                    && !usb_runtime_active
+                {
                     Some("idle-grace")
                 } else {
                     None
@@ -4479,7 +4602,7 @@ where
             } else {
                 self.post_prompt_local_seat_attach_blocked_turns = 0;
             }
-            if self.post_prompt_local_seat_attach_retry_turns != 0 {
+            if self.post_prompt_local_seat_attach_retry_turns != 0 && !usb_runtime_active {
                 self.post_prompt_local_seat_attach_retry_turns = self
                     .post_prompt_local_seat_attach_retry_turns
                     .saturating_sub(1);
@@ -4540,7 +4663,14 @@ where
         }
         crate::hal::driver_task::driver_task_ring_command_active(
             crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-        )
+        ) || crate::hal::driver_task::driver_task_ring_command_active(
+            crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+        ) || crate::hal::driver_task::driver_task_ring_command_active(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        ) || self
+            .local_seat
+            .as_ref()
+            .is_some_and(|local_seat| local_seat.backend_keyboard_probe_pending())
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -4641,7 +4771,26 @@ where
                         "[local-seat] prompt-settle attach begin action=arm-cooperative",
                     );
                 }
+                let display_attached_before = runtime.linked_display_runtime_attached();
                 let linked_display_ready = runtime.ensure_prompt_linked_display_ready();
+                if !display_attached_before {
+                    // HDMI descriptor/init is one retained physical action.
+                    // Resume its immutable ticket next outer turn; USB/PCIe
+                    // attachment must never share the same EventPump turn.
+                    self.post_prompt_local_seat_attach_pending = true;
+                    self.post_prompt_local_seat_attach_idle_turns = 0;
+                    self.post_prompt_local_seat_attach_retry_turns =
+                        POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS;
+                    self.post_prompt_local_seat_attach_not_before_ms = self
+                        .now_ms
+                        .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS);
+                    if verbose_attempt {
+                        boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
+                            "[local-seat] prompt-settle HDMI continuation retained action=usb-next-outer-turn",
+                        );
+                    }
+                    return;
+                }
                 runtime.enable_backend_keyboard_polling();
                 let usb_overruns_before = runtime.keyboard_trace().driver_task_budget_overruns;
                 let keyboard_probe = runtime.probe_backend_keyboard_once();
@@ -18958,7 +19107,9 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
-    fn post_prompt_local_seat_retry_policy_uses_quiet_window_for_active_usb() {
+    fn post_prompt_local_seat_retry_policy_resumes_active_usb_next_turn() {
+        assert_eq!(POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS, 0);
+        assert_eq!(POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS, 0);
         assert_eq!(
             post_prompt_local_seat_attach_retry_policy(false, false),
             Some((
@@ -19045,7 +19196,9 @@ mod tests {
         let mut pump =
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
         pump.post_prompt_local_seat_attach_pending = true;
-        pump.post_prompt_local_seat_attach_not_before_ms = 0;
+        pump.post_prompt_local_seat_attach_retry_turns =
+            POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS;
+        pump.post_prompt_local_seat_attach_not_before_ms = u64::MAX;
         pump.post_prompt_local_seat_attach_usb_active_override = Some(true);
 
         pump.maybe_run_post_prompt_local_seat_attach(true);
@@ -19060,6 +19213,35 @@ mod tests {
             POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS
         );
         assert!(pump.post_prompt_local_seat_attach_active_usb_traced);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_cutover_separates_uart_descriptor_drain_and_release_turns() {
+        assert_eq!(
+            serial_linked_runtime_cutover_action(true, false, false, true, false),
+            SerialLinkedRuntimeCutoverAction::ServiceRootUart,
+        );
+        assert_eq!(
+            serial_linked_runtime_cutover_action(true, false, false, false, false),
+            SerialLinkedRuntimeCutoverAction::AdvanceDescriptor,
+        );
+        assert_eq!(
+            serial_linked_runtime_cutover_action(false, false, false, false, false),
+            SerialLinkedRuntimeCutoverAction::ServiceRootUart,
+        );
+        assert_eq!(
+            serial_linked_runtime_cutover_action(false, false, false, false, true),
+            SerialLinkedRuntimeCutoverAction::AdvanceLinkedRuntime,
+        );
+        assert_eq!(
+            serial_linked_runtime_cutover_action(false, true, false, false, true),
+            SerialLinkedRuntimeCutoverAction::ServiceRootUart,
+        );
+        assert_eq!(
+            serial_linked_runtime_cutover_action(false, true, true, true, false),
+            SerialLinkedRuntimeCutoverAction::AdvanceLinkedRuntime,
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -24321,8 +24503,7 @@ mod tests {
         assert_eq!(empty_polls, 1);
         assert!(output_polls >= 1);
         assert!(output_polls <= empty_polls);
-        assert!(hdmi_pump_passes >= output_polls);
-        assert!(hdmi_pump_passes <= burst_passes);
+        assert_eq!(hdmi_pump_passes, 1);
         assert_eq!(serial_lines, 1);
         assert_eq!(serial_chunk_bytes, 32);
         assert!(burst_passes * KEYBOARD_POLL_CHUNK_BYTES <= 512);

@@ -1261,6 +1261,12 @@ pub fn debug_put_char_raw(byte: u8) {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 pub(crate) fn debug_put_bytes_unlocked(bytes: &[u8]) {
+    if serial::serial_root_uart_released_for_linked_runtime() {
+        // The linked runtime may already be executing INIT even though its
+        // root client is not active yet. Low-level debug callers have no
+        // retained ticket, so fail closed instead of racing UART MMIO.
+        return;
+    }
     for &byte in bytes {
         #[cfg(sel4_config_printing)]
         {
@@ -2558,6 +2564,9 @@ pub fn cnode_mint_checked(
 #[cfg(all(feature = "kernel", feature = "debug-input", target_arch = "aarch64"))]
 #[inline(always)]
 pub fn debug_poll_char() -> i32 {
+    if serial::serial_root_uart_released_for_linked_runtime() {
+        return -1;
+    }
     // SAFETY: `seL4_DebugPollChar` is provided by the seL4 kernel on targets that expose
     // the debug console polling syscall. The call has no side effects besides returning the
     // pending byte or a negative sentinel when no input is available.

@@ -5320,10 +5320,7 @@ fn retained_priority_lease_target_mask(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
 ) -> usize {
-    if !physical_pi_driver_task_only_owner_state_active()
-        || (contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
-            && contract != SDIO_HOST_DRIVER_TASK_CONTRACT)
-    {
+    if !physical_pi_driver_task_only_owner_state_active() {
         return 0;
     }
     let mut mask = 0usize;

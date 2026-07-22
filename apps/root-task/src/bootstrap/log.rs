@@ -339,6 +339,7 @@ fn linked_runtime_owns_uart() -> bool {
     #[cfg(feature = "kernel")]
     {
         crate::serial::serial_linked_runtime_transport_active()
+            || crate::serial::serial_root_uart_released_for_linked_runtime()
     }
     #[cfg(not(feature = "kernel"))]
     {

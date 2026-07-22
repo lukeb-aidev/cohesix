@@ -3701,6 +3701,29 @@ impl LocalSeatRuntime {
         }
     }
 
+    /// Whether the isolated HDMI runtime has completed exact owner transfer.
+    #[must_use]
+    pub fn linked_display_runtime_attached(&self) -> bool {
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            return LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire);
+        }
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
+        {
+            false
+        }
+    }
+
     /// Schedule the canonical first viewport immediately after HDMI attach.
     ///
     /// A full snapshot supersedes startup bytes already queued before attach.
@@ -4547,7 +4570,13 @@ impl LocalSeatRuntime {
         // cooldown here would strand the issued request until the cooldown
         // expired and make completion latency depend on unrelated backoff.
         #[cfg(all(feature = "kernel", feature = "usb"))]
-        let retained_poll_active = self.linked_usb_poll_command.is_some();
+        let retained_poll_active = self.linked_usb_poll_command.is_some()
+            || self.linked_usb_attach_command.is_some()
+            || self.keyboard_probe_cursor.active
+            || crate::hal::driver_task::driver_task_ring_command_active(
+                crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            )
+            || crate::hal::driver_task::driver_task_ring_command_active(driver_task_contract());
         #[cfg(not(all(feature = "kernel", feature = "usb")))]
         let retained_poll_active = false;
         if !retained_poll_active && self.keyboard_poll_no_reply_cooldown_active() {
@@ -7209,70 +7238,62 @@ fn submit_linked_hdmi_payload_via_linked_hdmi(
     let chunk_limit = LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
         .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES)
         .max(1);
-    let mut offset = 0usize;
-    let mut any_ready = false;
-    let chunk_count = bytes.len().saturating_add(chunk_limit - 1) / chunk_limit;
-    while offset < bytes.len() {
-        let end = offset.saturating_add(chunk_limit).min(bytes.len());
-        let chunk = &bytes[offset..end];
-        let chunk_index = offset / chunk_limit;
-        let Some(frame) = crate::hal::driver_task::describe_driver_task_ring_frame(chunk, 0) else {
-            return any_ready;
-        };
-        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-            0,
-            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
-            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-            frame,
-        );
-        let staging_segments =
-            [crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(chunk, 0)];
-        let completion = run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
-            contract,
-            command,
-            false,
-            &staging_segments,
-        );
-        let ready = completion.is_some_and(|completion| {
-            completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result != 0
-        });
-        emit_hdmi_frame_submit_state(
-            reason,
-            end.saturating_sub(offset),
-            hdmi_payload_signature(chunk),
-            chunk_index,
-            chunk_count,
-            redraw_chunk,
-            display_trace,
-            root_console_ready,
-            completion,
-            ready,
-            false,
-        );
-        if !ready {
-            if completion.is_none()
-                && local_seat_display_mirror_suspends_on_missing_reply(true, root_console_ready)
-            {
-                if !LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOGGED.swap(true, Ordering::AcqRel) {
-                    emit_hdmi_diagnostic_line(
-                        "[local-seat] runtime display mirror deferred reason=driver-task-no-reply action=retry-next-frame",
-                    );
-                }
-            }
-            return any_ready;
-        }
-        if let Some(completion) = completion {
-            let _ = credit_linked_display_runtime_frame_owner_state(
-                reason,
-                root_console_ready,
-                completion,
+    // `next_linked_hdmi_payload` owns the retained byte cursor and emits at
+    // most one bounded chunk. Reject an invalid direct caller rather than
+    // turning one outer EventPump turn into a private multi-command loop.
+    if bytes.len() > chunk_limit {
+        return false;
+    }
+    let Some(frame) = crate::hal::driver_task::describe_driver_task_ring_frame(bytes, 0) else {
+        return false;
+    };
+    let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        frame,
+    );
+    let staging_segments =
+        [crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(bytes, 0)];
+    let completion = run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
+        contract,
+        command,
+        false,
+        &staging_segments,
+    );
+    let ready = completion.is_some_and(|completion| {
+        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+            && completion.result != 0
+    });
+    emit_hdmi_frame_submit_state(
+        reason,
+        bytes.len(),
+        hdmi_payload_signature(bytes),
+        0,
+        1,
+        redraw_chunk,
+        display_trace,
+        root_console_ready,
+        completion,
+        ready,
+        false,
+    );
+    if !ready {
+        if completion.is_none()
+            && local_seat_display_mirror_suspends_on_missing_reply(true, root_console_ready)
+            && !LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOGGED.swap(true, Ordering::AcqRel)
+        {
+            emit_hdmi_diagnostic_line(
+                "[local-seat] runtime display mirror deferred reason=driver-task-no-reply action=retry-next-frame",
             );
         }
-        any_ready = true;
-        offset = end;
+        return false;
     }
-    any_ready
+    if let Some(completion) = completion {
+        let _ =
+            credit_linked_display_runtime_frame_owner_state(reason, root_console_ready, completion);
+    }
+    true
 }
 
 #[cfg(all(

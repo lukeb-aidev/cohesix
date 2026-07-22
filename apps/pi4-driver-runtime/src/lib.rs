@@ -16976,26 +16976,53 @@ static CYW43_FOREGROUND_TURN_ID: AtomicU64 = AtomicU64::new(0);
 static TEST_CYW43_FOREGROUND_PRODUCTION_CHAIN_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_store_baseline(state: Cyw43RuntimeState) {
+#[inline(never)]
+fn cyw43_foreground_snapshot_runtime_state() -> u32 {
     CYW43_FOREGROUND_BASELINE_VALID.store(false, Ordering::Release);
-    CYW43_FOREGROUND_BASELINE_STATE.with_mut(|baseline| {
-        baseline.write(state);
-    });
+    let _baseline_guard = CYW43_FOREGROUND_BASELINE_STATE.write_lock();
+    let _source_guard = CYW43_RUNTIME_STATE.read_lock();
+    // SAFETY: the baseline-first lock order matches restore, the source read
+    // guard excludes mutation of the live runtime state, the destination
+    // write guard gives exclusive access to the
+    // baseline slot, and the two statics are disjoint and identically typed.
+    // Copying directly between their backing storage prevents the complete
+    // CYW43 state from becoming a stack temporary in every runtime command.
+    let generation = unsafe {
+        core::ptr::copy_nonoverlapping(
+            CYW43_RUNTIME_STATE.state.get(),
+            (*CYW43_FOREGROUND_BASELINE_STATE.state.get()).as_mut_ptr(),
+            1,
+        );
+        (*CYW43_RUNTIME_STATE.state.get()).dpc_shared_epoch
+    };
     CYW43_FOREGROUND_BASELINE_VALID.store(true, Ordering::Release);
+    generation
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_load_baseline() -> Option<Cyw43RuntimeState> {
+#[inline(never)]
+fn cyw43_foreground_restore_runtime_state() -> bool {
     if !CYW43_FOREGROUND_BASELINE_VALID.load(Ordering::Acquire) {
-        return None;
+        return false;
     }
-    CYW43_FOREGROUND_BASELINE_STATE.with_ref(|baseline| {
-        // SAFETY: the acquire load observes the release that follows the
-        // complete `MaybeUninit::write`; the state-slot read guard excludes a
-        // concurrent replacement, and clearing validity never uninitializes
-        // bytes that an already-admitted reader may still copy.
-        Some(unsafe { *baseline.assume_init_ref() })
-    })
+    let _baseline_guard = CYW43_FOREGROUND_BASELINE_STATE.read_lock();
+    if !CYW43_FOREGROUND_BASELINE_VALID.load(Ordering::Acquire) {
+        return false;
+    }
+    let _destination_guard = CYW43_RUNTIME_STATE.write_lock();
+    // SAFETY: the acquire validity check observes the release following the
+    // complete snapshot copy. The baseline read guard excludes replacement,
+    // the live-state write guard excludes all readers and writers, and the two
+    // statics are disjoint and identically typed. Direct storage-to-storage
+    // copying keeps the 140-KiB state off the linked runtime's 64-KiB stack.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            (*CYW43_FOREGROUND_BASELINE_STATE.state.get()).as_ptr(),
+            CYW43_RUNTIME_STATE.state.get(),
+            1,
+        );
+    }
+    true
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -17082,14 +17109,12 @@ fn cyw43_foreground_poll_retained_deadline(deadline: RuntimeDeadline) -> Option<
 
 #[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_restore_baseline() -> bool {
+    if !CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| transaction.baseline_state_valid)
+        || !cyw43_foreground_restore_runtime_state()
+    {
+        return false;
+    }
     CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
-        if !transaction.baseline_state_valid {
-            return false;
-        }
-        let Some(baseline_state) = cyw43_foreground_load_baseline() else {
-            return false;
-        };
-        CYW43_RUNTIME_STATE.with_mut(|state| *state = baseline_state);
         CYW43_CONTROL_REQUEST.restore_snapshot(transaction.baseline_control_request);
         CYW43_RUNTIME_FLAGS.store(transaction.baseline_runtime_flags, Ordering::Release);
         CYW43_TX_COUNT.store(transaction.baseline_tx_count, Ordering::Release);
@@ -17132,12 +17157,10 @@ fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
     if !active {
         let descriptor = read_cyw43_command_descriptor_physical(command.frame);
         let shared_payload_bytes = RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
+        let generation = cyw43_foreground_snapshot_runtime_state();
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
-            CYW43_RUNTIME_STATE.with_ref(|state| {
-                cyw43_foreground_store_baseline(*state);
-                transaction.baseline_state_valid = true;
-                transaction.generation = state.dpc_shared_epoch;
-            });
+            transaction.baseline_state_valid = true;
+            transaction.generation = generation;
             transaction.baseline_control_request = CYW43_CONTROL_REQUEST.snapshot();
             transaction.baseline_runtime_flags = CYW43_RUNTIME_FLAGS.load(Ordering::Acquire);
             transaction.baseline_tx_count = CYW43_TX_COUNT.load(Ordering::Acquire);
@@ -43111,16 +43134,26 @@ mod tests {
     fn cyw43_foreground_baseline_requires_release_published_snapshot() {
         let _guard = test_guard();
         reset_runtime_for_test();
-        assert_eq!(cyw43_foreground_load_baseline(), None);
+        assert!(!cyw43_foreground_restore_runtime_state());
 
-        let mut expected = Cyw43RuntimeState::new();
-        expected.dpc_shared_epoch = 0x4359_0001;
-        expected.tx_frames = 17;
-        cyw43_foreground_store_baseline(expected);
-        assert_eq!(cyw43_foreground_load_baseline(), Some(expected));
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_shared_epoch = 0x4359_0001;
+            state.tx_frames = 17;
+        });
+        let generation = cyw43_foreground_snapshot_runtime_state();
+        assert_eq!(generation, 0x4359_0001);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_shared_epoch = 0x4359_0002;
+            state.tx_frames = 29;
+        });
+        assert!(cyw43_foreground_restore_runtime_state());
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.dpc_shared_epoch, 0x4359_0001);
+            assert_eq!(state.tx_frames, 17);
+        });
 
         CYW43_FOREGROUND_BASELINE_VALID.store(false, Ordering::Release);
-        assert_eq!(cyw43_foreground_load_baseline(), None);
+        assert!(!cyw43_foreground_restore_runtime_state());
     }
 
     fn reset_runtime_for_test() {
