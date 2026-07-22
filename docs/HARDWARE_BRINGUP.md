@@ -21,7 +21,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | QEMU current source | Target-qualified Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. | Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 current source, offline | Pi-qualified Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. | A board boot, current-image device readiness, TCP, or benchmark result. |
-| Pi 4 current image, live | Exact image `e14414d852cc` / `b0a81de968123e5ed003c57229c6f1105bfa91dcb2889adfad1e496cab74ac8f` starts both linked runtimes, completes bounded five-attempt supervision, keeps the operator console live, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5, advances exactly two 64-byte blocks, then stalls with `DATA_END` absent and BCM2835 DMA active/held. | No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. Correct HAL GPIO34-GPIO39 pinctrl is source-only until rebuilt, flashed, and captured; the current hardware-proven pull-up-policy skip remains unchanged. |
+| Pi 4 current image, live | Exact commit `9b115edc3697` / image `bd395baf5dd5dd8a06c88a343c838e6f44d9f652911fed5595fe61205700af26` starts both linked runtimes, proves the selected GPIO34-GPIO39 ALT3/pull fields by live readback, completes bounded five-attempt supervision, keeps the operator console live, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5, advances exactly two 64-byte blocks, then stalls with `DATA_END` absent and BCM2835 DMA active/DREQ-held. | No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The strict retained CYW43 extra-pull-up clear is source-only until rebuilt, flashed, and captured. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
 active. It may be newer than checked-in records, but only the repository's
@@ -815,19 +815,20 @@ published only after their exact irreversible child completions.
 
 Serial evidence should name the exact frontier rather than leaving the generic
 backplane marker as an ALP diagnosis: ALP request, ALP poll, FORCE_ALP, its
-65-microsecond settle, the Pi pull-up-policy skip, ChipCommon read, and each
+65-microsecond settle, the Pi extra-pull-up clear, ChipCommon read, and each
 LOW/MID/HIGH backplane-window CMD52 have separate progress markers. Before the
 SDIO engine starts, HAL must configure GPIO34-GPIO39 as ALT3 with CLK pull-none
 and CMD/DAT0-DAT3 pull-up using BCM2711 register value `1`, then read back every
 selected field. Missing or mismatched readback blocks Wi-Fi before its first
-runtime operation. Production then emits `BACKPLANE_PULLUP_SKIPPED` and no
-Function 1 descriptor for `SBSDIO_FUNC1_SDIOPULLUP`: the immediately preceding
-physical image proved that the optional write could poison the next CMD52, and
-host-pinctrl correction alone is the isolated causal change in this candidate.
-Any other issued-unknown,
-`OWNER_PATH_POISONED`, stale, or malformed result must poison the generation and
-request the ordered pair restart; host quiescence is not permission to continue
-or retry in place.
+runtime operation. Production then emits `BACKPLANE_PULLUP_CLEAR` and issues one
+immutable Function 1 descriptor for `SBSDIO_FUNC1_SDIOPULLUP=0`, matching
+Linux's ordering after the 65-microsecond FORCE_ALP settle. The earlier physical
+clear trial preceded deterministic host pinctrl and was therefore confounded;
+the latest image proves pinctrl but still skipped this card-side preparation.
+Only an exact completion may advance. Any issued-unknown,
+`OWNER_PATH_POISONED`, stale, failed, or malformed result poisons the generation
+and requests the ordered pair restart; host quiescence is not permission to
+continue or retry in place.
 Card selection uses CMD7 with the SDIO R1b short-busy response. Only the entry
 inhibit wait before `SDHCI_COMMAND` is written is retryable; a busy timeout after
 issue is retained as post-issue quiescence and cannot be replayed in-generation.

@@ -600,7 +600,7 @@ This as-built closure is authorized by Milestone 26d task
   issued-unknown ownership poisons the cursor and permits no same-generation
   replay. Backplane attach is a generation- and request-bound retained
   cursor with explicit `ALP request`, `ALP poll`, `FORCE_ALP`, `FORCE_ALP
-  settle`, `pull-up policy`, `ChipCommon read`, and `complete` phases. ALP
+  settle`, `pull-up clear`, `ChipCommon read`, and `complete` phases. ALP
   availability uses one absolute one-second elapsed deadline. Each exact
   `CHIPCLKCSR` poll checkpoints the cursor's deadline, last value, and poll
   count, then releases the foreground trace before a later outer EventPump
@@ -619,23 +619,25 @@ This as-built closure is authorized by Milestone 26d task
 
   After `FORCE_ALP`, the retained cursor preserves the 65 microsecond settle.
   Both nonterminal and terminal deadline observations consume their admitted
-  turn. The later `pull-up policy` turn deliberately does not issue
-  `SBSDIO_FUNC1_SDIOPULLUP=0` on the current BCM2711 profile. Upstream brcmfmac
-  issues that optional write with a null error sink, but fresh Cohesix hardware
-  evidence showed its issued command can leave the following CMD52 with
-  END_BIT/INDEX errors. Correcting the independently required host pinctrl does
-  not prove that an unknown card-side completion is safe to ignore. The policy
-  turn publishes `BACKPLANE_PULLUP_SKIPPED`, performs no child-runtime/HAL
-  operation, and returns; only a later turn may begin the ChipCommon window.
-  Initial attach and generation reprobe reject every descriptor targeting
-  `SBSDIO_FUNC1_SDIOPULLUP`.
+  turn. The next retained turn follows brcmfmac by issuing exactly one Function
+  1 CMD52 that writes `SBSDIO_FUNC1_SDIOPULLUP=0`, after host pinctrl is already
+  configured and read back. Cohesix adapts Linux's best-effort callback to the
+  linked-runtime authority boundary: `Pending` retains the immutable action
+  ticket, only the exact completion advances to ChipCommon, and a failed,
+  malformed, stale, or issued-unknown completion poisons the generation. It is
+  never replayed in that generation. An ordered pair restart may issue the
+  clear exactly once under its new generation, and the generation-reprobe
+  allowlist admits only this zero-valued write at the pull-up register. The
+  SDIO owner independently claims that exact descriptor before controller
+  issue and rejects a duplicate claim in the active or pending generation.
 
   Attach diagnostics identify the exact retained frontier with distinct
   `BACKPLANE_ALP_REQUEST`, `BACKPLANE_ALP_POLL`,
   `BACKPLANE_FORCE_ALP`, `BACKPLANE_FORCE_ALP_SETTLE`,
-  `BACKPLANE_PULLUP_SKIPPED`, and `BACKPLANE_CHIPCOMMON_READ` progress.
-  `BACKPLANE_PULLUP_CLEAR` and `BACKPLANE_PULLUP_FAULT_CONTAINED` remain
-  decodable for earlier captures but are not current-image acceptance progress.
+  `BACKPLANE_PULLUP_CLEAR`, and `BACKPLANE_CHIPCOMMON_READ` progress.
+  `BACKPLANE_PULLUP_SKIPPED` and `BACKPLANE_PULLUP_FAULT_CONTAINED` remain
+  decodable only for earlier captures and are not current-image acceptance
+  progress.
   The first ChipCommon access additionally
   publishes `BACKPLANE_WINDOW_LOW`, `BACKPLANE_WINDOW_MID`, and
   `BACKPLANE_WINDOW_HIGH` immediately before the matching CMD52 programming

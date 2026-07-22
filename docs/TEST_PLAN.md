@@ -212,9 +212,12 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib wifi_sdio_pinmux_matches_pi4_dtb_state -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib wifi_sdio_pinmux_readback_rejects_each_wrong_function_or_pull -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib cyw43_backplane_alp_timing_matches_linux_wall_clock_window -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_backplane_attach_skips_optional_pullup_write_before_chipcommon_window -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_generation_reprobe_trace_never_targets_optional_pullup_register -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_pullup_policy_consumes_one_retained_turn_without_an_sdio_operation -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_backplane_attach_clears_extra_pullups_once_before_chipcommon_window -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_generation_reprobe_trace_clears_extra_pullups_once -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_pullup_clear_consumes_one_retained_turn_with_one_exact_sdio_operation -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_pullup_clear_failure_poison_prevents_same_generation_replay -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_owner_reciprocal_pullup_clear_is_exactly_once_per_generation -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_pullup_clear_crosses_real_runtime_ring_controller_seam_once -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib cyw43_card_init_uses_linux_command_and_ready_bounds -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib sdio_short_busy_timeout_is_post_issue_and_never_retryable -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib cyw43_function_ready_deadlines_preserve_linux_default_and_f2_window -- --test-threads=1`
@@ -655,7 +658,7 @@ The first read must validate the request's writable bits while allowing only
 the asynchronous availability bits to differ. Boundary tests must prove the
 absolute one-second deadline, including that its terminal observation spends a
 turn and cannot issue another CMD52. Per-command progress must identify ALP
-request/poll, FORCE_ALP/settle, `BACKPLANE_PULLUP_SKIPPED`, ChipCommon read, and
+request/poll, FORCE_ALP/settle, `BACKPLANE_PULLUP_CLEAR`, ChipCommon read, and
 each LOW/MID/HIGH window CMD52 so a generic backplane phase cannot misclassify
 the stalled command.
 
@@ -667,14 +670,22 @@ function or pull mismatch. Target bootstrap must fail closed if that stable
 readback was not published, and passive `wifi diag` must render both complete
 GPFSEL3/GPPUPPDN2 words and the expected masked values.
 
-The production pull-up-policy turn must perform exactly zero CMD52, CMD53,
-child-runtime, or HAL operations and return before the first ChipCommon action.
-Full initial-attach and generation-reprobe traces must contain zero descriptors
-targeting `SBSDIO_FUNC1_SDIOPULLUP`; the reprobe admission test must reject that
-address for every value. A stale owner or generation must still be rejected
-without I/O. Legacy phase 451/452 parser tests may preserve old-capture
-decodability, but `BACKPLANE_PULLUP_CLEAR` and
-`BACKPLANE_PULLUP_FAULT_CONTAINED` cannot satisfy current-image acceptance.
+The production pull-up-clear turn must perform exactly one child-runtime SDIO
+operation: Function 1 CMD52, `SBSDIO_FUNC1_SDIOPULLUP=0`. It must return before
+the first ChipCommon action and advance only after the exact completion. Full
+initial-attach and generation-reprobe traces must contain exactly one such
+descriptor per generation; the reprobe admission test must accept only value
+zero and reject reads or every alternate value. A stale owner must be rejected
+without I/O, and a failed or issued-unknown clear must poison the generation and
+prevent same-generation replay. The reciprocal descriptor-ring/controller test
+must also prove that the SDIO owner claims the exact clear once before issue,
+rejects a duplicate without controller I/O, and admits one new claim only after
+the pending generation changes. A production-chain test must carry the action
+from the CYW43 transport cursor through `service_command_turn`, the reciprocal
+descriptor ring, and the real SDIO controller seam, including terminal poison
+with no second controller issue. Legacy `BACKPLANE_PULLUP_SKIPPED` and
+`BACKPLANE_PULLUP_FAULT_CONTAINED` parser tests may preserve old-capture
+decodability but cannot satisfy current-image acceptance.
 
 Pair-restart coverage must preserve the 22 logical
 SDIO-before-CYW43 actions while treating each bootstrap-priority,

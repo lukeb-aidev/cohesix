@@ -12947,7 +12947,7 @@ where
                 "verify-cyw43-force-alp-virtual-counter-settle"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR => {
-                "verify-legacy-cyw43-extra-pullup-clear-cmd52-write"
+                "verify-cyw43-extra-pullup-clear-cmd52-write"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED => {
                 "continue-cyw43-chipcommon-attach-without-optional-pullup-write"
@@ -24995,7 +24995,7 @@ mod tests {
             (
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_CLEAR,
                 "cyw43-backplane-pullup-clear-no-reply",
-                "verify-legacy-cyw43-extra-pullup-clear-cmd52-write",
+                "verify-cyw43-extra-pullup-clear-cmd52-write",
             ),
             (
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_PULLUP_SKIPPED,
