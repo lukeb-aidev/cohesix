@@ -9294,10 +9294,32 @@ Commands:
 Checks: Heartbeat/GPU/LoRA use the existing spawn, kill, namespace, console, policy, and ticket paths, while WorkerBus target spawn returns an existing-form deterministic model-only error; every host surface agrees on role, public instance id, slot, epoch, supervisor generation, cap generation, lifecycle, receipt, artifact, integration obligation/observed mode, execution proof, and separately derived runtime-release versus production-use-case state; control ACK proves only admission, `implemented = true` only executable declaration, READY only live runtime state, host-model only modelling, and QEMU/fresh-Pi proof only matching evidence; absent REST bounds mean unknown and gateway connection/QEMU launch never imply proof; generic ids are never inferred to be Heartbeat; GPU lease ACTIVE, bridge publication, ticket success, PEFT completion, FUSE mount, provider `ready`, package presence, or mocks cannot independently promote READY or target proof; connected GPU grant/renew/release and PEFT export/import/activate/rollback fixtures obtain the exact bounded WorkerGpu/WorkerLora confirmed/rejected/stale receipts without moving host hardware/registry/training/inference authority; mandatory live `worker-control`, `gpu-receipt-path`, and `peft-receipt-path` target-session rows pass, while every advertised FUSE/systemd/Docker/Kubernetes/federation/SIEM/CAS/sidecar/release/provider surface records its exact current mode and later blocker rather than being promoted by compatibility; canonical `/shard` invalidation, sharding, version-1/version-2 accepted-schema matrices, local-only v2 rejection, root-pinned admitted projections, crash-safe v2 journal recovery, replay retention on existing host-ticket status/deadletter paths, validated gateway evidence-file import, SwarmUI proof sourcing, and ACK/ERR/END fixtures pass; absent, wrong-kind, stale, forged, duplicate, late, oversized, wrong-role, wrong-generation, wrong-host-profile, wrong-provider-mode, wrong-target, wrong-ABI, hash-mismatched, mode-substituted, and secret-bearing records fail deterministically; release artifacts expose no ticket, host secret, raw badge, CPtr, or capability value; no CYW43 behavioral contract or evidence classification changes.
 Deliverables: One generated protocol-faithful host Worker state/dependency contract; target-session per-row Worker-integration evidence; LoRA support across all four Cohesix PEFT receipt actions and Rust/Python/REST/UI compatibility projections; exact GPU/PEFT result-to-Worker correlation; canonical FUSE `/shard` compatibility; crash-safe local v2 execution; honest current modes for every shipped/future host surface; hash-bound Worker-runtime release inputs; and host tools ready for the separate exact QEMU/fresh-Pi promotion gate without claiming production provider/use-case completion.
 
+Title/ID: m26e-python-library-as-built-compatibility
+Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / Python SDK as-built compatibility gate
+Goal: Verify and, where required, correct the non-authoritative `cohesix` Python package against the freeze-bound 26e generated Worker, integration, receipt, evidence, namespace, and backend contracts without creating a second protocol or authority path.
+Inputs: `m26e-host-worker-integration`, configs/sel4/profiles.toml, configs/root_task.toml, configs/root_task_pi4_uboot_aarch64.toml, tools/coh-rtc/src/codegen/cohesix_py.rs, configs/generated/**, generated Worker/integration schemas and conformance vectors, tools/cohesix-py/pyproject.toml, tools/cohesix-py/cohesix/**, tools/cohesix-py/tests/**, resources/openapi/hive-gateway.yaml, configs/host_integration_acceptance.toml, scripts/ci/host_integration_run.sh, scripts/release_bundle.sh, docs/PYTHON_SUPPORT.md, docs/HOST_API.md, docs/INTERFACES.md, and the accepted QEMU/Pi `worker-control`, `gpu-receipt-path`, and `peft-receipt-path` integration records.
+Changes:
+  - tools/coh-rtc/src/codegen/cohesix_py.rs + tools/cohesix-py/cohesix/generated.py + configs/generated/cohesix_python_{qemu_smp_production,pi4_production}.json + scripts/check-generated.sh + tools/cohesix-py/tests/test_generated_contract.py — keep the wheel's generated module target-neutral and emit a versioned target-qualified `cohesix-python-profile/v1` contract for each selected resolved manifest. The profile contract, not a universal wheel constant, binds manifest hash, canonical role labels, executable-role matrix, Worker ABI/host-ticket/evidence schema versions, `/shard` paths and legacy-alias gate, lifecycle/receipt/proof vocabularies, operation and byte bounds, maximum live tasks, and host-integration modes. Extend the generated-artifact guard to resolve `configs/root_task.toml` through `qemu_smp_production` and `configs/root_task_pi4_uboot_aarch64.toml` through `pi4_production` into isolated temporary outputs, then byte-compare both committed target contracts in addition to the target-neutral default output; no target contract may be hand-edited or inferred from the other target. Static defaults are bounded fallback expectations only and cannot establish live target identity or proof; stale, hand-maintained, missing, one-sided, or mismatched contracts fail generated drift checks.
+  - tools/cohesix-py/cohesix/{backends.py,client.py,worker.py,receipts.py,evidence.py,orchestration.py,playbooks.py} + focused tests — load an explicit target-qualified contract or bounded remote metadata for live use and verify Mock, filesystem, TCP, and REST behavior against the same fixtures. Cover Heartbeat/GPU/LoRA spawn, observe, wait, receipt, teardown, and stale-generation behavior; deterministic WorkerBus spawn refusal; canonical sharding; optional REST bounds and backend-class absence as `unknown`; version-1 compatibility versus local-only version-2 Worker receipts; all three GPU and four PEFT actions; and strict separation of request admission, READY, provider completion, Worker receipt, artifact verification, QEMU/Pi proof, runtime-release acceptance, and production-use-case acceptance.
+  - scripts/ci/python_compat_run.sh + configs/host_integration_acceptance.toml — add a bounded `python-sdk-projection` release-required lane that runs the Python client through the existing target-session integration fixtures for QEMU and Pi and emits the existing `cohesix-worker-integration-evidence/v1` record. Package/backend conformance covers the minimum supported Python 3.11 and canonical macOS release-host Python 3.13; each target-session record names the exact interpreter/platform, shared wheel hash, and matching target-qualified profile-contract hash. The lane may consume but never replace the direct target role-required records, and it cannot promote external CUDA/NVML, PEFT, FUSE, systemd, Docker, Kubernetes, federation, or other provider modes.
+  - tools/cohesix-py packaging/tests + scripts/release_bundle.sh — install and import the core package and declared `integrations`, `ml`, and `dev` extras on the Python 3.11/3.13 host matrix, build one target-neutral wheel, install that wheel into an isolated environment for import/public-entrypoint smoke, and emit an exact package manifest containing the wheel and QEMU/Pi profile-contract hashes. `dev` remains test-only and is excluded from deployed requirements; missing optional runtimes return typed unavailable rather than silently selecting mocks.
+  - docs/PYTHON_SUPPORT.md + tools/cohesix-py/README.md + docs/TEST_PLAN.md — document the 26e Worker APIs, target-neutral wheel/profile-contract model, as-built proof boundaries, supported backend matrix, compatibility/migration rules, and the distinction between Python projection compatibility and target or provider acceptance.
+Commands:
+  - python3 -m pip install -e 'tools/cohesix-py[integrations,ml,dev]'
+  - python3 -m pip check
+  - python3 -m pytest -q tools/cohesix-py/tests
+  - python3 -m pip wheel --no-deps --wheel-dir out/python-wheels tools/cohesix-py
+  - scripts/ci/python_compat_run.sh --wheel-smoke --wheel-dir out/python-wheels --package-manifest out/python-compat/m26e-python-package.json --state-dir out/python-compat/m26e-wheel
+  - scripts/ci/python_compat_run.sh --python-matrix 3.11,3.13 --target qemu --profile-contract configs/generated/cohesix_python_qemu_smp_production.json --package-manifest out/python-compat/m26e-python-package.json --matrix configs/host_integration_acceptance.toml --state-dir out/python-compat/m26e-qemu
+  - scripts/ci/python_compat_run.sh --python-matrix 3.11,3.13 --target pi4 --profile-contract configs/generated/cohesix_python_pi4_production.json --package-manifest out/python-compat/m26e-python-package.json --matrix configs/host_integration_acceptance.toml --state-dir out/python-compat/m26e-pi4
+  - scripts/check-generated.sh
+Checks: The same isolated-wheel smoke and public API pass on Python 3.11 and 3.13; each target-qualified contract matches its selected resolved manifest byte-for-byte where specified, while the shared wheel remains target-neutral; all supported backends preserve ACK/ERR/END, bounds, canonical paths, role identity, lifecycle, receipt, and evidence semantics; existing public compatibility wrappers remain valid or receive an explicit versioned migration; malformed, oversized, absent, unknown, wrong-version, wrong-role, stale-generation, wrong-target, wrong-contract, hash-mismatched, client-authored, and secret-bearing inputs fail deterministically; static fallback defaults and mocks remain non-proof `host-model`; no Python ACK, local file, subprocess result, provider state, or JSON object can become READY, an authoritative receipt, target proof, runtime release acceptance, or production-use-case evidence; QEMU/Pi Python rows bind the same wheel to their respective generated profile contract and target-session records but remain projection evidence only.
+Deliverables: One clean target-neutral wheel and exact package manifest, generated QEMU/Pi profile contracts, backend conformance tests, separate QEMU/Pi `python-sdk-projection` records, and release gating that proves the shipped Python SDK matches each 26e as-built target without widening Cohesix authority.
+
 Title/ID: m26e-worker-target-evidence-promotion
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / exact QEMU and Pi Worker acceptance
 Goal: Emit separate QEMU-accepted and Pi-accepted component records for the three configured executable roles only after exact-image evidence proves real IPC, faults, complete teardown, and fresh-generation recreation; do not promote release acceptance yet.
-Inputs: all preceding 26e Worker tasks including `m26e-host-worker-integration`, matching live `worker-control`, `gpu-receipt-path`, and `peft-receipt-path` Worker-integration records for each target, selected QEMU/Pi SMP+MCS builds and manifests, positive exact-image CYW43 closure plus the matching 26e MCS-driver coexistence record, scripts/ci/test_plan_run.sh, scripts/pi4_gate_proof.sh, exact image identities, docs/TEST_PLAN.md, canonical Worker/security/interface docs.
+Inputs: all preceding 26e target-runtime Worker tasks through `m26e-host-worker-integration`, matching live `worker-control`, `gpu-receipt-path`, and `peft-receipt-path` Worker-integration records for each target, selected QEMU/Pi SMP+MCS builds and manifests, positive exact-image CYW43 closure plus the matching 26e MCS-driver coexistence record, scripts/ci/test_plan_run.sh, scripts/pi4_gate_proof.sh, exact image identities, docs/TEST_PLAN.md, canonical Worker/security/interface docs. The adjacent `m26e-python-library-as-built-compatibility` task must finish any Python-only codegen/package corrections before the shared artifact freeze, but its PASS/FAIL record is not target-component evidence and cannot substitute for or alter this gate.
 Changes:
   - scripts/worker_task_evidence.py + tests/test_worker_task_evidence.py + docs/TEST_PLAN.md — create the emitter/validator and tamper/mode/hash/target tests for `cohesix-worker-task-evidence/v1` with `record_kind=target-component`, exactly one proof target/class, a sorted bounded list of the three exact live role-required Worker-integration records, source/resolved-manifest/kernel/root/MCS-driver-archive/MCS-driver-manifest/CYW43-coexistence-record/Worker-archive/Worker-image-manifest/Worker-image hashes, role/slot/epoch/supervisor-generation/cap-generation/badge/core/SC/object inventories, bounded event outcomes, raw-artifact hashes, PASS/FAIL, and blockers.
   - QEMU target gate — prove all three mandatory roles through the direct target authority/observation path, including Heartbeat progress, fixture-backed but live root-to-Worker GPU grant/renew/release confirmed/rejected/stale receipts, and LoRA export/import/activate/rollback confirmed/rejected/stale receipts; also prove two same-role instances, maximum-slot refusal, bounded control/receipt paths, combined notifications, durable-completion publish/signal ordering, budget exhaustion/timeout attribution, fault before READY/during IPC, forbidden-blocking-send refusal, stale-record revocation, no post-revoke activity/leak, and fresh generation under four-core SMP+MCS. Rust/Python/REST/UI/FUSE compatibility records are separate projections and cannot raise or block this runtime claim unless an explicit release profile independently requires them.
@@ -9335,12 +9357,13 @@ Deliverables: Separate hash-bound QEMU/Pi root-TCB acceptance records closing th
 Title/ID: m26e-mcs-smp-target-acceptance
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / full-system SMP+MCS target acceptance
 Goal: Accept the single four-core SMP+MCS operational architecture on QEMU and Pi 4 using the real root, service, Worker, and driver topology under normal, overload, timeout, fault, complete task teardown, fresh-generation recreation, and operator-liveness conditions, as a verification-only gate over the frozen artifacts produced by preceding 26e implementation tasks.
-Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, `m26e-worker-target-evidence-promotion`, `m26e-root-tcb-target-proof`, all enabled 26e child images and generated task records, separate matching QEMU/Pi Worker component records, separate matching QEMU/Pi root-TCB acceptance records, positive exact-image CYW43 closure plus matching MCS coexistence record, configs/sel4/profiles.toml, configs/root_task*.toml, scripts/worker_task_evidence.py, scripts/release_bundle.sh, scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, tests/test_release_bundle.py, docs/ROLES_AND_SCHEDULING.md, docs/TEST_PLAN.md, docs/BENCHMARKS.md, docs/audit/M26D_MCS_DECISION.md.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, `m26e-python-library-as-built-compatibility` for the independent Python package gate, `m26e-worker-target-evidence-promotion`, `m26e-root-tcb-target-proof`, all enabled 26e child images and generated task records, separate matching QEMU/Pi Worker component records, separate matching QEMU/Pi root-TCB acceptance records, matching QEMU/Pi `python-sdk-projection` compatibility records plus their target-qualified contracts and shared wheel/package manifest for any release profile that ships Python, positive exact-image CYW43 closure plus matching MCS coexistence record, configs/sel4/profiles.toml, configs/root_task*.toml, scripts/worker_task_evidence.py, scripts/release_bundle.sh, scripts/ci/test_plan_run.sh, scripts/rest_perf_harness.py, tests/test_release_bundle.py, docs/ROLES_AND_SCHEDULING.md, docs/TEST_PLAN.md, docs/BENCHMARKS.md, docs/audit/M26D_MCS_DECISION.md.
 Changes:
   - final artifact-freeze gate — make no runtime, generated-policy, manifest, kernel-profile, or image change in this task. Validate that the MCS-only profiles, per-core admission, five critical root reserves, active/passive/Reply topology, child runtimes, and exact kernel/root/MCS-driver/CYW43/Worker-archive/Worker-image-manifest/Worker-image identities are unchanged from the preceding component and root-TCB records. Any hash or generated-output drift sends execution back to the owning implementation task and requires all affected evidence to be rerun before promotion.
   - scripts/ci/test_plan_run.sh + scripts/worker_task_evidence.py — run the complete frozen topology on each target, then emit separate `cohesix-mcs-smp-system-acceptance/v1` QEMU/Pi records with `record_kind=full-system`, exactly one target, and bindings to the exact Worker component record, root-TCB record, kernel/root images, MCS driver archive/manifest, positive CYW43 coexistence record, Worker archive/image manifest/images, ABI schemas, full-system raw evidence, admission totals, timeout/fault/Reply outcomes, and performance/liveness results.
   - configs/sel4/profiles.toml + build/release validators — verify that the already-produced four-core MCS contracts are the sole runtime/release profiles for QEMU and Pi 4 and that no non-MCS switch, compatibility profile, or fallback selection remains; do not modify the profile here.
-  - scripts/worker_task_evidence.py + scripts/release_bundle.sh + tests/test_release_bundle.py — create/extend release promotion tests and, only after both full-system records validate, consume all six immutable QEMU/Pi Worker-component, root-TCB, and full-system records; recursively cross-check their role-required Worker-integration rows and complete artifact/evidence hash graph including the Worker image manifest; emit the `release-accepted` `cohesix-worker-release-acceptance/v1` record with `record_kind=release`, explicit scope `worker-runtime`, no singular target field, and exactly those six references; and exercise release verification. Missing either target or evidence layer, missing/wrong-mode integration row, QEMU-only/Pi-only proof, stale hashes, wrong kernel/root/driver/Worker image or Worker image manifest, wrong ABI/resolved-manifest/CYW43 record, or artifact-only packaging fails closed. This record cannot satisfy the Milestone 28b1 production use-case release schema.
+  - scripts/worker_task_evidence.py + scripts/release_bundle.sh + tests/test_release_bundle.py — create/extend Worker-runtime release promotion tests and, only after both full-system records validate, consume all six immutable QEMU/Pi Worker-component, root-TCB, and full-system records; recursively cross-check their role-required Worker-integration rows and complete artifact/evidence hash graph including the Worker image manifest; emit the `release-accepted` `cohesix-worker-release-acceptance/v1` record with `record_kind=release`, explicit scope `worker-runtime`, no singular target field, and exactly those six references; and exercise release verification. Missing either target or evidence layer, missing/wrong-mode role-required integration row, QEMU-only/Pi-only proof, stale hashes, wrong kernel/root/driver/Worker image or Worker image manifest, wrong ABI/resolved-manifest/CYW43 record, or artifact-only packaging fails closed. This record cannot satisfy the Milestone 28b1 production use-case release schema.
+  - scripts/release_bundle.sh + tests/test_release_bundle.py — independently verify every selected release-required projection through exact paths recorded in the generated package manifest. A release profile that ships Python must carry both exact `python-sdk-projection` records, the shared target-neutral wheel hash, and each record's matching target-qualified profile-contract hash; a missing, one-sided, stale, wrong-target, wrong-contract, or mismatched Python record fails Python packaging without entering, raising, lowering, or changing the six-reference Worker-runtime acceptance record.
   - docs/ROLES_AND_SCHEDULING.md + docs/TEST_PLAN.md + docs/BENCHMARKS.md + evidence packs — record WCET/admission inputs, per-core totals/reserves, full topology, exact build/image identity, timeout/fault/restart results, operator-liveness results, and performance deltas without overstating upstream AArch64 or SMP verification.
 Commands:
   - cargo test -p sel4-sys -p sel4-runtime
@@ -9357,8 +9380,9 @@ Commands:
   - python3 scripts/worker_task_evidence.py validate-system --target pi4 --worker out/test-plan/m26e-worker-pi4/worker-task-evidence.json --root out/test-plan/m26e-root-tcb-pi4/root-tcb-acceptance.json --run out/test-plan/m26e-mcs-smp-pi4 --out out/test-plan/m26e-mcs-smp-pi4/system-acceptance.json
   - python3 scripts/worker_task_evidence.py promote-release --worker-qemu out/test-plan/m26e-worker-qemu/worker-task-evidence.json --worker-pi4 out/test-plan/m26e-worker-pi4/worker-task-evidence.json --root-qemu out/test-plan/m26e-root-tcb-qemu/root-tcb-acceptance.json --root-pi4 out/test-plan/m26e-root-tcb-pi4/root-tcb-acceptance.json --system-qemu out/test-plan/m26e-mcs-smp-qemu/system-acceptance.json --system-pi4 out/test-plan/m26e-mcs-smp-pi4/system-acceptance.json --out out/test-plan/m26e-mcs-smp/worker-release-acceptance.json
   - scripts/release_bundle.sh --verify-worker-acceptance --worker-qemu-evidence out/test-plan/m26e-worker-qemu/worker-task-evidence.json --worker-pi4-evidence out/test-plan/m26e-worker-pi4/worker-task-evidence.json --worker-root-qemu-evidence out/test-plan/m26e-root-tcb-qemu/root-tcb-acceptance.json --worker-root-pi4-evidence out/test-plan/m26e-root-tcb-pi4/root-tcb-acceptance.json --worker-system-qemu-evidence out/test-plan/m26e-mcs-smp-qemu/system-acceptance.json --worker-system-pi4-evidence out/test-plan/m26e-mcs-smp-pi4/system-acceptance.json
+  - scripts/release_bundle.sh --verify-python-compatibility --python-package-manifest out/python-compat/m26e-python-package.json --python-qemu-evidence out/python-compat/m26e-qemu/python-sdk-projection.json --python-pi4-evidence out/python-compat/m26e-pi4/python-sdk-projection.json
   - python3 -m pytest -q tests/test_release_bundle.py tests/test_worker_task_evidence.py
-Checks: every active TCB has an admitted MCS budget/period/core, every passive service TCB has a bounded allowlisted donor/Reply/timeout chain to an admitted active context, every Worker has a dedicated active SC and zero normal-IPC donation, every linked driver uses its admitted MCS path, and all paths preserve correct ownership; aggregate demand preserves the root-control, root-fault, root-emergency, root-worker-supervisor, and root-driver-supervisor reserves; four-core QEMU and fresh Pi pass cold/warm boot, mixed load, budget exhaustion, timeout, fault, faulted-driver-call recovery, complete Worker task-instance teardown, fresh supervisor-generation recreation, SC/Reply/cap/mapping/record leak, operator-liveness, protocol-regression, GPU/PEFT receipt, positive CYW43 behavioral-coexistence, and same-harness performance gates; release promotion binds all six records and their complete artifact graph and rejects every missing, one-sided, stale, or mismatched input; no implementation or artifact changes occur after component evidence, and no operational classic scheduler path or profile remains. Any failure blocks closure and requires whole-change source/configuration reversion rather than a shipped fallback.
+Checks: every active TCB has an admitted MCS budget/period/core, every passive service TCB has a bounded allowlisted donor/Reply/timeout chain to an admitted active context, every Worker has a dedicated active SC and zero normal-IPC donation, every linked driver uses its admitted MCS path, and all paths preserve correct ownership; aggregate demand preserves the root-control, root-fault, root-emergency, root-worker-supervisor, and root-driver-supervisor reserves; four-core QEMU and fresh Pi pass cold/warm boot, mixed load, budget exhaustion, timeout, fault, faulted-driver-call recovery, complete Worker task-instance teardown, fresh supervisor-generation recreation, SC/Reply/cap/mapping/record leak, operator-liveness, protocol-regression, GPU/PEFT receipt, positive CYW43 behavioral-coexistence, and same-harness performance gates; Worker-runtime release promotion binds exactly the six target/root/system records and complete artifact graph, rejecting every missing, one-sided, stale, or mismatched input; independently, a profile cannot ship or advertise Python without both exact `python-sdk-projection` records, the shared wheel/package manifest, and the corresponding QEMU/Pi profile-contract hashes, and Python compatibility cannot raise or lower target, component, full-system, or Worker-runtime acceptance; no implementation or artifact changes occur after component evidence, and no operational classic scheduler path or profile remains. Any failure blocks closure and requires whole-change source/configuration reversion rather than a shipped fallback.
 Deliverables: One target-qualified SMP+MCS scheduling architecture for QEMU and Pi 4, final `cohesix-worker-release-acceptance/v1` evidence, and no runtime scheduler rollback path.
 ```
 
@@ -9524,15 +9548,18 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 ### Task Breakdown
 ```
 Title/ID: m27-persistence-ir
+Milestone: Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings / generated persistence contract compatibility
 Goal: Admit persistent spool/settings in compiler IR without overloading existing sidecar spool semantics.
-Inputs: tools/coh-rtc, docs/ARCHITECTURE.md, docs/INTERFACES.md.
+Inputs: tools/coh-rtc, tools/cohesix-py/cohesix/generated.py, docs/ARCHITECTURE.md, docs/INTERFACES.md.
 Changes:
   - tools/coh-rtc/src/ir.rs — `persistence.*` schema, validation, profile gating, and required storage-runtime MCS task/admission record.
-  - tools/coh-rtc/src/codegen/{docs,rust,cohsh}.rs — generated limits and snippet updates.
+  - tools/coh-rtc/src/codegen/{docs,rust,cohsh,cohesix_py}.rs — generated limits, distinct VM-persistence versus sidecar-spool paths, Python defaults, and snippet updates.
 Commands:
   - cargo test -p coh-rtc
+  - scripts/check-generated.sh
 Checks:
   - Persistence and sidecar spool configs are distinct; invalid storage declarations are rejected.
+  - Generated Python defaults expose only the selected profile's bounded persistence paths and keep them distinct from host-side bus spool paths.
   - Pi 4 admits `pi4-sdmmc-raw` only when a bounded raw region and isolated storage-runtime descriptor are declared, and rejects CYW43 SDIO, USB local-seat, FAT, root-task SD/MMC, or `cohesix.env` storage bindings.
 Deliverables:
   - Compiler-enforced persistence admission with docs snippets refreshed.
@@ -9618,21 +9645,25 @@ Deliverables:
   - Settings store with atomic semantics and a single-source-of-truth boundary.
 
 Title/ID: m27-persistence-regressions
+Milestone: Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings / persistence and Python projection regressions
 Goal: Add deterministic regression scripts and fixtures.
-Inputs: scripts/cohsh/, tests/fixtures/.
+Inputs: scripts/cohsh/, tests/fixtures/, coh-rtc-generated enabled/disabled persistence profile fixtures, generated persistence paths and bounds, tools/cohesix-py/cohesix/generated.py, tools/cohesix-py/tests/.
 Changes:
   - scripts/cohsh/spool_roundtrip.coh — append/read/ack sequence.
   - scripts/cohsh/settings_roundtrip.coh — set/get + A/B markers.
+  - tools/cohesix-py/tests/test_persistence.py — consume coh-rtc-produced enabled and disabled profile fixtures through the generated Python output and prove MockBackend, filesystem, TCP, and REST behavior for the generated `/proc/spool/*`, `/queen/spool/*`, settings paths, availability gates, and byte/record bounds. MockBackend remains explicit non-proof `host-model`; all backends preserve missing, disabled, denied, append/read/ack, and settings semantics without conflating VM persistence with the separate host-side `/bus/*/spool` contract or hand-editing `generated.py`.
   - docs/BENCHMARKS.md — record persistence-enabled status/spool/settings microbenchmark artifacts without claiming fresh hardware throughput parity.
 Commands:
   - cohsh --script scripts/cohsh/spool_roundtrip.coh
   - cohsh --script scripts/cohsh/settings_roundtrip.coh
+  - python3 -m pytest -q tools/cohesix-py/tests/test_persistence.py
   - python3 scripts/rest_perf_harness.py --mode perf --suite status --runs 5 --log-dir out/bench --log-prefix m27-persistence-status-sanity
 Checks:
   - Scripts pass unchanged; transcripts stable.
+  - Python uses only generated paths and bounds; its results and refusals match the canonical cohsh fixtures, and it introduces no independent persistence authority or sidecar-spool alias.
   - Status/spool/settings latency stays bounded against the accepted 26d rolling baseline for persistence-enabled profiles, or the delta is classified before 27 closes.
 Deliverables:
-  - Regression fixtures and targeted persistence benchmark artifacts committed or archived and referenced in docs/TEST_PLAN.md.
+  - Regression fixtures, Python persistence-compatibility coverage, and targeted persistence benchmark artifacts committed or archived and referenced in docs/TEST_PLAN.md.
 ```
 
 ## Milestone 27b — Formal Verification Baseline + Proof-Carrying Manifests <a id="27b"></a>
@@ -10037,16 +10068,18 @@ Checks: Spool append/read/ack fixtures stay byte-stable; per-core telemetry merg
 Deliverables: Core-local telemetry/spool drain path that does not become a general filesystem or new protocol.
 
 Title/ID: m27c-smp-observability-and-proof
+Milestone: Milestone 27c — Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) / Python schedule-evidence projection compatibility
 Goal: Expose service-bucket proof through `smp activity`, `/proc/schedule/*`, evidence packs, and verification witnesses.
-Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/ninedoor.rs, apps/coh/src/evidence.rs, tools/coh-rtc, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
+Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/ninedoor.rs, apps/coh/src/evidence.rs, tools/coh-rtc, tools/cohesix-py/cohesix/evidence.py, tools/cohesix-py/tests/test_evidence_receipts.py, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
 Changes:
   - apps/root-task/src/event/mod.rs — extend `smp activity` with service-bucket counters, busy/yield counts, max-turn latency, and IRQ-locality proof rows.
   - apps/root-task/src/ninedoor.rs — bounded `/proc/schedule/*` service-bucket summaries.
   - apps/coh/src/evidence.rs — include service-bucket snapshots in evidence packs.
+  - tools/cohesix-py/cohesix/evidence.py + tools/cohesix-py/tests/test_evidence_receipts.py — consume the generated additive service-bucket schedule fields and updated byte bounds without truncation, schema invention, inferred CPU utilization, or promotion to Worker, driver, QEMU, Pi, or hardware acceptance proof.
   - tools/coh-rtc/src/verify.rs — verify service-bucket witnesses against resolved manifests and generated Rust tables.
-Commands: cargo test -p root-task --tests schedule && cargo test -p coh --test evidence && scripts/ci/verification_gate.sh
-Checks: Observability is bounded, read-only, generated-manifest aligned, and keeps `cpu_pct=unavailable` unless real utilization evidence exists.
-Deliverables: Auditable service-bucket proof surface for operators and verification gates.
+Commands: cargo test -p root-task --tests schedule && cargo test -p coh --test evidence && python3 -m pytest -q tools/cohesix-py/tests/test_evidence_receipts.py -k service_bucket && scripts/ci/verification_gate.sh
+Checks: Observability is bounded, read-only, generated-manifest aligned, and keeps `cpu_pct=unavailable` unless real utilization evidence exists; Rust and Python evidence-pack projections agree on service-bucket fixtures and bounds.
+Deliverables: Auditable service-bucket proof surface with compatible Rust and Python evidence consumers for operators and verification gates.
 
 Title/ID: m27c-pressure-and-target-proof
 Goal: Add host-safe pressure coverage and target-qualified QEMU/Pi proof lanes for core-local service scheduling.
@@ -10579,6 +10612,19 @@ Commands: cargo test -p coh --test attest && cargo test -p coh --test evidence_p
 Checks: `coh attest` accepts only a fresh signed chain matching the exact target and configured trust policy; a matching public manifest hash alone never passes; no challenge grants or mutates authority; failure reasons and offline verification are deterministic.
 Deliverables: Shared cryptographic verifier reused by evidence packs, SwarmUI, and later `coh-status` without a second attestation vocabulary.
 
+Title/ID: m28-python-evidence-contract-parity
+Milestone: Milestone 28 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest / Python evidence contract parity
+Goal: Keep the non-authoritative Python SDK compatible with the canonical evidence-pack, timeline, redaction, trace-reference, and attestation-result contracts established by Milestone 28.
+Inputs: `m28-live-trace-capture`, `m28-attestation-verifier`, apps/coh evidence/attestation fixtures, canonical trace and legacy offline fixtures, generated evidence schemas and bounds, tools/cohesix-py/cohesix/{client.py,evidence.py}, tools/cohesix-py/tests/{test_evidence_receipts.py,test_examples_ci_siem.py}, docs/PYTHON_SUPPORT.md, docs/TEST_PLAN.md.
+Changes:
+  - tools/cohesix-py/cohesix/{client.py,evidence.py} — consume the canonical generated evidence-pack layout, timeline ordering, opaque bounded trace references, redaction rules, bounds, artifact classes, and typed attestation outcomes without defining a second pack format, parsing or replaying trace payloads, verifying against weaker inputs, or inferring attestation success. Authoritative receipt migration remains owned by `m28b1-authoritative-receipt-and-evidence-core`.
+  - tools/cohesix-py/tests/test_evidence_receipts.py + tools/cohesix-py/tests/test_examples_ci_siem.py — run the shared canonical fixtures plus explicitly classified legacy offline parser fixtures; cover unknown additive fields, missing optional artifacts, signed PASS/FAIL/UNAVAILABLE records, measurement-only inputs, virtual-versus-hardware proof separation, truncation, and secret canaries.
+  - docs/PYTHON_SUPPORT.md + docs/TEST_PLAN.md — document that Python may project or analyze the canonical record but cannot manufacture authoritative evidence or upgrade an offline/legacy/measurement-only artifact.
+Commands:
+  - python3 -m pytest -q tools/cohesix-py/tests/test_evidence_receipts.py tools/cohesix-py/tests/test_examples_ci_siem.py
+Checks: Rust and Python agree on canonical fixture bytes, ordering, classifications, bounds, and redaction; secret canaries never survive; matching hashes alone never become attestation PASS; legacy artifacts remain offline parser fixtures only; Python output cannot become a second evidence authority.
+Deliverables: One evidence-pack/timeline/attestation-result contract shared by Rust producers and Python consumers.
+
 Title/ID: m28-audit-ledger-refresh
 Goal: Refresh audit blockers, exceptions, findings, and risk baselines so later hardening milestones cite current state.
 Inputs: docs/audit/, scripts/check-generated.sh, docs/BUILD_PLAN.md, current evidence-pack schema.
@@ -10941,6 +10987,21 @@ Commands: cargo test -p host-ticket-agent && cargo test -p tests --test host_tic
 Checks: Invalid target/arg values never reach executors; crash/restart replay publishes or deadletters existing execution state without duplicating side effects.
 Deliverables: `/host/tickets/spec` is a durable, grammar-checked actuation lane rather than a best-effort command queue.
 
+Title/ID: m28b-python-authority-contract-parity
+Milestone: Milestone 28b — Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents / Python authority contract parity
+Goal: Keep Python REST writes, Queen intents, host tickets, secret handling, and evidence capture compatible with the generated delegated-identity, idempotency, writer-epoch, and audit/replay contract.
+Inputs: `m28-python-evidence-contract-parity`, `m28b-rest-delegated-identity`, `m28b-queen-ctl-idempotency`, `m28b-failover-epoch-fencing`, `m28b-production-secret-profile`, `m28b-audit-replay-production-default`, `m28b-host-ticket-validation-replay`, generated 28b policy and fixtures, tools/cohesix-py/cohesix/{auth.py,backends.py,orchestration.py,evidence.py}, tools/cohesix-py/tests/.
+Changes:
+  - tools/cohesix-py/cohesix/backends.py + tools/cohesix-py/tests/test_rest_backend_auth.py — resolve and send gateway request authentication and a separate delegated capability ticket on mutating REST routes while preserving the existing read behavior unchanged until `m28b1-read-visibility-classes`. Reject locally missing, placeholder, or malformed required credentials before mutation, and surface the gateway/agent's exact typed refusal for insufficient, overbroad, stale, or otherwise unauthorized delegated authority rather than claiming client-side authority adjudication.
+  - tools/coh-rtc/src/codegen/cohesix_py.rs + tools/cohesix-py/cohesix/orchestration.py + tools/cohesix-py/tests/test_orchestration.py — consume the codegen-owned strict Queen-intent compatibility mode, id/idempotency-key requirements, writer-epoch bounds, provider target/arg schemas, and deterministic stale-writer or legacy-path refusals rather than hand-maintaining a looser Python envelope or editing `generated.py` directly.
+  - tools/cohesix-py/cohesix/{auth.py,evidence.py} + tools/cohesix-py/tests/{test_auth.py,test_evidence_receipts.py} — reject placeholder live credentials, capture bounded writer-epoch/dedupe/audit/replay state using canonical evidence fields, and keep client observations distinct from authoritative target/provider receipts.
+  - docs/PYTHON_SUPPORT.md + tools/cohesix-py/README.md — document delegated REST configuration, compatibility profiles, writer-epoch behavior, typed refusals, and the fact that Python does not gain identity or replay authority beyond the generated gateway/target contract.
+Commands:
+  - python3 -m pytest -q tools/cohesix-py/tests/test_rest_backend_auth.py tools/cohesix-py/tests/test_orchestration.py tools/cohesix-py/tests/test_evidence_receipts.py tools/cohesix-py/tests/test_auth.py
+  - scripts/check-generated.sh
+Checks: Python cannot issue a production REST mutation without both request authentication and a delegated ticket; the gateway/agent rejects insufficient, overbroad, stale, or wrong-scope authority and Python preserves that typed refusal; Python cannot omit, regress, or reuse a stale required writer epoch; preserves legacy intent behavior only where the generated profile explicitly permits it; validates structural provider-specific ticket targets/args before append; preserves the pre-28b read contract until 28b1; and reports epoch/dedupe evidence without inventing authority, successful execution, or an authoritative receipt.
+Deliverables: Python clients remain protocol-faithful and fail closed under the complete Milestone 28b host/gateway authority floor.
+
 Title/ID: m28b-gpu-bridge-auth-frame-caps
 Goal: Enforce live GPU bridge auth discipline and bounded peer frame allocation.
 Inputs: apps/gpu-bridge-host, docs/HOST_TOOLS.md, docs/GPU_NODES.md, docs/SECURITY.md
@@ -11289,15 +11350,16 @@ Implementation requirements:
 Title/ID: m28b1-provider-action-registry
 Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-provider-action-registry
 Goal: Extend the 26e integration dependency graph with the compiler-owned provider/action registry used by host tickets, REST/OpenAPI docs, Python, host tools, and later MCP/A2A schemas.
-Inputs: configs/generated/host_integration_dependency.json, tools/coh-rtc, apps/host-ticket-agent, apps/coh, apps/cohsh, docs/INTERFACES.md, docs/HOST_API.md.
+Inputs: configs/generated/host_integration_dependency.json, tools/coh-rtc, apps/host-ticket-agent, apps/coh, apps/cohsh, tools/cohesix-py, docs/INTERFACES.md, docs/HOST_API.md.
 Changes:
   - tools/coh-rtc/src/ir.rs — `providers.*` schema for action names, targets, modes, authority, receipts, redaction, and evidence refs.
-  - tools/coh-rtc/src/codegen/{docs,rust}.rs — generated provider registry artifacts and snippets.
+  - tools/coh-rtc/src/codegen/{docs,rust,cohesix_py}.rs — generated provider registry artifacts, Python defaults, and snippets.
   - apps/host-ticket-agent/src/registry.rs — consume generated provider/action metadata before executor dispatch.
   - apps/coh/src/provider.rs + apps/cohsh/src/provider.rs — display generated provider action availability without hand-maintained lists.
-Commands: cargo test -p coh-rtc && cargo test -p host-ticket-agent && cargo test -p coh && cargo test -p cohsh
-Checks: Provider action schemas cannot drift between executor validation, host tools, docs, and future gateway protocol schema inputs.
-Deliverables: Single source of truth for host-side ecosystem action semantics.
+  - tools/cohesix-py/cohesix/integrations.py + tools/cohesix-py/tests/test_integrations.py — consume the coh-rtc-generated Python provider output for action ids, target schemas, modes, bounds, receipt refs, and typed unavailable state; reject any handwritten Python provider-action catalogue, direct edit of `generated.py`, or client-selected promotion to `live`.
+Commands: cargo test -p coh-rtc && cargo test -p host-ticket-agent && cargo test -p coh && cargo test -p cohsh && python3 -m pytest -q tools/cohesix-py/tests/test_integrations.py -k provider_registry
+Checks: Provider action schemas cannot drift between executor validation, Rust/Python host tools, docs, and future gateway protocol schema inputs; Python exposes the same generated availability and refusals.
+Deliverables: Single source of truth for host-side ecosystem action semantics across Rust and Python consumers.
 
 Title/ID: m28b1-integration-surface-registry
 Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-integration-surface-registry
@@ -11422,15 +11484,16 @@ Deliverables: Production coexistence matrix tied to release evidence.
 Title/ID: m28b1-read-visibility-classes
 Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-read-visibility-classes
 Goal: Classify every ecosystem-facing read projection before multi-caller REST, Python, FUSE, MCP, A2A, or UI clients expose it.
-Inputs: tools/coh-rtc, apps/hive-gateway, apps/coh, apps/cohsh, apps/swarmui, docs/SECURITY.md, docs/API_GUIDELINES.md.
+Inputs: tools/coh-rtc, apps/hive-gateway, apps/coh, apps/cohsh, apps/swarmui, tools/cohesix-py, docs/SECURITY.md, docs/API_GUIDELINES.md.
 Changes:
   - tools/coh-rtc/src/ir.rs — read visibility class for provider, evidence, ticket, audit, replay, telemetry, and `/proc` paths.
   - apps/hive-gateway/src/auth.rs — enforce delegated identity for ticket-scoped reads and admin-only policy for global reads.
   - apps/coh/src/read_scope.rs + apps/cohsh/src/read_scope.rs — preserve read-scope refusals in host tools.
+  - tools/cohesix-py/cohesix/backends.py + tools/cohesix-py/tests/test_rest_backend_auth.py — propagate delegated caller identity for ticket-scoped REST reads, preserve public/admin-only classification, and prove cross-caller denial before returning bytes.
   - docs/SECURITY.md + docs/API_GUIDELINES.md — document public, ticket-scoped, and admin-only read behavior.
-Commands: cargo test -p coh-rtc && cargo test -p hive-gateway && cargo test -p coh && cargo test -p cohsh
-Checks: Cross-caller ticket, provider receipt, evidence, audit/replay, task, and identity diagnostics reads fail deterministically before data is returned.
-Deliverables: Read-only ecosystem projections are scoped with the same rigor as writes.
+Commands: cargo test -p coh-rtc && cargo test -p hive-gateway && cargo test -p coh && cargo test -p cohsh && python3 -m pytest -q tools/cohesix-py/tests/test_rest_backend_auth.py -k read_visibility
+Checks: Cross-caller ticket, provider receipt, evidence, audit/replay, task, and identity diagnostics reads fail deterministically before data is returned through Rust, REST, Python, or UI projections.
+Deliverables: Read-only ecosystem projections, including Python, are scoped with the same rigor as writes.
 
 Title/ID: m28b1-identity-mapping
 Milestone: Milestone 28b1 — Host Integration Registry + Provider/Executor + Use-Case Conformance / m28b1-identity-mapping
@@ -12743,6 +12806,21 @@ Checks:
   - Fault/revoke timing remains bounded and is reported as VM authority recovery evidence, not Pi/QEMU network throughput proof.
 Deliverables:
   - Production fault lifecycle evidence that lets seL4 reviewers audit Worker ticket quarantine and ticket-free driver runtime quarantine/recovery separately.
+
+Title/ID: m28e-python-production-bundle-parity
+Milestone: Milestone 28e — Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle / Python production projection parity
+Goal: Make the Python SDK consume generated Worker-bundle binding and Worker/driver quarantine evidence without synthesizing production authority or treating drivers as ticket subjects.
+Inputs: `m28b1-authoritative-receipt-and-evidence-core`, `m28e-production-worker-ticket-driver-inventory`, `m28e-structured-fault-lifecycle`, generated 28e integration/use-case records and canonical evidence fixtures, tools/cohesix-py/cohesix/{generated.py,worker.py,orchestration.py,receipts.py,evidence.py}, tools/cohesix-py/tests/**, docs/PYTHON_SUPPORT.md.
+Changes:
+  - tools/cohesix-py/cohesix/{worker.py,orchestration.py,evidence.py} — consume coh-rtc-generated Worker binding, ticket/lease epoch, scheduler/supervisor/cap generation, terminal/quarantine, recovery, and evidence-reference fields while preserving the separate ticket-free driver manifest-runtime identity and the 26e-only versus 28e-production profile distinction; do not hand-edit `generated.py`.
+  - tools/cohesix-py/cohesix/receipts.py + focused fixtures — reuse the authoritative 28b1 receipt/evidence validators and conformance vectors to validate the shared binding/fault records and refuse missing, forged, duplicate, stale-generation, wrong-target, wrong-role, driver-ticket-bearing, client-authored, or incompletely correlated inputs; keep provider/executor receipts separate and add no parallel Python validator or receipt format.
+  - tools/cohesix-py/tests/{test_worker_compatibility.py,test_orchestration.py,test_evidence_receipts.py} — cover live, revoked, quarantined, stale-generation, missing-binding, fresh-generation recovery, 26e-only, and WorkerBus model-only cases using the canonical Rust/generated vectors.
+  - docs/PYTHON_SUPPORT.md — document read/projection behavior and explicitly deny any Python-created production-bundle, quarantine, restart, or driver-ticket authority.
+Commands:
+  - python3 -m pytest -q tools/cohesix-py/tests/test_worker_compatibility.py tools/cohesix-py/tests/test_orchestration.py tools/cohesix-py/tests/test_evidence_receipts.py
+  - scripts/check-generated.sh
+Checks: A ticket, lease, provider receipt, model publication, local file, or client-created JSON cannot become a 28e production-bundle claim; stale generations and incomplete correlations fail closed; no driver ticket is accepted or emitted; 26e-only profiles remain distinct; fresh recovery requires the generated new identity; WorkerBus remains model-only.
+Deliverables: Python projects the same generated production-binding and quarantine truth as other host tools without creating a parallel lifecycle or authority model.
 ```
 
 
@@ -13342,15 +13420,18 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 **Task Breakdown**
 ```
 Title/ID: m29b-ai-ir
+Milestone: Milestone 29b — AI-Native Namespace Surfaces (Control-Plane Only) / generated Python AI namespace contract
 Goal: Admit AI namespace surfaces in compiler IR without changing Cohesix transport or runtime boundaries.
-Inputs: tools/coh-rtc, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/USERLAND_AND_CLI.md.
+Inputs: tools/coh-rtc, tools/cohesix-py/cohesix/generated.py, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/USERLAND_AND_CLI.md.
 Changes:
   - tools/coh-rtc/src/ir.rs — `ecosystem.ai.*` schema, gating, receipt-projection mapping, and bounds validation.
-  - tools/coh-rtc/src/codegen/{docs,rust,cohsh}.rs — generated AI namespace snippets and client defaults.
+  - tools/coh-rtc/src/codegen/{docs,rust,cohsh,cohesix_py}.rs — generated AI namespace snippets and Rust, cohsh, and Python client defaults.
 Commands:
   - cargo test -p coh-rtc
+  - scripts/check-generated.sh
 Checks:
   - AI namespace admission is compiler-defined, rejects overlap with existing CAS/model/spool surfaces, and preserves the 28c host-ticket authority mapping for side-effecting flows and read-model projections.
+  - Generated Python roots, fixed control files, gates, and bounds match the selected resolved manifest and cannot be hand-maintained independently.
 Deliverables:
   - Authoritative manifest + docs snippets for AI namespace roots.
 
@@ -13370,18 +13451,22 @@ Deliverables:
   - AI control-plane namespace available in host and VM implementations with matching semantics.
 
 Title/ID: m29b-host-tool-discovery
+Milestone: Milestone 29b — AI-Native Namespace Surfaces (Control-Plane Only) / Python and host-tool discovery compatibility
 Goal: Extend host-tool discovery and read models for AI namespace paths without adding verbs.
-Inputs: apps/cohsh, apps/coh, apps/swarmui, generated client defaults.
+Inputs: apps/cohsh, apps/coh, apps/swarmui, tools/cohesix-py/cohesix/{generated.py,backends.py,orchestration.py}, tools/cohesix-py/tests/, coh-rtc-generated enabled/disabled AI namespace profile fixtures and client defaults.
 Changes:
   - apps/cohsh — list/cat/tail/echo flows for `/jobs`, `/datasets`, `/experiments`, `/infer`, `/metrics`, including checkpoint/handoff/prefix-status read paths.
   - apps/coh — host-side helpers remain projections of existing file semantics only.
   - apps/swarmui — optional read-only views backed by existing `/proc` and AI namespace tails.
+  - tools/cohesix-py/cohesix/{backends.py,orchestration.py} + tools/cohesix-py/tests/test_ai_namespace.py — consume the coh-rtc-generated enabled/disabled profile fixtures to discover and access only generated `/jobs`, `/datasets`, `/experiments`, `/infer`, and `/metrics` roots and fixed control files through existing bounded backend operations; prove MockBackend as explicit non-proof `host-model` plus filesystem, TCP, and REST missing/disabled/denied/enabled behavior; preserve the 28c host-ticket/evidence authority mapping without hand-editing `generated.py`.
 Commands:
   - cargo test -p cohsh
+  - python3 -m pytest -q tools/cohesix-py/tests/test_ai_namespace.py
 Checks:
   - Host tools discover AI paths using existing grammar and deterministic error handling, with read models aligned to 28c evidence receipts rather than inferred hidden state.
+  - Python matches coh/cohsh fixtures, cannot create dynamic paths or translate arbitrary data into host execution, and cannot bypass generated dependency, visibility, receipt, or fixed-control-file gates.
 Deliverables:
-  - Operator-facing tooling parity for AI namespace surfaces.
+  - Operator-facing Rust, UI, and Python tooling parity for AI namespace surfaces.
 
 Title/ID: m29b-ai-regressions
 Goal: Add deterministic regression coverage for AI namespace semantics.
