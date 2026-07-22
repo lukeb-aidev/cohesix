@@ -161,9 +161,9 @@ pub fn main(ctx: BootContext) -> ! {
     debug_uart_str("[dbg] console: spawning root console task\n");
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
     log::info!("[console] spawn: starting root console task on serial");
-    pump = attach_kernel_console(pump, &ctx, bootstrap_ipc.as_mut(), None);
-    pump = attach_local_seat(pump, &ctx);
-    pump = attach_ninedoor_bridge(pump, &ctx);
+    attach_kernel_console(&mut pump, &ctx, bootstrap_ipc.as_mut(), None);
+    attach_local_seat(&mut pump, &ctx);
+    attach_ninedoor_bridge(&mut pump, &ctx);
     #[cfg(feature = "kernel")]
     crate::hal::driver_task::emit_boot_contract_proof();
 
@@ -224,7 +224,7 @@ pub fn main(ctx: BootContext) -> ! {
         );
         #[cfg(feature = "kernel")]
         if let Some(wifi_debug) = wifi_debug.as_mut() {
-            pump = pump.with_wifi_debug(wifi_debug);
+            pump.attach_wifi_debug(wifi_debug);
         }
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         let mut start_deferred_net_after_prompt = false;
@@ -271,7 +271,7 @@ pub fn main(ctx: BootContext) -> ! {
         if start_deferred_net_after_prompt {
             #[cfg(feature = "net-console")]
             {
-                pump = attach_network(pump, None, net_unavailable_detail.take());
+                attach_network(&mut pump, None, net_unavailable_detail.take());
             }
             #[cfg(all(feature = "net-console", feature = "kernel"))]
             pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
@@ -287,18 +287,18 @@ pub fn main(ctx: BootContext) -> ! {
                         boot_log::force_uart_line(resume_line);
                     }
                     enter_root_console_loop_with_deferred_net_supervisor(
-                        pump,
+                        &mut pump,
                         config,
                         ctx.wifi_debug_hal_ptr,
                     );
                 }
             }
-            enter_root_console_loop(pump);
+            enter_root_console_loop(&mut pump);
         } else if let Some(mut active_net_stack) = net_stack.take() {
             #[cfg(feature = "net-console")]
             {
-                pump = attach_network(
-                    pump,
+                attach_network(
+                    &mut pump,
                     Some(&mut active_net_stack),
                     net_unavailable_detail.take(),
                 );
@@ -313,14 +313,14 @@ pub fn main(ctx: BootContext) -> ! {
             #[cfg(all(feature = "net-console", feature = "kernel"))]
             wait_for_net_console_before_root_console(&mut pump);
             start_root_console_prompt(&mut pump);
-            enter_root_console_loop(pump);
+            enter_root_console_loop(&mut pump);
         } else {
             #[cfg(feature = "net-console")]
             {
-                pump = attach_network(pump, None, net_unavailable_detail.take());
+                attach_network(&mut pump, None, net_unavailable_detail.take());
             }
             start_root_console_prompt(&mut pump);
-            enter_root_console_loop(pump);
+            enter_root_console_loop(&mut pump);
         }
     }
 
@@ -398,7 +398,7 @@ fn start_root_console_prompt<'a, D, T, I, V, const RX: usize, const TX: usize, c
 
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 fn enter_root_console_loop<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
 ) -> !
 where
     D: crate::serial::SerialDriver,
@@ -420,7 +420,23 @@ where
     } else {
         announce_root_console_loop_start();
     }
-    pump.run();
+    run_root_console_pump(pump);
+}
+
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+fn run_root_console_pump<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) -> !
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    loop {
+        pump.poll();
+        sel4::yield_now();
+    }
 }
 
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -1025,7 +1041,7 @@ fn enter_root_console_loop_with_deferred_net_supervisor<
     const TX: usize,
     const LINE: usize,
 >(
-    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     config: crate::net::ConsoleNetConfig,
     hal_ptr: usize,
 ) -> !
@@ -1054,9 +1070,9 @@ where
     if hal_ptr == 0 {
         let mut detail = HeaplessString::<192>::new();
         let _ = detail.push_str("deferred HAL pointer missing");
-        emit_deferred_net_console_failure(&mut pump, &detail, true);
+        emit_deferred_net_console_failure(pump, &detail, true);
         emit_deferred_net_bootstrap_supervisor_status(
-            &mut pump,
+            pump,
             retry_schedule.next_status_sequence(),
             1,
             DeferredNetSupervisorStatus::Permanent,
@@ -1065,16 +1081,16 @@ where
             local_seat_enabled,
             true,
         );
-        pump.run();
+        run_root_console_pump(pump);
     }
     let config = match crate::net::prepare_cyw43_net_console_config(config) {
         Ok(config) => config,
         Err(err) => {
             let mut detail = HeaplessString::<192>::new();
             let _ = write!(detail, "{err}");
-            emit_deferred_net_console_failure(&mut pump, &detail, true);
+            emit_deferred_net_console_failure(pump, &detail, true);
             emit_deferred_net_bootstrap_supervisor_status(
-                &mut pump,
+                pump,
                 retry_schedule.next_status_sequence(),
                 1,
                 DeferredNetSupervisorStatus::Permanent,
@@ -1083,7 +1099,7 @@ where
                 local_seat_enabled,
                 true,
             );
-            pump.run();
+            run_root_console_pump(pump);
         }
     };
     crate::drivers::driver_task_net::begin_cyw43_bootstrap_causal_fault_capture();
@@ -1117,7 +1133,7 @@ where
                     serial_retry.record_ready();
                     if !wifi_operation_started {
                         emit_deferred_net_bootstrap_supervisor_status(
-                            &mut pump,
+                            pump,
                             retry_schedule.next_status_sequence(),
                             0,
                             DeferredNetSupervisorStatus::Preflight,
@@ -1130,7 +1146,7 @@ where
                 } else {
                     if serial_retry.record_missing_proof(serial_now_ms) && !wifi_operation_started {
                         emit_deferred_net_bootstrap_supervisor_status(
-                            &mut pump,
+                            pump,
                             retry_schedule.next_status_sequence(),
                             0,
                             DeferredNetSupervisorStatus::Preflight,
@@ -1196,7 +1212,7 @@ where
                     continue;
                 }
                 emit_deferred_net_bootstrap_supervisor_status(
-                    &mut pump,
+                    pump,
                     retry_schedule.next_status_sequence(),
                     retry_schedule.attempt_number(),
                     if network_attached {
@@ -1223,7 +1239,7 @@ where
         let Some(turn) = with_deferred_net_hal(hal_ptr, |hal| bootstrap.service_turn(hal)) else {
             // The entry check above proves this unreachable unless the
             // retained bootstrap pointer was corrupted after validation.
-            pump.run();
+            run_root_console_pump(pump);
         };
         supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
         match turn {
@@ -1259,9 +1275,9 @@ where
                 if !bootstrap.is_ready() || bootstrap.ready_generation().is_none() {
                     let mut detail = HeaplessString::<192>::new();
                     let _ = detail.push_str("retained supervisor completed without generation");
-                    emit_deferred_net_console_failure(&mut pump, &detail, false);
+                    emit_deferred_net_console_failure(pump, &detail, false);
                     emit_deferred_net_bootstrap_supervisor_status(
-                        &mut pump,
+                        pump,
                         retry_schedule.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Permanent,
@@ -1276,11 +1292,11 @@ where
                         sel4::yield_now();
                         continue;
                     }
-                    pump.run();
+                    run_root_console_pump(pump);
                 }
                 if network_attached {
                     emit_deferred_net_bootstrap_supervisor_status(
-                        &mut pump,
+                        pump,
                         retry_schedule.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Ready,
@@ -1298,16 +1314,16 @@ where
                 }) else {
                     // The same validated leaked pointer is reused only after
                     // the retained operation above has released its borrow.
-                    pump.run();
+                    run_root_console_pump(pump);
                 };
                 let stack = match stack_result {
                     Ok(stack) => stack,
                     Err(err) => {
                         let mut detail = HeaplessString::<192>::new();
                         let _ = write!(detail, "{err}");
-                        emit_deferred_net_console_failure(&mut pump, &detail, false);
+                        emit_deferred_net_console_failure(pump, &detail, false);
                         emit_deferred_net_bootstrap_supervisor_status(
-                            &mut pump,
+                            pump,
                             retry_schedule.next_status_sequence(),
                             attempt,
                             DeferredNetSupervisorStatus::Permanent,
@@ -1316,17 +1332,17 @@ where
                             local_seat_enabled,
                             false,
                         );
-                        pump.run();
+                        run_root_console_pump(pump);
                     }
                 };
-                emit_deferred_net_console_result(&mut pump, &stack);
+                emit_deferred_net_console_result(pump, &stack);
                 let stack: &'static mut NetStackHandle = Box::leak(Box::new(stack));
                 if !pump.attach_network_after_bootstrap(stack) {
                     let mut detail = HeaplessString::<192>::new();
                     let _ = detail.push_str("deferred network attach rejected: stack already live");
-                    emit_deferred_net_console_failure(&mut pump, &detail, false);
+                    emit_deferred_net_console_failure(pump, &detail, false);
                     emit_deferred_net_bootstrap_supervisor_status(
-                        &mut pump,
+                        pump,
                         retry_schedule.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Permanent,
@@ -1335,10 +1351,10 @@ where
                         local_seat_enabled,
                         false,
                     );
-                    pump.run();
+                    run_root_console_pump(pump);
                 }
                 emit_deferred_net_bootstrap_supervisor_status(
-                    &mut pump,
+                    pump,
                     retry_schedule.next_status_sequence(),
                     attempt,
                     DeferredNetSupervisorStatus::Ready,
@@ -1364,12 +1380,12 @@ where
                 let failure_now_ms = crate::hal::timebase().now_ms();
                 let mut detail = HeaplessString::<192>::new();
                 let _ = write!(detail, "{err}");
-                emit_deferred_net_console_failure(&mut pump, &detail, false);
+                emit_deferred_net_console_failure(pump, &detail, false);
                 if crate::net::cyw43_net_console_bootstrap_error_retryable(&err) {
                     if let Some(delay_ms) = retry_schedule.record_transient_failure(failure_now_ms)
                     {
                         emit_deferred_net_bootstrap_supervisor_status(
-                            &mut pump,
+                            pump,
                             retry_schedule.next_status_sequence(),
                             attempt,
                             DeferredNetSupervisorStatus::Backoff,
@@ -1378,10 +1394,10 @@ where
                             local_seat_enabled,
                             false,
                         );
-                        bootstrap = Cyw43BootstrapSupervisor::new(config);
+                        bootstrap.reset_for_attempt(config);
                     } else {
                         emit_deferred_net_bootstrap_supervisor_status(
-                            &mut pump,
+                            pump,
                             retry_schedule.next_status_sequence(),
                             attempt,
                             DeferredNetSupervisorStatus::Exhausted,
@@ -1396,7 +1412,7 @@ where
                     attempt_active = false;
                 } else {
                     emit_deferred_net_bootstrap_supervisor_status(
-                        &mut pump,
+                        pump,
                         retry_schedule.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Permanent,
@@ -1409,7 +1425,7 @@ where
                         pump.quarantine_network_service_after_cyw43_exhaustion();
                         terminal_mode = Some(mode);
                     } else {
-                        pump.run();
+                        run_root_console_pump(pump);
                     }
                 }
             }
@@ -1815,81 +1831,71 @@ fn wait_for_net_console_before_root_console<
 
 #[cfg(feature = "kernel")]
 fn attach_kernel_console<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     ctx: &BootContext,
     bootstrap_ipc: Option<&'a mut UserlandBootstrapHandler>,
     wifi_debug: Option<&'a mut KernelWifiDebugHandle>,
-) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
     if let Some(handler) = bootstrap_ipc {
-        pump = pump.with_console_context(ctx.bootinfo, ctx.endpoints.control.raw(), ctx.uart_slot);
-        pump = pump.with_bootstrap_handler(handler);
+        pump.attach_console_context(ctx.bootinfo, ctx.endpoints.control.raw(), ctx.uart_slot);
+        pump.attach_bootstrap_handler(handler);
     }
     if let Some(wifi_debug) = wifi_debug {
-        pump = pump.with_wifi_debug(wifi_debug);
+        pump.attach_wifi_debug(wifi_debug);
     }
-
-    pump
 }
 
 #[cfg(not(feature = "kernel"))]
 fn attach_kernel_console<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    _pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     _ctx: &BootContext,
     _bootstrap_ipc: Option<&'a mut UserlandBootstrapHandler>,
     _wifi_debug: Option<&'a mut KernelWifiDebugHandle>,
-) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
-    pump
 }
 
 #[cfg(feature = "kernel")]
 fn attach_local_seat<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     ctx: &BootContext,
-) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
     if let Some(runtime) = ctx.local_seat.borrow_mut().take() {
-        pump = pump.with_local_seat(runtime);
+        pump.attach_local_seat(runtime);
     }
-    pump
 }
 
 #[cfg(not(feature = "kernel"))]
 fn attach_local_seat<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    _pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     _ctx: &BootContext,
-) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
-    pump
 }
 
 #[cfg(feature = "kernel")]
 fn attach_ninedoor_bridge<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     ctx: &BootContext,
-) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
@@ -1897,61 +1903,52 @@ where
 {
     if let Some(ninedoor) = ctx.ninedoor.borrow_mut().take() {
         let policy = affinity::policy();
-        pump = affinity::with_role_affinity(affinity::AffinityRole::NineDoor, 0, &policy, || {
-            pump.with_ninedoor(ninedoor)
+        affinity::with_role_affinity(affinity::AffinityRole::NineDoor, 0, &policy, || {
+            pump.attach_ninedoor(ninedoor);
         });
     }
-
-    pump
 }
 
 #[cfg(not(feature = "kernel"))]
 fn attach_ninedoor_bridge<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    _pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     _ctx: &BootContext,
-) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
-    pump
 }
 
 #[cfg(feature = "net-console")]
 fn attach_network<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    mut pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     net_stack_handle: Option<&'a mut NetStackHandle>,
     net_unavailable_detail: Option<HeaplessString<192>>,
-) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
-    pump = pump.with_network_unavailable_detail(net_unavailable_detail);
+    pump.set_network_unavailable_detail(net_unavailable_detail);
     if let Some(net_stack) = net_stack_handle {
-        pump = pump.with_network(net_stack);
+        pump.attach_initial_network(net_stack);
     }
-
-    pump
 }
 
 #[cfg(not(feature = "net-console"))]
 fn attach_network<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
-    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    _pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     _net_stack_handle: Option<&'a mut NetStackHandle>,
     _net_unavailable_detail: Option<HeaplessString<192>>,
-) -> EventPump<'a, D, T, I, V, RX, TX, LINE>
-where
+) where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
     V: CapabilityValidator,
 {
-    pump
 }
 
 #[cfg(feature = "kernel")]
@@ -2446,6 +2443,33 @@ mod tests {
         assert_eq!(
             super::serial_console_uart_status(true, false, true),
             "unavailable"
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn production_console_and_wifi_retained_state_fit_one_root_stack_budget() {
+        type ProductionPump<'a> = crate::event::EventPump<
+            'a,
+            crate::serial::kernel_uart::KernelSerialDriver,
+            crate::kernel::KernelTimer,
+            crate::kernel::KernelIpc,
+            crate::event::TicketTable<{ crate::generated::TICKET_COUNT }>,
+            { crate::serial::DEFAULT_RX_CAPACITY },
+            { crate::serial::DEFAULT_TX_CAPACITY },
+            { crate::serial::DEFAULT_LINE_CAPACITY },
+        >;
+
+        const RETAINED_STATE_BUDGET: usize = 128 * 1024;
+        let retained = core::mem::size_of::<ProductionPump<'static>>()
+            + core::mem::size_of::<super::Cyw43BootstrapSupervisor>();
+        assert!(
+            retained <= RETAINED_STATE_BUDGET,
+            "retained console and Wi-Fi state must leave at least half of the 256-KiB root stack for bounded call frames"
         );
     }
 }

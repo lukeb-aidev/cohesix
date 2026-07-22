@@ -409,7 +409,7 @@ use pi4_driver_abi::{
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
-    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES,
 };
 /// Hardware driver instance covered by a scheduling contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1593,7 +1593,8 @@ pub const DRIVER_TASK_RING_FRAME_OFFSET: usize = 256;
 /// One page is enough for the current smoke command and completion records.
 pub const DRIVER_TASK_RING_PAGE_BYTES: usize = 4096;
 /// Shared owner pages exposed through a linked bus-owner transport.
-pub const DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY: usize = 2;
+pub const DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY: usize =
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES;
 /// Bytes in the CYW43-to-SDIO owner shared data window.
 pub const DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES: usize =
     DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY * DRIVER_TASK_RING_PAGE_BYTES;
@@ -2953,8 +2954,10 @@ impl DriverTaskCommandSlot {
             ring_root_ptr: AtomicUsize::new(0),
             ring_frame_cap: AtomicUsize::new(0),
             shared_frame_count: AtomicUsize::new(0),
-            shared_frame_caps: [AtomicUsize::new(0), AtomicUsize::new(0)],
-            shared_frame_root_ptrs: [AtomicUsize::new(0), AtomicUsize::new(0)],
+            shared_frame_caps: [const { AtomicUsize::new(0) };
+                DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
+            shared_frame_root_ptrs: [const { AtomicUsize::new(0) };
+                DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             ring_producer: AtomicUsize::new(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP),
@@ -5076,6 +5079,10 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     slot.active.store(0, Ordering::Release);
     slot.active_command_fingerprint.store(0, Ordering::Release);
     slot.request_seq.store(0, Ordering::Release);
+    slot.last_progress_magic.store(0, Ordering::Release);
+    slot.last_progress_sequence.store(0, Ordering::Release);
+    slot.last_progress_phase.store(0, Ordering::Release);
+    slot.last_progress_aux0.store(0, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -12163,29 +12170,45 @@ fn driver_task_hdmi_progress_line_if_new(
     status: &'static str,
     completion: Option<DriverTaskCompletionRecord>,
 ) -> Option<heapless::String<192>> {
+    driver_task_hdmi_progress_line_if_new_with_gate(
+        &DRIVER_TASK_HDMI_PROGRESS_LAST_KEY,
+        contract,
+        hot_path,
+        stage,
+        status,
+        completion,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_hdmi_progress_line_if_new_with_gate(
+    gate: &AtomicUsize,
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    stage: &'static str,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) -> Option<heapless::String<192>> {
     let line =
         driver_task_resource_hdmi_progress_line(contract, hot_path, stage, status, completion)?;
-    if !driver_task_hdmi_progress_repeat_allowed(hot_path, stage, status, completion) {
+    if !driver_task_hdmi_progress_repeat_allowed_with_gate(
+        gate, hot_path, stage, status, completion,
+    ) {
         return None;
     }
     Some(line)
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_hdmi_progress_repeat_allowed(
+fn driver_task_hdmi_progress_repeat_allowed_with_gate(
+    gate: &AtomicUsize,
     hot_path: DriverTaskHotPath,
     stage: &'static str,
     status: &'static str,
     completion: Option<DriverTaskCompletionRecord>,
 ) -> bool {
     let key = driver_task_hdmi_progress_key(hot_path, stage, status, completion);
-    DRIVER_TASK_HDMI_PROGRESS_LAST_KEY.swap(key, Ordering::AcqRel) != key
-}
-
-#[cfg(test)]
-fn reset_driver_task_hdmi_progress_repeat_gate_for_test() {
-    #[cfg(feature = "kernel")]
-    DRIVER_TASK_HDMI_PROGRESS_LAST_KEY.store(0, Ordering::Release);
+    gate.swap(key, Ordering::AcqRel) != key
 }
 
 fn driver_task_hdmi_progress_key(
@@ -12194,13 +12217,26 @@ fn driver_task_hdmi_progress_key(
     status: &'static str,
     completion: Option<DriverTaskCompletionRecord>,
 ) -> usize {
+    // Hash string contents rather than their addresses: Rust does not guarantee
+    // that identical string literals share one allocation, so pointer identity
+    // would make repeat suppression depend on code generation and call site.
+    let mut key = 0xcbf2_9ce4_8422_2325u64;
+    for byte in stage
+        .as_bytes()
+        .iter()
+        .copied()
+        .chain(core::iter::once(0xff))
+        .chain(status.as_bytes().iter().copied())
+    {
+        key ^= u64::from(byte);
+        key = key.wrapping_mul(0x0000_0100_0000_01b3);
+    }
     let completion_key = completion.map_or(0, |completion| {
-        ((completion.detail as usize) << 16) ^ completion.result as usize
+        (u64::from(completion.detail) << 32) ^ completion.result as u64
     });
-    (hot_path.as_u32() as usize)
-        ^ stage.as_ptr() as usize
-        ^ status.as_ptr() as usize
-        ^ completion_key.rotate_left(7)
+    key ^= u64::from(hot_path.as_u32()).rotate_left(11);
+    key ^= completion_key.rotate_left(23);
+    key as usize
 }
 
 fn driver_task_resource_hdmi_progress_line(
@@ -16756,6 +16792,12 @@ mod tests {
         publish_driver_task_ring(contract, 0x7000_0000);
         publish_driver_task_scheduler(contract, 0x4321, 240);
         publish_driver_task_steady_priority_active(contract);
+        test_record_driver_task_ring_progress_snapshot(
+            contract,
+            0x55aa,
+            DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+            DriverTaskHotPath::UsbKeyboard.as_u32(),
+        );
         assert!(register_driver_task_pointer_free_ring_service(
             contract,
             DriverTaskHotPath::UsbKeyboard.as_u32() as usize,
@@ -16787,6 +16829,11 @@ mod tests {
         );
         assert_eq!(slot.active.load(Ordering::Acquire), 0);
         assert_eq!(slot.request_seq.load(Ordering::Acquire), 0);
+        assert_eq!(slot.last_progress_magic.load(Ordering::Acquire), 0);
+        assert_eq!(slot.last_progress_sequence.load(Ordering::Acquire), 0);
+        assert_eq!(slot.last_progress_phase.load(Ordering::Acquire), 0);
+        assert_eq!(slot.last_progress_aux0.load(Ordering::Acquire), 0);
+        assert!(latest_driver_task_ring_progress(contract).is_none());
     }
 
     #[cfg(feature = "kernel")]
@@ -17000,14 +17047,20 @@ mod tests {
         )
         .is_none());
 
-        publish_driver_task_shared_frame_cap(contract, 0, 0x3000);
-        assert!(driver_task_bus_owner_transport_caps_with_shared(
-            contract,
-            DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY
-        )
-        .is_none());
-
-        publish_driver_task_shared_frame_cap(contract, 1, 0x4000);
+        let mut expected_shared =
+            [0 as sel4_sys::seL4_CPtr; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY];
+        for (index, expected) in expected_shared.iter_mut().enumerate() {
+            let cap = 0x3000usize + index * 0x1000;
+            *expected = cap as sel4_sys::seL4_CPtr;
+            publish_driver_task_shared_frame_cap(contract, index, cap);
+            if index + 1 < DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
+                assert!(driver_task_bus_owner_transport_caps_with_shared(
+                    contract,
+                    DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY
+                )
+                .is_none());
+            }
+        }
         let (endpoint, ring, shared) = driver_task_bus_owner_transport_caps_with_shared(
             contract,
             DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY,
@@ -17015,7 +17068,7 @@ mod tests {
         .expect("shared bus-owner caps");
         assert_eq!(endpoint, 0x1234);
         assert_eq!(ring, 0x2000);
-        assert_eq!(shared, [0x3000, 0x4000]);
+        assert_eq!(shared, expected_shared);
 
         clear_driver_task_transport(contract);
         assert!(driver_task_bus_owner_transport_caps_with_shared(
@@ -17030,23 +17083,54 @@ mod tests {
     fn stage_driver_task_shared_payload_uses_published_root_pages() {
         let contract = SDIO_HOST_DRIVER_TASK_CONTRACT;
         clear_driver_task_transport(contract);
-        let mut shared = [0u8; DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES];
-        publish_driver_task_shared_frame(contract, 0, 0x3000, shared.as_mut_ptr() as usize);
+        let mut shared = vec![0u8; DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES];
+        for page in 0..DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY - 1 {
+            // SAFETY: Every offset addresses one page within the test-owned
+            // exact shared-aperture allocation.
+            let root_ptr =
+                unsafe { shared.as_mut_ptr().add(page * DRIVER_TASK_RING_PAGE_BYTES) as usize };
+            publish_driver_task_shared_frame(
+                contract,
+                page,
+                0x3000 + page * DRIVER_TASK_RING_PAGE_BYTES,
+                root_ptr,
+            );
+        }
+        let payload = (0..DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES)
+            .map(|index| ((index * 17 + 0xa5) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        assert!(
+            stage_driver_task_shared_payload(contract, &payload, 0x20).is_none(),
+            "an exact aperture must reject a missing eighth page before copying"
+        );
+        let last_page = DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY - 1;
+        // SAFETY: The last-page offset remains inside the test-owned exact
+        // shared-aperture allocation.
+        let last_root_ptr = unsafe {
+            shared
+                .as_mut_ptr()
+                .add(last_page * DRIVER_TASK_RING_PAGE_BYTES) as usize
+        };
         publish_driver_task_shared_frame(
             contract,
-            1,
-            0x4000,
-            // SAFETY: The offset is inside the local test buffer and points to
-            // the second simulated shared page.
-            unsafe { shared.as_mut_ptr().add(DRIVER_TASK_RING_PAGE_BYTES) as usize },
+            last_page,
+            0x3000 + last_page * DRIVER_TASK_RING_PAGE_BYTES,
+            last_root_ptr,
         );
-        let payload = [0xa5u8; DRIVER_TASK_RING_PAGE_BYTES + 17];
         let staged =
             stage_driver_task_shared_payload(contract, &payload, 0x20).expect("shared payload");
         assert_eq!(staged.offset, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE);
         assert_eq!(usize::from(staged.len), payload.len());
         assert_eq!(staged.flags, 0x20);
-        assert_eq!(&shared[..payload.len()], payload);
+        assert_eq!(shared, payload);
+        assert_eq!(
+            shared[DRIVER_TASK_RING_PAGE_BYTES - 1],
+            payload[DRIVER_TASK_RING_PAGE_BYTES - 1]
+        );
+        assert_eq!(
+            shared[DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES - 1],
+            payload[DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES - 1]
+        );
         clear_driver_task_transport(contract);
     }
 
@@ -20376,7 +20460,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn hdmi_progress_repeat_gate_suppresses_identical_driver_status() {
-        reset_driver_task_hdmi_progress_repeat_gate_for_test();
+        let gate = AtomicUsize::new(0);
         let fault = Some(DriverTaskCompletionRecord {
             sequence: 9,
             code: DriverTaskCompletionCode::Fault.as_u16(),
@@ -20389,7 +20473,8 @@ mod tests {
             },
         });
 
-        assert!(driver_task_hdmi_progress_repeat_allowed(
+        assert!(driver_task_hdmi_progress_repeat_allowed_with_gate(
+            &gate,
             DriverTaskHotPath::UsbKeyboard,
             "usb-engine-init",
             "fault",
@@ -20403,7 +20488,8 @@ mod tests {
             fault,
         )
         .is_none());
-        assert!(!driver_task_hdmi_progress_repeat_allowed(
+        assert!(!driver_task_hdmi_progress_repeat_allowed_with_gate(
+            &gate,
             DriverTaskHotPath::UsbKeyboard,
             "usb-engine-init",
             "fault",
@@ -20411,13 +20497,15 @@ mod tests {
         ));
 
         let ready = Some(DriverTaskCompletionRecord::progress(10, 1));
-        assert!(driver_task_hdmi_progress_repeat_allowed(
+        assert!(driver_task_hdmi_progress_repeat_allowed_with_gate(
+            &gate,
             DriverTaskHotPath::UsbKeyboard,
             "usb-engine-init",
             "ready",
             ready,
         ));
-        assert!(driver_task_hdmi_progress_repeat_allowed(
+        assert!(driver_task_hdmi_progress_repeat_allowed_with_gate(
+            &gate,
             DriverTaskHotPath::UsbKeyboard,
             "usb-engine-init",
             "fault",
@@ -20428,9 +20516,10 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn hdmi_progress_filter_does_not_let_hidden_transients_reset_repeat_gate() {
-        reset_driver_task_hdmi_progress_repeat_gate_for_test();
+        let gate = AtomicUsize::new(0);
 
-        let begin = driver_task_hdmi_progress_line_if_new(
+        let begin = driver_task_hdmi_progress_line_if_new_with_gate(
+            &gate,
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::UsbKeyboard,
             "usb-keyboard-enumeration-resume",
@@ -20443,7 +20532,8 @@ mod tests {
             "[drivers] USB usb-keyboard-enumeration-resume begin"
         );
 
-        assert!(driver_task_hdmi_progress_line_if_new(
+        assert!(driver_task_hdmi_progress_line_if_new_with_gate(
+            &gate,
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::UsbKeyboard,
             "usb-keyboard-enumeration-resume",
@@ -20452,7 +20542,8 @@ mod tests {
         )
         .is_none());
 
-        assert!(driver_task_hdmi_progress_line_if_new(
+        assert!(driver_task_hdmi_progress_line_if_new_with_gate(
+            &gate,
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::UsbKeyboard,
             "usb-keyboard-enumeration-resume",
@@ -20461,7 +20552,8 @@ mod tests {
         )
         .is_none());
 
-        let ready = driver_task_hdmi_progress_line_if_new(
+        let ready = driver_task_hdmi_progress_line_if_new_with_gate(
+            &gate,
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::UsbKeyboard,
             "usb-keyboard-enumeration-resume",
@@ -21708,7 +21800,10 @@ mod tests {
                     );
                 }
                 DriverTaskHotPath::SdioHost => {
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 4);
+                    assert_eq!(
+                        spec.region_pages(DriverTaskRuntimeRegionKind::Dma),
+                        2 + DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES as u16,
+                    );
                     assert_eq!(
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         32

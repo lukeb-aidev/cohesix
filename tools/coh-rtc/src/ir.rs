@@ -90,7 +90,8 @@ const DRIVER_RUNTIME_CYW43_SDIO_BADGE: u32 = 159;
 const DRIVER_RUNTIME_CYW43_SDIO_CLIENT_TO_OWNER_SLOT: u8 = 8;
 const DRIVER_RUNTIME_CYW43_SDIO_OWNER_TO_CLIENT_SLOT: u8 = 10;
 const DRIVER_RUNTIME_CYW43_SDIO_SHARED_OFFSET: u32 = 4096;
-const DRIVER_RUNTIME_CYW43_SDIO_SHARED_LEN: u32 = 8192;
+const DRIVER_RUNTIME_CYW43_SDIO_SHARED_LEN: u32 = 32 * 1024;
+const DRIVER_RUNTIME_SDIO_DMA_PAGES: u16 = 10;
 const DRIVER_RUNTIME_CYW43_SDIO_LINK_EPOCH: u32 = 0x4359_5301;
 const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
 const DRIVER_RUNTIME_DPC_EVENT_OFFSET: u16 = 160;
@@ -2775,9 +2776,11 @@ impl DriverRuntimeImageSpec {
                 self.id
             );
         }
-        if self.hot_path == "sdio-host" && (self.mmio_pages != 3 || self.dma_pages != 4) {
+        if self.hot_path == "sdio-host"
+            && (self.mmio_pages != 3 || self.dma_pages != DRIVER_RUNTIME_SDIO_DMA_PAGES)
+        {
             bail!(
-                "driver runtime image {} for sdio-host must declare exactly 3 mmio pages and 4 dma pages for SDHCI, WiFi pwrseq, and BCM2835 DMA",
+                "driver runtime image {} for sdio-host must declare exactly 3 mmio pages and 10 dma pages for SDHCI, WiFi pwrseq, the BCM2835 DMA control-block arena, and eight 4 KiB bounce pages",
                 self.id
             );
         }
@@ -2959,7 +2962,11 @@ mod tests {
             ipc_pages: 1,
             ring_pages: 1,
             mmio_pages: if hot_path == "sdio-host" { 3 } else { 1 },
-            dma_pages: if hot_path == "sdio-host" { 4 } else { 1 },
+            dma_pages: if hot_path == "sdio-host" {
+                super::DRIVER_RUNTIME_SDIO_DMA_PAGES
+            } else {
+                1
+            },
             shared_buffer_pages: 1,
             root_context_required: true,
             hardware_state_migrated: false,
@@ -3019,7 +3026,7 @@ mod tests {
             .expect_err("missing BCM2835 DMA MMIO page rejected");
         assert!(err
             .to_string()
-            .contains("exactly 3 mmio pages and 4 dma pages"));
+            .contains("exactly 3 mmio pages and 10 dma pages"));
 
         let mut image = driver_runtime_image("sdio-host");
         image.mmio_pages = 4;
@@ -3028,25 +3035,25 @@ mod tests {
             .expect_err("excess SDIO MMIO authority rejected");
         assert!(err
             .to_string()
-            .contains("exactly 3 mmio pages and 4 dma pages"));
+            .contains("exactly 3 mmio pages and 10 dma pages"));
 
         let mut image = driver_runtime_image("sdio-host");
-        image.dma_pages = 3;
+        image.dma_pages = super::DRIVER_RUNTIME_SDIO_DMA_PAGES - 1;
         let err = image
             .validate()
             .expect_err("missing SDIO DMA arena page rejected");
         assert!(err
             .to_string()
-            .contains("exactly 3 mmio pages and 4 dma pages"));
+            .contains("exactly 3 mmio pages and 10 dma pages"));
 
         let mut image = driver_runtime_image("sdio-host");
-        image.dma_pages = 5;
+        image.dma_pages = super::DRIVER_RUNTIME_SDIO_DMA_PAGES + 1;
         let err = image
             .validate()
             .expect_err("excess SDIO DMA authority rejected");
         assert!(err
             .to_string()
-            .contains("exactly 3 mmio pages and 4 dma pages"));
+            .contains("exactly 3 mmio pages and 10 dma pages"));
     }
 
     #[test]
@@ -3102,6 +3109,35 @@ mod tests {
             .validate()
             .expect_err("unbounded generated DPC shape rejected");
         assert!(err.to_string().contains("bounded reciprocal DPC contract"));
+    }
+
+    #[test]
+    fn driver_runtime_policy_requires_exact_cyw43_sdio_shared_aperture() {
+        for invalid_len in [
+            super::DRIVER_RUNTIME_CYW43_SDIO_SHARED_LEN - 1,
+            super::DRIVER_RUNTIME_CYW43_SDIO_SHARED_LEN + 1,
+        ] {
+            let mut invalid_link = cyw43_sdio_link();
+            invalid_link.shared_len = invalid_len;
+            let policy = DriverRuntimeImagePolicy {
+                required: true,
+                images: super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+                    .iter()
+                    .copied()
+                    .map(driver_runtime_image)
+                    .collect(),
+                irqs: vec![sdio_irq()],
+                bus_links: vec![invalid_link],
+            };
+
+            let err = policy
+                .validate()
+                .expect_err("noncanonical CYW43-SDIO shared aperture rejected");
+            assert!(
+                err.to_string().contains("bounded reciprocal DPC contract"),
+                "unexpected error for shared length {invalid_len}: {err}"
+            );
+        }
     }
 
     #[test]

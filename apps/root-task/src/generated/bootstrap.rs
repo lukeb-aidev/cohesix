@@ -31,7 +31,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "7d1a7ace1c85e20eac82ef3c1a0597c136b42572e9ecfec5b5079fbb8cd9a5a9";
+    "8edc337391b19802d98ed1732dfda0444d10bc8e51a0e81559bca9a00858a2f6";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -312,7 +312,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         ipc_pages: 1,
         ring_pages: 1,
         mmio_pages: 3,
-        dma_pages: 4,
+        dma_pages: 10,
         shared_buffer_pages: 32,
         root_context_required: false,
         hardware_state_migrated: true,
@@ -353,7 +353,7 @@ pub const DRIVER_RUNTIME_BUS_LINKS: [DriverRuntimeBusLinkSpec; 1] = [DriverRunti
     client_to_owner_slot: 8,
     owner_to_client_slot: 10,
     shared_offset: 4096,
-    shared_len: 8192,
+    shared_len: 32768,
     link_epoch: 1129927425,
     event_offset: 160,
     event_len: 96,
@@ -750,7 +750,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.6",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=fd43ceaf1b4bf3695c12ab3bc51879b65be653003a7689c994cc0088d6b88be9",
+    "manifest.sha256=ee489ec164ec1cd68dab659446d67526142a4e2ddaa2b6895dfc9f307143fd6c",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

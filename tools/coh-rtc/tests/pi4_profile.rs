@@ -126,7 +126,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(cyw43_sdio["client-to-owner-slot"], 8);
     assert_eq!(cyw43_sdio["owner-to-client-slot"], 10);
     assert_eq!(cyw43_sdio["shared-offset"], 4096);
-    assert_eq!(cyw43_sdio["shared-len"], 8192);
+    assert_eq!(cyw43_sdio["shared-len"], 32 * 1024);
     assert_eq!(cyw43_sdio["link-epoch"], 0x4359_5301u32);
     assert_eq!(cyw43_sdio["event-offset"], 160);
     assert_eq!(cyw43_sdio["event-len"], 96);
@@ -170,7 +170,7 @@ fn pi4_uboot_profile_emits_network_policy() {
         "hardware-state-migrated"
     ));
     assert_eq!(runtime_pages(images, "sdio-host", "mmio-pages"), 3);
-    assert_eq!(runtime_pages(images, "sdio-host", "dma-pages"), 4);
+    assert_eq!(runtime_pages(images, "sdio-host", "dma-pages"), 10);
     assert_eq!(
         runtime_pages(images, "sdio-host", "shared-buffer-pages"),
         32

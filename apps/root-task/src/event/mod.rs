@@ -2320,9 +2320,19 @@ where
     /// Attach a networking poller to the event pump.
     #[cfg(feature = "net-console")]
     pub fn with_network(mut self, net: &'a mut dyn NetPoller) -> Self {
+        self.attach_initial_network(net);
+        self
+    }
+
+    /// Attach the initial networking poller without moving the event pump.
+    ///
+    /// Production userland retains the pump in its root-console frame. Large
+    /// by-value builder chains would reserve multiple copies of this bounded
+    /// object and can exhaust the seL4 root stack before deferred Wi-Fi starts.
+    #[cfg(feature = "net-console")]
+    pub fn attach_initial_network(&mut self, net: &'a mut dyn NetPoller) {
         self.audit.info("event-pump: init network");
         self.net = Some(net);
-        self
     }
 
     /// Attach a network stack that completed bootstrap after the serial/local
@@ -2400,19 +2410,38 @@ where
     /// Attach the preserved reason why the network stack was unavailable.
     #[cfg(feature = "net-console")]
     pub fn with_network_unavailable_detail(mut self, detail: Option<HeaplessString<192>>) -> Self {
-        self.net_unavailable_detail = detail;
+        self.set_network_unavailable_detail(detail);
         self
+    }
+
+    /// Attach the preserved network-unavailable reason without moving the
+    /// event pump.
+    #[cfg(feature = "net-console")]
+    pub fn set_network_unavailable_detail(&mut self, detail: Option<HeaplessString<192>>) {
+        self.net_unavailable_detail = detail;
     }
 
     /// Attach a NineDoor handler to the event pump.
     #[cfg(feature = "kernel")]
     pub fn with_ninedoor(mut self, bridge: &'a mut NineDoorBridge) -> Self {
-        self.ninedoor = Some(bridge);
+        self.attach_ninedoor(bridge);
         self
+    }
+
+    /// Attach a NineDoor handler without moving the event pump.
+    #[cfg(feature = "kernel")]
+    pub fn attach_ninedoor(&mut self, bridge: &'a mut NineDoorBridge) {
+        self.ninedoor = Some(bridge);
     }
 
     /// Attach a local-seat runtime for keyboard ingress and mirrored egress.
     pub fn with_local_seat(mut self, runtime: &'a mut LocalSeatRuntime) -> Self {
+        self.attach_local_seat(runtime);
+        self
+    }
+
+    /// Attach a local-seat runtime without moving the event pump.
+    pub fn attach_local_seat(&mut self, runtime: &'a mut LocalSeatRuntime) {
         runtime.register_boot_progress_backend();
         self.local_seat = Some(runtime);
         #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -2421,7 +2450,6 @@ where
                 self.schedule_post_prompt_local_seat_attach();
             }
         }
-        self
     }
 
     /// Route a pre-prompt high-impact boot progress line to HDMI when the
@@ -2441,27 +2469,50 @@ where
         ep_slot: seL4_CPtr,
         uart_slot: Option<seL4_CPtr>,
     ) -> Self {
+        self.attach_console_context(bootinfo, ep_slot, uart_slot);
+        self
+    }
+
+    #[cfg(feature = "kernel")]
+    /// Attach boot-time console metadata without moving the event pump.
+    pub fn attach_console_context(
+        &mut self,
+        bootinfo: BootInfoView,
+        ep_slot: seL4_CPtr,
+        uart_slot: Option<seL4_CPtr>,
+    ) {
         self.console_context = Some(ConsoleContext {
             bootinfo,
             ep_slot,
             uart_slot,
         });
-        self
     }
 
     #[cfg(feature = "kernel")]
     /// Attach a bootstrap IPC handler that consumes staged messages.
     pub fn with_bootstrap_handler(mut self, handler: &'a mut dyn BootstrapMessageHandler) -> Self {
+        self.attach_bootstrap_handler(handler);
+        self
+    }
+
+    #[cfg(feature = "kernel")]
+    /// Attach a bootstrap IPC handler without moving the event pump.
+    pub fn attach_bootstrap_handler(&mut self, handler: &'a mut dyn BootstrapMessageHandler) {
         self.bootstrap_handler = Some(handler);
         self.ipc.handlers_ready();
-        self
     }
 
     #[cfg(feature = "kernel")]
     /// Attach a serial/local-seat Wi-Fi bring-up debug surface.
     pub fn with_wifi_debug(mut self, wifi_debug: &'a mut dyn WifiDebugOps) -> Self {
-        self.wifi_debug = Some(wifi_debug);
+        self.attach_wifi_debug(wifi_debug);
         self
+    }
+
+    #[cfg(feature = "kernel")]
+    /// Attach a Wi-Fi debug surface without moving the event pump.
+    pub fn attach_wifi_debug(&mut self, wifi_debug: &'a mut dyn WifiDebugOps) {
+        self.wifi_debug = Some(wifi_debug);
     }
 
     #[cfg(test)]
@@ -6490,7 +6541,7 @@ where
             UsbDebugCommand::ProbeKeyboard => {
                 self.emit_console_line("usb: probing local-seat keyboard now");
                 self.preflush_serial_before_raw_uart();
-                let (backend_attached, polling_enabled, probe_result) = {
+                let (backend_attached, polling_enabled, probe_result, continuation_pending) = {
                     let local_seat = match self.local_seat.as_mut() {
                         Some(local_seat) => local_seat,
                         None => {
@@ -6503,13 +6554,15 @@ where
                         local_seat.backend_attached(),
                         local_seat.backend_keyboard_polling_enabled(),
                         probe_result,
+                        local_seat.backend_keyboard_probe_pending(),
                     )
                 };
-                let detail = format_message(format_args!(
-                    "action=keyboard-probe-complete probe_result={}",
-                    probe_result.as_str()
-                ));
-                self.emit_usb_status(backend_attached, polling_enabled, Some(detail.as_str()));
+                self.emit_usb_probe_status(
+                    backend_attached,
+                    polling_enabled,
+                    probe_result.as_str(),
+                    continuation_pending,
+                );
             }
         }
 
@@ -6604,6 +6657,82 @@ where
             command_completion_blocked,
         ));
         self.emit_console_line(line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_usb_probe_status(
+        &mut self,
+        backend_attached: bool,
+        polling_enabled: bool,
+        probe_result: &str,
+        continuation_pending: bool,
+    ) {
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_detail = 0u16;
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_result = 0u32;
+        let (queued_reports, doorbell_pending, _, transfer_events, report_status) =
+            Self::usb_runtime_queue_fields(linked_result);
+        let local_trace = self
+            .local_seat
+            .as_ref()
+            .map(|local_seat| local_seat.keyboard_trace())
+            .unwrap_or_default();
+        let status_line = format_message(format_args!(
+            "usb: local-seat attached={} polling={} action=keyboard-probe-slice probe_result={} continuation={}",
+            Self::yes_no(backend_attached),
+            if polling_enabled {
+                "enabled"
+            } else {
+                "deferred"
+            },
+            probe_result,
+            if continuation_pending {
+                "pending"
+            } else {
+                "terminal"
+            },
+        ));
+        self.emit_console_line(status_line.as_str());
+        let contract_line = format_message(format_args!(
+            "usb: probe_contract detail=0x{:04x} result=0x{:08x} queue_valid={} queued_reports={} doorbell={} transfer_events={} report_status={} no_reply={} cooldown={}",
+            linked_detail,
+            linked_result,
+            Self::yes_no(Self::usb_runtime_detail_has_queue_result(linked_detail)),
+            queued_reports,
+            Self::yes_no(doorbell_pending),
+            transfer_events,
+            Self::usb_runtime_keyboard_report_status_label(report_status),
+            local_trace.driver_task_no_replies,
+            local_trace.poll_cooldown_turns,
+        ));
+        self.emit_console_line(contract_line.as_str());
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let exact_issue = {
+            let command_ready = self
+                .local_seat
+                .as_ref()
+                .is_some_and(|local_seat| local_seat.usb_keyboard_command_ready_latched());
+            if command_ready {
+                Some("command-input-ready")
+            } else if crate::local_seat::linked_local_seat_usb_keyboard_ready() {
+                Some("linked-keyboard-ready")
+            } else if crate::local_seat::linked_local_seat_usb_controller_ready() {
+                Some("linked-controller-ready")
+            } else {
+                None
+            }
+        };
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let exact_issue = None;
+        let (verdict, focus) =
+            Self::usb_capture_verdict(backend_attached, polling_enabled, exact_issue);
+        let verdict_line = format_message(format_args!("usb: verdict={verdict} focus={focus}"));
+        self.emit_console_line(verdict_line.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -10332,6 +10461,7 @@ where
         ))
     }
 
+    #[cfg(feature = "kernel")]
     fn wifi_diag_sdio_owner_progress(
         fault: crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
@@ -24768,7 +24898,7 @@ mod tests {
             flags: 0,
             target_addr: 0x0019_8000,
             payload_offset: 0,
-            payload_len: 8_192,
+            payload_len: 32_768,
             total_len: 609_309,
             control_cmd: 0,
             control_id: 0,
@@ -24814,7 +24944,7 @@ mod tests {
             transfer_status: 0,
             transfer_reason: "sdhci-data-end-deadline",
             r5: 0,
-            owner_window: "sdio-shared-8192",
+            owner_window: "sdio-shared-32768",
             retry: "no-replay-issued-unknown",
             payload_first: 0x98,
             payload_last: 0xbe,
@@ -24857,7 +24987,7 @@ mod tests {
             "{fault_summary}"
         );
         assert!(
-            request.contains("payload_len=8192") && request.contains("request_scope=parent-stage"),
+            request.contains("payload_len=32768") && request.contains("request_scope=parent-stage"),
             "{request}"
         );
         assert!(control.contains("header_mode=not-control"), "{control}");
@@ -29066,7 +29196,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn serial_usb_debug_probe_command_returns_without_arming_background_polling() {
+    fn host_serial_usb_debug_probe_command_is_compact_and_restores_polling_policy() {
         let driver = LoopbackSerial::<2048>::new();
         let serial = SerialPort::<_, 512, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -29102,8 +29232,12 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "usb: local-seat attached=no polling=deferred action=keyboard-probe-complete probe_result=backend-unavailable"
+                "usb: local-seat attached=no polling=deferred action=keyboard-probe-slice probe_result=backend-unavailable continuation=terminal"
             ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: probe_contract detail=0x0000 result=0x00000000 queue_valid=no"),
             "{rendered}"
         );
         assert!(
@@ -29113,6 +29247,11 @@ mod tests {
         assert!(
             rendered.contains("OK USB detail=subcommand=probe-kbd"),
             "{rendered}"
+        );
+        assert!(
+            rendered.len() < 2048,
+            "bounded probe response must not saturate serial output: {} bytes",
+            rendered.len()
         );
         assert!(!local_seat.backend_keyboard_polling_enabled());
     }

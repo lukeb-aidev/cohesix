@@ -189,6 +189,12 @@ pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED: u16 = 0x021a;
 pub const DRIVER_RUNTIME_NET_INIT_AUX: u32 = 0x494e_4954;
 /// CYW43 command descriptor submission marker used in `aux0`.
 pub const DRIVER_RUNTIME_CYW43_COMMAND_AUX: u32 = 0x4359_5734;
+/// Maximum reciprocal SDIO actions retained by one immutable CYW43 parent command.
+///
+/// Root uses the same bound to cap child-completion deadline renewals, so a
+/// multi-action Linux-shaped operation can outlive each legal child request
+/// without turning progress into an unbounded parent lease.
+pub const DRIVER_RUNTIME_CYW43_PARENT_MAX_SDIO_ACTIONS: u16 = 1_024;
 /// CYW43 operation: initialize the SDIO transport and firmware upload lane.
 pub const DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT: u16 = 1;
 /// CYW43 operation: write a firmware chunk into dongle RAM.
@@ -346,6 +352,25 @@ pub const DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE: u16 = 2;
 pub const DRIVER_RUNTIME_SDIO_OP_CMD53_READ: u16 = 3;
 /// SDIO bus-owner operation: write bytes or blocks with CMD53.
 pub const DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE: u16 = 4;
+/// Linux-equivalent issued-request watchdog for every SDIO controller command.
+pub const DRIVER_RUNTIME_SDIO_REQUEST_TIMEOUT_US: u32 = 10_000_000;
+/// Linux-equivalent pre-issue inhibit fence for each SDIO transfer attempt.
+pub const DRIVER_RUNTIME_SDIO_INHIBIT_TIMEOUT_US: u32 = 10_000;
+/// Cohesix bcm2835 reset/clock containment fence following a failed attempt.
+pub const DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US: u32 = 220_000;
+/// Maximum controller attempts after a provably unissued Function-1 request.
+pub const DRIVER_RUNTIME_SDIO_TRANSFER_ATTEMPT_LIMIT: u32 = 2;
+/// Maximum containment passes owned by one reciprocal SDIO descriptor.
+pub const DRIVER_RUNTIME_SDIO_CONTAINMENT_ATTEMPT_LIMIT: u32 = 2;
+/// Scheduling/publication margin above the complete reciprocal SDIO lifetime.
+pub const DRIVER_RUNTIME_CYW43_SDIO_CHILD_WAIT_MARGIN_US: u32 = 100_000;
+/// Maximum CYW43 wait for a controller child, including inhibit, retry, and containment.
+pub const DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US: u32 =
+    (DRIVER_RUNTIME_SDIO_REQUEST_TIMEOUT_US + DRIVER_RUNTIME_SDIO_INHIBIT_TIMEOUT_US)
+        * DRIVER_RUNTIME_SDIO_TRANSFER_ATTEMPT_LIMIT
+        + DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US
+            * DRIVER_RUNTIME_SDIO_CONTAINMENT_ATTEMPT_LIMIT
+        + DRIVER_RUNTIME_CYW43_SDIO_CHILD_WAIT_MARGIN_US;
 /// SDIO bus-owner operation: poll interrupt status.
 pub const DRIVER_RUNTIME_SDIO_OP_POLL_IRQ: u16 = 5;
 /// SDIO bus-owner operation: apply host-controller clock and bus-width state.
@@ -1372,8 +1397,21 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY: u32 = 118;
 /// Offset namespace base for runtime shared-buffer payloads referenced by an
 /// owner-ring descriptor.
 pub const DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE: u16 = DRIVER_RUNTIME_RING_PAGE_BYTES;
+/// Bytes addressable through one CYW43 Function-1 backplane aperture.
+pub const DRIVER_RUNTIME_CYW43_BACKPLANE_APERTURE_BYTES: u16 = 32 * 1024;
 /// Maximum SDIO descriptor payload carried outside the owner command ring.
-pub const DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES: u16 = 8192;
+///
+/// One exact backplane aperture lets the CYW43 runtime retain a Linux-shaped
+/// firmware stream window while the SDIO owner splits that immutable parent
+/// payload into its bounded CMD53 child requests.
+pub const DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES: u16 =
+    DRIVER_RUNTIME_CYW43_BACKPLANE_APERTURE_BYTES;
+/// Shared pages required to map the complete CYW43/SDIO payload aperture.
+pub const DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES: usize =
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize / DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as usize;
+/// Exclusive ABI offset at the end of the CYW43/SDIO payload aperture.
+pub const DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET: u16 =
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE + DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES;
 /// Root-to-CYW43 post-release TX slice in the shared payload arena.
 pub const DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES: u16 =
     DRIVER_RUNTIME_RING_PAGE_BYTES;
@@ -1384,6 +1422,38 @@ pub const DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET: u16 =
 /// Bytes reserved for CYW43-private post-release Function 2 RX.
 pub const DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES: u16 =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES - DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES;
+
+const _: () = {
+    assert!(DRIVER_RUNTIME_CYW43_BACKPLANE_APERTURE_BYTES == 0x8000);
+    assert!(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES == 32 * 1024);
+    assert!(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES == DRIVER_RUNTIME_RING_PAGE_BYTES as u64);
+    assert!((DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize)
+        .is_multiple_of(DRIVER_RUNTIME_RING_PAGE_BYTES as usize));
+    assert!(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES == 8);
+    assert!(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES <= DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES);
+    assert!(
+        DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
+            + DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32
+            <= u16::MAX as u32
+    );
+    assert!(
+        DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET as u32
+            == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
+                + DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32
+    );
+    assert!((DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET as usize)
+        .is_multiple_of(DRIVER_RUNTIME_RING_PAGE_BYTES as usize));
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET
+            == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+                + DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES
+    );
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET as u32
+            + DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES as u32
+            == DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET as u32
+    );
+};
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
 /// Child CSpace slot containing each runtime's local notification receive cap.
@@ -3249,6 +3319,33 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_shared_payload_is_one_exact_backplane_aperture() {
+        assert_eq!(DRIVER_RUNTIME_CYW43_BACKPLANE_APERTURE_BYTES, 0x8000);
+        assert_eq!(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, 32 * 1024);
+        assert_eq!(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES, 8);
+        assert_eq!(
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+                + DRIVER_RUNTIME_CYW43_BACKPLANE_APERTURE_BYTES
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+                + DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES,
+            7 * DRIVER_RUNTIME_RING_PAGE_BYTES
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET as u32
+                + DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES as u32,
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET as u32
+        );
+        assert!(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES <= DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES);
+    }
+
+    #[test]
     fn bcm2835_dma_tag_identifies_linked_sdio_mmio_authority() {
         assert_eq!(DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA, 13);
         assert_ne!(
@@ -3756,6 +3853,22 @@ mod tests {
         );
         assert!(!descriptor.valid());
         descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
+            8 * 1024,
+            DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+        );
+        assert!(!descriptor.valid());
+        descriptor.bus_links[0].shared_len = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32 - 1;
+        assert!(!descriptor.valid());
+        descriptor.bus_links[0].shared_len = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32 + 1;
+        assert!(!descriptor.valid());
+        descriptor.bus_links[0].shared_len = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32;
+        descriptor.bus_links[0].shared_offset =
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32 + 1;
+        assert!(!descriptor.valid());
+        descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
             HOT_PATH_PCIE_ROOT,
             DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
             DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
@@ -3963,14 +4076,21 @@ mod tests {
         assert!(!descriptor.valid());
 
         descriptor.data_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
+        descriptor.len = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES;
+        descriptor.block_size = 0;
+        descriptor.block_count = 0;
+        assert!(descriptor.valid());
+        descriptor.len = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES + 1;
+        assert!(!descriptor.valid());
+
         descriptor.len = 0;
         descriptor.block_size = 512;
-        descriptor.block_count = 16;
+        descriptor.block_count = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES / descriptor.block_size;
         assert!(descriptor.valid());
         descriptor.data_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE + 1;
         assert!(!descriptor.valid());
         descriptor.data_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
-        descriptor.block_count = 17;
+        descriptor.block_count = descriptor.block_count.saturating_add(1);
         assert!(!descriptor.valid());
     }
 
@@ -4290,6 +4410,7 @@ mod tests {
 
     #[test]
     fn pair_restart_marker_is_out_of_band_and_phase_is_distinct() {
+        assert_eq!(DRIVER_RUNTIME_CYW43_PARENT_MAX_SDIO_ACTIONS, 1_024);
         assert_eq!(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG, 1 << 31);
         assert_eq!(DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG & 0xff, 0);
         assert_ne!(
@@ -4332,5 +4453,15 @@ mod tests {
             DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED
                 | DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED
         );
+    }
+
+    #[test]
+    fn sdio_request_child_lifetime_covers_linux_request_and_containment() {
+        assert_eq!(DRIVER_RUNTIME_SDIO_REQUEST_TIMEOUT_US, 10_000_000);
+        assert_eq!(DRIVER_RUNTIME_SDIO_INHIBIT_TIMEOUT_US, 10_000);
+        assert_eq!(DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US, 220_000);
+        assert_eq!(DRIVER_RUNTIME_SDIO_TRANSFER_ATTEMPT_LIMIT, 2);
+        assert_eq!(DRIVER_RUNTIME_SDIO_CONTAINMENT_ATTEMPT_LIMIT, 2);
+        assert_eq!(DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US, 20_560_000);
     }
 }

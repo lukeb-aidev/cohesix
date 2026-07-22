@@ -222,10 +222,43 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `cargo test -p pi4-driver-runtime --lib sdio_short_busy_timeout_is_post_issue_and_never_retryable -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib cyw43_function_ready_deadlines_preserve_linux_default_and_f2_window -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib cyw43_data_tx_never_replays_ambiguous_function2_write -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_wifi_power_sequence_advances_one_bounded_action_per_turn -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_engine_init_turn_withholds_completion_until_pwrseq_terminal -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_generation_reset_keeps_epoch_uncommitted_while_pwrseq_pending -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_retained_bootstrap_cmd52_and_card_commands_issue_once_without_private_polls -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_retained_host_config_runs_recovery_and_set_ios_across_outer_turns -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_retained_external_dma_paces_32_blocks_across_finite_fifo_turns -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_retained_external_dma_moves_full_aperture_as_511_plus_one_blocks -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_retained_external_dma_terminal_fault_cannot_reissue -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_retained_dpc_activation_rearms_one_policy_register_per_outer_turn -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_typed_dpc_activation_publishes_latched_card_int_before_rearm_without_card_io -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib sdio_retained_generation_commit_resets_ring_before_state_and_policy_publication -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib firmware_parent_reciprocal_ring_drives_retained_sdio_owner_as_511_plus_one -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_linked_f2_tx_window_iorx_and_cmd53_each_consume_separate_outer_turns -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_linked_control_and_eapol_tx_retain_pure_begin_until_exact_f2_issue -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib control_and_eapol_tx_cross_reciprocal_ring_and_retained_sdio_owner -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib release_post_f2_crosses_exact_linux_order_to_real_dpc_activation -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib production_dpc_event_drains_real_owner_rx_before_foreground_poll -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib production_control_and_rx_polls_consume_only_dpc_owned_queue -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib firmware_terminal_and_issued_unknown_cuts_never_reissue_a_child -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib stale_foreground_completion_cannot_mutate_replacement_generation -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib mutated_action_fingerprint_poisoning_never_replays_issued_child -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib issued_unknown_timeout_retains_one_child_without_same_generation_replay -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib corrupted_continuation_fingerprint_fences_real_owner_without_second_quantum -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_foreground_baseline_requires_release_published_snapshot -- --test-threads=1`
+  - `cargo test -p pi4-driver-abi --lib cyw43_shared_payload_is_one_exact_backplane_aperture -- --test-threads=1`
+  - `cargo test -p coh-rtc --lib sdio_runtime_requires_exact_linked_dma_resources -- --test-threads=1`
+  - `cargo test -p coh-rtc --lib driver_runtime_policy_requires_exact_cyw43_sdio_shared_aperture -- --test-threads=1`
+  - `cargo test -p coh-rtc --test pi4_profile pi4_uboot_profile_emits_network_policy -- --test-threads=1`
 - Focused bootstrap/restart operator-liveness checks:
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_supervisor_display_status_is_concise_and_machine_record_free -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_hdmi_milestone_uses_a_distinct_later_operator_turn -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib delayed_cyw43_hdmi_fifo_retains_all_twelve_production_milestones -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib delayed_cyw43_hdmi_fifo_retains_full_queue_and_terminal_release -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib stage_driver_task_shared_payload_uses_published_root_pages -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib clear_driver_task_transport_removes_partial_bootstrap_endpoint -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_first_production_firmware_aperture_is_not_capped_by_nvram_arena -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_supervisor_retry_resets_large_retained_state_in_place -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib production_console_and_wifi_retained_state_fit_one_root_stack_budget -- --test-threads=1`
   - `cargo test -p pi4-driver-abi --lib cyw43_sdio_bus_link_supports_reciprocal_notification_dpc_descriptors -- --test-threads=1`
   - `cargo test -p pi4-driver-abi --lib continuation_grant_fits_reserved_command_slot_and_fingerprints_actions -- --test-threads=1`
   - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_service_badges_exclude_the_reserved_root_bit -- --test-threads=1`
@@ -477,6 +510,14 @@ second consumption must fail. Exclusive SDIO mapping must remove the admission
 record exactly once. Coverage must also prove that the already root-preseeded
 mailbox frame remains available for a child capability copy after fresh
 device-untyped coverage is consumed; no second retype is permitted. Runtime
+staging coverage must traverse all eight published root aliases for the exact
+32-KiB shared aperture. Clearing a partial transport must also zero cached
+progress magic, sequence, phase, and auxiliary identity before a replacement
+generation can observe it. Production AArch64 coverage must configure the
+EventPump in place, borrow it through both ordinary and deferred console loops,
+reset the CYW43 supervisor in place, and retain material emitted headroom within
+the 256-KiB root stack; a source-level linker-size check alone is insufficient.
+Runtime
 tests must drive the retained Linux-ordered
 GET_GPIO_CONFIG/polarity, output-low, power-off, 2 ms wait, power-up, 10 ms
 wait, release-high, startup-clock, 10 ms wait, and finalize phases one turn at
@@ -541,7 +582,74 @@ and require Pi proof. Under the ordinary EventPump, each
 outer turn opens one monotonic CYW43 operation permit and may execute no more
 than one child-runtime or HAL operation; a rejected second attempt must leave
 the retained ticket, deadline, payload fingerprint, generation, and cursor
-unchanged. Initial shared-core coverage must prove the exact owner-first phases:
+unchanged.
+
+SDIO request-lifecycle coverage must drive production owner seams for card
+CMD5, generic CMD52, and data CMD53 descriptors. It must prove that every
+request receives a separate 10-millisecond entry-inhibit fence and a fresh
+10-second watchdog armed only after that fence, including a response at the
+legal request edge after a long pre-issue wait. Data and short-busy requests
+must write `TIMEOUT_CONTROL=0x0e`. The owner may reserve two transfer attempts,
+but a second issue is legal only after an entry-inhibit failure proves the first
+command was never written; command, response, data, busy, or later failures are
+issued-unknown and perform no same-generation replay. Each failed attempt gets
+its own 220-millisecond containment deadline. Shared-ABI tests must derive the
+exact 20.56-second CYW43 child bound from those maxima plus the 100-millisecond
+handoff margin and prove root's initial 30.56-second child lease cannot expire at
+the child boundary. Multi-child parent coverage must prove that only a fresh
+same-request `OWNER_REPLY` edge renews a 30.56-second child lease, that a
+repeated reply cannot renew twice, stale/wrong-sequence progress cannot arm a
+renewal, and the shared 1,024-action trace bound ends renewal deterministically.
+Request setup must program exact named
+`INT_ENABLE=0x02ff000b`, adding `CARD_INT` only while armed, while terminal
+classification still recognizes every bit in broad `INT_STATUS` error mask
+`0xffff8000`.
+
+External-DMA lifecycle coverage must prove the exact Linux order: SDHCI
+block-gap inspect/repair/verify, DMA-authority/idle snapshot, full immutable
+control-block staging, status clear, timeout, block size, block count, argument,
+and transfer-mode programming each consume a distinct retained turn. One
+deliberate issue action publishes COMMAND and then one BCM2835 DMA `ACTIVE`
+write before even a delayed request-local response is acknowledged. Stale pre-command
+`SPACE_AVAILABLE` cannot satisfy the fresh response or open a PIO lane.
+Command/controller and R5 errors after COMMAND must show one DMA start, one
+descriptor-level containment, and no replay. A coalesced `RESPONSE|DATA_END`
+must survive the join; delayed DREQ must still complete; and the response/R5,
+`DATA_END`, and terminal `CONBLK_AD == 0` evidence may arrive in any order. The
+final BCM2835 control block must set Linux's `INT_EN`, intermediate blocks must
+not, and every case must prove `SDHCI_TRNS_DMA` remains clear. A posted-start adversary must hold
+control-block and ACTIVE writes invisible until the full store-completion fence
+and same-channel readback, then prove the join cannot accept the initial zero
+`CONBLK_AD`. Completion must require the terminal `CS.INT` edge and acknowledge
+it exactly once with `INT | ACTIVE`, including immediate-terminal and delayed-
+DREQ schedules. Failure coverage must separately retain telemetry capture, DMA
+inspect/abort/poll/stop/reset/verify, host acknowledgement/reset, clock restore,
+final inhibit, and final snapshot phases; no containment phase may replay the
+issued command.
+
+SDIO service-dispatch coverage must initialize the production runtime, submit
+every former non-descriptor raw/aux command shape, and prove each is rejected
+before any SDHCI or DMA access. Only a structurally valid
+`DriverRuntimeSdioCommandDescriptor` may reach owner service after init. DPC
+activation coverage must prove the owner performs zero Function 1
+`RFRAMEBCLO`/`RFRAMEBCHI` CMD52 reads: with host `CARD_INT` latched it publishes
+that retained event, and without a latched bit it advances a retained masked
+rearm. State, health, `INT_ENABLE`, `SIGNAL_ENABLE`, ring/disposition, IRQ
+acknowledgement, and signal phases must remain separate; the level route cannot
+rearm early. Subsequent dongle/FIFO source reads must occur only through the
+retained CYW43 DPC, one admitted operation per later turn. Generation-commit
+coverage must prove reciprocal-ring reset precedes state/health publication and
+the separately written interrupt-policy registers.
+
+Terminal-fault coverage must decode the immutable 116-byte version-3 frame and
+preserve its existing 68-byte prefix. Before containment changes either engine,
+the extension must capture SDHCI argument, transfer-mode/command,
+timeout/block-gap, interrupt-enable, signal-enable, and host-control-2 plus
+BCM2835 DMA `TI`, source, destination, length, stride, and debug. Tests must
+reject a truncated or version-mismatched frame and prove root renders the same
+terminal registers rather than post-reset state.
+
+Initial shared-core coverage must prove the exact owner-first phases:
 register SDIO service, replay the SDIO descriptor, register CYW43 service,
 replay the CYW43 descriptor, replay both engines plus firmware/control context
 while both remain at bootstrap priority `255`, prove control-plane readiness,
@@ -573,6 +681,11 @@ already-consumed, replayed, aliased, or exhausted-id state. The notification is
 only a wake hint. Both foreground and DPC paths must alternate separately
 admitted `Poll -> Grant -> Poll` turns, with no acknowledgement poll or second
 child/service/HAL operation composed into the grant turn.
+An event's source/frame-length hint must be copied into the DPC cursor only on
+the first admission of that exact sequence. Later grant and completion turns
+must not reapply it: doing so can resurrect `I_HMB_FRAME_IND` after a completed
+F2 read and create an endless same-frame drain. A different sequence while one
+is active must poison the generation rather than merge event identities.
 
 Backplane-attach coverage must drive the production retained cursor through
 ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, the Pi
@@ -618,6 +731,20 @@ write, each on its own outer turn. No Function 1 CMD52 may target any byte in
 `0x600..0x603`; injected read/write failure must terminate with `0x5333` or
 `0x5334` and must not select another transport shape.
 
+After SoCRAM preparation, the production cursor must invalidate cached
+firmware-transfer authority and re-prove the live contract before the first
+bulk CMD53. Real reciprocal-ring/controller coverage must exercise, one outer
+turn each, Function 1 block-size low/high reads, CCCR capability read with
+`CAP_SMB` and low-speed `4BLS` validation, four-bit interface readback,
+SHS+EHS speed readback, ALP availability/readback, RAM-window LOW/MID/HIGH
+writes, and matching LOW/MID/HIGH reads. A later zero-I/O contract-commit turn
+may publish block-mode, width, speed, ALP, window, and upload-prepared authority
+only when every sampled value belongs to the unchanged request and generation.
+A table-driven failure cut at every phase, including the local commit, must be
+terminal, invalidate every derived fact, mutate no card shadow after a failed
+write, and perform no second controller issue when the same command is polled
+again. No fabricated direct completion may satisfy this coverage.
+
 Firmware-release coverage must drive the production release cursor through the
 production parent-command plus staged-owner-descriptor/controller seam. Prove
 one new child issue per outer EventPump turn and exact Linux ordering from
@@ -635,6 +762,20 @@ an issued-unknown action, or repeating a terminal failure must perform no
 child I/O. `firmware_execution_started` and `firmware_released` must remain
 false until the exact RESETCTRL-clear and DPC-activation completions,
 respectively.
+Production-chain coverage must additionally drive control and EAPOL TX through
+three backplane-window CMD52 writes, one fresh IORx CMD52 read, and one F2
+CMD53 write; drive all 18 post-F2 release children into real retained DPC
+activation; and drive one DPC event through owner-backed status, F2 read,
+empty-confirmation, and post-status work before foreground queue consumption.
+Exactly 256 subsequent control/RX polls must consume 256 outer turns and issue
+zero SDIO-owner operations. Pre-issue terminal, post-issue unknown,
+stale-generation, action-fingerprint, timeout, and continuation-grant cuts must
+not issue a second child or mutate the replacement generation. Exercise the
+shared op11 outcome classifier through the real association, PTK/GTK, and
+SCB/filter/BSSID maintenance consumers: pre-TX `NOT_READY` and decoded firmware
+replies are terminal, while every encoded post-TX reply timeout must suppress
+Gate 7a/cursor advancement, publish the immutable ambiguity ticket, and enter
+the exact pair restart with no same-generation replay.
 
 Card-init tests must prove CMD7 uses the R1b short-busy response and distinguish
 the pre-command entry-inhibit wait from a post-command busy timeout. Only the
@@ -702,6 +843,18 @@ resume or fail deterministically at every retained action. EventPump/NetStack
 tests must prove Wi-Fi urgency is retained across later turns rather than
 implemented as private pre-root, EAPOL, tail-ingest, TCP-flush, hot-dispatch, or
 smoltcp device bursts.
+
+Parent-replay coverage must table every CYW43 operation against transfer
+stages 1 through 6. Only stage-1 `0x5103` on the seven single-action parents may
+retry in-generation; `TRANSPORT_INIT`, `FIRMWARE_PREP`, `RELEASE`, and
+`CONTROL_EXCHANGE` must publish exactly one reciprocal parent request and then
+fence pair recovery. Real-ring adversarial cases must cover maintenance op11,
+all four prompt-poll owners, association and WSEC payload drift, and an ETH_TX
+child cursor whose parent request was released before a carrier-generation
+change. They must preserve the original descriptor, digest, ticket, and owner
+generation and prove stable `submitted_turns` after the fault. Optional-control
+tests must reject transport-fault phase advancement while retaining semantic
+firmware `UNSUPPORTED`/`BADARG` continuation and visible transport telemetry.
 
 The supervisor retry-budget unit test must admit exactly five attempts with
 `1/2/4/8` second delays after failures one through four, return a terminal
@@ -892,7 +1045,11 @@ never returns more bytes than the root-issued command grant.
 Local-seat coverage must prove the retained USB attach and keyboard cursors
 issue one immutable linked-runtime request or poll one exact completion per
 outer turn, including one outer turn for each explicit `usb probe-kbd` attempt.
-It must prove probe policy restoration and immutable command fingerprints.
+It must prove probe policy restoration, immutable command fingerprints, and a
+complete compact probe result/continuation/contract/verdict/`OK` response below
+the 2,048-byte serial bound. Target-shaped coverage must distinguish a terminal
+slice from a bounded command-owned continuation, advance that continuation by
+one operation per later `LocalSeat` turn, and restore the prior polling policy.
 The real linked-serial path must also prove that the passive compact `usb diag`
 performs no USB poll, emits Gates 1 through 10, preserves `OK USB` and the
 prompt within the three-record protocol-tail reserve, retires the physical
@@ -908,8 +1065,55 @@ a root-owned steady USB backend.
 
 Host tests must prove the fixed-layout pointer-free command/completion records remain primitive-only and bounded, including primitive aux fields for service-turn arguments, nonzero-progress/frame-ready-only hot-path credit, owner-state descriptor rejection when the matching runtime spec is not acceptance-eligible, owner-state acceptance requiring the explicit owner hot-path mask plus acceptance-eligible runtime images, the separate root-context diagnostic versus pointer-free selector registration classes, the common `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit forced onto transitional root-context ring commands, and the one-way command flag used by send-only bootstrap/background turns so isolated runtimes do not call `Reply` without a reply cap. Runtime-init records must carry primitive MMIO/DMA/shared physical page metadata, fixed virtual bases, semantic resource ranges for large apertures and large buffer arenas, bus-address policy, optional IRQ descriptors, optional bus-link descriptors, and framebuffer metadata without root pointers.
 
-The physical Pi profile now requires isolated child VSpaces for driver bootstrap, loads isolated `pi4-driver-*` runtime image payloads only from the raw driver-runtime CPIO embedded into the Pi 4 root-task image by `scripts/pi4-image-build.sh`, maps all bounded `PT_LOAD` pages declared by generated `code-pages`, and uses fixed command/completion rings instead of shared-root service TCBs. The staged U-Boot CPIO remains audit/packaging evidence and is not a runtime fallback on the physical Pi profile. `scripts/pi4-image-build.sh` strips the root-task ELF copy injected into the derived seL4 archive and proves exact newc membership independently. The 4 MiB rootfs guard remains on the system payload CPIO produced by the QEMU/release packaging path; it does not apply to the seL4 elfloader archive that contains the root-task ELF. Seven generated runtime specs are acceptance-eligible (`root_context_required=false`, `hardware_state_migrated=true`); each has a generated 256-page code aperture that must contain the current 203-page runtime ELF span, and `sdio-host` is generated with one HAL-declared SDHCI MMIO page, one noncontiguous HAL-declared firmware-mailbox MMIO page, one channel-bounded BCM2835 DMA-controller MMIO page, one private low mailbox page, one low control-block page, two low CMD53 bounce pages, and 32 shared pages. Current Pi proof requires `DRIVER_TASK_EARLY_MMIO_ADMISSION selection=Wifi pages=1 owner=hal-unmapped-child-cap status=ready` before mailbox preseed and before `DRIVER_TASK_RUNTIME_ENTRY`/`DRIVER_TASK_BOOT contract=sdio-host`; wired and disabled boots require the same ready record with `pages=0`. Early admission alone is not ownership proof: successful exclusive SDIO mapping, descriptor construction, owner state, and runtime service proof remain mandatory. Host coverage must prove the generated `root_task.driver_images` table covers all seven hot paths, declares at least the 16-page xHCI minimum aperture, reserves the descriptor-backed runtime budgets (`usb` 128 DMA/32 shared, `hdmi` 0 DMA/16 shared plus framebuffer, `genet` 64 DMA/32 shared, `cyw43` 0 DMA/64 shared, `sdio` 3 MMIO/4 DMA/32 shared, `pcie` 16 shared, `serial` 4 shared), and checks the separate `pi4-driver-*` runtime package for host and `aarch64-unknown-none`. SDIO runtime tests must prove that every CMD53 takes the external-DMA path, control blocks remain 32-byte aligned and split only at admitted physical-page boundaries, command issue precedes immediate channel activation, request-local `DMA_END` is enabled and acknowledged but never substitutes for `DATA_END`, completion requires both DMA-chain exhaustion and SDHCI `DATA_END` in either order, a timeout or either-engine fault performs bounded channel-local abort/reset, and missing or malformed DMA resources fail closed without PIO, root-owned, or same-generation replay. Firmware tests must prove that one retained 8-KiB stage drains as four separately admitted 2-KiB `MEMBLOCK` commands of 32 64-byte blocks after exact `CAP_SMB` proof, with a shorter command only at a backplane-window edge or the true final remainder.
+The physical Pi profile requires isolated child VSpaces for driver bootstrap and
+loads isolated `pi4-driver-*` runtime image payloads only from the raw
+driver-runtime CPIO embedded by `scripts/pi4-image-build.sh`. The generated
+`sdio-host` contract has three MMIO pages, ten low DMA pages (mailbox,
+control-block arena, and eight CMD53 bounce pages), and 32 shared pages. The
+CYW43-SDIO bus link exposes exactly one 32-KiB shared backplane aperture.
+The staged U-Boot CPIO remains audit/packaging evidence, never a physical
+runtime fallback. The build strips the root-task ELF injected into the derived
+seL4 archive and proves exact newc membership independently; the 4 MiB rootfs
+guard remains on the QEMU/release system payload CPIO rather than that elfloader
+archive. All seven generated runtime specs remain acceptance-eligible and keep
+their 256-page code aperture. Current Pi proof requires
+`DRIVER_TASK_EARLY_MMIO_ADMISSION selection=Wifi pages=1 owner=hal-unmapped-child-cap status=ready`
+before mailbox preseed and before the SDIO runtime entry/boot records; wired and
+disabled selection requires the same record with `pages=0`. Packaging or early
+admission alone is not owner-state proof. Host coverage must prove the complete
+generated table and its exact budgets (`usb` 128 DMA/32 shared, `hdmi` 0 DMA/16
+shared plus framebuffer, `genet` 64 DMA/32 shared, `cyw43` 0 DMA/64 shared,
+`sdio` 3 MMIO/10 DMA/32 shared, `pcie` 16 shared, `serial` 4 shared), then
+compile the separate runtime package for host and `aarch64-unknown-none`.
+
+SDIO runtime tests must prove every CMD53 uses the sole external-DMA lane,
+control blocks split only at admitted physical-page boundaries, and COMMAND is
+followed by exactly one DMA activation. The issued request then remains in one
+immutable cursor: each later owner turn consumes one SDHCI/DMA snapshot,
+never W1C-acknowledges a lone PIO-ready bit, requires zero block-gap control,
+and independently latches response/R5, request-local `DMA_END`, authoritative
+`DATA_END`, and terminal DMA evidence. Timeout or either-engine failure must
+perform bounded channel-local containment without post-issue replay; malformed
+resources must fail before command issue with no PIO, root-owned, or
+same-generation fallback. Firmware tests must prove one retained 32-KiB
+aperture drains as Linux MMC-shaped `511 * 64` plus `1 * 64` CMD53 children,
+while the true final aperture uses the maximum full-block request plus one
+bounded four-byte-padded byte tail. The full-aperture proof must begin with the
+production `FIRMWARE_CHUNK` parent, publish and consume the sequence-last
+reciprocal ring plus acknowledged grants, and drive the real retained controller;
+manually fabricated child descriptors or completions do not count. Function 2
+TX coverage must prove IORx readiness, backplane-window selection, and CMD53
+issue consume separate outer turns, and that timeout never toggles IOEx or
+selects another lane in place.
 The focused adversarial cases include
+`cyw43_sdio_requests_use_linux_watchdog_and_derived_child_bound`,
+`sdio_owner_clamps_drifted_descriptor_to_linux_request_watchdog`,
+`sdio_linux_inhibit_fence_does_not_consume_issued_request_watchdog`,
+`sdio_runtime_rejects_all_legacy_nondescriptor_commands`,
+`sdio_attach_and_generation_reset_stay_masked_until_typed_dpc_activation`,
+`sdio_fault_telemetry_v3_distinguishes_dma_terminal_states`,
+`firmware_prep_live_contract_crosses_real_controller_once_per_outer_turn`,
+`firmware_prep_live_contract_failure_cuts_are_terminal_and_never_replayed`,
 `sdio_init_rejects_dma_alias_and_high_memory_before_card_service`,
 `sdio_external_dma_join_waits_for_later_dma_before_read_publication`,
 `sdio_external_dma_join_rejects_missing_dma_completion`,
@@ -917,16 +1121,40 @@ The focused adversarial cases include
 `sdio_data_requests_without_dma_authority_fail_before_command_for_both_directions`,
 `sdio_dma_error_telemetry_is_immutable_across_containment_reset`,
 `sdio_stale_dma_generation_is_contained_before_fixed_memory_reuse`,
-and `sdio_descriptor_rejects_unrepresentable_cmd53_byte_mode_before_issue`.
+`sdio_descriptor_rejects_unrepresentable_cmd53_byte_mode_before_issue`,
+`sdio_wifi_power_sequence_advances_one_bounded_action_per_turn`,
+`sdio_engine_init_turn_withholds_completion_until_pwrseq_terminal`,
+`sdio_generation_reset_keeps_epoch_uncommitted_while_pwrseq_pending`,
+`sdio_retained_bootstrap_cmd52_and_card_commands_issue_once_without_private_polls`,
+`sdio_retained_host_config_runs_recovery_and_set_ios_across_outer_turns`,
+`sdio_retained_dpc_activation_rearms_one_policy_register_per_outer_turn`,
+`sdio_retained_generation_commit_resets_ring_before_state_and_policy_publication`,
+`firmware_parent_reciprocal_ring_drives_retained_sdio_owner_as_511_plus_one`,
+`cyw43_linked_f2_tx_window_iorx_and_cmd53_each_consume_separate_outer_turns`,
+`cyw43_linked_control_and_eapol_tx_retain_pure_begin_until_exact_f2_issue`,
+`control_and_eapol_tx_cross_reciprocal_ring_and_retained_sdio_owner`,
+`release_post_f2_crosses_exact_linux_order_to_real_dpc_activation`,
+`production_dpc_event_drains_real_owner_rx_before_foreground_poll`,
+`production_control_and_rx_polls_consume_only_dpc_owned_queue`,
+`firmware_terminal_and_issued_unknown_cuts_never_reissue_a_child`,
+`stale_foreground_completion_cannot_mutate_replacement_generation`,
+`mutated_action_fingerprint_poisoning_never_replays_issued_child`,
+`issued_unknown_timeout_retains_one_child_without_same_generation_replay`,
+`corrupted_continuation_fingerprint_fences_real_owner_without_second_quantum`,
+and `cyw43_foreground_baseline_requires_release_published_snapshot`.
 
 QEMU packaging must pass `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none` and the 4 MiB rootfs guard with no `cohesix/bin/root-task` entry. The build embeds a boot-minimized rootserver in the staged elfloader and retains the unchanged target ELF as `out/cohesix/staging/rootserver` for diagnostics and external QEMU loading; these boot artifacts are outside the payload CPIO. The CPIO inventory manifest must match its component paths, and all seven `cohesix/bin/pi4-driver-*` payloads must be byte-identical to their target artifacts. Removing or stripping a runtime image, forging the manifest, or bypassing `scripts/ci/size_guard.sh` fails this gate.
 The AArch64 runtime ELF audit must additionally show the full fixed CYW43
 foreground transaction (1,024 action entries plus 128 KiB replay payload) in an
-`SHT_NOBITS` section covered by writable `PT_LOAD` memory, with only its smaller
-semantically nonzero baseline snapshot in file-backed data. The loader-zero
-contract, `p_filesz <= p_memsz`, generated 256-page aperture, exact packaged
-runtime bytes, and 4 MiB rootfs guard must all pass together; reducing trace
-capacity or post-link stripping is not an acceptable size fix.
+`SHT_NOBITS` section covered by writable `PT_LOAD` memory. The full baseline
+slot must be explicitly invalid `MaybeUninit` loader-zeroed storage, become
+readable only after exact parent admission release-publishes validity, and
+restore the live state byte-for-byte on every continuation; it must not create
+a second file-backed state image. The loader-zero contract,
+`p_filesz <= p_memsz`, generated 256-page aperture, exact packaged runtime
+bytes, and 4 MiB rootfs guard must all pass together; reducing trace capacity,
+aliasing runtime artifacts, or post-link stripping is not an acceptable size
+fix.
 
 Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be inferred from adjacent evidence. `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$HOME/seL4/build_UBOOT" --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel"` writes `out/pi4-sd/pi4-runtime-dma-proof.env` with `PI4_RUNTIME_DMA_PROOF=target-build`, `PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu`, manifest hash, runtime CPIO hash, runtime uImage hash, staged image hash, and the hash of `pi4-image-identity.json`; this proves source freshness, packaging, and exact legacy-image identity only. Under Milestone 26d, that external Pi build tree must validate independently as a `pi4_diagnostic` seL4 15.0.0 `bcm2711` profile with pinned source/build-input evidence, `KernelRootCNodeSizeBits=14`, `KernelArmExportVCNTUser=ON`, physical counter/timer-control exports off, `TIMER_CLOCK_HZ=54000000`, and no retained one-domain `KernelDomainSchedule` cache entry. The 14-bit root CNode is required for the bounded capability inventory of the linked-runtime images and isolated framebuffer mapping; a 13-bit external Pi tree is stale and cannot satisfy image or hardware proof. The static `out/sel4/profile-v2/pi4-diagnostic` PASS proves only the canonical configuration/artifact contract and cannot substitute for the external tree, staged/read-back image identity, boot, Wi-Fi, TCP/`cohsh`, or benchmark lanes. The image wrapper must reject legacy or ambient CMake configuration and non-canonical host `mkimage` tools rather than silently reconfiguring the tree. `scripts/pi4_trace_normalize.py --gate-summary` emits `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER`, and `PI4_RUNTIME_DMA_PROOF=absent`, `diagnostic`, `qemu-or-stale-log`, or `fresh-pi` from serial evidence. `scripts/pi4_gate_proof.sh --require-driver-task-proof --runtime-dma-proof-out out/test-plan/<run-id>/pi4-runtime-dma-proof.env` writes the live proof bundle only after normalization passes. Only `fresh-pi` counts as live hardware runtime/DMA proof, and it requires driver-task dedicated readiness, cap/fault/revoke/scheduling/affinity proof, isolated VSpace, pointer-free IPC, per-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no`, sealed descriptor version/hash/identity proof for every active hot path, sealed bus-link proof for USB and CYW43 split clients, per-hot-path `DRIVER_TASK_DMA_PROOF` with bounded no-IOMMU profile and cache/bus-address policy, aggregate `DRIVER_TASK_DMA_BLOCKER=none`, no compatibility service roles, no unresolved ring timeouts/deferred bootstrap, no resource blockers, a fresh Pi cold-boot marker, and a live prompt. Raw `DRIVER_TASK_RING_CALL_TIMEOUT` events remain diagnostic, but `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT` must be `0` after later return proof closes any bounded keep-active turn. It also emits `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified` only when `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, and at least one valid `DRIVER_TASK_COUNTER` snapshot with `DRIVER_TASK_COUNTER_INVALID=0` are present.
 
@@ -1000,6 +1228,23 @@ USB, HDMI, PCIe, or GENET transport identity, and that non-pair failures stay in
 their contract-local recovery domain. Serial tests must classify RX, staged TX,
 and transmitter-idle terminal transport failures as typed `Failed`, poison once
 without replay, and never misreport them as `Pending` or backpressure.
+
+The production DPC word-write test must cross the real SDIO descriptor and
+controller seam and prove that interrupt-status W1C plus mailbox ACK/NAK use
+one incrementing, four-byte Function 1 CMD53 with the exact little-endian
+payload, never four bytewise CMD52 commands. Its adversarial cut must publish a
+new interrupt cause after sampling but before commit and prove that only the
+sampled bits clear. The release-order test must drive the production retained
+cursor through `HOSTINTMASK`, the separate Gate 10 `FUNCTIONINTMASK` phase,
+watermark, `DEVICE_CTL` read-modify-write adding `F2WM`, `MESBUSYCTRL`,
+`WAKEUPCTRL` read-modify-write adding `HTWAIT`, `CARDCAP`, and exact
+`FORCE_HT`. It must prove one controller operation per outer turn, preservation
+of unrelated read-modify-write bits, stale/cached completion isolation, and no
+controller reissue when a fresh pending turn replays only the cached completed
+prefix. Run the focused production-chain coverage with:
+
+- `cargo test -p pi4-driver-runtime --lib dpc_backplane_write32_is_one_atomic_incrementing_cmd53 -- --test-threads=1`
+- `cargo test -p pi4-driver-runtime --lib release_post_f2_phases_issue_one_linux_ordered_operation_each -- --test-threads=1`
 
 The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; hardware captures must show `DRIVER_TASK_BOOT ... contract=bcmgenet-v5 ... affinity_core=3` and `DRIVER_TASK_BOOT ... contract=cyw43455 ... affinity_core=3` before claiming fourth-core driver placement. Physical Pi owner-state boots apply `seL4_TCB_SetAffinity` directly to each driver child TCB. That is distinct from the root-authority affinity wrapper used around in-process NineDoor and Worker-model operations; neither NineDoor nor a general Worker has a separate TCB in the current profile. Any `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence and must fail placement proof. Captures may still emit `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`; that keeps notification lifecycle proof red while allowing endpoint-backed command-ring startup to proceed. QEMU virtio compatibility boots may prove isolated VSpace/ASID allocation, runtime-image transport-region mapping, and pointer-free ring transport after virtio networking is online, but that is transport-substrate evidence only. Fresh Pi hardware proof is still required before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest isolated-driver hardware acceptance.
 
@@ -1479,7 +1724,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:fd43ceaf1b4bf3695c12ab3bc51879b65be653003a7689c994cc0088d6b88be9`
+- `configs/generated/root_task_resolved.json` — `sha256:ee489ec164ec1cd68dab659446d67526142a4e2ddaa2b6895dfc9f307143fd6c`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

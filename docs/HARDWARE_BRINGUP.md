@@ -21,7 +21,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | QEMU current source | Target-qualified Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. | Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 current source, offline | Pi-qualified Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. | A board boot, current-image device readiness, TCP, or benchmark result. |
-| Pi 4 current image, live | Exact commit `9b115edc3697` / image `bd395baf5dd5dd8a06c88a343c838e6f44d9f652911fed5595fe61205700af26` starts both linked runtimes, proves the selected GPIO34-GPIO39 ALT3/pull fields by live readback, completes bounded five-attempt supervision, keeps the operator console live, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5, advances exactly two 64-byte blocks, then stalls with `DATA_END` absent and BCM2835 DMA active/DREQ-held. | No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The strict retained CYW43 extra-pull-up clear is source-only until rebuilt, flashed, and captured. |
+| Pi 4 current image, live | Exact commit `7328bedd6142` / image `5a9f812c5408998e3292b4c4475bee545a4c8f2d0e5781a238054598ff313001` starts both linked runtimes, proves the selected GPIO34-GPIO39 ALT3/pull fields by live readback, completes the strict retained CYW43 extra-pull-up clear, keeps the operator console live through bounded supervision, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5 and advances exactly two 64-byte blocks before stalling with `DATA_END` absent and BCM2835 DMA active/DREQ-held. | No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The all-request Linux watchdog, live pre-firmware contract reproof, exact interrupt mask, and telemetry-v3 changes remain an offline source-and-image candidate until that exact candidate is read back and booted on the Pi. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
 active. It may be newer than checked-in records, but only the repository's
@@ -386,10 +386,20 @@ USB-keyboard `ping` must still return. If any tail is absent, stop sending input
 and preserve the sample. A merged or overlapped serial transcript is not
 acceptance evidence.
 
+`usb probe-kbd` is also output-bounded: it emits the one-slice result, explicit
+`continuation=pending|terminal` state, cached runtime contract, verdict, and
+terminal `OK` below the 2,048-byte serial bound. It does not prepend the verbose
+`usb status` dump. A pending command-owned cursor continues by one operation on
+each later `LocalSeat` turn and restores the prior polling policy at its finite
+terminal bound.
+
 The command effects are intentionally distinct. `wifi diag`, `usb diag`,
 `netstats`, and `smp activity` read retained state and must not submit a device
 operation; `wifi diag` labels cached progress as `last_progress` and
 `superseded=yes` when a terminal fault is newer. On the physical linked-runtime
+profile, that cache is transport-generation scoped: clearing/rebinding the
+transport zeros progress magic, sequence, phase, and auxiliary identity before
+a replacement generation can be admitted. On the physical linked-runtime
 profile, `wifi probe-ht` reports cached state or a typed runtime-required error
 and never starts a root-owned live probe. `nettest` actively starts the bounded
 network self-test, while `usb probe-kbd` actively advances one retained
@@ -644,18 +654,30 @@ that shows multiple foreground phases after one endpoint rendezvous or shared
 grant, or foreground progress caused only by a peer/IRQ badge without a valid
 grant, fails the one-operation-per-turn contract.
 
-The newest exact capture is `pi4-serial-20260721-191137.log`, boot-paired with
-`tcpdump-wifi-20260721-191146.pcap` and
+The newest exact capture is `pi4-serial-20260722-210743.log`, boot-paired with
+`tcpdump-wifi-20260722-210754.pcap` and
+`tcpdump-usb-eth-20260722-210754.pcap`. It identifies marker commit
+`7328bedd6142` and image id
+`5a9f812c5408998e3292b4c4475bee545a4c8f2d0e5781a238054598ff313001`.
+Early DMA-page admission, both linked-runtime starts, host pinctrl readback, and
+the strict retained Function 1 extra-pull-up clear pass. The first causal
+failure remains Gate 6's first firmware Function 1 CMD53: 2,048 bytes as 32
+64-byte blocks at backplane address `0x00198000`. R5 is clean at `0x1000`, but
+the block count advances only from 32 to 30, `TRANSFER_MODE=0x0022`,
+`PRESENT_STATE=0x01ef0106`, `INT_STATUS=0`, and BCM2835 DMA `CS=0x21` remains
+active with DREQ held. Exactly 128 bytes, or two blocks, transferred before
+`DATA_END` failed to arrive. Neither paired capture contains a Pi Wi-Fi frame.
+This is still a pre-firmware/RF transport boundary; association, EAPOL, DHCP,
+TCP, and `cohsh` remain downstream.
+
+The preceding exact capture is `pi4-serial-20260721-191137.log`, boot-paired
+with `tcpdump-wifi-20260721-191146.pcap` and
 `tcpdump-usb-eth-20260721-191146.pcap`. It identifies marker commit
 `cfc034bb5417` and image id
 `d3b4acf30a59af1cbdf3c0a9d6401dd7193552fc17250707164ef3287d379738`.
-Early DMA-page admission and both linked-runtime starts now pass. The first
-causal failure is Gate 6's first firmware Function 1 CMD53: 8,192 bytes as
-128 64-byte blocks with argument `0x9d000080`. R5 is clean at `0x1000`, but
-the FIFO remains full, `DATA_END` never arrives, block count advances only
-from 128 to 126, and BCM2835 DMA `CS=0x21` remains held by DREQ. Neither paired
-capture contains a Pi Wi-Fi frame. This is a pre-firmware/RF transport
-boundary; association, EAPOL, DHCP, TCP, and `cohsh` remain downstream.
+Its first 8,192-byte/count-128 Function 1 CMD53 also advanced only two blocks
+before the FIFO/DREQ stall. That earlier geometry remains historical evidence;
+the 2-KiB/count-32 request above is the current physical frontier.
 
 The preceding exact captures are
 `pi4-serial-20260721-063257.log` and the authenticated, paced reboot sidecar
@@ -681,8 +703,8 @@ absence of over-air EAPOL; it does corroborate that this boot never reached the
 host network path. TCP, association, DHCP, and `cohsh` remain downstream and
 must not be changed to treat this pre-firmware transport failure.
 
-The resulting source candidate changes the sole linked-runtime lane, not the
-launch path. After CMD7, a retained request- and generation-bound cursor reads
+The captured image changes the sole linked-runtime lane, not the launch path.
+After CMD7, a retained request- and generation-bound cursor reads
 CCCR revision and capabilities, requires `CAP_SMB`, a legal four-bit card, and
 SHS, enables/verifies EHS, programs the high-speed clock while still one-bit,
 read-modify-writes and verifies CCCR `IF`, and only
@@ -694,13 +716,74 @@ mailbox, and BCM2835 DMA MMIO plus one mailbox page, one control-block page,
 and two bounce pages. Physical channel 4 uses SDIO DREQ 11, FIFO bus address
 `0x7e300020`, and low-RAM `0xc0000000` aliasing. Every CMD53 uses that external
 engine and a missing or invalid resource fails closed—there is no PIO or
-legacy fallback. The bounded 8-KiB shared stage now drains as at most four
-2-KiB Linux `MEMBLOCK` commands, each 32 64-byte blocks and each a distinct
-outer EventPump operation. Request-local `DMA_END` is enabled and acknowledged
-as progress only. Success still requires both DMA control-block completion and
-SDHCI `DATA_END`; failure captures both engines before bounded channel
-abort/reset and generation poisoning. These card-lane and 2-KiB changes are
-source-only until a rebuilt image proves them on Pi.
+legacy fallback. Current source expands the compiler-declared SDIO authority
+to ten private DMA pages—one mailbox page, one control-block page, and eight
+bounce pages—and retains one exact 32-KiB backplane aperture
+and applies Linux MMC request shaping: a full window is `511 * 64` plus
+`1 * 64`, while the true final window uses full blocks followed by one bounded
+four-byte-padded byte tail. The external-DMA command is issued once; each later
+owner continuation consumes one SDHCI/DMA snapshot and never acknowledges a
+lone PIO-ready bit. Request-local `DMA_END` is progress only. Success still
+requires independently latched response, DMA terminal state, and SDHCI
+`DATA_END`; failure captures both engines before bounded channel abort/reset
+and generation poisoning. Commit `7328bedd6142` proves only the earlier
+card-lane/count-32 image reached the two-block physical frontier; this wider
+Linux-equivalent request lifecycle remains an offline source-and-image
+candidate until that exact candidate is read back and booted.
+
+The current source candidate advances that same one production lane more
+aggressively toward the pinned Linux lifecycle. Every CMD5, CMD52, and CMD53
+uses a separate 10-millisecond pre-issue inhibit fence followed by a fresh
+10-second request watchdog; data and short-busy requests set
+`TIMEOUT_CONTROL=0x0e`. The bounded envelope allows two transfer attempts only
+when entry-inhibit proves the first was never issued, gives each failed attempt
+an independent 220-millisecond containment interval, derives the shared
+20.56-second child bound, and gives root a 30.56-second per-child lease. Only a
+fresh exact `OWNER_REPLY` edge renews that lease; wrong-sequence, repeated, or
+unrelated progress cannot, and the shared 1,024-action trace caps renewals for
+one immutable parent. Power/reset, engine state/health/policy publication, host
+configuration, enumeration, DPC activation, and generation commit are retained
+phase machines; generation commit resets the reciprocal ring before publishing
+state/health and writing the two interrupt-policy registers on separate turns.
+For data CMD53, separate turns inspect/repair/verify block-gap state, admit DMA
+authority and an idle snapshot, stage the full immutable chain, clear status,
+and program timeout, block size/count, argument, and transfer mode. One
+deliberate issue turn then publishes COMMAND and starts the external BCM2835 DMA
+channel, matching `bcm2835_mmc_request()`; no setup or completion poll is folded
+into that issued action. The peripheral DREQ controls movement while each later
+turn consumes one immutable snapshot and joins the fresh response/R5, a
+possibly coalesced `DATA_END`, and terminal DMA proof in any arrival order. A
+command/controller or R5 error is therefore post-issue work: later turns capture
+telemetry, inspect/abort/poll/stop/reset/verify DMA, acknowledge/reset the host,
+restore its clock, and take the final inhibit/snapshot evidence. The generation
+is poisoned and the request is never replayed. The terminal DMA control
+block also carries Linux's `INT_EN`; `SDHCI_TRNS_DMA`
+remains clear because this is the external dmaengine lane. RESET, control-block
+address, and ACTIVE publication is followed by a full store-completion fence
+and same-channel readback. Terminal proof then requires both `CONBLK_AD == 0`
+and this request's `CS.INT`, which is acknowledged with Linux's `INT | ACTIVE`
+W1C value. The
+request interrupt enable is the exact named mask `0x02ff000b`, plus `CARD_INT`
+when armed, while broad terminal error detection remains `0xffff8000`. Before
+the first firmware CMD53, retained one-operation EventPump turns re-read the
+Function 1 block size, CCCR capabilities/interface/speed, ALP state, and exact
+RAM window; only a later local commit publishes that complete live contract.
+Every failure cut invalidates it and performs no replay. Terminal telemetry v3
+adds SDHCI argument, transfer/command, timeout/block-gap, interrupt/signal,
+host-control-2, and DMA transfer registers. After initialization, the SDIO
+runtime rejects every legacy aux-packed service command and admits only the
+fixed typed reciprocal descriptor. Its `DPC_ACTIVATE` turn no longer reads
+Function 1 `RFRAMEBCLO`/`RFRAMEBCHI`: it publishes a latched host `CARD_INT` or
+advances a retained masked rearm. State, health, `INT_ENABLE`, `SIGNAL_ENABLE`,
+ring/disposition, IRQ acknowledgement, and signal phases remain separate; the
+source is not rearmed until those admitted phases finish. Dongle/FIFO reads stay
+with the retained CYW43 DPC. Root configures the EventPump in place, borrows it
+through both Genet and deferred-WiFi loops, and resets the WiFi supervisor in
+place. The emitted Pi release chain now retains 136,480 bytes at the outer WiFi
+baseline and leaves 125,664 bytes of its 256-KiB root stack before nested calls.
+All changes in this paragraph remain an offline source-and-image candidate
+until that exact candidate is read back and booted on the Pi; they do not
+change the last physical Gate 6 result above.
 
 The earlier `pi4-serial-20260719-180716.log` capture identified a separate
 pre-command continuation-liveness failure: SDIO engine initialization completed
@@ -813,6 +896,45 @@ foreground trace or retained-deadline table. A poisoned or stale generation
 performs no same-command replay; ARM execution and firmware release are
 published only after their exact irreversible child completions.
 
+Typed control and EAPOL/data transmission retain `Pending` across the pure local
+Function 2 cursor-begin turn. LOW/MID/HIGH backplane-window writes, the fresh
+`IORx` readiness sample, and the single Function 2 CMD53 each require a later
+outer turn; cursor construction cannot report terminal `Idle` before any card
+operation occurs.
+
+After Function 2 becomes ready, the current source expresses the pinned Linux
+BCM43455 post-F2 lifecycle as separately retained operations. The exact
+sequence is `HOSTINTMASK`, Cohesix's separate Gate 10 `FUNCTIONINTMASK` phase,
+watermark, `DEVICE_CTL` read/modify/write adding `F2WM`, `MESBUSYCTRL`,
+`WAKEUPCTRL` read/modify/write adding `HTWAIT`, `CARDCAP`, and exact
+`FORCE_HT`. Reprime repeats the masks as distinct operations, samples the low
+and high frame-count bytes on separate turns, and arms the card interrupt on a
+later turn. No operation shares an outer EventPump turn with the next one; a
+fresh pending re-entry may consume only the cached completed prefix and cannot
+reissue it. Stale or issued-unknown work poisons the generation instead of
+replaying an earlier phase.
+
+The retained DPC likewise performs SDIO-core interrupt-status W1C and firmware
+mailbox ACK/NAK as one little-endian, incrementing, four-byte Function 1 CMD53,
+not four bytewise CMD52 writes. This makes the word update one immutable child
+action and removes the partial-byte window in which a newly arriving cause
+could be cleared inconsistently. Controller-seam host tests prove the command
+shape, exact payload, racing-cause preservation, Linux register order,
+bit-preserving read-modify-write, one issue per phase, and cached-prefix
+re-entry without controller reissue. These changes remain source and
+hardware-free evidence until a newly built, read-back image reaches them on a
+fresh Pi boot.
+
+The retry decision is made at the retained parent boundary, not inferred from
+one nested child in isolation. Only a stage-1 `0x5103` entry inhibit on a
+single-action firmware/NVRAM word or chunk, control/data frame, or poll may
+reuse the same immutable parent ticket. Transport init, firmware preparation,
+release, and op11 control exchange are composite: any transport terminal fences
+the generation and enters ordered pair recovery even if the last nested child
+was inhibited before issue. Optional scan/filter/offload policy may skip only a
+well-formed firmware `UNSUPPORTED` or `BADARG` reply. It must neither swallow
+nor suppress the causal trace for an SDIO transport fault.
+
 Serial evidence should name the exact frontier rather than leaving the generic
 backplane marker as an ALP diagnosis: ALP request, ALP poll, FORCE_ALP, its
 65-microsecond settle, the Pi extra-pull-up clear, ChipCommon read, and each
@@ -824,8 +946,10 @@ runtime operation. Production then emits `BACKPLANE_PULLUP_CLEAR` and issues one
 immutable Function 1 descriptor for `SBSDIO_FUNC1_SDIOPULLUP=0`, matching
 Linux's ordering after the 65-microsecond FORCE_ALP settle. The earlier physical
 clear trial preceded deterministic host pinctrl and was therefore confounded;
-the latest image proves pinctrl but still skipped this card-side preparation.
-Only an exact completion may advance. Any issued-unknown,
+commit `7328bedd6142` proves both pinctrl and the exact card-side clear complete,
+yet the first firmware CMD53 still stops after two blocks. That result removes
+the missing pull-up clear as the active Gate 6 explanation. Only an exact
+completion may advance. Any issued-unknown,
 `OWNER_PATH_POISONED`, stale, failed, or malformed result poisons the generation
 and requests the ordered pair restart; host quiescence is not permission to
 continue or retry in place.
@@ -837,9 +961,11 @@ The retained CYW43 transaction keeps its full 1,024-action and 128 KiB payload
 capacity in loader-zeroed `SHT_NOBITS` pages; the HAL loader must zero those
 pages before copying file-backed bytes. That trace remains a bounded cache for
 one straight-line retained substep, not an elapsed-time or ALP-poll budget. The
-smaller nonzero baseline snapshot remains file-backed, so this layout changes
-packaging size without changing the runtime aperture, replay capacity, or state
-semantics.
+full baseline is an explicitly invalid `MaybeUninit` slot in the same
+loader-zeroed storage and becomes readable only when exact parent admission
+snapshots the live CYW43 state and release-publishes validity. Avoiding a second
+file-backed nonzero state image changes packaging size without changing the
+runtime aperture, replay capacity, or state semantics.
 
 Each initial bootstrap or later steady-state recovery episode is finite. The
 supervisor permits five attempts with `1/2/4/8` second virtual-counter backoffs

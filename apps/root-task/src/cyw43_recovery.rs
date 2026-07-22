@@ -43,7 +43,7 @@ pub(crate) const fn fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool
 }
 
 pub(crate) const fn fault_detail_allows_same_command_retry(detail: u16) -> bool {
-    matches!(detail, 0x5103 | 0x532b)
+    detail == 0x5103
 }
 
 pub(crate) const fn firmware_release_fault_requires_engine_recovery(op: u16, detail: u16) -> bool {
@@ -83,7 +83,7 @@ mod tests {
         assert!(!fault_detail_allows_sdio_owner_recovery(0x5306));
         assert!(!fault_detail_allows_sdio_owner_recovery(0x53ff));
         assert!(fault_detail_allows_same_command_retry(0x5103));
-        assert!(fault_detail_allows_same_command_retry(0x532b));
+        assert!(!fault_detail_allows_same_command_retry(0x532b));
         assert!(!fault_detail_allows_same_command_retry(0x532a));
         assert!(!fault_detail_allows_same_command_retry(0x5102));
     }

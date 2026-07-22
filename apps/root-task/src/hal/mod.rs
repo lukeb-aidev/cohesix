@@ -88,7 +88,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
     DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
     DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
-    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1917,6 +1918,8 @@ const PI4_VL805_DMA_BUS_ALIAS_AND: u64 = 0x0000_0000_ffff_ffff;
 const PI4_SDIO_DMA_BUS_ALIAS_OR: u64 = 0x0000_0000_c000_0000;
 #[cfg(feature = "kernel")]
 const PI4_SDIO_DMA_BUS_ALIAS_AND: u64 = 0x0000_0000_3fff_ffff;
+#[cfg(feature = "kernel")]
+const PI4_SDIO_DMA_PRIVATE_PAGE_COUNT: usize = 2 + DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES;
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4003,7 +4006,7 @@ impl<'a> KernelHal<'a> {
             return Ok(false);
         }
         let sdio_dma_owned = dma_owned && hot_path == driver_task::DriverTaskHotPath::SdioHost;
-        if sdio_dma_owned && pages != 4 {
+        if sdio_dma_owned && pages != PI4_SDIO_DMA_PRIVATE_PAGE_COUNT {
             return Err(HalError::Unsupported("driver-runtime-sdio-dma-page-budget"));
         }
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
@@ -5864,7 +5867,14 @@ mod tests {
     fn runtime_init_descriptor_builder_records_sdio_dma_authority() {
         let hot_path = super::driver_task::DriverTaskHotPath::SdioHost;
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
-            hot_path, 256, 16, 3, 4, 32, false, true,
+            hot_path,
+            256,
+            16,
+            3,
+            super::PI4_SDIO_DMA_PRIVATE_PAGE_COUNT as u16,
+            32,
+            false,
+            true,
         );
         let mut builder = super::RuntimeInitDescriptorBuilder::new(
             spec,
@@ -5905,7 +5915,10 @@ mod tests {
             )
             .unwrap();
 
-        let dma_paddrs = [0x0010_0000, 0x0020_0000, 0x0030_0000, 0x0040_0000];
+        let mut dma_paddrs = [0usize; super::PI4_SDIO_DMA_PRIVATE_PAGE_COUNT];
+        for (index, paddr) in dma_paddrs.iter_mut().enumerate() {
+            *paddr = 0x0010_0000usize + index * 0x0010_0000;
+        }
         for paddr in dma_paddrs {
             builder.add_dma_page(paddr).unwrap();
         }
@@ -5924,7 +5937,7 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
                 super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR + page_bytes,
                 dma_paddrs[1],
-                3,
+                super::PI4_SDIO_DMA_PRIVATE_PAGE_COUNT - 1,
                 1,
                 false,
             )
@@ -5966,7 +5979,7 @@ mod tests {
             pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_DMA,
             pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
             (super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR + page_bytes) as u64,
-            3,
+            (super::PI4_SDIO_DMA_PRIVATE_PAGE_COUNT - 1) as u16,
         ));
         let dma_arena = descriptor.resource_ranges[..usize::from(descriptor.resource_range_count)]
             .iter()
@@ -5981,7 +5994,7 @@ mod tests {
             hot_path.as_u32(),
             super::driver_task::DRIVER_TASK_ROLE_SDIO_BIT as u32,
             3,
-            4,
+            super::PI4_SDIO_DMA_PRIVATE_PAGE_COUNT as u16,
             32,
         ));
     }

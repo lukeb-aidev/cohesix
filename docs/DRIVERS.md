@@ -343,6 +343,12 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   response-body records cannot consume the three linked-serial protocol-tail
   slots reserved for the terminal ACK/END and prompt, so backpressure cannot
   strand the physical-response fence or block later serial/USB input.
+- `usb probe-kbd` emits only its one-slice result, explicit
+  `continuation=pending|terminal` state, cached runtime contract, verdict, and
+  terminal `OK`; it does not reuse the verbose `usb status` dump. The complete
+  command response must fit below the 2,048-byte serial output bound. A pending
+  command-owned probe cursor advances by one operation on each later
+  `LocalSeat` turn and restores the prior polling policy when it terminates.
 - `wifi diag` is likewise a single cached read: it never performs the old
   dump/probe/dump sequence, and retained progress is explicitly labelled as
   historical when a newer terminal fault exists. `netstats` and `smp activity`
@@ -396,6 +402,10 @@ This as-built closure is authorized by Milestone 26d task
 `m26b-wifi-sdio-notification-dpc-closure`.
 
 - SDIO is the sole SDHCI owner; CYW43 submits bounded bus-link operations.
+- After engine initialization, the SDIO runtime accepts only the fixed-layout
+  typed reciprocal descriptor. The former aux-packed raw command shape is
+  rejected before controller access; it is not a compatibility or diagnostic
+  service lane.
 - Linux `mmc-bcm2835`/MMC-SDIO and `brcmfmac` ordering is the behavioral
   reliability oracle, adapted to the linked-runtime authority boundary rather
   than copied as a root-owned driver. The external-DMA adaptation was checked
@@ -412,6 +422,14 @@ This as-built closure is authorized by Milestone 26d task
   startup host configuration, `CMD0`, discovery `CMD5(0)`, bounded ready
   `CMD5(OCR)`, `CMD3`, and `CMD7` with the required short-busy R1b response. Generation
   reset completion, enumeration, and generation commit remain separate turns.
+  Power sequencing is itself retained: engine-init state/health/policy/IRQ
+  publication, firmware property post/reply, WL_ON mailbox service,
+  reset issue/poll, clock disable/program/stable-poll/enable, host-status repair,
+  and generation reset each consume separate outer turns. Startup host
+  configuration and generic CMD5/CMD52/CMD53 service use the same retained
+  request owner. Generation commit resets the reciprocal DPC ring before it
+  publishes generation state and health, then writes interrupt-enable and
+  signal-enable policy on separate turns.
   After CMD7, a request- and generation-bound card-lane cursor reads CCCR
   revision and capabilities on separate outer turns. It rejects an unsupported
   revision, missing `CAP_SMB`, or a low-speed card without `4BLS` before any
@@ -524,25 +542,75 @@ This as-built closure is authorized by Milestone 26d task
   rendezvous, grant, and poll is a separate root EventPump turn. These are
   scheduling admissions for one immutable operation, not private send/poll
   loops or legacy driver fallbacks.
-- Root-task must not wait synchronously for CMD52/CMD53 credit, firmware
+- Clearing a root-to-runtime transport also clears its cached progress magic,
+  sequence, phase, and auxiliary word. Progress evidence is scoped to one
+  transport generation; a rebound endpoint cannot inherit an earlier issued
+  action and poison the replacement generation.
+- Root-task must not wait synchronously for CMD5/CMD52/CMD53 credit, firmware
   replies, or RX drain work.
+- The production EventPump is configured in place and borrowed by both the
+  Genet and deferred-WiFi console loops. The retained CYW43 supervisor is reset
+  in place between bounded outer attempts. This avoids nested by-value copies
+  of the 54-KiB pump and 46-KiB supervisor on the 256-KiB root stack while
+  preserving one no-allocation owner.
 - Each SDHCI request follows the selected Pi 4 `mmc-bcm2835` register contract.
-  The owner refreshes `TIMEOUT_CONTROL=0x0e`, performs the immediate 16-bit
-  block-size then block-count writes used by that driver, preserves boundary
-  argument 7, writes argument/transfer-mode/command, and starts the external
-  BCM2835 DMA engine immediately after command issue. The external engine does
-  not set `SDHCI_TRNS_DMA`; that bit belongs to SDHCI's internal DMA mode, not
-  Linux's `dmaengine` path. SDHCI `readl`/`writel` access retains the AArch64
-  device-ordering barriers used by Linux. Request-local interrupt policy
-  enables and acknowledges `DMA_END` as progress/status, but `DMA_END` never
-  substitutes for `DATA_END`; asynchronous `CARD_INT` remains outside
-  request-local W1C ownership.
-- The compiler-declared SDIO owner has exactly three MMIO pages and four low,
+  Every CMD5, CMD52, and CMD53 first receives a separate 10-millisecond
+  pre-issue inhibit fence. The owner arms a fresh Linux-equivalent 10-second
+  request watchdog only after that fence succeeds and immediately before the
+  command can issue, so time spent proving ownership cannot consume the issued
+  request's lifetime. Data and short-busy requests refresh
+  `TIMEOUT_CONTROL=0x0e`. The bounded owner envelope reserves at most two
+  transfer attempts and an independent 220-millisecond containment interval
+  after each failed attempt; the second transfer attempt is admitted only when
+  the first failure was the entry-inhibit stage and therefore proves that no
+  command was issued. Any later failure is issued or issued-unknown and cannot
+  replay in the same generation. The shared ABI derives a 20.56-second
+  CYW43-to-SDIO child bound from those maxima plus its 100-millisecond handoff
+  margin. Root applies a 30.56-second per-child lease, preserving a full
+  10-second parent margin instead of racing the child's legal completion edge.
+  A lease renews only on a fresh `OWNER_REPLY` edge carrying the exact active
+  parent sequence, descriptor fingerprint, generation, and CYW43 aux marker.
+  Repeated, stale, wrong-sequence, or unrelated progress cannot renew it, and
+  the shared 1,024-action foreground-trace bound caps all renewals for one
+  immutable parent operation.
+
+  For data requests the retained owner first inspects, repairs, and verifies
+  block-gap state on separate turns; admits DMA authority and an idle-channel
+  snapshot; stages the complete immutable control-block chain; and separately
+  clears status and programs timeout, block size, block count, argument, and
+  transfer mode. One deliberate issue turn then writes COMMAND and publishes
+  DMA RESET, control-block address, and ACTIVE in Linux order, exactly as
+  `bcm2835_mmc_request()` hands the issued request to dmaengine without waiting
+  for the response IRQ. Those writes are the single indivisible issued action;
+  no other setup or poll is folded into it. The peripheral DREQ, not a software
+  response-first gate, controls data movement. Each later outer turn takes one
+  immutable SDHCI/DMA snapshot and joins the fresh response and R5, a possibly
+  coalesced `DATA_END`, and the terminal DMA edge in any arrival order. A
+  command/controller or R5 error after COMMAND is issued work: later turns
+  capture immutable telemetry, inspect/abort/poll/stop/reset/verify the DMA
+  channel, acknowledge/reset the host, restore the clock, recheck inhibit, and
+  take a final snapshot. The generation is poisoned and the request is never
+  replayed. The final DMA control block sets Linux's
+  `INT_EN`, while intermediate blocks do not. A full store-completion fence plus
+  same-channel status readback after ACTIVE prevents an immediate join poll
+  from observing a posted start as false completion.
+  Terminal DMA proof requires both `CONBLK_AD == 0` and this request's `CS.INT`;
+  the owner acknowledges that W1C edge with Linux's `INT | ACTIVE` value. The
+  external engine does not set
+  `SDHCI_TRNS_DMA`; that bit belongs to SDHCI's internal DMA mode, not Linux's
+  `dmaengine` path. SDHCI `readl`/`writel` access retains the AArch64
+  device-ordering barriers used by Linux. Request interrupt admission is the
+  exact named Linux mask `0x02ff000b`, plus `CARD_INT` only while that source is
+  armed; terminal detection still observes the broad `INT_STATUS` error mask
+  `0xffff8000`. Request-local policy enables and acknowledges `DMA_END` as
+  progress/status, but `DMA_END` never substitutes for `DATA_END`;
+  asynchronous `CARD_INT` remains outside request-local W1C ownership.
+- The compiler-declared SDIO owner has exactly three MMIO pages and ten low,
   uncached DMA pages. MMIO page 0 owns SDHCI at `0xfe300000`, page 1 owns the
   firmware mailbox aperture, and page 2 owns the BCM2835 DMA controller at
   `0xfe007000`; only physical channel 4 at offset `0x400` is admitted. DMA page
-  0 remains the mailbox request, page 1 holds 32-byte-aligned legacy control
-  blocks, and pages 2-3 are the SDIO bounce arena. Channel 4 uses SDIO DREQ 11,
+  0 remains the mailbox request, page 1 holds 32-byte-aligned control blocks,
+  and pages 2-9 are the 32-KiB SDIO bounce arena. Channel 4 uses SDIO DREQ 11,
   peripheral bus address `0x7e300020`, and the low-RAM bus alias
   `physical | 0xc0000000`. Missing, aliased, high-memory, misaligned, or
   incorrectly tagged resources fail descriptor admission before command issue.
@@ -558,29 +626,45 @@ This as-built closure is authorized by Milestone 26d task
   Linux's DMA-capable host behavior: Linux may retain PIO below its configured
   DMA barrier, while Cohesix fails closed instead because maintaining two
   physical data engines would create divergent ownership and recovery paths.
-  Function 1 firmware streaming retains the bounded 8,192-byte shared stage,
-  but drains it as at most four 2-KiB Linux `MEMBLOCK`-aligned CMD53 commands.
-  Each full command uses 64-byte blocks with count 32 and consumes its own
-  outer EventPump operation. Window edges and the true final remainder may
-  shorten a command; they do not select another transfer engine or
-  compatibility boot lane. Block mode is legal only after retained `CAP_SMB`
-  proof.
+  Function 1 firmware streaming retains one immutable 32-KiB backplane
+  aperture, matching brcmfmac's production RAM-write window rather than its
+  debug-only 2-KiB `MEMBLOCK` readback unit. MMC-shaped CMD53 partitioning
+  drains a full aperture as `511 * 64` bytes followed by `1 * 64` bytes; the
+  final aperture uses as many full 64-byte blocks as possible and one bounded
+  byte-mode tail after four-byte transport padding. Each child CMD53 is issued
+  once and retained across later owner turns. Window edges and the true final
+  remainder may shorten a command; they do not select another transfer engine
+  or compatibility boot lane. Block mode is legal only after retained
+  `CAP_SMB` proof.
 - Noncontiguous bounce pages produce one immutable control block per physical
   segment. Writes copy the reciprocal-ring payload into the bounce arena before
   the DMA store barrier; reads apply the DMA load barrier before copying back.
-  Completion requires both `CONBLK_AD == 0` with no DMA `CS.ERROR` and SDHCI
-  `DATA_END`, in either arrival order. `DMA_END` is enabled and acknowledged
+  The SDIO owner retains one exact external-DMA request cursor after command
+  and channel activation. Each later continuation samples one immutable SDHCI
+  plus DMA snapshot, latches response, `DATA_END`, and DMA terminal evidence
+  independently, and returns without a private wait loop. Lone
+  `SPACE_AVAIL`/`DATA_AVAIL` PIO-ready observations are never acknowledged in
+  this external-DMA lane, and block-gap control is required to remain zero.
+  Completion requires `CONBLK_AD == 0`, this request's terminal DMA `CS.INT`,
+  no DMA `CS.ERROR`, and SDHCI `DATA_END`, with the DMA and SDHCI terminal
+  edges accepted in either arrival order. The DMA edge is acknowledged exactly
+  once with `INT | ACTIVE`. `DMA_END` is enabled and acknowledged
   as Linux-shaped progress only; it cannot satisfy either terminal join
   condition. A deadline or either-engine error records pre-containment SDHCI
   and DMA state, clears `NEXTCB`, performs the bounded channel-local
   abort/reset, resets the SDHCI command/data path, and returns an issued-unknown
   result. It never replays that action in the same generation.
-- A failed owner transfer snapshots present state, interrupt status, response,
-  host/power/clock state, block-size/count, and DMA `CS`, `CONBLK_AD`, and
-  `NEXTCB` before command/data containment clears or resets either engine. The
-  returned fault frame therefore describes the terminal request, not the
-  recovered host. Root classifies absent DMA authority, never-started, active
-  or stuck, error, and chain-exhausted states and renders mandatory
+- A failed owner transfer snapshots telemetry version 3 before command/data
+  containment clears or resets either engine. Its stable prefix contains
+  present state, interrupt status, response, host/power/clock state,
+  block-size/count, payload digest, and DMA `CS`, `CONBLK_AD`, and `NEXTCB`.
+  The version-3 extension adds the live SDHCI argument,
+  transfer-mode/command, timeout/block-gap, interrupt-enable, signal-enable,
+  and host-control-2 registers plus BCM2835 DMA `TI`, source, destination,
+  length, stride, and debug registers. The returned fault frame therefore
+  describes the terminal request, not the recovered host. Root classifies
+  absent DMA authority, never-started, active or stuck, error, and
+  chain-exhausted states and renders mandatory
   `reason`, `result`, `clock_state`, parent-request length, child-transfer
   length, and direct-versus-inferred gate fields on separate bounded lines so
   serial truncation cannot silently change the diagnosis.
@@ -658,6 +742,19 @@ This as-built closure is authorized by Milestone 26d task
   committed `RES_RELOAD` trigger; no CMD52 or alternate-address fallback is
   permitted after the word operation is issued.
 
+  After SoCRAM preparation and before the first firmware CMD53, that same
+  cursor invalidates every cached firmware-transfer fact and re-proves the live
+  card contract through retained phases: Function 1 block-size low/high reads,
+  CCCR capabilities with `CAP_SMB` and low-speed `4BLS` validation, four-bit
+  interface readback, SHS+EHS speed readback, ALP availability/readback, exact
+  RAM-window LOW/MID/HIGH writes, and exact LOW/MID/HIGH reads. Every CMD52 is
+  one child operation in one ordinary EventPump turn; the final local contract
+  commit consumes a later turn and publishes all derived authority atomically.
+  Any failed phase, stale owner/generation, or issued-unknown result invalidates
+  the complete contract and cannot replay. Production-chain failure-cut tests
+  traverse the reciprocal ring and real controller seam at every phase, proving
+  terminal deterministic failure and no second controller issue.
+
   The fresh firmware-download ALP request retains the same absolute one-second
   PMU deadline and validates its first readback, but unavailable reads are
   spaced by retained five-millisecond virtual-counter settles. The CMD52 read,
@@ -695,8 +792,46 @@ This as-built closure is authorized by Milestone 26d task
   raw-spin retry. Post-release write readiness likewise does not re-prime F2
   within the same generation; an ambiguous issued transfer poisons that
   generation, and pair recovery owns the only retained replay.
-- SDIO captures/clears the source and wakes CYW43; CYW43 drains bounded control,
-  event, and data work. Pending-command DPC arbitration is retained across
+  Typed `CONTROL_FRAME` and `ETH_TX`/EAPOL parents remain `Pending` across the
+  pure local F2 cursor-begin turn; local identity initialization is not a false
+  terminal `Idle`. Backplane LOW, MID, and HIGH writes, the fresh `IORx` sample,
+  and the sole Function 2 CMD53 then consume separate later turns with at most
+  one reciprocal owner operation each.
+- Post-F2 configuration preserves the pinned Linux BCM43455 lifecycle as
+  explicit retained phases. The Linux-ordered register work is
+  `HOSTINTMASK`, watermark, `DEVICE_CTL` read-modify-write with `F2WM`,
+  `MESBUSYCTRL`, `WAKEUPCTRL` read-modify-write with `HTWAIT`, `CARDCAP`, and
+  exact `FORCE_HT`. Cohesix retains `FUNCTIONINTMASK` as a separate Gate 10
+  phase immediately after `HOSTINTMASK`; it is not folded into the host-mask
+  operation. Each read, write, completion observation, and later reprime phase
+  consumes its own outer EventPump turn. Read-modify-write preserves unrelated
+  `DEVICE_CTL` and `WAKEUPCTRL` bits. An issued-unknown phase poisons the
+  generation, stale completion cannot advance the cursor, and no earlier
+  phase is replayed in that generation.
+- Root retry authority is parent-operation-aware. A descriptor-transfer fault
+  proves same-generation non-issuance only when detail `0x5103` reports entry
+  inhibit at stage 1 and the retained parent is one physical action:
+  `FIRMWARE_CHUNK`, `NVRAM_CHUNK`, `NVRAM_TAIL`, `CONTROL_FRAME`, `ETH_TX`,
+  `RX_POLL`, or `CONTROL_POLL`. `TRANSPORT_INIT`, `FIRMWARE_PREP`, `RELEASE`,
+  and `CONTROL_EXCHANGE` are composite parents; an earlier child may already
+  have committed when their final nested SDIO child reports entry inhibit.
+  Those parents always leave through generation-bound pair recovery, never a
+  fresh parent publication. Maintenance, association, key install, BSSID
+  refresh, and optional bootstrap controls follow the same op11 rule. Optional
+  continuation is admitted only for a valid firmware semantic
+  `UNSUPPORTED`/`BADARG` response, never for a transport fault, and transport
+  telemetry is not quieted merely because the requested iovar was optional.
+- SDIO owns the host CARD_INT mask/rearm and wakes CYW43; CYW43 owns dongle/FIFO
+  source inspection and drains bounded control, event, and data work. The
+  generation-bound `DPC_ACTIVATE` owner turn performs no Function 1
+  `RFRAMEBCLO`/`RFRAMEBCHI` CMD52 reads. Matching Linux's MMC-host layering, it
+  publishes an already-latched host `CARD_INT`, or advances a retained masked
+  rearm when none is latched. The level route remains masked until separately
+  admitted state, health, `INT_ENABLE`, `SIGNAL_ENABLE`, ring, disposition, IRQ
+  acknowledgement, and signal phases complete; each phase performs at most one
+  register or owner action. The retained CYW43 DPC inspects the dongle source on
+  later admitted turns, removing the former two-CMD52 private owner subpath.
+  Pending-command DPC arbitration is retained across
   quanta: a peer/IRQ notification admits at most one DPC service action, while
   one exact root endpoint rendezvous admits at most one foreground child
   action. Any remaining foreground work blocks for another endpoint
@@ -705,6 +840,19 @@ This as-built closure is authorized by Milestone 26d task
   grant into retained quanta. Neither path contains a private yield/resignal
   loop; peer notifications report peer work or wake the owner to inspect an
   already-published exact grant and never grant a quantum by themselves.
+  A DPC event's immutable source/frame-length hint is admitted only when its
+  sequence first becomes active. Retained grant and completion turns continue
+  from the DPC cursor without reapplying that hint; otherwise a completed F2
+  read could resurrect `I_HMB_FRAME_IND` and reread the same frame forever.
+  A different event sequence arriving while one is active poisons the current
+  generation instead of merging two event identities.
+- DPC 32-bit backplane writes for SDIO-core interrupt-status W1C and firmware
+  mailbox ACK/NAK are one atomic little-endian, incrementing, four-byte
+  Function 1 CMD53 child action. They are never split into four bytewise CMD52
+  actions, so a newly arriving interrupt cause cannot be exposed to a partial
+  byte-clear window. Submission and completion remain separate retained
+  quanta, and an issued-unknown word write is never replayed in the same
+  generation.
 - Each retained foreground phase snapshots the committed DPC producer. Events
   through that watermark drain first; later level-triggered publications stay
   queued until after one foreground quantum. A new snapshot before the next
@@ -830,6 +978,11 @@ This as-built closure is authorized by Milestone 26d task
   prevents recovery from relocking a steady-path session, orphaning a
   possibly-issued join, or creating extra epoch transitions from duplicate
   faults.
+- For the shared op11 control lane, only a pre-transmit `NOT_READY` result or a
+  decoded firmware reply is known-terminal. Any timeout after the Function 2
+  transmit is issued-unknown: association cannot emit Gate 7a, PTK/GTK and
+  SCB/filter/BSSID cursors cannot advance, and bootstrap/maintenance callers
+  must leave through the ordered pair restart without same-generation replay.
 - One central CYW43 operation permit is opened for each ordinary EventPump
   turn. At most one reciprocal CYW43/SDIO runtime or HAL operation may claim
   it. Descriptor replay, firmware/NVRAM streaming, core release, control and
@@ -1008,11 +1161,24 @@ autonomous intake poll survives a lost initial best-effort root endpoint send.
 Duplicate or stale deferred records cannot replay work or advance a replacement
 generation. Recovery tests also prove that context-replay success cannot reset
 the one-pair-restart-per-attempt bound and that only attached address/TCP
-network-ready proof resets the streak.
+  network-ready proof resets the streak.
+Production-chain coverage additionally drives both control and EAPOL TX through
+the exact five children (three window CMD52 writes, fresh IORx CMD52 read, and
+one F2 CMD53 write), drives the 18-child post-F2 release through real DPC
+activation, and lets a real DPC event consume owner-backed status/F2/empty
+confirmation work before a later queue-only foreground poll. The queue-only
+test performs exactly 256 separately admitted control/RX polls with zero SDIO
+owner operations. Terminal pre-issue, issued-unknown, stale-generation,
+fingerprint-mutation, timeout, and corrupt-grant cuts preserve the immutable
+ticket and cannot issue a second child.
 The fixed 1,024-action trace and 128 KiB replay payload retain their full
-capacity in loader-zeroed `SHT_NOBITS` storage. Only the smaller, semantically
-nonzero CYW43 baseline snapshot is file-backed; packaging must not shrink,
-strip, or alias a runtime image to satisfy the rootfs size guard.
+capacity in loader-zeroed `SHT_NOBITS` storage. The full CYW43 baseline slot is
+also an explicitly invalid `MaybeUninit` slot in loader-zeroed storage and
+becomes readable only after exact parent admission copies the live state and
+release-publishes validity. This avoids a second file-backed nonzero state image
+without changing runtime memory, replay capacity, or state semantics;
+packaging must not shrink, strip, or alias a runtime image to satisfy the
+rootfs size guard.
 Operator service runs only after the preceding scoped HAL borrow and service
 guards are released. Serial production-chain tests publish staged bytes through
 the real reciprocal ring, delay the child completion across an outer-turn
