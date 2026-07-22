@@ -12984,6 +12984,31 @@ def test_gate_summary_treats_peer_assisted_nettest_as_ready_for_netstats() -> No
     assert gates.wifi_blocker == "netstats-missing"
 
 
+def test_gate_summary_does_not_credit_started_nettest_as_gate_ten() -> None:
+    """Command admission is not terminal NETTEST success evidence."""
+
+    events = normalizer.parse_events(
+        [
+            "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+            "server=192.168.10.1 lease_s=3600",
+            "OK NETTEST detail=started",
+            "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+            "netstats: mode=dhcp policy=wifi active=wifi standby=none "
+            "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 "
+            "dhcp=bound",
+            "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 "
+            "eapol_start=1 eapol_secure=1",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.wifi_gate == 9
+    assert gates.wifi_blocker != "none"
+    assert record["NETTEST_PROOF"] == "no"
+
+
 def test_gate_summary_clears_exact_after_peer_assisted_netstats_ready() -> None:
     events = normalizer.parse_events(
         [
@@ -14041,6 +14066,43 @@ def test_bootstrap_supervisor_blocked_preflight_remains_acceptance_red() -> None
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 0
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "serial-blocked"
+
+
+def test_bootstrap_supervisor_accepts_serial_cutover_preflight_suffix() -> None:
+    """The pre-cutover queen-log record is a legal attempt-zero snapshot."""
+
+    line = (
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=0 status=preflight "
+        "backoff_ms=250 next_attempt_ms=250 serial=blocked "
+        "local_seat=enabled recovery=full console_seq=1 "
+        "telemetry_sinks=serial+queen-log prompt_refresh=no"
+    )
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([line])
+    ).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 0
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "serial-blocked"
+
+
+def test_bootstrap_supervisor_rejects_preflight_suffix_after_attempt_zero() -> None:
+    """All active attempts still require the full operator-facing suffix."""
+
+    line = (
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin "
+        "backoff_ms=0 next_attempt_ms=250 serial=blocked "
+        "local_seat=enabled recovery=full console_seq=1 "
+        "telemetry_sinks=serial+queen-log prompt_refresh=no"
+    )
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([line])
+    ).to_record()
+
+    assert (
+        record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
+        == "production-suffix-incomplete"
+    )
 
 
 @pytest.mark.parametrize(

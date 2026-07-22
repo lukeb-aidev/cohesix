@@ -10322,16 +10322,30 @@ where
         fault: crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: evidence sdio_owner_transfer chunk_off={} payload_off={} len={} len_scope=child-transfer cmd53_count={} desc_blkcnt={} host_blkcnt={} increment={} block_mode={} mode={}",
+            "wifi: evidence sdio_owner_transfer chunk_off={} payload_off={} len={} len_scope=child-transfer increment={} block_mode={} mode={}",
             fault.chunk_offset,
             fault.payload_offset,
             fault.len,
-            fault.cmd53_count,
-            fault.desc_block_count,
-            fault.host_block_count,
             Self::yes_no(fault.increment),
             Self::yes_no(fault.block_mode),
             Self::wifi_sdio_owner_mode_label(fault),
+        ))
+    }
+
+    fn wifi_diag_sdio_owner_progress(
+        fault: crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let remaining_blocks = (fault.block_size_count_reg >> 16) as u16;
+        let completed_blocks = fault.host_block_count.saturating_sub(remaining_blocks);
+        format_message(format_args!(
+            "wifi: evidence sdio_owner_progress block_size={} cmd53_count={} desc_blkcnt={} host_initial_blkcnt={} host_remaining_blkcnt={} completed_blocks={} transfer_mode=0x{:04x}",
+            fault.block_size,
+            fault.cmd53_count,
+            fault.desc_block_count,
+            fault.host_block_count,
+            remaining_blocks,
+            completed_blocks,
+            fault.transfer_mode,
         ))
     }
 
@@ -10397,9 +10411,13 @@ where
         fault: crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: evidence sdio_dma authority={} state={} cs=0x{:08x} conblk=0x{:08x} nextcb=0x{:08x}",
+            "wifi: evidence sdio_dma authority={} state={} active={} end={} held={} error={} cs=0x{:08x} conblk=0x{:08x} nextcb=0x{:08x}",
             Self::wifi_sdio_dma_authority_label(fault),
             Self::wifi_sdio_dma_state_label(fault),
+            Self::yes_no(fault.dma_cs != u32::MAX && fault.dma_cs & (1 << 0) != 0),
+            Self::yes_no(fault.dma_cs != u32::MAX && fault.dma_cs & (1 << 1) != 0),
+            Self::yes_no(fault.dma_cs != u32::MAX && fault.dma_cs & (1 << 5) != 0),
+            Self::yes_no(fault.dma_cs != u32::MAX && fault.dma_cs & (1 << 8) != 0),
             fault.dma_cs,
             fault.dma_conblk,
             fault.dma_nextcb,
@@ -10471,6 +10489,7 @@ where
         };
         let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
         let progress_present = Self::wifi_driver_task_runtime_progress_present();
+        let pinctrl = crate::hal::pi4_wifi::wifi_sdio_pinctrl_snapshot();
         if source == "debug-handle-unavailable"
             && current_net_unavailable_detail.is_none()
             && host_eapol_exact.is_none()
@@ -10478,6 +10497,7 @@ where
             && fault.is_none()
             && sdio_status.is_none()
             && !progress_present
+            && !pinctrl.attempted
             && !live_net_supersedes_runtime
         {
             return false;
@@ -10488,6 +10508,7 @@ where
             && fault.is_none()
             && sdio_status.is_none()
             && !progress_present
+            && !pinctrl.attempted
             && !live_net_supersedes_runtime
         {
             return false;
@@ -10498,6 +10519,16 @@ where
                 "wifi: driver-task bootstrap failure contract={} reason={} stage=runtime-resource-admission source={source}",
                 failure.contract_name(),
                 failure.reason.as_str(),
+            ));
+            self.emit_console_line(detail.as_str());
+        }
+
+        if pinctrl.attempted {
+            let detail = format_message(format_args!(
+                "wifi: evidence sdio_pinctrl state={} fsel3=0x{:08x} pull2=0x{:08x} selected_fsel_mask=0x3ffff000 required_fsel=0x3ffff000 selected_pull_mask=0x0000fff0 required_pull=0x00005540 owner=hal source=stable-readback",
+                pinctrl.state_label(),
+                pinctrl.fsel3,
+                pinctrl.pull2,
             ));
             self.emit_console_line(detail.as_str());
         }
@@ -11893,6 +11924,8 @@ where
                 self.emit_console_line(sdio_owner.as_str());
                 let owner_transfer = Self::wifi_diag_sdio_owner_transfer(owner_fault);
                 self.emit_console_line(owner_transfer.as_str());
+                let owner_progress = Self::wifi_diag_sdio_owner_progress(owner_fault);
+                self.emit_console_line(owner_progress.as_str());
                 let status = Self::wifi_diag_sdio_transfer_status(owner_fault);
                 self.emit_console_line(status.as_str());
                 let host = Self::wifi_diag_sdio_host_status(owner_fault);
@@ -24798,6 +24831,7 @@ mod tests {
         let control = KernelConsoleTestPump::wifi_diag_cyw43_fault_control(fault, true);
         let owner_identity = KernelConsoleTestPump::wifi_diag_sdio_owner_identity(owner);
         let owner_transfer = KernelConsoleTestPump::wifi_diag_sdio_owner_transfer(owner);
+        let owner_progress = KernelConsoleTestPump::wifi_diag_sdio_owner_progress(owner);
         let transfer_status = KernelConsoleTestPump::wifi_diag_sdio_transfer_status(owner);
         let host_status = KernelConsoleTestPump::wifi_diag_sdio_host_status(owner);
         let dma_status = KernelConsoleTestPump::wifi_diag_sdio_dma_status(owner);
@@ -24834,8 +24868,18 @@ mod tests {
         assert!(
             owner_transfer.contains("len=64")
                 && owner_transfer.contains("len_scope=child-transfer")
-                && owner_transfer.contains("cmd53_count=1"),
+                && owner_transfer.contains("increment=yes")
+                && owner_transfer.contains("block_mode=yes"),
             "{owner_transfer}"
+        );
+        assert!(
+            owner_progress.contains("block_size=64")
+                && owner_progress.contains("cmd53_count=1")
+                && owner_progress.contains("host_initial_blkcnt=1")
+                && owner_progress.contains("host_remaining_blkcnt=1")
+                && owner_progress.contains("completed_blocks=0")
+                && owner_progress.contains("transfer_mode=0x0000"),
+            "{owner_progress}"
         );
         assert!(
             transfer_status.contains("transfer_reason=sdhci-data-end-deadline")
@@ -24852,6 +24896,8 @@ mod tests {
         assert!(
             dma_status.contains("authority=valid")
                 && dma_status.contains("state=active-or-stuck")
+                && dma_status.contains("active=yes")
+                && dma_status.contains("held=no")
                 && dma_status.contains("cs=0x00000001")
                 && dma_status.contains("conblk=0xc0102000"),
             "{dma_status}"

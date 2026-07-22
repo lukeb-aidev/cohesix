@@ -21,7 +21,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | QEMU current source | Target-qualified Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. | Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 current source, offline | Pi-qualified Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. | A board boot, current-image device readiness, TCP, or benchmark result. |
-| Pi 4 current image, live | Exact image `cfc034bb5417` / `d3b4acf30a59af1cbdf3c0a9d6401dd7193552fc17250707164ef3287d379738` starts both linked runtimes and reaches Gate 6. Its first 8-KiB/count-128 firmware CMD53 receives a clean R5, fills the 128-byte host FIFO, then stalls with `DATA_END` absent and BCM2835 DMA held by DREQ. | No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. Retained card adoption, mandatory pull-up clear, `DMA_END` handling, and 2-KiB `MEMBLOCK` commands remain source-only until rebuilt, flashed, and captured. |
+| Pi 4 current image, live | Exact image `e14414d852cc` / `b0a81de968123e5ed003c57229c6f1105bfa91dcb2889adfad1e496cab74ac8f` starts both linked runtimes, completes bounded five-attempt supervision, keeps the operator console live, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5, advances exactly two 64-byte blocks, then stalls with `DATA_END` absent and BCM2835 DMA active/held. | No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. Correct HAL GPIO34-GPIO39 pinctrl is source-only until rebuilt, flashed, and captured; the current hardware-proven pull-up-policy skip remains unchanged. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
 active. It may be newer than checked-in records, but only the repository's
@@ -816,12 +816,15 @@ published only after their exact irreversible child completions.
 Serial evidence should name the exact frontier rather than leaving the generic
 backplane marker as an ALP diagnosis: ALP request, ALP poll, FORCE_ALP, its
 65-microsecond settle, the Pi pull-up-policy skip, ChipCommon read, and each
-LOW/MID/HIGH backplane-window CMD52 have separate progress markers. Current Pi
-production must emit `BACKPLANE_PULLUP_SKIPPED` and no Function 1 descriptor for
-`SBSDIO_FUNC1_SDIOPULLUP`. Upstream brcmfmac treats that optional write as best
-effort, but a post-issue fault on this BCM2711 path can poison the next CMD52;
-resetting the host does not prove card-side non-issue. Initial attach and
-generation reprobe therefore reject it. Any other issued-unknown,
+LOW/MID/HIGH backplane-window CMD52 have separate progress markers. Before the
+SDIO engine starts, HAL must configure GPIO34-GPIO39 as ALT3 with CLK pull-none
+and CMD/DAT0-DAT3 pull-up using BCM2711 register value `1`, then read back every
+selected field. Missing or mismatched readback blocks Wi-Fi before its first
+runtime operation. Production then emits `BACKPLANE_PULLUP_SKIPPED` and no
+Function 1 descriptor for `SBSDIO_FUNC1_SDIOPULLUP`: the immediately preceding
+physical image proved that the optional write could poison the next CMD52, and
+host-pinctrl correction alone is the isolated causal change in this candidate.
+Any other issued-unknown,
 `OWNER_PATH_POISONED`, stale, or malformed result must poison the generation and
 request the ordered pair restart; host quiescence is not permission to continue
 or retry in place.

@@ -2318,6 +2318,11 @@ pub fn prepare_cyw43_net_console_config(
             "deferred CYW43 supervisor requires a Wi-Fi interface policy",
         ));
     }
+    if !crate::hal::pi4_wifi::wifi_sdio_pinctrl_ready_for_bootstrap() {
+        return Err(NetConsoleError::InvalidConfig(
+            "Pi 4 Wi-Fi SDIO pinctrl readback is not ready",
+        ));
+    }
     Ok(config)
 }
 

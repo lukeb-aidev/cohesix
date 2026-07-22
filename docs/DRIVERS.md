@@ -609,24 +609,33 @@ This as-built closure is authorized by Milestone 26d task
   elapsed-time bound. The first read validates all synchronous writable bits,
   excluding only asynchronous availability bits.
 
+  Before either linked runtime starts, HAL establishes the Linux Pi pinctrl
+  state for GPIO34-GPIO39: ALT3 on all six pins, no pull on CLK, and BCM2711
+  register-native pull-up value `1` on CMD/DAT0-DAT3. It reads GPFSEL3 and
+  GPPUPPDN2 back and fails Wi-Fi bootstrap closed unless every selected field
+  matches. This is deliberately after lower child-only DMA capability admission
+  but before SDIO engine construction, so the monotonic seL4 device-untyped
+  cursor and the Linux `pinctrl-before-mmc-probe` ordering both hold.
+
   After `FORCE_ALP`, the retained cursor preserves the 65 microsecond settle.
   Both nonterminal and terminal deadline observations consume their admitted
-  turn. A later `pull-up policy` turn deliberately does not issue
+  turn. The later `pull-up policy` turn deliberately does not issue
   `SBSDIO_FUNC1_SDIOPULLUP=0` on the current BCM2711 profile. Upstream brcmfmac
-  issues that optional write with a null error sink, but Cohesix hardware
-  evidence showed that its failed CMD52 can poison the following command, and
-  the linked owner cannot prove safe continuation after issued-unknown
-  ownership. The policy turn publishes `BACKPLANE_PULLUP_SKIPPED`, performs no
-  child-runtime/HAL operation, and returns; only a later turn may begin the
-  ChipCommon window. Initial attach and generation reprobe reject every
-  descriptor targeting `SBSDIO_FUNC1_SDIOPULLUP`.
+  issues that optional write with a null error sink, but fresh Cohesix hardware
+  evidence showed its issued command can leave the following CMD52 with
+  END_BIT/INDEX errors. Correcting the independently required host pinctrl does
+  not prove that an unknown card-side completion is safe to ignore. The policy
+  turn publishes `BACKPLANE_PULLUP_SKIPPED`, performs no child-runtime/HAL
+  operation, and returns; only a later turn may begin the ChipCommon window.
+  Initial attach and generation reprobe reject every descriptor targeting
+  `SBSDIO_FUNC1_SDIOPULLUP`.
 
   Attach diagnostics identify the exact retained frontier with distinct
   `BACKPLANE_ALP_REQUEST`, `BACKPLANE_ALP_POLL`,
   `BACKPLANE_FORCE_ALP`, `BACKPLANE_FORCE_ALP_SETTLE`,
   `BACKPLANE_PULLUP_SKIPPED`, and `BACKPLANE_CHIPCOMMON_READ` progress.
-  `BACKPLANE_PULLUP_CLEAR` and `BACKPLANE_PULLUP_FAULT_CONTAINED` describe
-  legacy captures only and are not current-image acceptance progress.
+  `BACKPLANE_PULLUP_CLEAR` and `BACKPLANE_PULLUP_FAULT_CONTAINED` remain
+  decodable for earlier captures but are not current-image acceptance progress.
   The first ChipCommon access additionally
   publishes `BACKPLANE_WINDOW_LOW`, `BACKPLANE_WINDOW_MID`, and
   `BACKPLANE_WINDOW_HIGH` immediately before the matching CMD52 programming

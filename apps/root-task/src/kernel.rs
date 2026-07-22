@@ -4525,13 +4525,14 @@ fn bootstrap<P: Platform>(
     // monotonic seL4 device untyped. This retains no root VSpace alias; the
     // selected runtime consumes the HAL capability exactly once during child
     // construction.
+    let pi4_net_selection = crate::hal::driver_task::pi4_pre_root_net_bootstrap_selection();
     match hal.admit_selected_pi4_runtime_mmio() {
         Ok(pages) => {
             let mut line = heapless::String::<192>::new();
             let _ = write!(
                 line,
                 "DRIVER_TASK_EARLY_MMIO_ADMISSION selection={:?} pages={} owner=hal-unmapped-child-cap status=ready",
-                crate::hal::driver_task::pi4_pre_root_net_bootstrap_selection(),
+                pi4_net_selection,
                 pages,
             );
             boot_log::force_uart_line(line.as_str());
@@ -4541,7 +4542,7 @@ fn bootstrap<P: Platform>(
             let _ = write!(
                 line,
                 "DRIVER_TASK_EARLY_MMIO_ADMISSION selection={:?} owner=hal-unmapped-child-cap status=failed err={}",
-                crate::hal::driver_task::pi4_pre_root_net_bootstrap_selection(),
+                pi4_net_selection,
                 err,
             );
             boot_log::force_uart_line(line.as_str());
@@ -4562,7 +4563,17 @@ fn bootstrap<P: Platform>(
             console.writeln_prefixed(line.as_str());
         }
     }
-    crate::hal::pi4_wifi::preseed_gpio_mmio(hal);
+    if matches!(
+        pi4_net_selection,
+        crate::hal::driver_task::Pi4PreRootNetBootstrapSelection::Wifi
+    ) {
+        // Linux establishes mmcnr pinctrl before probing mmc-bcm2835. Cohesix
+        // performs the equivalent one-time HAL action after lower child-only
+        // MMIO admission but before constructing either linked runtime.
+        let _ = crate::hal::pi4_wifi::prepare_wifi_sdio_pinctrl(hal);
+    } else {
+        crate::hal::pi4_wifi::preseed_gpio_mmio(hal);
+    }
 
     let driver_task_report = if let Some(reason) =
         live_driver_task_bootstrap_skip_reason(cfg!(feature = "net-backend-virtio"))

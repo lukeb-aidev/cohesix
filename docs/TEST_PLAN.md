@@ -209,6 +209,8 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo check -p pi4-driver-runtime --target aarch64-unknown-none`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::tests::runtime_`
 - Focused Linux-aligned CYW43 attach/transfer checks:
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib wifi_sdio_pinmux_matches_pi4_dtb_state -- --test-threads=1`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib wifi_sdio_pinmux_readback_rejects_each_wrong_function_or_pull -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib cyw43_backplane_alp_timing_matches_linux_wall_clock_window -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib cyw43_backplane_attach_skips_optional_pullup_write_before_chipcommon_window -- --test-threads=1`
   - `cargo test -p pi4-driver-runtime --lib cyw43_generation_reprobe_trace_never_targets_optional_pullup_register -- --test-threads=1`
@@ -656,6 +658,14 @@ turn and cannot issue another CMD52. Per-command progress must identify ALP
 request/poll, FORCE_ALP/settle, `BACKPLANE_PULLUP_SKIPPED`, ChipCommon read, and
 each LOW/MID/HIGH window CMD52 so a generic backplane phase cannot misclassify
 the stalled command.
+
+Before the first linked SDIO operation, HAL pinctrl coverage must prove
+GPIO34-GPIO39 ALT3, CLK pull-none, and CMD/DAT0-DAT3 pull-up with BCM2711
+register-native value `1`. Pure readback tests must accept the exact selected
+fields while preserving unrelated bits and reject every single selected-field
+function or pull mismatch. Target bootstrap must fail closed if that stable
+readback was not published, and passive `wifi diag` must render both complete
+GPFSEL3/GPPUPPDN2 words and the expected masked values.
 
 The production pull-up-policy turn must perform exactly zero CMD52, CMD53,
 child-runtime, or HAL operations and return before the first ChipCommon action.

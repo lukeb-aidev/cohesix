@@ -186,12 +186,38 @@ const EXPGPIO_BASE: u32 = 128;
 const PI4_WIFI_GPIO: u32 = EXPGPIO_BASE + 1;
 const GPIO_DIR_OUT: u32 = 1;
 const PI4_WIFI_SDIO_PINS: [u32; 6] = [34, 35, 36, 37, 38, 39];
-const PI4_WIFI_SDIO_PULLS: [u32; 6] = [0, 2, 2, 2, 2, 2];
+// BCM2711 GPPUPPDN uses a different encoding from the legacy `brcm,pull`
+// device-tree property: 0 means none, 1 means pull-up, and 2 means pull-down.
+// Linux translates the Pi 4 `brcm,pull = <0 2 2 2 2 2>` state before touching
+// this register. Keep the register-native values here so CMD and DAT0-DAT3 are
+// deterministically host-owned regardless of the separately retained
+// card-side extra-pull-up policy.
+const BCM2711_GPIO_PULL_NONE: u32 = 0;
+const BCM2711_GPIO_PULL_UP: u32 = 1;
+const PI4_WIFI_SDIO_PULLS: [u32; 6] = [
+    BCM2711_GPIO_PULL_NONE,
+    BCM2711_GPIO_PULL_UP,
+    BCM2711_GPIO_PULL_UP,
+    BCM2711_GPIO_PULL_UP,
+    BCM2711_GPIO_PULL_UP,
+    BCM2711_GPIO_PULL_UP,
+];
 const BCM2835_GPIO_FSEL_MASK: u32 = 0x7;
 const BCM2711_GPIO_PULL_MASK: u32 = 0x3;
 const BCM2711_GPIO_ALT3: u32 = 0x7;
 const BCM2711_GPFSEL0: usize = 0x00;
 const BCM2711_GPPUPPDN0: usize = 0xE4;
+const WIFI_SDIO_GPFSEL3_SELECTED_MASK: u32 = 0x3fff_f000;
+const WIFI_SDIO_GPFSEL3_REQUIRED: u32 = 0x3fff_f000;
+const WIFI_SDIO_GPPUPPDN2_SELECTED_MASK: u32 = 0x0000_fff0;
+const WIFI_SDIO_GPPUPPDN2_REQUIRED: u32 = 0x0000_5540;
+
+const WIFI_SDIO_PINCTRL_UNATTEMPTED: u32 = 0;
+const WIFI_SDIO_PINCTRL_READY: u32 = 1;
+const WIFI_SDIO_PINCTRL_FAILED: u32 = 2;
+static WIFI_SDIO_PINCTRL_STATE: AtomicU32 = AtomicU32::new(WIFI_SDIO_PINCTRL_UNATTEMPTED);
+static WIFI_SDIO_PINCTRL_FSEL3: AtomicU32 = AtomicU32::new(0);
+static WIFI_SDIO_PINCTRL_PULL2: AtomicU32 = AtomicU32::new(0);
 
 static PINNED_MAILBOX_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_GPIO_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
@@ -422,6 +448,33 @@ struct GpioBank {
     regs: MappedRegs,
 }
 
+/// Cached HAL readback of the Pi 4 Wi-Fi SDIO pinctrl prerequisite.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WifiSdioPinctrlSnapshot {
+    /// Whether the HAL attempted to establish the pinctrl state.
+    pub attempted: bool,
+    /// Whether every selected function and pull field matched after writes.
+    pub ready: bool,
+    /// Complete GPFSEL3 readback containing GPIO34-GPIO39.
+    pub fsel3: u32,
+    /// Complete GPPUPPDN2 readback containing GPIO34-GPIO39.
+    pub pull2: u32,
+}
+
+impl WifiSdioPinctrlSnapshot {
+    /// Stable label used by passive Wi-Fi diagnostics.
+    #[must_use]
+    pub const fn state_label(self) -> &'static str {
+        if self.ready {
+            "ready"
+        } else if self.attempted {
+            "failed"
+        } else {
+            "unattempted"
+        }
+    }
+}
+
 impl GpioBank {
     fn new<H>(hal: &mut H) -> Result<Self, HalError>
     where
@@ -442,7 +495,7 @@ impl GpioBank {
         Ok(Self { regs })
     }
 
-    fn configure_wifi_sdio_pins(&self) {
+    fn configure_wifi_sdio_pins(&self) -> WifiSdioPinctrlSnapshot {
         emit_breadcrumb(format_args!("[pi4-wifi] gpio sdio mux begin"));
         for &pin in &PI4_WIFI_SDIO_PINS {
             self.set_function(pin, BCM2711_GPIO_ALT3);
@@ -451,10 +504,28 @@ impl GpioBank {
             self.set_pull(pin, pull);
         }
         let fsel3 = self.read32(bcm2711_gpfsel_offset(PI4_WIFI_SDIO_PINS[0]));
-        let pud2 = self.read32(bcm2711_puppdn_offset(PI4_WIFI_SDIO_PINS[0]));
+        let pull2 = self.read32(bcm2711_puppdn_offset(PI4_WIFI_SDIO_PINS[0]));
+        let ready = wifi_sdio_pinctrl_readback_matches(fsel3, pull2);
+        WIFI_SDIO_PINCTRL_FSEL3.store(fsel3, Ordering::Release);
+        WIFI_SDIO_PINCTRL_PULL2.store(pull2, Ordering::Release);
+        WIFI_SDIO_PINCTRL_STATE.store(
+            if ready {
+                WIFI_SDIO_PINCTRL_READY
+            } else {
+                WIFI_SDIO_PINCTRL_FAILED
+            },
+            Ordering::Release,
+        );
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] gpio sdio mux ready fsel3=0x{fsel3:08x} pud2=0x{pud2:08x}"
+            "[pi4-wifi] gpio sdio mux status={} fsel3=0x{fsel3:08x} pull2=0x{pull2:08x} selected_fsel_mask=0x{WIFI_SDIO_GPFSEL3_SELECTED_MASK:08x} required_fsel=0x{WIFI_SDIO_GPFSEL3_REQUIRED:08x} selected_pull_mask=0x{WIFI_SDIO_GPPUPPDN2_SELECTED_MASK:08x} required_pull=0x{WIFI_SDIO_GPPUPPDN2_REQUIRED:08x}",
+            if ready { "ready" } else { "failed" },
         ));
+        WifiSdioPinctrlSnapshot {
+            attempted: true,
+            ready,
+            fsel3,
+            pull2,
+        }
     }
 
     fn set_function(&self, gpio: u32, function: u32) {
@@ -481,9 +552,9 @@ impl GpioBank {
         // SAFETY: `regs` is a mapped BCM2711 GPIO MMIO page owned by the HAL, and
         // all accesses use aligned 32-bit register offsets within that page.
         unsafe { ptr::write_volatile((base + offset) as *mut u32, value) };
-        for _ in 0..SDHCI_WRITE_DELAY_LOOPS {
-            spin_loop();
-        }
+        // Linux does not add a CPU-speed delay after these BCM2711 pinctrl
+        // writes. The same-register volatile readback below is the ordering
+        // point and the fail-closed proof that the selected fields landed.
     }
 }
 
@@ -513,6 +584,45 @@ fn update_bcm2711_gpio_pull(word: u32, gpio: u32, pull: u32) -> u32 {
     let shift = bcm2711_puppdn_shift(gpio);
     let mask = BCM2711_GPIO_PULL_MASK << shift;
     (word & !mask) | ((pull & BCM2711_GPIO_PULL_MASK) << shift)
+}
+
+fn wifi_sdio_pinctrl_readback_matches(fsel3: u32, pull2: u32) -> bool {
+    for (&pin, &pull) in PI4_WIFI_SDIO_PINS.iter().zip(PI4_WIFI_SDIO_PULLS.iter()) {
+        let function_shift = bcm2711_gpfsel_shift(pin);
+        if (fsel3 >> function_shift) & BCM2835_GPIO_FSEL_MASK != BCM2711_GPIO_ALT3 {
+            return false;
+        }
+        let pull_shift = bcm2711_puppdn_shift(pin);
+        if (pull2 >> pull_shift) & BCM2711_GPIO_PULL_MASK != pull {
+            return false;
+        }
+    }
+    true
+}
+
+/// Returns the last HAL-owned GPIO34-GPIO39 pinctrl proof without touching MMIO.
+#[must_use]
+pub fn wifi_sdio_pinctrl_snapshot() -> WifiSdioPinctrlSnapshot {
+    let state = WIFI_SDIO_PINCTRL_STATE.load(Ordering::Acquire);
+    WifiSdioPinctrlSnapshot {
+        attempted: state != WIFI_SDIO_PINCTRL_UNATTEMPTED,
+        ready: state == WIFI_SDIO_PINCTRL_READY,
+        fsel3: WIFI_SDIO_PINCTRL_FSEL3.load(Ordering::Acquire),
+        pull2: WIFI_SDIO_PINCTRL_PULL2.load(Ordering::Acquire),
+    }
+}
+
+/// Whether target CYW43 bootstrap may proceed past its HAL pinctrl prerequisite.
+#[must_use]
+pub fn wifi_sdio_pinctrl_ready_for_bootstrap() -> bool {
+    #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+    {
+        wifi_sdio_pinctrl_snapshot().ready
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
+    {
+        true
+    }
 }
 
 pub(crate) struct WifiBreadcrumbUartSuppression {
@@ -5426,6 +5536,43 @@ where
         "[pi4-platform] mmio preseeded gpio=no"
     });
     gpio
+}
+
+/// Establishes and verifies Linux-equivalent Pi 4 Wi-Fi SDIO pinctrl state.
+///
+/// The lower child-only DMA MMIO page must be admitted before this higher GPIO
+/// page is mapped from the monotonic seL4 device-untyped cursor. The kernel
+/// bootstrap therefore calls this after capability admission but before any
+/// SDIO runtime is constructed, powered, or allowed to issue a command.
+pub fn prepare_wifi_sdio_pinctrl<H>(hal: &mut H) -> bool
+where
+    H: DeviceHal<Error = HalError>,
+{
+    if !preseed_gpio_mmio(hal) {
+        WIFI_SDIO_PINCTRL_FSEL3.store(0, Ordering::Release);
+        WIFI_SDIO_PINCTRL_PULL2.store(0, Ordering::Release);
+        WIFI_SDIO_PINCTRL_STATE.store(WIFI_SDIO_PINCTRL_FAILED, Ordering::Release);
+        boot_log::force_uart_line(
+            "[pi4-platform] wifi sdio pinctrl status=failed reason=gpio-mmio-unavailable",
+        );
+        return false;
+    }
+    let Ok(gpio) = GpioBank::new(hal) else {
+        WIFI_SDIO_PINCTRL_FSEL3.store(0, Ordering::Release);
+        WIFI_SDIO_PINCTRL_PULL2.store(0, Ordering::Release);
+        WIFI_SDIO_PINCTRL_STATE.store(WIFI_SDIO_PINCTRL_FAILED, Ordering::Release);
+        boot_log::force_uart_line(
+            "[pi4-platform] wifi sdio pinctrl status=failed reason=gpio-bank-unavailable",
+        );
+        return false;
+    };
+    let snapshot = gpio.configure_wifi_sdio_pins();
+    boot_log::force_uart_line(if snapshot.ready {
+        "[pi4-platform] wifi sdio pinctrl status=ready owner=hal-before-linked-runtime"
+    } else {
+        "[pi4-platform] wifi sdio pinctrl status=failed reason=readback-mismatch"
+    });
+    snapshot.ready
 }
 
 pub fn preseed_mmio<H>(hal: &mut H)
@@ -36540,7 +36687,45 @@ mod tests {
         }
 
         assert_eq!(fsel3, 0x3fff_f000);
-        assert_eq!(pud2, 0x0000_aa80);
+        assert_eq!(pud2, 0x0000_5540);
+        assert!(wifi_sdio_pinctrl_readback_matches(fsel3, pud2));
+        assert!(!wifi_sdio_pinctrl_readback_matches(fsel3, 0x0000_aa80));
+    }
+
+    #[test]
+    fn wifi_sdio_pinmux_readback_rejects_each_wrong_function_or_pull() {
+        let initial_fsel3 = 0xa000_0005u32;
+        let initial_pull2 = 0x8000_0003u32;
+        let mut fsel3 = initial_fsel3;
+        let mut pull2 = initial_pull2;
+        for &pin in &PI4_WIFI_SDIO_PINS {
+            fsel3 = update_bcm2711_gpio_function(fsel3, pin, BCM2711_GPIO_ALT3);
+        }
+        for (&pin, &pull) in PI4_WIFI_SDIO_PINS.iter().zip(PI4_WIFI_SDIO_PULLS.iter()) {
+            pull2 = update_bcm2711_gpio_pull(pull2, pin, pull);
+        }
+        assert!(wifi_sdio_pinctrl_readback_matches(fsel3, pull2));
+        assert_eq!(
+            fsel3 & !WIFI_SDIO_GPFSEL3_SELECTED_MASK,
+            initial_fsel3 & !WIFI_SDIO_GPFSEL3_SELECTED_MASK,
+        );
+        assert_eq!(
+            pull2 & !WIFI_SDIO_GPPUPPDN2_SELECTED_MASK,
+            initial_pull2 & !WIFI_SDIO_GPPUPPDN2_SELECTED_MASK,
+        );
+
+        for &pin in &PI4_WIFI_SDIO_PINS {
+            assert!(!wifi_sdio_pinctrl_readback_matches(
+                update_bcm2711_gpio_function(fsel3, pin, 0),
+                pull2,
+            ));
+        }
+        for (&pin, &pull) in PI4_WIFI_SDIO_PINS.iter().zip(PI4_WIFI_SDIO_PULLS.iter()) {
+            assert!(!wifi_sdio_pinctrl_readback_matches(
+                fsel3,
+                update_bcm2711_gpio_pull(pull2, pin, pull ^ 0x1),
+            ));
+        }
     }
 
     #[test]

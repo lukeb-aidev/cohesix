@@ -98,6 +98,14 @@ CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE = re.compile(
     r"telemetry_sinks=serial\+qlog\+hdmi "
     r"prompt_refresh=yes$"
 )
+CYW43_BOOTSTRAP_SUPERVISOR_PREFLIGHT_SUFFIX_RE = re.compile(
+    r"^ serial=(?P<serial>blocked) "
+    r"local_seat=(?:enabled|disabled|ready) "
+    r"recovery=full "
+    r"console_seq=(?P<console_seq>[0-9]+) "
+    r"telemetry_sinks=serial\+queen-log "
+    r"prompt_refresh=no$"
+)
 CYW43_BOOTSTRAP_RETRY_BACKOFF_MS = (1_000, 2_000, 4_000, 8_000)
 CYW43_BOOTSTRAP_MAX_ATTEMPTS = 5
 U64_MAX = (1 << 64) - 1
@@ -5573,6 +5581,20 @@ def join_security_blocker_for_iovar(
     return None
 
 
+def wifi_nettest_ok_terminal_success(event: TraceEvent) -> bool:
+    """Return true only for a terminal successful ``OK NETTEST`` record."""
+
+    raw = event.raw.lower()
+    return (
+        event.domain == "wifi"
+        and raw.startswith("ok nettest")
+        and (
+            field_lower(event, "detail") in {"pass", "success"}
+            or re.search(r"(?:^|\s)success(?:\s|$)", raw) is not None
+        )
+    )
+
+
 def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     """Summarize the WiFi CYW43455 proof gate from HT through nettest."""
 
@@ -5772,6 +5794,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "exact_error",
         ):
             value = fields.get(key)
+            if raw.startswith("ok nettest") and key == "detail":
+                # Admission (for example detail=started) is neither a
+                # failure nor terminal self-test proof.
+                continue
             if key == "reason" and value and value.lower() == "net-ready":
                 continue
             if value and value not in {"none", "n/a"}:
@@ -6537,7 +6563,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 nettest_success_seen = True
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
-                if blocker.startswith("nettest-"):
+                if blocker in {"none", "unknown", "tcp-proof-missing"} or (
+                    blocker.startswith("nettest-")
+                ):
                     blocker = "netstats-missing"
             else:
                 if not (
@@ -6549,10 +6577,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     blocker = "nettest-failed"
             continue
         if raw.startswith("ok nettest"):
-            nettest_success_seen = True
-            gate = max(gate, 9)
-            post_f2_progress_seen = True
-            blocker = "netstats-missing"
+            if wifi_nettest_ok_terminal_success(event):
+                nettest_success_seen = True
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+                blocker = "netstats-missing"
             continue
         if raw.startswith("err nettest"):
             if explicit_blocker in direct_sdio_blockers | {
@@ -9049,11 +9078,10 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
     nettest_proof = False
     for event in events:
         raw = event.raw.lower()
-        detail = field_lower(event, "detail")
         if "[cohsh-net][auth] auth ok" in raw or "[net-console] auth ok" in raw:
             host_tcp_proof = True
             tcp_ready = True
-        if raw.startswith("ok nettest") and (detail == "pass" or "success" in raw):
+        if wifi_nettest_ok_terminal_success(event):
             nettest_proof = True
         if raw.startswith("err nettest") or "detail=net-disabled" in raw:
             host_tcp_proof = False
@@ -11265,10 +11293,7 @@ def wifi_nettest_step(event: TraceEvent) -> bool:
 
     raw = event.raw.lower()
     return event.domain == "wifi" and (
-        (
-            raw.startswith("ok nettest")
-            and (field_lower(event, "detail") == "pass" or "success" in raw)
-        )
+        wifi_nettest_ok_terminal_success(event)
         or raw_has(event, "[net-selftest] result", "tx_ok=true", "console_ok=true")
     )
 
@@ -11813,9 +11838,20 @@ def summarize_cyw43_bootstrap_supervisor(
             mark_blocker("malformed-line")
             continue
 
+        production_suffix = match.group("production_suffix")
         suffix_match = CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE.fullmatch(
-            match.group("production_suffix")
+            production_suffix
         )
+        if (
+            suffix_match is None
+            and match.group("attempt") == "0"
+            and match.group("status") == "preflight"
+        ):
+            suffix_match = (
+                CYW43_BOOTSTRAP_SUPERVISOR_PREFLIGHT_SUFFIX_RE.fullmatch(
+                    production_suffix
+                )
+            )
         if suffix_match is None:
             # Older records remain useful for attempt/backoff diagnosis, but
             # only the current full-fidelity UART record proves that serial,
