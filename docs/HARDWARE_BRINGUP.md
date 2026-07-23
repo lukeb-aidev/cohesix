@@ -400,8 +400,15 @@ operation; `wifi diag` labels cached progress as `last_progress` and
 profile, that cache is transport-generation scoped: clearing/rebinding the
 transport zeros progress magic, sequence, phase, and auxiliary identity before
 a replacement generation can be admitted. On the physical linked-runtime
-profile, `wifi probe-ht` reports cached state or a typed runtime-required error
-and never starts a root-owned live probe. `nettest` actively starts the bounded
+profile, `wifi probe-ht` exposes only cached root-driver state when that debug
+handle exists; the linked runtime returns a typed runtime-required error after
+printing the passive startup blackbox and never starts a root-owned live probe.
+The blackbox maps a firmware-preparation terminal from its semantic detail,
+including Gate 3–5 failures, rather than relabeling every preparation failure
+as Gate 6. Admission of a later firmware operation is a direct sequencer proof
+for the completed FBR and upload-window checks, while ARMCR4/D11 reset
+readbacks remain explicitly advisory and pre-release ALP/high-speed proof is
+not reported as post-release HT proof. `nettest` actively starts the bounded
 network self-test, while `usb probe-kbd` actively advances one retained
 keyboard-enumeration attempt per later local-seat turn. Run the active commands
 only after their preceding passive response has returned its terminal status

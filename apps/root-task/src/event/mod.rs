@@ -6425,7 +6425,7 @@ where
                 "  wifi dump-state - Show cached SDIO, clock, and contract trace state",
             );
             self.emit_console_line(
-                "  wifi probe-ht   - Show cached linked-runtime HT state; no live Pi probe",
+                "  wifi probe-ht   - Show cached root-driver HT state; linked runtime returns typed unavailable",
             );
             self.emit_console_line(
                 "  wifi diag       - Show passive cached linked-runtime gate and owner state",
@@ -11788,6 +11788,8 @@ where
                 })
         };
         let live_net_channel_ready = live_net_supersedes_runtime;
+        let firmware_prep_complete =
+            fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_prep_complete);
         let power_ready = live_net_channel_ready
             || snapshot.is_some_and(|snapshot| {
                 matches!(snapshot.power_state, WifiPowerState::On)
@@ -11795,8 +11797,10 @@ where
             })
             || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready);
         let card_selected = live_net_channel_ready
+            || firmware_prep_complete
             || snapshot.is_some_and(|snapshot| snapshot.card_ready && snapshot.card_rca != 0);
         let f1_ready = live_net_channel_ready
+            || firmware_prep_complete
             || snapshot.is_some_and(|snapshot| {
                 snapshot.io_enable.is_some_and(|value| (value & 0x02) != 0)
                     && snapshot.io_ready.is_some_and(|value| (value & 0x02) != 0)
@@ -11811,6 +11815,7 @@ where
             || snapshot.is_some_and(Self::wifi_snapshot_ht_avail)
             || firmware_trace.is_some_and(|trace| trace.sr_kso_clock_ready);
         let backplane_ready = live_net_channel_ready
+            || firmware_prep_complete
             || snapshot.is_some_and(|snapshot| {
                 snapshot.programmed_backplane_window.is_some()
                     || snapshot.shadow_backplane_window.is_some()
@@ -12093,7 +12098,7 @@ where
             "cccr-fbr-ready",
             Self::wifi_startup_gate_status(3, direct_proof_gate, failing_gate),
             format_args!(
-                "ioex={} iordy={} fbr1_blk={} fbr2_blk={}",
+                "ioex={} iordy={} fbr1_blk={} fbr2_blk={} sequencer_proof={}",
                 Self::format_optional_u8(snapshot.and_then(|snapshot| snapshot.io_enable)),
                 Self::format_optional_u8(snapshot.and_then(|snapshot| snapshot.io_ready)),
                 Self::format_optional_u16(
@@ -12102,6 +12107,11 @@ where
                 Self::format_optional_u16(
                     control_trace.and_then(|trace| trace.cached_fbr2_block_size)
                 ),
+                if firmware_prep_complete {
+                    "firmware-prep-complete"
+                } else {
+                    "none"
+                },
             ),
             "ht-clock",
         );
@@ -12110,12 +12120,22 @@ where
             "ht-clock",
             Self::wifi_startup_gate_status(4, direct_proof_gate, failing_gate),
             format_args!(
-                "chipclk={} clock={}Hz width={}",
+                "chipclk={} clock={}Hz width={} prep_transport_proof={} ht_proof={}",
                 Self::format_optional_u8(snapshot.and_then(|snapshot| snapshot.chipclkcsr)),
                 snapshot.map_or(0, |snapshot| snapshot.current_clock_hz),
                 snapshot.map_or("unknown", |snapshot| Self::wifi_bus_width_label(
                     snapshot.bus_width
                 )),
+                if firmware_prep_complete {
+                    "high-speed-checked+alp-available"
+                } else {
+                    "none"
+                },
+                if firmware_prep_complete {
+                    "not-attempted-pre-release"
+                } else {
+                    "none"
+                },
             ),
             "backplane-window",
         );
@@ -12124,7 +12144,7 @@ where
             "backplane-window",
             Self::wifi_startup_gate_status(5, direct_proof_gate, failing_gate),
             format_args!(
-                "programmed={} shadow={} fn={}",
+                "programmed={} shadow={} fn={} sequencer_proof={}",
                 Self::format_optional_u32(
                     snapshot.and_then(|snapshot| snapshot.programmed_backplane_window)
                 ),
@@ -12134,6 +12154,11 @@ where
                 Self::format_optional_fn_addr(
                     snapshot.and_then(|snapshot| snapshot.shadow_backplane_fn_addr)
                 ),
+                if firmware_prep_complete {
+                    "firmware-prep-complete"
+                } else {
+                    "none"
+                },
             ),
             "firmware-upload",
         );
@@ -12210,6 +12235,20 @@ where
             self.emit_console_line(request_line.as_str());
             let control_line = Self::wifi_diag_cyw43_fault_control(fault, true);
             self.emit_console_line(control_line.as_str());
+            if Self::wifi_runtime_fault_is_firmware_prep(fault) {
+                let prep = format_message(format_args!(
+                    "wifi: evidence firmware_prep status=failed semantic_gate={} detail=0x{:04x} result=0x{:08x} edge={} proof=immutable-terminal-fault",
+                    Self::wifi_cyw43_fault_gate(fault.detail),
+                    fault.detail,
+                    fault.result,
+                    Self::wifi_firmware_prep_fault_edge(fault),
+                ));
+                self.emit_console_line(prep.as_str());
+            } else if Self::wifi_runtime_fault_implies_firmware_prep_complete(fault) {
+                self.emit_console_line(
+                    "wifi: evidence firmware_prep status=complete proof=later-operation-admitted armcr4_clear_write=issued postreset_cpuhalt_clock_flush=pass armcr4_resetctrl_read=advisory d11_reset_assert_write=issued d11_inreset_flush=pass d11_resetctrl_read=advisory f1_block=64 caps=checked bus_width=4 high_speed=checked alp=available ht=not-attempted-pre-release ram_window=verified",
+                );
+            }
             if Self::wifi_runtime_fault_is_sdio_card_select(fault) {
                 let sdio_command = format_message(format_args!(
                     "wifi: evidence sdio_command command={} attempt={} card_bits=0x{:04x} stage={} detail=0x{:04x} result=0x{:08x}",
@@ -13453,10 +13492,49 @@ where
     fn wifi_runtime_fault_is_firmware_stream(
         fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
     ) -> bool {
+        matches!(fault.stage, "cyw43-firmware-chunk" | "cyw43-nvram-chunk")
+            || matches!(
+                fault.op,
+                pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
+                    | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+            )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_runtime_fault_is_firmware_prep(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> bool {
+        fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP
+            || matches!(fault.stage, "cyw43-firmware-prep")
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_runtime_fault_implies_firmware_prep_complete(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> bool {
         matches!(
-            fault.stage,
-            "cyw43-firmware-prep" | "cyw43-firmware-chunk" | "cyw43-nvram-chunk"
-        ) || matches!(fault.op, 2 | 3)
+            fault.op,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_ETH_TX
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RX_POLL
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_firmware_prep_fault_edge(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> &'static str {
+        if fault.detail == 0x531f && fault.result != 0 {
+            crate::drivers::driver_task_net::cyw43_armcr4_reset_fault_reason(fault.result)
+        } else {
+            Self::wifi_cyw43_fault_next_action(fault.detail)
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -13482,6 +13560,7 @@ where
     ) -> bool {
         Self::wifi_runtime_fault_is_sdio_card_select(fault)
             || Self::wifi_runtime_fault_is_transport_no_reply(fault)
+            || Self::wifi_runtime_fault_is_firmware_prep(fault)
             || Self::wifi_runtime_fault_is_firmware_stream(fault)
             || fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
     }
@@ -28866,6 +28945,122 @@ mod tests {
             rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-replay-failure"),
             "{rendered}"
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_diag_preserves_firmware_prep_gate_and_later_operation_proof() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let prep_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-prep",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x5316,
+            reason: "cyw43-card-bus-width",
+            result: 0,
+        };
+        crate::drivers::driver_task_net::test_record_cyw43_runtime_command_fault_status(prep_fault);
+
+        let render = || {
+            let driver = LoopbackSerial::<32768>::new();
+            let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+            let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+            let ipc = NullIpc;
+            let mut store: TicketTable<4> = TicketTable::new();
+            store.register(Role::Queen, "ticket").unwrap();
+            let mut audit = AuditLog::new();
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_test_pi4_debug_commands();
+            pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+            let mut transcript = Vec::new();
+            for _ in 0..256 {
+                pump.poll();
+                transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+            }
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+            String::from_utf8(transcript).expect("serial output must be utf8")
+        };
+
+        let prep_rendered = render();
+        assert!(
+            prep_rendered.contains("wifi: gate 4 name=ht-clock status=fail"),
+            "{prep_rendered}"
+        );
+        assert!(
+            prep_rendered.contains("wifi: gate 6 name=firmware-upload status=blocked"),
+            "{prep_rendered}"
+        );
+        assert!(
+            prep_rendered.contains(
+                "wifi: evidence firmware_prep status=failed semantic_gate=4 detail=0x5316"
+            ),
+            "{prep_rendered}"
+        );
+        assert!(
+            !prep_rendered.contains("status=failed semantic_gate=6 detail=0x5316"),
+            "{prep_rendered}"
+        );
+
+        let stream_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-chunk",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            flags: 0,
+            target_addr: 0x0019_8000,
+            payload_offset: 0,
+            payload_len: 32_704,
+            total_len: 609_309,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x5103,
+            reason: "sdio-descriptor-transfer-failed",
+            result: 0x020c_8000,
+        };
+        crate::drivers::driver_task_net::test_record_cyw43_runtime_command_fault_status(
+            stream_fault,
+        );
+        let stream_rendered = render();
+        assert!(
+            stream_rendered.contains("wifi: gate 3 name=cccr-fbr-ready status=pass"),
+            "{stream_rendered}"
+        );
+        assert!(
+            stream_rendered.contains(
+                "wifi: gate 4 name=ht-clock status=inferred evidence=chipclk=n/a clock=0Hz width=unknown prep_transport_proof=high-speed-checked+alp-available ht_proof=not-attempted-pre-release"
+            ),
+            "{stream_rendered}"
+        );
+        assert!(
+            stream_rendered.contains("wifi: gate 5 name=backplane-window status=inferred"),
+            "{stream_rendered}"
+        );
+        assert_eq!(
+            stream_rendered
+                .matches("sequencer_proof=firmware-prep-complete")
+                .count(),
+            2,
+            "{stream_rendered}"
+        );
+        assert!(
+            stream_rendered.contains("wifi: gate 6 name=firmware-upload status=fail"),
+            "{stream_rendered}"
+        );
+        assert!(
+            stream_rendered.contains(
+                "wifi: evidence firmware_prep status=complete proof=later-operation-admitted armcr4_clear_write=issued postreset_cpuhalt_clock_flush=pass armcr4_resetctrl_read=advisory d11_reset_assert_write=issued d11_inreset_flush=pass d11_resetctrl_read=advisory"
+            ),
+            "{stream_rendered}"
+        );
+        crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
