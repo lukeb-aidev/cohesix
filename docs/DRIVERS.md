@@ -750,12 +750,13 @@ This as-built closure is authorized by Milestone 26d task
   asserted for firmware to enable. Each window byte, control write, flush read,
   retained settle, reset read, KSO operation, and probe-attach operation is an
   explicit cursor phase, so even an immediately completed SDIO child cannot
-  authorize a second physical operation in that EventPump turn. As in Linux
-  `brcmf_sdiod_readl()`/`brcmf_sdiod_writel()`, each PMUCONTROL read or write is
-  one incrementing four-byte Function 1 CMD53 with the backplane 2/4-byte flag.
-  Four independent CMD52 bytes are invalid because they expose a partially
-  committed `RES_RELOAD` trigger; no CMD52 or alternate-address fallback is
-  permitted after the word operation is issued.
+  authorize a second physical operation in that EventPump turn. PMUCONTROL
+  preserves Linux's little-endian `readl()`/modify/`writel()` semantics, adapted
+  to the Pi 4 transport that hardware proved reliable: four ordered Function 1
+  CMD52 reads followed by four ordered CMD52 writes at `0x600..0x603`. The
+  generation-owned cursor is the sole sequencer, and every byte consumes its
+  own outer turn. No PMU CMD53 attempt, alternate address, byte replay, or
+  fallback is permitted.
 
   After SoCRAM preparation and before the first firmware CMD53, that same
   cursor invalidates every cached firmware-transfer fact and re-proves the live
@@ -820,9 +821,14 @@ This as-built closure is authorized by Milestone 26d task
   phase immediately after `HOSTINTMASK`; it is not folded into the host-mask
   operation. Each read, write, completion observation, and later reprime phase
   consumes its own outer EventPump turn. Read-modify-write preserves unrelated
-  `DEVICE_CTL` and `WAKEUPCTRL` bits. An issued-unknown phase poisons the
-  generation, stale completion cannot advance the cursor, and no earlier
-  phase is replayed in that generation.
+  `DEVICE_CTL`, `WAKEUPCTRL`, and CCCR `IENx` bits. Card-interrupt admission is
+  the Linux-shaped retained sequence `IENx read -> write(current | 0x07) ->
+  readback`; DPC activation is forbidden until the master, Function 1, and
+  Function 2 bits are all proved. Exact fault `0x5339` poisons the live
+  firmware generation on a failed access or bad readback; steady RX sampling
+  never repairs `IENx` opportunistically. An issued-unknown phase poisons the
+  generation, stale completion cannot advance the cursor, and no earlier phase
+  is replayed in that generation.
 - Root retry authority is parent-operation-aware. A descriptor-transfer fault
   proves same-generation non-issuance only when detail `0x5103` reports entry
   inhibit at stage 1 and the retained parent is one physical action:
@@ -1112,6 +1118,10 @@ This as-built closure is authorized by Milestone 26d task
   record, or response barrier is outstanding, so later commands cannot overtake
   their predecessor's response. A later `Serial` phase moves one retained
   record into serial only after the active TX action and input fence permit it.
+- Secured PSK profiles have one production security lane: root owns the retained
+  host-EAPOL sequencer after the linked runtime completes the primary join.
+  Firmware-supplicant, wrapper, PMK-launch, and adaptive fallback paths are not
+  present. Open profiles retain only their explicit open-network lane.
 - Association alone is not acceptance. Require DHCP, raw TCP/`cohsh`, clean
   counters, and repeated current-image boots with paired network evidence.
   Gate 7 is likewise an ordered proof, not the latest reported frontier:

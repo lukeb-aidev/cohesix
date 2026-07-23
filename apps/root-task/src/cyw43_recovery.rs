@@ -39,6 +39,7 @@ pub(crate) const fn fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool
             | 0x5336
             | 0x5337
             | 0x5338
+            | 0x5339
     )
 }
 
@@ -73,7 +74,7 @@ mod tests {
         assert!(fault_detail_allows_sdio_owner_recovery(0x532f));
         assert!(fault_detail_allows_sdio_owner_recovery(0x5330));
         for detail in [
-            0x5331, 0x5332, 0x5333, 0x5334, 0x5335, 0x5336, 0x5337, 0x5338,
+            0x5331, 0x5332, 0x5333, 0x5334, 0x5335, 0x5336, 0x5337, 0x5338, 0x5339,
         ] {
             assert!(fault_detail_allows_sdio_owner_recovery(detail));
             assert!(!fault_detail_allows_same_command_retry(detail));
@@ -90,7 +91,9 @@ mod tests {
 
     #[test]
     fn release_faults_route_to_engine_recovery_by_operation() {
-        for detail in [0x5101, 0x531a, 0x5321, 0x5322, 0x532a, 0x532f, 0x5330] {
+        for detail in [
+            0x5101, 0x531a, 0x5321, 0x5322, 0x532a, 0x532f, 0x5330, 0x5339,
+        ] {
             assert!(firmware_release_fault_requires_engine_recovery(
                 DRIVER_RUNTIME_CYW43_OP_RELEASE,
                 detail

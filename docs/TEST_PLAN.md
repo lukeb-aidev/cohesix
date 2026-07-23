@@ -670,11 +670,12 @@ ownership, and a second same-generation preparation must all perform zero
 replay. Exercise the exact clock-zero, request, and read descriptors through
 the production parent-command plus staged-owner-descriptor/controller seam and
 prove one controller issue per descriptor without a fabricated completion.
-The same real reciprocal seam must prove PMUCONTROL uses exactly one
-incrementing, flagged, four-byte Function 1 CMD53 read and exactly one matching
-write, each on its own outer turn. No Function 1 CMD52 may target any byte in
-`0x600..0x603`; injected read/write failure must terminate with `0x5333` or
-`0x5334` and must not select another transport shape.
+The same real reciprocal seam must prove PMUCONTROL uses four ordered Function 1
+CMD52 reads followed by four ordered CMD52 writes at `0x600..0x603`, with each
+byte consuming a distinct outer turn. No Function 1 CMD53 may target the PMU
+word; failure injected at any of the eight byte operations must terminate with
+`0x5333` or `0x5334`, perform no same-generation replay, and never select
+another transport shape.
 
 After SoCRAM preparation, the production cursor must invalidate cached
 firmware-transfer authority and re-prove the live contract before the first
@@ -1186,7 +1187,12 @@ watermark, `DEVICE_CTL` read-modify-write adding `F2WM`, `MESBUSYCTRL`,
 `FORCE_HT`. It must prove one controller operation per outer turn, preservation
 of unrelated read-modify-write bits, stale/cached completion isolation, and no
 controller reissue when a fresh pending turn replays only the cached completed
-prefix. The complete catalogued Pi runtime suite covers the atomic DPC
+prefix. The final card-interrupt test must cross the same real seam as three
+distinct turns: read CCCR `IENx`, write `current | 0x07` without clearing upper
+bits, and read it back before DPC activation. A missing required bit, failed
+access, or stale completion must terminate as exact fault `0x5339`, poison the
+generation, and perform no opportunistic steady-state repair. The complete
+catalogued Pi runtime suite covers the atomic DPC
 word-write and Linux-ordered post-F2 production-chain invariants; do not replay
 those tests as name filters.
 

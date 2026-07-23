@@ -403,12 +403,14 @@ a replacement generation can be admitted. On the physical linked-runtime
 profile, `wifi probe-ht` exposes only cached root-driver state when that debug
 handle exists; the linked runtime returns a typed runtime-required error after
 printing the passive startup blackbox and never starts a root-owned live probe.
-The blackbox maps a firmware-preparation terminal from its semantic detail,
-including Gate 3–5 failures, rather than relabeling every preparation failure
-as Gate 6. Admission of a later firmware operation is a direct sequencer proof
-for the completed FBR and upload-window checks, while ARMCR4/D11 reset
-readbacks remain explicitly advisory and pre-release ALP/high-speed proof is
-not reported as post-release HT proof. `nettest` actively starts the bounded
+The blackbox maps a firmware-preparation terminal from its contextual semantic
+detail: live CCCR/FBR and clock/backplane contract failures remain at Gates
+3–5, while ARMCR4/D11 passive core preparation remains Gate 6. It never
+relabels every preparation failure as bulk firmware upload. Admission of a
+later firmware operation is a direct sequencer proof for the completed FBR and
+upload-window checks, while ARMCR4/D11 reset readbacks remain explicitly
+advisory and pre-release ALP/high-speed proof is not reported as post-release
+HT proof. `nettest` actively starts the bounded
 network self-test, while `usb probe-kbd` actively advances one retained
 keyboard-enumeration attempt per later local-seat turn. Run the active commands
 only after their preceding passive response has returned its terminal status
@@ -878,16 +880,16 @@ cores: before the first firmware CMD53, ARMCR4 completes a reset cycle and is
 left reset-deasserted with `CPUHALT|CLK`, making its TCM available for download;
 D11 remains reset asserted for firmware to enable. LOW/MID/HIGH window writes,
 each IOCTRL/RESETCTRL write, each flush/readback, retained settle, KSO action,
-CARDCTRL action, atomic PMU word, and Function 2 disable are separate outer
+CARDCTRL action, each ordered PMU byte, and Function 2 disable are separate outer
 turns even when the child completes immediately. The zero write is the required `CLK_SDONLY` edge
 before the asynchronous firmware-download ALP request. Each zero write, ALP
 request, ALP read, retained five-millisecond virtual-counter settle, and
 one-second absolute-deadline observation consumes its own outer EventPump turn.
-PMUCONTROL follows Linux's `readl`/`writel` transaction shape: one incrementing
-four-byte Function 1 CMD53 with the backplane 2/4-byte flag for the read, and
-one for the write. Splitting the word across CMD52 addresses `0x600..0x603`
-can expose `RES_RELOAD` before the tail bytes and is prohibited; there is no
-CMD52 fallback or same-generation replay after an ambiguous word operation.
+PMUCONTROL preserves Linux's little-endian `readl()`/modify/`writel()` semantics
+through the Pi 4 lane proven by hardware: four ordered Function 1 CMD52 reads,
+then four ordered CMD52 writes at `0x600..0x603`. Each byte is a retained outer
+turn under one generation-owned sequencer. There is no preceding CMD53 attempt,
+alternate address, fallback, or same-generation byte replay.
 The cursor checkpoints after every completed phase, so unavailable ALP cannot
 consume the 1,024-entry foreground trace. Production timing permits about 200
 five-millisecond reads inside the absolute one-second window; a separate
@@ -921,11 +923,15 @@ sequence is `HOSTINTMASK`, Cohesix's separate Gate 10 `FUNCTIONINTMASK` phase,
 watermark, `DEVICE_CTL` read/modify/write adding `F2WM`, `MESBUSYCTRL`,
 `WAKEUPCTRL` read/modify/write adding `HTWAIT`, `CARDCAP`, and exact
 `FORCE_HT`. Reprime repeats the masks as distinct operations, samples the low
-and high frame-count bytes on separate turns, and arms the card interrupt on a
-later turn. No operation shares an outer EventPump turn with the next one; a
-fresh pending re-entry may consume only the cached completed prefix and cannot
-reissue it. Stale or issued-unknown work poisons the generation instead of
-replaying an earlier phase.
+and high frame-count bytes on separate turns, then admits the card interrupt as
+three more retained turns: read CCCR `IENx`, write `current | 0x07`, and prove
+the required bits by readback before DPC activation. Upper bits are preserved.
+Exact fault `0x5339` rejects any failed access or bad readback and forces
+generation recovery; steady RX never mutates `IENx` as a repair. No operation
+shares an outer EventPump turn with the next one; a fresh pending re-entry may
+consume only the cached completed prefix and cannot reissue it. Stale or
+issued-unknown work poisons the generation instead of replaying an earlier
+phase.
 
 The retained DPC likewise performs SDIO-core interrupt-status W1C and firmware
 mailbox ACK/NAK as one little-endian, incrementing, four-byte Function 1 CMD53,

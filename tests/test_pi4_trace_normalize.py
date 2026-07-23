@@ -7631,6 +7631,8 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         "21302": "cyw43-probe-function2-disable-write",
         "0x5337": "cyw43-probe-sdonly-clock",
         "0x5338": "cyw43-release-intstatus-clear",
+        "0x5339": "cyw43-post-release-ienx-admission",
+        "21305": "cyw43-post-release-ienx-admission",
         "0x5324": "cyw43-transport-card-cmd0",
         "21285": "cyw43-transport-card-cmd5-ocr",
         "0x5326": "cyw43-transport-card-cmd5-ready",

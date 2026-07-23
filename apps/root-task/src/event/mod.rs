@@ -12238,7 +12238,7 @@ where
             if Self::wifi_runtime_fault_is_firmware_prep(fault) {
                 let prep = format_message(format_args!(
                     "wifi: evidence firmware_prep status=failed semantic_gate={} detail=0x{:04x} result=0x{:08x} edge={} proof=immutable-terminal-fault",
-                    Self::wifi_cyw43_fault_gate(fault.detail),
+                    Self::wifi_runtime_fault_gate(fault),
                     fault.detail,
                     fault.result,
                     Self::wifi_firmware_prep_fault_edge(fault),
@@ -12438,11 +12438,24 @@ where
         if Self::wifi_runtime_fault_is_probe_attach(fault) {
             return Self::wifi_cyw43_fault_gate(fault.detail);
         }
+        if Self::wifi_runtime_fault_is_firmware_prep(fault) {
+            return match fault.detail {
+                // The retained live CAP_SMB/4BLS sample is part of the
+                // generation-local CCCR/FBR contract, not a later policy
+                // failure.
+                0x5312 => 3,
+                // ARMCR4/D11 passive preparation establishes the target RAM
+                // execution contract for the firmware stream. A failure here
+                // has reached Gate 6 even though no bulk CMD53 is yet issued.
+                0x531f => 6,
+                _ => Self::wifi_cyw43_fault_gate(fault.detail),
+            };
+        }
         if Self::wifi_runtime_fault_is_firmware_stream(fault) {
             return 6;
         }
         if fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
-            && matches!(fault.detail, 0x5305 | 0x531f | 0x5338)
+            && matches!(fault.detail, 0x5305 | 0x531f | 0x5338 | 0x5339)
         {
             return 6;
         }
@@ -13365,7 +13378,7 @@ where
             0x5329 => 6,
             0x532a..=0x532e => 7,
             0x5331..=0x5337 => 5,
-            0x5338 => 6,
+            0x5338 | 0x5339 => 6,
             _ => 8,
         }
     }
@@ -13435,11 +13448,12 @@ where
             0x5327 => "verify-linked-sdio-cmd3-rca",
             0x5328 => "verify-linked-sdio-cmd7-select",
             0x532a => "inspect-linux-post-release-power-ht-transition",
-            0x5333 | 0x5334 => "inspect-probe-pmucontrol-cmd53-word-primary",
+            0x5333 | 0x5334 => "inspect-probe-pmucontrol-cmd52-byte-primary",
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
             0x5331..=0x5336 => "inspect-linux-probe-attach-state",
             0x5337 => "inspect-probe-sdonly-clock-before-firmware-alp",
             0x5338 => "inspect-pre-release-intstatus-clear",
+            0x5339 => "inspect-post-release-ienx-rmw-readback",
             _ => "inspect-cyw43-runtime-fault-stage",
         }
     }
@@ -25687,6 +25701,52 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn wifi_firmware_prep_faults_use_contextual_semantic_gates() {
+        let caps_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-prep",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
+            detail: 0x5312,
+            reason: "cyw43-transport-card-init",
+            result: 0,
+        };
+        let bus_width_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            detail: 0x5316,
+            reason: "cyw43-card-bus-width",
+            ..caps_fault
+        };
+        let passive_core_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            detail: 0x531f,
+            reason: "cyw43-backplane-armcr4-reset",
+            ..caps_fault
+        };
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_gate(caps_fault),
+            3
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_gate(bus_width_fault),
+            4
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_gate(passive_core_fault),
+            6
+        );
+        assert_eq!(KernelConsoleTestPump::wifi_cyw43_fault_gate(0x5312), 8);
+        assert_eq!(KernelConsoleTestPump::wifi_cyw43_fault_gate(0x531f), 5);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_diagnostics_preserve_cause_and_report_distinct_recovery_fault() {
         let causal = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
             stage: "cyw43-firmware-release",
@@ -25762,7 +25822,7 @@ mod tests {
             assert_eq!(
                 KernelConsoleTestPump::wifi_cyw43_fault_next_action(detail),
                 if matches!(detail, 0x5333 | 0x5334) {
-                    "inspect-probe-pmucontrol-cmd53-word-primary"
+                    "inspect-probe-pmucontrol-cmd52-byte-primary"
                 } else if detail == 0x5337 {
                     "inspect-probe-sdonly-clock-before-firmware-alp"
                 } else {
@@ -25774,6 +25834,11 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_cyw43_fault_next_action(0x5338),
             "inspect-pre-release-intstatus-clear"
+        );
+        assert_eq!(KernelConsoleTestPump::wifi_cyw43_fault_gate(0x5339), 6);
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_fault_next_action(0x5339),
+            "inspect-post-release-ienx-rmw-readback"
         );
 
         let sdonly_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
@@ -29007,6 +29072,41 @@ mod tests {
         assert!(
             !prep_rendered.contains("status=failed semantic_gate=6 detail=0x5316"),
             "{prep_rendered}"
+        );
+
+        let caps_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            detail: 0x5312,
+            reason: "cyw43-transport-card-init",
+            ..prep_fault
+        };
+        crate::drivers::driver_task_net::test_record_cyw43_runtime_command_fault_status(caps_fault);
+        let caps_rendered = render();
+        assert!(
+            caps_rendered.contains(
+                "wifi: evidence firmware_prep status=failed semantic_gate=3 detail=0x5312"
+            ),
+            "{caps_rendered}"
+        );
+
+        let passive_core_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            detail: 0x531f,
+            reason: "cyw43-backplane-armcr4-reset",
+            result: pi4_driver_abi::driver_runtime_cyw43_armcr4_reset_result(
+                pi4_driver_abi::DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_CLEAR_WRITE,
+                1,
+                None,
+            ),
+            ..prep_fault
+        };
+        crate::drivers::driver_task_net::test_record_cyw43_runtime_command_fault_status(
+            passive_core_fault,
+        );
+        let passive_core_rendered = render();
+        assert!(
+            passive_core_rendered.contains(
+                "wifi: evidence firmware_prep status=failed semantic_gate=6 detail=0x531f"
+            ),
+            "{passive_core_rendered}"
         );
 
         let stream_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {

@@ -204,6 +204,40 @@ const fn cyw43_pre_poll_generation_fence_required(cached: u32, observed: u32) ->
     cached != observed
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TcpGenerationProofBaseline {
+    generation: u32,
+    accepts: u64,
+    authenticated_sessions: u64,
+    rx_bytes: u64,
+}
+
+impl TcpGenerationProofBaseline {
+    fn capture(generation: u32, counters: NetCounters) -> Self {
+        Self {
+            generation,
+            accepts: counters.tcp_accepts,
+            authenticated_sessions: counters.tcp_auth_sessions,
+            rx_bytes: counters.tcp_rx_bytes,
+        }
+    }
+
+    fn project(self, observed_generation: u32, mut counters: NetCounters) -> NetCounters {
+        if self.generation != observed_generation {
+            counters.tcp_accepts = 0;
+            counters.tcp_auth_sessions = 0;
+            counters.tcp_rx_bytes = 0;
+            return counters;
+        }
+        counters.tcp_accepts = counters.tcp_accepts.saturating_sub(self.accepts);
+        counters.tcp_auth_sessions = counters
+            .tcp_auth_sessions
+            .saturating_sub(self.authenticated_sessions);
+        counters.tcp_rx_bytes = counters.tcp_rx_bytes.saturating_sub(self.rx_bytes);
+        counters
+    }
+}
+
 #[cfg(not(feature = "kernel"))]
 fn wifi_connection_generation_for<D: NetDevice>() -> u32 {
     let _ = core::marker::PhantomData::<D>;
@@ -1385,6 +1419,7 @@ pub struct NetStack<D: NetDevice> {
     #[cfg(feature = "net-outbound-probe")]
     tcp_probe_handle: Option<SocketHandle>,
     counters: NetCounters,
+    tcp_generation_proof_baseline: TcpGenerationProofBaseline,
     self_test: SelfTestState,
     stage_policy: NetStagePolicy,
     tx_only_sent: bool,
@@ -3316,6 +3351,10 @@ impl<D: NetDevice> NetStack<D> {
             #[cfg(feature = "net-outbound-probe")]
             tcp_probe_handle: None,
             counters: NetCounters::default(),
+            tcp_generation_proof_baseline: TcpGenerationProofBaseline::capture(
+                wifi_connection_generation,
+                NetCounters::default(),
+            ),
             self_test: SelfTestState::new(stage_policy.allow_selftest),
             stage_policy,
             tx_only_sent: false,
@@ -3523,6 +3562,8 @@ impl<D: NetDevice> NetStack<D> {
             return false;
         }
         let previous_generation = self.wifi_connection_generation;
+        self.tcp_generation_proof_baseline =
+            TcpGenerationProofBaseline::capture(generation, self.counters);
         self.wifi_connection_generation = generation;
         #[cfg(feature = "kernel")]
         self.wifi_association_supervisor
@@ -4944,7 +4985,7 @@ impl<D: NetDevice> NetStack<D> {
 
     fn current_counters(&self) -> NetCounters {
         let device_counters = self.device.counters();
-        NetCounters {
+        let counters = NetCounters {
             rx_packets: device_counters.rx_packets,
             tx_packets: device_counters.tx_packets,
             rx_used_advances: device_counters.rx_used_advances,
@@ -5025,7 +5066,9 @@ impl<D: NetDevice> NetStack<D> {
             wifi_host_eapol_m4: device_counters.wifi_host_eapol_m4,
             wifi_host_eapol_ptk: device_counters.wifi_host_eapol_ptk,
             wifi_host_eapol_gtk: device_counters.wifi_host_eapol_gtk,
-        }
+        };
+        self.tcp_generation_proof_baseline
+            .project(wifi_connection_generation_for::<D>(), counters)
     }
 
     fn log_self_test_result(&self, result: NetSelfTestResult) {
@@ -7498,7 +7541,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 
     fn stats(&self) -> NetCounters {
-        self.counters
+        self.tcp_generation_proof_baseline
+            .project(wifi_connection_generation_for::<D>(), self.counters)
     }
 
     fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
@@ -8406,6 +8450,74 @@ mod tests {
         assert!(!cyw43_pre_poll_generation_fence_required(7, 7));
         assert!(cyw43_pre_poll_generation_fence_required(7, 8));
         assert!(cyw43_pre_poll_generation_fence_required(u32::MAX, 0));
+    }
+
+    #[test]
+    fn tcp_generation_proof_rejects_old_activity_until_new_activity_occurs() {
+        let old_generation_counters = NetCounters {
+            tcp_accepts: 4,
+            tcp_auth_sessions: 3,
+            tcp_rx_bytes: 4_096,
+            ..NetCounters::default()
+        };
+        let old_generation_baseline =
+            TcpGenerationProofBaseline::capture(7, NetCounters::default());
+
+        let generation_mismatch = old_generation_baseline.project(8, old_generation_counters);
+        assert_eq!(generation_mismatch.tcp_accepts, 0);
+        assert_eq!(generation_mismatch.tcp_auth_sessions, 0);
+        assert_eq!(generation_mismatch.tcp_rx_bytes, 0);
+        assert!(!cyw43_tcp_data_path_proven(
+            "cyw43",
+            "wifi",
+            generation_mismatch
+        ));
+
+        let new_generation_baseline =
+            TcpGenerationProofBaseline::capture(8, old_generation_counters);
+        let before_new_activity = new_generation_baseline.project(8, old_generation_counters);
+        assert_eq!(before_new_activity.tcp_accepts, 0);
+        assert_eq!(before_new_activity.tcp_auth_sessions, 0);
+        assert_eq!(before_new_activity.tcp_rx_bytes, 0);
+        assert!(!cyw43_tcp_data_path_proven(
+            "cyw43",
+            "wifi",
+            before_new_activity
+        ));
+
+        let new_generation_counters = NetCounters {
+            tcp_accepts: 5,
+            tcp_auth_sessions: 4,
+            tcp_rx_bytes: 4_224,
+            ..old_generation_counters
+        };
+        let after_new_activity = new_generation_baseline.project(8, new_generation_counters);
+        assert_eq!(after_new_activity.tcp_accepts, 1);
+        assert_eq!(after_new_activity.tcp_auth_sessions, 1);
+        assert_eq!(after_new_activity.tcp_rx_bytes, 128);
+        assert!(cyw43_tcp_data_path_proven(
+            "cyw43",
+            "wifi",
+            after_new_activity
+        ));
+    }
+
+    #[test]
+    fn tcp_generation_proof_projection_fails_closed_after_counter_reset() {
+        let baseline = TcpGenerationProofBaseline::capture(
+            12,
+            NetCounters {
+                tcp_accepts: 9,
+                tcp_auth_sessions: 7,
+                tcp_rx_bytes: 8_192,
+                ..NetCounters::default()
+            },
+        );
+
+        let projected = baseline.project(12, NetCounters::default());
+        assert_eq!(projected.tcp_accepts, 0);
+        assert_eq!(projected.tcp_auth_sessions, 0);
+        assert_eq!(projected.tcp_rx_bytes, 0);
     }
 
     #[test]
