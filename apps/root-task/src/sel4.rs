@@ -2025,8 +2025,15 @@ pub fn write_tcb_registers(
     let resume: sel4_sys::seL4_Bool = if resume_target { 1 } else { 0 };
     // SAFETY: The register block is fully initialized and lives for the duration of the
     // syscall. seL4 validates the TCB capability and register count.
-    let result =
-        unsafe { sel4_sys::seL4_TCB_WriteRegisters(guarded_tcb, resume, 0, 36, &regs as *const _) };
+    let result = unsafe {
+        sel4_sys::seL4_TCB_WriteRegisters(
+            guarded_tcb,
+            resume,
+            0,
+            sel4_sys::SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT,
+            &regs as *const _,
+        )
+    };
     if result == seL4_NoError {
         Ok(())
     } else {
@@ -3416,7 +3423,7 @@ impl SlotAllocator {
 
 /// Returns `true` when the supplied slot index references a kernel-reserved capability.
 ///
-/// The set mirrors Table 9.1 of the seL4 reference manual (version 15.0.0) and includes the
+/// The set mirrors Table 9.1 of the seL4 reference manual (version 16.0.0) and includes the
 /// optional `seL4_CapSMC` slot provided by Arm kernels.
 #[inline(always)]
 #[allow(non_upper_case_globals)]

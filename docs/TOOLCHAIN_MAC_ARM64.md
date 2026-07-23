@@ -18,11 +18,12 @@ not vendor, upstream seL4 build outputs.
 | AArch64 compiler | Official Arm GNU Toolchain 15.2.Rel1 macOS Arm64 archive; GCC 15.2.1; target `aarch64-none-elf` | `configs/sel4/profiles.toml` |
 | seL4 Python environment | Dedicated `out/toolchain/sel4-profile-venv`; two hash locks; exact 38-distribution closure | `configs/sel4/python-bootstrap.lock`, `configs/sel4/python-build-requirements.lock` |
 | Pi packaging tool | `mkimage` built from the official DENX U-Boot 2026.01 release tarball | `configs/sel4/profiles.toml` |
-| Kernel baseline | Complete upstream seL4Test manifest 15.0.0 source set, including seL4 commit `881de507fe528490dc5e570c7810a149bad5880f` | `configs/sel4/profiles.toml`, `docs/audit/M26D_SEL4_15_PROVENANCE.md` |
+| Kernel baseline | Complete upstream seL4Test manifest 16.0.0 source set, including seL4 commit `6e7c3b733d296cfd88d5fbf635c96e447a882374` | `configs/sel4/profiles.toml`, `docs/audit/M26D_SEL4_16_PROVENANCE.md` |
+| CAmkES companion | Upstream CAmkES 3.13.0 is the release paired with seL4 16.0.0 | Reference/smoke-test surface only; CAmkES is not a Cohesix build or target dependency |
 | Target artifacts | Profile-selected generated headers/configuration, kernel, elfloader, rootserver, system image, and DTB outputs | `SEL4_BUILD_DIR` / `--sel4-build` |
 
 The official kernel interface reference is the
-[seL4 Reference Manual 15.0.0](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf).
+[seL4 Reference Manual 16.0.0](https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf).
 
 ## 1. Install host and Rust dependencies
 
@@ -94,16 +95,22 @@ libraries must come from the same pinned upstream manifest. Parameterize the
 complete project location rather than embedding a developer home directory:
 
 ```bash
-export COHESIX_SEL4_PROJECT="${COHESIX_SEL4_PROJECT:-$HOME/sel4test-15.0.0}"
+export COHESIX_SEL4_PROJECT="${COHESIX_SEL4_PROJECT:-$PWD/out/sel4/v16-worktree-project}"
 mkdir -p "$COHESIX_SEL4_PROJECT"
 (
   cd "$COHESIX_SEL4_PROJECT"
   repo init \
     -u https://github.com/seL4/sel4test-manifest.git \
-    -b refs/tags/15.0.0
+    -b refs/tags/16.0.0
   repo sync -c
 )
 ```
+
+An optional `$HOME/seL4_16` checkout may hold the complete seL4Test 16.0.0
+manifest plus its recreated `.venv_aarch64`. When the authenticated Pi overlay
+is applied, it is eligible only for the Pi operational source policy; it cannot
+replace the pristine QEMU/proof checkout or establish a build claim without a
+fresh profile build and validation.
 
 The complete repository revision set is pinned in
 `configs/sel4/profiles.toml`. Validate it before configuration; checking only
@@ -124,13 +131,13 @@ separate pristine manifest checkout explicitly; never add the operational
 overlay to the clean QEMU/proof source:
 
 ```bash
-export COHESIX_SEL4_PI4_PROJECT="${COHESIX_SEL4_PI4_PROJECT:-$HOME/sel4test-15.0.0-pi4}"
+export COHESIX_SEL4_PI4_PROJECT="${COHESIX_SEL4_PI4_PROJECT:-$PWD/out/sel4/v16-pi4-project}"
 mkdir -p "$COHESIX_SEL4_PI4_PROJECT"
 (
   cd "$COHESIX_SEL4_PI4_PROJECT"
   repo init \
     -u https://github.com/seL4/sel4test-manifest.git \
-    -b refs/tags/15.0.0
+    -b refs/tags/16.0.0
   repo sync -c
 )
 out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py prepare-source \
@@ -167,7 +174,7 @@ are part of the profile contract; an extra, missing, changed, or content-drifted
 distribution is rejected.
 
 The closure pins `setuptools==80.9.0` because the upstream nanopb generator
-used by this seL4 15 project imports `pkg_resources`. Setup smoke-tests that
+used by this seL4 16 project imports `pkg_resources`. Setup smoke-tests that
 import; selecting a newer environment that removes it is a hard provisioning
 failure rather than a profile-build workaround.
 
@@ -182,6 +189,18 @@ the artifact-build `PATH`, because nanopb launches its generator through
 executable and installed-file content identities, complete distribution
 closure, both lock digests, and exact `PATH` prefixes. The isolated environment
 does not write package metadata into either seL4 source checkout.
+
+The upstream
+[CAmkES 3.13.0 release](https://docs.sel4.systems/releases/camkes/camkes-3.13.0.html)
+is the companion component-framework release for seL4 16.0.0. Cohesix does not
+use CAmkES, capDL-generated components, or their Haskell build closure in its
+target architecture. A separate CAmkES smoke checkout may test upstream host
+compatibility, but it is not part of the pinned Cohesix toolchain, generated
+profile evidence, or TCB. The 2026-07-23 macOS smoke configured and compiled
+the upstream `adder` example through capDL source generation, then stopped
+when BSD `cpio` rejected the upstream GNU-only `--append --owner=+0:+0`
+invocation; simulation was not reached. See
+`docs/audit/M26D_SEL4_16_PROVENANCE.md` for the bounded result.
 
 ## 3. Select a generated profile intentionally
 
@@ -213,12 +232,14 @@ The five canonical defaults are fresh, isolated `profile-v2` trees:
 | `out/sel4/profile-v2/pi4-diagnostic` | Pi 4 diagnostic | Diagnostic profile used alongside, not in place of, the CYW43 exact-image lane |
 | `out/sel4/profile-v2/bcm2711-proof-eligibility` | BCM2711 proof eligibility | Upstream configuration compatibility only; not a Cohesix proof |
 
-Preserved `seL4/build` and `seL4/SMP_build` trees remain historical or explicit
-diagnostic inputs; they are not QEMU build, release, regression, or publication
-defaults and cannot make a `profile-v2` contract pass. The external
-`/Users/lukasbower/seL4/build_UBOOT` tree remains the separately qualified
-exact-image Pi diagnostic input coordinated with the parallel CYW43 lane and is
-not replaced or upgraded by a static profile build.
+The repo-managed `seL4/` reference trees are refreshed from the same v16
+profile outputs: `seL4/build` mirrors `qemu_smp_production`,
+`seL4/SMP_build` mirrors `qemu_smp_diagnostic`, and `seL4/build_UBOOT`
+mirrors `pi4_diagnostic`. They no longer contain seL4 15 artifacts. Their
+embedded build paths and causal stamps still name the original
+`out/sel4/profile-v2/*` builds, so the tracked copies remain reviewable mirrors
+rather than relocated fresh-build evidence. Active build, release, regression,
+and publication claims validate the corresponding `profile-v2` tree.
 
 These build directories contain generated kernel truth, not vendored seL4
 source. The selected directory must match the intended target and root-task
@@ -236,7 +257,7 @@ slot layouts, or root-task artifacts from another.
 
 QEMU launchers inspect the selected seL4 configuration and choose matching
 machine details, including the GIC revision. An explicit override is valid only
-when it agrees with that generated configuration. In seL4 15,
+when it agrees with that generated configuration. In seL4 16,
 `QEMU_GIC_VERSION=3` is the platform source selector that chooses `gic_v3.c`;
 `KernelArmGicV3=ON` or `QEMU_MACHINE=...,gic-version=3` alone is insufficient.
 The profile contract validates the source selector, its derived kernel option,
@@ -381,39 +402,32 @@ out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
   --evidence out/audit/m26d-profile-v2-pi4-diagnostic.json
 ```
 
-The parallel CYW43 exact-image lane separately consumes `pi4-diagnostic` at
-`/Users/lukasbower/seL4/build_UBOOT`. Coordinate replacement with that lane and
-preserve any active or evidentiary tree by an atomic rename to a unique sibling;
-never configure over it or hand-edit its cache. These commands validate that
-external input but do not make it an aggregate default:
+The parallel CYW43 exact-image lane consumes the repo-managed canonical
+`pi4-diagnostic` build under `out/sel4/profile-v2/pi4-diagnostic`. The tracked
+`seL4/build_UBOOT` directory mirrors that completed build for review, but is
+not reconfigured in place. These commands validate the canonical input and
+stage from it:
 
 ```bash
-mv /Users/lukasbower/seL4/build_UBOOT \
-  "/Users/lukasbower/seL4/build_UBOOT.pre-v2-$(date -u +%Y%m%dT%H%M%SZ)"
 out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py prepare-source \
   --profile pi4_diagnostic \
-  --source out/sel4/v15-pi4-project
-out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py configure \
-  --profile pi4_diagnostic \
-  --source out/sel4/v15-pi4-project \
-  --build-dir /Users/lukasbower/seL4/build_UBOOT
-out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py build \
-  --profile pi4_diagnostic \
-  --source out/sel4/v15-pi4-project \
-  --build-dir /Users/lukasbower/seL4/build_UBOOT \
-  --jobs 8
+  --source out/sel4/v16-pi4-project
 out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
   --profile pi4_diagnostic \
-  --source out/sel4/v15-pi4-project \
-  --build-dir /Users/lukasbower/seL4/build_UBOOT \
+  --source out/sel4/v16-pi4-project \
+  --build-dir out/sel4/profile-v2/pi4-diagnostic \
   --require-source \
   --require-artifacts \
   --for-runtime \
-  --evidence out/audit/m26d-pi4-diagnostic-build-uboot.json
+  --evidence out/audit/m26d-profile-v2-pi4-diagnostic.json
+scripts/pi4-image-build.sh \
+  --manifest configs/root_task_pi4_uboot_aarch64.toml \
+  --sel4-build-dir out/sel4/profile-v2/pi4-diagnostic \
+  --sel4-kernel-source-dir out/sel4/v16-pi4-project/kernel
 ```
 
 The build is incomplete until
-`/Users/lukasbower/seL4/build_UBOOT/cohesix-profile-build-inputs.json` has schema
+`out/sel4/profile-v2/pi4-diagnostic/cohesix-profile-build-inputs.json` has schema
 `cohesix-sel4-profile-build-inputs/v2`, status `complete`, and profile
 `pi4_diagnostic`. Its exact build directory, source revisions and authenticated
 overlay, contract and validator hashes, configure/build commands, parallelism,
@@ -431,7 +445,10 @@ stamp/tree fingerprint, the derivative's pristine stamp and generated timing
 configuration, and the derived rootserver/newc/wrapper bytes. The canonical
 tree must validate and retain the same complete fingerprint after composition
 and final staging; the script never repairs, re-stamps, or accepts a mutated
-profile tree.
+profile tree. With no override, the wrapper selects the repo-managed canonical
+v16 `out/sel4/profile-v2/pi4-diagnostic` build. Neither
+`~/seL4_16/build_pi4_diagnostic` nor the tracked `seL4/build_UBOOT` reference
+mirror is auto-selected; an explicit override must pass the same v16 validator.
 
 Wrapper AArch64 contracts set `AARCH64=ON`, and every profile binds
 `CROSS_COMPILER_PREFIX=aarch64-none-elf-` before upstream `kernel/gcc.cmake`
@@ -528,7 +545,7 @@ Only publish generated reference outputs after validation and target-specific
 review. Do not hand-edit `CMakeCache.txt`, generated headers, generated JSON,
 DTS/DTB, kernel or elfloader artifacts. In particular:
 
-- keep `ElfloaderRootserversLast=ON` for the accepted seL4 15 profiles;
+- keep `ElfloaderRootserversLast=ON` for the accepted seL4 16 profiles;
 - keep Pi 4 `IMAGE_START_ADDR=0x10000000` for the U-Boot `bootm` XIP handoff;
 - when both settings are active, let the profile wrapper regenerate
   `elfloader/gen_headers/platform_info.h` from the kernel-generated

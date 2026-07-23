@@ -59,8 +59,80 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/ci/test_plan_resources.sh
+source "${PROJECT_ROOT}/scripts/ci/test_plan_resources.sh"
+tp_configure_resource_limits
 GENERATED_CONFIG_DIR="$PROJECT_ROOT/configs/generated"
+QEMU_ARTIFACT_HELPER="$PROJECT_ROOT/scripts/ci/qemu_artifact.py"
+TEST_PLAN_CATALOG="$PROJECT_ROOT/scripts/ci/test_plan_catalog.py"
+BUILD_RUN_BIN="${COHESIX_BUILD_RUN_BIN:-$PROJECT_ROOT/scripts/cohesix-build-run.sh}"
 cd "$PROJECT_ROOT"
+
+canonical_path() {
+    python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).resolve(strict=False))
+PY
+}
+
+validate_output_roots() {
+    python3 - \
+        "$PROJECT_ROOT" \
+        "$ARCHIVE_ROOT" \
+        "$QEMU_ARTIFACT_ROOT" \
+        "$TRANSPORT_RESULT_ROOT" \
+        "$TRANSPORT_EVIDENCE_ROOT" <<'PY'
+from pathlib import Path
+import tempfile
+import sys
+
+repo, archive, artifact, result, evidence = (
+    Path(value).resolve() for value in sys.argv[1:]
+)
+repo_out = (repo / "out").resolve()
+temp_root = Path(tempfile.gettempdir()).resolve()
+home = Path.home().resolve()
+
+
+def within(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+for label, path in (
+    ("archive", archive),
+    ("artifact", artifact),
+    ("result", result),
+    ("evidence", evidence),
+):
+    if path in {Path("/"), repo, repo_out, home, temp_root}:
+        raise SystemExit(f"unsafe {label} root: {path}")
+    if not within(path, repo_out) and not within(path, temp_root):
+        raise SystemExit(
+            f"{label} root must be below {repo_out} or temporary root "
+            f"{temp_root}: {path}"
+        )
+
+if artifact == archive or result == archive:
+    raise SystemExit("artifact/result roots must not alias the archive root")
+if within(archive, artifact) or within(archive, result):
+    raise SystemExit("archive root must not be nested below artifact/result roots")
+if artifact == result or within(artifact, result) or within(result, artifact):
+    raise SystemExit("artifact and result roots must not alias or overlap")
+for label, path in (
+    ("archive", archive),
+    ("artifact", artifact),
+    ("result", result),
+):
+    if not within(path, evidence):
+        raise SystemExit(f"{label} root escapes transport evidence root: {path}")
+PY
+}
 
 BASE_SCRIPTS=(
     "boot_v0.coh"
@@ -112,16 +184,88 @@ case "$BATCH_TARGET" in
         exit 2
         ;;
 esac
+if [[ "$BATCH_TARGET" == "qemu" ]]; then
+    TEST_ACTION_ID="${TEST_PLAN_ACTION_ID:-qemu.tcp-regression}"
+    TEST_CLAIM_TIER="qemu-integration"
+else
+    TEST_ACTION_ID="${TEST_PLAN_ACTION_ID:-pi4.tcp-regression}"
+    TEST_CLAIM_TIER="pi4-transport"
+fi
+if [[ ! -x "$QEMU_ARTIFACT_HELPER" ]]; then
+    echo "Missing QEMU artifact helper: $QEMU_ARTIFACT_HELPER" >&2
+    exit 1
+fi
+if [[ ! -x "$TEST_PLAN_CATALOG" ]]; then
+    echo "Missing test-plan action catalog helper: $TEST_PLAN_CATALOG" >&2
+    exit 1
+fi
+if [[ ! -x "$BUILD_RUN_BIN" ]]; then
+    echo "Missing Cohesix build wrapper: $BUILD_RUN_BIN" >&2
+    exit 1
+fi
+TEST_ACTION_DIGEST="sha256:$(
+    "$TEST_PLAN_CATALOG" action --id "$TEST_ACTION_ID" --field digest
+)"
+TEST_SOURCE_DIGEST="${TEST_PLAN_SOURCE_DIGEST:-$(
+    "$QEMU_ARTIFACT_HELPER" source-digest --repo-root "$PROJECT_ROOT"
+)}"
+if [[ "$TEST_SOURCE_DIGEST" != sha256:* ]]; then
+    TEST_SOURCE_DIGEST="sha256:${TEST_SOURCE_DIGEST}"
+fi
+TEST_ATTEMPT_MANIFEST="${TEST_PLAN_ATTEMPT_MANIFEST:-}"
+QEMU_ARTIFACT_ROOT="${COHSH_QEMU_ARTIFACT_ROOT:-}"
+TRANSPORT_RESULT_ROOT="${COHSH_TRANSPORT_RESULT_ROOT:-}"
+REQUIRE_RESULT_EVIDENCE="${COHSH_REQUIRE_RESULT_EVIDENCE:-0}"
+TARGET_EVIDENCE_FILE="${TEST_PLAN_TARGET_EVIDENCE_FILE:-${PI4_TARGET_EVIDENCE_FILE:-}}"
 RUN_ID="${COHSH_BATCH_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)}"
 if [[ "$BATCH_TARGET" == "pi4" && -z "${COHSH_LOG_ROOT:-}" ]]; then
     ARCHIVE_ROOT="${PROJECT_ROOT}/out/regression-logs/pi4-full-${RUN_ID}"
 else
     ARCHIVE_ROOT="${COHSH_LOG_ROOT:-${PROJECT_ROOT}/out/regression-logs}"
 fi
+ARCHIVE_ROOT="$(canonical_path "$ARCHIVE_ROOT")"
+if [[ -z "$QEMU_ARTIFACT_ROOT" ]]; then
+    QEMU_ARTIFACT_ROOT="${ARCHIVE_ROOT}/qemu-artifacts"
+fi
+QEMU_ARTIFACT_ROOT="$(canonical_path "$QEMU_ARTIFACT_ROOT")"
+if [[ -z "$TRANSPORT_RESULT_ROOT" ]]; then
+    TRANSPORT_RESULT_ROOT="${ARCHIVE_ROOT}/transport-results"
+fi
+TRANSPORT_RESULT_ROOT="$(canonical_path "$TRANSPORT_RESULT_ROOT")"
+TRANSPORT_EVIDENCE_ROOT="$(
+    python3 - \
+        "$ARCHIVE_ROOT" \
+        "$QEMU_ARTIFACT_ROOT" \
+        "$TRANSPORT_RESULT_ROOT" <<'PY'
+from pathlib import Path
+import os
+import sys
+
+print(Path(os.path.commonpath(sys.argv[1:])).resolve())
+PY
+)"
+validate_output_roots
+case "${COHSH_BATCH_PRINT_PATHS:-0}" in
+    0)
+        ;;
+    1)
+        printf 'ARCHIVE_ROOT=%s\n' "$ARCHIVE_ROOT"
+        printf 'QEMU_ARTIFACT_ROOT=%s\n' "$QEMU_ARTIFACT_ROOT"
+        printf 'TRANSPORT_RESULT_ROOT=%s\n' "$TRANSPORT_RESULT_ROOT"
+        printf 'TRANSPORT_EVIDENCE_ROOT=%s\n' "$TRANSPORT_EVIDENCE_ROOT"
+        exit 0
+        ;;
+    *)
+        echo "COHSH_BATCH_PRINT_PATHS must be 0 or 1" >&2
+        exit 2
+        ;;
+esac
 TCP_HOST="${COHSH_TCP_HOST:-${COHSH_HOST:-127.0.0.1}}"
 TCP_PORT="${COHSH_TCP_PORT:-${COHSH_PORT:-31337}}"
 QEMU_TCP_HOST="127.0.0.1"
-QEMU_TCP_PORT="31337"
+QEMU_TCP_PORT="${COHSH_QEMU_TCP_PORT:-}"
+QEMU_UDP_PORT="${COHSH_QEMU_UDP_PORT:-}"
+QEMU_SMOKE_PORT="${COHSH_QEMU_SMOKE_PORT:-}"
 COHSH_RUN_TCP_HOST="$QEMU_TCP_HOST"
 COHSH_RUN_TCP_PORT="$QEMU_TCP_PORT"
 if [[ "$BATCH_TARGET" == "pi4" ]]; then
@@ -129,6 +273,121 @@ if [[ "$BATCH_TARGET" == "pi4" ]]; then
 else
     BATCH_CONTINUE_ON_FAIL="${COHSH_BATCH_CONTINUE_ON_FAIL:-0}"
 fi
+
+GENERATED_OUTPUT_PATHS=(
+    "apps/root-task/src/generated"
+    "configs/generated/root_task_resolved.json"
+    "configs/generated/root_task_resolved.json.sha256"
+    "configs/generated/cas_manifest_template.json"
+    "configs/generated/cas_manifest_template.json.sha256"
+    "scripts/cohsh/boot_v0.coh"
+    "docs/snippets/root_task_manifest.md"
+    "docs/snippets/gpu_breadcrumbs.md"
+    "docs/snippets/observability_interfaces.md"
+    "docs/snippets/observability_security.md"
+    "docs/snippets/ticket_quotas.md"
+    "docs/snippets/trace_policy.md"
+    "docs/snippets/cas_interfaces.md"
+    "docs/snippets/cas_security.md"
+    "docs/snippets/telemetry_cbor_schema.md"
+    "tools/cohesix-py/cohesix/generated.py"
+    "docs/snippets/cohesix_py_defaults.md"
+    "docs/snippets/coh_doctor_checks.md"
+    "apps/cohsh/src/generated/policy.rs"
+    "docs/snippets/cohsh_policy.md"
+    "apps/cohsh/src/generated/client.rs"
+    "docs/snippets/cohsh_client.md"
+    "docs/snippets/cohsh_grammar.md"
+    "docs/snippets/cohsh_ticket_policy.md"
+    "apps/coh/src/generated/policy.rs"
+    "docs/snippets/coh_policy.md"
+    "apps/swarmui/src/generated.rs"
+    "docs/snippets/swarmui_defaults.md"
+    "out/cohsh_policy.toml"
+    "out/cohsh_policy.toml.sha256"
+    "out/coh_policy.toml"
+    "out/coh_policy.toml.sha256"
+    "out/swarmui_defaults.toml"
+    "out/swarmui_defaults.toml.sha256"
+)
+generated_snapshot_dir=""
+generated_snapshot_ready=0
+
+clear_generated_path() {
+    local relative="$1"
+    local absolute="${PROJECT_ROOT}/${relative}"
+    case "$absolute" in
+        "${PROJECT_ROOT}/"*)
+            ;;
+        *)
+            echo "Refusing to clear generated path outside repository: $absolute" >&2
+            return 1
+            ;;
+    esac
+    if [[ -d "$absolute" && ! -L "$absolute" ]]; then
+        find "$absolute" -mindepth 1 -delete
+        rmdir "$absolute"
+    else
+        rm -f "$absolute"
+    fi
+}
+
+snapshot_generated_outputs() {
+    if [[ "$generated_snapshot_ready" == "1" ]]; then
+        return 0
+    fi
+    generated_snapshot_dir="$(mktemp -d "${TMPDIR:-/tmp}/cohesix-generated.XXXXXX")"
+    : >"${generated_snapshot_dir}/present"
+    : >"${generated_snapshot_dir}/missing"
+    local relative
+    for relative in "${GENERATED_OUTPUT_PATHS[@]}"; do
+        local source="${PROJECT_ROOT}/${relative}"
+        if [[ -e "$source" || -L "$source" ]]; then
+            mkdir -p "${generated_snapshot_dir}/files/$(dirname "$relative")"
+            cp -pR "$source" "${generated_snapshot_dir}/files/${relative}"
+            printf '%s\n' "$relative" >>"${generated_snapshot_dir}/present"
+        else
+            printf '%s\n' "$relative" >>"${generated_snapshot_dir}/missing"
+        fi
+    done
+    generated_snapshot_ready=1
+}
+
+restore_generated_outputs() {
+    if [[ "$generated_snapshot_ready" != "1" ]]; then
+        return 0
+    fi
+    local relative
+    for relative in "${GENERATED_OUTPUT_PATHS[@]}"; do
+        if [[ -e "${PROJECT_ROOT}/${relative}" || -L "${PROJECT_ROOT}/${relative}" ]]; then
+            clear_generated_path "$relative" || return 1
+        fi
+        if grep -Fx "$relative" "${generated_snapshot_dir}/present" >/dev/null; then
+            mkdir -p "${PROJECT_ROOT}/$(dirname "$relative")"
+            cp -pR \
+                "${generated_snapshot_dir}/files/${relative}" \
+                "${PROJECT_ROOT}/${relative}" || return 1
+        fi
+    done
+    for relative in $(<"${generated_snapshot_dir}/present"); do
+        if ! diff -qr \
+            "${generated_snapshot_dir}/files/${relative}" \
+            "${PROJECT_ROOT}/${relative}" >/dev/null; then
+            echo "Failed to restore generated output exactly: ${relative}" >&2
+            return 1
+        fi
+    done
+    for relative in $(<"${generated_snapshot_dir}/missing"); do
+        if [[ -e "${PROJECT_ROOT}/${relative}" || -L "${PROJECT_ROOT}/${relative}" ]]; then
+            echo "Generated output should have been removed during restore: ${relative}" >&2
+            return 1
+        fi
+    done
+    find "$generated_snapshot_dir" -mindepth 1 -delete
+    rmdir "$generated_snapshot_dir"
+    generated_snapshot_dir=""
+    generated_snapshot_ready=0
+}
 
 group_selected() {
     local group="$1"
@@ -240,6 +499,67 @@ PY
         fi
     fi
     return 1
+}
+
+check_port_available() {
+    local host="$1"
+    local port="$2"
+    local kind="$3"
+    python3 - "$host" "$port" "$kind" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+kind = sys.argv[3]
+sock_type = socket.SOCK_DGRAM if kind == "udp" else socket.SOCK_STREAM
+try:
+    with socket.socket(socket.AF_INET, sock_type) as sock:
+        sock.bind((host, port))
+        if sock_type == socket.SOCK_STREAM:
+            sock.listen(1)
+except (OSError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0)
+PY
+}
+
+find_free_host_port() {
+    local kind="$1"
+    python3 - "$kind" <<'PY'
+import socket
+import sys
+
+kind = sys.argv[1]
+sock_type = socket.SOCK_DGRAM if kind == "udp" else socket.SOCK_STREAM
+with socket.socket(socket.AF_INET, sock_type) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+}
+
+resolve_qemu_host_ports() {
+    if [[ -z "$QEMU_TCP_PORT" ]]; then
+        QEMU_TCP_PORT="$(find_free_host_port tcp)"
+    fi
+    if [[ -z "$QEMU_UDP_PORT" ]]; then
+        QEMU_UDP_PORT="$(find_free_host_port udp)"
+    fi
+    if [[ -z "$QEMU_SMOKE_PORT" ]]; then
+        QEMU_SMOKE_PORT="$(find_free_host_port tcp)"
+    fi
+    while [[ "$QEMU_UDP_PORT" == "$QEMU_TCP_PORT" ]]; do
+        QEMU_UDP_PORT="$(find_free_host_port udp)"
+    done
+    while [[ "$QEMU_SMOKE_PORT" == "$QEMU_TCP_PORT" \
+        || "$QEMU_SMOKE_PORT" == "$QEMU_UDP_PORT" ]]; do
+        QEMU_SMOKE_PORT="$(find_free_host_port tcp)"
+    done
+    printf \
+        'INFO: QEMU host ports console=%s udp=%s smoke=%s\n' \
+        "$QEMU_TCP_PORT" \
+        "$QEMU_UDP_PORT" \
+        "$QEMU_SMOKE_PORT"
 }
 
 wait_port_ready() {
@@ -484,53 +804,174 @@ run_cohsh() {
     run_cohsh_file "$script_path"
 }
 
-run_batch() {
-    local name="$1"
-    local manifest="$2"
-    local out_dir="$3"
-    shift 3
-    local scripts=("$@")
+reset_scoped_directory() {
+    local directory="$1"
+    case "$directory" in
+        "$ARCHIVE_ROOT"|"$QEMU_ARTIFACT_ROOT"|\
+        "${PROJECT_ROOT}/"*|"${ARCHIVE_ROOT}/"*|"${QEMU_ARTIFACT_ROOT}/"*)
+            ;;
+        *)
+            echo "Refusing to reset directory outside scoped roots: $directory" >&2
+            return 1
+            ;;
+    esac
+    if [[ -d "$directory" ]]; then
+        find "$directory" -mindepth 1 -delete
+    else
+        mkdir -p "$directory"
+    fi
+}
 
-    if check_port_open "$QEMU_TCP_HOST" "$QEMU_TCP_PORT"; then
-        echo "Port ${QEMU_TCP_PORT} already in use; stop the running QEMU TCP console and retry." >&2
-        return 1
+prepare_qemu_artifact() {
+    local variant="$1"
+    local manifest="$2"
+    local artifact_dir="${QEMU_ARTIFACT_ROOT}/${variant}"
+    local artifact_manifest="${artifact_dir}/qemu-artifact.json"
+    local build_log="${ARCHIVE_ROOT}/build/${variant}.log"
+    local selected_profile="${COHESIX_SEL4_PROFILE:-qemu_smp_production}"
+    local smp="${COHESIX_QEMU_SMP_TOPO:-${QEMU_SMP_TOPO:-4,cores=4,threads=1,sockets=1}}"
+    local virtualization="${COHESIX_QEMU_VIRT:-${QEMU_VIRT:-on}}"
+    local machine_extra="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
+    if [[ -z "$machine_extra" && "$(uname -s)" == "Darwin" ]]; then
+        machine_extra="kernel-irqchip=off"
     fi
 
-    local log_root="${out_dir}/logs"
-    local archive_root="${ARCHIVE_ROOT}/${name}"
-    local qemu_log="${log_root}/regression_batch.qemu.log"
-
-    rm -rf "$out_dir"
-    mkdir -p "$log_root" "$archive_root"
-    mkdir -p "$GENERATED_CONFIG_DIR"
-
-    cargo run -p coh-rtc -- \
-        "$manifest" \
-        --out "$PROJECT_ROOT/apps/root-task/src/generated" \
-        --manifest "$GENERATED_CONFIG_DIR/root_task_resolved.json" \
-        --cas-manifest-template "$GENERATED_CONFIG_DIR/cas_manifest_template.json" \
-        --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
-        --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
-        --gpu-breadcrumbs-snippet "$PROJECT_ROOT/docs/snippets/gpu_breadcrumbs.md" \
-        --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
-        --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
-        --ticket-quotas-snippet "$PROJECT_ROOT/docs/snippets/ticket_quotas.md" \
-        --trace-policy-snippet "$PROJECT_ROOT/docs/snippets/trace_policy.md" \
-        --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
-        --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md" \
-        --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
-        --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
-
-    COHESIX_SEL4_PROFILE="${COHESIX_SEL4_PROFILE:-qemu_smp_production}" \
-        COH_RTC_MANIFEST="$manifest" SEL4_BUILD_DIR="$SEL4_BUILD_DIR" ./scripts/cohesix-build-run.sh \
+    snapshot_generated_outputs
+    reset_scoped_directory "$artifact_dir"
+    mkdir -p "$artifact_dir" "$(dirname "$build_log")"
+    echo "INFO: building QEMU artifact variant=${variant} manifest=${manifest}"
+    COHESIX_SEL4_PROFILE="$selected_profile" \
+        COH_RTC_MANIFEST="$manifest" \
+        SEL4_BUILD_DIR="$SEL4_BUILD_DIR" \
+        "$BUILD_RUN_BIN" \
         --sel4-build "$SEL4_BUILD_DIR" \
-        --out-dir "$out_dir" \
+        --out-dir "$artifact_dir" \
         --profile release \
         --root-task-features cohesix-dev \
         --cargo-target aarch64-unknown-none \
-        --raw-qemu \
         --transport tcp \
-        > "$qemu_log" 2>&1 &
+        --no-run \
+        >"$build_log" 2>&1
+
+    local record_args=(
+        record
+        --artifact-dir "$artifact_dir"
+        --output "$artifact_manifest"
+        --manifest "$manifest"
+        --resolved-manifest "$GENERATED_CONFIG_DIR/root_task_resolved.json"
+        --policy "$PROJECT_ROOT/out/cohsh_policy.toml"
+        --source-digest "$TEST_SOURCE_DIGEST"
+        --sel4-build "$SEL4_BUILD_DIR"
+        --sel4-profile "$selected_profile"
+        --root-task-features cohesix-dev
+        --cargo-target aarch64-unknown-none
+        --smp "$smp"
+        --virtualization "$virtualization"
+        --machine-extra "$machine_extra"
+        --net-backend virtio
+        --detect-gic-script "$PROJECT_ROOT/scripts/lib/detect_gic_version.py"
+        --action-id "$TEST_ACTION_ID"
+        --catalog-action-digest "$TEST_ACTION_DIGEST"
+    )
+    if [[ -n "$TEST_ATTEMPT_MANIFEST" && -f "$TEST_ATTEMPT_MANIFEST" ]]; then
+        record_args+=(--attempt-manifest "$TEST_ATTEMPT_MANIFEST")
+    elif [[ -n "$TEST_ATTEMPT_MANIFEST" ]]; then
+        echo "WARN: attempt manifest is not yet available; omitting from artifact evidence: ${TEST_ATTEMPT_MANIFEST}" \
+            >>"$build_log"
+    fi
+    "$QEMU_ARTIFACT_HELPER" "${record_args[@]}" >>"$build_log"
+    echo "INFO: QEMU artifact ready variant=${variant} manifest=${artifact_manifest}"
+
+    case "$variant" in
+        base)
+            BASE_QEMU_ARTIFACT_MANIFEST="$artifact_manifest"
+            ;;
+        gated)
+            GATED_QEMU_ARTIFACT_MANIFEST="$artifact_manifest"
+            ;;
+        *)
+            echo "Unknown QEMU artifact variant: $variant" >&2
+            return 1
+            ;;
+    esac
+}
+
+write_qemu_result() {
+    local name="$1"
+    local artifact_manifest="$2"
+    local boot_id="$3"
+    local qemu_log="$4"
+    shift 4
+    local scripts=("$@")
+    local result_path="${TRANSPORT_RESULT_ROOT}/${name}.json"
+    local arguments=(
+        result
+        --output "$result_path"
+        --action-id "$TEST_ACTION_ID"
+        --catalog-action-digest "$TEST_ACTION_DIGEST"
+        --claim-tier "$TEST_CLAIM_TIER"
+        --target qemu
+        --source-digest "$TEST_SOURCE_DIGEST"
+        --evidence-root "$TRANSPORT_EVIDENCE_ROOT"
+        --artifact-manifest "$artifact_manifest"
+        --artifact-action-id "$TEST_ACTION_ID"
+        --artifact-catalog-action-digest "$TEST_ACTION_DIGEST"
+        --boot-id "$boot_id"
+        --group "$name"
+        --status pass
+        --log "$qemu_log"
+    )
+    local script
+    for script in "${scripts[@]}"; do
+        arguments+=(--script "$script")
+        arguments+=(--log "${ARCHIVE_ROOT}/runtime/${name}/${script%.coh}.out.log")
+    done
+    mkdir -p "$TRANSPORT_RESULT_ROOT"
+    "$QEMU_ARTIFACT_HELPER" "${arguments[@]}" >"${result_path}.id"
+}
+
+run_batch() {
+    local name="$1"
+    local artifact_manifest="$2"
+    shift 2
+    local scripts=("$@")
+
+    if ! check_port_available "$QEMU_TCP_HOST" "$QEMU_TCP_PORT" tcp; then
+        echo "QEMU console port already in use: ${QEMU_TCP_PORT}" >&2
+        return 1
+    fi
+    if ! check_port_available "$QEMU_TCP_HOST" "$QEMU_UDP_PORT" udp; then
+        echo "QEMU UDP echo port already in use: ${QEMU_UDP_PORT}" >&2
+        return 1
+    fi
+    if ! check_port_available "$QEMU_TCP_HOST" "$QEMU_SMOKE_PORT" tcp; then
+        echo "QEMU smoke port already in use: ${QEMU_SMOKE_PORT}" >&2
+        return 1
+    fi
+
+    "$QEMU_ARTIFACT_HELPER" verify \
+        --artifact-manifest "$artifact_manifest" \
+        --source-digest "$TEST_SOURCE_DIGEST" \
+        --action-id "$TEST_ACTION_ID" \
+        --catalog-action-digest "$TEST_ACTION_DIGEST" >/dev/null
+
+    local artifact_dir
+    artifact_dir="$(dirname "$artifact_manifest")"
+    local log_root="${ARCHIVE_ROOT}/runtime/${name}"
+    local archive_root="${ARCHIVE_ROOT}/${name}"
+    local qemu_log="${log_root}/regression_batch.qemu.log"
+    local boot_id="${RUN_ID}-${name}-$$-${RANDOM}"
+
+    mkdir -p "$log_root" "$archive_root"
+    "$QEMU_ARTIFACT_HELPER" launch \
+        --artifact-manifest "$artifact_manifest" \
+        --source-digest "$TEST_SOURCE_DIGEST" \
+        --action-id "$TEST_ACTION_ID" \
+        --catalog-action-digest "$TEST_ACTION_DIGEST" \
+        --console-port "$QEMU_TCP_PORT" \
+        --udp-port "$QEMU_UDP_PORT" \
+        --smoke-port "$QEMU_SMOKE_PORT" \
+        >"$qemu_log" 2>&1 &
     qemu_pid=$!
 
     if ! wait_port_ready "$QEMU_TCP_HOST" "$QEMU_TCP_PORT" "$READY_TIMEOUT" "$qemu_pid"; then
@@ -552,10 +993,10 @@ run_batch() {
     fi
     echo "INFO: TCP auth handshake is responsive"
 
-    COHSH_BIN="${out_dir}/host-tools/cohsh"
+    COHSH_BIN="${artifact_dir}/host-tools/cohsh"
     COHSH_RUN_TCP_HOST="$QEMU_TCP_HOST"
     COHSH_RUN_TCP_PORT="$QEMU_TCP_PORT"
-    COHSH_RUN_POLICY="${PROJECT_ROOT}/out/cohsh_policy.toml"
+    COHSH_RUN_POLICY="${artifact_dir}/evidence/cohsh_policy.toml"
 
     for script in "${scripts[@]}"; do
         local script_name="${script%.coh}"
@@ -589,6 +1030,12 @@ run_batch() {
         wait "$qemu_pid" 2>/dev/null || true
     fi
     qemu_pid=0
+    write_qemu_result \
+        "$name" \
+        "$artifact_manifest" \
+        "$boot_id" \
+        "$qemu_log" \
+        "${scripts[@]}"
     return 0
 }
 
@@ -708,9 +1155,74 @@ run_live_group() {
     done
 }
 
+write_pi4_result() {
+    local name="$1"
+    shift
+    local scripts=("$@")
+    if [[ -z "$TARGET_EVIDENCE_FILE" ]]; then
+        if [[ "$REQUIRE_RESULT_EVIDENCE" == "1" ]]; then
+            echo "Pi 4 transport evidence requires TEST_PLAN_TARGET_EVIDENCE_FILE" >&2
+            return 1
+        fi
+        printf \
+            "NO_CLAIM group=%s tier=pi4-transport reason=target-evidence-missing\n" \
+            "$name" | tee -a "$SUMMARY_LOG"
+        return 0
+    fi
+
+    local result_path="${TRANSPORT_RESULT_ROOT}/${name}.json"
+    local arguments=(
+        result
+        --output "$result_path"
+        --action-id "$TEST_ACTION_ID"
+        --catalog-action-digest "$TEST_ACTION_DIGEST"
+        --claim-tier pi4-transport
+        --target pi4
+        --source-digest "$TEST_SOURCE_DIGEST"
+        --evidence-root "$TRANSPORT_EVIDENCE_ROOT"
+        --target-evidence "$TARGET_EVIDENCE_FILE"
+        --group "$name"
+        --status pass
+        --log "$SUMMARY_LOG"
+    )
+    local script
+    for script in "${scripts[@]}"; do
+        arguments+=(--script "$script")
+        arguments+=(--log "${ARCHIVE_ROOT}/${name}/${script%.coh}.out.log")
+    done
+    mkdir -p "$TRANSPORT_RESULT_ROOT"
+    "$QEMU_ARTIFACT_HELPER" "${arguments[@]}" >"${result_path}.id"
+}
+
+write_transport_aggregate() {
+    local target="$1"
+    local claim_tier="$2"
+    if [[ "$target" == "pi4" && -z "$TARGET_EVIDENCE_FILE" ]]; then
+        return 0
+    fi
+    local aggregate_path="${TRANSPORT_RESULT_ROOT}/stage-03.json"
+    local arguments=(
+        aggregate
+        --output "$aggregate_path"
+        --action-id "$TEST_ACTION_ID"
+        --catalog-action-digest "$TEST_ACTION_DIGEST"
+        --claim-tier "$claim_tier"
+        --target "$target"
+        --source-digest "$TEST_SOURCE_DIGEST"
+        --evidence-root "$TRANSPORT_EVIDENCE_ROOT"
+    )
+    local group
+    for group in base base-telemetry base-shard gated; do
+        if group_selected "$group"; then
+            arguments+=(--result "${TRANSPORT_RESULT_ROOT}/${group}.json")
+        fi
+    done
+    mkdir -p "$TRANSPORT_RESULT_ROOT"
+    "$QEMU_ARTIFACT_HELPER" "${arguments[@]}" >"${aggregate_path}.id"
+}
+
 run_pi4_batch() {
-    rm -rf "$ARCHIVE_ROOT"
-    mkdir -p "$ARCHIVE_ROOT"
+    reset_scoped_directory "$ARCHIVE_ROOT"
     SUMMARY_LOG="${ARCHIVE_ROOT}/summary.log"
     : > "$SUMMARY_LOG"
     LIFECYCLE_RESUME_SCRIPT="${ARCHIVE_ROOT}/lifecycle_resume.coh"
@@ -773,6 +1285,19 @@ run_pi4_batch() {
     if (( pi_fail > 0 )); then
         return 1
     fi
+    if group_selected "base"; then
+        write_pi4_result "base" "${BASE_SCRIPTS[@]}"
+    fi
+    if group_selected "base-telemetry"; then
+        write_pi4_result "base-telemetry" "${BASE_TELEMETRY_SCRIPTS[@]}"
+    fi
+    if group_selected "base-shard"; then
+        write_pi4_result "base-shard" "${BASE_SHARD_SCRIPTS[@]}"
+    fi
+    if group_selected "gated"; then
+        write_pi4_result "gated" "${GATED_SCRIPTS[@]}"
+    fi
+    write_transport_aggregate "pi4" "pi4-transport"
     return 0
 }
 
@@ -785,15 +1310,35 @@ pi_fail=0
 pi_total=0
 
 cleanup() {
+    local status=$?
+    local cleanup_status=0
+    set +e
     if (( qemu_pid > 0 )); then
         if kill -0 "$qemu_pid" 2>/dev/null; then
             kill "$qemu_pid" || true
+            wait "$qemu_pid" 2>/dev/null || true
         fi
     fi
+    if ! restore_generated_outputs; then
+        cleanup_status=1
+    fi
+    if (( cleanup_status != 0 )); then
+        status=1
+    fi
+    trap - EXIT
+    exit "$status"
 }
 trap cleanup EXIT
 
 if [[ "$BATCH_TARGET" == "pi4" ]]; then
+    if [[ -n "$TARGET_EVIDENCE_FILE" ]]; then
+        "$QEMU_ARTIFACT_HELPER" verify-pi4-evidence \
+            --target-evidence "$TARGET_EVIDENCE_FILE" \
+            --source-digest "$TEST_SOURCE_DIGEST" >/dev/null
+    elif [[ "$REQUIRE_RESULT_EVIDENCE" == "1" ]]; then
+        echo "Pi 4 transport evidence requires TEST_PLAN_TARGET_EVIDENCE_FILE" >&2
+        exit 1
+    fi
     run_pi4_batch
     exit $?
 fi
@@ -804,17 +1349,50 @@ if [[ ! -d "$SEL4_BUILD_DIR" ]]; then
     exit 1
 fi
 
+resolve_qemu_host_ports
 if [[ "${COHSH_BATCH_CLEAN_TARGET:-0}" == "1" ]]; then
-    rm -rf "${PROJECT_ROOT}/target"
+    if [[ -d "${PROJECT_ROOT}/target" ]]; then
+        find "${PROJECT_ROOT}/target" -mindepth 1 -delete
+        rmdir "${PROJECT_ROOT}/target"
+    fi
 fi
-rm -rf \
-    "${PROJECT_ROOT}/out/cohesix" \
-    "${PROJECT_ROOT}/out/cohesix-gated" \
-    "$ARCHIVE_ROOT"
-mkdir -p "$ARCHIVE_ROOT"
+reset_scoped_directory "$ARCHIVE_ROOT"
+BASE_QEMU_ARTIFACT_MANIFEST=""
+GATED_QEMU_ARTIFACT_MANIFEST=""
+
+if group_selected "base" \
+    || group_selected "base-telemetry" \
+    || group_selected "base-shard"; then
+    prepare_qemu_artifact "base" "$BASE_MANIFEST"
+fi
+if group_selected "gated"; then
+    prepare_qemu_artifact "gated" "$GATED_MANIFEST"
+fi
+# The built artifacts carry private copies of their resolved manifest and
+# client policy, so tracked/default generated outputs can be restored before
+# any long-running QEMU boot begins.
+restore_generated_outputs
+
+case "${COHSH_BATCH_PREPARE_ONLY:-0}" in
+    0)
+        ;;
+    1)
+        if [[ -n "$BASE_QEMU_ARTIFACT_MANIFEST" ]]; then
+            printf 'BASE_QEMU_ARTIFACT_MANIFEST=%s\n' "$BASE_QEMU_ARTIFACT_MANIFEST"
+        fi
+        if [[ -n "$GATED_QEMU_ARTIFACT_MANIFEST" ]]; then
+            printf 'GATED_QEMU_ARTIFACT_MANIFEST=%s\n' "$GATED_QEMU_ARTIFACT_MANIFEST"
+        fi
+        exit 0
+        ;;
+    *)
+        echo "COHSH_BATCH_PREPARE_ONLY must be 0 or 1" >&2
+        exit 2
+        ;;
+esac
 
 if group_selected "base"; then
-    if ! run_batch "base" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_SCRIPTS[@]}"; then
+    if ! run_batch "base" "$BASE_QEMU_ARTIFACT_MANIFEST" "${BASE_SCRIPTS[@]}"; then
         exit 1
     fi
 else
@@ -822,7 +1400,7 @@ else
 fi
 
 if group_selected "base-telemetry"; then
-    if ! run_batch "base-telemetry" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
+    if ! run_batch "base-telemetry" "$BASE_QEMU_ARTIFACT_MANIFEST" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
         exit 1
     fi
 else
@@ -830,7 +1408,7 @@ else
 fi
 
 if group_selected "base-shard"; then
-    if ! run_batch "base-shard" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_SHARD_SCRIPTS[@]}"; then
+    if ! run_batch "base-shard" "$BASE_QEMU_ARTIFACT_MANIFEST" "${BASE_SHARD_SCRIPTS[@]}"; then
         exit 1
     fi
 else
@@ -838,28 +1416,12 @@ else
 fi
 
 if group_selected "gated"; then
-    if ! run_batch "gated" "$GATED_MANIFEST" "${PROJECT_ROOT}/out/cohesix-gated" "${GATED_SCRIPTS[@]}"; then
+    if ! run_batch "gated" "$GATED_QEMU_ARTIFACT_MANIFEST" "${GATED_SCRIPTS[@]}"; then
         exit 1
     fi
 else
     log_skip_group "gated"
 fi
 
-cargo run -p coh-rtc -- \
-    "$PROJECT_ROOT/configs/root_task.toml" \
-    --out "$PROJECT_ROOT/apps/root-task/src/generated" \
-    --manifest "$GENERATED_CONFIG_DIR/root_task_resolved.json" \
-    --cas-manifest-template "$GENERATED_CONFIG_DIR/cas_manifest_template.json" \
-    --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
-    --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
-    --gpu-breadcrumbs-snippet "$PROJECT_ROOT/docs/snippets/gpu_breadcrumbs.md" \
-    --observability-interfaces-snippet "$PROJECT_ROOT/docs/snippets/observability_interfaces.md" \
-    --observability-security-snippet "$PROJECT_ROOT/docs/snippets/observability_security.md" \
-    --ticket-quotas-snippet "$PROJECT_ROOT/docs/snippets/ticket_quotas.md" \
-    --trace-policy-snippet "$PROJECT_ROOT/docs/snippets/trace_policy.md" \
-    --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
-    --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md" \
-    --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
-    --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
-
+write_transport_aggregate "qemu" "qemu-integration"
 echo "regression batch complete: $(selected_script_count) scripts passed"

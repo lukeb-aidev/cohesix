@@ -5,14 +5,22 @@
 #
 # Environment:
 #   DD_GATE_LOG_DIR            Override log output root (default: out/audit/gate/<utc-timestamp>)
+#   DD_COLLECT_ALL=1           Continue after failures to collect every diagnostic.
+#                                Default behavior is fail-fast.
 #   DD_SKIP_TEST_PLAN_CHECK=1  Mark test-plan hash check as incomplete (run still fails)
 #   DD_SKIP_REGRESSION_BATCH=1 Mark regression batch check as incomplete (run still fails)
 #   DD_SKIP_CARGO_AUDIT=1      Mark cargo-audit as incomplete (run still fails)
 #   DD_SKIP_CARGO_DENY=1       Mark cargo-deny advisories check as incomplete (run still fails)
 #   DD_REUSE_REGRESSION_BATCH_FROM
-#                                Validate a prior full Stage 03 regression log root
-#                                instead of rerunning the batch. Used only by
-#                                scripts/ci/test_plan_stage_05_due_diligence.sh.
+#                                Validate a prior immutable Stage 03 artifact
+#                                root instead of rerunning the batch.
+#   DD_REUSE_STAGED_EVIDENCE_FROM
+#                                Validate source-bound, target-qualified Stage
+#                                01-04 attestations from this state directory
+#                                instead of rerunning covered work.
+#   DD_REUSE_STAGED_EVIDENCE_TARGET
+#                                Required qemu or pi4 qualifier when reusing
+#                                staged or Stage 03 evidence.
 #   DD_REGRESSION_GROUPS        Full due-diligence requires all regression groups.
 #                                Subsets are incomplete and fail the gate.
 #   DD_REGRESSION_READY_TIMEOUT  Override run_regression_batch READY_TIMEOUT (default: 900)
@@ -24,6 +32,12 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$repo_root"
+# shellcheck source=scripts/ci/test_plan_common.sh
+source "${repo_root}/scripts/ci/test_plan_common.sh"
+TEST_PLAN_ROOT="${TEST_PLAN_ROOT:-${repo_root}}"
+TP_EVIDENCE_TOOL="${TEST_PLAN_ROOT}/scripts/ci/test_plan_evidence.py"
+export TEST_PLAN_ROOT
+tp_configure_resource_limits
 
 run_id=$(date -u +"%Y%m%dT%H%M%SZ")
 log_root="${DD_GATE_LOG_DIR:-${repo_root}/out/audit/gate/${run_id}}"
@@ -32,10 +46,38 @@ dd_regression_port_timeout="${DD_REGRESSION_PORT_TIMEOUT:-60}"
 dd_regression_auth_timeout="${DD_REGRESSION_AUTH_TIMEOUT:-120}"
 dd_regression_quit_timeout="${DD_REGRESSION_QUIT_TIMEOUT:-60}"
 dd_reuse_regression_batch_from="${DD_REUSE_REGRESSION_BATCH_FROM:-}"
+dd_reuse_staged_evidence_from="${DD_REUSE_STAGED_EVIDENCE_FROM:-}"
+dd_reuse_staged_evidence_target="${DD_REUSE_STAGED_EVIDENCE_TARGET:-}"
 dd_regression_groups="${DD_REGRESSION_GROUPS:-${COHSH_BATCH_GROUPS:-all}}"
+test_plan_catalog="${repo_root}/scripts/ci/test_plan_catalog.py"
+dd_collect_all="${DD_COLLECT_ALL:-0}"
 
 declare -a failures=()
 declare -a incomplete_steps=()
+
+print_failure_summary() {
+  printf "\n[dd-gate] FAILURES (%s):\n" "${#failures[@]}"
+  local failure
+  for failure in "${failures[@]}"; do
+    printf "  - %s\n" "${failure}"
+  done
+  if [[ ${#incomplete_steps[@]} -gt 0 ]]; then
+    printf "\n[dd-gate] INCOMPLETE RUN (%s):\n" "${#incomplete_steps[@]}"
+    local incomplete_step
+    for incomplete_step in "${incomplete_steps[@]}"; do
+      printf "  - %s\n" "${incomplete_step}"
+    done
+    printf "[dd-gate] INCOMPLETE runs cannot be PASS per docs/audit/DUE_DILIGENCE_PLAN.md\n"
+  fi
+  printf "[dd-gate] LOG ROOT %s\n" "${log_root}"
+}
+
+stop_unless_collecting() {
+  if [[ "${dd_collect_all}" != "1" ]]; then
+    print_failure_summary
+    exit 1
+  fi
+}
 
 run_step() {
   local name="$1"
@@ -49,6 +91,7 @@ run_step() {
     printf "[dd-gate] FAIL  %s (log: %s)\n" "$name" "$log_file"
     tail -n 40 "$log_file" >&2 || true
     failures+=("$name")
+    stop_unless_collecting
   fi
 }
 
@@ -59,6 +102,46 @@ mark_incomplete_step() {
   printf "[dd-gate] REASON %s\n" "$reason"
   incomplete_steps+=("$name")
   failures+=("INCOMPLETE:${name}")
+  stop_unless_collecting
+}
+
+run_catalog_action() {
+  local action_id="$1"
+  local action_command
+  local timeout_seconds
+  local test_policy
+  local minimum_test_count
+  action_command=$(
+    python3 "${test_plan_catalog}" \
+      action \
+      --id "${action_id}" \
+      --field command
+  )
+  timeout_seconds=$(
+    python3 "${test_plan_catalog}" \
+      action \
+      --id "${action_id}" \
+      --field timeout_seconds
+  )
+  test_policy=$(
+    python3 "${test_plan_catalog}" \
+      action \
+      --id "${action_id}" \
+      --field test_policy
+  )
+  minimum_test_count=$(
+    python3 "${test_plan_catalog}" \
+      action \
+      --id "${action_id}" \
+      --field minimum_test_count
+  )
+  printf "[dd-gate] ACTION %s\n" "${action_id}"
+  printf "[dd-gate] ACTION CMD %s\n" "${action_command}"
+  tp_catalog_execute \
+    "${timeout_seconds}" \
+    "${test_policy}" \
+    "${minimum_test_count}" \
+    "${action_command}"
 }
 
 check_required_audit_assets() {
@@ -81,12 +164,6 @@ check_required_audit_assets() {
     fi
   done
   return "$missing"
-}
-
-check_rust_risk_ratchet() {
-  scripts/ci/rust_risk_gate.sh \
-    --root "$repo_root" \
-    --baseline docs/audit/rust_risk_baseline.toml
 }
 
 scan_hardcoded_secrets() {
@@ -614,84 +691,207 @@ PY
 
 check_reused_regression_batch() {
   local reuse_root="$1"
-  python3 - "$reuse_root" <<'PY'
-import pathlib
-import re
-import sys
+  local target="${dd_reuse_staged_evidence_target}"
+  local action_id
+  local claim_tier
+  case "${target}" in
+    qemu)
+      action_id="qemu.tcp-regression"
+      claim_tier="qemu-integration"
+      ;;
+    pi4)
+      action_id="pi4.tcp-regression"
+      claim_tier="pi4-transport"
+      ;;
+    *)
+      printf "reused Stage 03 evidence requires DD_REUSE_STAGED_EVIDENCE_TARGET=qemu|pi4\n" >&2
+      return 1
+      ;;
+  esac
+  if [[ ! -d "${reuse_root}" ]]; then
+    printf "missing immutable Stage 03 artifact root: %s\n" "${reuse_root}" >&2
+    return 1
+  fi
 
-root = pathlib.Path(sys.argv[1])
-if not root.is_dir():
-    print(f"missing regression log root: {root}", file=sys.stderr)
-    sys.exit(1)
+  local source_digest="${TEST_PLAN_SOURCE_DIGEST:-}"
+  if [[ -z "${source_digest}" ]]; then
+    source_digest="$(
+      "${repo_root}/scripts/ci/qemu_artifact.py" \
+        source-digest \
+        --repo-root "${repo_root}"
+    )"
+  fi
+  if [[ "${source_digest}" != sha256:* ]]; then
+    source_digest="sha256:${source_digest}"
+  fi
+  local catalog_digest
+  catalog_digest="sha256:$(
+    python3 "${test_plan_catalog}" \
+      action \
+      --id "${action_id}" \
+      --field digest
+  )"
 
-summary = root / "summary.log"
-if summary.is_file():
-    text = summary.read_text(errors="ignore")
-    if "INFO target=pi4" not in text:
-        print(f"Pi 4 summary does not record target=pi4: {summary}", file=sys.stderr)
-        sys.exit(1)
-    match = re.search(r"RESULT pass=(\d+) fail=(\d+) total=(\d+)", text)
-    if not match:
-        print(f"Pi 4 summary is missing RESULT line: {summary}", file=sys.stderr)
-        sys.exit(1)
-    passed, failed, total = (int(value) for value in match.groups())
-    if failed != 0 or total == 0 or passed != total:
-        print(
-            f"Pi 4 regression summary is not a full pass: pass={passed} fail={failed} total={total}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    print(f"reused Pi 4 regression batch: {summary} pass={passed} total={total}")
-    sys.exit(0)
-
-expected = {
-    "base": [
-        "boot_v0",
-        "9p_batch",
-        "host_absent",
-        "host_sidecar_mock",
-        "observe_watch",
-        "root_cut_basic",
-        "session_lifecycle",
-        "busy_backpressure",
-        "cas_roundtrip",
-        "tcp_basic",
-        "session_pool",
-    ],
-    "base-telemetry": [
-        "telemetry_ring",
-        "telemetry_push_create",
-    ],
-    "base-shard": [
-        "shard_1k",
-    ],
-    "gated": [
-        "replay_journal",
-        "policy_gate",
-        "model_cas_bind",
-        "sidecar_integration",
-    ],
+  "${repo_root}/scripts/ci/qemu_artifact.py" \
+    verify-aggregate \
+    --aggregate "${reuse_root}/transport-results/stage-03.json" \
+    --result-root "${reuse_root}/transport-results" \
+    --evidence-root "${reuse_root}" \
+    --action-id "${action_id}" \
+    --catalog-action-digest "${catalog_digest}" \
+    --claim-tier "${claim_tier}" \
+    --target "${target}" \
+    --source-digest "${source_digest}" \
+    --expected-group base \
+    --expected-group base-telemetry \
+    --expected-group base-shard \
+    --expected-group gated
 }
 
-missing = []
-for group, scripts in expected.items():
-    group_root = root / group
-    if not group_root.is_dir():
-        missing.append(str(group_root))
-        continue
-    for script in scripts:
-        for suffix in ("out.log", "qemu.log"):
-            path = group_root / f"{script}.{suffix}"
-            if not path.is_file() or path.stat().st_size == 0:
-                missing.append(str(path))
+check_reused_stage_attestation() {
+  local state_dir="$1"
+  local stage="$2"
+  local target="${3:-}"
 
-if missing:
-    print("reused QEMU regression batch is incomplete:", file=sys.stderr)
-    for path in missing:
-        print(f"  - {path}", file=sys.stderr)
+  if [[ -n "${target}" ]]; then
+    tp_verify_stage_attestation "${state_dir}" "${stage}" "${target}"
+  else
+    tp_verify_stage_attestation "${state_dir}" "${stage}"
+  fi
+}
+
+check_reused_staged_state() {
+  local state_dir="$1"
+  local expected_target="$2"
+
+  python3 - "${state_dir}" "${expected_target}" "${repo_root}" <<'PY'
+from __future__ import annotations
+
+from datetime import datetime
+import pathlib
+import sys
+
+
+state_argument = pathlib.Path(sys.argv[1])
+expected_target = sys.argv[2]
+expected_repo = pathlib.Path(sys.argv[3]).resolve(strict=True)
+
+try:
+    state = state_argument.resolve(strict=True)
+except OSError as exc:
+    print(
+        f"reused staged-evidence state is missing: {state_argument}: {exc}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+if not state.is_dir():
+    print(f"reused staged-evidence state is not a directory: {state}", file=sys.stderr)
     sys.exit(1)
 
-print(f"reused QEMU regression batch: {root} groups={len(expected)} scripts=18")
+metadata = state / "target.env"
+if metadata.is_symlink() or not metadata.is_file():
+    print(
+        f"reused staged-evidence target metadata must be a regular file: {metadata}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+required_keys = {
+    "TEST_PLAN_TARGET",
+    "TEST_PLAN_TARGET_MATRIX_VERSION",
+    "TEST_PLAN_STATE_DIR",
+    "TEST_PLAN_REPO_ROOT",
+    "TEST_PLAN_STARTED_AT_UTC",
+}
+values: dict[str, str] = {}
+errors: list[str] = []
+try:
+    lines = metadata.read_text(encoding="utf-8").splitlines()
+except (OSError, UnicodeError) as exc:
+    print(f"unable to read reused target metadata {metadata}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+for line_number, line in enumerate(lines, start=1):
+    if not line or "=" not in line:
+        errors.append(f"target.env line {line_number} is not KEY=VALUE")
+        continue
+    key, value = line.split("=", 1)
+    if key not in required_keys:
+        errors.append(f"target.env contains unknown key: {key or '<empty>'}")
+        continue
+    if key in values:
+        errors.append(f"target.env contains duplicate key: {key}")
+        continue
+    values[key] = value
+
+missing = sorted(required_keys.difference(values))
+if missing:
+    errors.append("target.env is missing keys: " + ", ".join(missing))
+if values.get("TEST_PLAN_TARGET") != expected_target:
+    errors.append(
+        "target.env target mismatch: "
+        f"expected {expected_target}, found "
+        f"{values.get('TEST_PLAN_TARGET', '<missing>')}"
+    )
+if values.get("TEST_PLAN_TARGET_MATRIX_VERSION") != "2":
+    errors.append(
+        "target.env matrix version mismatch: expected 2, found "
+        f"{values.get('TEST_PLAN_TARGET_MATRIX_VERSION', '<missing>')}"
+    )
+if values.get("TEST_PLAN_STATE_DIR") != str(state):
+    errors.append(
+        "target.env state directory mismatch: "
+        f"expected {state}, found "
+        f"{values.get('TEST_PLAN_STATE_DIR', '<missing>')}"
+    )
+if values.get("TEST_PLAN_REPO_ROOT") != str(expected_repo):
+    errors.append(
+        "target.env repository mismatch: "
+        f"expected {expected_repo}, found "
+        f"{values.get('TEST_PLAN_REPO_ROOT', '<missing>')}"
+    )
+timestamp = values.get("TEST_PLAN_STARTED_AT_UTC", "")
+try:
+    datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+except ValueError:
+    errors.append(
+        "target.env TEST_PLAN_STARTED_AT_UTC must use YYYY-MM-DDTHH:MM:SSZ"
+    )
+
+incomplete_markers = sorted(state.glob("stage_*.incomplete"))
+if incomplete_markers:
+    errors.append(
+        "reused staged evidence has active incomplete marker(s): "
+        + ", ".join(str(path) for path in incomplete_markers)
+    )
+incomplete_root = state / "incomplete"
+if incomplete_root.is_symlink():
+    errors.append(
+        f"reused staged-evidence incomplete record root is a symlink: {incomplete_root}"
+    )
+elif incomplete_root.exists():
+    if not incomplete_root.is_dir():
+        errors.append(
+            f"reused staged-evidence incomplete record root is not a directory: "
+            f"{incomplete_root}"
+        )
+    else:
+        records = sorted(incomplete_root.iterdir())
+        if records:
+            errors.append(
+                "reused staged evidence has active incomplete record(s): "
+                + ", ".join(str(path) for path in records)
+            )
+
+if errors:
+    print("reused staged-evidence state validation failed:", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
+    sys.exit(1)
+
+print(
+    f"reused staged-evidence state passed: target={expected_target} state={state}"
+)
 PY
 }
 
@@ -700,39 +900,92 @@ if [[ $# -gt 0 ]]; then
     check_exceptions_register "$2" "$3"
     exit $?
   fi
-  printf "usage: %s [--check-exceptions-register <findings.csv> <EXCEPTIONS.md>]\n" "$0" >&2
+  if [[ "$1" == "--collect-all" && $# -eq 1 ]]; then
+    dd_collect_all=1
+  else
+    printf "usage: %s [--collect-all]\n" "$0" >&2
+    printf "       %s --check-exceptions-register <findings.csv> <EXCEPTIONS.md>\n" "$0" >&2
+    exit 2
+  fi
+fi
+if [[ "${dd_collect_all}" != "0" && "${dd_collect_all}" != "1" ]]; then
+  printf "DD_COLLECT_ALL must be 0 or 1, got: %s\n" "${dd_collect_all}" >&2
   exit 2
+fi
+if [[ -n "${dd_reuse_staged_evidence_from}" ]]; then
+  case "${dd_reuse_staged_evidence_target}" in
+    qemu|pi4)
+      ;;
+    *)
+      printf "DD_REUSE_STAGED_EVIDENCE_FROM requires DD_REUSE_STAGED_EVIDENCE_TARGET=qemu|pi4\n" >&2
+      exit 2
+      ;;
+  esac
 fi
 
 mkdir -p "$log_root"
 
 run_step "required-audit-assets" check_required_audit_assets
-run_step "cargo-lockfile" cargo metadata --locked --no-deps
-run_step "cargo-fmt-check" cargo fmt --all -- --check
-run_step "cargo-clippy-workspace" env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings
-run_step "cargo-check-workspace" env CARGO_INCREMENTAL=0 cargo check --workspace
-run_step "secure9p-codec-tests" cargo test -p secure9p-codec
-run_step "integration-tests" cargo test -p tests
-run_step "workspace-tests" env CARGO_INCREMENTAL=0 cargo test --workspace
-run_step "rust-risk-bootstrap-tests" python3 scripts/ci/test_rust_risk_gate.py
+staged_evidence_verified=0
+if [[ -n "${dd_reuse_staged_evidence_from}" ]]; then
+  reuse_failure_count="${#failures[@]}"
+  run_step \
+    "staged-evidence-state" \
+    check_reused_staged_state \
+    "${dd_reuse_staged_evidence_from}" \
+    "${dd_reuse_staged_evidence_target}"
+  for reused_stage in 1 2 3 4; do
+    run_step \
+      "stage-0${reused_stage}-attestation" \
+      check_reused_stage_attestation \
+      "${dd_reuse_staged_evidence_from}" \
+      "${reused_stage}" \
+      "${dd_reuse_staged_evidence_target}"
+  done
+  if [[ "${#failures[@]}" -eq "${reuse_failure_count}" ]]; then
+    staged_evidence_verified=1
+  fi
+else
+  run_step \
+    "integrity-cargo-metadata" \
+    run_catalog_action \
+    "integrity.cargo-metadata"
+  run_step \
+    "generated-artifacts-and-test-plan" \
+    run_catalog_action \
+    "integrity.generated-contracts"
+  run_step \
+    "host-hermetic-baseline" \
+    env \
+    TEST_PLAN_ROOT="${repo_root}" \
+    TP_PYTHON_BIN="${TP_PYTHON_BIN:-python3}" \
+    "${repo_root}/scripts/ci/host_hermetic_gate.sh" \
+    --common-only
+fi
 if [[ "${DD_SKIP_CARGO_AUDIT:-0}" == "1" ]]; then
   mark_incomplete_step "cargo-audit" "DD_SKIP_CARGO_AUDIT=1"
 else
+  run_step "cargo-audit-version" cargo audit --version
   run_step "cargo-audit" cargo audit
 fi
 if [[ "${DD_SKIP_CARGO_DENY:-0}" == "1" ]]; then
   mark_incomplete_step "cargo-deny-advisories" "DD_SKIP_CARGO_DENY=1"
 else
+  run_step "cargo-deny-version" cargo deny --version
   run_step "cargo-deny-advisories" cargo deny check advisories
 fi
-run_step "rust-risk-ratchet" check_rust_risk_ratchet
-run_step "generated-artifacts" scripts/check-generated.sh
 if [[ "${DD_SKIP_TEST_PLAN_CHECK:-0}" == "1" ]]; then
   mark_incomplete_step "test-plan-hash-check" "DD_SKIP_TEST_PLAN_CHECK=1"
-else
-  run_step "test-plan-hash-check" scripts/ci/check_test_plan.sh
 fi
-if [[ "${DD_SKIP_REGRESSION_BATCH:-0}" == "1" ]]; then
+if [[ "${staged_evidence_verified}" == "1" &&
+      -z "${dd_reuse_regression_batch_from}" ]]; then
+  printf "\n[dd-gate] PASS  regression-batch (covered by verified Stage 03/04 attestations)\n"
+elif [[ -n "${dd_reuse_staged_evidence_from}" &&
+        -z "${dd_reuse_regression_batch_from}" ]]; then
+  mark_incomplete_step \
+    "regression-batch" \
+    "reused staged evidence did not verify"
+elif [[ "${DD_SKIP_REGRESSION_BATCH:-0}" == "1" ]]; then
   mark_incomplete_step "regression-batch" "DD_SKIP_REGRESSION_BATCH=1"
 elif [[ -n "${dd_reuse_regression_batch_from}" ]]; then
   run_step "regression-batch-reuse" check_reused_regression_batch "${dd_reuse_regression_batch_from}"
@@ -760,17 +1013,5 @@ if [[ ${#failures[@]} -eq 0 ]]; then
   exit 0
 fi
 
-printf "\n[dd-gate] FAILURES (%s):\n" "${#failures[@]}"
-for failure in "${failures[@]}"; do
-  printf "  - %s\n" "$failure"
-done
-if [[ ${#incomplete_steps[@]} -gt 0 ]]; then
-  printf "\n[dd-gate] INCOMPLETE RUN (%s):\n" "${#incomplete_steps[@]}"
-  local_step=""
-  for local_step in "${incomplete_steps[@]}"; do
-    printf "  - %s\n" "$local_step"
-  done
-  printf "[dd-gate] INCOMPLETE runs cannot be PASS per docs/audit/DUE_DILIGENCE_PLAN.md\n"
-fi
-printf "[dd-gate] LOG ROOT %s\n" "$log_root"
+print_failure_summary
 exit 1

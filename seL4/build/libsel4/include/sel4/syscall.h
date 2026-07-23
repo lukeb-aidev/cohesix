@@ -33,36 +33,37 @@ typedef enum {
        seL4_SysDebugSnapshot = -13,
        seL4_SysDebugNameThread = -14,
 #endif /* defined(CONFIG_DEBUG_BUILD) */
-#if defined(CONFIG_DEBUG_BUILD)
+#if (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_ENABLE_SMP_SUPPORT))
        seL4_SysDebugSendIPI = -15,
-#endif /* defined(CONFIG_DEBUG_BUILD) */
+       seL4_SysDebugGetThreadAffinity = -16,
+#endif /* (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_ENABLE_SMP_SUPPORT)) */
 #if defined(CONFIG_DANGEROUS_CODE_INJECTION)
-       seL4_SysDebugRun = -16,
+       seL4_SysDebugRun = -17,
 #endif /* defined(CONFIG_DANGEROUS_CODE_INJECTION) */
 #if defined(CONFIG_ENABLE_BENCHMARKS)
-       seL4_SysBenchmarkFlushCaches = -17,
-       seL4_SysBenchmarkResetLog = -18,
-       seL4_SysBenchmarkFinalizeLog = -19,
-       seL4_SysBenchmarkSetLogBuffer = -20,
-       seL4_SysBenchmarkNullSyscall = -21,
+       seL4_SysBenchmarkFlushCaches = -18,
+       seL4_SysBenchmarkResetLog = -19,
+       seL4_SysBenchmarkFinalizeLog = -20,
+       seL4_SysBenchmarkSetLogBuffer = -21,
+       seL4_SysBenchmarkNullSyscall = -22,
 #endif /* defined(CONFIG_ENABLE_BENCHMARKS) */
 #if defined(CONFIG_BENCHMARK_TRACK_UTILISATION)
-       seL4_SysBenchmarkGetThreadUtilisation = -22,
-       seL4_SysBenchmarkResetThreadUtilisation = -23,
+       seL4_SysBenchmarkGetThreadUtilisation = -23,
+       seL4_SysBenchmarkResetThreadUtilisation = -24,
 #endif /* defined(CONFIG_BENCHMARK_TRACK_UTILISATION) */
 #if (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_BENCHMARK_TRACK_UTILISATION))
-       seL4_SysBenchmarkDumpAllThreadsUtilisation = -24,
-       seL4_SysBenchmarkResetAllThreadsUtilisation = -25,
+       seL4_SysBenchmarkDumpAllThreadsUtilisation = -25,
+       seL4_SysBenchmarkResetAllThreadsUtilisation = -26,
 #endif /* (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_BENCHMARK_TRACK_UTILISATION)) */
 #if defined(CONFIG_KERNEL_X86_DANGEROUS_MSR)
-       seL4_SysX86DangerousWRMSR = -26,
-       seL4_SysX86DangerousRDMSR = -27,
+       seL4_SysX86DangerousWRMSR = -27,
+       seL4_SysX86DangerousRDMSR = -28,
 #endif /* defined(CONFIG_KERNEL_X86_DANGEROUS_MSR) */
 #if defined(CONFIG_VTX)
-       seL4_SysVMEnter = -28,
+       seL4_SysVMEnter = -29,
 #endif /* defined(CONFIG_VTX) */
 #if defined(CONFIG_SET_TLS_BASE_SELF)
-       seL4_SysSetTLSBase = -29,
+       seL4_SysSetTLSBase = -30,
 #endif /* defined(CONFIG_SET_TLS_BASE_SELF) */
     SEL4_FORCE_LONG_ENUM(seL4_Syscall_ID)
 } seL4_Syscall_ID;

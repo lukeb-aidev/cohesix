@@ -50,36 +50,37 @@ enum syscall {
     SysDebugSnapshot = -13,
     SysDebugNameThread = -14,
 #endif /* defined(CONFIG_DEBUG_BUILD) */
-#if defined(CONFIG_DEBUG_BUILD)
+#if (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_ENABLE_SMP_SUPPORT))
     SysDebugSendIPI = -15,
-#endif /* defined(CONFIG_DEBUG_BUILD) */
+    SysDebugGetThreadAffinity = -16,
+#endif /* (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_ENABLE_SMP_SUPPORT)) */
 #if defined(CONFIG_DANGEROUS_CODE_INJECTION)
-    SysDebugRun = -16,
+    SysDebugRun = -17,
 #endif /* defined(CONFIG_DANGEROUS_CODE_INJECTION) */
 #if defined(CONFIG_ENABLE_BENCHMARKS)
-    SysBenchmarkFlushCaches = -17,
-    SysBenchmarkResetLog = -18,
-    SysBenchmarkFinalizeLog = -19,
-    SysBenchmarkSetLogBuffer = -20,
-    SysBenchmarkNullSyscall = -21,
+    SysBenchmarkFlushCaches = -18,
+    SysBenchmarkResetLog = -19,
+    SysBenchmarkFinalizeLog = -20,
+    SysBenchmarkSetLogBuffer = -21,
+    SysBenchmarkNullSyscall = -22,
 #endif /* defined(CONFIG_ENABLE_BENCHMARKS) */
 #if defined(CONFIG_BENCHMARK_TRACK_UTILISATION)
-    SysBenchmarkGetThreadUtilisation = -22,
-    SysBenchmarkResetThreadUtilisation = -23,
+    SysBenchmarkGetThreadUtilisation = -23,
+    SysBenchmarkResetThreadUtilisation = -24,
 #endif /* defined(CONFIG_BENCHMARK_TRACK_UTILISATION) */
 #if (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_BENCHMARK_TRACK_UTILISATION))
-    SysBenchmarkDumpAllThreadsUtilisation = -24,
-    SysBenchmarkResetAllThreadsUtilisation = -25,
+    SysBenchmarkDumpAllThreadsUtilisation = -25,
+    SysBenchmarkResetAllThreadsUtilisation = -26,
 #endif /* (defined(CONFIG_DEBUG_BUILD) && defined(CONFIG_BENCHMARK_TRACK_UTILISATION)) */
 #if defined(CONFIG_KERNEL_X86_DANGEROUS_MSR)
-    SysX86DangerousWRMSR = -26,
-    SysX86DangerousRDMSR = -27,
+    SysX86DangerousWRMSR = -27,
+    SysX86DangerousRDMSR = -28,
 #endif /* defined(CONFIG_KERNEL_X86_DANGEROUS_MSR) */
 #if defined(CONFIG_VTX)
-    SysVMEnter = -28,
+    SysVMEnter = -29,
 #endif /* defined(CONFIG_VTX) */
 #if defined(CONFIG_SET_TLS_BASE_SELF)
-    SysSetTLSBase = -29,
+    SysSetTLSBase = -30,
 #endif /* defined(CONFIG_SET_TLS_BASE_SELF) */
 };
 typedef word_t syscall_t;

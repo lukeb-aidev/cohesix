@@ -10,13 +10,8 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
 CANONICAL_MANIFEST_PATH="${ROOT_DIR}/configs/root_task.toml"
-DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/seL4/build_UBOOT"
-DEFAULT_HOME_SEL4_BUILD_DIR="${HOME}/seL4/build_UBOOT"
-if [[ -d "${DEFAULT_REPO_SEL4_BUILD_DIR}" ]]; then
-    SEL4_BUILD_DIR="${DEFAULT_REPO_SEL4_BUILD_DIR}"
-else
-    SEL4_BUILD_DIR="${DEFAULT_HOME_SEL4_BUILD_DIR}"
-fi
+DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/out/sel4/profile-v2/pi4-diagnostic"
+SEL4_BUILD_DIR="${DEFAULT_REPO_SEL4_BUILD_DIR}"
 SEL4_KERNEL_SOURCE_DIR="${COHESIX_SEL4_KERNEL_SOURCE_DIR:-}"
 SEL4_VENV_DIR="${ROOT_DIR}/.venv"
 PI4_SEL4_PROFILE="pi4_diagnostic"
@@ -91,8 +86,8 @@ Options:
   --manifest <path>         Manifest input for root-task build:
                             TOML (coh-rtc source) or resolved JSON
                             (default: configs/root_task_pi4_uboot_aarch64.toml)
-  --sel4-build-dir <dir>    seL4 Pi4 build directory (default: repo seL4/build_UBOOT
-                            when present, otherwise ~/seL4/build_UBOOT)
+  --sel4-build-dir <dir>    seL4 Pi4 build directory (default: canonical v16
+                            out/sel4/profile-v2/pi4-diagnostic)
   --sel4-kernel-source-dir <dir>
                             Pinned seL4 kernel source used by the canonical
                             pi4_diagnostic profile wrapper
@@ -1151,7 +1146,7 @@ validate_pi4_sel4_build() {
     verify_pi4_sel4_counter_config
     grep -q "^HardwareDebugAPI:BOOL=OFF$" "$cache_file" || fail "HardwareDebugAPI must be OFF for current sel4-sys bindings"
     grep -q "^KernelMaxNumNodes:STRING=4$" "$cache_file" || fail "KernelMaxNumNodes not 4"
-    grep -q "^ElfloaderRootserversLast:BOOL=ON$" "$cache_file" || fail "ElfloaderRootserversLast must be ON for seL4 15 Pi4 rootserver placement"
+    grep -q "^ElfloaderRootserversLast:BOOL=ON$" "$cache_file" || fail "ElfloaderRootserversLast must be ON for seL4 16 Pi4 rootserver placement"
     grep -q "^ElfloaderImage:STRING=uimage$" "$cache_file" || fail "ElfloaderImage not set to uimage"
     grep -q "^ElfloaderIncludeDtb:BOOL=OFF$" "$cache_file" || fail "ElfloaderIncludeDtb must be OFF for Pi4 U-Boot DTB handoff"
     verify_pi4_uboot_image_start_addr
@@ -1303,6 +1298,16 @@ clean_root_task_build() {
     cargo clean -p root-task
 }
 
+resolve_build_jobs() {
+    local jobs="${TP_HOST_JOBS:-${CARGO_BUILD_JOBS:-${CMAKE_BUILD_PARALLEL_LEVEL:-}}}"
+    if [[ -z "${jobs}" ]]; then
+        jobs="$(sysctl -n hw.ncpu)"
+    fi
+    [[ "${jobs}" =~ ^[1-9][0-9]*$ ]] || \
+      fail "build parallelism must be a positive integer (TP_HOST_JOBS/CARGO_BUILD_JOBS/CMAKE_BUILD_PARALLEL_LEVEL), got: ${jobs}"
+    printf "%s\n" "${jobs}"
+}
+
 rebuild_u_boot_pi4() {
     local u_boot_source_dir="${ROOT_DIR}/third_party/u-boot"
     local default_u_boot_bin="${u_boot_source_dir}/u-boot.bin"
@@ -1314,7 +1319,7 @@ rebuild_u_boot_pi4() {
       fail "--clean currently requires the default Pi4 U-Boot output (${default_u_boot_bin})"
 
     gnu_make="$(resolve_gnu_make)"
-    jobs="$(sysctl -n hw.ncpu)"
+    jobs="$(resolve_build_jobs)"
 
     configure_u_boot_openssl_env
 
@@ -1798,7 +1803,7 @@ build_pi4_image() {
         --features "$ROOT_TASK_FEATURES"
     verify_build_repository_state "after root-task build"
 
-    jobs="$(sysctl -n hw.ncpu)"
+    jobs="$(resolve_build_jobs)"
     require_file "$root_task_elf"
     verify_unsealed_pi4_build_marker "$root_task_elf" 1
     log "Built root-task ELF: ${root_task_elf}"

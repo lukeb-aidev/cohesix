@@ -1,0 +1,495 @@
+# Author: Lukas Bower
+# Purpose: Define the canonical staged and claim-specific Cohesix test action catalog.
+# Copyright 2026 Lukas Bower
+
+[catalog]
+schema = "cohesix-test-plan-actions/v1"
+minimum_python = "3.11"
+default_claims = ["common-hermetic", "qemu-integration", "release"]
+claim_tiers = [
+  "common-hermetic",
+  "qemu-integration",
+  "pi4-transport",
+  "pi4-hardware",
+  "ui",
+  "performance",
+  "federation",
+  "release",
+]
+
+[[action]]
+id = "integrity.cargo-metadata"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Reject an unlocked or stale Cargo dependency resolution."
+command = "cargo metadata --locked --no-deps"
+timeout_seconds = 120
+trigger_paths = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "integrity.generated-contracts"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Validate generated artifacts and the test-plan catalog in one pass."
+command = "scripts/check-generated.sh"
+timeout_seconds = 600
+trigger_paths = [
+  "configs/**",
+  "docs/**",
+  "scripts/**",
+  "tools/coh-rtc/**",
+  "apps/root-task/src/generated/**",
+]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.format"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Fail fast on Rust formatting drift."
+command = "cargo fmt --all -- --check"
+timeout_seconds = 300
+trigger_paths = ["**/*.rs", "**/Cargo.toml", "Cargo.toml"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.clippy"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Lint every workspace target with warnings denied."
+command = "CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings"
+timeout_seconds = 1800
+trigger_paths = ["**/*.rs", "**/Cargo.toml", "Cargo.toml", "Cargo.lock"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.workspace-check"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Type-check the default workspace configuration once."
+command = "CARGO_INCREMENTAL=0 cargo check --workspace"
+timeout_seconds = 1200
+trigger_paths = ["**/*.rs", "**/Cargo.toml", "Cargo.toml", "Cargo.lock"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.workspace-tests"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Run the default workspace test closure once; SwarmUI has its own complete suite."
+command = "CARGO_INCREMENTAL=0 cargo test --workspace --exclude swarmui --exclude pi4-driver-runtime"
+timeout_seconds = 3600
+trigger_paths = ["**/*.rs", "**/Cargo.toml", "Cargo.toml", "Cargo.lock", "tests/**"]
+expected_evidence = ["command-result", "nonzero-test-inventory"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "host.swarmui-tests"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Run the complete SwarmUI Rust package suite once."
+command = "CARGO_INCREMENTAL=0 cargo test -p swarmui"
+timeout_seconds = 1200
+trigger_paths = ["apps/swarmui/**", "crates/**", "tests/fixtures/**"]
+expected_evidence = ["command-result", "nonzero-test-inventory"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "host.coh-mock-tests"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Run the complete coh mock-feature test suite once."
+command = "cargo test -p coh --features mock"
+timeout_seconds = 600
+trigger_paths = ["apps/coh/**", "crates/**", "configs/**"]
+expected_evidence = ["command-result", "nonzero-test-inventory"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "host.root-task-qemu-features"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Run the broad root-task QEMU production-feature library suite once, excluding the Pi-only linked driver-task module covered by the complete Pi suite."
+command = "cargo test -p root-task --no-default-features --features driver-tests-qemu --lib -- --test-threads=1 --skip drivers::driver_task_net"
+timeout_seconds = 2400
+trigger_paths = ["apps/root-task/**", "crates/**", "configs/**"]
+expected_evidence = ["command-result", "nonzero-test-inventory"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "host.root-task-pi4-features"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Run the complete root-task Pi 4 production-feature library suite at its stateful package boundary."
+command = "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib -- --test-threads=1"
+timeout_seconds = 3600
+trigger_paths = ["apps/root-task/**", "apps/pi4-driver-runtime/**", "crates/pi4-driver-abi/**", "configs/**"]
+expected_evidence = ["command-result", "nonzero-test-inventory"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "host.root-task-net-console"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Exercise the distinct host-only net-console feature boundary at the stateful root-task package boundary."
+command = "cargo test -p root-task --no-default-features --features net-console --lib -- --test-threads=1"
+timeout_seconds = 1200
+trigger_paths = ["apps/root-task/src/net/**", "apps/root-task/Cargo.toml", "crates/**"]
+expected_evidence = ["command-result", "nonzero-test-inventory"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "host.pi4-runtime-tests"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Run the complete isolated Pi 4 runtime suite once with bounded serialization."
+command = "cargo test -p pi4-driver-runtime -- --test-threads=1"
+timeout_seconds = 3600
+trigger_paths = ["apps/pi4-driver-runtime/**", "crates/pi4-driver-abi/**", "configs/**"]
+expected_evidence = ["command-result", "nonzero-test-inventory"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "host.pi4-runtime-target-check"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Compile the isolated Pi 4 runtime for the no-std AArch64 target."
+command = "cargo check -p pi4-driver-runtime --target aarch64-unknown-none"
+timeout_seconds = 1200
+trigger_paths = ["apps/pi4-driver-runtime/**", "crates/pi4-driver-abi/**", "Cargo.lock"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.cache-maintenance-tests"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Exercise the distinct cache-maintenance feature configuration."
+command = "cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance"
+timeout_seconds = 600
+trigger_paths = ["apps/root-task/src/hal/cache.rs", "apps/root-task/tests/cache_maintenance.rs", "apps/root-task/Cargo.toml"]
+expected_evidence = ["command-result", "nonzero-test-inventory"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "host.coh-doctor-smoke"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Exercise the mock operator doctor contract."
+command = "cargo run -p coh --features mock -- doctor --mock"
+timeout_seconds = 600
+trigger_paths = ["apps/coh/**", "crates/**", "configs/**"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.swarmui-dependency-policy"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Check SwarmUI dependency and VM-boundary policy."
+command = "python3 scripts/ci/check_swarmui_dependencies.py"
+timeout_seconds = 120
+trigger_paths = ["apps/swarmui/**", "Cargo.toml", "Cargo.lock", "scripts/ci/check_swarmui_dependencies.py"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.driver-coverage-contract"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Map documented driver invariants to the consolidated production-feature suites."
+command = "python3 scripts/ci/check_driver_test_coverage.py"
+timeout_seconds = 120
+trigger_paths = ["apps/root-task/**", "apps/pi4-driver-runtime/**", "docs/DRIVERS.md", "docs/TEST_PLAN.md"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.python-tests"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Run repository Python discovery and due-diligence lifecycle tests in one pinned pytest process."
+command = "scripts/ci/python_test_gate.sh --tests"
+timeout_seconds = 3600
+trigger_paths = ["tests/**/*.py", "tools/cohesix-py/**/*.py", "scripts/**/*.py"]
+expected_evidence = ["command-result", "pytest-summary"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "host.python-examples"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Run the four mock Python client and playbook smoke flows."
+command = "scripts/ci/python_test_gate.sh --examples"
+timeout_seconds = 600
+trigger_paths = ["tools/cohesix-py/**", "configs/**"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.rust-risk-bootstrap"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Exercise hostile rust-risk toolchain and configuration selectors."
+command = "python3 scripts/ci/test_rust_risk_gate.py"
+timeout_seconds = 900
+trigger_paths = ["scripts/ci/rust_risk_gate.sh", "scripts/ci/test_rust_risk_gate.py", "tools/rust-risk-audit/**"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "host.rust-risk-ratchet"
+stage = 1
+tier = "common-hermetic"
+scope = "common"
+targets = ["qemu", "pi4"]
+description = "Enforce the cfg-aware production risk baseline before integration."
+command = "env -u CARGO_HOME scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml"
+timeout_seconds = 900
+trigger_paths = ["**/*.rs", "docs/audit/rust_risk_baseline.toml", "docs/audit/findings.csv", "docs/audit/EXCEPTIONS.md"]
+expected_evidence = ["command-result"]
+test_policy = "none"
+
+[[action]]
+id = "target.qemu-profile"
+stage = 2
+tier = "qemu-integration"
+scope = "provisioned-target"
+targets = ["qemu"]
+description = "Validate the provisioned canonical QEMU seL4 profile."
+command = "\"${TEST_PLAN_ROOT}/out/toolchain/sel4-profile-venv/bin/python\" scripts/sel4_profile.py validate --profile qemu_smp_production --build-dir \"${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production\" --require-source --require-artifacts --for-runtime"
+timeout_seconds = 600
+trigger_paths = ["configs/sel4/**", "scripts/sel4_profile.py", "tools/sel4-profile-project/**"]
+expected_evidence = ["command-result", "sel4-profile-identity"]
+test_policy = "none"
+
+[[action]]
+id = "target.root-task-qemu-release"
+stage = 2
+tier = "qemu-integration"
+scope = "provisioned-target"
+targets = ["qemu"]
+description = "Compile the exact root-task QEMU release feature set against the selected profile."
+command = "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu"
+timeout_seconds = 1800
+trigger_paths = ["apps/root-task/**", "configs/root_task.toml", "configs/sel4/**", "Cargo.lock"]
+expected_evidence = ["command-result", "sel4-profile-identity"]
+test_policy = "none"
+
+[[action]]
+id = "target.pi4-profile"
+stage = 2
+tier = "pi4-transport"
+scope = "provisioned-target"
+targets = ["pi4"]
+description = "Validate the canonical repo-managed Pi 4 seL4 16 diagnostic profile."
+command = "\"${TEST_PLAN_ROOT}/out/toolchain/sel4-profile-venv/bin/python\" scripts/sel4_profile.py validate --profile pi4_diagnostic --build-dir \"${TEST_PLAN_ROOT}/out/sel4/profile-v2/pi4-diagnostic\" --require-source --require-artifacts --for-runtime"
+timeout_seconds = 600
+trigger_paths = ["configs/sel4/**", "scripts/sel4_profile.py", "tools/sel4-profile-project/**"]
+expected_evidence = ["command-result", "sel4-profile-identity"]
+test_policy = "none"
+
+[[action]]
+id = "target.root-task-pi4-release"
+stage = 2
+tier = "pi4-transport"
+scope = "provisioned-target"
+targets = ["pi4"]
+description = "Compile the exact root-task Pi 4 release feature set against the canonical seL4 16 diagnostic profile."
+command = "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/out/sel4/profile-v2/pi4-diagnostic\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4"
+timeout_seconds = 1800
+trigger_paths = ["apps/root-task/**", "configs/root_task_pi4_uboot_aarch64.toml", "configs/sel4/**", "Cargo.lock"]
+expected_evidence = ["command-result", "sel4-profile-identity"]
+test_policy = "none"
+
+[[action]]
+id = "qemu.tcp-regression"
+stage = 3
+tier = "qemu-integration"
+scope = "target"
+targets = ["qemu"]
+description = "Build each unique QEMU manifest once and run every cohsh group in a fresh boot."
+command = "scripts/cohsh/run_regression_batch.sh"
+timeout_seconds = 5400
+trigger_paths = ["apps/root-task/**", "apps/cohsh/**", "scripts/cohsh/**", "configs/root_task*.toml", "crates/**"]
+expected_evidence = ["qemu-artifact-manifest", "qemu-boot-result-manifests", "regression-summary"]
+test_policy = "artifact-count"
+
+[[action]]
+id = "pi4.tcp-regression"
+stage = 3
+tier = "pi4-transport"
+scope = "target"
+targets = ["pi4"]
+description = "Run the cohsh transport matrix against caller-bound Pi 4 boot and image evidence."
+command = "scripts/cohsh/run_regression_batch.sh"
+timeout_seconds = 5400
+trigger_paths = ["apps/root-task/**", "apps/cohsh/**", "scripts/cohsh/**", "configs/root_task_pi4_uboot_aarch64.toml", "crates/**"]
+expected_evidence = ["pi4-target-evidence", "regression-summary"]
+test_policy = "artifact-count"
+allow_duplicate_command = true
+
+[[action]]
+id = "qemu.rest-regression"
+stage = 4
+tier = "qemu-integration"
+scope = "target"
+targets = ["qemu"]
+description = "Reuse the validated Stage 03 image and run REST parity in a fresh QEMU boot."
+command = "scripts/ci/test_plan_stage_04_rest_multiplexer.sh"
+timeout_seconds = 3600
+trigger_paths = ["apps/hive-gateway/**", "apps/coh/**", "apps/cohsh/**", "scripts/cohsh/**", "tools/cohesix-py/**"]
+expected_evidence = ["qemu-boot-result-manifest", "rest-regression-summary"]
+test_policy = "artifact-count"
+
+[[action]]
+id = "pi4.rest-regression"
+stage = 4
+tier = "pi4-transport"
+scope = "target"
+targets = ["pi4"]
+description = "Run REST parity through a gateway bound to the same Pi 4 boot evidence."
+command = "scripts/ci/test_plan_stage_04_rest_multiplexer.sh"
+timeout_seconds = 3600
+trigger_paths = ["apps/hive-gateway/**", "apps/coh/**", "apps/cohsh/**", "scripts/cohsh/**", "tools/cohesix-py/**"]
+expected_evidence = ["pi4-target-evidence", "rest-regression-summary"]
+test_policy = "artifact-count"
+allow_duplicate_command = true
+
+[[action]]
+id = "release.unique-governance"
+stage = 5
+tier = "release"
+scope = "target"
+targets = ["qemu", "pi4"]
+description = "Attest Stages 01-04 and run only unique audit, advisory, exception, and secret gates."
+command = "scripts/ci/due_diligence_gate.sh"
+timeout_seconds = 3600
+trigger_paths = ["docs/audit/**", "scripts/ci/**", "Cargo.lock", "deny.toml"]
+expected_evidence = ["prior-stage-attestations", "cargo-audit-report", "cargo-deny-report", "release-governance-result"]
+test_policy = "none"
+
+[[action]]
+id = "ui.swarmui-playwright"
+stage = 0
+tier = "ui"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Run deterministic replay, transcript, UX, and render-budget Playwright coverage."
+command = "scripts/ci/swarmui_ui_gate.sh --run"
+timeout_seconds = 2400
+trigger_paths = ["apps/swarmui/**", "tools/swarmui-ui-tests/**", "tests/fixtures/**"]
+expected_evidence = ["playwright-report"]
+test_policy = "nonzero"
+minimum_test_count = 1
+
+[[action]]
+id = "performance.gateway-telemetry"
+stage = 0
+tier = "performance"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Run the no-retry telemetry matrix and preserve machine-readable error-budget summaries."
+command = ""
+timeout_seconds = 14400
+trigger_paths = ["apps/hive-gateway/**", "scripts/rest_perf_harness.py", "apps/root-task/src/net/**"]
+expected_evidence = ["telemetry-summary-matrix", "ops-csv", "ramp-csv", "ramp-svg"]
+test_policy = "manual-evidence"
+manual = true
+
+[[action]]
+id = "federation.three-hive-relay"
+stage = 0
+tier = "federation"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Qualify relay success, dedupe, WAL resume, failover, timeline, and three-hive scale."
+command = ""
+timeout_seconds = 14400
+trigger_paths = ["apps/host-ticket-agent/**", "apps/hive-gateway/**", "scripts/failover_watchdog.py", "scripts/rest_perf_harness.py"]
+expected_evidence = ["federation-result-manifest", "relay-counter-snapshots", "evidence-timeline", "scale-summary"]
+test_policy = "manual-evidence"
+manual = true
+
+[[action]]
+id = "pi4.hardware-acceptance"
+stage = 0
+tier = "pi4-hardware"
+scope = "conditional"
+targets = ["pi4"]
+description = "Validate fresh image/readback, serial, capture, repeatability, and driver-task proof as one hardware bundle."
+command = ""
+timeout_seconds = 21600
+trigger_paths = ["apps/pi4-driver-runtime/**", "apps/root-task/src/hal/pi4_*.rs", "scripts/pi4_*.py", "scripts/pi4-*.sh", "configs/root_task_pi4_uboot_aarch64.toml"]
+expected_evidence = ["pi4-image-readback-identity", "pi4-gate-proof", "pi4-capture-manifest", "pi4-repeatability-report"]
+test_policy = "manual-evidence"
+manual = true
+
+[[action]]
+id = "release.bundle-validation"
+stage = 0
+tier = "release"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Validate extracted macOS and Ubuntu bundles without borrowing repository build outputs."
+command = ""
+timeout_seconds = 7200
+trigger_paths = ["scripts/release_bundle.sh", "releases/**"]
+expected_evidence = ["macos-bundle-result", "ubuntu-bundle-result"]
+test_policy = "manual-evidence"
+manual = true

@@ -1,4 +1,3 @@
-/* Author: Lukas Bower */
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *

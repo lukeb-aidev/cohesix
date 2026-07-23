@@ -1,0 +1,957 @@
+{
+  "artifacts": {
+    "elfloader": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/elfloader",
+      "sha256": "13e43352ab250819c0b21d81edbb950116f8ad8f572a9b25544df2808425079c",
+      "size": 3302872
+    },
+    "elfloader_archive": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/archive.archive.o.cpio",
+      "sha256": "29aea631c8c97b718d93b580a80c9f39fe632122464582dd9234bff49d4e4a5b",
+      "size": 3192320
+    },
+    "kernel": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.elf",
+      "sha256": "32a227adc375cc3b6a8ff5411dd7b7089ee66260beac0f4ec69739ae53faf8f9",
+      "size": 157560
+    },
+    "kernel_dtb": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.dtb",
+      "sha256": "2a747db460777f58f6a93a6a875471915d2e27558c193467a574e87c6257b8b3",
+      "size": 8241
+    },
+    "qemu_dtb": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dtb",
+      "sha256": "cb86ba154ccfdacc93e4a31c535ced36928834fe30e721749280ae9c2d8ff810",
+      "size": 1048576
+    },
+    "rootserver": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-driver",
+      "sha256": "382a129e242f7c39a908b9940f7467be5d0c16446c9767e2331a615dcea38e86",
+      "size": 3438648
+    },
+    "system_image": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/images/sel4test-driver-image-arm-qemu-arm-virt",
+      "sha256": "13e43352ab250819c0b21d81edbb950116f8ad8f572a9b25544df2808425079c",
+      "size": 3302872
+    }
+  },
+  "build_dir": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production",
+  "build_mode": "wrapper",
+  "causal_freshness": {
+    "build_start": {
+      "outputs": {
+        "elfloader": {
+          "candidates": [
+            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/elfloader"
+          ],
+          "existing": []
+        },
+        "kernel": {
+          "candidates": [
+            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.elf",
+            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel.elf"
+          ],
+          "existing": []
+        },
+        "rootserver": {
+          "candidates": [
+            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-driver"
+          ],
+          "existing": []
+        },
+        "system_image": {
+          "candidates": [
+            "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/images/sel4test-driver-image-arm-qemu-arm-virt"
+          ],
+          "existing": []
+        }
+      },
+      "schema": "cohesix-sel4-build-start/v1",
+      "stamp": {
+        "exists": false,
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/cohesix-profile-build-inputs.json"
+      }
+    },
+    "post_build_outputs": {
+      "elfloader": {
+        "exists": true,
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/elfloader",
+        "sha256": "13e43352ab250819c0b21d81edbb950116f8ad8f572a9b25544df2808425079c",
+        "size": 3302872
+      },
+      "kernel": {
+        "exists": true,
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.elf",
+        "sha256": "32a227adc375cc3b6a8ff5411dd7b7089ee66260beac0f4ec69739ae53faf8f9",
+        "size": 157560
+      },
+      "rootserver": {
+        "exists": true,
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-driver",
+        "sha256": "382a129e242f7c39a908b9940f7467be5d0c16446c9767e2331a615dcea38e86",
+        "size": 3438648
+      },
+      "system_image": {
+        "exists": true,
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/images/sel4test-driver-image-arm-qemu-arm-virt",
+        "sha256": "13e43352ab250819c0b21d81edbb950116f8ad8f572a9b25544df2808425079c",
+        "size": 3302872
+      }
+    },
+    "schema": "cohesix-sel4-causal-freshness/v1"
+  },
+  "commands": {
+    "build": [
+      "cmake",
+      "--build",
+      "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production",
+      "--target",
+      "rootserver_image",
+      "--parallel",
+      "8"
+    ],
+    "configure": [
+      "cmake",
+      "-G",
+      "Ninja",
+      "-S",
+      "/Users/lukasbower/GitHub/cohesix/tools/sel4-profile-project",
+      "-B",
+      "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production",
+      "-DCMAKE_TOOLCHAIN_FILE=/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/gcc.cmake",
+      "-DCOHESIX_SEL4_PROJECT_ROOT=/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project",
+      "-DSEL4_CACHE_DIR=",
+      "-DPYTHON3=/Users/lukasbower/GitHub/cohesix/out/toolchain/sel4-profile-venv/bin/python",
+      "-DAARCH64=ON",
+      "-DARM_HYP=OFF",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCOHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES=2097152",
+      "-DCROSS_COMPILER_PREFIX=aarch64-none-elf-",
+      "-DDOMAINS=OFF",
+      "-DElfloaderImage=elf",
+      "-DElfloaderIncludeDtb=ON",
+      "-DElfloaderRootserversLast=ON",
+      "-DHardwareDebugAPI=OFF",
+      "-DKernelAllowSMCCalls=OFF",
+      "-DKernelArmExportPCNTUser=OFF",
+      "-DKernelArmExportPTMRUser=OFF",
+      "-DKernelArmExportVCNTUser=OFF",
+      "-DKernelArmExportVTMRUser=OFF",
+      "-DKernelArmHypervisorSupport=OFF",
+      "-DKernelArmSMMU=OFF",
+      "-DKernelArmVtimerUpdateVOffset=OFF",
+      "-DKernelBenchmarks=none",
+      "-DKernelDangerousCodeInjection=OFF",
+      "-DKernelDebugBuild=OFF",
+      "-DKernelFastpath=ON",
+      "-DKernelIsMCS=OFF",
+      "-DKernelMaxNumNodes=4",
+      "-DKernelNumDomains=1",
+      "-DKernelPlatform=qemu-arm-virt",
+      "-DKernelPrinting=OFF",
+      "-DKernelSel4Arch=aarch64",
+      "-DKernelVerificationBuild=OFF",
+      "-DMCS=OFF",
+      "-DNUM_NODES=4",
+      "-DPLATFORM=qemu-arm-virt",
+      "-DRELEASE=ON",
+      "-DSIMULATION=OFF",
+      "-DSMP=ON",
+      "-DSel4testAllowSettingsOverride=ON",
+      "-DVERIFICATION=OFF",
+      "-DQEMU_GIC_VERSION=3",
+      "-DQEMU_MACHINE=virt,secure=off,virtualization=on,gic-version=3,dumpdtb=/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dtb"
+    ],
+    "jobs": 8
+  },
+  "configuration": {
+    "build_graph": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/build.ninja",
+      "sha256": "12b4082c36788ff087358822ebebaae2eaffacc50e1922e193a072d7e3f50a92",
+      "size": 1971378
+    },
+    "cmake_cache": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/CMakeCache.txt",
+      "sha256": "c611520a5e2aa539f32d151b5706c0c12428f707c8453e74ff11bf82ef55f367",
+      "size": 91801
+    },
+    "dts_0": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel.dts",
+      "sha256": "ab548459fa5f83ffa601f956e8655ee5df91a60c55a1415f7f4700f9c4efaedc",
+      "size": 10345
+    },
+    "dts_1": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/qemu-arm-virt.dts",
+      "sha256": "56703b41be6590ca56e70ea0e9fb38fcc9f4109d6822e5a5b7f04dc4b501c116",
+      "size": 10015
+    },
+    "elfloader_platform_info": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/elfloader/gen_headers/platform_info.h",
+      "sha256": "f538c107d9ea1a900c377d0f3d5ff6e90d94ec6bc95f1a4c82e2dd7f12cb3113",
+      "size": 461
+    },
+    "generated_config": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_config/kernel/gen_config.json",
+      "sha256": "d82f91116bb9a41e3c3682b8593421273a68fb8b952466603947273a8cd00df0",
+      "size": 5085
+    },
+    "launcher_gic_header": {
+      "exists": true,
+      "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_config/kernel/gen_config.h",
+      "sha256": "1584d747061923f57768ecb7bfdc985b3df01ce73cf795fc52bdc5d2f5d21a8e",
+      "size": 6442
+    }
+  },
+  "contract_values_sha256": "62b2f3f34fc1531c556d85f0bd3ae6459f2b02a3f9ac371f770d174e3d0afa92",
+  "environment": {
+    "PATH_prepend": [
+      "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin",
+      "/Users/lukasbower/GitHub/cohesix/out/toolchain/sel4-profile-venv/bin"
+    ],
+    "SEL4_CACHE_DIR": ""
+  },
+  "host_inputs": {
+    "compiler": {
+      "declared": {
+        "ar_sha256": "38f32b4a1b196da8ef1c34412f68792bb2a3cdc8c20d5c98d70fa44f13c9c1bb",
+        "as_sha256": "cf01313f7f00d24dedb273b7e3d3753290cf0dd4f4be389094e47de2c90d1e48",
+        "bin_path": "out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin",
+        "cpp_sha256": "cd16a3d2f8f9972782c8eddb816675e8a92fe935075628d0340d018d0ee5ad4a",
+        "gcc_sha256": "e3aca7127a4407f63b9a3f157021bda8476706370f98ded3fd4a20f898261066",
+        "gxx_sha256": "dce7d3014f33b95e68dbc64ac885048e9de682b1263edea886ece769a4cf2b55",
+        "install_path": "out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf",
+        "ld_sha256": "16d591c8f44bbadb1c0f96990753b34efe74e0c92a594d1a8b600170e7d99d10",
+        "objcopy_sha256": "0784ea59a9a45dea36c6129c0d5c010db8966508fccbd6b415a0aa6c78e23ddf",
+        "path_prefixes": [
+          "out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin"
+        ],
+        "provenance_path": "out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/cohesix-compiler-provenance.json",
+        "provider": "arm-gnu-toolchain-release-tarball",
+        "ranlib_sha256": "939545db6eac3b78e5e145dcf428db22229aa6eec04cd86f95ca90f9a8d00e99",
+        "required_programs": [
+          "aarch64-none-elf-gcc",
+          "aarch64-none-elf-g++",
+          "aarch64-none-elf-cpp",
+          "aarch64-none-elf-as",
+          "aarch64-none-elf-ld",
+          "aarch64-none-elf-objcopy",
+          "aarch64-none-elf-ar",
+          "aarch64-none-elf-ranlib"
+        ],
+        "source_archive": "out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz",
+        "source_archive_sha256": "37084c99bc05fda43a6c48900c638ae4fd6d93e2287ceb3e9bcda55437f1aadd",
+        "source_archive_size": 80863820,
+        "source_url": "https://armkeil.blob.core.windows.net/developer/files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz",
+        "source_version": "15.2.Rel1"
+      },
+      "identity": {
+        "target_triple": "aarch64-none-elf",
+        "version": "15.2.1"
+      },
+      "path_prefixes": [
+        "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin"
+      ],
+      "programs": {
+        "aarch64-none-elf-ar": {
+          "expected_sha256": "38f32b4a1b196da8ef1c34412f68792bb2a3cdc8c20d5c98d70fa44f13c9c1bb",
+          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ar",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ar",
+          "sha256": "38f32b4a1b196da8ef1c34412f68792bb2a3cdc8c20d5c98d70fa44f13c9c1bb"
+        },
+        "aarch64-none-elf-as": {
+          "expected_sha256": "cf01313f7f00d24dedb273b7e3d3753290cf0dd4f4be389094e47de2c90d1e48",
+          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-as",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-as",
+          "sha256": "cf01313f7f00d24dedb273b7e3d3753290cf0dd4f4be389094e47de2c90d1e48"
+        },
+        "aarch64-none-elf-cpp": {
+          "expected_sha256": "cd16a3d2f8f9972782c8eddb816675e8a92fe935075628d0340d018d0ee5ad4a",
+          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-cpp",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-cpp",
+          "sha256": "cd16a3d2f8f9972782c8eddb816675e8a92fe935075628d0340d018d0ee5ad4a"
+        },
+        "aarch64-none-elf-g++": {
+          "expected_sha256": "dce7d3014f33b95e68dbc64ac885048e9de682b1263edea886ece769a4cf2b55",
+          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-g++",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-g++",
+          "sha256": "dce7d3014f33b95e68dbc64ac885048e9de682b1263edea886ece769a4cf2b55"
+        },
+        "aarch64-none-elf-gcc": {
+          "expected_sha256": "e3aca7127a4407f63b9a3f157021bda8476706370f98ded3fd4a20f898261066",
+          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc",
+          "sha256": "e3aca7127a4407f63b9a3f157021bda8476706370f98ded3fd4a20f898261066"
+        },
+        "aarch64-none-elf-ld": {
+          "expected_sha256": "16d591c8f44bbadb1c0f96990753b34efe74e0c92a594d1a8b600170e7d99d10",
+          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ld",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ld",
+          "sha256": "16d591c8f44bbadb1c0f96990753b34efe74e0c92a594d1a8b600170e7d99d10"
+        },
+        "aarch64-none-elf-objcopy": {
+          "expected_sha256": "0784ea59a9a45dea36c6129c0d5c010db8966508fccbd6b415a0aa6c78e23ddf",
+          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objcopy",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objcopy",
+          "sha256": "0784ea59a9a45dea36c6129c0d5c010db8966508fccbd6b415a0aa6c78e23ddf"
+        },
+        "aarch64-none-elf-ranlib": {
+          "expected_sha256": "939545db6eac3b78e5e145dcf428db22229aa6eec04cd86f95ca90f9a8d00e99",
+          "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ranlib",
+          "resolved_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-ranlib",
+          "sha256": "939545db6eac3b78e5e145dcf428db22229aa6eec04cd86f95ca90f9a8d00e99"
+        }
+      },
+      "provenance": {
+        "exists": true,
+        "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/cohesix-compiler-provenance.json",
+        "record": {
+          "compiler": {
+            "bin_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin",
+            "program_sha256": {
+              "ar": "38f32b4a1b196da8ef1c34412f68792bb2a3cdc8c20d5c98d70fa44f13c9c1bb",
+              "as": "cf01313f7f00d24dedb273b7e3d3753290cf0dd4f4be389094e47de2c90d1e48",
+              "cpp": "cd16a3d2f8f9972782c8eddb816675e8a92fe935075628d0340d018d0ee5ad4a",
+              "g++": "dce7d3014f33b95e68dbc64ac885048e9de682b1263edea886ece769a4cf2b55",
+              "gcc": "e3aca7127a4407f63b9a3f157021bda8476706370f98ded3fd4a20f898261066",
+              "ld": "16d591c8f44bbadb1c0f96990753b34efe74e0c92a594d1a8b600170e7d99d10",
+              "objcopy": "0784ea59a9a45dea36c6129c0d5c010db8966508fccbd6b415a0aa6c78e23ddf",
+              "ranlib": "939545db6eac3b78e5e145dcf428db22229aa6eec04cd86f95ca90f9a8d00e99"
+            },
+            "target": "aarch64-none-elf",
+            "version": "15.2.1"
+          },
+          "profile_contract_sha256": "ddd5544d2bda57d5c208b4aaea565bb242973677bae4f703a349af857c20faa7",
+          "schema": "cohesix-compiler-provenance/v1",
+          "setup_script_sha256": "81407220000c85a77fbc750e0eec2ded4917cee5b416739db5af995984bf9d08",
+          "source": {
+            "archive_path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz",
+            "archive_sha256": "37084c99bc05fda43a6c48900c638ae4fd6d93e2287ceb3e9bcda55437f1aadd",
+            "archive_size": 80863820,
+            "provider": "arm-gnu-toolchain-release-tarball",
+            "release": "15.2.Rel1",
+            "url": "https://armkeil.blob.core.windows.net/developer/files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz"
+          }
+        },
+        "sha256": "586d007bcc6c36683b29f1313710efd5187345dd615e9a22a08bcd48243423b3",
+        "size": 1656
+      },
+      "schema": "cohesix-compiler-supply-chain/v1",
+      "source_archive": {
+        "exists": true,
+        "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz",
+        "sha256": "37084c99bc05fda43a6c48900c638ae4fd6d93e2287ceb3e9bcda55437f1aadd",
+        "size": 80863820
+      }
+    },
+    "mkimage_tool": null,
+    "objcopy_stdout_wrapper": null,
+    "profile": "qemu_smp_production",
+    "python_tool": {
+      "contract": {
+        "bootstrap_lock": "configs/sel4/python-bootstrap.lock",
+        "bootstrap_lock_sha256": "a582a400e97b0b830952482a8923c4097024c9960fe2197315c341ca00a9548a",
+        "distribution_count": 38,
+        "formula": "python@3.13",
+        "implementation": "CPython",
+        "major_minor_version": "3.13",
+        "path": "out/toolchain/sel4-profile-venv/bin/python",
+        "protobuf_version": "6.33.5",
+        "provider": "homebrew",
+        "requirements_lock": "configs/sel4/python-build-requirements.lock",
+        "requirements_lock_sha256": "5ef6b3b1e5edc912a0041417b7386ad17a57fab6ecd3b64c797ecbb3e37ea929",
+        "sel4_deps_version": "0.7.0",
+        "setuptools_version": "80.9.0"
+      },
+      "environment": {
+        "distributions": {
+          "attrs": "26.1.0",
+          "autopep8": "2.3.2",
+          "beautifulsoup4": "4.15.0",
+          "bs4": "0.0.2",
+          "cmake-format": "0.6.13",
+          "cmakelang": "0.6.13",
+          "future": "1.0.0",
+          "guardonce": "2.4.0",
+          "iniconfig": "2.3.0",
+          "jinja2": "3.1.6",
+          "jsonschema": "4.26.0",
+          "jsonschema-specifications": "2025.9.1",
+          "libarchive-c": "5.3",
+          "lxml": "6.1.1",
+          "markupsafe": "3.0.3",
+          "packaging": "26.2",
+          "pexpect": "4.9.0",
+          "pip": "26.1.2",
+          "pluggy": "1.6.0",
+          "ply": "3.11",
+          "protobuf": "6.33.5",
+          "psutil": "7.2.2",
+          "ptyprocess": "0.7.0",
+          "pycodestyle": "2.14.0",
+          "pyelftools": "0.33",
+          "pyfdt": "0.3",
+          "pygments": "2.20.0",
+          "pytest": "9.1.1",
+          "pyyaml": "6.0.3",
+          "referencing": "0.37.0",
+          "rpds-py": "2026.6.3",
+          "sel4-deps": "0.7.0",
+          "setuptools": "80.9.0",
+          "sh": "2.3.0",
+          "six": "1.17.0",
+          "soupsieve": "2.8.4",
+          "typing-extensions": "4.16.0",
+          "wheel": "0.47.0"
+        },
+        "executable": "/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/bin/python3.13",
+        "implementation": "CPython",
+        "installed_content": {
+          "algorithm": "sha256-canonical-installed-files-v1",
+          "distributions": {
+            "attrs": {
+              "file_count": 37,
+              "sha256": "309fb03dff2952d8ef29a466c597abd6db6e288dde328465daf6f31abc95d9f0",
+              "version": "26.1.0"
+            },
+            "autopep8": {
+              "file_count": 11,
+              "sha256": "9aa330e4375c4c9f257c03a2eb4edf68c1c4d71cd0d7b701d635e497ed033241",
+              "version": "2.3.2"
+            },
+            "beautifulsoup4": {
+              "file_count": 23,
+              "sha256": "79c6ee35c3120d078bec3c562a04f597a4bac80000a8a5806347e303d84230da",
+              "version": "4.15.0"
+            },
+            "bs4": {
+              "file_count": 6,
+              "sha256": "5bf1cda4223d0ba14e4411efc0502e6c7aea841e82bf9cb89cec89b97a29e2a9",
+              "version": "0.0.2"
+            },
+            "cmake-format": {
+              "file_count": 7,
+              "sha256": "42cbfafd9db804a4d1abb51e5f4e313777e369c3b708a5c844119dcdc68fdc73",
+              "version": "0.6.13"
+            },
+            "cmakelang": {
+              "file_count": 71,
+              "sha256": "d5e3de12e6cb4bc1eb5e8381fb6431da22bf4be09b8471735c014f10c963e9da",
+              "version": "0.6.13"
+            },
+            "future": {
+              "file_count": 221,
+              "sha256": "dba197f8595bc379cac2e17b0522a722add5c48b68bf59d0a0d849d1b7b8589d",
+              "version": "1.0.0"
+            },
+            "guardonce": {
+              "file_count": 18,
+              "sha256": "4f170bb3a3f30668fc0ee6ffcecb5d4bd4c49b91bff2502a674f9f516a17745c",
+              "version": "2.4.0"
+            },
+            "iniconfig": {
+              "file_count": 12,
+              "sha256": "60c1c826b924787289db3a55c1bba685d9c0d722a500c1b1bda55787af6fe609",
+              "version": "2.3.0"
+            },
+            "jinja2": {
+              "file_count": 33,
+              "sha256": "abc7bb5c0f3190b0ce2ec020c998b094bed0583582c61731e94906bf1030bb9c",
+              "version": "3.1.6"
+            },
+            "jsonschema": {
+              "file_count": 46,
+              "sha256": "68aaf9c42972997681f65a8614b7ceb81537cb59c50ceba7e80178a6b2ed8f0e",
+              "version": "4.26.0"
+            },
+            "jsonschema-specifications": {
+              "file_count": 30,
+              "sha256": "e1bc56e99d3bf1291c269b3a3bb97e0f319a95f30716b65f79be6fd8187730b2",
+              "version": "2025.9.1"
+            },
+            "libarchive-c": {
+              "file_count": 15,
+              "sha256": "a4be03a3d788ae344ae4b7d77fd3cf40ce2d899bba5fc7653c27a45000ad978c",
+              "version": "5.3"
+            },
+            "lxml": {
+              "file_count": 176,
+              "sha256": "8c1c6eafc8afa1113a96746344c55498cda03fa8162eaae48e1ffaa24cf340d8",
+              "version": "6.1.1"
+            },
+            "markupsafe": {
+              "file_count": 13,
+              "sha256": "5b0cd903613cf892a1a6e81d0793e91d8bc95a3f2fc462d317371f92939f8ce4",
+              "version": "3.0.3"
+            },
+            "packaging": {
+              "file_count": 29,
+              "sha256": "cae17614bb755ca159b91560a3f4ad16bc9e8815115fe139dafed376c8510fb2",
+              "version": "26.2"
+            },
+            "pexpect": {
+              "file_count": 26,
+              "sha256": "b601f3c9aa1f042c445fd457364158fc91c7c77198789f583ceb519341c2564d",
+              "version": "4.9.0"
+            },
+            "pip": {
+              "file_count": 470,
+              "sha256": "45e113ae324b9935a13b32f378efb311d73c44200c1137339bbbbdfb1dbd4f7e",
+              "version": "26.1.2"
+            },
+            "pluggy": {
+              "file_count": 16,
+              "sha256": "929080bff5ce240dfc77356ade64aeaf55e1021a06ac09c220a336aa3a608591",
+              "version": "1.6.0"
+            },
+            "ply": {
+              "file_count": 14,
+              "sha256": "6751d2ec327157e340d880e06e09d98ec9c0bb1640b885a1c26e891e898de351",
+              "version": "3.11"
+            },
+            "protobuf": {
+              "file_count": 61,
+              "sha256": "e1110490338c714d604248b1fa8ba0480d2366aebd5a7a8736e89dbc20799ab2",
+              "version": "6.33.5"
+            },
+            "psutil": {
+              "file_count": 18,
+              "sha256": "a281a924de7463d0ed110d28e68accfab440297a27ec0fb58eac038ccd435027",
+              "version": "7.2.2"
+            },
+            "ptyprocess": {
+              "file_count": 10,
+              "sha256": "f2acbfd607605b29d3e6fc52eccb13a64e9865092ae5f9f012a9840863b19de8",
+              "version": "0.7.0"
+            },
+            "pycodestyle": {
+              "file_count": 10,
+              "sha256": "b33234f1ddadf96bed7ab28ac58918425fd8c9f24c9e92d8afdde38ac78bd43c",
+              "version": "2.14.0"
+            },
+            "pyelftools": {
+              "file_count": 61,
+              "sha256": "fabd565001c0aa70da26ba27b1421ae9151b0f8cc1c0854891bc097925a513ed",
+              "version": "0.33"
+            },
+            "pyfdt": {
+              "file_count": 11,
+              "sha256": "f554c3f70d3d6ec0370aabf3d66be919e9299650a87c93e18157d6dbee421558",
+              "version": "0.3"
+            },
+            "pygments": {
+              "file_count": 348,
+              "sha256": "00e9cf1e51e8b54a49132f076caf3894089f22d236f3e5b5317a9402965ff9a3",
+              "version": "2.20.0"
+            },
+            "pytest": {
+              "file_count": 93,
+              "sha256": "8834b31c6e6edaa015a80c9126dc5655763ccaa531431d63f9e980cabf70e072",
+              "version": "9.1.1"
+            },
+            "pyyaml": {
+              "file_count": 26,
+              "sha256": "9e2b2f6c2777f03c5776c9077a578d1f8bc816a253fa9b9dd560171c1a4fc086",
+              "version": "6.0.3"
+            },
+            "referencing": {
+              "file_count": 21,
+              "sha256": "5254299ea522110344a7186420301e01cdd06e9518bb093940ace5b3f8ca0385",
+              "version": "0.37.0"
+            },
+            "rpds-py": {
+              "file_count": 11,
+              "sha256": "b685af8682499f36afdc53b37229a65f959e6bf540a8f0de1f606410b8f3a395",
+              "version": "2026.6.3"
+            },
+            "sel4-deps": {
+              "file_count": 6,
+              "sha256": "98f359e20217aeba8e7851a45a8f321f1d7dc3e225d85bdf485380e2aa3eaa4a",
+              "version": "0.7.0"
+            },
+            "setuptools": {
+              "file_count": 514,
+              "sha256": "8d4f9508d9e584eed94b4a6217355babe2e2b0716c90e8760763cbd7abaed071",
+              "version": "80.9.0"
+            },
+            "sh": {
+              "file_count": 9,
+              "sha256": "e34f19da41f45958eeeb180721bfceb90667a3bfaa8050f5921840e39dbe9a9f",
+              "version": "2.3.0"
+            },
+            "six": {
+              "file_count": 8,
+              "sha256": "4c7d5a2cb32f25ac829fc4e21aac2d0282fbcc0f7941582334137eee20df0a29",
+              "version": "1.17.0"
+            },
+            "soupsieve": {
+              "file_count": 14,
+              "sha256": "0e7fb32b47f1239573e25f04d92b259c67bea90de3bf764edd879c89838befb0",
+              "version": "2.8.4"
+            },
+            "typing-extensions": {
+              "file_count": 7,
+              "sha256": "cab0f9b6b1ef4b663ea821e670f6c7381b724e49f80ca39b3ece38e692f0edd9",
+              "version": "4.16.0"
+            },
+            "wheel": {
+              "file_count": 23,
+              "sha256": "c0ac08e40f63dd2b3a8d54c49fecc34b403e545bea1f7adc29c6573d6bb9766f",
+              "version": "0.47.0"
+            }
+          },
+          "sha256": "7961b223d47ec2008b4db3368471c85e212860e631ea52ea90e7786aecefd147"
+        },
+        "major_minor_version": "3.13",
+        "prefix": "/Users/lukasbower/GitHub/cohesix/out/toolchain/sel4-profile-venv",
+        "schema": "cohesix-python-environment/v1",
+        "version": "3.13.7"
+      },
+      "lock_files": {
+        "bootstrap_lock": {
+          "exists": true,
+          "expected_sha256": "a582a400e97b0b830952482a8923c4097024c9960fe2197315c341ca00a9548a",
+          "path": "/Users/lukasbower/GitHub/cohesix/configs/sel4/python-bootstrap.lock",
+          "requirements": {
+            "pip": {
+              "hashes": [
+                "382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab"
+              ],
+              "version": "26.1.2"
+            },
+            "setuptools": {
+              "hashes": [
+                "062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922"
+              ],
+              "version": "80.9.0"
+            },
+            "wheel": {
+              "hashes": [
+                "212281cab4dff978f6cedd499cd893e1f620791ca6ff7107cf270781e587eced"
+              ],
+              "version": "0.47.0"
+            }
+          },
+          "sha256": "a582a400e97b0b830952482a8923c4097024c9960fe2197315c341ca00a9548a",
+          "size": 448
+        },
+        "requirements_lock": {
+          "exists": true,
+          "expected_sha256": "5ef6b3b1e5edc912a0041417b7386ad17a57fab6ecd3b64c797ecbb3e37ea929",
+          "path": "/Users/lukasbower/GitHub/cohesix/configs/sel4/python-build-requirements.lock",
+          "requirements": {
+            "attrs": {
+              "hashes": [
+                "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309"
+              ],
+              "version": "26.1.0"
+            },
+            "autopep8": {
+              "hashes": [
+                "ce8ad498672c845a0c3de2629c15b635ec2b05ef8177a6e7c91c74f3e9b51128"
+              ],
+              "version": "2.3.2"
+            },
+            "beautifulsoup4": {
+              "hashes": [
+                "d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9"
+              ],
+              "version": "4.15.0"
+            },
+            "bs4": {
+              "hashes": [
+                "abf8742c0805ef7f662dce4b51cca104cffe52b835238afc169142ab9b3fbccc"
+              ],
+              "version": "0.0.2"
+            },
+            "cmake-format": {
+              "hashes": [
+                "ec7ed949101e5f0b7bc19317d122b83ccbc28fd766c41c93094845719667c56e"
+              ],
+              "version": "0.6.13"
+            },
+            "cmakelang": {
+              "hashes": [
+                "764b9467195c7c36453d60a829f30229720d26c7dffd41cb516b99bd9c7daf4e"
+              ],
+              "version": "0.6.13"
+            },
+            "future": {
+              "hashes": [
+                "929292d34f5872e70396626ef385ec22355a1fae8ad29e1a734c3e43f9fbc216"
+              ],
+              "version": "1.0.0"
+            },
+            "guardonce": {
+              "hashes": [
+                "325b5705148ca82b0422439e94456dd3b1a561556e2cc0e24a1acc1b8916f89f"
+              ],
+              "version": "2.4.0"
+            },
+            "iniconfig": {
+              "hashes": [
+                "f631c04d2c48c52b84d0d0549c99ff3859c98df65b3101406327ecc7d53fbf12"
+              ],
+              "version": "2.3.0"
+            },
+            "jinja2": {
+              "hashes": [
+                "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"
+              ],
+              "version": "3.1.6"
+            },
+            "jsonschema": {
+              "hashes": [
+                "d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce"
+              ],
+              "version": "4.26.0"
+            },
+            "jsonschema-specifications": {
+              "hashes": [
+                "98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe"
+              ],
+              "version": "2025.9.1"
+            },
+            "libarchive-c": {
+              "hashes": [
+                "651550a6ec39266b78f81414140a1e04776c935e72dfc70f1d7c8e0a3672ffba"
+              ],
+              "version": "5.3"
+            },
+            "lxml": {
+              "hashes": [
+                "68a9198d0fc122d14bb76837de9aa80cf84caed990b5b237f532ed87d3706736"
+              ],
+              "version": "6.1.1"
+            },
+            "markupsafe": {
+              "hashes": [
+                "116bb52f642a37c115f517494ea5feb03889e04df47eeff5b130b1808ce7c219"
+              ],
+              "version": "3.0.3"
+            },
+            "packaging": {
+              "hashes": [
+                "5fc45236b9446107ff2415ce77c807cee2862cb6fac22b8a73826d0693b0980e"
+              ],
+              "version": "26.2"
+            },
+            "pexpect": {
+              "hashes": [
+                "7236d1e080e4936be2dc3e326cec0af72acf9212a7e1d060210e70a47e253523"
+              ],
+              "version": "4.9.0"
+            },
+            "pluggy": {
+              "hashes": [
+                "e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746"
+              ],
+              "version": "1.6.0"
+            },
+            "ply": {
+              "hashes": [
+                "096f9b8350b65ebd2fd1346b12452efe5b9607f7482813ffca50c22722a807ce"
+              ],
+              "version": "3.11"
+            },
+            "protobuf": {
+              "hashes": [
+                "a5cb85982d95d906df1e2210e58f8e4f1e3cdc088e52c921a041f9c9a0386de5"
+              ],
+              "version": "6.33.5"
+            },
+            "psutil": {
+              "hashes": [
+                "1a7b04c10f32cc88ab39cbf606e117fd74721c831c98a27dc04578deb0c16979"
+              ],
+              "version": "7.2.2"
+            },
+            "ptyprocess": {
+              "hashes": [
+                "4b41f3967fce3af57cc7e94b888626c18bf37a083e3651ca8feeb66d492fef35"
+              ],
+              "version": "0.7.0"
+            },
+            "pycodestyle": {
+              "hashes": [
+                "dd6bf7cb4ee77f8e016f9c8e74a35ddd9f67e1d5fd4184d86c3b98e07099f42d"
+              ],
+              "version": "2.14.0"
+            },
+            "pyelftools": {
+              "hashes": [
+                "f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036"
+              ],
+              "version": "0.33"
+            },
+            "pyfdt": {
+              "hashes": [
+                "61601c2005ff394a25a6c84c6da2088bbf888328038400d27e4eeb1b04b9f4f0"
+              ],
+              "version": "0.3"
+            },
+            "pygments": {
+              "hashes": [
+                "81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176"
+              ],
+              "version": "2.20.0"
+            },
+            "pytest": {
+              "hashes": [
+                "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c"
+              ],
+              "version": "9.1.1"
+            },
+            "pyyaml": {
+              "hashes": [
+                "2283a07e2c21a2aa78d9c4442724ec1eb15f5e42a723b99cb3d822d48f5f7ad1"
+              ],
+              "version": "6.0.3"
+            },
+            "referencing": {
+              "hashes": [
+                "381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231"
+              ],
+              "version": "0.37.0"
+            },
+            "rpds-py": {
+              "hashes": [
+                "f4d78253f6996be4901669ad25319f842f740eccf4d58e3c7f3dd39e6dde1d8f"
+              ],
+              "version": "2026.6.3"
+            },
+            "sel4-deps": {
+              "hashes": [
+                "1ca94cf1a3300b319bc497d5927b02d3c1cf9cf575a9827b6e7ea6db87b9f45d"
+              ],
+              "version": "0.7.0"
+            },
+            "sh": {
+              "hashes": [
+                "9b9c51f988fa91ba09e2a78edc48810d0b5a34c8cf383408e4e8c4352169f26e"
+              ],
+              "version": "2.3.0"
+            },
+            "six": {
+              "hashes": [
+                "4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"
+              ],
+              "version": "1.17.0"
+            },
+            "soupsieve": {
+              "hashes": [
+                "e7e6b0769c8f51ed59acab6e994b00621096cfb1c640a7509295987388fbaf65"
+              ],
+              "version": "2.8.4"
+            },
+            "typing-extensions": {
+              "hashes": [
+                "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+              ],
+              "version": "4.16.0"
+            }
+          },
+          "sha256": "5ef6b3b1e5edc912a0041417b7386ad17a57fab6ecd3b64c797ecbb3e37ea929",
+          "size": 3710
+        }
+      },
+      "path": "/Users/lukasbower/GitHub/cohesix/out/toolchain/sel4-profile-venv/bin/python",
+      "resolved_path": "/opt/homebrew/Cellar/python@3.13/3.13.7/Frameworks/Python.framework/Versions/3.13/bin/python3.13",
+      "sha256": "56587d29d1588abbd51f0ffa357e670d79893f6781f1c7b9269be275f561a2ba"
+    },
+    "schema": "cohesix-sel4-wrapper-host-inputs/v3",
+    "target": "rootserver_image",
+    "wrapper_sha256": "b0ddda9c7bbbe944323d31cce779a3cbebddac7cf3d6eed604d22215ae6d17a3"
+  },
+  "memoization_cache": "disabled",
+  "profile": "qemu_smp_production",
+  "schema": "cohesix-sel4-profile-build-inputs/v2",
+  "source": {
+    "errors": [],
+    "policy": "clean",
+    "repositories": {
+      ".repo/manifests": {
+        "actual_commit": "b81fd440977a8ad89ed8478a9a5a027f062551f6",
+        "dirty": false,
+        "expected_commit": "b81fd440977a8ad89ed8478a9a5a027f062551f6",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/.repo/manifests"
+      },
+      "kernel": {
+        "actual_commit": "6e7c3b733d296cfd88d5fbf635c96e447a882374",
+        "dirty": false,
+        "expected_commit": "6e7c3b733d296cfd88d5fbf635c96e447a882374",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel"
+      },
+      "projects/musllibc": {
+        "actual_commit": "b0005f86fecbd6d0257b15363a5b013446914265",
+        "dirty": false,
+        "expected_commit": "b0005f86fecbd6d0257b15363a5b013446914265",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/musllibc"
+      },
+      "projects/seL4_libs": {
+        "actual_commit": "d8abd95e7114c852f6636e3084eb1f66091a75ee",
+        "dirty": false,
+        "expected_commit": "d8abd95e7114c852f6636e3084eb1f66091a75ee",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/seL4_libs"
+      },
+      "projects/sel4_projects_libs": {
+        "actual_commit": "5b3c81127b191232489df09a59b22edead1c9db7",
+        "dirty": false,
+        "expected_commit": "5b3c81127b191232489df09a59b22edead1c9db7",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/sel4_projects_libs"
+      },
+      "projects/sel4runtime": {
+        "actual_commit": "86489cf6efab9f314964e79468c036e9035394c7",
+        "dirty": false,
+        "expected_commit": "86489cf6efab9f314964e79468c036e9035394c7",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/sel4runtime"
+      },
+      "projects/sel4test": {
+        "actual_commit": "60b7b47ee0a67f56e15951735a6aa9d270d47f55",
+        "dirty": false,
+        "expected_commit": "60b7b47ee0a67f56e15951735a6aa9d270d47f55",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/sel4test"
+      },
+      "projects/util_libs": {
+        "actual_commit": "6e55b3c62687779692150e1de411ce61b9d2919a",
+        "dirty": false,
+        "expected_commit": "6e55b3c62687779692150e1de411ce61b9d2919a",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/util_libs"
+      },
+      "tools/nanopb": {
+        "actual_commit": "cad3c18ef15a663e30e3e43e3a752b66378adec1",
+        "dirty": false,
+        "expected_commit": "cad3c18ef15a663e30e3e43e3a752b66378adec1",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/tools/nanopb"
+      },
+      "tools/opensbi": {
+        "actual_commit": "234ed8e427f4d92903123199f6590d144e0d9351",
+        "dirty": false,
+        "expected_commit": "234ed8e427f4d92903123199f6590d144e0d9351",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/tools/opensbi"
+      },
+      "tools/seL4": {
+        "actual_commit": "7dd5ba144b1fecf1358a12d2bef3eb365aab35c7",
+        "dirty": false,
+        "expected_commit": "7dd5ba144b1fecf1358a12d2bef3eb365aab35c7",
+        "path": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/tools/seL4"
+      }
+    },
+    "root": "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project"
+  },
+  "status": "complete",
+  "validator_sha256": "3b95da8aaf06aaecfd693df0aa54477eaaacc78e1604c78d282e58f44e40d76f"
+}

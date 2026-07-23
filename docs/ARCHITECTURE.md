@@ -31,10 +31,10 @@ plan governs and this document must be corrected.
 
 ## 1. Authority and evidence boundary
 
-Cohesix is built from the tag-pinned upstream seL4 15.0.0 project. The selected
-kernel revision is `881de507fe528490dc5e570c7810a149bad5880f`; complete source,
+Cohesix is built from the tag-pinned upstream seL4 16.0.0 project. The selected
+kernel revision is `6e7c3b733d296cfd88d5fbf635c96e447a882374`; complete source,
 toolchain, profile, and evidence provenance is recorded in
-[M26D_SEL4_15_PROVENANCE.md](audit/M26D_SEL4_15_PROVENANCE.md). Target userspace
+[M26D_SEL4_16_PROVENANCE.md](audit/M26D_SEL4_16_PROVENANCE.md). Target userspace
 is pure Rust `no_std`.
 
 The selected profile manifest, its resolved manifest, and generated `coh-rtc`
@@ -49,7 +49,7 @@ object sizes, platform metadata, and timer truth.
 
 | Concern | Current selected state during Milestone 26d | Selected planned state |
 | --- | --- | --- |
-| Kernel contract | seL4 15, AArch64, four nodes, one domain, non-hypervisor classic SMP, with `KERNEL_MCS=false`. QEMU uses the GICv3 operational profile. | Pending Milestone 26e makes four-core, one-domain, non-hypervisor SMP+MCS the sole operational QEMU and Pi 4 architecture. |
+| Kernel contract | seL4 16, AArch64, four nodes, one domain, non-hypervisor classic SMP, with `KERNEL_MCS=false`. QEMU uses the GICv3 operational profile. | Pending Milestone 26e makes four-core, one-domain, non-hypervisor SMP+MCS the sole operational QEMU and Pi 4 architecture. |
 | Temporal authority | Priorities, affinity, and bounded cooperative service turns; no scheduling contexts, MCS Reply objects, timeout faults, donation, or kernel-enforced CPU budgets. | Every live TCB has a compiler-admitted bound active scheduling context or an allowlisted passive donation chain with explicit Reply, timeout, and recovery ownership. |
 | Principal userspace authority | One Rust root task owns Queen policy, parsers, networking, Worker model state, supervision, audit, and evidence. Selected physical drivers are restricted child tasks. | Five independently schedulable critical TCBs protect root control, fault handling, emergency output, Worker supervision, and driver supervision; parser, network, and executable Worker loops move to restricted children. |
 | Workers | Heartbeat, GPU, Bus, and LoRA are model/session records. No selected profile launches a general Worker TCB. | Heartbeat, GPU, and LoRA become executable child tasks with one active SC each. WorkerBus alone remains model/session-only. |
@@ -80,7 +80,7 @@ Implementation and proof remain separate:
   Rust userspace, boot-path, hardware, DMA, SMP, or timing proof.
 
 Current classic SMP and planned AArch64 SMP+MCS are not represented as
-tag-pinned verified seL4 configurations. The seL4 15 caveats describe AArch64
+tag-pinned verified seL4 configurations. The seL4 16 caveats describe AArch64
 MCS verification as incomplete and SMP+MCS as less explored. Exact QEMU and Pi
 acceptance is therefore mandatory, but it does not create a formal-verification
 claim.
@@ -273,7 +273,7 @@ gates pass.
 
 ### 4.1 Atomic SMP+MCS transition
 
-Task `m26e-mcs-abi-foundation` first adds seL4 15 version-pinned
+Task `m26e-mcs-abi-foundation` first adds seL4 16 version-pinned
 `SchedContext`, `SchedControl`, Reply-object, timeout-fault, consumed-time,
 `YieldTo`, receive/call/reply, and reply-receive bindings. It makes the
 four-node MCS profiles the only operational QEMU/Pi contracts and validates
@@ -829,10 +829,10 @@ Planned 26e acceptance invariants:
 
 - Scope and milestones: [BUILD_PLAN.md](BUILD_PLAN.md), especially
   [Milestone 26e](BUILD_PLAN.md#26e)
-- seL4 15 source/profile evidence:
-  [M26D_SEL4_15_PROVENANCE.md](audit/M26D_SEL4_15_PROVENANCE.md)
+- seL4 16 source/profile evidence:
+  [M26D_SEL4_16_PROVENANCE.md](audit/M26D_SEL4_16_PROVENANCE.md)
 - seL4 capability classification:
-  [M26D_SEL4_15_CAPABILITY_AUDIT.md](audit/M26D_SEL4_15_CAPABILITY_AUDIT.md)
+  [M26D_SEL4_16_CAPABILITY_AUDIT.md](audit/M26D_SEL4_16_CAPABILITY_AUDIT.md)
 - Scheduler decision and atomic transition:
   [M26D_MCS_DECISION.md](audit/M26D_MCS_DECISION.md)
 - Current root boundary and planned split order:

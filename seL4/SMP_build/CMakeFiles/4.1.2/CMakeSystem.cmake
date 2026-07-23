@@ -3,7 +3,7 @@ set(CMAKE_HOST_SYSTEM_NAME "Darwin")
 set(CMAKE_HOST_SYSTEM_VERSION "25.5.0")
 set(CMAKE_HOST_SYSTEM_PROCESSOR "arm64")
 
-include("/Users/lukasbower/GitHub/cohesix/seL4/SMP_build/gcc.cmake")
+include("/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/gcc.cmake")
 
 set(CMAKE_SYSTEM "Generic")
 set(CMAKE_SYSTEM_NAME "Generic")

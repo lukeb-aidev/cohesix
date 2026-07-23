@@ -53,6 +53,24 @@ def test_pi4_image_build_defaults_to_pi4_release_features() -> None:
     assert "(default: release-pi4,bootstrap-trace)" in source
 
 
+def test_pi4_image_build_honors_the_staged_runner_job_budget() -> None:
+    """U-Boot and seL4 composition must not bypass test-plan CPU limits."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    resolver = source[
+        source.index("resolve_build_jobs()") : source.index(
+            "rebuild_u_boot_pi4()"
+        )
+    ]
+
+    assert (
+        'TP_HOST_JOBS:-${CARGO_BUILD_JOBS:-${CMAKE_BUILD_PARALLEL_LEVEL:-}}'
+        in resolver
+    )
+    assert source.count('jobs="$(resolve_build_jobs)"') == 2
+    assert source.count('jobs="$(sysctl -n hw.ncpu)"') == 1
+
+
 def test_pi4_image_build_uses_third_party_wifi_firmware_bundle() -> None:
     """Pi 4 release builds must not depend on generated capture outputs."""
 
@@ -112,9 +130,12 @@ def test_pi4_image_build_prefers_repo_local_sel4_build_tree() -> None:
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert 'DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/seL4/build_UBOOT"' in source
+    assert (
+        'DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/out/sel4/profile-v2/pi4-diagnostic"'
+        in source
+    )
     assert 'SEL4_BUILD_DIR="${DEFAULT_REPO_SEL4_BUILD_DIR}"' in source
-    assert "default: repo seL4/build_UBOOT" in source
+    assert "default: canonical v16" in source
 
 
 def test_pi4_image_build_skip_build_rejects_stale_selected_image() -> None:

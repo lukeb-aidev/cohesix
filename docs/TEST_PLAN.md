@@ -6,104 +6,195 @@
 # Test Plan
 
 ## Mandatory Agent Execution Contract
-This section is a mandatory execution contract for all contributors and agents working this repository.
 
-1. Use scripted stages as the source of truth.
-- Run `scripts/ci/test_plan_run.sh --list` first.
-- Execute stages in order with a shared state dir: `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`.
-- For target-qualified evidence, select the target explicitly:
-  - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/<run-id>`
-  - `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/<run-id>`
-- For focused debugging, run one stage in iteration mode:
-  - `scripts/ci/test_plan_run.sh --target qemu --stage 3 --iteration --state-dir out/test-plan/<run-id>`
-  - `TEST_PLAN_ITERATION=1 scripts/ci/test_plan_run.sh --target pi4 --stage 3 --state-dir out/test-plan/<run-id>`
-- Stage scripts are authoritative:
-  - `scripts/ci/test_plan_stage_01_integrity.sh`
-  - `scripts/ci/test_plan_stage_02_host_fast.sh`
-  - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
-  - `scripts/ci/test_plan_stage_04_rest_multiplexer.sh`
-  - `scripts/ci/test_plan_stage_05_due_diligence.sh`
+This contract is normative for contributors and automation.
 
-2. Defect resolution is mandatory before progression.
-- If any stage fails, stop immediately.
-- Fix the root cause in code/docs/scripts first; do not bypass by proceeding to a later stage.
-- Re-run the failed stage until green, then continue to the next stage.
-- A focused rerun may use `--iteration`; it writes `stage_01.inputs.sha256`
-  style input fingerprints and `stage_01.<target>.iteration` markers, but it
-  never writes `stage_XX.done` or `stage_XX.<target>.done`.
-- Later stages may reuse earlier markers only when their stored input
-  fingerprints still match the current test-plan scripts, docs, and regression
-  fixtures. If a fingerprint is stale, rerun that earlier stage in the same
-  state dir before treating later evidence as current.
-- Do not mark the run complete until Stage 05 (`scripts/ci/due_diligence_gate.sh`) passes.
+1. Run `scripts/ci/test_plan_run.sh --list`, then use the staged runner with a
+   dedicated state directory. The runner resumes digest-valid evidence by
+   default:
+   - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/<run-id>`
+   - `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/<run-id>`
+2. Use `--force` to replace an active stage result after a failure or input
+   change. The old immutable attempt remains under `evidence/`; a failed,
+   interrupted, or INCOMPLETE rerun cannot leave a reusable PASS marker.
+3. Use `--stage <n> --iteration` only for focused debugging. Iterations have a
+   separate evidence namespace and never write, remove, or refresh full-pass
+   attestations.
+4. Use `--reuse-common-from <state-dir>` only for source-, configuration-,
+   toolchain-, catalog-, and artifact-identical common evidence. Target-specific
+   actions are never relabelled across QEMU and Pi 4. Missing or legacy
+   provenance fails closed.
+5. Fix a failed stage before progressing. Skips write INCOMPLETE evidence and
+   fail; a platform check may be `NA` only where the catalog explicitly permits
+   it.
+6. Keep `configs/test_plan_actions.toml`, this document, and the scripts aligned.
+   `scripts/ci/check_test_plan.sh` must pass.
+7. Before making a claim for a change set, select its conditional tiers from
+   the catalog without losing paths that contain whitespace: `git diff
+   --name-only -z <base> -- | python3 scripts/ci/test_plan_catalog.py recommend
+   --stdin0 --format tiers`.
+   Preserve the reported action IDs with the run evidence. An unmatched path
+   selects every catalog action, and a conditional tier cannot be reported
+   unless its named evidence action has also passed.
+8. Keep the developer host responsive. The runner defaults build, libtest, and
+   Rayon concurrency to half the detected logical CPUs (maximum six); on the
+   10-core macOS development host this is five jobs. Playwright defaults to two
+   workers. Set `TP_HOST_JOBS=<n>` or `TP_UI_WORKERS=<n>` to lower the cap.
+   Oversubscription requires the explicit `TP_ALLOW_OVERSUBSCRIBE=1` opt-in.
+   The Pi image builder consumes the same budget when invoked from a staged or
+   conditional test-plan run.
 
-3. No silent skips.
-- Stage scripts treat skips as **INCOMPLETE**: they write an `incomplete/` record under the shared state dir and the stage exits non-zero.
-- A run with any INCOMPLETE marker is **not** a PASS and must not be treated as release-ready.
-- Platform-specific **NA** checks (for example, Linux-only mount coverage on macOS) are logged as `NA` and do not block PASS.
+The five staged entrypoints remain:
 
-4. Keep docs and scripts aligned.
-- If execution behavior changes, update this document and the corresponding scripts in the same change.
-- `scripts/ci/check_test_plan.sh` must pass before continuing.
+- Stage 01: `scripts/ci/test_plan_stage_01_integrity.sh`
+- Stage 02: `scripts/ci/test_plan_stage_02_host_fast.sh`
+- Stage 03: `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
+- Stage 04: `scripts/ci/test_plan_stage_04_rest_multiplexer.sh`
+- Stage 05: `scripts/ci/test_plan_stage_05_due_diligence.sh`
 
-## Definition of "Test Plan PASS" (Normative)
-A run is **PASS** if and only if:
-- It is executed via the staged runner with a shared state dir: `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`.
-- For target-qualified PASS, it is executed via `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/<run-id>` or `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/<run-id>`.
-- Stages **01-05** complete successfully and create `stage_01.done` ... `stage_05.done` in the shared state dir.
-- The state dir contains target metadata in `target.env`.
-- Target-qualified runs also create `stage_01.qemu.done` ... `stage_05.qemu.done` or `stage_01.pi4.done` ... `stage_05.pi4.done`.
-- Every completed stage records `stage_XX.inputs.sha256`; stale fingerprints
-  prevent later-stage reuse until the affected earlier stage is rerun.
-- Iteration markers such as `stage_01.qemu.iteration` or
-  `stage_01.pi4.iteration` are useful evidence for debugging but do not count
-  toward PASS.
-- No stage wrote an INCOMPLETE marker (presence of any `stage_*.incomplete` or any files under `out/test-plan/<run-id>/incomplete/` means **FAIL**).
-- Stage 05 runs `scripts/ci/due_diligence_gate.sh` and it is green.
+Stage 01 runs integrity first and then one broad host suite per distinct
+feature configuration. Its common-hermetic attestation may be imported into a
+second target state directory with `--reuse-common-from`. Stage 02 runs only
+the selected provisioned-target profile and release checks. Stage 05 verifies
+the immutable Stage 01-04 attestations and runs only unique release governance.
+Direct `scripts/ci/due_diligence_gate.sh` execution remains exhaustive.
 
-Notes:
-- Running individual stages (for example `--stage 2`) is for iteration only; it is not a "PASS" run.
-- Subset selectors such as `COHSH_BATCH_GROUPS=base` are valid only with
-  `--iteration`; a final Stage 03 or due-diligence run requires all regression
-  groups.
-- "NA" checks must still be logged, but they do not cause failure; INCOMPLETE always fails.
+## Claim tiers and PASS terminology
 
-## Target-Qualified Runner Matrix
-The staged runner owns target qualification. `--target qemu|pi4` writes `TEST_PLAN_TARGET` to `target.env`, passes `TEST_PLAN_TARGET` and `COHSH_BATCH_TARGET` to every stage script, and writes a target-qualified marker only after the stage exits successfully and the required target artifacts are present.
+Never report an unqualified “Test Plan PASS.” Report the exact claim tier(s):
 
-| Target | Allowed stages | Required target-specific evidence |
+| Claim tier | What a PASS proves | What it does not prove |
 | --- | --- | --- |
-| `qemu` | 01-05 | Stage 03 archives QEMU TCP regression logs under `qemu-regression-logs/`; Stage 04 may start the self-contained local QEMU plus hive-gateway path when no gateway URL is supplied. |
-| `pi4` | 01-05 | Stage 03 requires `COHSH_TCP_HOST` or `COHSH_HOST` for the live Pi 4 TCP console and runs the cohsh batch with `COHSH_BATCH_TARGET=pi4`; Stage 04 requires `COHESIX_GATEWAY_URL`, `HIVE_GATEWAY_URL`, `COHSH_REST_URL`, or `COH_REST_URL` for an existing REST gateway so it cannot silently create QEMU evidence; Stage 05 requires `PI4_RUNTIME_DMA_PROOF_FILE` or `out/test-plan/<run-id>/pi4-runtime-dma-proof.env` containing `PI4_RUNTIME_DMA_PROOF=fresh-pi` and `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`. |
+| `common-hermetic` | Catalog integrity, generated contracts, formatting, lint, workspace/default tests, complete production-feature host suites, Python discovery, no-std Pi runtime compile, and risk ratchet. | Provisioned root-task target builds, QEMU boot, live transport, Pi hardware, performance, UI, federation, or bundles. |
+| `qemu-integration` | `common-hermetic` plus the provisioned QEMU profile/release check, content-bound QEMU artifacts, and fresh Stage 03/04 boots with TCP and REST regression results. | Pi transport or hardware. |
+| `pi4-transport` | `common-hermetic` plus the provisioned Pi profile/release check and TCP/REST results bound to one caller-supplied Pi target/boot/image evidence record. | Reflash/readback, RF, driver ownership, repeatability, benchmark, or hardware acceptance. |
+| `pi4-hardware` | A separate machine-validated bundle containing image/readback identity, fresh serial proof, capture manifest, driver-task proof, and required repeatability report. | Performance unless the performance tier also passes. |
+| `ui` | Deterministic replay-mode Playwright presentation and transcript coverage. | Control-plane authority or protocol correctness. |
+| `performance` | Named no-retry/error-budget matrices with reviewable summaries. | General functional or hardware acceptance. |
+| `federation` | Named three-hive relay, dedupe, WAL resume, failover, timeline, and scale evidence. | Unrelated release or hardware claims. |
+| `release` | Unique advisory/governance checks; bundle validation is an additional release action when bundles are shipped. | Any target tier not explicitly included in the result. |
 
-Unsupported target/stage combinations fail before the stage starts. A Pi 4 Stage 03 run must not default to loopback unless `TP_PI4_ALLOW_LOOPBACK=1` documents an intentional local tunnel. A Pi 4 Stage 04 run without an existing gateway URL is **FAIL**, because the stage's self-contained local-QEMU fallback would be QEMU evidence, not Pi 4 evidence.
+The normal five-stage QEMU run produces `common-hermetic`,
+`qemu-integration`, and repository `release` governance evidence. The normal
+five-stage Pi run produces `common-hermetic`, `pi4-transport`, and repository
+`release` governance evidence. It must never be described as `pi4-hardware`
+without the separate hardware bundle.
 
-## GitHub Actions Gate Mapping
+Conditional UI, performance, federation, Pi hardware, and bundle actions are
+selected by their catalog `trigger_paths` or by the active milestone. An
+unknown changed path selects the complete catalog conservatively.
 
-`.github/workflows/ci.yml` is the sole repository-authored GitHub Actions
-workflow. Pull requests, merge-queue candidates, and pushes to `main` run the
-following merge-gate graph; manual dispatch runs the same graph:
+## Immutable evidence and resume contract
 
-- `source-and-tests` is one fail-fast `macos-26` ARM64 clean-runner gate. It
-  checksum-verifies pinned `actionlint` and ripgrep binaries, runs workflow and
-  repository policy checks, target-qualified Stage 01, generated-artifact
-  validation, workspace formatting, full-workspace/all-target Clippy, the full
-  workspace check and single-threaded workspace test suite, the normative Rust
-  risk ratchet, and artifact-independent QEMU/Pi 4 dependency-tree checks. It
-  retains runner, Stage 01, and VM-boundary evidence for 14 days.
-- `dependency-audit` runs independently on pinned Ubuntu 24.04 with exact
-  `cargo-audit` and `cargo-deny` versions. It also runs on the weekly schedule
-  and retains both reports for 30 days, including failure reports.
-- `ci` preserves the established required-check name as the aggregate merge
-  gate and passes only when both required pull-request jobs above succeed.
+Each stage attempt records:
 
-GitHub Actions Stage 01 is a merge gate, not a claim of full Test Plan PASS.
-Stage 02 target compilation and canonical QEMU packaging require the external,
-profile-validated QEMU and Pi 4 seL4 build trees that this repository does not
-vendor. They remain mandatory evidence on a provisioned macOS ARM64 host, but a
-clean GitHub-hosted runner must not fabricate or silently skip those inputs.
-Stages 03-05, QEMU boot/transport evidence, and fresh Pi 4 hardware proof remain
-required whenever the active milestone calls for them.
+- the Git HEAD plus every tracked and non-ignored untracked source file,
+  including mode and submodule state;
+- `Cargo.lock`, selected manifests/generated outputs, non-secret selectors,
+  selected seL4 profile identity, toolchain versions, OS, target, and exact
+  action-catalog digest;
+- redacted argv, exit status, start/end timestamps, duration, and hashed logs
+  for every action;
+- required artifacts and their content hashes, including the exact QEMU image
+  or caller-supplied Pi target evidence where applicable; and
+- a terminal immutable stage manifest published atomically only after all
+  assertions pass.
+
+`stage_XX.attestation` is an atomic reference to the immutable manifest.
+Compatibility `.done` files are not authority and are published only after the
+attestation verifies. Missing/malformed provenance, changed inputs, tampered
+logs/actions/artifacts, an iteration result, target mismatch, or a failed
+attempt blocks resume. `target.env` is created once and cannot be overwritten
+with a different target or start identity. A state directory has one writer:
+the runner holds its lock across all selected stages, and a concurrent writer
+must use a different state directory.
+
+Secrets named like tokens, passwords, tickets, credentials, API keys, or
+authorization values are redacted from command logs and structured evidence.
+Pass secrets through inherited environment variables; do not interpolate them
+into logged shell command strings.
+
+## Target-qualified runner matrix
+
+| Target | Stages | Required target-specific evidence |
+| --- | --- | --- |
+| `qemu` | 01-05 | Stage 03 builds one immutable artifact per unique manifest, then uses a fresh boot for every regression group. Stage 04 reuses the validated default artifact but starts another fresh boot. Result manifests bind source, profile, manifest, image, scripts, boot identity, counts, and log hashes. |
+| `pi4` | 01-05 | Stage 03 requires `COHSH_TCP_HOST` or `COHSH_HOST` plus `TP_PI4_TARGET_EVIDENCE_FILE`; Stage 04 requires an existing gateway URL and evidence binding that gateway to the same boot/image. These stages yield only `pi4-transport`. `TP_PI4_HARDWARE_EVIDENCE_FILE`, when required, must validate the stronger hardware bundle and is never synthesized by the runner. |
+
+A Pi Stage 03 run refuses loopback unless `TP_PI4_ALLOW_LOOPBACK=1` records an
+intentional tunnel. A Pi Stage 04 run without an existing gateway fails rather
+than creating misleading local-QEMU evidence.
+
+## Canonical action catalog
+
+`configs/test_plan_actions.toml` is the sole staged command inventory. It owns
+action IDs, exact commands, feature sets, stages, claim tiers, targets, trigger
+paths, timeouts, expected evidence, and zero-test policy.
+`scripts/ci/test_plan_catalog.py` validates semantic duplicates and forbids
+zero-match-prone filtered library-test actions. The table below is generated
+from that catalog.
+
+<!-- test-plan-catalog:start -->
+| Action | Stage | Claim tier | Scope / target | Command or proof |
+| --- | ---: | --- | --- | --- |
+| `integrity.cargo-metadata` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo metadata --locked --no-deps` |
+| `integrity.generated-contracts` | 1 | `common-hermetic` | common / qemu, pi4 | `scripts/check-generated.sh` |
+| `host.format` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo fmt --all -- --check` |
+| `host.clippy` | 1 | `common-hermetic` | common / qemu, pi4 | `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings` |
+| `host.workspace-check` | 1 | `common-hermetic` | common / qemu, pi4 | `CARGO_INCREMENTAL=0 cargo check --workspace` |
+| `host.workspace-tests` | 1 | `common-hermetic` | common / qemu, pi4 | `CARGO_INCREMENTAL=0 cargo test --workspace --exclude swarmui --exclude pi4-driver-runtime` |
+| `host.swarmui-tests` | 1 | `common-hermetic` | common / qemu, pi4 | `CARGO_INCREMENTAL=0 cargo test -p swarmui` |
+| `host.coh-mock-tests` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo test -p coh --features mock` |
+| `host.root-task-qemu-features` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib -- --test-threads=1 --skip drivers::driver_task_net` |
+| `host.root-task-pi4-features` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib -- --test-threads=1` |
+| `host.root-task-net-console` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo test -p root-task --no-default-features --features net-console --lib -- --test-threads=1` |
+| `host.pi4-runtime-tests` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo test -p pi4-driver-runtime -- --test-threads=1` |
+| `host.pi4-runtime-target-check` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo check -p pi4-driver-runtime --target aarch64-unknown-none` |
+| `host.cache-maintenance-tests` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance` |
+| `host.coh-doctor-smoke` | 1 | `common-hermetic` | common / qemu, pi4 | `cargo run -p coh --features mock -- doctor --mock` |
+| `host.swarmui-dependency-policy` | 1 | `common-hermetic` | common / qemu, pi4 | `python3 scripts/ci/check_swarmui_dependencies.py` |
+| `host.driver-coverage-contract` | 1 | `common-hermetic` | common / qemu, pi4 | `python3 scripts/ci/check_driver_test_coverage.py` |
+| `host.python-tests` | 1 | `common-hermetic` | common / qemu, pi4 | `scripts/ci/python_test_gate.sh --tests` |
+| `host.python-examples` | 1 | `common-hermetic` | common / qemu, pi4 | `scripts/ci/python_test_gate.sh --examples` |
+| `host.rust-risk-bootstrap` | 1 | `common-hermetic` | common / qemu, pi4 | `python3 scripts/ci/test_rust_risk_gate.py` |
+| `host.rust-risk-ratchet` | 1 | `common-hermetic` | common / qemu, pi4 | `env -u CARGO_HOME scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml` |
+| `target.qemu-profile` | 2 | `qemu-integration` | provisioned-target / qemu | `"${TEST_PLAN_ROOT}/out/toolchain/sel4-profile-venv/bin/python" scripts/sel4_profile.py validate --profile qemu_smp_production --build-dir "${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production" --require-source --require-artifacts --for-runtime` |
+| `target.root-task-qemu-release` | 2 | `qemu-integration` | provisioned-target / qemu | `SEL4_BUILD_DIR="${TEST_PLAN_ROOT}/out/sel4/profile-v2/qemu-smp-production" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu` |
+| `target.pi4-profile` | 2 | `pi4-transport` | provisioned-target / pi4 | `"${TEST_PLAN_ROOT}/out/toolchain/sel4-profile-venv/bin/python" scripts/sel4_profile.py validate --profile pi4_diagnostic --build-dir "${TEST_PLAN_ROOT}/out/sel4/profile-v2/pi4-diagnostic" --require-source --require-artifacts --for-runtime` |
+| `target.root-task-pi4-release` | 2 | `pi4-transport` | provisioned-target / pi4 | `SEL4_BUILD_DIR="${TEST_PLAN_ROOT}/out/sel4/profile-v2/pi4-diagnostic" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4` |
+| `qemu.tcp-regression` | 3 | `qemu-integration` | target / qemu | `scripts/cohsh/run_regression_batch.sh` |
+| `pi4.tcp-regression` | 3 | `pi4-transport` | target / pi4 | `scripts/cohsh/run_regression_batch.sh` |
+| `qemu.rest-regression` | 4 | `qemu-integration` | target / qemu | `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` |
+| `pi4.rest-regression` | 4 | `pi4-transport` | target / pi4 | `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` |
+| `release.unique-governance` | 5 | `release` | target / qemu, pi4 | `scripts/ci/due_diligence_gate.sh` |
+| `ui.swarmui-playwright` | conditional | `ui` | conditional / qemu, pi4 | `scripts/ci/swarmui_ui_gate.sh --run` |
+| `performance.gateway-telemetry` | conditional | `performance` | conditional / qemu, pi4 | evidence-only: telemetry-summary-matrix, ops-csv, ramp-csv, ramp-svg |
+| `federation.three-hive-relay` | conditional | `federation` | conditional / qemu, pi4 | evidence-only: federation-result-manifest, relay-counter-snapshots, evidence-timeline, scale-summary |
+| `pi4.hardware-acceptance` | conditional | `pi4-hardware` | conditional / pi4 | evidence-only: pi4-image-readback-identity, pi4-gate-proof, pi4-capture-manifest, pi4-repeatability-report |
+| `release.bundle-validation` | conditional | `release` | conditional / qemu, pi4 | evidence-only: macos-bundle-result, ubuntu-bundle-result |
+<!-- test-plan-catalog:end -->
+
+## GitHub Actions gate mapping
+
+`.github/workflows/ci.yml` is the sole repository-authored workflow and keeps
+the stable aggregate check `ci`.
+
+- Source/integrity, consolidated hermetic Rust/Python production-feature
+  coverage, replay-mode UI coverage, and dependency advisories run as
+  independently cacheable jobs. The aggregate waits for every required job.
+- The workspace test lane uses the bounded host-wide concurrency policy rather
+  than consuming every CPU. Root-task feature suites and
+  `pi4-driver-runtime` remain serialized at their known stateful boundaries.
+- Cargo registries, build outputs, Playwright browsers, and exact-version audit
+  tools use content-keyed caches. Cached tools are version-checked; mandatory
+  `cargo audit` and `cargo deny check advisories` are never skipped.
+- Hosted CI compiles `pi4-driver-runtime` for `aarch64-unknown-none` and runs
+  the complete host-safe QEMU/Pi production-feature suites. Exact root-task
+  release builds and QEMU packaging remain on the provisioned macOS ARM64 lane
+  because the canonical external seL4 trees are not vendored.
+- The weekly workflow repeats the hermetic matrix and fresh advisory checks.
+  Provisioned QEMU Stage 03/04 cadence is recorded separately and must not be
+  represented as hosted-runner boot evidence.
 
 ## Purpose
 Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP console reliability and performance, deterministic replay, and every shipped host tool.
@@ -136,7 +227,7 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
   diagnostic comparison only and are claim-ineligible unless they pass a named
   profile contract.
 - Default QEMU SMP topology is four single-threaded cores; set `COHESIX_QEMU_SMP=1` for single-core baselines or `COHESIX_QEMU_SMP_TOPO` for explicit topologies.
-- seL4 15 QEMU artifact trees must be configured with
+- seL4 16 QEMU artifact trees must be configured with
   `ElfloaderRootserversLast=ON` and an embedded QEMU `virt` DTB generated with
   `virtualization=on`, so PSCI records `method = "smc"` for the Cohesix QEMU
   launcher.
@@ -145,15 +236,16 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
   with source and artifacts required. QEMU build, release, regression, and
   publication entrypoints consume and revalidate `qemu_smp_production` by
   default. This makes it the canonical GICv3 build input; it is still not QEMU
-  boot evidence. The external `/Users/lukasbower/seL4/build_UBOOT` exact-image
-  CYW43 input remains separately coordinated and is not Pi hardware evidence.
-  Exact-image composition treats that external tree as immutable input: the
-  image wrapper fingerprints it, creates and validates a fresh disposable Pi
-  profile tree, mutates only the derived tree, and requires the selected tree's
-  full byte/mode/symlink fingerprint plus canonical validation to remain
-  unchanged through final staging. Derived provenance binds both pristine
-  profile stamps and the exact rootserver/CPIO/wrapper tuple; `--skip-build`
-  may reuse only that provenance-bound derived assembly, never a relabelled or
+  boot evidence. The repo-managed
+  `out/sel4/profile-v2/pi4-diagnostic` exact-image CYW43 input remains
+  separately coordinated and is not Pi hardware evidence. Exact-image
+  composition treats that canonical tree as immutable input: the image wrapper
+  fingerprints it, creates and validates a fresh disposable Pi profile tree,
+  mutates only the derived tree, and requires the selected tree's full
+  byte/mode/symlink fingerprint plus canonical validation to remain unchanged
+  through final staging. Derived provenance binds both pristine profile stamps
+  and the exact rootserver/CPIO/wrapper tuple; `--skip-build` may reuse only
+  that provenance-bound derived assembly, never a relabelled or
   in-place-mutated canonical profile tree.
 - macOS: FUSE mount coverage is optional unless the MacFUSE runtime is installed and approved (verify `/dev/macfuse0` exists, or `/dev/osxfuse0` on older OSXFUSE).
 - If the host lacks EL2/virtualization support or KVM cannot provide the
@@ -178,227 +270,74 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 - Do not use "last local run" as a baseline. If you need a new baseline,
   preserve the artifact path and update `docs/BENCHMARKS.md` in the same change.
 
-## Execution order
+## Staged and conditional procedures
 Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - Scripted runner (recommended): `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`
 
-### 1) Artifact and fixture integrity
-- `scripts/ci/test_plan_stage_01_integrity.sh`
-- `cargo metadata --locked --no-deps` (the tracked lockfile must resolve without mutation before any Cargo build or test command)
-- `scripts/ci/check_test_plan.sh`
-- If IR/manifest changed:
-  - `scripts/check-generated.sh`
+### Automated Stage 01 — Reusable common-hermetic closure
 
-### 2) Host-side unit/integration tests (fast)
-- `scripts/ci/test_plan_stage_02_host_fast.sh`
-- `cargo test -p coh --features mock`
-- `cargo test -p cohesix-rest`
-- `cargo test -p gpu-bridge-host`
-- `cargo test -p cohsh-core`
-- `cargo test -p cohsh --test ticket_mint`
-- `cargo test -p cohsh --test transcripts`
-- `cargo test -p cohsh --test control_plane`
-- `cargo test -p cohsh --test pooling`
-- `cargo test -p cohsh` (REST transport is enabled by default; use `--no-default-features` to verify minimal builds)
-- `cargo test -p secure9p-core --test session_limits`
-- `cargo check -p swarmui --bin swarmui` (Tauri 2 command/context wiring; SwarmUI keeps the Tauri binary out of Cargo test harnesses)
-- `python3 scripts/ci/check_swarmui_dependencies.py` (default REST projection may use `ureq`; `--no-default-features` must not pull HTTP clients)
-- `cargo test -p swarmui --test dependency_policy`
-- `cargo test -p pi4-driver-abi`
-- `cargo test -p pi4-driver-runtime -- --test-threads=1`
-- `cargo check -p pi4-driver-runtime --target aarch64-unknown-none`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::tests::runtime_`
-- Focused Linux-aligned CYW43 attach/transfer checks:
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib wifi_sdio_pinmux_matches_pi4_dtb_state -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib wifi_sdio_pinmux_readback_rejects_each_wrong_function_or_pull -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_backplane_alp_timing_matches_linux_wall_clock_window -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_backplane_attach_clears_extra_pullups_once_before_chipcommon_window -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_generation_reprobe_trace_clears_extra_pullups_once -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_pullup_clear_consumes_one_retained_turn_with_one_exact_sdio_operation -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_pullup_clear_failure_poison_prevents_same_generation_replay -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_owner_reciprocal_pullup_clear_is_exactly_once_per_generation -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_pullup_clear_crosses_real_runtime_ring_controller_seam_once -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_card_init_uses_linux_command_and_ready_bounds -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_short_busy_timeout_is_post_issue_and_never_retryable -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_function_ready_deadlines_preserve_linux_default_and_f2_window -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_data_tx_never_replays_ambiguous_function2_write -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_wifi_power_sequence_advances_one_bounded_action_per_turn -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_engine_init_turn_withholds_completion_until_pwrseq_terminal -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_generation_reset_keeps_epoch_uncommitted_while_pwrseq_pending -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_retained_bootstrap_cmd52_and_card_commands_issue_once_without_private_polls -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_retained_host_config_runs_recovery_and_set_ios_across_outer_turns -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_retained_external_dma_paces_32_blocks_across_finite_fifo_turns -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_retained_external_dma_moves_full_aperture_as_511_plus_one_blocks -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_retained_external_dma_terminal_fault_cannot_reissue -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_retained_dpc_activation_rearms_one_policy_register_per_outer_turn -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_typed_dpc_activation_publishes_latched_card_int_before_rearm_without_card_io -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib sdio_retained_generation_commit_resets_ring_before_state_and_policy_publication -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib firmware_parent_reciprocal_ring_drives_retained_sdio_owner_as_511_plus_one -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_linked_f2_tx_window_iorx_and_cmd53_each_consume_separate_outer_turns -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_linked_control_and_eapol_tx_retain_pure_begin_until_exact_f2_issue -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib control_and_eapol_tx_cross_reciprocal_ring_and_retained_sdio_owner -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib release_post_f2_crosses_exact_linux_order_to_real_dpc_activation -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib production_dpc_event_drains_real_owner_rx_before_foreground_poll -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib production_control_and_rx_polls_consume_only_dpc_owned_queue -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib firmware_terminal_and_issued_unknown_cuts_never_reissue_a_child -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib stale_foreground_completion_cannot_mutate_replacement_generation -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib mutated_action_fingerprint_poisoning_never_replays_issued_child -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib issued_unknown_timeout_retains_one_child_without_same_generation_replay -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib corrupted_continuation_fingerprint_fences_real_owner_without_second_quantum -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_foreground_baseline_requires_release_published_snapshot -- --test-threads=1`
-  - `cargo test -p pi4-driver-abi --lib cyw43_shared_payload_is_one_exact_backplane_aperture -- --test-threads=1`
-  - `cargo test -p coh-rtc --lib sdio_runtime_requires_exact_linked_dma_resources -- --test-threads=1`
-  - `cargo test -p coh-rtc --lib driver_runtime_policy_requires_exact_cyw43_sdio_shared_aperture -- --test-threads=1`
-  - `cargo test -p coh-rtc --test pi4_profile pi4_uboot_profile_emits_network_policy -- --test-threads=1`
-- Focused bootstrap/restart operator-liveness checks:
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_supervisor_display_status_is_concise_and_machine_record_free -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_hdmi_milestone_uses_a_distinct_later_operator_turn -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib delayed_cyw43_hdmi_fifo_retains_full_queue_and_terminal_release -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib stage_driver_task_shared_payload_uses_published_root_pages -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib clear_driver_task_transport_removes_partial_bootstrap_endpoint -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_first_production_firmware_aperture_is_not_capped_by_nvram_arena -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_supervisor_retry_resets_large_retained_state_in_place -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib production_console_and_wifi_retained_state_fit_one_root_stack_budget -- --test-threads=1`
-  - `cargo test -p pi4-driver-abi --lib cyw43_sdio_bus_link_supports_reciprocal_notification_dpc_descriptors -- --test-threads=1`
-  - `cargo test -p pi4-driver-abi --lib continuation_grant_fits_reserved_command_slot_and_fingerprints_actions -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_service_badges_exclude_the_reserved_root_bit -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib production_loop_routes_idle_and_retained_commands_to_blocking_receive -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib pending_quantum_requires_one_exact_endpoint_rendezvous -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib pending_quantum_coalesced_peer_irq_arbitration_is_fair_and_durable -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib pending_quantum_accepts_only_the_exact_one_way_endpoint_rendezvous -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib pending_command_dpc_arbitration_requires_separate_endpoint_rendezvous -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib reciprocal_sdio_child_submit_and_polls_require_separate_root_rendezvous -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib retained_256_poll_drain_spends_256_root_endpoint_rendezvous -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib continuation_grant_ring_publication_ack_and_aliases_fail_closed -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib continuation_grant_state_and_id_exhaustion_are_fail_closed -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib delegated_pending_quantum_requires_fresh_exact_generation_grants -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib reciprocal_multiphase_child_alternates_poll_grant_and_poll_outer_turns -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib delegated_generation_reset_real_cursor_requires_one_fresh_grant_per_quantum -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib dpc_owned_multiphase_child_uses_real_owner_cursor_and_shared_grants -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_bootstrap_operator_turn -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_one_way_turn_keeps_a_demoted_pi_runtime_schedulable -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_ring_sequence_is_invisible_until_the_dedicated_issue_turn -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_poll_miss_arms_one_endpoint_rendezvous_or_quarantines_the_request -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_priority_lease_identity_rejects_request_fingerprint_and_generation_aliases -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib non_pair_retained_faults_never_request_cyw43_sdio_recovery -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_service_turn_preserves_pending_and_rejects_aliases -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_engine_deadline_poisons_an_issued_request_without_replay -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib sdio_engine_deadline_poisons_an_issued_request_without_replay -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib descriptor_issued_deadlines_poison_both_linked_runtime_generations -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_engine_active_request_requires_the_complete_immutable_fingerprint -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib pre_bundle_pair_recovery_reacquires_firmware_before_continuation -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_maintenance_deadline_poisons_only_an_issued_action -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_turn_status_reports_transitions_and_power_of_two_repeats -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_tx_ -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib ordinary_linked_serial_pump_admits_one_tx_first_operation_per_turn -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib network_dispatch_post_response_flushes_get_separate_service_turns -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib network_dispatch_gets_bounded_post_response_flush -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib network_dispatch_flushes_between_batched_commands -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_network_flush_rejects_replacement_connection -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_data_ready_dispatches_one_command_per_outer_turn -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_post_dispatch_work_is_retained_for_a_later_outer_turn -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_post_dispatch_does_not_spin_through_idle_flush_polls -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib post_dispatch_flush_limit_extends_under_display_pressure -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_serial_backpressure_retains_operator_line_and_prompt -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_serial_saturation_retains_protocol_tail_and_stream_cursor -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib serial_tx_idle_probe_distinguishes_fifo_acceptance_from_wire_drain -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_runtime_resumes_issued_idle_probe_before_later_tx -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib poisoned_linked_tx_keeps_polling_successive_operator_rx -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_rx_terminal_transport_failure_is_not_reported_as_pending -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_tx_idle_terminal_transport_failure_poison_is_idempotent -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_staged_tx_terminal_transport_failure_is_not_backpressure -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib ordinary_linked_dispatch_echoes_buffered_keyboard_without_usb_or_display_turn -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib ordinary_linked_dispatch_routes_arrows_to_echo_before_later_display_phase -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_reboot_waits_until_complete_ack_is_transmitted -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_reboot_poison_fails_closed_without_false_ack_proof -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib linked_cutover_routes_raw_diagnostics_to_queen_log -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_bootstrap_operator_turn_accepts_authenticated_reboot_and_fences_bootstrap -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib continuous_bootstrap_status_cannot_starve_authenticated_reboot -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_keyboard_probe_budget_consumes_one_outer_turn_per_attempt -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_keyboard_probe_restores_prior_polling_policy -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_keyboard_commands_keep_an_immutable_fingerprint -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib prompt_side_display_attach_retries_transient_misses -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_executes_one_operation_per_turn_in_canonical_order -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_every_operation_cut_uses_the_same_outer_fence -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib retained_pair_restart_deadline_failure_fences_before_recovery_mmio -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib recurring_replay_fault_cannot_restart_the_pair_forever_in_one_attempt -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib network_ready_proof_resets_pair_recovery_streak_once_per_generation -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_supervisor_post_up_drain_consumes_256_reciprocal_ring_turns -- --test-threads=1`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib accepted_reboot_blocks_cyw43_bootstrap_until_backend_dispatch -- --test-threads=1`
-- `cargo test -p swarmui --test transcript`
-- `cargo test -p swarmui --test console_parity`
-- `cargo test -p swarmui --test security`
-- `cargo test -p swarmui --test tauri2_config`
-- `cargo test -p host-sidecar-bridge`
-- `cargo test -p host-ticket-agent`
-- `cargo test -p nine-door --test ui_security`
-- `cargo test -p nine-door --test session_state`
-- `pytest tests/test_sel4_profile.py`
-- `pytest tests/test_pi4_image_build.py`
-- `pytest tests/test_pi4_image_identity.py`
-- `pytest tests/test_pi4_wifi_repeatability.py`
-- `pytest tests/test_pi4_trace_normalize.py`
-- `pytest tests/test_pi4_gate_proof.py`
-- `cargo test -p nine-door --test pressure_counters`
-- `cargo test -p nine-door --test schedule_create`
-- `cargo test -p nine-door --test schedule_bounds`
-- `cargo test -p nine-door --test lease_bounds`
-- `cargo test -p nine-door --test policy_ctl`
-- `cargo test -p nine-door --test export_ctl`
-- `cargo test -p nine-door --test telemetry_create`
-- `cargo test -p nine-door --test telemetry_quotas`
-- `cargo test -p nine-door --test telemetry_envelope`
-- `cargo test -p nine-door --test integration`
-- `cargo test -p cohsh-core --test trace`
-- `cargo test -p cohsh --test trace`
-- `cargo test -p swarmui --test trace`
-- `cargo run -p coh --features mock -- doctor --mock`
-- `cargo test -p hive-gateway`
-- `cargo test -p tests`
-- `python3 scripts/ci/check_driver_test_coverage.py`
-- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::rtl8139`
-- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::virtio`
-- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci`
-- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio`
-- `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib ninedoor::tests`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::driver_task_net -- --test-threads=1`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib net::stack`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::poll_io_obeys_driver_task_budget`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::flush_tx_backpressure_does_not_count_as_budget_overrun`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::runtime_serial_write_moves_bytes_without_root_port_pointer`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::runtime_serial_poll_moves_rx_bytes_without_root_port_pointer`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_skips_ready_network_data_poll_for_driver_task_turn`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_defers_buffered_network_console_lines_for_driver_task_turn`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::nettest_reports_wifi_host_eapol_pending_detail`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::netstats_emits_compact_status_line`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::`
-- `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`
-- `cargo test -p sel4-sys --lib`
-- `$REPO/out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate --profile qemu_smp_production --build-dir $REPO/out/sel4/profile-v2/qemu-smp-production --require-source --require-artifacts --for-runtime`
-- `SEL4_BUILD_DIR=$REPO/out/sel4/profile-v2/qemu-smp-production cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu`
-- `SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
-- `CARGO_INCREMENTAL=0 cargo test --workspace --exclude swarmui` (the stage
-  exercises SwarmUI through the explicit binary check and focused tests above;
-  the Tauri binary must stay out of the generic Cargo test harness)
-- Stages 02 and 04 resolve `TP_PYTHON_BIN` (default `python3`) to one canonical absolute executable and require Python 3.11 or newer, matching the Python client contract. Stage 02 uses that executable for its Python policy checks and client matrix. If `pytest` is unavailable, it creates `${TEST_PLAN_STATE_DIR}/.venv`; an existing venv is reused only when its base executable and minimum version match, otherwise it is recreated. Nested login-shell `PATH` changes must not select a different Python in either stage.
-- `python3 -m pytest tools/cohesix-py/tests`
-- `python3 tools/cohesix-py/examples/lease_run.py --mock`
-- `python3 tools/cohesix-py/examples/peft_roundtrip.py --mock`
-- `python3 tools/cohesix-py/examples/telemetry_write_pull.py --mock`
-- `python3 tools/cohesix-py/examples/use_case_playbook.py --playbook mixed-closed-loop-ai-factory --dry-run --mock --no-proc-snapshot --no-host-snapshot --no-push-host-snapshot --out out/test-plan/python-playbooks`
-- Fixture regen (only when needed):
-  - `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
-  - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
-- Explicit scale proof (not part of the fast stage):
-  - `cargo test -p nine-door --features scale-tests --test shard_scale sharded_attach_1k_scale_gate_exports_metrics -- --nocapture`
+Run `scripts/ci/test_plan_stage_01_integrity.sh`. The generated catalog table is
+the sole Stage 01 command inventory; do not replay named tests as filters.
+Stage 01 deliberately runs one complete harness for each distinct configuration:
 
-Stage 02 includes host-safe 1000-worker pressure coverage for Secure9P tag/window/fid churn, `cohsh` session-pool fan-out, localhost TCP framed logical sessions, NineDoor worker namespace listing/telemetry retention, and mixed Pi 4 driver-task ring scheduling under serial/USB/HDMI plus GENET/CYW43 pressure. The local-seat coverage also guards the root-owned HDMI terminal history, prompt/input echo shape, viewport redraw coalescing, and no-reply backpressure policy so stale HDMI payload replay cannot regress behind green host tests. These tests are regression guards for bounded control-plane and scheduling behavior; they are not Pi 4 Wi-Fi/GENET hardware throughput proof and do not replace Stage 03/04 QEMU runs or fresh Pi 4 hardware benchmarks.
+- locked Cargo metadata and generated-contract/catalog integrity;
+- workspace formatting, Clippy, check, and default tests, partitioned so
+  SwarmUI and `pi4-driver-runtime` are not rerun by the workspace action;
+- complete SwarmUI, `coh --features mock`, root-task QEMU, root-task Pi 4,
+  minimal `net-console`, cache-maintenance, and isolated Pi runtime suites;
+- the `aarch64-unknown-none` Pi runtime compile, host dependency/driver policy,
+  Python discovery and examples, and the Rust-risk bootstrap/ratchet.
 
-Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` and `scripts/pi4_gate_proof.sh` tests directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `USB_BLOCKER=usbcmd-run-preserved-reset-bit`, `USB_POST_FIRST_BYTE_BLOCKER=usb-post-first-byte-queue-collapse`, `USB_POST_FIRST_BYTE_BLOCKER=usb-post-first-byte-recovery-failed`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, `WIFI_BLOCKER=ht-clock-timeout`, `BOOT_HALTED=yes`, `PANIC_SEEN=yes`, `PANIC_REASON=bootinfo-snapshot-corrupted`, or `TIMER_IRQ27_SEEN=yes`. For USB and Wi-Fi, `*_GATE` records the last proven gate; `*_BLOCKER` names the failed or blocked next gate when acceptance is not complete. Gate 10 records USB command-ready parser admission, while `USB_FIRST_REPORT_READY`, `USB_LOCAL_SEAT_STATE`, `USB_BUSY_AFTER_READY`, and `USB_POST_FIRST_BYTE_BLOCKER` separately guard local-seat HID proof and sustained keyboard acceptance. `USB_STARTUP_BLOCKER_SEEN` is diagnostic pre-command churn; `USB_ACTIVE_BLOCKER_SEEN` and `USB_RECOVERED_FROM_BLOCKER` are post-ready health evidence and can block perfect local-seat proof. The Pi 4 local-seat driver coverage module is part of Stage 02 because it owns USB keyboard input proof contracts, Caps/Num/Scroll LED bitmaps, post-seal LED-sync enablement, HDMI progress refresh cadence, and Wi-Fi progress suppression while USB boot activity is active.
+Normal harness parallelism is retained. Serialization is limited to the
+stateful root-task feature suites and isolated Pi runtime boundary recorded in
+the catalog. `scripts/ci/check_driver_test_coverage.py` maps the documented
+HAL/driver invariants to those broad suites and fails if the feature or target
+closure drifts. Every catalogued test action enforces a non-zero inventory, so
+a renamed or removed test cannot turn an empty filtered run green.
+
+The Python actions use `scripts/ci/python_test_gate.sh`: a shared virtual
+environment keyed by the canonical Python executable and hashed requirements,
+with exact `pytest`/`pyserial` pins. Repository, client, due-diligence, and
+runner contract tests execute in one pytest process; four mock examples execute
+once in a separate smoke action. A missing Python lane is INCOMPLETE, never
+PASS.
+
+`scripts/check-generated.sh` already invokes `scripts/ci/check_test_plan.sh`,
+so Stage 01 does not repeat that check. Fixture regeneration is intentionally
+outside the normal pass and is allowed only when fixtures change:
+
+- `COHESIX_WRITE_TRACE=1 cargo test -p cohsh --test trace`
+- `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
+
+The explicit NineDoor scale proof remains conditional rather than part of the
+fast common closure:
+
+- `cargo test -p nine-door --features scale-tests --test shard_scale sharded_attach_1k_scale_gate_exports_metrics -- --nocapture`
+
+Stage 01 proves bounded host-model and feature behavior, including the
+catalogued Secure9P, operator-liveness, driver-ring, CYW43/SDIO, GENET, USB,
+HDMI, and scheduling invariants. It does not prove QEMU boot, live Pi hardware,
+RF/DHCP, physical throughput, or image/readback identity. Pi trace normalization,
+image identity, and repeatability remain post-capture hardware workflows under
+Conditional F.
+
+### Automated Stage 02 — Provisioned-target checks
+
+Stage 02 runs only the catalogued checks for the selected target after a fresh
+or imported Stage 01 common-hermetic attestation:
+
+- QEMU profile validation against
+  `out/sel4/profile-v2/qemu-smp-production`, followed by the
+  `release-qemu` AArch64 root-task check.
+- Pi 4 profile validation against
+  `out/sel4/profile-v2/pi4-diagnostic`, followed by the `release-pi4`
+  AArch64 root-task check.
+
+The remaining Pi-specific material in this section defines evidence semantics
+for Conditional F. It is not additional Stage 02 execution and must not cause
+the common host suites to be replayed.
+
+#### Pi 4 post-capture and hardware evidence semantics
 
 CYW43 repeatability is a separate post-capture aggregate gate. Run
 `scripts/pi4_wifi_repeatability.py` with the staged source image, an independently
@@ -1156,7 +1095,7 @@ bytes, and 4 MiB rootfs guard must all pass together; reducing trace capacity,
 aliasing runtime artifacts, or post-link stripping is not an acceptable size
 fix.
 
-Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be inferred from adjacent evidence. `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$HOME/seL4/build_UBOOT" --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel"` writes `out/pi4-sd/pi4-runtime-dma-proof.env` with `PI4_RUNTIME_DMA_PROOF=target-build`, `PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu`, manifest hash, runtime CPIO hash, runtime uImage hash, staged image hash, and the hash of `pi4-image-identity.json`; this proves source freshness, packaging, and exact legacy-image identity only. Under Milestone 26d, that external Pi build tree must validate independently as a `pi4_diagnostic` seL4 15.0.0 `bcm2711` profile with pinned source/build-input evidence, `KernelRootCNodeSizeBits=14`, `KernelArmExportVCNTUser=ON`, physical counter/timer-control exports off, `TIMER_CLOCK_HZ=54000000`, and no retained one-domain `KernelDomainSchedule` cache entry. The 14-bit root CNode is required for the bounded capability inventory of the linked-runtime images and isolated framebuffer mapping; a 13-bit external Pi tree is stale and cannot satisfy image or hardware proof. The static `out/sel4/profile-v2/pi4-diagnostic` PASS proves only the canonical configuration/artifact contract and cannot substitute for the external tree, staged/read-back image identity, boot, Wi-Fi, TCP/`cohsh`, or benchmark lanes. The image wrapper must reject legacy or ambient CMake configuration and non-canonical host `mkimage` tools rather than silently reconfiguring the tree. `scripts/pi4_trace_normalize.py --gate-summary` emits `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER`, and `PI4_RUNTIME_DMA_PROOF=absent`, `diagnostic`, `qemu-or-stale-log`, or `fresh-pi` from serial evidence. `scripts/pi4_gate_proof.sh --require-driver-task-proof --runtime-dma-proof-out out/test-plan/<run-id>/pi4-runtime-dma-proof.env` writes the live proof bundle only after normalization passes. Only `fresh-pi` counts as live hardware runtime/DMA proof, and it requires driver-task dedicated readiness, cap/fault/revoke/scheduling/affinity proof, isolated VSpace, pointer-free IPC, per-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no`, sealed descriptor version/hash/identity proof for every active hot path, sealed bus-link proof for USB and CYW43 split clients, per-hot-path `DRIVER_TASK_DMA_PROOF` with bounded no-IOMMU profile and cache/bus-address policy, aggregate `DRIVER_TASK_DMA_BLOCKER=none`, no compatibility service roles, no unresolved ring timeouts/deferred bootstrap, no resource blockers, a fresh Pi cold-boot marker, and a live prompt. Raw `DRIVER_TASK_RING_CALL_TIMEOUT` events remain diagnostic, but `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT` must be `0` after later return proof closes any bounded keep-active turn. It also emits `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified` only when `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, and at least one valid `DRIVER_TASK_COUNTER` snapshot with `DRIVER_TASK_COUNTER_INVALID=0` are present.
+Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be inferred from adjacent evidence. `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel"` writes `out/pi4-sd/pi4-runtime-dma-proof.env` with `PI4_RUNTIME_DMA_PROOF=target-build`, `PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu`, manifest hash, runtime CPIO hash, runtime uImage hash, staged image hash, and the hash of `pi4-image-identity.json`; this proves source freshness, packaging, and exact legacy-image identity only. Under Milestone 26d, that Pi build tree must validate independently as a `pi4_diagnostic` seL4 16.0.0 `bcm2711` profile with pinned source/build-input evidence, `KernelRootCNodeSizeBits=14`, `KernelArmExportVCNTUser=ON`, physical counter/timer-control exports off, `TIMER_CLOCK_HZ=54000000`, and no retained one-domain `KernelDomainSchedule` cache entry. The 14-bit root CNode is required for the bounded capability inventory of the linked-runtime images and isolated framebuffer mapping; a 13-bit external Pi tree is stale and cannot satisfy image or hardware proof. The static `out/sel4/profile-v2/pi4-diagnostic` PASS proves only the canonical configuration/artifact contract and cannot substitute for the staged/read-back image identity, boot, Wi-Fi, TCP/`cohsh`, or benchmark lanes. The image wrapper must reject legacy or ambient CMake configuration and non-canonical host `mkimage` tools rather than silently reconfiguring the tree. `scripts/pi4_trace_normalize.py --gate-summary` emits `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER`, and `PI4_RUNTIME_DMA_PROOF=absent`, `diagnostic`, `qemu-or-stale-log`, or `fresh-pi` from serial evidence. `scripts/pi4_gate_proof.sh --require-driver-task-proof --runtime-dma-proof-out out/test-plan/<run-id>/pi4-runtime-dma-proof.env` writes the live proof bundle only after normalization passes. Only `fresh-pi` counts as live hardware runtime/DMA proof, and it requires driver-task dedicated readiness, cap/fault/revoke/scheduling/affinity proof, isolated VSpace, pointer-free IPC, per-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no`, sealed descriptor version/hash/identity proof for every active hot path, sealed bus-link proof for USB and CYW43 split clients, per-hot-path `DRIVER_TASK_DMA_PROOF` with bounded no-IOMMU profile and cache/bus-address policy, aggregate `DRIVER_TASK_DMA_BLOCKER=none`, no compatibility service roles, no unresolved ring timeouts/deferred bootstrap, no resource blockers, a fresh Pi cold-boot marker, and a live prompt. Raw `DRIVER_TASK_RING_CALL_TIMEOUT` events remain diagnostic, but `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT` must be `0` after later return proof closes any bounded keep-active turn. It also emits `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified` only when `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, and at least one valid `DRIVER_TASK_COUNTER` snapshot with `DRIVER_TASK_COUNTER_INVALID=0` are present.
 
 The isolated runtime engines contain production service turns for serial mini-UART init/RX/TX, HDMI framebuffer rendering, PCIe MMIO turns, direct-root-port xHCI boot-keyboard polling, GENET MDIO/MAC/RX/TX rings, CYW43 shared-control SDPCM command records, and SDIO fixed-layout CMD52/CMD53/POLL_IRQ service turns. Physical Pi root starts each isolated runtime with `TCB.WriteRegisters(resume=1)` at a shell-safe bootstrap priority while preserving the contract MCP; roles outside the deferred Wi-Fi pair keep their existing profile-specific priority transition. Deferred CYW43 and SDIO remain at bootstrap priority `255` through prompt publication, owner-first descriptor and engine replay, firmware/control-context replay, and control-plane readiness; the supervisor proves SDIO first, then CYW43, and only then lowers SDIO and CYW43 in two separate outer turns. A linked serial runtime cuts over after its descriptor/init/owner-state path plus a valid service completion; RX-byte proof remains separate. Root may emit `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` so an unproved child cannot starve the root shell. Captures may show SDIO host, PCIe root, GENET, and CYW43 `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` lines before the prompt; those markers are acceptable only as shell-preserving fail-closed evidence, and the retained descriptor must later replay with `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=resumed owner=linked-runtime proof_effect=deferred-proof-retry-enabled` before matching call/return service proof can close SDIO, PCIe, or network acceptance. Wi-Fi descriptor replay is prompt-safe: when physical Pi pointer-free IPC proof and linked serial service proof are present, root emits `[net-console] deferred resume scheduled reason=driver-startup-before-root-prompt action=publish-prompt-then-supervise`, publishes the serial `cohesix>` prompt, and then starts the persistent SDIO/CYW43 bootstrap supervisor. HDMI reports startup and concise Wi-Fi milestones during this episode but withholds its interactive ready banner and prompt until a terminal `ready`, `exhausted`, or `permanent` milestone has reached the display FIFO and USB command admission is proven. Each episode emits `CYW43_BOOTSTRAP_SUPERVISOR attempt=<n> status=begin|recovery|backoff|ready|exhausted ... recovery=full telemetry_sinks=serial+qlog+hdmi`; it admits at most five attempts with `1/2/4/8` second backoffs. A fifth retryable failure emits `status=exhausted backoff_ms=0`, admits no automatic sixth attempt, and returns to the ordinary EventPump so diagnostics, authentication, and reboot remain responsive while Wi-Fi stays acceptance-red. If linked serial service is absent, the supervisor stays at the root console and reports `attempt=0 status=preflight serial=blocked`. Once both linked-runtime restart contexts exist, every retry must perform the complete fenced pair restart and retained firmware/control replay before ordinary network construction continues. A no-reply runtime must emit `DRIVER_TASK_RING_CALL_TIMEOUT` and `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=pending owner=linked-runtime action=serial-shell proof_effect=acceptance-red-until-replayed`; the supervisor may retry only after another ordinary serial/local-seat event-pump turn and the elapsed backoff. If pointer-free proof is absent, root must emit `[net-console] deferred resume skipped reason=driver-task-net-runtime-unproved action=serial-diagnostics-only`, preserve serial diagnostics, and leave Wi-Fi acceptance red until an explicit diagnostic command retries the failed stage. Physical Pi local-seat captures must show HDMI as an independent display sink without making it a pre-prompt serial dependency: the framebuffer hint must be available before driver-task bootstrap, and after EventPump construction each `hdmi-text` descriptor/attach step and pending-frame service must consume one retained `Display` outer turn. Attach and frame submission cannot share a turn, and a successful attach schedules its canonical viewport snapshot only once. High-impact supervisor records may retain an HDMI mirror only after the Wi-Fi HAL guard is released; the mirror must wait for a later `Display` turn and restore any open prompt plus typed row with a bounded carriage-return/erase-line update rather than closing it or restarting a full viewport redraw. A no-reply HDMI render path is display-red evidence and must emit `DRIVER_TASK_RING_CALL_TIMEOUT`, but it must not prevent `cohesix>` from becoming responsive on UART. No HAL-mapped framebuffer diagnostic mirror is allowed; HDMI output must come from the isolated `hdmi-text` runtime only. Before linked-serial cutover, raw UART remains the boot log; after cutover, the serial child is the sole physical UART owner, root diagnostics are authoritative in `/log/queen.log`, and operator output may reach UART only through the linked reciprocal ring. Before EventPump construction, the current synchronous PCIe HAL prerequisite runs only as local bookkeeping and authority setup for the USB cursor. It cannot construct a root-owned steady USB backend or authorize combined later work, and missing proof leaves USB attach blocked at the PCIe prerequisite. After the serial `cohesix>` prompt, local-seat must defer if the USB runtime already has an active command, emit one `prompt-settle attach deferred reason=usb-runtime-active` summary, and retry after the normal quiet window; PCIe descriptor replay, USB init, enumeration, and keyboard report service then advance as retained one-action `LocalSeat` outer turns. While a Wi-Fi HAL scope is held, local-seat service is buffered-only: it must not poll USB, re-enter HDMI or echo, or start network work. It must then advance HID discovery only through the explicit keyboard-enumeration aux while ordinary background polls report the current frontier without re-entering enumeration. No-reply background USB polls must produce `DRIVER_TASK_RING_CALL_TIMEOUT` plus `[local-seat] isolated USB runtime keyboard poll suspended contract=usb-local-seat source=linked-runtime reason=driver-task-no-reply action=serial-shell` rather than repeated blocking `usb-local-seat` calls. `usb probe-kbd` must retain its bounded keyboard-enumeration cursor and must not replay the whole isolated local-seat attach/init chain; each attempt consumes one later `LocalSeat` outer turn and is permitted only while the child USB enumeration marker advances, stopping at the finite cap, keyboard readiness, or no new marker. Root-console startup must emit UART-visible `[mark] root-console.start.begin`, publish `cohesix>` after bounded non-Wi-Fi driver startup settles or fails closed, and emit `[mark] root-console.start.ok` before persistent Wi-Fi bootstrap, `/log/queen.log`, or NineDoor log-stream handoff; host-EAPOL, association, DHCP, and retry backoff cannot hold the serial shell hostage. Once `cohesix>` is published and USB polling is armed, serial UART and USB keyboard input must both feed the shared parser concurrently after USB proof succeeds; during a Wi-Fi HAL turn local-seat dispatch remains buffered and command-fenced even though HDMI has not yet claimed interactive readiness. Steady physical Pi root submits serial/network service turns through bounded ring calls; HDMI submits are limited to high-impact progress lines, while init, deferred-resume, timeout, and proof turns retain bounded diagnostics and may enqueue linked-UART breadcrumbs. USB keyboard auto-poll uses bounded nonblocking sends until the runtime proves it can reply without risking serial. The isolated runtime `_start` entry must preserve root's task key, install the mapped driver-local IPC buffer before receiving commands, skip `Reply` for commands marked with the one-way flag, and emit replies only for call-delivered commands. Hardware captures should show `DRIVER_TASK_RING_CALL_BEGIN` and the matching `DRIVER_TASK_RING_CALL_RETURN` for init/deferred-resume/proof turns; routine steady console data turns may be suppressed to keep interactive serial latency bounded. Any `DRIVER_TASK_RING_CALL_TIMEOUT` or positive `DRIVER_TASK_BOOTSTRAP_DEFERRED` keeps driver-task acceptance red until later service proof closes it. A role boolean is credited only from a line proving both `live_tcb=yes` and `hot_path=dedicated`; static contract isolation, callback-pointer live-TCB service turns, shared-root ring service turns, runtime-image declarations, runtime-region mapping, runtime-image smoke loops, runtime-init descriptor commands, and any ring command marked root-context or init-descriptor non-acceptance are diagnostic until the driver state boundary is owned by an isolated ring-backed task, VSpace proof is `yes`, pointer-free IPC is `yes`, and `owner_state=driver-owned` is present. Pre-root bootstrap turns, including the serial bootstrap reply proof, must not sample timer registers. Later ring latency telemetry may sample the EL0 virtual counter only when the profile enables `timers-arch-counter`; dummy-timer Pi captures must suppress latency proof rather than reading CNT registers.
 
@@ -1241,10 +1180,9 @@ watermark, `DEVICE_CTL` read-modify-write adding `F2WM`, `MESBUSYCTRL`,
 `FORCE_HT`. It must prove one controller operation per outer turn, preservation
 of unrelated read-modify-write bits, stale/cached completion isolation, and no
 controller reissue when a fresh pending turn replays only the cached completed
-prefix. Run the focused production-chain coverage with:
-
-- `cargo test -p pi4-driver-runtime --lib dpc_backplane_write32_is_one_atomic_incrementing_cmd53 -- --test-threads=1`
-- `cargo test -p pi4-driver-runtime --lib release_post_f2_phases_issue_one_linux_ordered_operation_each -- --test-threads=1`
+prefix. The complete catalogued Pi runtime suite covers the atomic DPC
+word-write and Linux-ordered post-F2 production-chain invariants; do not replay
+those tests as name filters.
 
 The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; hardware captures must show `DRIVER_TASK_BOOT ... contract=bcmgenet-v5 ... affinity_core=3` and `DRIVER_TASK_BOOT ... contract=cyw43455 ... affinity_core=3` before claiming fourth-core driver placement. Physical Pi owner-state boots apply `seL4_TCB_SetAffinity` directly to each driver child TCB. That is distinct from the root-authority affinity wrapper used around in-process NineDoor and Worker-model operations; neither NineDoor nor a general Worker has a separate TCB in the current profile. Any `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence and must fail placement proof. Captures may still emit `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`; that keeps notification lifecycle proof red while allowing endpoint-backed command-ring startup to proceed. QEMU virtio compatibility boots may prove isolated VSpace/ASID allocation, runtime-image transport-region mapping, and pointer-free ring transport after virtio networking is online, but that is transport-substrate evidence only. Fresh Pi hardware proof is still required before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest isolated-driver hardware acceptance.
 
@@ -1252,12 +1190,33 @@ Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CY
 
 Current Wi-Fi acceptance also requires one exact `CYW43_SDIO_DPC generation=<n> captures=<n> published=<n> consumed=<n> rearms=<n> overruns=<n> epoch_errors=<n> sequence_errors=<n> ack_failures=<n> poisoned=yes|no masked=yes|no` diagnostic in the current boot slice and `WIFI_DPC_PROOF=yes` from `scripts/pi4_trace_normalize.py --gate-summary`. `wifi diag` emits this line only after a stable, valid read of the admitted SDIO owner ring and a same-generation v10 CYW43 client-counter sample. The v10 `rearms` value counts the real owner-notification publications; the older source-asserted-empty episode counter remains separate and cannot satisfy Gate 10. Acceptance fails closed with `WIFI_DPC_REASON=no-activity` unless the current exact proof has both `captures > 0` and `published > 0`; it also fails when the line is missing, poisoned, or masked, any overrun/epoch/sequence/ack failure is nonzero, captured and published totals differ, consumed and published totals differ, or the final IRQ service state is unrearmed. Exploratory summaries and wired-only historical evidence remain readable without this Wi-Fi-only proof.
 
-### 3) QEMU boot + TCP console baseline
+### Automated Stage 03 — QEMU or Pi transport regression
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`
 - Stage 03 sets resilient defaults for clean hosts: `TP_STAGE3_READY_TIMEOUT=900`, `TP_STAGE3_PORT_TIMEOUT=60`, `TP_STAGE3_AUTH_READY_TIMEOUT=120`, `TP_STAGE3_QUIT_CLOSE_TIMEOUT=60` (override as needed).
-- `scripts/cohsh/run_regression_batch.sh` keeps Cargo build cache by default; set `COHSH_BATCH_CLEAN_TARGET=1` only for deliberate clean-rebuild validation.
-- `scripts/cohsh/run_regression_batch.sh` defaults to `COHSH_BATCH_TARGET=qemu`, boots fresh QEMU instances for the base, telemetry, shard, and gated groups, and is invoked by stage 03.
+- `scripts/cohsh/run_regression_batch.sh` builds one immutable artifact for the
+  default manifest and one for the gated manifest. Base, telemetry, and shard
+  groups reuse the default artifact bytes; every group still receives a fresh
+  QEMU boot.
+- The batch snapshots generated projections and restores them in an EXIT trap,
+  including failure and interrupt paths. Each artifact and boot result has a
+  machine-readable source/profile/manifest/image/action/log binding.
 - Pi 4 hardware bring-up uses the same official runner against an already-booted TCP console: `COHSH_BATCH_TARGET=pi4 COHSH_TCP_HOST=<pi4-ip> COHSH_TCP_PORT=31337 scripts/cohsh/run_regression_batch.sh`. Pi mode archives a full per-script ledger, runs lifecycle resume before/after groups and scripts, continues after failures by default, and writes a unique `out/regression-logs/pi4-full-<utc>/summary.log` unless `COHSH_LOG_ROOT` is set.
+- Before the staged Pi 4 transport run, create its source/boot/image/endpoint
+  binding and pass the result as `TEST_PLAN_TARGET_EVIDENCE_FILE`:
+  ```sh
+  source_digest="$(scripts/ci/qemu_artifact.py source-digest --repo-root .)"
+  scripts/ci/qemu_artifact.py record-pi4-evidence \
+    --output out/test-plan/<run-id>/pi4-target-evidence.json \
+    --source-digest "${source_digest}" \
+    --boot-id <fresh-boot-id> \
+    --image-identity sha256:<staged-image-sha256> \
+    --target-host <pi-host> \
+    --gateway-url http://<gateway-host>:<port>
+  ```
+  Use `--gateway-target-host <gateway-host>` instead when the public URL is
+  recorded separately. This caller-declared record prevents accidental target
+  switching during Stages 03/04; it cannot independently detect a reboot or
+  backend replacement and is transport evidence, not Pi hardware acceptance.
 - Stage 03 archives per-script logs under the stage state dir (for example `out/test-plan/<run-id>/qemu-regression-logs/`).
 - Manual runs of `scripts/cohsh/run_regression_batch.sh` default to `out/regression-logs/` unless `COHSH_LOG_ROOT` is set.
 - Focused Stage 03 iteration may use `COHSH_BATCH_GROUPS=base`,
@@ -1279,7 +1238,7 @@ Start QEMU (source tree or bundle), then verify:
   - No unexpected `ERR` lines or reconnect loops.
   - ACK/ERR/END ordering stable.
 
-### 4) TCP reliability & performance (QEMU)
+### Conditional A — TCP reliability smoke
 Stage 04 is self-contained for local QEMU. If no `COHESIX_GATEWAY_URL`
 (`HIVE_GATEWAY_URL`, `COHSH_REST_URL`, or `COH_REST_URL`) is supplied, the stage
 boots a local QEMU instance, starts `hive-gateway` against that TCP console, and
@@ -1289,16 +1248,18 @@ by default; override the local bind/port with `TP_STAGE4_GATEWAY_BIND` and
 external-gateway path and requires
 `HIVE_GATEWAY_REQUEST_AUTH_TOKEN` (`COHSH_REST_AUTH_TOKEN` or
 `COH_REST_AUTH_TOKEN`). Stage 04 uses the same canonical absolute Python 3.11+
-selection contract as Stage 02 for its local probes and `cohesix-py` REST smoke.
+selection contract as Stage 01 for its local probes and `cohesix-py` REST smoke.
 
 Run while QEMU is up:
 - Repeat `tcp-diag` 5–10 times and record results (example: `... | tee logs/tcp-diag.log`).
 - Run `pool bench path=/log/queen.log ops=500 batch=8 payload_bytes=64` and record throughput/latency (example: `... | tee logs/pool-bench.log`).
-- Reasonable acceptance:
+- Functional smoke acceptance:
   - `tcp-diag` has zero failures.
-  - `pool bench` shows non-zero throughput and stable latency.
-  - Any performance regression claim must be backed by reviewable baseline
-    artifacts and indexed in `docs/BENCHMARKS.md` when applicable; do not
+  - `pool bench` completes with non-zero operations. This is a liveness smoke,
+    not a performance claim.
+  - The `performance` tier is qualified only by Conditional D's explicit
+    no-retry matrix and numeric error budget. Any regression claim also needs
+    reviewable baseline artifacts indexed in `docs/BENCHMARKS.md`; never
     compare against unpublished local runs.
 - Capture logs:
   - cohsh: `logs/cohsh-session.log`
@@ -1311,7 +1272,7 @@ Run while QEMU is up:
 - Acceptable disconnects: explicit `quit` or EOF; anything else is a defect.
 - `audit tcp.flush.blocked` lines before any client connects are expected; do not treat them as failures.
 
-### 5) Host tools integration (QEMU running)
+### Conditional B — Host tools integration
 - QEMU log correlation (required):
   - Record a short note per tool in `logs/host-tool-runs.md` with start/stop time and tool name.
   - In the QEMU log, locate matching `audit tcp.conn.open`/`audit tcp.conn.close` lines for the same window.
@@ -1388,7 +1349,7 @@ Run while QEMU is up:
   - `./bin/host-ticket-agent --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --run-once`
   - REST mode (gateway required): `./bin/host-ticket-agent --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --run-once`
 
-### 5a) Mandatory control-ticket matrix (Milestone 25g)
+### Conditional B1 — Control-ticket matrix (Milestone 25g)
 All runs are required unless explicitly marked `NA` by platform constraints.
 - Ticket namespace and bounds:
   - Append valid ticket JSONL to `/host/tickets/spec`; verify success.
@@ -1514,7 +1475,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 
 #### 5) CI Positioning
 - Runs **after** `.coh` scripts and the regression pack.
-- **Blocking (mandatory):** replay-mode UI tests (snapshot + transcript parity + Live Hive UX + performance harness).
+- **Blocking for the `ui` claim:** replay-mode UI tests (snapshot + transcript parity + Live Hive UX + performance harness).
 - **Warn-only:** live-mode smoke checks.
 
 **Playwright commands (macOS ARM64):**
@@ -1535,9 +1496,15 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - Browser binaries are installed into the user Playwright cache (not committed).
 - Snapshot coverage runs against the current browser matrix: `webkit-desktop` (baseline shell), `webkit-narrow` (responsive shell and scheduler), and `chromium-tablet` (interaction parity without snapshot gating).
 
-### 6) Regression pack (full-stack, recommended before release)
-- `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` (self-contained local QEMU by default; set `COHESIX_GATEWAY_URL` or equivalent to target an already running gateway)
+### Automated Stage 04 — REST multiplexer regression
+- In a staged QEMU run,
+  `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` verifies and reuses the
+  Stage 03 default artifact, then starts a fresh boot. Standalone Stage 04 may
+  build its own canonical artifact. Set `COHESIX_GATEWAY_URL` or equivalent to
+  target an existing gateway.
 - `COHESIX_GATEWAY_URL=http://<gateway-host>:<port> HIVE_GATEWAY_REQUEST_AUTH_TOKEN=<token> scripts/cohsh/REST_regression_batch.sh`
+- Pass the token through the inherited environment. The runner records a
+  redacted command and must not place the token value in retained logs.
 - Stage 04 runs two REST batches:
   - A concurrent "core" batch (boot/proc/pool coverage): `scripts/cohsh/boot_v0.coh`, `scripts/cohsh/observe_watch.coh`, `scripts/cohsh/session_pool.coh`.
   - A strict "parity" batch (control-plane smoke): `scripts/cohsh/rest_control_plane_smoke.coh`.
@@ -1549,15 +1516,17 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - Verify logs show no unexpected errors or disconnects.
 - From Milestone 25 onward, use the REST batch above; the TCP/QEMU batch remains a local bring-up tool only.
 
-### 6a) SMP parity (Milestone 25+)
+### Conditional C — SMP parity (Milestone 25+)
 - Boot QEMU with a single core: `COHESIX_QEMU_SMP=1 scripts/cohesix-build-run.sh --transport tcp`
 - Run `./cohsh --transport tcp --tcp-port 31337 --script scripts/cohsh/smp_parity.coh > out/smp_parity_1.txt`
 - Reboot QEMU with multiple cores (match the SMP kernel build): `COHESIX_QEMU_SMP=4 scripts/cohesix-build-run.sh --transport tcp`
 - Run `./cohsh --transport tcp --tcp-port 31337 --script scripts/cohsh/smp_parity.coh > out/smp_parity_4.txt`
 - Compare transcripts: `diff -u out/smp_parity_1.txt out/smp_parity_4.txt` (must be byte-identical).
 
-### 6b) Gateway large-telemetry reliability gate (Milestone 25f, mandatory)
-Run this matrix with `hive-gateway` attached and **no retry paths**. These runs are required both locally and on the G5g host.
+### Conditional D — Gateway large-telemetry reliability (Milestone 25f)
+When the `performance` claim is selected, run this matrix with `hive-gateway`
+attached and **no retry paths**. Qualification requires both the local and G5g
+evidence named by the active milestone.
 - `python3 scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01`
 - `python3 scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01`
 - `python3 scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01`
@@ -1574,8 +1543,10 @@ Failure policy:
 - Do not use retry flags or ad-hoc rerun wrappers to mask failures; tune/fix code and re-run the same matrix.
 - On slower physical targets, keep `--ready-timeout-secs` greater than the gateway broker response timeout and pass explicit harness overrides such as `--gateway-broker-control-response-timeout-ms 120000 --gateway-broker-telemetry-response-timeout-ms 120000` rather than lowering the error budget or enabling retries.
 
-### 6c) Multi-hive federation relay gate (Milestone 25h, mandatory)
-Run this matrix with three independent hives (`hive-a`, `hive-b`, `hive-c`) and one `host-ticket-agent --relay` per hive.
+### Conditional E — Multi-hive federation relay (Milestone 25h)
+When the `federation` claim is selected, run this matrix with three independent
+hives (`hive-a`, `hive-b`, `hive-c`) and one `host-ticket-agent --relay` per
+hive.
 
 Required checks:
 - Relay success path:
@@ -1605,31 +1576,15 @@ Pass criteria:
 - No ACK/ERR/END grammar drift versus existing fixtures.
 - Any failed mandatory federation check is release-blocking.
 
-### 6d) Pi 4 DHCP + U-Boot policy compatibility and reopened driver-task proof (Milestones 26a/26b)
+### Conditional F — Pi 4 hardware acceptance (Milestones 26a/26b)
 Run this matrix in addition to the staged runner when Milestone 26a or 26b files change. Older checked-in M26B Wi-Fi/DHCP captures prove the retained compatibility baseline only; reopened 26a/26b closure additionally requires fresh USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load plus the driver-task scheduling fields below.
 
-- Compiler + docs gate:
-  - `cargo test -p coh-rtc`
-  - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
-- Host DHCP/policy gate:
-  - `cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture`
-  - Confirms the bounded DHCP core plus runtime policy override plumbing without changing QEMU grammar.
-- Driver hot-path budget gate:
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib log_buffer::tests::cursor_reads_retained_lines_in_order_across_batches`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::cat_queen_log_streams_full_payload_after_ack`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::tail_queen_log_honors_default_and_requested_line_counts`
-  - `cargo test -p cohsh --lib log_dump`
-  - `cargo test -p swarmui --test log_dump`
-  - `python3 -m pytest -q tests/test_rest_perf_harness.py`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib wired_nic_steady_dataplane_trace_is_suppressed_for_benchmarks`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_driver_task_firmware_ready_is_not_dhcp_ready`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_data_tx_is_credit_gated_and_preserves_sequence_on_no_credit -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_control_tx_is_credit_gated_and_preserves_sequence_on_no_credit -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib cyw43_rx_queue_removes_matching_channel_without_reordering_data -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib genet_rx_drain_budget_caps_one_service_turn -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib genet_tx_completion_reclaim_budget_caps_one_service_turn -- --test-threads=1`
-  - `cargo test -p pi4-driver-runtime --lib genet_service_reports_budget_exhaustion_before_dataplane_work -- --test-threads=1`
-  - Confirms routine wired NIC ring traces are suppressed during benchmark-mode dataplane turns, runtime CYW43 data TX is credit-admitted instead of spin-wait admitted, Wi-Fi DHCP/data release still requires secure carrier, and GENET service turns stay budget-capped while dedicated task proof is pending.
+- Require the exact Stage 01 common-hermetic attestation instead of rerunning
+  compiler, generated-contract, DHCP, log-dump, CYW43, or GENET name filters.
+  Its broad suites cover bounded DHCP policy, log streaming, suppressed
+  benchmark traces, credit-gated CYW43 TX/RX ordering, and GENET service
+  budgets. Conditional F adds only image, boot, capture, repeatability, and
+  live-hardware proof.
 - Pi 4 image / U-Boot gate:
   - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
   - `scripts/uboot/qemu-uboot-smoke.sh --net user`
@@ -1667,7 +1622,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no` and `USB_COLD_BOOT_SEEN=yes`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
     - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, and `USB_BUSY_AFTER_READY=no`, and hardware acceptance also reaches `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none` for the isolated hub-keyboard sequence before claiming the local-seat keyboard experience is complete. The first HID report and first byte must be sourced from `linked-runtime-hid`; parser ingress reported as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic only. A printable-key line such as `runtime keyboard first-printable-byte ...` remains required user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply/runtime-skipped pressure during typing, arrow-history, and lock-key bursts.
     - if the attached keyboard exposes lock LEDs, Caps Lock, Num Lock, and Scroll Lock testing either proves the preallocated EP0 OUT DMA path (`xhci-control-out-prealloc` plus `pi4 keyboard led sync ready ...`) or cleanly logs `keyboard led sync unavailable ... action=disabled` without blocking input.
-    - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at parser ingress on the live prompt row, boot/progress messages refreshing at the documented 5-10 s cadence, and new output scrolling the isolated HDMI viewport like a serial terminal without full-screen blink. On deferred Wi-Fi boots the HDMI ready banner and prompt must follow the terminal supervisor milestone and USB command-ready proof; preflight may report diagnostics available but must not claim Wi-Fi or interactive-console readiness. The first attached viewport snapshot is one-shot, and asynchronous driver milestones arriving during a partial command must use the bounded row-preserving update and restore the exact prompt, typed bytes, backspace floor, and cursor. USB up/down arrow escape sequences navigate the bounded root-owned HDMI history and trigger cursor-home redraws from canonical scrollback; redraws must use the framebuffer-derived safe-area row count even when the payload spans multiple bounded HDMI service turns. Each rendered row must use clear-to-end-of-line and the final chunk must use clear-to-end so framebuffer-derived wide modes cannot retain stale text on the right or below the viewport. Redraws must leave the cursor at the real end of the prompt/input text, not after padding spaces, and overflow recovery must not collapse into a stale or jumbled top-of-screen block. Arrow bytes must not enter the command parser or starve ordinary keyboard bytes. Linked HDMI submit misses, ring busy states, and queue backpressure must coalesce to one pending canonical redraw and supersede stale queued bytes rather than replaying raw payload tails; a capture with repeated `hdmi-text` no-reply growth, saturated `pending_bytes`, or jumbled/repeated screen content is not HDMI acceptance even if USB reaches Gate 10. Stage 02 driver coverage guards the cadence constants, serial runtime ring RX/TX turns, HDMI prompt/input/history/no-reply behavior, and Wi-Fi progress suppression during USB boot activity and after USB first-byte proof. Pi 4 manifest-default boots must use `hw.local_seat.enabled=true`, `hw.local_seat.required=true`, and matching `usb-kbd0`/`hdmi0` `hw.devices[] required=true` declarations so missing declared devices fail visibly. Runtime backend attach failures may degrade with `required=yes action=serial-shell`; that keeps the UART root shell reachable but does not satisfy HDMI/USB acceptance.
+    - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at parser ingress on the live prompt row, boot/progress messages refreshing at the documented 5-10 s cadence, and new output scrolling the isolated HDMI viewport like a serial terminal without full-screen blink. On deferred Wi-Fi boots the HDMI ready banner and prompt must follow the terminal supervisor milestone and USB command-ready proof; preflight may report diagnostics available but must not claim Wi-Fi or interactive-console readiness. The first attached viewport snapshot is one-shot, and asynchronous driver milestones arriving during a partial command must use the bounded row-preserving update and restore the exact prompt, typed bytes, backspace floor, and cursor. USB up/down arrow escape sequences navigate the bounded root-owned HDMI history and trigger cursor-home redraws from canonical scrollback; redraws must use the framebuffer-derived safe-area row count even when the payload spans multiple bounded HDMI service turns. Each rendered row must use clear-to-end-of-line and the final chunk must use clear-to-end so framebuffer-derived wide modes cannot retain stale text on the right or below the viewport. Redraws must leave the cursor at the real end of the prompt/input text, not after padding spaces, and overflow recovery must not collapse into a stale or jumbled top-of-screen block. Arrow bytes must not enter the command parser or starve ordinary keyboard bytes. Linked HDMI submit misses, ring busy states, and queue backpressure must coalesce to one pending canonical redraw and supersede stale queued bytes rather than replaying raw payload tails; a capture with repeated `hdmi-text` no-reply growth, saturated `pending_bytes`, or jumbled/repeated screen content is not HDMI acceptance even if USB reaches Gate 10. Stage 01 driver coverage guards the cadence constants, serial runtime ring RX/TX turns, HDMI prompt/input/history/no-reply behavior, and Wi-Fi progress suppression during USB boot activity and after USB first-byte proof. Pi 4 manifest-default boots must use `hw.local_seat.enabled=true`, `hw.local_seat.required=true`, and matching `usb-kbd0`/`hdmi0` `hw.devices[] required=true` declarations so missing declared devices fail visibly. Runtime backend attach failures may degrade with `required=yes action=serial-shell`; that keeps the UART root shell reachable but does not satisfy HDMI/USB acceptance.
   - `netstats` must report:
     - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`; the normalizer exposes the selected state as `NET_ACTIVE`, `NET_ADDR_SRC`, and `NET_DHCP`, and separately exposes command/listener proof as `NET_TCP_READY` and `NETTEST_PROOF`.
     - `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`; on CYW43, `tx_complete` is credit-backed SDPCM completion proof and `tx_submit > tx_complete` is a Wi-Fi TX credit anomaly until host TCP/cohsh evidence proves the path recovered.
@@ -1685,31 +1640,38 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - `detail=policy-disabled` or `detail=selftest-disabled` when the profile/runtime disables self-test
   - explicit `wifi` now supports both `static` and `dhcp` through the HAL-backed CYW43455 path; `auto` remains DHCP-only and single-active-interface. On the physical driver-task profile, bounded credentials select CYW43 and selected-CYW43 attach/join/runtime failure is fatal driver evidence rather than wired fallback; QEMU/host compatibility profiles may retain absent-device fallback coverage. Final 26b compatibility evidence still requires Pi 4 hardware captures proving join + DHCP and documenting which fallback profile, if any, was exercised.
 
-### 7) Release bundle validation (macOS + Ubuntu)
-Run Sections 3–5 using the extracted bundle in a clean temp directory (not the repo checkout).
+### Conditional G — Release bundle validation (macOS + Ubuntu)
+Run the catalogued host-tool, replay, and UI bundle checks from a clean
+extraction directory, never from repository build output.
 - macOS bundle: `releases/Cohesix-0.9.0-beta-MacOS.tar.gz`
 - Ubuntu bundle: `releases/Cohesix-0.9.0-beta-linux.tar.gz`
 - Ensure headless Linux uses `xvfb-run` for SwarmUI.
 - The release bundle includes Python tests and fixtures for running `python3 -m pytest tools/cohesix-py/tests`.
 
-### 8) Final release gate (must pass)
+### Automated Stage 05 — Release governance and attestation
 - `scripts/ci/test_plan_stage_05_due_diligence.sh`
-- `scripts/ci/due_diligence_gate.sh`
-- `scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml` (cfg-aware production-source ratchet with direct host execution; inline `#[cfg(test)]` items do not consume production risk budget)
-- `python3 scripts/ci/test_rust_risk_gate.py` (hostile compiler/runner/toolchain/config selectors must fail closed, the named pinned toolchain must override directory selection, and registry sources must be re-extracted in a private Cargo home)
-- `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings`
-- `CARGO_INCREMENTAL=0 cargo check --workspace`
-- `CARGO_INCREMENTAL=0 cargo test --workspace`
-- When Stage 05 is invoked through `scripts/ci/test_plan_run.sh`, the wrapper
-  may reuse fresh Stage 03 regression evidence by passing
-  `DD_REUSE_REGRESSION_BATCH_FROM=<state-dir>/qemu-regression-logs` into the
-  due-diligence gate. Set `TP_STAGE5_REUSE_REGRESSION=0` to force a fresh
-  regression batch inside Stage 05.
+- In staged mode, `scripts/ci/due_diligence_gate.sh` verifies the
+  source-bound Stage 01/02 attestations and Stage 03/04 target result manifests.
+  It does not rerun formatting, Clippy, workspace check/tests, generated
+  contracts, the risk bootstrap, or regression scripts.
+- Reused Stage 03 evidence must pass `qemu_artifact.py verify-aggregate` for
+  the exact target, claim tier, source digest, catalog action digest, and all
+  four regression groups; non-empty logs or pass counts alone are insufficient.
+- Stage 05 uniquely runs required audit-asset checks, `cargo audit`,
+  `cargo deny check advisories`, findings/exception lifecycle validation, and
+  the hardcoded-secret scan. It records the audit-tool versions and all
+  governance logs in an immutable Stage 05 artifact root.
+- Stage 05 is deliberately refreshed even when Stages 01-04 resume. Advisory
+  data and governance state are time-sensitive, so an older valid Stage 05
+  attestation never suppresses the current audit.
 - Direct standalone `scripts/ci/due_diligence_gate.sh` remains exhaustive and
-  reruns the regression batch unless `DD_REUSE_REGRESSION_BATCH_FROM` is
-  supplied explicitly. `DD_REGRESSION_GROUPS` or inherited `COHSH_BATCH_GROUPS`
-  values other than `all` mark the gate INCOMPLETE.
-- Do not progress beyond this stage until all prior scripted stages have completion markers and the due-diligence gate is fully green.
+  executes every mandatory baseline plus the regression batch unless
+  provenance-bound reuse is supplied explicitly.
+- The due-diligence gate fails on the first failed or incomplete check by
+  default. Use `--collect-all` or `DD_COLLECT_ALL=1` only when a diagnostic run
+  should continue to accumulate all failures.
+- Do not progress beyond this stage until all prior attestations verify and the
+  due-diligence gate is green.
 
 ## Trace replay limits
 <!-- coh-rtc:trace-policy:start -->

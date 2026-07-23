@@ -62,6 +62,94 @@ def load_root_task_cargo() -> dict[str, object]:
     return parse_root_task_manifest_subset(text)
 
 
+def check_test_plan_action_catalog(errors: list[str]) -> None:
+    """Require broad driver suites without duplicating filtered test runs."""
+
+    if tomllib is None:
+        errors.append(
+            "scripts/ci/check_driver_test_coverage.py: Python 3.11 or newer "
+            "is required to validate configs/test_plan_actions.toml"
+        )
+        return
+    catalog = tomllib.loads(read_text("configs/test_plan_actions.toml"))
+    raw_actions = catalog.get("action", [])
+    actions = {
+        action.get("id"): action
+        for action in raw_actions
+        if isinstance(action, dict) and isinstance(action.get("id"), str)
+    }
+    expected_commands = {
+        "host.root-task-qemu-features": (
+            "cargo test -p root-task --no-default-features "
+            "--features driver-tests-qemu --lib -- --test-threads=1 "
+            "--skip drivers::driver_task_net"
+        ),
+        "host.root-task-pi4-features": (
+            "cargo test -p root-task --no-default-features "
+            "--features driver-tests-pi4 --lib -- --test-threads=1"
+        ),
+        "host.root-task-net-console": (
+            "cargo test -p root-task --no-default-features "
+            "--features net-console --lib -- --test-threads=1"
+        ),
+        "host.pi4-runtime-tests": (
+            "cargo test -p pi4-driver-runtime -- --test-threads=1"
+        ),
+        "host.pi4-runtime-target-check": (
+            "cargo check -p pi4-driver-runtime "
+            "--target aarch64-unknown-none"
+        ),
+        "host.cache-maintenance-tests": (
+            "cargo test -p root-task --no-default-features "
+            "--features cache-maintenance --test cache_maintenance"
+        ),
+        "target.root-task-qemu-release": "--features release-qemu",
+        "target.root-task-pi4-release": "--features release-pi4",
+    }
+    host_action_ids = {
+        action_id
+        for action_id in expected_commands
+        if action_id.startswith("host.")
+    }
+    for action_id, expected in expected_commands.items():
+        action = actions.get(action_id)
+        if action is None:
+            errors.append(
+                "configs/test_plan_actions.toml: missing driver coverage "
+                f"action `{action_id}`"
+            )
+            continue
+        command = action.get("command")
+        if not isinstance(command, str) or expected not in command:
+            errors.append(
+                "configs/test_plan_actions.toml: action "
+                f"`{action_id}` must contain `{expected}`"
+            )
+        expected_stage = 1 if action_id in host_action_ids else 2
+        expected_scope = (
+            "common"
+            if action_id in host_action_ids
+            else "provisioned-target"
+        )
+        if action.get("stage") != expected_stage:
+            errors.append(
+                "configs/test_plan_actions.toml: "
+                f"`{action_id}` must be Stage {expected_stage}"
+            )
+        if action.get("scope") != expected_scope:
+            errors.append(
+                "configs/test_plan_actions.toml: "
+                f"`{action_id}` must use scope={expected_scope}"
+            )
+        if action.get("test_policy") == "nonzero":
+            minimum = action.get("minimum_test_count")
+            if not isinstance(minimum, int) or minimum < 1:
+                errors.append(
+                    "configs/test_plan_actions.toml: "
+                    f"`{action_id}` must reject zero-test execution"
+                )
+
+
 def parse_root_task_manifest_subset(text: str) -> dict[str, object]:
     """Parse the manifest subset needed by this guard without external deps."""
 
@@ -139,6 +227,7 @@ def check_feature_bundles(errors: list[str]) -> None:
 def main() -> int:
     errors: list[str] = []
     check_feature_bundles(errors)
+    check_test_plan_action_catalog(errors)
     require_path_absent(errors, "apps/root-task/src/local_seat_pi4.rs")
     require_path_absent(errors, "crates/cohesix-usb")
     require_absent_tokens(
@@ -195,38 +284,41 @@ def main() -> int:
         "docs/TEST_PLAN.md",
         [
             "python3 scripts/ci/check_driver_test_coverage.py",
-            "driver-tests-qemu --lib drivers::rtl8139",
-            "driver-tests-qemu --lib drivers::virtio",
-            "driver-tests-qemu --lib hal::pci",
-            "driver-tests-qemu --lib hal::virtio_mmio",
-            "driver-tests-qemu --lib hal::uart",
-            "driver-tests-pi4 --lib hal::pi4_pcie",
-            "driver-tests-pi4 --lib hal::pi4_wifi",
-            "driver-tests-pi4 --lib local_seat::",
-            "--features release-qemu",
-            "--features release-pi4",
-            "--features cache-maintenance --test cache_maintenance",
+            "`host.root-task-qemu-features`",
+            "`host.root-task-pi4-features`",
+            "`host.pi4-runtime-tests`",
+            "`target.root-task-qemu-release`",
+            "`target.root-task-pi4-release`",
+            "one broad",
+        ],
+    )
+    require_tokens(
+        errors,
+        "scripts/ci/test_plan_stage_01_integrity.sh",
+        [
+            "--stage 1",
+            "--scope common",
+            "host.python-*",
+            "tp_run_catalog_action",
         ],
     )
     require_tokens(
         errors,
         "scripts/ci/test_plan_stage_02_host_fast.sh",
         [
-            'python_bin="${TP_PYTHON_RESOLVED}"',
-            '\\"${python_bin}\\" scripts/ci/check_driver_test_coverage.py',
-            "driver-tests-qemu --lib drivers::rtl8139",
-            "driver-tests-qemu --lib drivers::virtio",
-            "driver-tests-qemu --lib hal::pci",
-            "driver-tests-qemu --lib hal::virtio_mmio",
-            "driver-tests-qemu --lib hal::uart",
-            "driver-tests-pi4 --lib hal::pi4_pcie",
-            "driver-tests-pi4 --lib hal::pi4_wifi",
-            "driver-tests-pi4 --lib local_seat::",
-            "--features release-qemu",
-            "--features release-pi4",
-            "--features cache-maintenance --test cache_maintenance",
+            "--stage 2",
+            "--scope provisioned-target",
+            "tp_run_catalog_action",
+            "ACTION_SET scope=provisioned-target",
         ],
     )
+    stage_two = read_text("scripts/ci/test_plan_stage_02_host_fast.sh")
+    for forbidden in ("--scope common", "ACTION_SET scope=common"):
+        if forbidden in stage_two:
+            errors.append(
+                "scripts/ci/test_plan_stage_02_host_fast.sh: "
+                f"provisioned Stage 2 must not contain `{forbidden}`"
+            )
 
     source_tokens = {
         "apps/root-task/src/drivers/rtl8139.rs": [

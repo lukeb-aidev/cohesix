@@ -12,6 +12,7 @@ apps/worker-gpu/README.md,human-edited canonical source,docs-owner,edit directly
 crates/boot/uefi-elfloader-shim/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 crates/cohesix-ticket/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 crates/secure9p-codec/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+crates/sel4-sys/upstream/libsel4/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/API_GUIDELINES.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/ARCHITECTURE.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/AWS_AMI.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
@@ -22,6 +23,7 @@ docs/CODING_GUIDELINES.md,human-edited canonical source,docs-owner,edit directly
 docs/DRIVERS.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/FAILOVER.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/FAILURE_MODES.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/GLOSSARY.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/GPU_NODES.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/HARDWARE_BRINGUP.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
 docs/HOST_API.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
@@ -66,7 +68,12 @@ docs/audit/M26C_REFACTOR_OWNERSHIP.md,live audit register,audit-owner,update onl
 docs/audit/M26C_RUNTIME_BOUNDARY_AUDIT.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
 docs/audit/M26C_SIMPLICITY_SCORECARD.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
 docs/audit/M26C_TARGET_RUNNER_BASELINE.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/M26D_MCS_DECISION.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/M26D_SEL4_15_CAPABILITY_AUDIT.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
 docs/audit/M26D_SEL4_15_PROVENANCE.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/M26D_SEL4_16_CAPABILITY_AUDIT.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/M26D_SEL4_16_PROVENANCE.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
 docs/audit/PI4_ROOT_OWNED_DRIVER_INVENTORY.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
 docs/audit/checklists/ARCHITECTURE_CHECKLIST.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
 docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
@@ -162,6 +169,7 @@ releases/RELEASE_NOTES-0.6.0-alpha.md,release snapshot,release-owner,update only
 releases/RELEASE_NOTES-0.7.0-alpha.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
 releases/RELEASE_NOTES-0.8.0-alpha.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
 releases/RELEASE_NOTES-0.9.0-beta.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+seL4/README.md,external reference mirror,kernel-reference-owner,inventory only; update through accepted seL4 reference refresh,external seL4 reference
 seL4/elfloader.md,external reference mirror,kernel-reference-owner,inventory only; update through accepted seL4 reference refresh,external seL4 reference
 seL4/seL4-manual-latest.md,external reference mirror,kernel-reference-owner,inventory only; update through accepted seL4 reference refresh,external seL4 reference
 tests/integration/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation

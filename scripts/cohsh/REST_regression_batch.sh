@@ -60,7 +60,7 @@ EOF
   for ((i = 0; i < attempts; i += 1)); do
     if COHSH_REST_URL="${GATEWAY_URL}" \
       HIVE_GATEWAY_REQUEST_AUTH_TOKEN="${GATEWAY_AUTH_TOKEN}" \
-      "${COHSH_BIN}" --transport rest --rest-url "${GATEWAY_URL}" --rest-auth-token "${GATEWAY_AUTH_TOKEN}" --role queen --script "${tmp_script}" \
+      "${COHSH_BIN}" --transport rest --role queen --script "${tmp_script}" \
       >/dev/null 2>&1; then
       rm -f "${tmp_script}"
       return 0
@@ -125,7 +125,7 @@ run_one() {
   printf "[rest-batch] start %s (#%s)\n" "$script" "$index"
   COHSH_REST_URL="${GATEWAY_URL}" \
     HIVE_GATEWAY_REQUEST_AUTH_TOKEN="${GATEWAY_AUTH_TOKEN}" \
-    "${COHSH_BIN}" --transport rest --rest-url "${GATEWAY_URL}" --rest-auth-token "${GATEWAY_AUTH_TOKEN}" --script "${SCRIPT_ROOT}/${script}" \
+    "${COHSH_BIN}" --transport rest --script "${SCRIPT_ROOT}/${script}" \
     >"${log_path}" 2>&1
 }
 

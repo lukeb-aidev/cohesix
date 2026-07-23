@@ -294,6 +294,254 @@ class DueDiligenceLifecycleTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unknown columns: mystery", result.stderr)
 
+    def run_missing_attestation_gate(
+        self,
+        log_root: Path,
+        *,
+        collect_all: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run the full gate against intentionally missing staged evidence."""
+
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DD_GATE_LOG_DIR": str(log_root),
+                "DD_REUSE_STAGED_EVIDENCE_FROM": str(
+                    log_root.parent / "missing-evidence"
+                ),
+                "DD_REUSE_STAGED_EVIDENCE_TARGET": "qemu",
+                "DD_SKIP_CARGO_AUDIT": "1",
+                "DD_SKIP_CARGO_DENY": "1",
+                "DD_SKIP_REGRESSION_BATCH": "1",
+            }
+        )
+        arguments = ["bash", str(GATE)]
+        if collect_all:
+            arguments.append("--collect-all")
+        return subprocess.run(
+            arguments,
+            cwd=REPO_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_full_gate_fails_fast_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_root = Path(temp_dir) / "gate-logs"
+            result = self.run_missing_attestation_gate(
+                log_root,
+                collect_all=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue((log_root / "staged-evidence-state.log").is_file())
+            self.assertFalse((log_root / "stage-01-attestation.log").exists())
+            self.assertIn("FAILURES (1)", result.stdout)
+
+    def test_collect_all_mode_accumulates_later_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_root = Path(temp_dir) / "gate-logs"
+            result = self.run_missing_attestation_gate(
+                log_root,
+                collect_all=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue((log_root / "staged-evidence-state.log").is_file())
+            self.assertTrue((log_root / "stage-01-attestation.log").is_file())
+            self.assertTrue((log_root / "stage-02-attestation.log").is_file())
+            self.assertTrue((log_root / "stage-03-attestation.log").is_file())
+            self.assertTrue((log_root / "stage-04-attestation.log").is_file())
+            self.assertIn("INCOMPLETE RUN (3)", result.stdout)
+
+    def test_staged_reuse_requires_an_explicit_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "DD_GATE_LOG_DIR": str(root / "gate-logs"),
+                    "DD_REUSE_STAGED_EVIDENCE_FROM": str(root / "evidence"),
+                }
+            )
+
+            result = subprocess.run(
+                ["bash", str(GATE)],
+                cwd=REPO_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(
+                "requires DD_REUSE_STAGED_EVIDENCE_TARGET=qemu|pi4",
+                result.stderr,
+            )
+
+    def test_reused_regression_requires_content_bound_aggregate(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            log_root = root / "gate-logs"
+            stage_three_root = root / "stage-three"
+            stage_three_root.mkdir()
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "DD_GATE_LOG_DIR": str(log_root),
+                    "DD_REUSE_STAGED_EVIDENCE_FROM": str(
+                        root / "missing-evidence"
+                    ),
+                    "DD_REUSE_STAGED_EVIDENCE_TARGET": "qemu",
+                    "DD_REUSE_REGRESSION_BATCH_FROM": str(stage_three_root),
+                    "DD_SKIP_CARGO_AUDIT": "1",
+                    "DD_SKIP_CARGO_DENY": "1",
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(GATE), "--collect-all"],
+                cwd=REPO_ROOT,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            regression_log = log_root / "regression-batch-reuse.log"
+            self.assertTrue(regression_log.is_file())
+            self.assertIn(
+                "transport aggregate",
+                regression_log.read_text(encoding="utf-8"),
+            )
+
+    def write_target_metadata(self, state: Path, target: str = "qemu") -> None:
+        """Write the exact target metadata emitted by the staged runner."""
+
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "target.env").write_text(
+            "\n".join(
+                [
+                    f"TEST_PLAN_TARGET={target}",
+                    "TEST_PLAN_TARGET_MATRIX_VERSION=2",
+                    f"TEST_PLAN_STATE_DIR={state.resolve()}",
+                    f"TEST_PLAN_REPO_ROOT={REPO_ROOT.resolve()}",
+                    "TEST_PLAN_STARTED_AT_UTC=2026-07-23T00:00:00Z",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+    def run_reused_state_gate(
+        self,
+        root: Path,
+        state: Path,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run the gate far enough to validate reused staged-state integrity."""
+
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "DD_GATE_LOG_DIR": str(root / "gate-logs"),
+                "DD_REUSE_STAGED_EVIDENCE_FROM": str(state),
+                "DD_REUSE_STAGED_EVIDENCE_TARGET": "qemu",
+                "DD_SKIP_CARGO_AUDIT": "1",
+                "DD_SKIP_CARGO_DENY": "1",
+                "DD_SKIP_REGRESSION_BATCH": "1",
+            }
+        )
+        return subprocess.run(
+            ["bash", str(GATE)],
+            cwd=REPO_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_reused_state_rejects_target_metadata_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            state = root / "evidence"
+            self.write_target_metadata(state, target="pi4")
+
+            result = self.run_reused_state_gate(root, state)
+
+            self.assertNotEqual(result.returncode, 0)
+            validation_log = root / "gate-logs" / "staged-evidence-state.log"
+            self.assertIn(
+                "target.env target mismatch: expected qemu, found pi4",
+                validation_log.read_text(encoding="utf-8"),
+            )
+
+    def test_reused_state_rejects_unknown_target_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            state = root / "evidence"
+            self.write_target_metadata(state)
+            with (state / "target.env").open("a", encoding="utf-8") as handle:
+                handle.write("UNTRUSTED_FIELD=value\n")
+
+            result = self.run_reused_state_gate(root, state)
+
+            self.assertNotEqual(result.returncode, 0)
+            validation_log = root / "gate-logs" / "staged-evidence-state.log"
+            self.assertIn(
+                "target.env contains unknown key: UNTRUSTED_FIELD",
+                validation_log.read_text(encoding="utf-8"),
+            )
+
+    def test_reused_state_rejects_incomplete_markers_and_records(self) -> None:
+        for incomplete_path in (
+            Path("stage_03.incomplete"),
+            Path("incomplete") / "stage-03.md",
+        ):
+            with self.subTest(incomplete_path=incomplete_path):
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    root = Path(temp_dir)
+                    state = root / "evidence"
+                    self.write_target_metadata(state)
+                    marker = state / incomplete_path
+                    marker.parent.mkdir(parents=True, exist_ok=True)
+                    marker.write_text("incomplete\n", encoding="utf-8")
+
+                    result = self.run_reused_state_gate(root, state)
+
+                    self.assertNotEqual(result.returncode, 0)
+                    validation_log = (
+                        root / "gate-logs" / "staged-evidence-state.log"
+                    )
+                    self.assertIn(
+                        "active incomplete",
+                        validation_log.read_text(encoding="utf-8"),
+                    )
+
+    def test_stage_five_records_audit_versions_and_publishes_logs(self) -> None:
+        gate_source = GATE.read_text(encoding="utf-8")
+        stage_source = (
+            REPO_ROOT
+            / "scripts"
+            / "ci"
+            / "test_plan_stage_05_due_diligence.sh"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'run_step "cargo-audit-version" cargo audit --version',
+            gate_source,
+        )
+        self.assertIn(
+            'run_step "cargo-deny-version" cargo deny --version',
+            gate_source,
+        )
+        self.assertIn('stage5_root="${TP_ATTEMPT_DIR}/governance"', stage_source)
+        self.assertIn('DD_GATE_LOG_DIR="${audit_root}"', stage_source)
+        self.assertIn("stage_05_artifact_root.path", stage_source)
+        self.assertIn("publish-root", stage_source)
+
 
 if __name__ == "__main__":
     unittest.main()

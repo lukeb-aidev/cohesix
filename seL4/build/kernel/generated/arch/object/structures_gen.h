@@ -1,4 +1,4 @@
-/* generated from /Users/lukasbower/seL4_15/include/arch/arm/arch/object/structures.bf */
+/* generated from /Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/structures.bf */
 
 #pragma once
 
@@ -587,8 +587,7 @@ enum cap_tag {
     cap_page_table_cap = 3,
     cap_vspace_cap = 9,
     cap_asid_control_cap = 11,
-    cap_asid_pool_cap = 13,
-    cap_sgi_signal_cap = 27
+    cap_asid_pool_cap = 13
 };
 typedef enum cap_tag cap_tag_t;
 
@@ -1223,13 +1222,12 @@ cap_irq_handler_cap_new(uint64_t capIRQ) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */  
-    assert((capIRQ & ~0xfffull) == ((1 && (capIRQ & (1ull << 47))) ? 0x0 : 0));  
     assert(((uint64_t)cap_irq_handler_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_handler_cap & (1ull << 47))) ? 0x0 : 0));
 
     cap.words[0] = 0
         | ((uint64_t)cap_irq_handler_cap & 0x1full) << 59;
     cap.words[1] = 0
-        | (capIRQ & 0xfffull) << 0;
+        | capIRQ << 0;
 
     return cap;
 }
@@ -1240,7 +1238,7 @@ cap_irq_handler_cap_get_capIRQ(cap_t cap) {
     /* fail if union does not have the expected tag */
     assert(((cap.words[0] >> 59) & 0x1f) == cap_irq_handler_cap);
 
-    ret = (cap.words[1] & 0xfffull) >> 0;
+    ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;
@@ -1737,52 +1735,6 @@ cap_asid_pool_cap_get_capASIDPool(cap_t cap) {
     return ret;
 }
 
-static inline cap_t CONST
-cap_sgi_signal_cap_new(uint64_t capSGITarget, uint64_t capSGIIRQ) {
-    cap_t cap;
-
-    /* fail if user has passed bits that we will override */  
-    assert((capSGITarget & ~0xffffffffull) == ((1 && (capSGITarget & (1ull << 47))) ? 0x0 : 0));  
-    assert(((uint64_t)cap_sgi_signal_cap & ~0x1full) == ((1 && ((uint64_t)cap_sgi_signal_cap & (1ull << 47))) ? 0x0 : 0));  
-    assert((capSGIIRQ & ~0xfull) == ((1 && (capSGIIRQ & (1ull << 47))) ? 0x0 : 0));
-
-    cap.words[0] = 0
-        | ((uint64_t)cap_sgi_signal_cap & 0x1full) << 59
-        | (capSGIIRQ & 0xfull) << 55;
-    cap.words[1] = 0
-        | (capSGITarget & 0xffffffffull) << 0;
-
-    return cap;
-}
-
-static inline uint64_t CONST
-cap_sgi_signal_cap_get_capSGITarget(cap_t cap) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    assert(((cap.words[0] >> 59) & 0x1f) == cap_sgi_signal_cap);
-
-    ret = (cap.words[1] & 0xffffffffull) >> 0;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
-}
-
-static inline uint64_t CONST
-cap_sgi_signal_cap_get_capSGIIRQ(cap_t cap) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    assert(((cap.words[0] >> 59) & 0x1f) == cap_sgi_signal_cap);
-
-    ret = (cap.words[0] & 0x780000000000000ull) >> 55;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
-}
-
 struct lookup_fault {
     uint64_t words[2];
 };
@@ -2031,34 +1983,6 @@ pte_pte_page_new(uint64_t UXN, uint64_t page_base_address, uint64_t nG, uint64_t
     return pte;
 }
 
-static inline uint64_t PURE
-pte_pte_page_ptr_get_UXN(pte_t *pte_ptr) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    assert(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */);
-
-    ret = (pte_ptr->words[0] & 0x40000000000000ull) >> 54;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
-}
-
-static inline uint64_t PURE
-pte_pte_page_ptr_get_SH(pte_t *pte_ptr) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    assert(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */);
-
-    ret = (pte_ptr->words[0] & 0x300ull) >> 8;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
-}
-
 static inline uint64_t CONST
 pte_pte_page_get_AP(pte_t pte) {
     uint64_t ret;
@@ -2066,20 +1990,6 @@ pte_pte_page_get_AP(pte_t pte) {
     assert(((pte.words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */);
 
     ret = (pte.words[0] & 0xc0ull) >> 6;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
-}
-
-static inline uint64_t PURE
-pte_pte_page_ptr_get_AP(pte_t *pte_ptr) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    assert(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */);
-
-    ret = (pte_ptr->words[0] & 0xc0ull) >> 6;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;

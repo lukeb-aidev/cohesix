@@ -8,13 +8,13 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 
 ## Summary
 
-- tracked Markdown files: 204
+- tracked Markdown files: 212
 - append-only audit evidence: 4
-- external reference mirror: 2
+- external reference mirror: 3
 - generated report: 1
 - generated snippet: 18
-- human-edited canonical source: 44
-- live audit register: 24
+- human-edited canonical source: 46
+- live audit register: 29
 - release snapshot: 72
 - vendored reference: 39
 
@@ -43,6 +43,7 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `crates/boot/uefi-elfloader-shim/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `crates/cohesix-ticket/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `crates/secure9p-codec/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
+| `crates/sel4-sys/upstream/libsel4/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/API_GUIDELINES.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/ARCHITECTURE.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/AWS_AMI.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
@@ -53,6 +54,7 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `docs/DRIVERS.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/FAILOVER.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/FAILURE_MODES.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
+| `docs/GLOSSARY.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/GPU_NODES.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/HARDWARE_BRINGUP.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
 | `docs/HOST_API.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |
@@ -97,7 +99,12 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `docs/audit/M26C_RUNTIME_BOUNDARY_AUDIT.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/M26C_SIMPLICITY_SCORECARD.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/M26C_TARGET_RUNNER_BASELINE.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26D_MCS_DECISION.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26D_SEL4_15_CAPABILITY_AUDIT.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/M26D_SEL4_15_PROVENANCE.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26D_SEL4_16_CAPABILITY_AUDIT.md` | live audit register | audit-owner | update only with matching evidence command |
+| `docs/audit/M26D_SEL4_16_PROVENANCE.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/PI4_ROOT_OWNED_DRIVER_INVENTORY.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/checklists/ARCHITECTURE_CHECKLIST.md` | live audit register | audit-owner | update only with matching evidence command |
 | `docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md` | live audit register | audit-owner | update only with matching evidence command |
@@ -193,6 +200,7 @@ This report is derived from `docs/audit/M26C_MARKDOWN_INVENTORY.csv`.
 | `releases/RELEASE_NOTES-0.7.0-alpha.md` | release snapshot | release-owner | update only through release-cut flow |
 | `releases/RELEASE_NOTES-0.8.0-alpha.md` | release snapshot | release-owner | update only through release-cut flow |
 | `releases/RELEASE_NOTES-0.9.0-beta.md` | release snapshot | release-owner | update only through release-cut flow |
+| `seL4/README.md` | external reference mirror | kernel-reference-owner | inventory only; update through accepted seL4 reference refresh |
 | `seL4/elfloader.md` | external reference mirror | kernel-reference-owner | inventory only; update through accepted seL4 reference refresh |
 | `seL4/seL4-manual-latest.md` | external reference mirror | kernel-reference-owner | inventory only; update through accepted seL4 reference refresh |
 | `tests/integration/README.md` | human-edited canonical source | docs-owner | edit directly with generated/as-built evidence |

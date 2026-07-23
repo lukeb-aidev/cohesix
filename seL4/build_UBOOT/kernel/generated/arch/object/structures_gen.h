@@ -1,4 +1,4 @@
-/* generated from /Users/lukasbower/seL4_15/include/arch/arm/arch/object/structures.bf */
+/* generated from /Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/include/arch/arm/arch/object/structures.bf */
 
 #pragma once
 

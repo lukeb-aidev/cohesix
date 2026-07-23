@@ -1,4 +1,4 @@
-# Install script for directory: /Users/lukasbower/seL4/projects/sel4test
+# Install script for directory: /Users/lukasbower/GitHub/cohesix/tools/sel4-profile-project
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -34,28 +34,28 @@ endif()
 
 # Set path to fallback-tool for dependency-resolution.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "/opt/homebrew/bin/aarch64-linux-gnu-objdump")
+  set(CMAKE_OBJDUMP "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objdump")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/kernel/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic/kernel/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/elfloader/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic/elfloader/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic/apps/sel4test-driver/cmake_install.cmake")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/install_local_manifest.txt"
+  file(WRITE "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()
 if(CMAKE_INSTALL_COMPONENT)
@@ -71,6 +71,6 @@ else()
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/${CMAKE_INSTALL_MANIFEST}"
+  file(WRITE "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/pi4-diagnostic/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

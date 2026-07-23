@@ -1,4 +1,4 @@
-# Install script for directory: /Users/lukasbower/seL4/projects/sel4test/apps/sel4test-driver
+# Install script for directory: /Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/sel4test/apps/sel4test-driver
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -12,7 +12,7 @@ if(NOT DEFINED CMAKE_INSTALL_CONFIG_NAME)
     string(REGEX REPLACE "^[^A-Za-z0-9_]+" ""
            CMAKE_INSTALL_CONFIG_NAME "${BUILD_TYPE}")
   else()
-    set(CMAKE_INSTALL_CONFIG_NAME "Debug")
+    set(CMAKE_INSTALL_CONFIG_NAME "Release")
   endif()
   message(STATUS "Install configuration: \"${CMAKE_INSTALL_CONFIG_NAME}\"")
 endif()
@@ -34,52 +34,52 @@ endif()
 
 # Set path to fallback-tool for dependency-resolution.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "/opt/homebrew/bin/aarch64-linux-gnu-objdump")
+  set(CMAKE_OBJDUMP "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objdump")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build/apps/sel4test-driver/sel4runtime/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4runtime/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build/apps/sel4test-driver/musllibc/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/musllibc/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build/libsel4/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/libsel4/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build/apps/sel4test-driver/util_libs/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/util_libs/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build/apps/sel4test-driver/seL4_libs/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/seL4_libs/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build/apps/sel4test-driver/sel4_projects_libs/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4_projects_libs/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build/apps/sel4test-driver/libsel4testsupport/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/libsel4testsupport/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
-  include("/Users/lukasbower/GitHub/cohesix/seL4/build/apps/sel4test-driver/sel4test-tests/cmake_install.cmake")
+  include("/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/sel4test-tests/cmake_install.cmake")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/lukasbower/GitHub/cohesix/seL4/build/apps/sel4test-driver/install_local_manifest.txt"
+  file(WRITE "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/apps/sel4test-driver/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

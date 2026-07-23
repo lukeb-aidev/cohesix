@@ -34,6 +34,7 @@
 /* disabled: CONFIG_PLAT_APQ8064 */
 /* disabled: CONFIG_PLAT_ARIANE */
 /* disabled: CONFIG_PLAT_BCM2711 */
+/* disabled: CONFIG_PLAT_BCM2712 */
 /* disabled: CONFIG_PLAT_BCM2837 */
 /* disabled: CONFIG_PLAT_CHESHIRE */
 /* disabled: CONFIG_PLAT_HIFIVE_P550 */
@@ -62,6 +63,7 @@
 /* disabled: CONFIG_PLAT_BANANAPIF3 */
 /* disabled: CONFIG_PLAT_SPIKE */
 /* disabled: CONFIG_PLAT_STAR64 */
+/* disabled: CONFIG_PLAT_STM32MP2 */
 /* disabled: CONFIG_PLAT_TK1 */
 /* disabled: CONFIG_PLAT_TQMA8XQP1GB */
 /* disabled: CONFIG_PLAT_TX1 */
@@ -76,6 +78,7 @@
 /* disabled: CONFIG_ARM_CORTEX_A55 */
 /* disabled: CONFIG_ARM_CORTEX_A57 */
 /* disabled: CONFIG_ARM_CORTEX_A72 */
+/* disabled: CONFIG_ARM_CORTEX_A76 */
 /* disabled: CONFIG_ARCH_ARM_V7A */
 /* disabled: CONFIG_ARCH_ARM_V7VE */
 /* disabled: CONFIG_AARCH64_SERROR_IGNORE */
@@ -86,7 +89,6 @@
 /* disabled: CONFIG_DEBUG_DISABLE_L1_DCACHE */
 /* disabled: CONFIG_DEBUG_DISABLE_BRANCH_PREDICTION */
 /* disabled: CONFIG_ARM_HYPERVISOR_SUPPORT */
-/* disabled: CONFIG_ARM_GIC_V3_SUPPORT */
 /* disabled: CONFIG_AARCH64_VSPACE_S2_START_L1 */
 /* disabled: CONFIG_ARM_HYP_ENABLE_VCPU_CP14_SAVE_AND_RESTORE */
 /* disabled: CONFIG_ARM_ERRATA_430973 */
@@ -131,6 +133,7 @@
 /* disabled: CONFIG_EXPORT_VCNT_USER */
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
+/* disabled: CONFIG_VTIMER_UPDATE_VOFFSET */
 /* Set ENABLE_SMP_SUPPORT for kernel source files */
 /*
  * Copyright 2014, General Dynamics C4 Systems
@@ -238,7 +241,8 @@
 /* word size */
 /* Untyped size limits */
 /* IPC buffer is 1024 bytes, giving size bits of 10 */
-/* First address in the virtual address space that is not accessible to user level */
+/* (Deprecated) Last address in the virtual address space that is accessible to user level */
+/* Last address in the virtual address space that is accessible to user level */
 /* Extract the n-level PT index from a virtual address:
  * - n is page table level counting from the root page table,
  * - NUM_PT_LEVELS are either 3 or 4 page table levels depending
@@ -286,7 +290,6 @@
  */
        
 /* Cortex-A53 Manual, Section 11.6.1 */
-/* First address in the virtual address space that is not accessible to user level */
 /*
  * For information on the architectural details of the Armv8-A address translation,
  * refer to the ARM "Armv8-A Address Translation", document ID 100940.

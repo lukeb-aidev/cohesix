@@ -858,7 +858,8 @@ seL4_ARM_Page_MapIO(seL4_ARM_Page _service, seL4_ARM_IOSpace iospace, seL4_CapRi
  * Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start_offset"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end_offset"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="start_offset"/> @endxmlonly  or  @xmlonly <texttt text="end_offset"/> @endxmlonly  exceeds the page size of  @xmlonly <texttt text="_service"/> @endxmlonly . 
- * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
+ * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type or
+ * represents a stale mapping. 
  */
 LIBSEL4_INLINE seL4_Error
 seL4_ARM_Page_Clean_Data(seL4_ARM_Page _service, seL4_Word start_offset, seL4_Word end_offset)
@@ -919,7 +920,8 @@ seL4_ARM_Page_Clean_Data(seL4_ARM_Page _service, seL4_Word start_offset, seL4_Wo
  * Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start_offset"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end_offset"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="start_offset"/> @endxmlonly  or  @xmlonly <texttt text="end_offset"/> @endxmlonly  exceeds the page size of  @xmlonly <texttt text="_service"/> @endxmlonly . 
- * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
+ * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type or
+ * represents a stale mapping. 
  */
 LIBSEL4_INLINE seL4_Error
 seL4_ARM_Page_Invalidate_Data(seL4_ARM_Page _service, seL4_Word start_offset, seL4_Word end_offset)
@@ -978,7 +980,8 @@ seL4_ARM_Page_Invalidate_Data(seL4_ARM_Page _service, seL4_Word start_offset, se
  * Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start_offset"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end_offset"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="start_offset"/> @endxmlonly  or  @xmlonly <texttt text="end_offset"/> @endxmlonly  exceeds the page size of  @xmlonly <texttt text="_service"/> @endxmlonly . 
- * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
+ * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type or
+ * represents a stale mapping. 
  */
 LIBSEL4_INLINE seL4_Error
 seL4_ARM_Page_CleanInvalidate_Data(seL4_ARM_Page _service, seL4_Word start_offset, seL4_Word end_offset)
@@ -1039,7 +1042,8 @@ seL4_ARM_Page_CleanInvalidate_Data(seL4_ARM_Page _service, seL4_Word start_offse
  * Or, if hypervisor support is configured, the requested range overlaps the kernel physical address range. 
  * @retval seL4_InvalidArgument The  @xmlonly <texttt text="start_offset"/> @endxmlonly  is greater than or equal to  @xmlonly <texttt text="end_offset"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="start_offset"/> @endxmlonly  or  @xmlonly <texttt text="end_offset"/> @endxmlonly  exceeds the page size of  @xmlonly <texttt text="_service"/> @endxmlonly . 
- * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
+ * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type or
+ * represents a stale mapping. 
  */
 LIBSEL4_INLINE seL4_Error
 seL4_ARM_Page_Unify_Instruction(seL4_ARM_Page _service, seL4_Word start_offset, seL4_Word end_offset)
@@ -2631,38 +2635,9 @@ seL4_TCB_ReadRegisters(seL4_TCB _service, seL4_Bool suspend_source, seL4_Uint8 a
 	regs->sp = mr1;
 	regs->spsr = mr2;
 	regs->x0 = mr3;
-	regs->x1 = seL4_GetMR(4);
-	regs->x2 = seL4_GetMR(5);
-	regs->x3 = seL4_GetMR(6);
-	regs->x4 = seL4_GetMR(7);
-	regs->x5 = seL4_GetMR(8);
-	regs->x6 = seL4_GetMR(9);
-	regs->x7 = seL4_GetMR(10);
-	regs->x8 = seL4_GetMR(11);
-	regs->x16 = seL4_GetMR(12);
-	regs->x17 = seL4_GetMR(13);
-	regs->x18 = seL4_GetMR(14);
-	regs->x29 = seL4_GetMR(15);
-	regs->x30 = seL4_GetMR(16);
-	regs->x9 = seL4_GetMR(17);
-	regs->x10 = seL4_GetMR(18);
-	regs->x11 = seL4_GetMR(19);
-	regs->x12 = seL4_GetMR(20);
-	regs->x13 = seL4_GetMR(21);
-	regs->x14 = seL4_GetMR(22);
-	regs->x15 = seL4_GetMR(23);
-	regs->x19 = seL4_GetMR(24);
-	regs->x20 = seL4_GetMR(25);
-	regs->x21 = seL4_GetMR(26);
-	regs->x22 = seL4_GetMR(27);
-	regs->x23 = seL4_GetMR(28);
-	regs->x24 = seL4_GetMR(29);
-	regs->x25 = seL4_GetMR(30);
-	regs->x26 = seL4_GetMR(31);
-	regs->x27 = seL4_GetMR(32);
-	regs->x28 = seL4_GetMR(33);
-	regs->tpidr_el0 = seL4_GetMR(34);
-	regs->tpidrro_el0 = seL4_GetMR(35);
+	for (seL4_Word i = 4; i < count; i++) {
+		((seL4_Word *) &regs->x1)[i - 4] = seL4_GetMR(i);
+	}
 	return result;
 }
 
@@ -2700,40 +2675,9 @@ seL4_TCB_WriteRegisters(seL4_TCB _service, seL4_Bool resume_target, seL4_Uint8 a
 	mr1 = count;
 	mr2 = regs->pc;
 	mr3 = regs->sp;
-	seL4_SetMR(4, regs->spsr);
-	seL4_SetMR(5, regs->x0);
-	seL4_SetMR(6, regs->x1);
-	seL4_SetMR(7, regs->x2);
-	seL4_SetMR(8, regs->x3);
-	seL4_SetMR(9, regs->x4);
-	seL4_SetMR(10, regs->x5);
-	seL4_SetMR(11, regs->x6);
-	seL4_SetMR(12, regs->x7);
-	seL4_SetMR(13, regs->x8);
-	seL4_SetMR(14, regs->x16);
-	seL4_SetMR(15, regs->x17);
-	seL4_SetMR(16, regs->x18);
-	seL4_SetMR(17, regs->x29);
-	seL4_SetMR(18, regs->x30);
-	seL4_SetMR(19, regs->x9);
-	seL4_SetMR(20, regs->x10);
-	seL4_SetMR(21, regs->x11);
-	seL4_SetMR(22, regs->x12);
-	seL4_SetMR(23, regs->x13);
-	seL4_SetMR(24, regs->x14);
-	seL4_SetMR(25, regs->x15);
-	seL4_SetMR(26, regs->x19);
-	seL4_SetMR(27, regs->x20);
-	seL4_SetMR(28, regs->x21);
-	seL4_SetMR(29, regs->x22);
-	seL4_SetMR(30, regs->x23);
-	seL4_SetMR(31, regs->x24);
-	seL4_SetMR(32, regs->x25);
-	seL4_SetMR(33, regs->x26);
-	seL4_SetMR(34, regs->x27);
-	seL4_SetMR(35, regs->x28);
-	seL4_SetMR(36, regs->tpidr_el0);
-	seL4_SetMR(37, regs->tpidrro_el0);
+	for (seL4_Word i = 2; i < count; i++) {
+		seL4_SetMR(i + 2, ((seL4_Word*)&regs->spsr)[i - 2]);
+	}
 
 	/* Perform the call, passing in-register arguments directly. */
 	output_tag = seL4_CallWithMRs(_service, tag,

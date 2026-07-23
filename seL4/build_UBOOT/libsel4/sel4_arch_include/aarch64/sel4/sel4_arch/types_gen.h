@@ -1,4 +1,4 @@
-/* generated from /Users/lukasbower/seL4_15/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/types.bf */
+/* generated from /Users/lukasbower/GitHub/cohesix/out/sel4/v16-pi4-project/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/types.bf */
 
 #pragma once
 

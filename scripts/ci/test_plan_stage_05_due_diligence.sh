@@ -13,31 +13,23 @@ tp_init
 tp_require_stage_done 4
 tp_stage_begin 5 "due-diligence"
 
-reuse_regression="${TP_STAGE5_REUSE_REGRESSION:-1}"
-reuse_regression_log_root=""
-if [[ "${reuse_regression}" == "1" && "${DD_SKIP_REGRESSION_BATCH:-0}" != "1" && -z "${DD_REUSE_REGRESSION_BATCH_FROM:-}" ]]; then
-  stage3_fingerprint="$(tp_stage_fingerprint_file 3)"
-  regression_log_root="${TEST_PLAN_STATE_DIR}/qemu-regression-logs"
-  if [[ ! -f "${stage3_fingerprint}" ]]; then
-    tp_log "INFO  Stage 03 input fingerprint is missing; running exhaustive due-diligence regression batch"
-  elif [[ ! -d "${regression_log_root}" ]]; then
-    tp_log "FAIL  missing reusable Stage 03 regression logs: ${regression_log_root}"
-    exit 1
-  else
-    tp_assert_stage_fingerprint_fresh 3
-    reuse_regression_log_root="${regression_log_root}"
-  fi
-fi
+stage5_root="${TP_ATTEMPT_DIR}/governance"
+audit_root="${stage5_root}/audit"
 
-if [[ -n "${reuse_regression_log_root}" ]]; then
-  tp_log "INFO  reusing Stage 03 regression batch evidence: ${regression_log_root}"
-  tp_run_cmd \
-    "due-diligence-gate" \
-    env \
-    DD_REUSE_REGRESSION_BATCH_FROM="${reuse_regression_log_root}" \
-    "${TEST_PLAN_ROOT}/scripts/ci/due_diligence_gate.sh"
-else
-  tp_run_cmd "due-diligence-gate" "${TEST_PLAN_ROOT}/scripts/ci/due_diligence_gate.sh"
-fi
+tp_run_cmd \
+  "due-diligence-gate" \
+  env -u DD_REUSE_REGRESSION_BATCH_FROM \
+  DD_GATE_LOG_DIR="${audit_root}" \
+  DD_REUSE_STAGED_EVIDENCE_FROM="${TEST_PLAN_STATE_DIR}" \
+  DD_REUSE_STAGED_EVIDENCE_TARGET="${TEST_PLAN_TARGET}" \
+  "${TEST_PLAN_ROOT}/scripts/ci/due_diligence_gate.sh"
+
+tp_run_cmd \
+  "publish-stage-05-artifact-root" \
+  "${TEST_PLAN_ROOT}/scripts/ci/qemu_artifact.py" \
+  publish-root \
+  --state-dir "${TEST_PLAN_STATE_DIR}" \
+  --root "${stage5_root}" \
+  --pointer "${TEST_PLAN_STATE_DIR}/stage_05_artifact_root.path"
 
 tp_stage_complete 5

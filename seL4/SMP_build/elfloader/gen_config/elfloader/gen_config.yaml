@@ -10,10 +10,11 @@ ARM_NS_SUPERVISOR_MODE: false
 ARM_MONITOR_HOOK: false
 GPT_PTIMER_NS_PL1_ACCESS: false
 ARM_ERRATA_764369: false
-HASH_NONE: true # ElfloaderHashNone=ON
+HASH_NONE: false
 HASH_SHA: false
 HASH_MD5: false
 HASH_INSTRUCTIONS: "hash_none"
+HASH_NONE: true # ElfloaderHashNone=ON
 ELFLOADER_INCLUDE_DTB: true # ElfloaderIncludeDtb=ON
 ELFLOADER_ROOTSERVERS_LAST: true # ElfloaderRootserversLast=ON
 ELFLOADER_ARMV8_LEAVE_AARCH64: false

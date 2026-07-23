@@ -1585,6 +1585,9 @@
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  * Copyright (C) 2021, Hensoldt Cyber GmbH
  * Copyright 2021, Technology Innovation Institute
+ * Author: Lukas Bower
+ * Purpose: Expose the Pi 4 VL805 BAR as a seL4 device-untyped window.
+ * Copyright 2026 Lukas Bower
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */

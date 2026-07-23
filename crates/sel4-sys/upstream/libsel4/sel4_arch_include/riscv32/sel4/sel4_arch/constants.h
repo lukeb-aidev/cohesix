@@ -1,4 +1,3 @@
-/* Author: Lukas Bower */
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  * Copyright 2015, 2016 Hesham Almatary <heshamelmatary@gmail.com>
@@ -125,8 +124,11 @@ typedef enum {
 #endif
 #endif /* __ASSEMBLER__ */
 
-/* First address in the virtual address space that is not accessible to user level */
+/* (Deprecated) First address in the virtual address space that is not accessible to user level */
 #define seL4_UserTop 0x80000000lu
+
+/* Last address in the virtual address space that is accessible to user level */
+#define seL4_UserVSpaceTop (seL4_UserTop - 1)
 
 #ifdef CONFIG_ENABLE_BENCHMARKS
 /* size of kernel log buffer in bytes */

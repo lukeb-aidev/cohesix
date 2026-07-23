@@ -1,4 +1,4 @@
-#line 1 "/Users/lukasbower/seL4_15/src/api/faults.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -260,7 +260,7 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
                                  seL4_Fault_get_seL4_FaultType(sender->tcbFault));
     }
 }
-#line 1 "/Users/lukasbower/seL4_15/src/api/syscall.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -421,6 +421,19 @@ exception_t handleUnknownSyscall(word_t w)
         return EXCEPTION_NONE;
     }
 #ifdef ENABLE_SMP_SUPPORT
+    if (w == SysDebugGetThreadAffinity) {
+        word_t cptr = getRegister(NODE_STATE(ksCurThread), capRegister);
+        lookupCapAndSlot_ret_t lu_ret = lookupCapAndSlot(NODE_STATE(ksCurThread), cptr);
+        /* ensure we got a TCB cap */
+        word_t cap_type = cap_get_capType(lu_ret.cap);
+        if (cap_type != cap_thread_cap) {
+            userError("SysDebugGetThreadAffinity: cap is not a TCB, halting");
+            halt();
+        }
+        word_t affinity = TCB_PTR(cap_thread_cap_get_capTCBPtr(lu_ret.cap))->tcbAffinity;
+        setRegister(NODE_STATE(ksCurThread), capRegister, affinity);
+        return EXCEPTION_NONE;
+    }
     if (w == SysDebugSendIPI) {
         return handle_SysDebugSendIPI();
     }
@@ -595,6 +608,11 @@ static exception_t handleInvocation(bool_t isCall, bool_t isBlocking)
     /* Syscall error/Preemptible section */
     length = seL4_MessageInfo_get_length(info);
     if (unlikely(length > n_msgRegisters && !buffer)) {
+        /* If no IPC buffer is present the kernel truncates the maximum message length to n_msgRegisters.
+         * The kernel truncates rather than returns because not all message transfer points in the kernel
+         * are allowed to return an error.
+         */
+        userError("Warning: No IPC buffer for thread. Truncating message length to: %d.", n_msgRegisters);
         length = n_msgRegisters;
     }
 #ifdef CONFIG_KERNEL_MCS
@@ -637,15 +655,15 @@ static inline lookupCap_ret_t lookupReply(void)
     lookupCap_ret_t lu_ret = lookupCap(NODE_STATE(ksCurThread), replyCPtr);
     if (unlikely(lu_ret.status != EXCEPTION_NONE)) {
         userError("Reply cap lookup failed");
+        /* current_lookup_fault has been set by lookupCap */
         current_fault = seL4_Fault_CapFault_new(replyCPtr, true);
-        handleFault(NODE_STATE(ksCurThread));
         return lu_ret;
     }
 
     if (unlikely(cap_get_capType(lu_ret.cap) != cap_reply_cap)) {
-        userError("Cap in reply slot is not a reply");
+        userError("Cap in reply slot is not a reply cap");
+        current_lookup_fault = lookup_fault_missing_capability_new(0);
         current_fault = seL4_Fault_CapFault_new(replyCPtr, true);
-        handleFault(NODE_STATE(ksCurThread));
         lu_ret.status = EXCEPTION_FAULT;
         return lu_ret;
     }
@@ -724,6 +742,8 @@ static void handleRecv(bool_t isBlocking)
         if (canReply) {
             lu_ret = lookupReply();
             if (lu_ret.status != EXCEPTION_NONE) {
+                /* lookup_fault has been set by lookupReply */
+                handleFault(NODE_STATE(ksCurThread));
                 return;
             } else {
                 reply_cap = lu_ret.cap;
@@ -857,8 +877,12 @@ exception_t handleSyscall(syscall_t syscall)
         case SysReplyRecv: {
             cptr_t reply = getRegister(NODE_STATE(ksCurThread), replyRegister);
             ret = handleInvocation(false, false, true, true, reply);
-            /* reply cannot error and is not preemptible */
-            assert(ret == EXCEPTION_NONE);
+            /* reply is not preemptible, but to ease verification we check explicitly */
+            if (unlikely(ret != EXCEPTION_NONE)) {
+                mcsPreemptionPoint();
+                checkInterrupt(/* was_interrupt_entry */ false);
+                break;
+            }
             handleRecv(true, true);
             break;
         }
@@ -904,7 +928,7 @@ exception_t handleSyscall(syscall_t syscall)
 
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/c_traps.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -972,7 +996,58 @@ void VISIBLE NORETURN restore_user_context(void)
     );
     UNREACHABLE();
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/idle.c"
+
+#if defined(CONFIG_DEBUG_BUILD)
+/* See 'arm_vector_table' for details on 'vect_offset' */
+static const char *vect_offset_to_name(word_t vect_offset)
+{
+    switch (vect_offset) {
+    case 0x000:
+        return "Synchronous EL1t/EL2t";
+    case 0x080:
+        return "IRQ EL1t/EL2t";
+    case 0x100:
+        return "FIQ EL1t/EL2t";
+    case 0x180:
+        return "SError EL1t/EL2t";
+    case 0x200:
+        return "Synchronous Current EL";
+    case 0x280:
+        return "IRQ Current EL";
+    case 0x300:
+        return "FIQ Current EL";
+    case 0x380:
+        return "SError Current EL";
+    case 0x400:
+        return "Synchronous 64-bit EL0/EL1";
+    case 0x480:
+        return "IRQ 64-bit EL0/EL1";
+    case 0x500:
+        return "FIQ 64-bit EL0/EL1";
+    case 0x580:
+        return "SError 64-bit EL0/EL1";
+    case 0x600:
+        return "Synchronous 32-bit EL0/EL1";
+    case 0x680:
+        return "IRQ 32-bit EL0/EL1";
+    case 0x700:
+        return "FIQ 32-bit EL0/EL1";
+    case 0x780:
+        return "SError 32-bit EL0/EL1";
+    default:
+        return "<Unknown>";
+    }
+}
+
+void VISIBLE c_handle_invalid_vector_entry(word_t vect_offset, word_t pc)
+{
+    printf("\n\nKERNEL INVALID VECTOR ENTRY!\n");
+    printf("Vector: 0x%"SEL4_PRIx_word" (%s)\n", vect_offset, vect_offset_to_name(vect_offset));
+    printf("Fault attributed to program counter: 0x%"SEL4_PRIx_word"\n", pc);
+    printf("ESR: 0x%"SEL4_PRIx_word" FAR: 0x%"SEL4_PRIx_word"\n", getESR(), getFAR());
+}
+#endif
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/idle.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -998,7 +1073,7 @@ void NORETURN NO_INLINE VISIBLE halt(void)
     idle_thread();
     UNREACHABLE();
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/thread.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1038,7 +1113,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 {
     /* Don't need to do anything */
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -2175,6 +2250,8 @@ static void doFlush(word_t invLabel, vptr_t start, vptr_t end, paddr_t pstart)
         /* ...then invalidate the corresponding instruction lines
            to point of unification... */
         invalidateCacheRange_I(start, end, pstart);
+        /* ... then wait for the completion of invalidations... */
+        dsb();
         /* ... and ensure new instructions come from fresh cache lines. */
         isb();
         break;
@@ -3042,7 +3119,7 @@ exception_t benchmark_arch_map_logBuffer(word_t frame_cptr)
     return EXCEPTION_NONE;
 }
 #endif /* CONFIG_KERNEL_LOG_BUFFER */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/capdl.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3553,7 +3630,7 @@ void debug_capDL(void)
 }
 
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/debug.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3808,7 +3885,7 @@ void aarch64_restore_user_debug_context(tcb_t *target_thread)
 }
 
 #endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/fpu.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3847,7 +3924,7 @@ BOOT_CODE bool_t fpsimd_HWCapTest(void)
 
     return true;
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/registerset.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3890,7 +3967,7 @@ word_t getNBSendRecvDest(void)
     return getRegister(NODE_STATE(ksCurThread), nbsendRecvDest);
 }
 #endif
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/model/statedata.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/model/statedata.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4022,7 +4099,7 @@ asid_t smmuStateCBAsidTable[SMMU_MAX_CB];
 /* Null state for the Debug coprocessor's break/watchpoint registers */
 user_breakpoint_state_t armKSNullBreakpointState;
 #endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4570,7 +4647,7 @@ Arch_prepareThreadDelete(tcb_t * thread) {
     fpuRelease(thread);
 #endif
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/api/faults.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4634,7 +4711,7 @@ word_t Arch_setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffe
         fail("Invalid fault");
     }
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/armv/armv8-a/64/cache.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/armv/armv8-a/64/cache.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4743,7 +4820,7 @@ void cleanInvalidate_L1D(void)
 {
     cleanInvalidate_D_by_level(0);
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/armv/armv8-a/64/user_access.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4808,7 +4885,7 @@ void armv_init_user_access(void)
     check_export_pmu();
     check_export_arch_timer();
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/benchmark/benchmark.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/benchmark/benchmark.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4847,7 +4924,7 @@ void arm_init_ccnt(void)
 #endif /* CONFIG_ARM_ENABLE_PMU_OVERFLOW_INTERRUPT */
 }
 #endif
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/c_traps.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5060,7 +5137,7 @@ VISIBLE NORETURN void c_handle_vcpu_fault(word_t hsr)
     UNREACHABLE();
 }
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2021, HENSOLDT Cyber
@@ -5533,12 +5610,7 @@ static BOOT_CODE bool_t try_init_kernel(
         extra_bi_offset += dtb_size;
     }
 
-    if (extra_bi_size > extra_bi_offset) {
-        /* provide a chunk for any leftover padding in the extended boot info */
-        header.id = SEL4_BOOTINFO_HEADER_PADDING;
-        header.len = (extra_bi_size - extra_bi_offset);
-        *(seL4_BootInfoHeader *)(rootserver.extra_bi + extra_bi_offset) = header;
-    }
+    assert(extra_bi_size == extra_bi_offset);
 
     if (config_set(CONFIG_TK1_SMMU)) {
         ndks_boot.bi_frame->ioSpaceCaps = create_iospace_caps(root_cnode_cap);
@@ -5738,7 +5810,7 @@ BOOT_CODE VISIBLE void init_kernel(
     schedule();
     activateThread();
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/thread.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5765,7 +5837,7 @@ void Arch_prepareSetDomain(tcb_t *tptr, dom_t dom)
         vcpu_flush_if_current(tptr);
     }
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/cache.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/cache.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5974,7 +6046,7 @@ void arch_clean_invalidate_L1_caches(word_t type)
         isb();
     }
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/debug.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6590,7 +6662,7 @@ void restore_user_debug_context(tcb_t *target_thread)
 }
 
 #endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/errata.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/errata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6636,253 +6708,486 @@ BOOT_CODE void VISIBLE arm_errata(void)
 #endif
 }
 
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/gic_v2.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/gic_v3.c"
 /*
- * Copyright 2014, General Dynamics C4 Systems
+ * Copyright 2019, DornerWorks
+ * Copyright 2019, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
 #include <config.h>
-#include <arch/machine/gic_v2.h>
-
-#define TARGET_CPU_ALLINT(CPU) ( \
-        ( ((CPU)&0xff)<<0u  ) |\
-        ( ((CPU)&0xff)<<8u  ) |\
-        ( ((CPU)&0xff)<<16u ) |\
-        ( ((CPU)&0xff)<<24u ) \
-    )
-#define TARGET_CPU0_ALLINT   TARGET_CPU_ALLINT(BIT(0))
-
-/* Use this to forward interrupts to all CPUs when debugging */
-#define TARGET_CPU_ALL_ALLINT   TARGET_CPU_ALLINT(0xff)
+#include <types.h>
+#include <arch/machine/gic_v3.h>
 
 #define IRQ_SET_ALL 0xffffffff
 
-#ifndef GIC_V2_DISTRIBUTOR_PPTR
-#error GIC_V2_DISTRIBUTOR_PPTR must be defined for virtual memory access to the gic distributer
-#else  /* GIC_DISTRIBUTOR_PPTR */
-volatile struct gic_dist_map *const gic_dist =
-    (volatile struct gic_dist_map *)(GIC_V2_DISTRIBUTOR_PPTR);
-#endif /* GIC_DISTRIBUTOR_PPTR */
+#define RDIST_BANK_SZ 0x00010000
+/* One GICR region and one GICR_SGI region */
+#define GICR_PER_CORE_SIZE  (0x20000)
+/* Assume 8 cores */
+#define GICR_SIZE           (0x100000)
 
-#ifndef GIC_V2_CONTROLLER_PPTR
-#error GIC_V2_CONTROLLER_PPTR must be defined for virtual memory access to the gic cpu interface
-#else  /* GIC_CONTROLLER_PPTR */
-volatile struct gic_cpu_iface_map *const gic_cpuiface =
-    (volatile struct gic_cpu_iface_map *)(GIC_V2_CONTROLLER_PPTR);
-#endif /* GIC_CONTROLLER_PPTR */
+#define GIC_DEADLINE_MS 2
+#define GIC_REG_WIDTH   32
+
+#ifdef CONFIG_ARCH_AARCH64
+#define ICC_SGI1R_EL1 "S3_0_C12_C11_5"
+#else
+#define ICC_SGI1R_EL1 "p15, 0, %Q0, %R0, c12"
+#endif
+
+#define ICC_SGI1R_INTID_SHIFT          (24)
+#define ICC_SGI1R_AFF1_SHIFT           (16)
+#define ICC_SGI1R_AFF2_SHIFT           (32)
+#define ICC_SGI1R_AFF3_SHIFT           (48)
+#define ICC_SGI1R_RS_SHIFT             (44)
+#define ICC_SGI1R_IRM_BIT              (40)
+#define ICC_SGI1R_CPUTARGETLIST_MASK   0xffff
+
+volatile struct gic_dist_map *const gic_dist = (volatile struct gic_dist_map *)(GICD_PPTR);
+volatile void *const gicr_base = (volatile uint8_t *)(GICR_PPTR);
 
 word_t active_irq[CONFIG_MAX_NUM_NODES];
+volatile struct gic_rdist_map *gic_rdist_map[CONFIG_MAX_NUM_NODES] = { 0 };
+volatile struct gic_rdist_sgi_ppi_map *gic_rdist_sgi_ppi_map[CONFIG_MAX_NUM_NODES] = { 0 };
 
-/* Get the target id for this processor. We rely on the constraint that the registers
- * for PPI are read only and return only the current processor as the target.
- * If this doesn't lead to a valid ID, we emit a warning and default to core 0.
- */
-BOOT_CODE static uint8_t infer_cpu_gic_id(int nirqs)
+#ifdef CONFIG_ARCH_AARCH64
+#define MPIDR_AFF0(x) (x & 0xff)
+#define MPIDR_AFF1(x) ((x >> 8) & 0xff)
+#define MPIDR_AFF2(x) ((x >> 16) & 0xff)
+#define MPIDR_AFF3(x) ((x >> 32) & 0xff)
+#else
+#define MPIDR_AFF0(x) (x & 0xff)
+#define MPIDR_AFF1(x) ((x >> 8) & 0xff)
+#define MPIDR_AFF2(x) ((x >> 16) & 0xff)
+#define MPIDR_AFF3(x) (0)
+#endif
+#define MPIDR_MT(x)   (x & BIT(24))
+#define MPIDR_AFF_MASK(x) (x & 0xff00ffffff)
+
+static word_t mpidr_map[CONFIG_MAX_NUM_NODES];
+
+static inline word_t get_mpidr(word_t core_id)
 {
-    word_t i;
-    uint32_t target = 0;
-    for (i = 0; i < nirqs; i += 4) {
-        target = gic_dist->targets[i >> 2];
-        target |= target >> 16;
-        target |= target >> 8;
-        if (target) {
-            break;
+    return mpidr_map[core_id];
+}
+
+static inline word_t get_current_mpidr(void)
+{
+    word_t core_id = CURRENT_CPU_INDEX();
+    return get_mpidr(core_id);
+}
+
+static inline uint64_t mpidr_to_gic_affinity(void)
+{
+    word_t mpidr = get_current_mpidr();
+    uint64_t affinity = 0;
+    affinity = (uint64_t)MPIDR_AFF3(mpidr) << 32 | MPIDR_AFF2(mpidr) << 16 |
+               MPIDR_AFF1(mpidr) << 8  | MPIDR_AFF0(mpidr);
+    return affinity;
+}
+
+static inline uint64_t sgir_word_from_args(word_t irq, word_t target)
+{
+    uint64_t t = target; /* make sure shifts below are on 64 bit */
+    return (uint64_t) irq << ICC_SGI1R_INTID_SHIFT
+           | (1llu << (t & 0xf)) // AFF0 base
+           | ((t >> 4)  & 0x0f) << ICC_SGI1R_RS_SHIFT // AFF0 Range select
+           | ((t >> 8)  & 0xff) << ICC_SGI1R_AFF1_SHIFT // AFF1
+           | ((t >> 16) & 0xff) << ICC_SGI1R_AFF2_SHIFT // AFF2
+           | ((t >> 24) & 0xff) << ICC_SGI1R_AFF2_SHIFT; // AFF3
+}
+
+/* Wait for completion of a distributor change */
+/** DONT_TRANSLATE */
+static uint32_t gicv3_do_wait_for_rwp(volatile uint32_t *ctlr_addr)
+{
+    uint32_t val;
+    bool_t waiting = true;
+    uint32_t ret = 0;
+
+    uint64_t gpt_cnt_tval = 0;
+    uint32_t deadline_ms =  GIC_DEADLINE_MS;
+    uint64_t gpt_cnt_ciel;
+
+    /* Check the value before reading the generic timer */
+    val = *ctlr_addr;
+    if (!(val & GICD_CTLR_RWP)) {
+        return 0;
+    }
+    SYSTEM_READ_64(CNT_CT, gpt_cnt_tval);
+    gpt_cnt_ciel = gpt_cnt_tval + (deadline_ms * TICKS_PER_MS);
+
+    while (waiting) {
+        SYSTEM_READ_64(CNT_CT, gpt_cnt_tval);
+        val = *ctlr_addr;
+
+        if (gpt_cnt_tval >= gpt_cnt_ciel) {
+            printf("GICV3 RWP Timeout after %u ms\n", deadline_ms);
+            ret = 1;
+            waiting = false;
+
+        } else if (!(val & GICD_CTLR_RWP)) {
+            ret = 0;
+            waiting = false;
         }
     }
-    if (!target) {
-        printf("Warning: Could not infer GIC interrupt target ID, assuming 0.\n");
-        target = BIT(0);
-    }
-    return target & 0xff;
+    return ret;
 }
+
+static void gicv3_dist_wait_for_rwp(void)
+{
+    gicv3_do_wait_for_rwp(&gic_dist->ctlr);
+}
+
+static void gicv3_redist_wait_for_rwp(void)
+{
+    gicv3_do_wait_for_rwp(&gic_rdist_map[CURRENT_CPU_INDEX()]->ctlr);
+}
+
+static void gicv3_enable_sre(void)
+{
+    word_t val;
+
+#ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
+    /* Set SRE to enable register interface for GICv3 in EL2. Disable IRQ/FIQ legacy bypass.
+     * Set ICC_SRE_EL2.Enable to 0, so EL1 accesses to ICC_SRE_EL1 will trap.
+     *
+     * SRE may be RAO/WI and DIB/DFB may be read-only aliases of ICC_SRE_EL3 on cores
+     * with EL3. Writing to them is harmless.
+     */
+    val = GICC_SRE_EL2_SRE | GICC_SRE_EL2_DIB | GICC_SRE_EL2_DFB;
+    SYSTEM_WRITE_WORD(ICC_SRE_EL2, val);
+#endif
+
+    /* Enable register interface for GICv3 in EL1. Disable IRQ/FIQ legacy bypass. */
+    val = GICC_SRE_EL1_SRE | GICC_SRE_EL1_DIB | GICC_SRE_EL1_DFB;
+    SYSTEM_WRITE_WORD(ICC_SRE_EL1, val);
+    isb();
+}
+
 
 BOOT_CODE static void dist_init(void)
 {
     word_t i;
-    int nirqs = 32 * ((gic_dist->ic_type & 0x1f) + 1);
-    gic_dist->enable = 0;
+    uint32_t type;
+    unsigned int nr_lines;
+    uint64_t affinity;
+    uint32_t priority;
 
-    for (i = 0; i < nirqs; i += 32) {
-        /* disable */
-        gic_dist->enable_clr[i >> 5] = IRQ_SET_ALL;
-        /* clear pending */
-        gic_dist->pending_clr[i >> 5] = IRQ_SET_ALL;
+    /* Disable GIC Distributor */
+    gic_dist->ctlr = 0;
+    gicv3_dist_wait_for_rwp();
+
+    type = gic_dist->typer;
+
+    nr_lines = GIC_REG_WIDTH * ((type & GICD_TYPE_LINESNR) + 1);
+
+    /* Assume level-triggered */
+    for (i = SPI_START; i < nr_lines; i += 16) {
+        gic_dist->icfgrn[(i / 16)] = 0;
     }
 
-    /* reset interrupts priority */
-    for (i = 32; i < nirqs; i += 4) {
-        if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
-            gic_dist->priority[i >> 2] = 0x80808080;
-        } else {
-            gic_dist->priority[i >> 2] = 0;
+    /* Default priority for global interrupts */
+    priority = (GIC_PRI_IRQ << 24 | GIC_PRI_IRQ << 16 | GIC_PRI_IRQ << 8 |
+                GIC_PRI_IRQ);
+    for (i = SPI_START; i < nr_lines; i += 4) {
+        gic_dist->ipriorityrn[(i / 4)] = priority;
+    }
+    /* Disable and clear all global interrupts */
+    for (i = SPI_START; i < nr_lines; i += 32) {
+        gic_dist->icenablern[(i / 32)] = IRQ_SET_ALL;
+        gic_dist->icpendrn[(i / 32)] = IRQ_SET_ALL;
+    }
+
+    /* group 1 for non-secure */
+    if (config_set(CONFIG_PLAT_QEMU_ARM_VIRT)) {
+        for (i = SPI_START; i < nr_lines; i += 32) {
+            gic_dist->igrouprn[(i / 32)] = IRQ_SET_ALL;
         }
+    }
+
+    gic_dist->ctlr = GICD_CTLR_ARE_NS | GICD_CTLR_ENABLE_G1NS | GICD_CTLR_ENABLE_G0;
+    gicv3_dist_wait_for_rwp();
+
+    /* Route all global IRQs to this CPU */
+    affinity = mpidr_to_gic_affinity();
+    for (i = SPI_START; i < nr_lines; i++) {
+        gic_dist->iroutern[i - SPI_START] = affinity;
+    }
+
+}
+
+BOOT_CODE static uint32_t gicr_enable_rdist(int core_id)
+{
+    uint32_t deadline_ms =  GIC_DEADLINE_MS;
+    bool_t waiting = true;
+    uint32_t val;
+    uint64_t gpt_cnt_tval = 0;
+    uint64_t gpt_cnt_ciel;
+    uint32_t ret = 0;
+
+    val = gic_rdist_map[core_id]->waker;
+    val &= ~GICR_WAKER_ProcessorSleep;
+    gic_rdist_map[core_id]->waker = val;
+
+    SYSTEM_READ_64(CNT_CT, gpt_cnt_tval);
+    gpt_cnt_ciel = gpt_cnt_tval + (deadline_ms * TICKS_PER_MS);
+
+    while (waiting) {
+        SYSTEM_READ_64(CNT_CT, gpt_cnt_tval);
+        val = gic_rdist_map[core_id]->waker;
+
+        if (gpt_cnt_tval >= gpt_cnt_ciel) {
+            printf("GICv3: GICR_WAKER returned non-zero %x\n", val);
+            ret = 1;
+            waiting = false;
+
+        } else if (!(val & GICR_WAKER_ChildrenAsleep)) {
+            ret = 0;
+            waiting = false;
+        }
+    }
+    return ret;
+}
+
+BOOT_CODE static void gicr_locate_interface(void)
+{
+    word_t offset;
+    int core_id = CURRENT_CPU_INDEX();
+    word_t mpidr = get_current_mpidr();
+    uint32_t val;
+
+    /*
+     * Iterate through all redistributor interfaces looking for one that matches
+     * our mpidr.
+     */
+    for (offset = 0; offset < GICR_SIZE; offset += GICR_PER_CORE_SIZE) {
+
+        uint64_t typer = ((struct gic_rdist_map *)((word_t)gicr_base + offset))->typer;
+        if ((typer >> 32) == ((MPIDR_AFF3(mpidr) << 24) |
+                              (MPIDR_AFF2(mpidr) << 16) |
+                              (MPIDR_AFF1(mpidr) <<  8) |
+                              MPIDR_AFF0(mpidr))) {
+
+            word_t gicr = (word_t)gicr_base + offset;
+            if (gic_rdist_map[core_id] != NULL || gic_rdist_sgi_ppi_map[core_id] != NULL) {
+                printf("GICv3: %s[%d] %p is not null\n",
+                       gic_rdist_map[core_id] == NULL ? "gic_rdist_map" : "gic_rdist_sgi_ppi_map",
+                       core_id,
+                       gic_rdist_map[core_id] == NULL ? (void *)gic_rdist_map[core_id] : (void *)gic_rdist_sgi_ppi_map[core_id]);
+                halt();
+            }
+            gic_rdist_map[core_id] = (void *)gicr;
+            gic_rdist_sgi_ppi_map[core_id] = (void *)(gicr + RDIST_BANK_SZ);
+
+            /*
+             * GICR_WAKER should be Read-all-zeros in Non-secure world
+             * and we expect redistributors to be already awoken by an earlier loader.
+             * However if we get a value back then something is probably wrong.
+             */
+            val = gic_rdist_map[core_id]->waker;
+            if (val & GICR_WAKER_ChildrenAsleep) {
+                /* On QEMU, the redistributor may not be woken by an earlier
+                 * loader, so we need to explicitly wake it here. */
+                int ret = gicr_enable_rdist(core_id);
+                if (ret == 1) {
+                    halt();
+                }
+            }
+            break;
+        }
+    }
+    if (offset >= GICR_SIZE) {
+        printf("GICv3: GICR base for CPU %d %d %d %d (Logic ID %d) not found\n",
+               (int)MPIDR_AFF3(mpidr), (int)MPIDR_AFF2(mpidr),
+               (int)MPIDR_AFF1(mpidr), (int)MPIDR_AFF0(mpidr), core_id);
+        halt();
+    }
+
+
+}
+
+BOOT_CODE static void gicr_init(void)
+{
+    int i;
+    uint32_t priority;
+
+    /* Find redistributor for this core. */
+    gicr_locate_interface();
+
+    /* Deactivate SGIs/PPIs */
+    gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->icactiver0 = ~0;
+
+    /* Set priority on PPI and SGI interrupts */
+    priority = (GIC_PRI_IRQ << 24 | GIC_PRI_IRQ << 16 | GIC_PRI_IRQ << 8 |
+                GIC_PRI_IRQ);
+    for (i = 0; i < SPI_START; i += 4) {
+        gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->ipriorityrn[i / 4] = priority;
     }
 
     /*
-     * reset int target to current cpu
-     * We query which id that the GIC uses for us and use that.
+     * Disable all PPI interrupts, ensure all SGI interrupts are
+     * enabled.
      */
-    uint8_t target = infer_cpu_gic_id(nirqs);
-    for (i = 0; i < nirqs; i += 4) {
-        gic_dist->targets[i >> 2] = TARGET_CPU_ALLINT(target);
+    gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->icenabler0 = 0xffff0000;
+    gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->isenabler0 = 0x0000ffff;
+    if (config_set(CONFIG_PLAT_QEMU_ARM_VIRT)) {
+        gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->igroupr0 = IRQ_SET_ALL;
     }
 
-    /* level-triggered, 1-N */
-    for (i = 64; i < nirqs; i += 32) {
-        gic_dist->config[i >> 5] = 0x55555555;
-    }
+    /* Set ICFGR1 for PPIs as level-triggered */
+    gic_rdist_sgi_ppi_map[CURRENT_CPU_INDEX()]->icfgr1 = 0x0;
 
-    /* group 0 for secure; group 1 for non-secure */
-    for (i = 0; i < nirqs; i += 32) {
-        if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT) && !config_set(CONFIG_PLAT_QEMU_ARM_VIRT)) {
-            gic_dist->security[i >> 5] = 0xffffffff;
-        } else {
-            gic_dist->security[i >> 5] = 0;
-        }
-    }
-    /* enable the int controller */
-    gic_dist->enable = 1;
+    gicv3_redist_wait_for_rwp();
 }
 
 BOOT_CODE static void cpu_iface_init(void)
 {
-    uint32_t i;
+    word_t icc_ctlr = 0;
 
-    /* For non-Exynos4, the registers are banked per CPU, need to clear them */
-    gic_dist->enable_clr[0] = IRQ_SET_ALL;
-    gic_dist->pending_clr[0] = IRQ_SET_ALL;
+    /* Enable system registers */
+    gicv3_enable_sre();
 
-    /* put everything in group 0; group 1 if in hyp mode */
-    if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT) && !config_set(CONFIG_PLAT_QEMU_ARM_VIRT)) {
-        gic_dist->security[0] = 0xffffffff;
-        gic_dist->priority[0] = 0x80808080;
-    } else {
-        gic_dist->security[0] = 0;
-        gic_dist->priority[0] = 0x0;
-    }
+    /* No priority grouping: ICC_BPR1_EL1 */
+    SYSTEM_WRITE_WORD(ICC_BPR1_EL1, 0);
 
-    /* clear any software generated interrupts */
-    for (i = 0; i < 16; i += 4) {
-        gic_dist->sgi_pending_clr[i >> 2] = IRQ_SET_ALL;
-    }
+    /* Set priority mask register: ICC_PMR_EL1 */
+    SYSTEM_WRITE_WORD(ICC_PMR_EL1, DEFAULT_PMR_VALUE);
 
-    gic_cpuiface->icontrol = 0;
-    /* the write to priority mask is ignored if the kernel is
-     * in non-secure mode and the priority mask is already configured
-     * by secure mode software. the elfloader should config the
-     * interrupt routing properly to ensure that the hyp-mode kernel
-     * can get interrupts
-     */
-    gic_cpuiface->pri_msk_c = 0x000000f0;
-    gic_cpuiface->pb_c = 0x00000003;
+    /* EOI drops priority of the interrupt, deactivation happens separately: ICC_CTLR_EL1 */
+    SYSTEM_READ_WORD(ICC_CTLR_EL1, icc_ctlr);
+    icc_ctlr |= GICC_CTLR_EL1_EOImode_drop;
+    SYSTEM_WRITE_WORD(ICC_CTLR_EL1, icc_ctlr);
 
-    i = gic_cpuiface->int_ack;
-    while ((i & IRQ_MASK) != IRQ_NONE) {
-        gic_cpuiface->eoi = i;
-        i = gic_cpuiface->int_ack;
-    }
-    gic_cpuiface->icontrol = 1;
+    /* Enable Group1 interrupts: ICC_IGRPEN1_EL1 */
+    SYSTEM_WRITE_WORD(ICC_IGRPEN1_EL1, 1);
+
+    /* Sync at once at the end of cpu interface configuration */
+    isb();
 }
 
 void setIRQTrigger(irq_t irq, bool_t trigger)
 {
-    /* in the gic_config, there is a 2 bit field for each irq,
-     * setting the most significant bit of this field makes the irq edge-triggered,
-     * while 0 indicates that it is level-triggered */
-    word_t index = IRQT_TO_IRQ(irq) / 16u;
-    word_t offset = (IRQT_TO_IRQ(irq) % 16u) * 2;
-    if (trigger) {
-        /* set the bit */
-        gic_dist->config[index] |= BIT(offset + 1);
-    } else {
-        gic_dist->config[index] &= ~BIT(offset + 1);
+
+    /* GICv3 has read-only GICR_ICFG0 for SGI with
+     * default value 0xaaaaaaaa, and read-write GICR_ICFG1
+     * for PPI with default 0x00000000.*/
+    word_t hw_irq = IRQT_TO_IRQ(irq);
+    word_t core = IRQT_TO_CORE(irq);
+    if (HW_IRQ_IS_SGI(hw_irq)) {
+        return;
     }
+    int word = hw_irq >> 4;
+    int bit = ((hw_irq & 0xf) * 2);
+    uint32_t icfgr = 0;
+    if (HW_IRQ_IS_PPI(hw_irq)) {
+        icfgr = gic_rdist_sgi_ppi_map[core]->icfgr1;
+    } else {
+        icfgr = gic_dist->icfgrn[word];
+    }
+
+    if (trigger) {
+        icfgr |= (2 << bit);
+    } else {
+        icfgr &= ~(3 << bit);
+    }
+
+    if (HW_IRQ_IS_PPI(hw_irq)) {
+        gic_rdist_sgi_ppi_map[core]->icfgr1 = icfgr;
+    } else {
+        /* Update GICD_ICFGR<n>. Note that the interrupt should
+         * be disabled before changing the field, and this function
+         * assumes the caller has disabled the interrupt. */
+        gic_dist->icfgrn[word] = icfgr;
+    }
+
+    return;
 }
 
 BOOT_CODE void initIRQController(void)
 {
-    /* irqInvalid cannot correspond to a valid IRQ index into the irq state array */
-    assert(INT_STATE_ARRAY_SIZE < IRQT_TO_IRQ(irqInvalid));
     dist_init();
 }
 
 BOOT_CODE void cpu_initLocalIRQController(void)
 {
+    word_t mpidr = 0;
+    SYSTEM_READ_WORD(MPIDR, mpidr);
+
+    mpidr_map[CURRENT_CPU_INDEX()] = mpidr;
     active_irq[CURRENT_CPU_INDEX()] = IRQ_NONE;
+
+    gicr_init();
     cpu_iface_init();
 }
 
 bool_t plat_SGITargetValid(word_t target)
 {
-    /* written as <= so that the term is the same as in gic_v3 for the proofs */
-    return target <= GIC_SGI_NUM_TARGETS - 1;
+    /* Aff0+Aff1+Aff2+Aff3 values are not guaranteed to be contiguous
+     * and the first core may have a non-zero affinity value. */
+    return target <= UINT32_MAX;
 }
 
 void plat_sendSGI(word_t irq, word_t target)
 {
-    gic_dist->sgi_control = (BIT(target) << (GICD_SGIR_CPUTARGETLIST_SHIFT)) | (irq << GICD_SGIR_SGIINTID_SHIFT);
+    uint64_t sgi1r_base = sgir_word_from_args(irq, target);
+    SYSTEM_WRITE_64(ICC_SGI1R_EL1, sgi1r_base);
+    isb();
 }
 
 #ifdef ENABLE_SMP_SUPPORT
-/*
-* 25-24: target lister filter
-* 0b00 - send the ipi to the CPU interfaces specified in the CPU target list
-* 0b01 - send the ipi to all CPU interfaces except the cpu interface.
-*        that requested the ipi
-* 0b10 - send the ipi only to the CPU interface that requested the IPI.
-* 0b11 - reserved
-*.
-* 23-16: CPU targets list
-* each bit of CPU target list [7:0] refers to the corresponding CPU interface.
-* 3-0:   SGIINTID
-* software generated interrupt id, from 0 to 15...
-*/
+#define MPIDR_MT(x)   (x & BIT(24))
+
 void ipi_send_target(irq_t irq, word_t cpuTargetList)
 {
-    if (config_set(CONFIG_PLAT_TX2)) {
-        /* We need to swap the top 4 bits and the bottom 4 bits of the
-         * cpuTargetList since the A57 cores with logical core ID 0-3 are
-         * in cluster 1 and the Denver2 cores with logical core ID 4-5 are
-         * in cluster 0. */
-        cpuTargetList = ((cpuTargetList & 0xf) << 4) | ((cpuTargetList & 0xf0) >> 4);
+    uint64_t sgi1r_base = ((word_t) IRQT_TO_IRQ(irq)) << ICC_SGI1R_INTID_SHIFT;
+    word_t sgi1r[CONFIG_MAX_NUM_NODES];
+    word_t last_aff1 = 0;
+
+    for (word_t i = 0; i < CONFIG_MAX_NUM_NODES; i++) {
+        sgi1r[i] = 0;
+        if (cpuTargetList & BIT(i)) {
+            word_t mpidr = mpidr_map[i];
+            word_t aff1 = MPIDR_AFF1(mpidr);
+            word_t aff0 = MPIDR_AFF0(mpidr);
+            // AFF1 is assumed to be contiguous and less than CONFIG_MAX_NUM_NODES.
+            // The targets are grouped by AFF1.
+            assert(aff1 >= 0 && aff1 < CONFIG_MAX_NUM_NODES);
+            sgi1r[aff1] |= sgi1r_base | (aff1 << ICC_SGI1R_AFF1_SHIFT) | (1 << aff0);
+            if (aff1 > last_aff1) {
+                last_aff1 = aff1;
+            }
+        }
     }
-    gic_dist->sgi_control = (cpuTargetList << (GICD_SGIR_CPUTARGETLIST_SHIFT)) | (IRQT_TO_IRQ(
-                                                                                      irq) << GICD_SGIR_SGIINTID_SHIFT);
+    for (word_t i = 0; i <= last_aff1; i++) {
+        if (sgi1r[i] != 0) {
+            SYSTEM_WRITE_64(ICC_SGI1R_EL1, sgi1r[i]);
+        }
+    }
+    isb();
 }
 
-/*
- * Set CPU target for the interrupt if it's not a PPI
- */
 void setIRQTarget(irq_t irq, seL4_Word target)
 {
-    uint8_t targetList = 1 << target;
-    uint8_t *targets = (void *)(gic_dist->targets);
-    word_t hwIRQ = IRQT_TO_IRQ(irq);
-
-    /* Return early if PPI */
     if (IRQ_IS_PPI(irq)) {
         fail("PPI can't have designated target core\n");
         return;
     }
-    targets[hwIRQ] = targetList;
+
+    word_t hw_irq = IRQT_TO_IRQ(irq);
+    gic_dist->iroutern[hw_irq - SPI_START] = MPIDR_AFF_MASK(mpidr_map[target]);
 }
+
 #endif /* ENABLE_SMP_SUPPORT */
 
 #ifdef CONFIG_ARM_HYPERVISOR_SUPPORT
 
-#ifndef GIC_V2_VCPUCTRL_PPTR
-#error GIC_V2_VCPUCTRL_PPTR must be defined for virtual memory access to the gic virtual cpu interface control
-#else  /* GIC_PL400_GICVCPUCTRL_PPTR */
-volatile struct gich_vcpu_ctrl_map *gic_vcpu_ctrl =
-    (volatile struct gich_vcpu_ctrl_map *)(GIC_V2_VCPUCTRL_PPTR);
-#endif /* GIC_PL400_GICVCPUCTRL_PPTR */
-
 word_t gic_vcpu_num_list_regs;
 
 #endif /* End of CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/hardware.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/hardware.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6928,7 +7233,7 @@ BOOT_CODE void map_kernel_devices(void)
     }
 }
 
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/io.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/io.c"
 /*
  * Copyright 2021, Axel Heider <axelheider@gmx.de>
  *
@@ -6952,7 +7257,7 @@ unsigned char kernel_getDebugChar(void)
     return uart_drv_getchar();
 }
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/l2c_nop.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/l2c_nop.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6969,7 +7274,7 @@ void plat_cleanL2Range(paddr_t start, paddr_t end) {}
 void plat_invalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Cache(void) {}
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/interrupt.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7197,7 +7502,7 @@ exception_t decodeSGISignalInvocation(word_t invLabel, word_t length,
     return invokeSGISignalGenerate(irq, target);
 }
 #endif /* !CONFIG_ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/iospace.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/iospace.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -7674,7 +7979,7 @@ exception_t decodeARMIOSpaceInvocation(word_t invLabel, cap_t cap)
     return EXCEPTION_SYSCALL_ERROR;
 }
 #endif /* end of CONFIG_TK1_SMMU */
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/smc.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/smc.c"
 /*
  * Copyright 2021, DornerWorks Ltd.
  *
@@ -7774,7 +8079,7 @@ exception_t decodeARMSMCInvocation(word_t label, word_t length, cap_t cap, bool_
 }
 
 #endif
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/smmu.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/smmu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8187,7 +8492,7 @@ void invalidateSMMUTLBByASIDVA(asid_t asid, vptr_t vaddr, word_t bind_cb)
 
 #endif
 
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/tcb.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8211,7 +8516,7 @@ exception_t CONST Arch_performTransfer(word_t arch, tcb_t *tcb_src, tcb_t *tcb_d
 {
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/vcpu.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/vcpu.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8325,7 +8630,8 @@ void VPPIEvent(irq_t irq)
      * budget check that happens early in the handleInterruptEntry.
      *
      * If the current thread does *not* have budget, as indicated by its
-     * presence in the release queue, this interrupt is ignored for now.
+     * presence in either the scheduling or release queue, this interrupt
+     * is ignored for now.
      * As it is a level-triggered interrupt it shall be re-raised
      * (and not lost).
      *
@@ -8333,7 +8639,8 @@ void VPPIEvent(irq_t irq)
      * our timeslice having ended, and we have a timeout fault handler for
      * this thread, we do not want to overwrite that with our VCPU fault.
      */
-    if (!isSchedulable(NODE_STATE(ksCurThread))) {
+    if (thread_state_get_tcbQueued(NODE_STATE(ksCurThread)->tcbState) ||
+        !isSchedulable(NODE_STATE(ksCurThread))) {
         return;
     }
 #endif
@@ -8360,7 +8667,8 @@ void VGICMaintenance(void)
 
 #ifdef CONFIG_KERNEL_MCS
     /* See VPPIEvent for details on this check. */
-    if (!isSchedulable(NODE_STATE(ksCurThread))) {
+    if (thread_state_get_tcbQueued(NODE_STATE(ksCurThread)->tcbState) ||
+        !isSchedulable(NODE_STATE(ksCurThread))) {
         return;
     }
 #endif
@@ -8819,7 +9127,7 @@ void handleVCPUInjectInterruptIPI(vcpu_t *vcpu, unsigned long index, virq_t virq
 #endif /* ENABLE_SMP_SUPPORT */
 
 #endif
-#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/smp/ipi.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8895,7 +9203,7 @@ void ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking)
     generic_ipi_send_mask(ipi, mask, isBlocking);
 }
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4_15/src/assert.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/assert.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8939,7 +9247,7 @@ void _assert_fail(
 }
 
 #endif
-#line 1 "/Users/lukasbower/seL4_15/src/benchmark/benchmark.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/benchmark/benchmark.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9096,7 +9404,7 @@ exception_t handle_SysBenchmarkResetAllThreadsUtilisation(void)
 #endif /* CONFIG_DEBUG_BUILD */
 #endif /* CONFIG_BENCHMARK_TRACK_UTILISATION */
 #endif /* CONFIG_ENABLE_BENCHMARKS */
-#line 1 "/Users/lukasbower/seL4_15/src/benchmark/benchmark_track.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/benchmark/benchmark_track.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9131,7 +9439,7 @@ void benchmark_track_exit(void)
     }
 }
 #endif /* CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES */
-#line 1 "/Users/lukasbower/seL4_15/src/benchmark/benchmark_utilisation.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/benchmark/benchmark_utilisation.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9210,7 +9518,7 @@ void benchmark_track_reset_utilisation(tcb_t *tcb)
     tcb->benchmark.schedule_start_time = 0;
 }
 #endif /* CONFIG_BENCHMARK_TRACK_UTILISATION */
-#line 1 "/Users/lukasbower/seL4_15/src/drivers/serial/pl011.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/drivers/serial/pl011.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9248,7 +9556,7 @@ unsigned char uart_drv_getchar(void)
     return *UART_REG(UARTDR);
 }
 #endif  /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/seL4_15/src/drivers/timer/generic_timer.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/drivers/timer/generic_timer.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9389,7 +9697,7 @@ static void restore_virt_timer(vcpu_t *vcpu)
 }
 
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -9857,7 +10165,7 @@ void NORETURN fastpath_reply_recv(word_t cptr, word_t msgInfo)
     } else {
 #ifdef CONFIG_KERNEL_MCS
         /* Update queue. */
-        tcb_queue_t queue = tcbEPAppend(NODE_STATE(ksCurThread), ep_ptr_get_queue(ep_ptr));
+        tcb_queue_t queue = tcbAppend(NODE_STATE(ksCurThread), ep_ptr_get_queue(ep_ptr));
         endpoint_ptr_set_epQueue_head_np(ep_ptr, TCB_REF(queue.head));
         endpoint_ptr_mset_epQueue_tail_state(ep_ptr, TCB_REF(queue.end), EPState_Recv);
 #else
@@ -10072,7 +10380,7 @@ void NORETURN fastpath_signal(word_t cptr, word_t msgInfo)
         cancelIPC_fp(dest);
     } else {
         /* Dequeue dest from the notification queue */
-        ntfn_queue_dequeue_fp(dest, ntfnPtr);
+        tcbNTFNDequeue(dest, ntfnPtr);
     }
 
     /* Wake up the signalled thread and transfer badge */
@@ -10289,7 +10597,7 @@ void NORETURN fastpath_vm_fault(vm_fault_type_t type)
     fastpath_restore(badge, msgInfo, NODE_STATE(ksCurThread));
 }
 #endif
-#line 1 "/Users/lukasbower/seL4_15/src/inlines.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/inlines.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -10306,7 +10614,7 @@ syscall_error_t current_syscall_error;
 debug_syscall_error_t current_debug_error;
 #endif
 
-#line 1 "/Users/lukasbower/seL4_15/src/kernel/boot.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11117,9 +11425,11 @@ BOOT_CODE bool_t create_untypeds(cap_t root_cnode_cap)
         start = ndks_boot.reserved[i].end;
     }
 
-    if (start < CONFIG_PADDR_USER_DEVICE_TOP) {
+    if (start <= CONFIG_PADDR_USER_DEVICE_TOP - 1) {
         region_t reg = paddr_to_pptr_reg((p_region_t) {
-            start, CONFIG_PADDR_USER_DEVICE_TOP
+            /* CONFIG_PADDR_USER_DEVICE_TOP cast to paddr_t can be 0.
+             * create_untypeds_for_region() can deal with that correctly. */
+            start, (paddr_t) CONFIG_PADDR_USER_DEVICE_TOP
         });
 
         if (!create_untypeds_for_region(root_cnode_cap, true, reg, first_untyped_slot)) {
@@ -11176,17 +11486,6 @@ BOOT_CODE void bi_finalise(void)
     };
 }
 
-BOOT_CODE static inline pptr_t ceiling_kernel_window(pptr_t p)
-{
-    /* Adjust address if it exceeds the kernel window
-     * Note that we compare physical address in case of overflow.
-     */
-    if (pptr_to_paddr((void *)p) > PADDR_TOP) {
-        p = PPTR_TOP;
-    }
-    return p;
-}
-
 BOOT_CODE static bool_t check_available_memory(word_t n_available,
                                                const p_region_t *available)
 {
@@ -11196,28 +11495,29 @@ BOOT_CODE static bool_t check_available_memory(word_t n_available,
         return false;
     }
 
-    printf("available phys memory regions: %"SEL4_PRIu_word"\n", n_available);
+    printf("Available phys memory regions: %"SEL4_PRIu_word"\n", n_available);
     /* Force ordering and exclusivity of available regions. */
     for (word_t i = 0; i < n_available; i++) {
         const p_region_t *r = &available[i];
         printf("  [%"SEL4_PRIx_word"..%"SEL4_PRIx_word")\n", r->start, r->end);
 
-        /* Available regions must be sane */
+        /* Available regions must not wrap */
         if (r->start > r->end) {
             printf("ERROR: memory region %"SEL4_PRIu_word" has start > end\n", i);
             return false;
         }
 
-        /* Available regions can't be empty. */
+        /* Available regions must be non-empty. */
         if (r->start == r->end) {
             printf("ERROR: memory region %"SEL4_PRIu_word" empty\n", i);
             return false;
         }
 
         /* Regions must be ordered and must not overlap. Regions are [start..end),
-           so the == case is fine. Directly adjacent regions are allowed. */
+         * so the '==' case is fine. Directly adjacent regions are allowed.
+         */
         if ((i > 0) && (r->start < available[i - 1].end)) {
-            printf("ERROR: memory region %d in wrong order\n", (int)i);
+            printf("ERROR: memory region %"SEL4_PRIu_word" in wrong order\n", i);
             return false;
         }
     }
@@ -11225,11 +11525,61 @@ BOOT_CODE static bool_t check_available_memory(word_t n_available,
     return true;
 }
 
+/* We can't declare arrays on the stack, so this is space for init_avail_reg()
+ * below to populate and init_freemem() to consume. */
+BOOT_BSS static region_t avail_reg[MAX_NUM_FREEMEM_REG];
+
+/**
+ * Initialise avail_reg with the parts of the available memory regions that are
+ * in the kernel window, converted to kernel pointers. Only this memory can be
+ * used for kernel objects. On 32-bit architectures it is not uncommon for
+ * regions to be completely or partially outside of the kernel window, because
+ * the available address space is small. Memory outside of the kernel window is
+ * discarded here, but it may be made available as device untyped memory instead
+ * if it is not also in a reserved region. Regions must have passed
+ * check_available_memory(). Returns the number of entries populated in
+ * avail_reg.
+ */
+BOOT_CODE static word_t init_avail_reg(word_t n_available,
+                                       const p_region_t *available)
+{
+    word_t cnt = 0;
+    for (word_t i = 0; i < n_available; i++) {
+        const p_region_t *r = &available[i];
+
+        if ((r->start >= PADDR_TOP) || (r->end <= PADDR_BASE)) {
+            printf("  region [%"SEL4_PRIx_word"..%"SEL4_PRIx_word") is outside the kernel"
+                   " window, only potentially available as device untypeds\n", r->start, r->end);
+        } else {
+            p_region_t usable_reg = {
+                .start = MAX(r->start, PADDR_BASE),
+                .end   = MIN(r->end, PADDR_TOP)
+            };
+
+            if (cnt >= ARRAY_SIZE(avail_reg)) {
+                /* No space left in the array, seems MAX_NUM_FREEMEM_REG should
+                 * be increased. Debug builds raise an assert here because this
+                 * is likely a porting issue that should be looked into. Release
+                 * builds will continue booting, but can't use this memory
+                 * region. This might still be sufficient to run.
+                 */
+                printf("  WARNING: cannot use region [%"SEL4_PRIx_word"..%"SEL4_PRIx_word"),"
+                       " avail_reg[] is full\n", r->start, r->end);
+                assert(0);
+            } else {
+                avail_reg[cnt] = paddr_to_pptr_reg(usable_reg);
+                cnt++;
+            }
+        }
+    }
+    return cnt;
+}
+
 
 BOOT_CODE static bool_t check_reserved_memory(word_t n_reserved,
                                               const region_t *reserved)
 {
-    printf("reserved virt address space regions: %"SEL4_PRIu_word"\n",
+    printf("Reserved virt address space regions: %"SEL4_PRIu_word"\n",
            n_reserved);
     /* Force ordering and exclusivity of reserved regions. */
     for (word_t i = 0; i < n_reserved; i++) {
@@ -11253,9 +11603,6 @@ BOOT_CODE static bool_t check_reserved_memory(word_t n_reserved,
     return true;
 }
 
-/* we can't declare arrays on the stack, so this is space for
- * the function below to use. */
-BOOT_BSS static region_t avail_reg[MAX_NUM_FREEMEM_REG];
 /**
  * Dynamically initialise the available memory on the platform.
  * A region represents an area of memory.
@@ -11264,8 +11611,14 @@ BOOT_CODE bool_t init_freemem(word_t n_available, const p_region_t *available,
                               word_t n_reserved, const region_t *reserved,
                               v_region_t it_v_reg, word_t extra_bi_size_bits)
 {
-
     if (!check_available_memory(n_available, available)) {
+        return false;
+    }
+
+    /* After here, avail_reg[0..n_available) are all regions within the kernel window. */
+    n_available = init_avail_reg(n_available, available);
+    if (0 == n_available) {
+        printf("ERROR: no available memory within the kernel window\n");
         return false;
     }
 
@@ -11275,13 +11628,6 @@ BOOT_CODE bool_t init_freemem(word_t n_available, const p_region_t *available,
 
     for (word_t i = 0; i < ARRAY_SIZE(ndks_boot.freemem); i++) {
         ndks_boot.freemem[i] = REG_EMPTY;
-    }
-
-    /* convert the available regions to pptrs */
-    for (word_t i = 0; i < n_available; i++) {
-        avail_reg[i] = paddr_to_pptr_reg(available[i]);
-        avail_reg[i].end = ceiling_kernel_window(avail_reg[i].end);
-        avail_reg[i].start = ceiling_kernel_window(avail_reg[i].start);
     }
 
     word_t a = 0;
@@ -11402,7 +11748,7 @@ BOOT_CODE bool_t init_freemem(word_t n_available, const p_region_t *available,
            "objects, need size/alignment of 2^%"SEL4_PRIu_word"\n", max);
     return false;
 }
-#line 1 "/Users/lukasbower/seL4_15/src/kernel/cspace.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/cspace.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11596,7 +11942,7 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap, cptr_t capptr, word_t
         }
     }
 }
-#line 1 "/Users/lukasbower/seL4_15/src/kernel/faulthandler.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/faulthandler.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11630,11 +11976,12 @@ void handleTimeout(tcb_t *tptr)
 bool_t sendFaultIPC(tcb_t *tptr, cap_t handlerCap, bool_t can_donate)
 {
     if (cap_get_capType(handlerCap) == cap_endpoint_cap) {
-        assert(cap_endpoint_cap_get_capCanSend(handlerCap));
-        assert(cap_endpoint_cap_get_capCanGrant(handlerCap) ||
-               cap_endpoint_cap_get_capCanGrantReply(handlerCap));
+        assert(validFaultHandler(handlerCap));
 
         tptr->tcbFault = current_fault;
+        if (seL4_Fault_get_seL4_FaultType(current_fault) == seL4_Fault_CapFault) {
+            tptr->tcbLookupFailure = current_lookup_fault;
+        }
         sendIPC(true, false,
                 cap_endpoint_cap_get_capEPBadge(handlerCap),
                 cap_endpoint_cap_get_capCanGrant(handlerCap),
@@ -11769,7 +12116,7 @@ void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
     setThreadState(tptr, ThreadState_Inactive);
 }
-#line 1 "/Users/lukasbower/seL4_15/src/kernel/stack.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/stack.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -11780,7 +12127,7 @@ void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
 VISIBLE ALIGN(KERNEL_STACK_ALIGNMENT)
 char kernel_stack_alloc[CONFIG_MAX_NUM_NODES][BIT(CONFIG_KERNEL_STACK_BITS)];
-#line 1 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11863,12 +12210,12 @@ void suspend(tcb_t *target)
          * running */
         updateRestartPC(target);
     }
-    setThreadState(target, ThreadState_Inactive);
     tcbSchedDequeue(target);
 #ifdef CONFIG_KERNEL_MCS
     tcbReleaseRemove(target);
     schedContext_cancelYieldTo(target);
 #endif
+    setThreadState(target, ThreadState_Inactive);
 }
 
 void restart(tcb_t *target)
@@ -12369,7 +12716,8 @@ void scheduleTCB(tcb_t *tptr)
     if (tptr == NODE_STATE(ksCurThread) &&
         NODE_STATE(ksSchedulerAction) == SchedulerAction_ResumeCurrentThread &&
         !isSchedulable(tptr)) {
-        rescheduleRequired();
+        /* short-cut rescheduleRequired(), because we know what the scheduler action is. */
+        NODE_STATE(ksSchedulerAction) = SchedulerAction_ChooseNewThread;
     }
 }
 
@@ -12532,7 +12880,7 @@ void awaken(void)
     }
 }
 #endif
-#line 1 "/Users/lukasbower/seL4_15/src/machine/capdl.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13051,7 +13399,7 @@ void print_object(cap_t cap)
 #endif /* CONFIG_PRINTING */
 
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/seL4_15/src/machine/fpu.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13102,7 +13450,7 @@ void fpuRelease(tcb_t *thread)
     }
 }
 #endif /* CONFIG_HAVE_FPU */
-#line 1 "/Users/lukasbower/seL4_15/src/machine/io.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/io.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13759,7 +14107,7 @@ int impl_ksnvprintf(char *str, word_t size, const char *format, va_list ap)
 }
 
 #endif /* CONFIG_PRINTING */
-#line 1 "/Users/lukasbower/seL4_15/src/machine/registerset.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13775,7 +14123,7 @@ const register_t fault_messages[][MAX_MSG_SIZE] = {
     [MessageID_TimeoutReply] = TIMEOUT_REPLY_MESSAGE,
 #endif
 };
-#line 1 "/Users/lukasbower/seL4_15/src/model/preemption.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/preemption.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13820,7 +14168,7 @@ exception_t preemptionPoint(void)
     return EXCEPTION_NONE;
 }
 
-#line 1 "/Users/lukasbower/seL4_15/src/model/smp.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/smp.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13855,7 +14203,7 @@ void migrateTCB(tcb_t *tcb, word_t new_core)
 }
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4_15/src/model/statedata.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/statedata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13966,7 +14314,7 @@ kernel_entry_t ksKernelEntry;
 #ifdef CONFIG_KERNEL_LOG_BUFFER
 paddr_t ksUserLogBuffer;
 #endif /* CONFIG_KERNEL_LOG_BUFFER */
-#line 1 "/Users/lukasbower/seL4_15/src/object/cnode.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/cnode.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14901,7 +15249,7 @@ cap_transfer_t PURE loadCapTransfer(word_t *buffer)
     const int offset = seL4_MsgMaxLength + seL4_MsgMaxExtraCaps + 2;
     return capTransferFromWords(buffer + offset);
 }
-#line 1 "/Users/lukasbower/seL4_15/src/object/domain.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/domain.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2025, Indan Zupancic
@@ -15074,7 +15422,7 @@ exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffe
         return EXCEPTION_SYSCALL_ERROR;
     }
 }
-#line 1 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -15105,7 +15453,6 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
     case EPState_Idle:
     case EPState_Send:
         if (blocking) {
-            tcb_queue_t queue;
 
             /* Set thread state to BlockedOnSend */
             thread_state_ptr_set_tsType(&thread->tcbState,
@@ -15124,10 +15471,16 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
             scheduleTCB(thread);
 
             /* Place calling thread in endpoint queue */
+#ifdef CONFIG_KERNEL_MCS
+            tcbEPAppend(thread, epptr, EPState_Send);
+#else
+            tcb_queue_t queue;
             queue = ep_ptr_get_queue(epptr);
             queue = tcbEPAppend(thread, queue);
             endpoint_ptr_set_state(epptr, EPState_Send);
             ep_ptr_set_queue(epptr, queue);
+#endif /* CONFIG_KERNEL_MCS */
+
         }
         break;
 
@@ -15143,12 +15496,16 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
         assert(dest);
 
         /* Dequeue the first TCB */
+#ifdef CONFIG_KERNEL_MCS
+        tcbEPDequeue(dest, epptr);
+#else
         queue = tcbEPDequeue(dest, queue);
         ep_ptr_set_queue(epptr, queue);
 
         if (!queue.head) {
             endpoint_ptr_set_state(epptr, EPState_Idle);
         }
+#endif /* CONFIG_KERNEL_MCS */
 
         /* Do the transfer */
         doIPCTransfer(thread, epptr, badge, canGrant, dest);
@@ -15170,12 +15527,13 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
             schedContext_donate(thread->tcbSchedContext, dest);
         }
 
-        /* blocked threads should have enough budget to get out of the kernel */
-        assert(dest->tcbSchedContext == NULL || refill_sufficient(dest->tcbSchedContext, 0));
-        assert(dest->tcbSchedContext == NULL || refill_ready(dest->tcbSchedContext));
         setThreadState(dest, ThreadState_Running);
-        if (sc_sporadic(dest->tcbSchedContext) && dest->tcbSchedContext != NODE_STATE(ksCurSC)) {
-            refill_unblock_check(dest->tcbSchedContext);
+        sched_context_t *dest_sc = dest->tcbSchedContext;
+        /* blocked threads should have enough budget to get out of the kernel */
+        assert(dest_sc == NULL || refill_sufficient(dest_sc, 0));
+        assert(dest_sc == NULL || refill_ready(dest_sc));
+        if (sc_sporadic(dest_sc) && dest_sc != NODE_STATE(ksCurSC)) {
+            refill_unblock_check(dest_sc);
         }
         possibleSwitchTo(dest);
 #else
@@ -15215,9 +15573,10 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
     reply_t *replyPtr = NULL;
     if (cap_get_capType(replyCap) == cap_reply_cap) {
         replyPtr = REPLY_PTR(cap_reply_cap_get_capReplyPtr(replyCap));
-        if (unlikely(replyPtr->replyTCB != NULL && replyPtr->replyTCB != thread)) {
+        tcb_t *reply_tcb = replyPtr->replyTCB;
+        if (unlikely(reply_tcb != NULL && reply_tcb != thread)) {
             userError("Reply object already has unexecuted reply!");
-            cancelIPC(replyPtr->replyTCB);
+            cancelIPC(reply_tcb);
         }
     }
 #endif
@@ -15240,7 +15599,6 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
         switch (endpoint_ptr_get_state(epptr)) {
         case EPState_Idle:
         case EPState_Recv: {
-            tcb_queue_t queue;
 
             if (isBlocking) {
                 /* Set thread state to BlockedOnReceive */
@@ -15250,20 +15608,27 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
                     &thread->tcbState, EP_REF(epptr));
 #ifdef CONFIG_KERNEL_MCS
                 thread_state_ptr_set_replyObject(&thread->tcbState, REPLY_REF(replyPtr));
-                if (replyPtr) {
-                    replyPtr->replyTCB = thread;
-                }
 #else
                 thread_state_ptr_set_blockingIPCCanGrant(
                     &thread->tcbState, cap_endpoint_cap_get_capCanGrant(cap));
 #endif
                 scheduleTCB(thread);
+#ifdef CONFIG_KERNEL_MCS
+                if (replyPtr) {
+                    replyPtr->replyTCB = thread;
+                }
+#endif
 
                 /* Place calling thread in endpoint queue */
+#ifdef CONFIG_KERNEL_MCS
+                tcbEPAppend(thread, epptr, EPState_Recv);
+#else
+                tcb_queue_t queue;
                 queue = ep_ptr_get_queue(epptr);
                 queue = tcbEPAppend(thread, queue);
                 endpoint_ptr_set_state(epptr, EPState_Recv);
                 ep_ptr_set_queue(epptr, queue);
+#endif /* CONFIG_KERNEL_MCS */
             } else {
                 doNBRecvFailedTransfer(thread);
             }
@@ -15286,12 +15651,16 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
             assert(sender);
 
             /* Dequeue the first TCB */
+#ifdef CONFIG_KERNEL_MCS
+            tcbEPDequeue(sender, epptr);
+#else
             queue = tcbEPDequeue(sender, queue);
             ep_ptr_set_queue(epptr, queue);
 
             if (!queue.head) {
                 endpoint_ptr_set_state(epptr, EPState_Idle);
             }
+#endif /* CONFIG_KERNEL_MCS */
 
             /* Get sender IPC details */
             badge = thread_state_ptr_get_blockingIPCBadge(&sender->tcbState);
@@ -15394,7 +15763,6 @@ void cancelIPC(tcb_t *tptr)
     case ThreadState_BlockedOnReceive: {
         /* blockedIPCCancel state */
         endpoint_t *epptr;
-        tcb_queue_t queue;
 
         epptr = EP_PTR(thread_state_ptr_get_blockingObject(state));
 
@@ -15402,6 +15770,10 @@ void cancelIPC(tcb_t *tptr)
         assert(endpoint_ptr_get_state(epptr) != EPState_Idle);
 
         /* Dequeue TCB */
+#ifdef CONFIG_KERNEL_MCS
+        tcbEPDequeue(tptr, epptr);
+#else
+        tcb_queue_t queue;
         queue = ep_ptr_get_queue(epptr);
         queue = tcbEPDequeue(tptr, queue);
         ep_ptr_set_queue(epptr, queue);
@@ -15409,6 +15781,7 @@ void cancelIPC(tcb_t *tptr)
         if (!queue.head) {
             endpoint_ptr_set_state(epptr, EPState_Idle);
         }
+#endif /* CONFIG_KERNEL_MCS */
 
 #ifdef CONFIG_KERNEL_MCS
         if (thread_state_ptr_get_tsType(state) == ThreadState_BlockedOnReceive) {
@@ -15472,6 +15845,18 @@ static inline void restart_thread_if_no_fault(tcb_t *thread)
         setThreadState(thread, ThreadState_Inactive);
     }
 }
+
+static inline void removeAndRestartEPQueuedThread(tcb_t *thread, endpoint_t *epptr)
+{
+    tcbEPDequeue(thread, epptr);
+    if (thread_state_get_tsType(thread->tcbState) == ThreadState_BlockedOnReceive) {
+        reply_t *reply = REPLY_PTR(thread_state_get_replyObject(thread->tcbState));
+        if (reply != NULL) {
+            reply_unlink(reply, thread);
+        }
+    }
+    restart_thread_if_no_fault(thread);
+}
 #endif
 
 void cancelAllIPC(endpoint_t *epptr)
@@ -15481,6 +15866,18 @@ void cancelAllIPC(endpoint_t *epptr)
         break;
 
     default: {
+        /* Clear the queue and set all blocked threads to restart */
+#ifdef CONFIG_KERNEL_MCS
+        tcb_queue_t queue;
+        tcb_t *thread, *next;
+
+        queue = ep_ptr_get_queue(epptr);
+
+        for (thread = queue.head; thread; thread = next) {
+            next = thread->tcbSchedNext;
+            removeAndRestartEPQueuedThread(thread, epptr);
+        }
+#else
         tcb_t *thread = TCB_PTR(endpoint_ptr_get_epQueue_head(epptr));
 
         /* Make endpoint idle */
@@ -15488,27 +15885,31 @@ void cancelAllIPC(endpoint_t *epptr)
         endpoint_ptr_set_epQueue_head(epptr, 0);
         endpoint_ptr_set_epQueue_tail(epptr, 0);
 
-        /* Set all blocked threads to restart */
         for (; thread; thread = thread->tcbEPNext) {
-#ifdef CONFIG_KERNEL_MCS
-            if (thread_state_get_tsType(thread->tcbState) == ThreadState_BlockedOnReceive) {
-                reply_t *reply = REPLY_PTR(thread_state_get_replyObject(thread->tcbState));
-                if (reply != NULL) {
-                    reply_unlink(reply, thread);
-                }
-            }
-            restart_thread_if_no_fault(thread);
-#else
             setThreadState(thread, ThreadState_Restart);
             SCHED_ENQUEUE(thread);
-#endif
         }
+#endif
 
         rescheduleRequired();
         break;
     }
     }
 }
+
+#ifdef CONFIG_KERNEL_MCS
+static inline void removeAndRestartBadgedThread(tcb_t *thread, endpoint_t *epptr, word_t badge)
+{
+    word_t b = thread_state_ptr_get_blockingIPCBadge(&thread->tcbState);
+
+    /* senders do not have reply objects in their state, and we are only cancelling sends */
+    assert(thread_state_get_tsType(thread->tcbState) == ThreadState_BlockedOnSend);
+    if (b == badge) {
+        tcbEPDequeue(thread, epptr);
+        restart_thread_if_no_fault(thread);
+    }
+}
+#endif
 
 void cancelBadgedSends(endpoint_t *epptr, word_t badge)
 {
@@ -15521,6 +15922,12 @@ void cancelBadgedSends(endpoint_t *epptr, word_t badge)
         tcb_t *thread, *next;
         tcb_queue_t queue = ep_ptr_get_queue(epptr);
 
+#ifdef CONFIG_KERNEL_MCS
+        for (thread = queue.head; thread; thread = next) {
+            next = thread->tcbSchedNext;
+            removeAndRestartBadgedThread(thread, epptr, badge);
+        }
+#else
         /* this is a de-optimisation for verification
          * reasons. it allows the contents of the endpoint
          * queue to be ignored during the for loop. */
@@ -15532,27 +15939,20 @@ void cancelBadgedSends(endpoint_t *epptr, word_t badge)
             word_t b = thread_state_ptr_get_blockingIPCBadge(
                            &thread->tcbState);
             next = thread->tcbEPNext;
-#ifdef CONFIG_KERNEL_MCS
-            /* senders do not have reply objects in their state, and we are only cancelling sends */
-            assert(thread_state_get_tsType(thread->tcbState) == ThreadState_BlockedOnSend);
-            if (b == badge) {
-                restart_thread_if_no_fault(thread);
-                queue = tcbEPDequeue(thread, queue);
-            }
-#else
+
             if (b == badge) {
                 setThreadState(thread, ThreadState_Restart);
                 SCHED_ENQUEUE(thread);
                 queue = tcbEPDequeue(thread, queue);
             }
-#endif
+
         }
         ep_ptr_set_queue(epptr, queue);
 
         if (queue.head) {
             endpoint_ptr_set_state(epptr, EPState_Send);
         }
-
+#endif /* CONFIG_KERNEL_MCS */
         rescheduleRequired();
 
         break;
@@ -15564,15 +15964,43 @@ void cancelBadgedSends(endpoint_t *epptr, word_t badge)
 }
 
 #ifdef CONFIG_KERNEL_MCS
+void tcbEPAppend(tcb_t *thread, endpoint_t *epptr, endpoint_state_t ep_state)
+{
+    tcb_queue_t queue;
+    tcb_queue_t new_queue;
+
+    queue = ep_ptr_get_queue(epptr);
+    new_queue = tcbAppend(thread, queue);
+    ep_ptr_set_queue(epptr, new_queue);
+
+    /* Update the state of the endpoint with the state that was passed in. If the queue
+     * was previously non-empty this must be the same state the endpoint is currently in. */
+    endpoint_ptr_set_state(epptr, ep_state);
+}
+
+void tcbEPDequeue(tcb_t *thread, endpoint_t *epptr)
+{
+    tcb_queue_t queue;
+    tcb_queue_t new_queue;
+
+    queue = ep_ptr_get_queue(epptr);
+    new_queue = tcb_queue_remove(queue, thread);
+    ep_ptr_set_queue(epptr, new_queue);
+
+    if (tcb_queue_empty(new_queue)) {
+        endpoint_ptr_set_state(epptr, EPState_Idle);
+    }
+}
+
 void reorderEP(endpoint_t *epptr, tcb_t *thread)
 {
     tcb_queue_t queue = ep_ptr_get_queue(epptr);
-    queue = tcbEPDequeue(thread, queue);
-    queue = tcbEPAppend(thread, queue);
+    queue = tcb_queue_remove(queue, thread);
+    queue = tcbAppend(thread, queue);
     ep_ptr_set_queue(epptr, queue);
 }
 #endif
-#line 1 "/Users/lukasbower/seL4_15/src/object/interrupt.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -15870,7 +16298,7 @@ void setIRQState(irq_state_t irqState, irq_t irq)
 #endif
     maskInterrupt(irqState == IRQInactive, irq);
 }
-#line 1 "/Users/lukasbower/seL4_15/src/object/notification.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -16018,6 +16446,9 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
         assert(dest);
 
         /* Dequeue TCB */
+#ifdef CONFIG_KERNEL_MCS
+        tcbNTFNDequeue(dest, ntfnPtr);
+#else
         ntfn_queue = tcbEPDequeue(dest, ntfn_queue);
         ntfn_ptr_set_queue(ntfnPtr, ntfn_queue);
 
@@ -16025,6 +16456,7 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
         if (!ntfn_queue.head) {
             notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
         }
+#endif /* CONFIG_KERNEL_MCS */
 
         setThreadState(dest, ThreadState_Running);
         setRegister(dest, badgeRegister, badge);
@@ -16069,7 +16501,6 @@ void receiveSignal(tcb_t *thread, cap_t cap, bool_t isBlocking)
     switch (notification_ptr_get_state(ntfnPtr)) {
     case NtfnState_Idle:
     case NtfnState_Waiting: {
-        tcb_queue_t ntfn_queue;
 
         if (isBlocking) {
             /* Block thread on notification object */
@@ -16080,11 +16511,16 @@ void receiveSignal(tcb_t *thread, cap_t cap, bool_t isBlocking)
             scheduleTCB(thread);
 
             /* Enqueue TCB */
+#ifdef CONFIG_KERNEL_MCS
+            tcbNTFNAppend(thread, ntfnPtr);
+#else
+            tcb_queue_t ntfn_queue;
             ntfn_queue = ntfn_ptr_get_queue(ntfnPtr);
             ntfn_queue = tcbEPAppend(thread, ntfn_queue);
 
             notification_ptr_set_state(ntfnPtr, NtfnState_Waiting);
             ntfn_ptr_set_queue(ntfnPtr, ntfn_queue);
+#endif /* CONFIG_KERNEL_MCS */
 
 #ifdef CONFIG_KERNEL_MCS
             maybeReturnSchedContext(ntfnPtr, thread);
@@ -16113,47 +16549,66 @@ void receiveSignal(tcb_t *thread, cap_t cap, bool_t isBlocking)
     }
 }
 
+#ifdef CONFIG_KERNEL_MCS
+static inline void removeAndRestartNTFNQueuedThread(tcb_t *thread, notification_t *ntfnPtr)
+{
+    tcbNTFNDequeue(thread, ntfnPtr);
+    setThreadState(thread, ThreadState_Restart);
+    if (sc_sporadic(thread->tcbSchedContext)) {
+        /* We know that the thread can't have the current SC as its own SC at
+         * this point as it should still be associated with the current thread,
+         * or no thread. This check is added here to reduce the cost of proving
+         * this to be true as a short-term stop-gap. */
+        assert(thread->tcbSchedContext != NODE_STATE(ksCurSC));
+        if (thread->tcbSchedContext != NODE_STATE(ksCurSC)) {
+            refill_unblock_check(thread->tcbSchedContext);
+        }
+    }
+    possibleSwitchTo(thread);
+}
+#endif
+
 void cancelAllSignals(notification_t *ntfnPtr)
 {
     if (notification_ptr_get_state(ntfnPtr) == NtfnState_Waiting) {
+        /* Clear the queue and set all blocked threads to Restart */
+#ifdef CONFIG_KERNEL_MCS
+        tcb_queue_t queue;
+        tcb_t *thread, *next;
+
+        queue = ntfn_ptr_get_queue(ntfnPtr);
+
+        for (thread = queue.head; thread; thread = next) {
+            next = thread->tcbSchedNext;
+            removeAndRestartNTFNQueuedThread(thread, ntfnPtr);
+        }
+#else
         tcb_t *thread = TCB_PTR(notification_ptr_get_ntfnQueue_head(ntfnPtr));
 
         notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
         notification_ptr_set_ntfnQueue_head(ntfnPtr, 0);
         notification_ptr_set_ntfnQueue_tail(ntfnPtr, 0);
 
-        /* Set all waiting threads to Restart */
         for (; thread; thread = thread->tcbEPNext) {
             setThreadState(thread, ThreadState_Restart);
-#ifdef CONFIG_KERNEL_MCS
-            if (sc_sporadic(thread->tcbSchedContext)) {
-                /* We know that the thread can't have the current SC
-                 * as its own SC as this point as it should still be
-                 * associated with the current thread, or no thread.
-                 * This check is added here to reduce the cost of
-                 * proving this to be true as a short-term stop-gap. */
-                assert(thread->tcbSchedContext != NODE_STATE(ksCurSC));
-                if (thread->tcbSchedContext != NODE_STATE(ksCurSC)) {
-                    refill_unblock_check(thread->tcbSchedContext);
-                }
-            }
-            possibleSwitchTo(thread);
-#else
             SCHED_ENQUEUE(thread);
-#endif
         }
+#endif /* CONFIG_KERNEL_MCS */
         rescheduleRequired();
     }
 }
 
 void cancelSignal(tcb_t *threadPtr, notification_t *ntfnPtr)
 {
-    tcb_queue_t ntfn_queue;
 
     /* Haskell error "cancelSignal: notification object must be in a waiting" state */
     assert(notification_ptr_get_state(ntfnPtr) == NtfnState_Waiting);
 
     /* Dequeue TCB */
+#ifdef CONFIG_KERNEL_MCS
+    tcbNTFNDequeue(threadPtr, ntfnPtr);
+#else
+    tcb_queue_t ntfn_queue;
     ntfn_queue = ntfn_ptr_get_queue(ntfnPtr);
     ntfn_queue = tcbEPDequeue(threadPtr, ntfn_queue);
     ntfn_ptr_set_queue(ntfnPtr, ntfn_queue);
@@ -16162,6 +16617,7 @@ void cancelSignal(tcb_t *threadPtr, notification_t *ntfnPtr)
     if (!ntfn_queue.head) {
         notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
     }
+#endif /* CONFIG_KERNEL_MCS */
 
     /* Make thread inactive */
     setThreadState(threadPtr, ThreadState_Inactive);
@@ -16229,15 +16685,40 @@ void bindNotification(tcb_t *tcb, notification_t *ntfnPtr)
 }
 
 #ifdef CONFIG_KERNEL_MCS
+void tcbNTFNAppend(tcb_t *thread, notification_t *ntfnPtr)
+{
+    tcb_queue_t queue;
+    tcb_queue_t new_queue;
+
+    queue = ntfn_ptr_get_queue(ntfnPtr);
+    new_queue = tcbAppend(thread, queue);
+    ntfn_ptr_set_queue(ntfnPtr, new_queue);
+    notification_ptr_set_state(ntfnPtr, NtfnState_Waiting);
+}
+
+void tcbNTFNDequeue(tcb_t *thread, notification_t *ntfnPtr)
+{
+    tcb_queue_t queue;
+    tcb_queue_t new_queue;
+
+    queue = ntfn_ptr_get_queue(ntfnPtr);
+    new_queue = tcb_queue_remove(queue, thread);
+    ntfn_ptr_set_queue(ntfnPtr, new_queue);
+
+    if (tcb_queue_empty(new_queue)) {
+        notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
+    }
+}
+
 void reorderNTFN(notification_t *ntfnPtr, tcb_t *thread)
 {
     tcb_queue_t queue = ntfn_ptr_get_queue(ntfnPtr);
-    queue = tcbEPDequeue(thread, queue);
-    queue = tcbEPAppend(thread, queue);
+    queue = tcb_queue_remove(queue, thread);
+    queue = tcbAppend(thread, queue);
     ntfn_ptr_set_queue(ntfnPtr, queue);
 }
 #endif
-#line 1 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17262,7 +17743,7 @@ bool_t CONST isCapRevocable(cap_t derivedCap, cap_t srcCap)
         return false;
     }
 }
-#line 1 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17514,7 +17995,6 @@ tcb_queue_t tcbEPAppend(tcb_t *tcb, tcb_queue_t queue)
 
     return queue;
 }
-#endif
 
 /* Remove TCB from an endpoint queue */
 tcb_queue_t tcbEPDequeue(tcb_t *tcb, tcb_queue_t queue)
@@ -17533,6 +18013,7 @@ tcb_queue_t tcbEPDequeue(tcb_t *tcb, tcb_queue_t queue)
 
     return queue;
 }
+#endif /* CONFIG_KERNEL_MCS */
 
 #ifdef CONFIG_KERNEL_MCS
 
@@ -17580,12 +18061,11 @@ void tcbReleaseEnqueue(tcb_t *tcb)
     ticks_t new_time;
     tcb_queue_t queue;
 
-    new_time = tcbReadyTime(tcb);
     queue = NODE_STATE_ON_CORE(ksReleaseQueue, tcb->tcbAffinity);
+    new_time = tcbReadyTime(tcb);
 
     if (tcb_queue_empty(queue) || new_time < tcbReadyTime(queue.head)) {
         NODE_STATE_ON_CORE(ksReleaseQueue, tcb->tcbAffinity) = tcb_queue_prepend(queue, tcb);
-        NODE_STATE_ON_CORE(ksReprogram, tcb->tcbAffinity) = true;
     } else {
         if (tcbReadyTime(queue.end) <= new_time) {
             NODE_STATE_ON_CORE(ksReleaseQueue, tcb->tcbAffinity) = tcb_queue_append(queue, tcb);
@@ -17597,6 +18077,10 @@ void tcbReleaseEnqueue(tcb_t *tcb)
     }
 
     thread_state_ptr_set_tcbInReleaseQueue(&tcb->tcbState, true);
+
+    if (queue.head != NODE_STATE_ON_CORE(ksReleaseQueue, tcb->tcbAffinity).head) {
+        NODE_STATE_ON_CORE(ksReprogram, tcb->tcbAffinity) = true;
+    }
 }
 #endif
 
@@ -18340,23 +18824,19 @@ exception_t decodeWriteRegisters(cap_t cap, word_t length, word_t *buffer)
 }
 
 #ifdef CONFIG_KERNEL_MCS
-static bool_t validFaultHandler(cap_t cap)
+bool_t validFaultHandler(cap_t cap)
 {
     switch (cap_get_capType(cap)) {
     case cap_endpoint_cap:
-        if (!cap_endpoint_cap_get_capCanSend(cap) ||
-            (!cap_endpoint_cap_get_capCanGrant(cap) &&
-             !cap_endpoint_cap_get_capCanGrantReply(cap))) {
-            return false;
-        }
-        break;
+        return (cap_endpoint_cap_get_capCanSend(cap) &&
+                (cap_endpoint_cap_get_capCanGrant(cap) ||
+                 cap_endpoint_cap_get_capCanGrantReply(cap)));
     case cap_null_cap:
         /* just has no fault endpoint */
-        break;
+        return true;
     default:
         return false;
     }
-    return true;
 }
 #endif
 
@@ -19382,7 +19862,7 @@ word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer)
         fail("Invalid syscall error");
     }
 }
-#line 1 "/Users/lukasbower/seL4_15/src/object/untyped.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/untyped.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -19688,7 +20168,7 @@ exception_t invokeUntyped_Retype(cte_t *srcSlot,
 
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/seL4_15/src/smp/ipi.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -19907,7 +20387,7 @@ exception_t handle_SysDebugSendIPI(void)
 #endif /* CONFIG_DEBUG_BUILD */
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4_15/src/smp/lock.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/smp/lock.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -19937,7 +20417,7 @@ BOOT_CODE void clh_lock_init(void)
 }
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4_15/src/string.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/string.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -19980,7 +20460,7 @@ word_t strlcat(char *dest, const char *src, word_t size)
     }
     return len;
 }
-#line 1 "/Users/lukasbower/seL4_15/src/util.c"
+#line 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/util.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *

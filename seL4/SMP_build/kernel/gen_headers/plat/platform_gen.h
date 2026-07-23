@@ -20,7 +20,7 @@ enum IRQConstants {
 
 #define IRQ_CNODE_SLOT_BITS (8)
 
-#include <arch/machine/gic_v2.h>
+#include <arch/machine/gic_v3.h>
 #include <drivers/timer/arm_generic.h>
 
 /* #undef CONFIGURE_SMMU */

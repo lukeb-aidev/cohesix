@@ -46,6 +46,7 @@ module.exports = {
       name: "chromium-tablet",
       use: {
         browserName: "chromium",
+        channel: "chromium",
         viewport: { width: 1180, height: 820 }
       }
     }

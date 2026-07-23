@@ -2,7 +2,7 @@
  * DTS of QEMU v10.1.0 for:
  *    qemu-system-aarch64
  *    -machine
- *    virt,secure=off,virtualization=on,gic-version=2,dumpdtb=/Users/lukasbower/GitHub/cohesix/seL4/SMP_build/qemu-arm-virt.dtb
+ *    virt,secure=off,virtualization=on,gic-version=3,dumpdtb=/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-diagnostic/qemu-arm-virt.dtb
  *    -cpu
  *    cortex-a53
  *    -smp
@@ -328,26 +328,28 @@
 	};
 
 	pmu {
-		interrupts = <0x01 0x07 0xf04>;
+		interrupts = <0x01 0x07 0x04>;
 		compatible = "arm,armv8-pmuv3";
 	};
 
 	intc@8000000 {
 		phandle = <0x8005>;
 		interrupts = <0x01 0x09 0x04>;
-		reg = <0x00 0x8000000 0x00 0x10000 0x00 0x8010000 0x00 0x10000 0x00 0x8030000 0x00 0x10000 0x00 0x8040000 0x00 0x10000>;
-		compatible = "arm,cortex-a15-gic";
+		reg = <0x00 0x8000000 0x00 0x10000 0x00 0x80a0000 0x00 0xf60000>;
+		#redistributor-regions = <0x01>;
+		compatible = "arm,gic-v3";
 		ranges;
 		#size-cells = <0x02>;
 		#address-cells = <0x02>;
 		interrupt-controller;
 		#interrupt-cells = <0x03>;
 
-		v2m@8020000 {
+		its@8080000 {
 			phandle = <0x8006>;
-			reg = <0x00 0x8020000 0x00 0x1000>;
+			reg = <0x00 0x8080000 0x00 0x20000>;
+			#msi-cells = <0x01>;
 			msi-controller;
-			compatible = "arm,gic-v2m-frame";
+			compatible = "arm,gic-v3-its";
 		};
 	};
 
@@ -420,7 +422,7 @@
 	};
 
 	timer {
-		interrupts = <0x01 0x0d 0xf04 0x01 0x0e 0xf04 0x01 0x0b 0xf04 0x01 0x0a 0xf04>;
+		interrupts = <0x01 0x0d 0x04 0x01 0x0e 0x04 0x01 0x0b 0x04 0x01 0x0a 0x04>;
 		always-on;
 		compatible = "arm,armv8-timer", "arm,armv7-timer";
 	};
@@ -439,7 +441,7 @@
 
 	chosen {
 		stdout-path = "/pl011@9000000";
-		rng-seed = <0xf9a6aa4d 0x90aeca08 0xf1f43e59 0x554259c6 0xfd2f28d7 0x3be259d0 0xe29edda 0x61fc98e1>;
-		kaslr-seed = <0x3b6421f9 0x8aabdb3f>;
+		rng-seed = <0xa22ca73b 0xbffac9fe 0xe73552c6 0x8f7e6a17 0x210bfba6 0xb94342bc 0xa4cb6fd1 0x1111d504>;
+		kaslr-seed = <0x3c22ff7c 0x4b1d114a>;
 	};
 };

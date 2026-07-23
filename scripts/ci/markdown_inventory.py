@@ -80,7 +80,7 @@ def write_csv(rows: list[tuple[str, str, str, str, str]], out: pathlib.Path) -> 
         handle.write("# Author: Lukas Bower\n")
         handle.write("# Purpose: Inventory every tracked Markdown file for Milestone 26c disposition control.\n")
         handle.write("# Copyright 2026 Lukas Bower\n")
-        writer = csv.writer(handle)
+        writer = csv.writer(handle, lineterminator="\n")
         writer.writerow(["path", "disposition", "owner", "update_rule", "evidence_source"])
         writer.writerows(rows)
 

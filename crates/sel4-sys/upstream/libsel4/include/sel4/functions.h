@@ -1,4 +1,3 @@
-/* Author: Lukas Bower */
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  * Copyright 2015, 2016 Hesham Almatary <heshamelmatary@gmail.com>
@@ -11,10 +10,10 @@
 #include <sel4/types.h>
 #include <sel4/syscalls.h>
 
-extern seL4_IPCBuffer *__sel4_ipc_buffer;
+extern LIBSEL4_THREAD_LOCAL seL4_IPCBuffer *__sel4_ipc_buffer;
 
 #ifdef CONFIG_KERNEL_INVOCATION_REPORT_ERROR_IPC
-extern char __sel4_print_error;
+extern LIBSEL4_THREAD_LOCAL char __sel4_print_error;
 
 LIBSEL4_INLINE_FUNC char *seL4_GetDebugError(void)
 {

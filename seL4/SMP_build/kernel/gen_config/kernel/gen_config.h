@@ -25,6 +25,7 @@
 /* disabled: CONFIG_PLAT_APQ8064 */
 /* disabled: CONFIG_PLAT_ARIANE */
 /* disabled: CONFIG_PLAT_BCM2711 */
+/* disabled: CONFIG_PLAT_BCM2712 */
 /* disabled: CONFIG_PLAT_BCM2837 */
 /* disabled: CONFIG_PLAT_CHESHIRE */
 /* disabled: CONFIG_PLAT_HIFIVE_P550 */
@@ -54,6 +55,7 @@
 /* disabled: CONFIG_PLAT_BANANAPIF3 */
 /* disabled: CONFIG_PLAT_SPIKE */
 /* disabled: CONFIG_PLAT_STAR64 */
+/* disabled: CONFIG_PLAT_STM32MP2 */
 /* disabled: CONFIG_PLAT_TK1 */
 /* disabled: CONFIG_PLAT_TQMA8XQP1GB */
 /* disabled: CONFIG_PLAT_TX1 */
@@ -70,10 +72,12 @@
 /* disabled: CONFIG_ARM_CORTEX_A55 */
 /* disabled: CONFIG_ARM_CORTEX_A57 */
 /* disabled: CONFIG_ARM_CORTEX_A72 */
+/* disabled: CONFIG_ARM_CORTEX_A76 */
 /* disabled: CONFIG_ARCH_ARM_V7A */
 /* disabled: CONFIG_ARCH_ARM_V7VE */
 #define CONFIG_ARCH_ARM_V8A  1
 /* disabled: CONFIG_AARCH64_SERROR_IGNORE */
+#define CONFIG_TIMER_FREQUENCY  62500000
 #define CONFIG_ARM_MACH  /* empty */
 /* disabled: CONFIG_KERNEL_MCS */
 #define CONFIG_ARM_PA_SIZE_BITS_40  1
@@ -84,7 +88,7 @@
 /* disabled: CONFIG_DEBUG_DISABLE_L1_DCACHE */
 /* disabled: CONFIG_DEBUG_DISABLE_BRANCH_PREDICTION */
 /* disabled: CONFIG_ARM_HYPERVISOR_SUPPORT */
-/* disabled: CONFIG_ARM_GIC_V3_SUPPORT */
+#define CONFIG_ARM_GIC_V3_SUPPORT  1
 /* disabled: CONFIG_AARCH64_VSPACE_S2_START_L1 */
 /* disabled: CONFIG_ARM_HYP_ENABLE_VCPU_CP14_SAVE_AND_RESTORE */
 /* disabled: CONFIG_ARM_ERRATA_430973 */
@@ -160,4 +164,4 @@
 /* disabled: CONFIG_EXPORT_VCNT_USER */
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
-#define CONFIG_VTIMER_UPDATE_VOFFSET  1
+/* disabled: CONFIG_VTIMER_UPDATE_VOFFSET */

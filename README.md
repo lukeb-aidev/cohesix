@@ -147,8 +147,8 @@ Work is tracked in the [Build Plan](docs/BUILD_PLAN.md), including future planne
 
 | Surface | Current state | Evidence boundary |
 | --- | --- | --- |
-| QEMU `aarch64/virt` | Reference development and regression target on seL4 15.0.0 | Current target-qualified repository evidence passes Stages 1–5; QEMU is not hardware proof. |
-| Raspberry Pi 4 boot | Pi firmware → U-Boot → seL4 binary image → root task | Implemented and previously board-proven; current-tree live revalidation remains part of Milestone 26d. |
+| QEMU `aarch64/virt` | Reference development and regression target on seL4 16.0.0; fresh static profiles and linked `--no-run` packaging pass | Booted target-qualified evidence is still required; QEMU is not hardware proof. |
+| Raspberry Pi 4 boot | Pi firmware → U-Boot → seL4 binary image → root task; fresh v16 Pi profiles and direct `~/seL4_16` diagnostic build pass | Implemented and previously board-proven; a clean exact image and current-tree live revalidation remain part of Milestone 26d. |
 | Pi 4 wired networking | Isolated GENETv5 runtime with DHCP and TCP | Accepted Milestone 26c evidence exists for its recorded image; a new image must prove its own state. |
 | Pi 4 Wi-Fi | Linked CYW43455 and SDIO runtimes implemented | Reopened 26b work has no current-image association, DHCP, TCP, or repeatability claim yet. |
 | Host tools | macOS 26 on Apple Silicon is the primary development host | Host success does not prove target or Pi hardware behavior. |
@@ -184,11 +184,13 @@ through an authenticated tunnel.
 ### Build the current source tree
 
 The primary path is macOS 26 on Apple Silicon with the repository's external
-seL4 15.0.0 build outputs. QEMU, Rust, Python 3, and the selected seL4 profile
+seL4 16.0.0 build outputs. QEMU, Rust, Python 3, and the selected seL4 profile
 must already be available. Follow the current-tree
 [Quickstart](docs/QUICKSTART.md); use
 [Toolchain setup](docs/TOOLCHAIN_MAC_ARM64.md) for the pinned host and external
-seL4 prerequisites.
+seL4 prerequisites. The repo-managed `seL4/` build, SMP, U-Boot, manual, and
+elfloader reference artifacts have all been refreshed to v16; fresh acceptance
+claims still validate their causal `out/sel4/profile-v2` builds.
 
 ```bash
 ./toolchain/setup_macos_arm64.sh

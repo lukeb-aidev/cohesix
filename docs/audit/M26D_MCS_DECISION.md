@@ -27,13 +27,14 @@ This is a staged implementation boundary, not architectural indecision. The
 shows the facilities Cohesix would need to use: scheduling contexts, budget and
 period configuration, reply objects, passive-server donation, timeout
 endpoints, consumed-time observation, and per-core scheduling control. The
-tag-pinned [seL4 15 caveats](https://github.com/seL4/seL4/blob/15.0.0/CAVEATS.md)
-state that AArch64 MCS verification is incomplete and SMP+MCS remains less
-explored and experimental. Those facts make exact QEMU/Pi acceptance and honest
-proof wording mandatory; they do not justify maintaining two production
-schedulers. If the atomic 26e transition encounters an unforeseen blocker, the
-change set is reverted in source/configuration rather than shipping a classic
-runtime fallback, compatibility mode, or selectable scheduler profile.
+tag-pinned [seL4 16 caveats](https://github.com/seL4/seL4/blob/16.0.0/CAVEATS.md)
+state that AArch64 MCS functional-correctness proofs remain in progress and
+SMP+MCS remains less explored and experimental. Those facts make exact
+QEMU/Pi acceptance and honest proof wording mandatory; they do not justify two
+production schedulers. If the atomic 26e transition encounters an unforeseen
+blocker, the change set is reverted in source/configuration rather than
+shipping a classic runtime fallback, compatibility mode, or selectable
+scheduler profile.
 
 ## Current as-built state
 
@@ -58,7 +59,7 @@ cores; MCS adds kernel-enforced temporal budgets, scheduling-context ownership,
 timeout faults, and donation rules. Enabling MCS does not by itself make an SMP
 system faster or make an unmeasured service schedulable.
 
-| Candidate | Temporal-isolation value | seL4 15 / Cohesix assurance state | Decision |
+| Candidate | Temporal-isolation value | seL4 16 / Cohesix assurance state | Decision |
 | --- | --- | --- | --- |
 | Classic four-core SMP, non-MCS | Priority, domain, affinity, and bounded cooperative service turns; no kernel CPU-time budget | Current 26d generated bindings, runtime paths, QEMU/Pi profiles, and operator-liveness evidence use this model | Accepted only through 26d; retired by the atomic 26e transition |
 | Single-core MCS alternative | Would isolate scheduling-context, budget/period, timeout, Reply, and donation semantics from SMP effects | Useful in the design comparison, but it would add a target configuration that is not the selected Cohesix architecture | Not implemented as an operational or fallback profile |

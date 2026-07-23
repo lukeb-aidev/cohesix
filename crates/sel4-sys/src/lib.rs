@@ -20,6 +20,54 @@ mod imp {
         "/sel4_config_consts.rs"
     ));
 
+    /// Number of machine words in an AArch64 `seL4_UserContext`.
+    pub const SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT: seL4_Word = 36;
+    const SEL4_TCB_WRITE_REGISTERS_MESSAGE_LENGTH: seL4_Word =
+        2 + SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT;
+
+    #[inline(always)]
+    fn aarch64_user_context_register(regs: &seL4_UserContext, index: seL4_Word) -> seL4_Word {
+        match index {
+            0 => regs.pc,
+            1 => regs.sp,
+            2 => regs.spsr,
+            3 => regs.x0,
+            4 => regs.x1,
+            5 => regs.x2,
+            6 => regs.x3,
+            7 => regs.x4,
+            8 => regs.x5,
+            9 => regs.x6,
+            10 => regs.x7,
+            11 => regs.x8,
+            12 => regs.x16,
+            13 => regs.x17,
+            14 => regs.x18,
+            15 => regs.x29,
+            16 => regs.x30,
+            17 => regs.x9,
+            18 => regs.x10,
+            19 => regs.x11,
+            20 => regs.x12,
+            21 => regs.x13,
+            22 => regs.x14,
+            23 => regs.x15,
+            24 => regs.x19,
+            25 => regs.x20,
+            26 => regs.x21,
+            27 => regs.x22,
+            28 => regs.x23,
+            29 => regs.x24,
+            30 => regs.x25,
+            31 => regs.x26,
+            32 => regs.x27,
+            33 => regs.x28,
+            34 => regs.tpidr_el0,
+            35 => regs.tpidrro_el0,
+            _ => 0,
+        }
+    }
+
     extern "C" {
         #[cfg(not(sel4_sys_bindings_have_debug_cap_identify))]
         pub fn seL4_DebugCapIdentify(cap: seL4_CPtr) -> seL4_Word;
@@ -1451,47 +1499,29 @@ mod imp {
         }
 
         let regs = &*regs;
+        let bounded_count = core::cmp::min(count, SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT);
         let mut mr0: seL4_Word =
             ((resume_target as seL4_Word) & 0x1) | (((arch_flags as seL4_Word) & 0xff) << 8);
         let mut mr1: seL4_Word = count;
-        let mut mr2: seL4_Word = regs.pc;
-        let mut mr3: seL4_Word = regs.sp;
-        seL4_SetMR(4, regs.spsr);
-        seL4_SetMR(5, regs.x0);
-        seL4_SetMR(6, regs.x1);
-        seL4_SetMR(7, regs.x2);
-        seL4_SetMR(8, regs.x3);
-        seL4_SetMR(9, regs.x4);
-        seL4_SetMR(10, regs.x5);
-        seL4_SetMR(11, regs.x6);
-        seL4_SetMR(12, regs.x7);
-        seL4_SetMR(13, regs.x8);
-        seL4_SetMR(14, regs.x16);
-        seL4_SetMR(15, regs.x17);
-        seL4_SetMR(16, regs.x18);
-        seL4_SetMR(17, regs.x29);
-        seL4_SetMR(18, regs.x30);
-        seL4_SetMR(19, regs.x9);
-        seL4_SetMR(20, regs.x10);
-        seL4_SetMR(21, regs.x11);
-        seL4_SetMR(22, regs.x12);
-        seL4_SetMR(23, regs.x13);
-        seL4_SetMR(24, regs.x14);
-        seL4_SetMR(25, regs.x15);
-        seL4_SetMR(26, regs.x19);
-        seL4_SetMR(27, regs.x20);
-        seL4_SetMR(28, regs.x21);
-        seL4_SetMR(29, regs.x22);
-        seL4_SetMR(30, regs.x23);
-        seL4_SetMR(31, regs.x24);
-        seL4_SetMR(32, regs.x25);
-        seL4_SetMR(33, regs.x26);
-        seL4_SetMR(34, regs.x27);
-        seL4_SetMR(35, regs.x28);
-        seL4_SetMR(36, regs.tpidr_el0);
-        seL4_SetMR(37, regs.tpidrro_el0);
+        // seL4's AArch64 fast-message ABI always carries PC and SP in mr2/mr3.
+        // The kernel uses `count` to decide how many context words to consume.
+        let mut mr2: seL4_Word = aarch64_user_context_register(regs, 0);
+        let mut mr3: seL4_Word = aarch64_user_context_register(regs, 1);
+        let mut register_index = 2;
+        while register_index < bounded_count {
+            seL4_SetMR(
+                register_index + 2,
+                aarch64_user_context_register(regs, register_index),
+            );
+            register_index += 1;
+        }
 
-        let tag = seL4_MessageInfo::new(invocation_label_TCBWriteRegisters as seL4_Word, 0, 0, 38);
+        let tag = seL4_MessageInfo::new(
+            invocation_label_TCBWriteRegisters as seL4_Word,
+            0,
+            0,
+            SEL4_TCB_WRITE_REGISTERS_MESSAGE_LENGTH,
+        );
         let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
         let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
 
@@ -2003,6 +2033,11 @@ mod imp {
     pub type seL4_ARM_Page = seL4_CPtr;
     pub type seL4_ARM_PageTable = seL4_CPtr;
 
+    /// Number of machine words in an AArch64 `seL4_UserContext`.
+    pub const SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT: seL4_Word = 36;
+    const SEL4_TCB_WRITE_REGISTERS_MESSAGE_LENGTH: seL4_Word =
+        2 + SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT;
+
     #[no_mangle]
     pub static mut __sel4_ipc_buffer: *mut seL4_IPCBuffer = ptr::null_mut();
 
@@ -2212,6 +2247,49 @@ mod imp {
     }
 
     pub type seL4_UserContext = seL4_UserContext_;
+
+    #[inline(always)]
+    fn aarch64_user_context_register(regs: &seL4_UserContext, index: seL4_Word) -> seL4_Word {
+        match index {
+            0 => regs.pc,
+            1 => regs.sp,
+            2 => regs.spsr,
+            3 => regs.x0,
+            4 => regs.x1,
+            5 => regs.x2,
+            6 => regs.x3,
+            7 => regs.x4,
+            8 => regs.x5,
+            9 => regs.x6,
+            10 => regs.x7,
+            11 => regs.x8,
+            12 => regs.x16,
+            13 => regs.x17,
+            14 => regs.x18,
+            15 => regs.x29,
+            16 => regs.x30,
+            17 => regs.x9,
+            18 => regs.x10,
+            19 => regs.x11,
+            20 => regs.x12,
+            21 => regs.x13,
+            22 => regs.x14,
+            23 => regs.x15,
+            24 => regs.x19,
+            25 => regs.x20,
+            26 => regs.x21,
+            27 => regs.x22,
+            28 => regs.x23,
+            29 => regs.x24,
+            30 => regs.x25,
+            31 => regs.x26,
+            32 => regs.x27,
+            33 => regs.x28,
+            34 => regs.tpidr_el0,
+            35 => regs.tpidrro_el0,
+            _ => 0,
+        }
+    }
 
     #[derive(Clone, Copy)]
     pub struct seL4_MessageInfo {
@@ -2691,48 +2769,28 @@ mod imp {
             return seL4_InvalidArgument;
         }
 
-        let regs = *regs;
+        let regs = &*regs;
+        let bounded_count = core::cmp::min(count, SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT);
         let ipc = ensure_ipc_buffer();
-        (*ipc).tag = seL4_MessageInfo::new(invocation_label_TCBWriteRegisters, 0, 0, 38);
+        (*ipc).tag = seL4_MessageInfo::new(
+            invocation_label_TCBWriteRegisters,
+            0,
+            0,
+            SEL4_TCB_WRITE_REGISTERS_MESSAGE_LENGTH,
+        );
         (*ipc).msg[0] =
             ((resume_target as seL4_Word) & 0x1) | (((arch_flags as seL4_Word) & 0xff) << 8);
         (*ipc).msg[1] = count;
-        (*ipc).msg[2] = regs.pc;
-        (*ipc).msg[3] = regs.sp;
-        (*ipc).msg[4] = regs.spsr;
-        (*ipc).msg[5] = regs.x0;
-        (*ipc).msg[6] = regs.x1;
-        (*ipc).msg[7] = regs.x2;
-        (*ipc).msg[8] = regs.x3;
-        (*ipc).msg[9] = regs.x4;
-        (*ipc).msg[10] = regs.x5;
-        (*ipc).msg[11] = regs.x6;
-        (*ipc).msg[12] = regs.x7;
-        (*ipc).msg[13] = regs.x8;
-        (*ipc).msg[14] = regs.x16;
-        (*ipc).msg[15] = regs.x17;
-        (*ipc).msg[16] = regs.x18;
-        (*ipc).msg[17] = regs.x29;
-        (*ipc).msg[18] = regs.x30;
-        (*ipc).msg[19] = regs.x9;
-        (*ipc).msg[20] = regs.x10;
-        (*ipc).msg[21] = regs.x11;
-        (*ipc).msg[22] = regs.x12;
-        (*ipc).msg[23] = regs.x13;
-        (*ipc).msg[24] = regs.x14;
-        (*ipc).msg[25] = regs.x15;
-        (*ipc).msg[26] = regs.x19;
-        (*ipc).msg[27] = regs.x20;
-        (*ipc).msg[28] = regs.x21;
-        (*ipc).msg[29] = regs.x22;
-        (*ipc).msg[30] = regs.x23;
-        (*ipc).msg[31] = regs.x24;
-        (*ipc).msg[32] = regs.x25;
-        (*ipc).msg[33] = regs.x26;
-        (*ipc).msg[34] = regs.x27;
-        (*ipc).msg[35] = regs.x28;
-        (*ipc).msg[36] = regs.tpidr_el0;
-        (*ipc).msg[37] = regs.tpidrro_el0;
+        // seL4's AArch64 fast-message ABI always carries PC and SP in mr2/mr3.
+        // The kernel uses `count` to decide how many context words to consume.
+        (*ipc).msg[2] = aarch64_user_context_register(regs, 0);
+        (*ipc).msg[3] = aarch64_user_context_register(regs, 1);
+        let mut register_index = 2;
+        while register_index < bounded_count {
+            (*ipc).msg[(register_index + 2) as usize] =
+                aarch64_user_context_register(regs, register_index);
+            register_index += 1;
+        }
         seL4_NoError
     }
 
@@ -2929,6 +2987,47 @@ mod tests {
         unsafe { (*ipc).msg[index] }
     }
 
+    fn patterned_user_context() -> seL4_UserContext {
+        seL4_UserContext {
+            pc: 0x100,
+            sp: 0x101,
+            spsr: 0x102,
+            x0: 0x103,
+            x1: 0x104,
+            x2: 0x105,
+            x3: 0x106,
+            x4: 0x107,
+            x5: 0x108,
+            x6: 0x109,
+            x7: 0x10a,
+            x8: 0x10b,
+            x16: 0x10c,
+            x17: 0x10d,
+            x18: 0x10e,
+            x29: 0x10f,
+            x30: 0x110,
+            x9: 0x111,
+            x10: 0x112,
+            x11: 0x113,
+            x12: 0x114,
+            x13: 0x115,
+            x14: 0x116,
+            x15: 0x117,
+            x19: 0x118,
+            x20: 0x119,
+            x21: 0x11a,
+            x22: 0x11b,
+            x23: 0x11c,
+            x24: 0x11d,
+            x25: 0x11e,
+            x26: 0x11f,
+            x27: 0x120,
+            x28: 0x121,
+            tpidr_el0: 0x122,
+            tpidrro_el0: 0x123,
+        }
+    }
+
     #[test]
     fn aarch64_host_object_numbers_match_generated_kernel_layout() {
         assert_eq!(seL4_ARM_HugePageObject, 5);
@@ -2941,7 +3040,60 @@ mod tests {
     }
 
     #[test]
-    fn tcb_set_ipc_buffer_uses_v15_invocation_shape() {
+    fn aarch64_user_context_register_count_matches_layout() {
+        assert_eq!(
+            core::mem::size_of::<seL4_UserContext>() / core::mem::size_of::<seL4_Word>(),
+            SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT as usize
+        );
+    }
+
+    #[test]
+    fn tcb_write_registers_respects_v16_count_and_static_message_length() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        let sentinel = 0xfeed_face_cafe_beef;
+        for index in 4..=37 {
+            // SAFETY: Host tests use the crate-owned synthetic IPC buffer and valid MR indices.
+            unsafe { seL4_SetMR(index, sentinel) };
+        }
+        let regs = patterned_user_context();
+
+        // SAFETY: The context is initialized and remains live for the synthetic host invocation.
+        let result = unsafe { seL4_TCB_WriteRegisters(0x44, 1, 0x5a, 3, &regs) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), invocation_label_TCBWriteRegisters);
+        assert_eq!(tag.extra_caps(), 0);
+        assert_eq!(tag.length(), 2 + SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT);
+        assert_eq!(host_mr(0), 1 | (0x5a << 8));
+        assert_eq!(host_mr(1), 3);
+        assert_eq!(host_mr(2), regs.pc);
+        assert_eq!(host_mr(3), regs.sp);
+        assert_eq!(host_mr(4), regs.spsr);
+        assert_eq!(host_mr(5), sentinel);
+        assert_eq!(host_mr(37), sentinel);
+    }
+
+    #[test]
+    fn tcb_write_registers_bounds_invalid_count_to_aarch64_context() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        let sentinel = 0xfeed_face_cafe_beef;
+        // SAFETY: Host tests use the crate-owned synthetic IPC buffer and a valid MR index.
+        unsafe { seL4_SetMR(38, sentinel) };
+        let regs = patterned_user_context();
+        let invalid_count = SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT + 1;
+
+        // SAFETY: The context is initialized and remains live for the synthetic host invocation.
+        let result =
+            unsafe { seL4_TCB_WriteRegisters(0x44, 0, 0, invalid_count, &regs as *const _) };
+        assert_eq!(result, seL4_NoError);
+        assert_eq!(host_mr(1), invalid_count);
+        assert_eq!(host_mr(37), regs.tpidrro_el0);
+        assert_eq!(host_mr(38), sentinel);
+    }
+
+    #[test]
+    fn tcb_set_ipc_buffer_uses_v16_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_SetIPCBuffer(0x44, 0x8000_0000, 0x55) };
@@ -2956,7 +3108,7 @@ mod tests {
     }
 
     #[test]
-    fn tcb_set_sched_params_uses_v15_invocation_shape() {
+    fn tcb_set_sched_params_uses_v16_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_SetSchedParams(0x44, 0x01, 220, 200) };
@@ -2972,7 +3124,7 @@ mod tests {
     }
 
     #[test]
-    fn tcb_set_priority_uses_v15_invocation_shape() {
+    fn tcb_set_priority_uses_v16_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_SetPriority(0x44, 0x01, 240) };
@@ -2987,7 +3139,7 @@ mod tests {
     }
 
     #[test]
-    fn tcb_bind_and_unbind_notification_use_v15_invocation_shape() {
+    fn tcb_bind_and_unbind_notification_use_v16_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_BindNotification(0x44, 0x99) };
@@ -3010,7 +3162,7 @@ mod tests {
     }
 
     #[test]
-    fn tcb_suspend_resume_use_v15_invocation_shape() {
+    fn tcb_suspend_resume_use_v16_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_Suspend(0x44) };

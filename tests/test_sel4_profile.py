@@ -1318,6 +1318,14 @@ def test_pi_profiles_reserve_root_cspace_for_linked_runtimes(
         assert "-DKernelRootCNodeSizeBits=14" in command
 
 
+def test_sel4_16_profiles_pin_virtual_timer_offset_updates_off(
+    contract: dict[str, Any],
+) -> None:
+    for profile_name, profile in contract["profiles"].items():
+        assert profile["cmake"]["KernelArmVtimerUpdateVOffset"] == "OFF", profile_name
+        assert profile["generated"]["VTIMER_UPDATE_VOFFSET"] is False, profile_name
+
+
 def test_wrapper_preserves_profile_root_cnode_before_upstream_settings() -> None:
     wrapper = sel4_profile.WRAPPER_CMAKE.read_text(encoding="utf-8")
 
@@ -2647,8 +2655,7 @@ def test_active_qemu_entrypoints_default_to_production_contract() -> None:
         "scripts/tcp_cohsh_smoke.sh",
         "scripts/tcp_repro.sh",
         "scripts/cohsh/run_regression_batch.sh",
-        "scripts/ci/test_plan_stage_02_host_fast.sh",
-        "scripts/ci/test_plan_stage_04_rest_multiplexer.sh",
+        "configs/test_plan_actions.toml",
     )
 
     for relative in entrypoints:

@@ -1,4 +1,3 @@
--- Author: Lukas Bower
 --
 -- Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
 --
@@ -16,9 +15,8 @@ block seL4_MessageInfo {
     field length 7
 }
 
+-- Cap rights
 block seL4_CapRights {
-    padding 32
-
     padding 28
     field capAllowGrantReply 1
     field capAllowGrant 1
@@ -28,6 +26,8 @@ block seL4_CapRights {
 
 -- CNode cap data
 block seL4_CNode_CapData {
-    field guard 26
-    field guardSize 6
+    padding 6
+    field guard 18
+    field guardSize 5
+    padding 3
 }

@@ -18,10 +18,10 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 
 | Lane | Current status | What it does not prove |
 | --- | --- | --- |
-| QEMU current source | Target-qualified Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. | Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
+| QEMU seL4 16 offline | All five fresh profiles and a linked GICv3 QEMU `--no-run` package build pass. Earlier Stage 01-05 records predate this refresh and are not v16 boot evidence. | A QEMU boot, target-qualified v16 Test Plan, Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
-| Pi 4 current source, offline | Pi-qualified Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. | A board boot, current-image device readiness, TCP, or benchmark result. |
-| Pi 4 current image, live | Exact commit `7328bedd6142` / image `5a9f812c5408998e3292b4c4475bee545a4c8f2d0e5781a238054598ff313001` starts both linked runtimes, proves the selected GPIO34-GPIO39 ALT3/pull fields by live readback, completes the strict retained CYW43 extra-pull-up clear, keeps the operator console live through bounded supervision, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5 and advances exactly two 64-byte blocks before stalling with `DATA_END` absent and BCM2835 DMA active/DREQ-held. | No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The all-request Linux watchdog, live pre-firmware contract reproof, exact interrupt mask, and telemetry-v3 changes remain an offline source-and-image candidate until that exact candidate is read back and booted on the Pi. |
+| Pi 4 seL4 16 source, offline | Both fresh Pi profiles pass; a direct `~/seL4_16` diagnostic build completed 309 of 309 steps and passed runtime validation. Exact-image staging remains open because the shared checkout was already dirty and was preserved. | A sealed/read-back image, board boot, current-image device readiness, TCP, or benchmark result. |
+| Pi 4 pre-v16 live diagnostic | Exact commit `7328bedd6142` / image `5a9f812c5408998e3292b4c4475bee545a4c8f2d0e5781a238054598ff313001` starts both linked runtimes, proves the selected GPIO34-GPIO39 ALT3/pull fields by live readback, completes the strict retained CYW43 extra-pull-up clear, keeps the operator console live through bounded supervision, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5 and advances exactly two 64-byte blocks before stalling with `DATA_END` absent and BCM2835 DMA active/DREQ-held. | This is historical diagnostic evidence, not seL4 16 proof. No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The all-request Linux watchdog, live pre-firmware contract reproof, exact interrupt mask, and telemetry-v3 changes remain an offline source-and-image candidate until that exact candidate is read back and booted on the Pi. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
 active. It may be newer than checked-in records, but only the repository's
@@ -65,7 +65,7 @@ flowchart LR
 | Target | Manifest | seL4 build truth |
 | --- | --- | --- |
 | QEMU `aarch64/virt` | `configs/root_task.toml` | Canonical validated `SEL4_BUILD_DIR` at `out/sel4/profile-v2/qemu-smp-production`; explicit alternatives are diagnostic unless a named profile contract passes. |
-| Raspberry Pi 4 | `configs/root_task_pi4_uboot_aarch64.toml` | `seL4/build_UBOOT` plus the accepted external seL4 15 source and Pi overlay provenance. |
+| Raspberry Pi 4 | `configs/root_task_pi4_uboot_aarch64.toml` | Canonical repo-managed `out/sel4/profile-v2/pi4-diagnostic` artifacts plus `out/sel4/v16-pi4-project` source and Pi overlay provenance. External trees are accepted only through an explicit override and the same v16 validator. |
 
 The Pi 4 baseline is `Pi firmware -> U-Boot -> seL4 binary image -> root-task`.
 `configs/root_task_uefi_aarch64.toml` is a separate profile and is not Pi 4
@@ -114,23 +114,23 @@ projection, and Stage 05 due diligence.
 For an acceptance candidate, perform a full build. Do not use `--skip-build`:
 
 ```bash
-python3 scripts/sel4_profile.py configure \
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py configure \
   --profile pi4_diagnostic \
-  --source "$PWD/out/sel4/v15-pi4-project" \
-  --build-dir "$HOME/seL4/build_UBOOT"
-python3 scripts/sel4_profile.py build \
+  --source "$PWD/out/sel4/v16-pi4-project" \
+  --build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic"
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py build \
   --profile pi4_diagnostic \
-  --source "$PWD/out/sel4/v15-pi4-project" \
-  --build-dir "$HOME/seL4/build_UBOOT"
-python3 scripts/sel4_profile.py validate \
+  --source "$PWD/out/sel4/v16-pi4-project" \
+  --build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic"
+out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
   --profile pi4_diagnostic \
-  --source "$PWD/out/sel4/v15-pi4-project" \
-  --build-dir "$HOME/seL4/build_UBOOT" \
+  --source "$PWD/out/sel4/v16-pi4-project" \
+  --build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" \
   --require-source --require-artifacts --for-runtime
 ./scripts/pi4-image-build.sh \
   --manifest configs/root_task_pi4_uboot_aarch64.toml \
-  --sel4-build-dir "$HOME/seL4/build_UBOOT" \
-  --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel"
+  --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" \
+  --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel"
 ```
 
 The default stage directory is `out/pi4-sd`. The script validates the Pi U-Boot
@@ -188,8 +188,8 @@ Only after verification, pass the explicit whole-disk node:
 ```bash
 ./scripts/pi4-image-build.sh \
   --manifest configs/root_task_pi4_uboot_aarch64.toml \
-  --sel4-build-dir "$HOME/seL4/build_UBOOT" \
-  --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel" \
+  --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" \
+  --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel" \
   --flash-disk /dev/diskN
 ```
 

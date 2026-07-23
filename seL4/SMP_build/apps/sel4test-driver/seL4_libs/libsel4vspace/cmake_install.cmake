@@ -1,4 +1,4 @@
-# Install script for directory: /Users/lukasbower/seL4/projects/seL4_libs/libsel4vspace
+# Install script for directory: /Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/projects/seL4_libs/libsel4vspace
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -34,12 +34,12 @@ endif()
 
 # Set path to fallback-tool for dependency-resolution.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "/opt/homebrew/bin/aarch64-linux-gnu-objdump")
+  set(CMAKE_OBJDUMP "/Users/lukasbower/GitHub/cohesix/out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-objdump")
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "/Users/lukasbower/GitHub/cohesix/seL4/SMP_build/apps/sel4test-driver/seL4_libs/libsel4vspace/install_local_manifest.txt"
+  file(WRITE "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-diagnostic/apps/sel4test-driver/seL4_libs/libsel4vspace/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

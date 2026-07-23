@@ -9,3 +9,9 @@ third_party/raspberry-pi-firmware/**/brcmfmac43455-sdio*.txt -text -diff
 # Inner unified-diff context intentionally starts with a context marker before
 # upstream tabs or blank lines; retain those bytes without outer-diff warnings.
 configs/sel4/patches/*.patch -whitespace
+
+# seL4 reference trees are exact generated-build mirrors. Preserve upstream
+# and compiler-emitted whitespace while retaining ordinary textual diffs.
+seL4/build/** -whitespace
+seL4/SMP_build/** -whitespace
+seL4/build_UBOOT/** -whitespace

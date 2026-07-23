@@ -25,6 +25,7 @@
 /* disabled: CONFIG_PLAT_APQ8064 */
 /* disabled: CONFIG_PLAT_ARIANE */
 #define CONFIG_PLAT_BCM2711  1
+/* disabled: CONFIG_PLAT_BCM2712 */
 /* disabled: CONFIG_PLAT_BCM2837 */
 /* disabled: CONFIG_PLAT_CHESHIRE */
 /* disabled: CONFIG_PLAT_HIFIVE_P550 */
@@ -54,6 +55,7 @@
 /* disabled: CONFIG_PLAT_BANANAPIF3 */
 /* disabled: CONFIG_PLAT_SPIKE */
 /* disabled: CONFIG_PLAT_STAR64 */
+/* disabled: CONFIG_PLAT_STM32MP2 */
 /* disabled: CONFIG_PLAT_TK1 */
 /* disabled: CONFIG_PLAT_TQMA8XQP1GB */
 /* disabled: CONFIG_PLAT_TX1 */
@@ -70,10 +72,12 @@
 /* disabled: CONFIG_ARM_CORTEX_A55 */
 /* disabled: CONFIG_ARM_CORTEX_A57 */
 #define CONFIG_ARM_CORTEX_A72  1
+/* disabled: CONFIG_ARM_CORTEX_A76 */
 /* disabled: CONFIG_ARCH_ARM_V7A */
 /* disabled: CONFIG_ARCH_ARM_V7VE */
 #define CONFIG_ARCH_ARM_V8A  1
 /* disabled: CONFIG_AARCH64_SERROR_IGNORE */
+#define CONFIG_TIMER_FREQUENCY  54000000
 #define CONFIG_ARM_MACH  /* empty */
 /* disabled: CONFIG_KERNEL_MCS */
 /* disabled: CONFIG_ARM_PA_SIZE_BITS_40 */
@@ -105,7 +109,7 @@
 /* disabled: CONFIG_ARM_HAS_TLB_LOCK */
 #define CONFIG_HAVE_FPU  1
 #define CONFIG_PADDR_USER_DEVICE_TOP  17592186044416
-#define CONFIG_ROOT_CNODE_SIZE_BITS  13
+#define CONFIG_ROOT_CNODE_SIZE_BITS  14
 #define CONFIG_TIMER_TICK_MS  2
 #define CONFIG_TIME_SLICE  5
 #define CONFIG_RETYPE_FAN_OUT_LIMIT  256
@@ -160,4 +164,4 @@
 #define CONFIG_EXPORT_VCNT_USER  1
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
-#define CONFIG_VTIMER_UPDATE_VOFFSET  1
+/* disabled: CONFIG_VTIMER_UPDATE_VOFFSET */

@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Define fail-closed seL4 15 source and generated-build profile contracts for Cohesix.
+# Purpose: Define fail-closed seL4 16 source and generated-build profile contracts for Cohesix.
 # Copyright 2026 Lukas Bower
 
 schema_version = 2
@@ -63,21 +63,21 @@ version = "mkimage version 2026.01"
 
 [source]
 manifest_url = "https://github.com/seL4/sel4test-manifest.git"
-manifest_ref = "refs/tags/15.0.0"
-manifest_commit = "367a780d5f3f1b59711618b3b321666cecb2f8a2"
+manifest_ref = "refs/tags/16.0.0"
+manifest_commit = "b81fd440977a8ad89ed8478a9a5a027f062551f6"
 
 [source.repositories]
-".repo/manifests" = "367a780d5f3f1b59711618b3b321666cecb2f8a2"
-"kernel" = "881de507fe528490dc5e570c7810a149bad5880f"
+".repo/manifests" = "b81fd440977a8ad89ed8478a9a5a027f062551f6"
+"kernel" = "6e7c3b733d296cfd88d5fbf635c96e447a882374"
 "projects/musllibc" = "b0005f86fecbd6d0257b15363a5b013446914265"
-"projects/seL4_libs" = "4ce71fca2adbf1c2add7eabf5670633a70177a2f"
-"projects/sel4_projects_libs" = "0e06bebf4a3f0c21317c6877e0079f637e021562"
+"projects/seL4_libs" = "d8abd95e7114c852f6636e3084eb1f66091a75ee"
+"projects/sel4_projects_libs" = "5b3c81127b191232489df09a59b22edead1c9db7"
 "projects/sel4runtime" = "86489cf6efab9f314964e79468c036e9035394c7"
-"projects/sel4test" = "aebc7448f738c1360b1af2dae2faf414c4743fc9"
-"projects/util_libs" = "c8f9ea7c0ea390e3d82049de4125fe553a76ed1e"
-"tools/nanopb" = "1466e6f953835b191a7f5acf0c06c941d4cd33d9"
+"projects/sel4test" = "60b7b47ee0a67f56e15951735a6aa9d270d47f55"
+"projects/util_libs" = "6e55b3c62687779692150e1de411ce61b9d2919a"
+"tools/nanopb" = "cad3c18ef15a663e30e3e43e3a752b66378adec1"
 "tools/opensbi" = "234ed8e427f4d92903123199f6590d144e0d9351"
-"tools/seL4" = "83eeeda94cc12eb59fb7eb79940d02f4da618ecd"
+"tools/seL4" = "7dd5ba144b1fecf1358a12d2bef3eb365aab35c7"
 
 [source.pi4_overlay]
 path = "kernel/src/plat/bcm2711/overlay-rpi4.dts"
@@ -139,6 +139,7 @@ KernelMaxNumNodes = "4"
 KernelNumDomains = "1"
 KernelIsMCS = "OFF"
 KernelArmHypervisorSupport = "OFF"
+KernelArmVtimerUpdateVOffset = "OFF"
 KernelVerificationBuild = "OFF"
 KernelDebugBuild = "OFF"
 KernelPrinting = "OFF"
@@ -170,6 +171,7 @@ DEBUG_BUILD = false
 PRINTING = false
 KERNEL_BENCHMARK = "none"
 ARM_HYPERVISOR_SUPPORT = false
+VTIMER_UPDATE_VOFFSET = false
 EXPORT_VCNT_USER = false
 EXPORT_PCNT_USER = false
 EXPORT_PTMR_USER = false
@@ -228,6 +230,7 @@ KernelMaxNumNodes = "4"
 KernelNumDomains = "1"
 KernelIsMCS = "OFF"
 KernelArmHypervisorSupport = "OFF"
+KernelArmVtimerUpdateVOffset = "OFF"
 KernelVerificationBuild = "OFF"
 KernelDebugBuild = "ON"
 KernelPrinting = "ON"
@@ -258,6 +261,7 @@ DEBUG_BUILD = true
 PRINTING = true
 KERNEL_BENCHMARK = "none"
 ARM_HYPERVISOR_SUPPORT = false
+VTIMER_UPDATE_VOFFSET = false
 EXPORT_VCNT_USER = false
 EXPORT_PCNT_USER = false
 EXPORT_PTMR_USER = false
@@ -319,6 +323,7 @@ KernelNumDomains = "1"
 KernelIsMCS = "OFF"
 KernelArmGicV3 = "OFF"
 KernelArmHypervisorSupport = "OFF"
+KernelArmVtimerUpdateVOffset = "OFF"
 KernelVerificationBuild = "OFF"
 KernelDebugBuild = "OFF"
 KernelPrinting = "OFF"
@@ -352,6 +357,7 @@ DEBUG_BUILD = false
 PRINTING = false
 KERNEL_BENCHMARK = "none"
 ARM_HYPERVISOR_SUPPORT = false
+VTIMER_UPDATE_VOFFSET = false
 EXPORT_VCNT_USER = true
 EXPORT_PCNT_USER = false
 EXPORT_PTMR_USER = false
@@ -413,6 +419,7 @@ KernelNumDomains = "1"
 KernelIsMCS = "OFF"
 KernelArmGicV3 = "OFF"
 KernelArmHypervisorSupport = "OFF"
+KernelArmVtimerUpdateVOffset = "OFF"
 KernelVerificationBuild = "OFF"
 KernelDebugBuild = "ON"
 KernelPrinting = "ON"
@@ -446,6 +453,7 @@ DEBUG_BUILD = true
 PRINTING = true
 KERNEL_BENCHMARK = "none"
 ARM_HYPERVISOR_SUPPORT = false
+VTIMER_UPDATE_VOFFSET = false
 EXPORT_VCNT_USER = true
 EXPORT_PCNT_USER = false
 EXPORT_PTMR_USER = false
@@ -490,6 +498,7 @@ CROSS_COMPILER_PREFIX = "aarch64-none-elf-"
 KernelPlatform = "bcm2711"
 KernelSel4Arch = "aarch64"
 KernelArmHypervisorSupport = "ON"
+KernelArmVtimerUpdateVOffset = "OFF"
 KernelVerificationBuild = "ON"
 KernelMaxNumNodes = "1"
 KernelNumDomains = "16"
@@ -511,5 +520,6 @@ VERIFICATION_BUILD = true
 PRINTING = false
 KERNEL_BENCHMARK = "none"
 ARM_HYPERVISOR_SUPPORT = true
+VTIMER_UPDATE_VOFFSET = false
 ARM_SMMU = false
 ALLOW_SMC_CALLS = true

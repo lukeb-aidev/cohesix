@@ -1,4 +1,3 @@
-/* Author: Lukas Bower */
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -17,7 +16,7 @@ typedef enum kernel_fault_context {
      */
     SEL4_VMENTER_CALL_EIP_MR,
     SEL4_VMENTER_CALL_CONTROL_PPC_MR,
-    SEL4_VMENTER_CALL_CONTROL_ENTRY_MR,
+    SEL4_VMENTER_CALL_INTERRUPT_INFO_MR,
 
     /*
      * In addition to the above message registers, if a VMEnter results in

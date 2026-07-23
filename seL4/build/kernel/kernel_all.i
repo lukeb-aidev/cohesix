@@ -1,16 +1,15 @@
-# 0 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/kernel_all_copy.c"
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build//"
+# 0 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel_all_copy.c"
 # 0 "<built-in>"
 # 0 "<command-line>"
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/kernel_all_copy.c"
-# 1 "/Users/lukasbower/seL4_15/src/api/faults.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/kernel_all_copy.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-# 1 "/Users/lukasbower/seL4_15/include/config.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/config.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -19,7 +18,7 @@
 
        
 
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/config.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/config.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -30,11 +29,11 @@
 
 /* Compile-time configuration parameters. Might be set by the build system. */
 
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/autoconf/autoconf.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/autoconf/autoconf.h" 1
 
        
 
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_config/kernel/gen_config.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_config/kernel/gen_config.h" 1
        
 
 
@@ -62,6 +61,7 @@
 /* disabled: CONFIG_PLAT_APQ8064 */
 /* disabled: CONFIG_PLAT_ARIANE */
 /* disabled: CONFIG_PLAT_BCM2711 */
+/* disabled: CONFIG_PLAT_BCM2712 */
 /* disabled: CONFIG_PLAT_BCM2837 */
 /* disabled: CONFIG_PLAT_CHESHIRE */
 /* disabled: CONFIG_PLAT_HIFIVE_P550 */
@@ -91,6 +91,7 @@
 /* disabled: CONFIG_PLAT_BANANAPIF3 */
 /* disabled: CONFIG_PLAT_SPIKE */
 /* disabled: CONFIG_PLAT_STAR64 */
+/* disabled: CONFIG_PLAT_STM32MP2 */
 /* disabled: CONFIG_PLAT_TK1 */
 /* disabled: CONFIG_PLAT_TQMA8XQP1GB */
 /* disabled: CONFIG_PLAT_TX1 */
@@ -107,10 +108,12 @@
 /* disabled: CONFIG_ARM_CORTEX_A55 */
 /* disabled: CONFIG_ARM_CORTEX_A57 */
 /* disabled: CONFIG_ARM_CORTEX_A72 */
+/* disabled: CONFIG_ARM_CORTEX_A76 */
 /* disabled: CONFIG_ARCH_ARM_V7A */
 /* disabled: CONFIG_ARCH_ARM_V7VE */
 
 /* disabled: CONFIG_AARCH64_SERROR_IGNORE */
+
 
 /* disabled: CONFIG_KERNEL_MCS */
 
@@ -121,7 +124,7 @@
 /* disabled: CONFIG_DEBUG_DISABLE_L1_DCACHE */
 /* disabled: CONFIG_DEBUG_DISABLE_BRANCH_PREDICTION */
 /* disabled: CONFIG_ARM_HYPERVISOR_SUPPORT */
-/* disabled: CONFIG_ARM_GIC_V3_SUPPORT */
+
 /* disabled: CONFIG_AARCH64_VSPACE_S2_START_L1 */
 /* disabled: CONFIG_ARM_HYP_ENABLE_VCPU_CP14_SAVE_AND_RESTORE */
 /* disabled: CONFIG_ARM_ERRATA_430973 */
@@ -140,20 +143,20 @@
 
 
 /* disabled: CONFIG_ARM_HAS_TLB_LOCK */
-# 116 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_config/kernel/gen_config.h"
+# 120 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_config/kernel/gen_config.h"
 /* disabled: CONFIG_EXCEPTION_FASTPATH */
 
 
 /* disabled: CONFIG_SIGNAL_FASTPATH */
 
 
-/* disabled: CONFIG_ENABLE_SMP_SUPPORT */
+
 
 /* disabled: CONFIG_VERIFICATION_BUILD */
 /* disabled: CONFIG_BINARY_VERIFICATION_BUILD */
-
+/* disabled: CONFIG_DEBUG_BUILD */
 /* disabled: CONFIG_HARDWARE_DEBUG_API */
-
+/* disabled: CONFIG_PRINTING */
 /* disabled: CONFIG_KERNEL_INVOCATION_REPORT_ERROR_IPC */
 
 /* disabled: CONFIG_BENCHMARK_GENERIC */
@@ -164,8 +167,8 @@
 /* disabled: CONFIG_ENABLE_BENCHMARKS */
 /* disabled: CONFIG_KERNEL_LOG_BUFFER */
 
-
-
+/* disabled: CONFIG_IRQ_REPORTING */
+/* disabled: CONFIG_COLOUR_PRINTING */
 
 
 /* disabled: CONFIG_KERNEL_OPT_LEVEL_OS */
@@ -188,13 +191,14 @@
 /* disabled: CONFIG_EXPORT_VCNT_USER */
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
-# 5 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/autoconf/autoconf.h" 2
-# 12 "/Users/lukasbower/seL4_15/libsel4/include/sel4/config.h" 2
-# 10 "/Users/lukasbower/seL4_15/include/config.h" 2
+/* disabled: CONFIG_VTIMER_UPDATE_VOFFSET */
+# 5 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/autoconf/autoconf.h" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/config.h" 2
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/config.h" 2
 
 /* Set ENABLE_SMP_SUPPORT for kernel source files */
-# 8 "/Users/lukasbower/seL4_15/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_15/include/types.h" 1
+# 8 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -203,7 +207,7 @@
 
        
 
-# 1 "/Users/lukasbower/seL4_15/include/basic_types.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/basic_types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -212,7 +216,7 @@
 
        
 
-# 1 "/Users/lukasbower/seL4_15/include/stdint.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/stdint.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -221,7 +225,7 @@
 
        
 
-# 1 "/Users/lukasbower/seL4_15/include/64/mode/stdint.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/64/mode/stdint.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -229,7 +233,7 @@
  */
 
        
-# 10 "/Users/lukasbower/seL4_15/include/stdint.h" 2
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/stdint.h" 2
 
 typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;
@@ -248,8 +252,8 @@ typedef signed long long int64_t;
 
 typedef uint64_t uintmax_t;
 typedef int64_t intmax_t;
-# 10 "/Users/lukasbower/seL4_15/include/basic_types.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/types.h" 1
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/basic_types.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -259,7 +263,7 @@ typedef int64_t intmax_t;
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/types.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -268,7 +272,7 @@ typedef int64_t intmax_t;
 
        
 
-# 1 "/Users/lukasbower/seL4_15/include/assert.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/assert.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -278,7 +282,7 @@ typedef int64_t intmax_t;
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/util.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/util.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -286,13 +290,13 @@ typedef int64_t intmax_t;
  */
 
        
-# 28 "/Users/lukasbower/seL4_15/include/util.h"
+# 28 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/util.h"
 /* There is no difference between using 'ul' or 'lu' as suffix for numbers to
  * enforce a specific type besides the default 'int'. Just when it comes to the
  * printf() format specifiers, '%lu' is the only form that is supported. Thus
  * 'ul' is the preferred suffix to avoid confusion.
  */
-# 48 "/Users/lukasbower/seL4_15/include/util.h"
+# 48 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/util.h"
 /* Time constants are defined to use the 'unsigned long long'. Rationale is,
  * that the C rules define the calculation result is determined by largest type
  * involved. Enforcing the largest possible type C provides avoids pitfalls with
@@ -309,7 +313,7 @@ typedef int64_t intmax_t;
  * uint64_t type definitions nor including the header with the uint64_t
  * definitions here is currently a feasible option.
  */
-# 93 "/Users/lukasbower/seL4_15/include/util.h"
+# 93 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/util.h"
 /** MODIFIES: */
 /** FNSPEC
       StrictC'__unreachable_spec: "\<Gamma> \<turnstile> {} Call StrictC'__unreachable_'proc UNIV"
@@ -465,7 +469,7 @@ __attribute__((__const__)) clzll(unsigned long long x)
 static inline long
 __attribute__((__const__)) ctzl(unsigned long x)
 {
-# 269 "/Users/lukasbower/seL4_15/include/util.h"
+# 269 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/util.h"
     // Here, we have __builtin_ctzl.
     return __builtin_ctzl(x);
 
@@ -485,7 +489,7 @@ __attribute__((__const__)) ctzl(unsigned long x)
 static inline long long
 __attribute__((__const__)) ctzll(unsigned long long x)
 {
-# 300 "/Users/lukasbower/seL4_15/include/util.h"
+# 300 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/util.h"
     return __builtin_ctzll(x);
 
 }
@@ -511,26 +515,8 @@ __attribute__((__const__)) popcountl(unsigned long mask)
 
 
 /* Can be used to insert padding to the next L1 cache line boundary */
-# 11 "/Users/lukasbower/seL4_15/include/assert.h" 2
-
-
-
-void _fail(
-    const char *str,
-    const char *file,
-    unsigned int line,
-    const char *function
-) __attribute__((__noreturn__));
-
-
-
-void _assert_fail(
-    const char *assertion,
-    const char *file,
-    unsigned int line,
-    const char *function
-) __attribute__((__noreturn__));
-# 45 "/Users/lukasbower/seL4_15/include/assert.h"
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/assert.h" 2
+# 45 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/assert.h"
 /* Create an assert that triggers a compile error if the condition fails. We do
  * not include sel4/macros.h that provides SEL4_COMPILE_ASSERT() for two
  * reasons:
@@ -548,7 +534,7 @@ void _assert_fail(
  * unverified_compile_assert() exists, because some compile asserts contain
  * expressions that the C parser cannot handle, too.
  */
-# 10 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/types.h" 2
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/types.h" 2
 
 _Static_assert(sizeof(unsigned long) == 8, "long_is_64bits");
 
@@ -556,7 +542,7 @@ _Static_assert(sizeof(unsigned long) == 8, "long_is_64bits");
 
 
 typedef uint64_t timestamp_t;
-# 11 "/Users/lukasbower/seL4_15/include/arch/arm/arch/types.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/types.h" 2
 
 
 typedef unsigned long word_t;
@@ -585,7 +571,7 @@ typedef struct kernel_frame {
     int armExecuteNever;
     int userAvailable;
 } kernel_frame_t;
-# 11 "/Users/lukasbower/seL4_15/include/basic_types.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/basic_types.h" 2
 
 /* arch/types.h is supposed to define word_t and _seL4_word_fmt */
 
@@ -599,7 +585,7 @@ typedef struct kernel_frame {
  * always be from the strings behind all macros then - and not the macro names
  * that are passed as parameters.
  */
-# 35 "/Users/lukasbower/seL4_15/include/basic_types.h"
+# 35 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/basic_types.h"
 /* The C parser from the verification toolchain requires declaring word_t
  * constants without casting integer values to word_t. Since the printf() format
  * specifiers are aligned with the C integer type suffixes, _seL4_word_fmt can
@@ -654,8 +640,8 @@ typedef cptr_t seL4_CPtr;
 typedef node_id_t seL4_NodeId;
 typedef paddr_t seL4_PAddr;
 typedef dom_t seL4_Domain;
-# 10 "/Users/lukasbower/seL4_15/include/types.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/compound_types.h" 1
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/types.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/compound_types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -665,7 +651,7 @@ typedef dom_t seL4_Domain;
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/api/types.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -677,8 +663,8 @@ typedef dom_t seL4_Domain;
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/sel4/shared_types_gen.h" 1
-/* generated from /Users/lukasbower/seL4_15/libsel4/mode_include/64/sel4/shared_types.bf */
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/generated/sel4/shared_types_gen.h" 1
+/* generated from /Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/mode_include/64/sel4/shared_types.bf */
 
        
 
@@ -772,10 +758,10 @@ seL4_MessageInfo_new(uint64_t label, uint64_t capsUnwrapped, uint64_t extraCaps,
     seL4_MessageInfo_t seL4_MessageInfo;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((label & ~0xfffffffffffffull) == ((0 && (label & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(label & ~0xfffffffffffffull) == ((0 && (label & (1ull << 63))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/sel4/shared_types_gen.h", 95, __func__); } } while(0);
-    do { if (!((capsUnwrapped & ~0x7ull) == ((0 && (capsUnwrapped & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(capsUnwrapped & ~0x7ull) == ((0 && (capsUnwrapped & (1ull << 63))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/sel4/shared_types_gen.h", 96, __func__); } } while(0);
-    do { if (!((extraCaps & ~0x3ull) == ((0 && (extraCaps & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(extraCaps & ~0x3ull) == ((0 && (extraCaps & (1ull << 63))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/sel4/shared_types_gen.h", 97, __func__); } } while(0);
-    do { if (!((length & ~0x7full) == ((0 && (length & (1ull << 63))) ? 0x0 : 0))) { _assert_fail("(length & ~0x7full) == ((0 && (length & (1ull << 63))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/sel4/shared_types_gen.h", 98, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
 
     seL4_MessageInfo.words[0] = 0
         | (label & 0xfffffffffffffull) << 12
@@ -811,7 +797,7 @@ seL4_MessageInfo_get_capsUnwrapped(seL4_MessageInfo_t seL4_MessageInfo) {
 static inline seL4_MessageInfo_t __attribute__((__const__))
 seL4_MessageInfo_set_capsUnwrapped(seL4_MessageInfo_t seL4_MessageInfo, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xe00ull >> 9 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0))) { _assert_fail("(((~0xe00ull >> 9 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/sel4/shared_types_gen.h", 134, __func__); } } while(0);
+    ;
     seL4_MessageInfo.words[0] &= ~0xe00ull;
     seL4_MessageInfo.words[0] |= (v64 << 9) & 0xe00ull;
     return seL4_MessageInfo;
@@ -831,7 +817,7 @@ seL4_MessageInfo_get_extraCaps(seL4_MessageInfo_t seL4_MessageInfo) {
 static inline seL4_MessageInfo_t __attribute__((__const__))
 seL4_MessageInfo_set_extraCaps(seL4_MessageInfo_t seL4_MessageInfo, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0))) { _assert_fail("(((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/sel4/shared_types_gen.h", 154, __func__); } } while(0);
+    ;
     seL4_MessageInfo.words[0] &= ~0x180ull;
     seL4_MessageInfo.words[0] |= (v64 << 7) & 0x180ull;
     return seL4_MessageInfo;
@@ -851,13 +837,13 @@ seL4_MessageInfo_get_length(seL4_MessageInfo_t seL4_MessageInfo) {
 static inline seL4_MessageInfo_t __attribute__((__const__))
 seL4_MessageInfo_set_length(seL4_MessageInfo_t seL4_MessageInfo, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x7full >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0))) { _assert_fail("(((~0x7full >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (63)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/sel4/shared_types_gen.h", 174, __func__); } } while(0);
+    ;
     seL4_MessageInfo.words[0] &= ~0x7full;
     seL4_MessageInfo.words[0] |= (v64 << 0) & 0x7full;
     return seL4_MessageInfo;
 }
-# 13 "/Users/lukasbower/seL4_15/include/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/api/types.h" 1
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/types.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/api/types.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -866,7 +852,7 @@ seL4_MessageInfo_set_length(seL4_MessageInfo_t seL4_MessageInfo, uint64_t v64) {
 
        
 
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/objecttype.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/objecttype.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -891,8 +877,8 @@ __attribute__((deprecated("use seL4_NotificationObject"))) static const seL4_Obj
     seL4_NotificationObject;
 
 typedef seL4_Word api_object_t;
-# 10 "/Users/lukasbower/seL4_15/include/arch/arm/arch/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_15/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/objecttype.h" 1
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/api/types.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/objecttype.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -906,8 +892,8 @@ typedef enum _mode_object {
     seL4_ARM_VSpaceObject,
     seL4_ModeObjectTypeCount
 } seL4_ModeObjectType;
-# 11 "/Users/lukasbower/seL4_15/include/arch/arm/arch/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_15/libsel4/arch_include/arm/sel4/arch/objecttype.h" 1
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/api/types.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/arch_include/arm/sel4/arch/objecttype.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -936,16 +922,16 @@ typedef enum _object {
 } seL4_ArchObjectType;
 
 typedef seL4_Word object_t;
-# 12 "/Users/lukasbower/seL4_15/include/arch/arm/arch/api/types.h" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/api/types.h" 2
 
 enum asidConstants {
     asidInvalid = 0
 };
 
 typedef word_t asid_t;
-# 14 "/Users/lukasbower/seL4_15/include/api/types.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/types.h" 2
 
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/macros.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/macros.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -953,17 +939,17 @@ typedef word_t asid_t;
  */
 
        
-# 51 "/Users/lukasbower/seL4_15/libsel4/include/sel4/macros.h"
+# 51 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/macros.h"
 /* _Static_assert() is a c11 feature. Since the kernel is currently compiled
  * with c99, we have to emulate it. */
-# 65 "/Users/lukasbower/seL4_15/libsel4/include/sel4/macros.h"
+# 65 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/macros.h"
 /*
  * Some compilers attempt to pack enums into the smallest possible type.
  * For ABI compatibility with the kernel, we need to ensure they remain
  * the same size as a 'long'.
  */
-# 16 "/Users/lukasbower/seL4_15/include/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/constants.h" 1
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/types.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/constants.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -971,7 +957,7 @@ typedef word_t asid_t;
  */
 
        
-# 44 "/Users/lukasbower/seL4_15/libsel4/include/sel4/constants.h"
+# 44 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/constants.h"
 enum priorityConstants {
     seL4_InvalidPrio = -1,
     seL4_MinPrio = 0,
@@ -1011,8 +997,8 @@ typedef enum {
                         | seL4_TCBFlag_fpuDisabled
 
 } seL4_TCBFlag;
-# 17 "/Users/lukasbower/seL4_15/include/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/shared_types.h" 1
+# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/types.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/shared_types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1044,8 +1030,8 @@ typedef enum {
     seL4_CapFault_GuardMismatch_BitsFound,
     _enum_pad_seL4_CapFault_Msg = ((1ULL << ((sizeof(long)*8) - 1)) - 1),
 } seL4_CapFault_Msg;
-# 18 "/Users/lukasbower/seL4_15/include/api/types.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/machine/io.h" 1
+# 18 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/types.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/io.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -1053,120 +1039,25 @@ typedef enum {
  */
 
        
+# 110 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/io.h"
+/* The verification runs on the output of the preprocessing stage of a release
+ * build configuration, CONFIG_PRINTING is not enabled there. We remove all
+ * calls to printf() completely from the code base, because neither printf() nor
+ * the usage of a variable argument list is supported by the verification
+ * toolchain. It would just reject the code if it encounters any unsupported
+ * things.
+ */
 
 
-
-
-/* io for dumping capdl */
-unsigned char kernel_getDebugChar(void);
-
-
-
-
-
-
-# 1 "/Users/lukasbower/seL4_15/include/stdarg.h" 1
-/*
- * Copyright 2014, General Dynamics C4 Systems
+/* Seems there is no need to define out these functions, they are use by code
+ * that is active with CONFIG_PRINTING only.
  *
- * SPDX-License-Identifier: GPL-2.0-only
+ *   #define kernel_putchar(...)     ((void)(0))
+ *   #define putchar(...)            ((void)(0))
+ *   #define puts(...)               ((void)(0))
+ *   #define snprintf(...)           ((void)(0))
  */
-
-       
-
-
-
-
-
-typedef __builtin_va_list va_list;
-# 21 "/Users/lukasbower/seL4_15/include/machine/io.h" 2
-
-/* the actual output function */
-void kernel_putDebugChar(unsigned char c);
-
-/* This is the actual implementation of the kernel printing API. It must never
- * be called directly from anywhere except the function defined in this file.
- */
-int impl_kvprintf(const char *format, va_list ap);
-int impl_ksnvprintf(char *str, word_t size, const char *format, va_list ap);
-
-/*
- *------------------------------------------------------------------------------
- * Kernel printing API
- *------------------------------------------------------------------------------
- */
-
-/* Writes a character to the kernel output channel. This is used to implement
- * the syscall SysDebugPutChar.
- */
-static inline void kernel_putchar(
-    char c)
-{
-    /* Write to target specific debug output channel. */
-    kernel_putDebugChar(c);
-}
-
-/* Writes a character to the active output channel. This is used by all code
- * related to printf(). Contrary to the common signature of putchar(), there is
- * no return value here.
- */
-static inline void putchar(
-    char c)
-{
-    /* Write to target specific debug output channel. Purposely, we do not call
-     * kernel_putchar() here, as the kernel printf() channel is semantically
-     * different from the syscall SysDebugPutChar channel. The unification
-     * of both channels happens at the lower layer eventually
-     */
-    kernel_putDebugChar(c);
-}
-
-/* Writes the string and a trailing newline. There is no point to enforce a
- * kernel_puts(), as this is just a wrapper for putchar() anyway.
- */
-static inline int puts(
-    const char *str)
-{
-    if (str) {
-        while (*str) {
-            putchar(*str++);
-        }
-    }
-    putchar('\n');
-    /* Standards define that a non-negative number is returned on success. */
-    return 0;
-}
-
-/* There should only be a kprintf() that all kernel code must use for printing,
- * but for convenience we provide a printf() here.
- */
-static inline __attribute__((format(printf, 1, 2))) int printf(
-    const char *format,
-    ...)
-{
-    va_list args;
-    __builtin_va_start(args,format);
-    int ret = impl_kvprintf(format, args); /* will call putchar() eventually */
-    __builtin_va_end(args);
-    return ret;
-}
-
-/* Provide the standard snprintf() for write formatted data into a buffer, which
- * can then be printed or stored.
- */
-static inline __attribute__((format(printf, 3, 4))) int snprintf(
-    char *buf,
-    word_t size,
-    const char *format,
-    ...)
-{
-    va_list args;
-    __builtin_va_start(args,format);
-    int ret = impl_ksnvprintf(buf, size, format, args);
-    __builtin_va_end(args);
-    return ret;
-}
-# 19 "/Users/lukasbower/seL4_15/include/api/types.h" 2
+# 19 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/types.h" 2
 
 /* seL4_CapRights_t defined in mode/api/shared_types.bf */
 
@@ -1250,17 +1141,8 @@ static inline word_t __attribute__((__const__)) wordFromMessageInfo(seL4_Message
 {
     return mi.words[0];
 }
-# 114 "/Users/lukasbower/seL4_15/include/api/types.h"
-/*
- * thread name is only available if the kernel is built in debug mode.
- */
-# 133 "/Users/lukasbower/seL4_15/include/api/types.h"
-/*
- * Print to serial a message helping userspace programmers to determine why the
- * kernel is not performing their requested operation.
- */
-# 11 "/Users/lukasbower/seL4_15/include/compound_types.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/object/structures.h" 1
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/compound_types.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -1272,8 +1154,8 @@ static inline word_t __attribute__((__const__)) wordFromMessageInfo(seL4_Message
 
 
 
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h" 1
-/* generated from /Users/lukasbower/seL4_15/include/arch/arm/arch/object/structures.bf */
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/generated/arch/object/structures_gen.h" 1
+/* generated from /Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/structures.bf */
 
        
 
@@ -1300,7 +1182,7 @@ endpoint_ptr_get_epQueue_head(endpoint_t *endpoint_ptr) {
 static inline void
 endpoint_ptr_set_epQueue_head(endpoint_t *endpoint_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 28, __func__); } } while(0);
+    ;
     endpoint_ptr->words[1] &= ~0xffffffffffffffffull;
     endpoint_ptr->words[1] |= (v64 << 0) & 0xffffffffffffffff;
 }
@@ -1319,7 +1201,7 @@ endpoint_ptr_get_epQueue_tail(endpoint_t *endpoint_ptr) {
 static inline void
 endpoint_ptr_set_epQueue_tail(endpoint_t *endpoint_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 47, __func__); } } while(0);
+    ;
     endpoint_ptr->words[0] &= ~0xfffffffffffcull;
     endpoint_ptr->words[0] |= (v64 >> 0) & 0xfffffffffffc;
 }
@@ -1338,7 +1220,7 @@ endpoint_ptr_get_state(endpoint_t *endpoint_ptr) {
 static inline void
 endpoint_ptr_set_state(endpoint_t *endpoint_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 66, __func__); } } while(0);
+    ;
     endpoint_ptr->words[0] &= ~0x3ull;
     endpoint_ptr->words[0] |= (v64 << 0) & 0x3;
 }
@@ -1353,9 +1235,9 @@ mdb_node_new(uint64_t mdbNext, uint64_t mdbRevocable, uint64_t mdbFirstBadged, u
     mdb_node_t mdb_node;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((mdbNext & ~0xfffffffffffcull) == ((1 && (mdbNext & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(mdbNext & ~0xfffffffffffcull) == ((1 && (mdbNext & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 81, __func__); } } while(0);
-    do { if (!((mdbRevocable & ~0x1ull) == ((1 && (mdbRevocable & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(mdbRevocable & ~0x1ull) == ((1 && (mdbRevocable & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 82, __func__); } } while(0);
-    do { if (!((mdbFirstBadged & ~0x1ull) == ((1 && (mdbFirstBadged & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(mdbFirstBadged & ~0x1ull) == ((1 && (mdbFirstBadged & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 83, __func__); } } while(0);
+    ;
+    ;
+    ;
 
     mdb_node.words[0] = 0
         | mdbPrev << 0;;
@@ -1381,7 +1263,7 @@ mdb_node_get_mdbNext(mdb_node_t mdb_node) {
 static inline void
 mdb_node_ptr_set_mdbNext(mdb_node_t *mdb_node_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffffffffcull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 109, __func__); } } while(0);
+    ;
     mdb_node_ptr->words[1] &= ~0xfffffffffffcull;
     mdb_node_ptr->words[1] |= (v64 >> 0) & 0xfffffffffffc;
 }
@@ -1400,7 +1282,7 @@ mdb_node_get_mdbRevocable(mdb_node_t mdb_node) {
 static inline mdb_node_t __attribute__((__const__))
 mdb_node_set_mdbRevocable(mdb_node_t mdb_node, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x2ull >> 1 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 128, __func__); } } while(0);
+    ;
     mdb_node.words[1] &= ~0x2ull;
     mdb_node.words[1] |= (v64 << 1) & 0x2ull;
     return mdb_node;
@@ -1409,7 +1291,7 @@ mdb_node_set_mdbRevocable(mdb_node_t mdb_node, uint64_t v64) {
 static inline void
 mdb_node_ptr_set_mdbRevocable(mdb_node_t *mdb_node_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 137, __func__); } } while(0);
+    ;
     mdb_node_ptr->words[1] &= ~0x2ull;
     mdb_node_ptr->words[1] |= (v64 << 1) & 0x2;
 }
@@ -1428,7 +1310,7 @@ mdb_node_get_mdbFirstBadged(mdb_node_t mdb_node) {
 static inline mdb_node_t __attribute__((__const__))
 mdb_node_set_mdbFirstBadged(mdb_node_t mdb_node, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1ull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1ull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 156, __func__); } } while(0);
+    ;
     mdb_node.words[1] &= ~0x1ull;
     mdb_node.words[1] |= (v64 << 0) & 0x1ull;
     return mdb_node;
@@ -1437,7 +1319,7 @@ mdb_node_set_mdbFirstBadged(mdb_node_t mdb_node, uint64_t v64) {
 static inline void
 mdb_node_ptr_set_mdbFirstBadged(mdb_node_t *mdb_node_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 165, __func__); } } while(0);
+    ;
     mdb_node_ptr->words[1] &= ~0x1ull;
     mdb_node_ptr->words[1] |= (v64 << 0) & 0x1;
 }
@@ -1456,7 +1338,7 @@ mdb_node_get_mdbPrev(mdb_node_t mdb_node) {
 static inline mdb_node_t __attribute__((__const__))
 mdb_node_set_mdbPrev(mdb_node_t mdb_node, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 184, __func__); } } while(0);
+    ;
     mdb_node.words[0] &= ~0xffffffffffffffffull;
     mdb_node.words[0] |= (v64 << 0) & 0xffffffffffffffffull;
     return mdb_node;
@@ -1465,7 +1347,7 @@ mdb_node_set_mdbPrev(mdb_node_t mdb_node, uint64_t v64) {
 static inline void
 mdb_node_ptr_set_mdbPrev(mdb_node_t *mdb_node_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 193, __func__); } } while(0);
+    ;
     mdb_node_ptr->words[0] &= ~0xffffffffffffffffull;
     mdb_node_ptr->words[0] |= (v64 << 0) & 0xffffffffffffffff;
 }
@@ -1489,7 +1371,7 @@ notification_ptr_get_ntfnBoundTCB(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_ntfnBoundTCB(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 217, __func__); } } while(0);
+    ;
     notification_ptr->words[3] &= ~0xffffffffffffull;
     notification_ptr->words[3] |= (v64 >> 0) & 0xffffffffffff;
 }
@@ -1508,7 +1390,7 @@ notification_ptr_get_ntfnMsgIdentifier(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_ntfnMsgIdentifier(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 236, __func__); } } while(0);
+    ;
     notification_ptr->words[2] &= ~0xffffffffffffffffull;
     notification_ptr->words[2] |= (v64 << 0) & 0xffffffffffffffff;
 }
@@ -1527,7 +1409,7 @@ notification_ptr_get_ntfnQueue_head(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_ntfnQueue_head(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffffull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 255, __func__); } } while(0);
+    ;
     notification_ptr->words[1] &= ~0xffffffffffffull;
     notification_ptr->words[1] |= (v64 >> 0) & 0xffffffffffff;
 }
@@ -1546,7 +1428,7 @@ notification_ptr_get_ntfnQueue_tail(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_ntfnQueue_tail(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffff0000ull >> 16) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xffffffffffff0000ull >> 16) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 274, __func__); } } while(0);
+    ;
     notification_ptr->words[0] &= ~0xffffffffffff0000ull;
     notification_ptr->words[0] |= (v64 << 16) & 0xffffffffffff0000;
 }
@@ -1565,7 +1447,7 @@ notification_ptr_get_state(notification_t *notification_ptr) {
 static inline void
 notification_ptr_set_state(notification_t *notification_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x3ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 293, __func__); } } while(0);
+    ;
     notification_ptr->words[0] &= ~0x3ull;
     notification_ptr->words[0] |= (v64 << 0) & 0x3;
 }
@@ -1589,7 +1471,7 @@ thread_state_ptr_get_blockingIPCBadge(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingIPCBadge(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 317, __func__); } } while(0);
+    ;
     thread_state_ptr->words[2] &= ~0xffffffffffffffffull;
     thread_state_ptr->words[2] |= (v64 << 0) & 0xffffffffffffffff;
 }
@@ -1608,7 +1490,7 @@ thread_state_ptr_get_blockingIPCCanGrant(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingIPCCanGrant(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x8ull >> 3) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x8ull >> 3) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 336, __func__); } } while(0);
+    ;
     thread_state_ptr->words[1] &= ~0x8ull;
     thread_state_ptr->words[1] |= (v64 << 3) & 0x8;
 }
@@ -1627,7 +1509,7 @@ thread_state_ptr_get_blockingIPCCanGrantReply(thread_state_t *thread_state_ptr) 
 static inline void
 thread_state_ptr_set_blockingIPCCanGrantReply(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x4ull >> 2) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x4ull >> 2) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 355, __func__); } } while(0);
+    ;
     thread_state_ptr->words[1] &= ~0x4ull;
     thread_state_ptr->words[1] |= (v64 << 2) & 0x4;
 }
@@ -1646,7 +1528,7 @@ thread_state_ptr_get_blockingIPCIsCall(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingIPCIsCall(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 374, __func__); } } while(0);
+    ;
     thread_state_ptr->words[1] &= ~0x2ull;
     thread_state_ptr->words[1] |= (v64 << 1) & 0x2;
 }
@@ -1665,7 +1547,7 @@ thread_state_get_tcbQueued(thread_state_t thread_state) {
 static inline void
 thread_state_ptr_set_tcbQueued(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1ull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 393, __func__); } } while(0);
+    ;
     thread_state_ptr->words[1] &= ~0x1ull;
     thread_state_ptr->words[1] |= (v64 << 0) & 0x1;
 }
@@ -1684,7 +1566,7 @@ thread_state_ptr_get_blockingObject(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_blockingObject(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfffffffffff0ull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffffffff0ull << 0) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 412, __func__); } } while(0);
+    ;
     thread_state_ptr->words[0] &= ~0xfffffffffff0ull;
     thread_state_ptr->words[0] |= (v64 >> 0) & 0xfffffffffff0;
 }
@@ -1714,7 +1596,7 @@ thread_state_ptr_get_tsType(thread_state_t *thread_state_ptr) {
 static inline void
 thread_state_ptr_set_tsType(thread_state_t *thread_state_ptr, uint64_t v64) {
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xfull >> 0) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 442, __func__); } } while(0);
+    ;
     thread_state_ptr->words[0] &= ~0xfull;
     thread_state_ptr->words[0] |= (v64 << 0) & 0xf;
 }
@@ -1729,8 +1611,8 @@ ttbr_new(uint64_t asid, uint64_t base_address) {
     ttbr_t ttbr;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((asid & ~0xffffull) == ((0 && (asid & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(asid & ~0xffffull) == ((0 && (asid & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 457, __func__); } } while(0);
-    do { if (!((base_address & ~0xffffffffffffull) == ((0 && (base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(base_address & ~0xffffffffffffull) == ((0 && (base_address & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 458, __func__); } } while(0);
+    ;
+    ;
 
     ttbr.words[0] = 0
         | (asid & 0xffffull) << 48
@@ -1749,9 +1631,9 @@ vm_attributes_new(uint64_t armExecuteNever, uint64_t armParityEnabled, uint64_t 
     vm_attributes_t vm_attributes;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((armExecuteNever & ~0x1ull) == ((1 && (armExecuteNever & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(armExecuteNever & ~0x1ull) == ((1 && (armExecuteNever & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 477, __func__); } } while(0);
-    do { if (!((armParityEnabled & ~0x1ull) == ((1 && (armParityEnabled & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(armParityEnabled & ~0x1ull) == ((1 && (armParityEnabled & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 478, __func__); } } while(0);
-    do { if (!((armPageCacheable & ~0x1ull) == ((1 && (armPageCacheable & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(armPageCacheable & ~0x1ull) == ((1 && (armPageCacheable & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 479, __func__); } } while(0);
+    ;
+    ;
+    ;
 
     vm_attributes.words[0] = 0
         | (armExecuteNever & 0x1ull) << 2
@@ -1804,7 +1686,7 @@ asid_map_asid_map_none_new(void) {
     asid_map_t asid_map;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)asid_map_asid_map_none & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_none & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)asid_map_asid_map_none & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_none & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 532, __func__); } } while(0);
+    ;
 
     asid_map.words[0] = 0
         | ((uint64_t)asid_map_asid_map_none & 0x1ull) << 0;
@@ -1817,8 +1699,8 @@ asid_map_asid_map_vspace_new(uint64_t vspace_root) {
     asid_map_t asid_map;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((vspace_root & ~0xfffffffff000ull) == ((1 && (vspace_root & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(vspace_root & ~0xfffffffff000ull) == ((1 && (vspace_root & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 545, __func__); } } while(0);
-    do { if (!(((uint64_t)asid_map_asid_map_vspace & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_vspace & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)asid_map_asid_map_vspace & ~0x1ull) == ((1 && ((uint64_t)asid_map_asid_map_vspace & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 546, __func__); } } while(0);
+    ;
+    ;
 
     asid_map.words[0] = 0
         | (vspace_root & 0xfffffffff000ull) >> 0
@@ -1831,7 +1713,7 @@ static inline uint64_t __attribute__((__const__))
 asid_map_asid_map_vspace_get_vspace_root(asid_map_t asid_map) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((asid_map.words[0] >> 0) & 0x1) == asid_map_asid_map_vspace)) { _assert_fail("((asid_map.words[0] >> 0) & 0x1) == asid_map_asid_map_vspace", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 559, __func__); } } while(0);
+    ;
 
     ret = (asid_map.words[0] & 0xfffffffff000ull) << 0;
     /* Possibly sign extend */
@@ -1862,8 +1744,7 @@ enum cap_tag {
     cap_page_table_cap = 3,
     cap_vspace_cap = 9,
     cap_asid_control_cap = 11,
-    cap_asid_pool_cap = 13,
-    cap_sgi_signal_cap = 27
+    cap_asid_pool_cap = 13
 };
 typedef enum cap_tag cap_tag_t;
 
@@ -1882,7 +1763,7 @@ cap_null_cap_new(void) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_null_cap & ~0x1full) == ((1 && ((uint64_t)cap_null_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_null_cap & ~0x1full) == ((1 && ((uint64_t)cap_null_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 610, __func__); } } while(0);
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_null_cap & 0x1full) << 59;
@@ -1896,11 +1777,11 @@ cap_untyped_cap_new(uint64_t capFreeIndex, uint64_t capIsDevice, uint64_t capBlo
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capFreeIndex & ~0xffffffffffffull) == ((1 && (capFreeIndex & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFreeIndex & ~0xffffffffffffull) == ((1 && (capFreeIndex & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 624, __func__); } } while(0);
-    do { if (!((capIsDevice & ~0x1ull) == ((1 && (capIsDevice & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capIsDevice & ~0x1ull) == ((1 && (capIsDevice & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 625, __func__); } } while(0);
-    do { if (!((capBlockSize & ~0x3full) == ((1 && (capBlockSize & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capBlockSize & ~0x3full) == ((1 && (capBlockSize & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 626, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_untyped_cap & ~0x1full) == ((1 && ((uint64_t)cap_untyped_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_untyped_cap & ~0x1full) == ((1 && ((uint64_t)cap_untyped_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 627, __func__); } } while(0);
-    do { if (!((capPtr & ~0xffffffffffffull) == ((1 && (capPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capPtr & ~0xffffffffffffull) == ((1 && (capPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 628, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_untyped_cap & 0x1full) << 59
@@ -1917,7 +1798,7 @@ static inline uint64_t __attribute__((__const__))
 cap_untyped_cap_get_capFreeIndex(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 645, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffffffffffff0000ull) >> 16;
     /* Possibly sign extend */
@@ -1930,9 +1811,9 @@ cap_untyped_cap_get_capFreeIndex(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_untyped_cap_set_capFreeIndex(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 658, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffff0000ull >> 16 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffff0000ull >> 16 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 660, __func__); } } while(0);
+    ;
 
     cap.words[1] &= ~0xffffffffffff0000ull;
     cap.words[1] |= (v64 << 16) & 0xffffffffffff0000ull;
@@ -1942,10 +1823,10 @@ cap_untyped_cap_set_capFreeIndex(cap_t cap, uint64_t v64) {
 static inline void
 cap_untyped_cap_ptr_set_capFreeIndex(cap_t *cap_ptr, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap_ptr->words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap_ptr->words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 670, __func__); } } while(0);
+    ;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffff0000ull >> 16) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffff0000ull >> 16) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 673, __func__); } } while(0);
+    ;
 
     cap_ptr->words[1] &= ~0xffffffffffff0000ull;
     cap_ptr->words[1] |= (v64 << 16) & 0xffffffffffff0000ull;
@@ -1955,7 +1836,7 @@ static inline uint64_t __attribute__((__const__))
 cap_untyped_cap_get_capIsDevice(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 683, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0x40ull) >> 6;
     /* Possibly sign extend */
@@ -1969,7 +1850,7 @@ static inline uint64_t __attribute__((__const__))
 cap_untyped_cap_get_capBlockSize(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 697, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0x3full) >> 0;
     /* Possibly sign extend */
@@ -1983,7 +1864,7 @@ static inline uint64_t __attribute__((__const__))
 cap_untyped_cap_get_capPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_untyped_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 711, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -1998,12 +1879,12 @@ cap_endpoint_cap_new(uint64_t capEPBadge, uint64_t capCanGrantReply, uint64_t ca
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capCanGrantReply & ~0x1ull) == ((1 && (capCanGrantReply & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanGrantReply & ~0x1ull) == ((1 && (capCanGrantReply & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 726, __func__); } } while(0);
-    do { if (!((capCanGrant & ~0x1ull) == ((1 && (capCanGrant & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanGrant & ~0x1ull) == ((1 && (capCanGrant & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 727, __func__); } } while(0);
-    do { if (!((capCanSend & ~0x1ull) == ((1 && (capCanSend & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanSend & ~0x1ull) == ((1 && (capCanSend & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 728, __func__); } } while(0);
-    do { if (!((capCanReceive & ~0x1ull) == ((1 && (capCanReceive & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCanReceive & ~0x1ull) == ((1 && (capCanReceive & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 729, __func__); } } while(0);
-    do { if (!((capEPPtr & ~0xffffffffffffull) == ((1 && (capEPPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capEPPtr & ~0xffffffffffffull) == ((1 && (capEPPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 730, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_endpoint_cap & ~0x1full) == ((1 && ((uint64_t)cap_endpoint_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_endpoint_cap & ~0x1full) == ((1 && ((uint64_t)cap_endpoint_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 731, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
+    ;
+    ;
 
     cap.words[0] = 0
         | (capCanGrantReply & 0x1ull) << 58
@@ -2022,7 +1903,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capEPBadge(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 750, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2035,9 +1916,9 @@ cap_endpoint_cap_get_capEPBadge(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capEPBadge(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 763, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 765, __func__); } } while(0);
+    ;
 
     cap.words[1] &= ~0xffffffffffffffffull;
     cap.words[1] |= (v64 << 0) & 0xffffffffffffffffull;
@@ -2048,7 +1929,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capCanGrantReply(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 776, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x400000000000000ull) >> 58;
     /* Possibly sign extend */
@@ -2061,9 +1942,9 @@ cap_endpoint_cap_get_capCanGrantReply(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capCanGrantReply(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 789, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 791, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x400000000000000ull;
     cap.words[0] |= (v64 << 58) & 0x400000000000000ull;
@@ -2074,7 +1955,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capCanGrant(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 802, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x200000000000000ull) >> 57;
     /* Possibly sign extend */
@@ -2087,9 +1968,9 @@ cap_endpoint_cap_get_capCanGrant(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capCanGrant(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 815, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 817, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x200000000000000ull;
     cap.words[0] |= (v64 << 57) & 0x200000000000000ull;
@@ -2100,7 +1981,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capCanReceive(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 828, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x100000000000000ull) >> 56;
     /* Possibly sign extend */
@@ -2113,9 +1994,9 @@ cap_endpoint_cap_get_capCanReceive(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capCanReceive(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 841, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x100000000000000ull >> 56 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x100000000000000ull >> 56 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 843, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x100000000000000ull;
     cap.words[0] |= (v64 << 56) & 0x100000000000000ull;
@@ -2126,7 +2007,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capCanSend(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 854, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x80000000000000ull) >> 55;
     /* Possibly sign extend */
@@ -2139,9 +2020,9 @@ cap_endpoint_cap_get_capCanSend(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_endpoint_cap_set_capCanSend(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 867, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x80000000000000ull >> 55 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x80000000000000ull >> 55 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 869, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x80000000000000ull;
     cap.words[0] |= (v64 << 55) & 0x80000000000000ull;
@@ -2152,7 +2033,7 @@ static inline uint64_t __attribute__((__const__))
 cap_endpoint_cap_get_capEPPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_endpoint_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 880, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2167,10 +2048,10 @@ cap_notification_cap_new(uint64_t capNtfnBadge, uint64_t capNtfnCanReceive, uint
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_notification_cap & ~0x1full) == ((1 && ((uint64_t)cap_notification_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_notification_cap & ~0x1full) == ((1 && ((uint64_t)cap_notification_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 895, __func__); } } while(0);
-    do { if (!((capNtfnCanReceive & ~0x1ull) == ((1 && (capNtfnCanReceive & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capNtfnCanReceive & ~0x1ull) == ((1 && (capNtfnCanReceive & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 896, __func__); } } while(0);
-    do { if (!((capNtfnCanSend & ~0x1ull) == ((1 && (capNtfnCanSend & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capNtfnCanSend & ~0x1ull) == ((1 && (capNtfnCanSend & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 897, __func__); } } while(0);
-    do { if (!((capNtfnPtr & ~0xffffffffffffull) == ((1 && (capNtfnPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capNtfnPtr & ~0xffffffffffffull) == ((1 && (capNtfnPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 898, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_notification_cap & 0x1full) << 59
@@ -2187,7 +2068,7 @@ static inline uint64_t __attribute__((__const__))
 cap_notification_cap_get_capNtfnBadge(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 915, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2200,9 +2081,9 @@ cap_notification_cap_get_capNtfnBadge(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_notification_cap_set_capNtfnBadge(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 928, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 930, __func__); } } while(0);
+    ;
 
     cap.words[1] &= ~0xffffffffffffffffull;
     cap.words[1] |= (v64 << 0) & 0xffffffffffffffffull;
@@ -2213,7 +2094,7 @@ static inline uint64_t __attribute__((__const__))
 cap_notification_cap_get_capNtfnCanReceive(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 941, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x400000000000000ull) >> 58;
     /* Possibly sign extend */
@@ -2226,9 +2107,9 @@ cap_notification_cap_get_capNtfnCanReceive(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_notification_cap_set_capNtfnCanReceive(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 954, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 956, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x400000000000000ull;
     cap.words[0] |= (v64 << 58) & 0x400000000000000ull;
@@ -2239,7 +2120,7 @@ static inline uint64_t __attribute__((__const__))
 cap_notification_cap_get_capNtfnCanSend(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 967, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x200000000000000ull) >> 57;
     /* Possibly sign extend */
@@ -2252,9 +2133,9 @@ cap_notification_cap_get_capNtfnCanSend(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_notification_cap_set_capNtfnCanSend(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 980, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x200000000000000ull >> 57 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 982, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x200000000000000ull;
     cap.words[0] |= (v64 << 57) & 0x200000000000000ull;
@@ -2265,7 +2146,7 @@ static inline uint64_t __attribute__((__const__))
 cap_notification_cap_get_capNtfnPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_notification_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_notification_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 993, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2280,9 +2161,9 @@ cap_reply_cap_new(uint64_t capReplyCanGrant, uint64_t capReplyMaster, uint64_t c
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capReplyCanGrant & ~0x1ull) == ((1 && (capReplyCanGrant & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capReplyCanGrant & ~0x1ull) == ((1 && (capReplyCanGrant & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1008, __func__); } } while(0);
-    do { if (!((capReplyMaster & ~0x1ull) == ((1 && (capReplyMaster & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capReplyMaster & ~0x1ull) == ((1 && (capReplyMaster & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1009, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_reply_cap & ~0x1full) == ((1 && ((uint64_t)cap_reply_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_reply_cap & ~0x1full) == ((1 && ((uint64_t)cap_reply_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1010, __func__); } } while(0);
+    ;
+    ;
+    ;
 
     cap.words[0] = 0
         | (capReplyCanGrant & 0x1ull) << 1
@@ -2298,7 +2179,7 @@ static inline uint64_t __attribute__((__const__))
 cap_reply_cap_get_capTCBPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1026, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2312,7 +2193,7 @@ static inline uint64_t __attribute__((__const__))
 cap_reply_cap_get_capReplyCanGrant(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1040, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x2ull) >> 1;
     /* Possibly sign extend */
@@ -2325,9 +2206,9 @@ cap_reply_cap_get_capReplyCanGrant(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_reply_cap_set_capReplyCanGrant(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1053, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x2ull >> 1 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x2ull >> 1 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1055, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x2ull;
     cap.words[0] |= (v64 << 1) & 0x2ull;
@@ -2338,7 +2219,7 @@ static inline uint64_t __attribute__((__const__))
 cap_reply_cap_get_capReplyMaster(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_reply_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_reply_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1066, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x1ull) >> 0;
     /* Possibly sign extend */
@@ -2353,10 +2234,10 @@ cap_cnode_cap_new(uint64_t capCNodeRadix, uint64_t capCNodeGuardSize, uint64_t c
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capCNodeRadix & ~0x3full) == ((1 && (capCNodeRadix & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCNodeRadix & ~0x3full) == ((1 && (capCNodeRadix & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1081, __func__); } } while(0);
-    do { if (!((capCNodeGuardSize & ~0x3full) == ((1 && (capCNodeGuardSize & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capCNodeGuardSize & ~0x3full) == ((1 && (capCNodeGuardSize & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1082, __func__); } } while(0);
-    do { if (!((capCNodePtr & ~0xfffffffffffeull) == ((1 && (capCNodePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capCNodePtr & ~0xfffffffffffeull) == ((1 && (capCNodePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1083, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_cnode_cap & ~0x1full) == ((1 && ((uint64_t)cap_cnode_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_cnode_cap & ~0x1full) == ((1 && ((uint64_t)cap_cnode_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1084, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
 
     cap.words[0] = 0
         | (capCNodeRadix & 0x3full) << 47
@@ -2373,7 +2254,7 @@ static inline uint64_t __attribute__((__const__))
 cap_cnode_cap_get_capCNodeGuard(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1101, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2386,9 +2267,9 @@ cap_cnode_cap_get_capCNodeGuard(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_cnode_cap_set_capCNodeGuard(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1114, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1116, __func__); } } while(0);
+    ;
 
     cap.words[1] &= ~0xffffffffffffffffull;
     cap.words[1] |= (v64 << 0) & 0xffffffffffffffffull;
@@ -2399,7 +2280,7 @@ static inline uint64_t __attribute__((__const__))
 cap_cnode_cap_get_capCNodeGuardSize(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1127, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x7e0000000000000ull) >> 53;
     /* Possibly sign extend */
@@ -2412,9 +2293,9 @@ cap_cnode_cap_get_capCNodeGuardSize(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_cnode_cap_set_capCNodeGuardSize(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1140, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x7e0000000000000ull >> 53 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x7e0000000000000ull >> 53 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1142, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x7e0000000000000ull;
     cap.words[0] |= (v64 << 53) & 0x7e0000000000000ull;
@@ -2425,7 +2306,7 @@ static inline uint64_t __attribute__((__const__))
 cap_cnode_cap_get_capCNodeRadix(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1153, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x1f800000000000ull) >> 47;
     /* Possibly sign extend */
@@ -2439,7 +2320,7 @@ static inline uint64_t __attribute__((__const__))
 cap_cnode_cap_get_capCNodePtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_cnode_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1167, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x7fffffffffffull) << 1;
     /* Possibly sign extend */
@@ -2454,8 +2335,8 @@ cap_thread_cap_new(uint64_t capTCBPtr) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_thread_cap & ~0x1full) == ((1 && ((uint64_t)cap_thread_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_thread_cap & ~0x1full) == ((1 && ((uint64_t)cap_thread_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1182, __func__); } } while(0);
-    do { if (!((capTCBPtr & ~0xffffffffffffull) == ((1 && (capTCBPtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capTCBPtr & ~0xffffffffffffull) == ((1 && (capTCBPtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1183, __func__); } } while(0);
+    ;
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_thread_cap & 0x1full) << 59
@@ -2469,7 +2350,7 @@ static inline uint64_t __attribute__((__const__))
 cap_thread_cap_get_capTCBPtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_thread_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_thread_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1197, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2484,7 +2365,7 @@ cap_irq_control_cap_new(void) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_irq_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_control_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_irq_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_control_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1212, __func__); } } while(0);
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_irq_control_cap & 0x1full) << 59;
@@ -2498,13 +2379,12 @@ cap_irq_handler_cap_new(uint64_t capIRQ) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capIRQ & ~0xfffull) == ((1 && (capIRQ & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capIRQ & ~0xfffull) == ((1 && (capIRQ & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1226, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_irq_handler_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_handler_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_irq_handler_cap & ~0x1full) == ((1 && ((uint64_t)cap_irq_handler_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1227, __func__); } } while(0);
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_irq_handler_cap & 0x1full) << 59;
     cap.words[1] = 0
-        | (capIRQ & 0xfffull) << 0;
+        | capIRQ << 0;
 
     return cap;
 }
@@ -2513,9 +2393,9 @@ static inline uint64_t __attribute__((__const__))
 cap_irq_handler_cap_get_capIRQ(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_irq_handler_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_irq_handler_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1241, __func__); } } while(0);
+    ;
 
-    ret = (cap.words[1] & 0xfffull) >> 0;
+    ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;
@@ -2528,8 +2408,8 @@ cap_zombie_cap_new(uint64_t capZombieID, uint64_t capZombieType) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_zombie_cap & ~0x1full) == ((1 && ((uint64_t)cap_zombie_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_zombie_cap & ~0x1full) == ((1 && ((uint64_t)cap_zombie_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1256, __func__); } } while(0);
-    do { if (!((capZombieType & ~0x7full) == ((1 && (capZombieType & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capZombieType & ~0x7full) == ((1 && (capZombieType & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1257, __func__); } } while(0);
+    ;
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_zombie_cap & 0x1full) << 59
@@ -2544,7 +2424,7 @@ static inline uint64_t __attribute__((__const__))
 cap_zombie_cap_get_capZombieID(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1272, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -2557,9 +2437,9 @@ cap_zombie_cap_get_capZombieID(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_zombie_cap_set_capZombieID(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1285, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffffffffffffffffull >> 0 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1287, __func__); } } while(0);
+    ;
 
     cap.words[1] &= ~0xffffffffffffffffull;
     cap.words[1] |= (v64 << 0) & 0xffffffffffffffffull;
@@ -2570,7 +2450,7 @@ static inline uint64_t __attribute__((__const__))
 cap_zombie_cap_get_capZombieType(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_zombie_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1298, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x7full) >> 0;
     /* Possibly sign extend */
@@ -2585,7 +2465,7 @@ cap_domain_cap_new(void) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_domain_cap & ~0x1full) == ((1 && ((uint64_t)cap_domain_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_domain_cap & ~0x1full) == ((1 && ((uint64_t)cap_domain_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1313, __func__); } } while(0);
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_domain_cap & 0x1full) << 59;
@@ -2599,13 +2479,13 @@ cap_frame_cap_new(uint64_t capFMappedASID, uint64_t capFBasePtr, uint64_t capFSi
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capFMappedASID & ~0xffffull) == ((1 && (capFMappedASID & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFMappedASID & ~0xffffull) == ((1 && (capFMappedASID & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1327, __func__); } } while(0);
-    do { if (!((capFBasePtr & ~0xffffffffffffull) == ((1 && (capFBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capFBasePtr & ~0xffffffffffffull) == ((1 && (capFBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1328, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_frame_cap & ~0x1full) == ((1 && ((uint64_t)cap_frame_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_frame_cap & ~0x1full) == ((1 && ((uint64_t)cap_frame_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1329, __func__); } } while(0);
-    do { if (!((capFSize & ~0x3ull) == ((1 && (capFSize & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFSize & ~0x3ull) == ((1 && (capFSize & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1330, __func__); } } while(0);
-    do { if (!((capFMappedAddress & ~0xffffffffffffull) == ((1 && (capFMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capFMappedAddress & ~0xffffffffffffull) == ((1 && (capFMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1331, __func__); } } while(0);
-    do { if (!((capFVMRights & ~0x3ull) == ((1 && (capFVMRights & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFVMRights & ~0x3ull) == ((1 && (capFVMRights & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1332, __func__); } } while(0);
-    do { if (!((capFIsDevice & ~0x1ull) == ((1 && (capFIsDevice & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capFIsDevice & ~0x1ull) == ((1 && (capFIsDevice & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1333, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
+    ;
+    ;
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_frame_cap & 0x1full) << 59
@@ -2624,7 +2504,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFMappedASID(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1352, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffff000000000000ull) >> 48;
     /* Possibly sign extend */
@@ -2637,9 +2517,9 @@ cap_frame_cap_get_capFMappedASID(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_frame_cap_set_capFMappedASID(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1365, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1367, __func__); } } while(0);
+    ;
 
     cap.words[1] &= ~0xffff000000000000ull;
     cap.words[1] |= (v64 << 48) & 0xffff000000000000ull;
@@ -2650,7 +2530,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFBasePtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1378, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2664,7 +2544,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFSize(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1392, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x600000000000000ull) >> 57;
     /* Possibly sign extend */
@@ -2678,7 +2558,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFMappedAddress(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1406, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x1fffffffffffe00ull) >> 9;
     /* Possibly sign extend */
@@ -2691,9 +2571,9 @@ cap_frame_cap_get_capFMappedAddress(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_frame_cap_set_capFMappedAddress(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1419, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1fffffffffffe00ull >> 9 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0x1fffffffffffe00ull >> 9 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1421, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x1fffffffffffe00ull;
     cap.words[0] |= (v64 << 9) & 0x1fffffffffffe00ull;
@@ -2704,7 +2584,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFVMRights(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1432, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x180ull) >> 7;
     /* Possibly sign extend */
@@ -2717,9 +2597,9 @@ cap_frame_cap_get_capFVMRights(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_frame_cap_set_capFVMRights(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1445, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x180ull >> 7 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1447, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x180ull;
     cap.words[0] |= (v64 << 7) & 0x180ull;
@@ -2730,7 +2610,7 @@ static inline uint64_t __attribute__((__const__))
 cap_frame_cap_get_capFIsDevice(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_frame_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_frame_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1458, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x40ull) >> 6;
     /* Possibly sign extend */
@@ -2745,11 +2625,11 @@ cap_page_table_cap_new(uint64_t capPTMappedASID, uint64_t capPTBasePtr, uint64_t
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capPTMappedASID & ~0xffffull) == ((1 && (capPTMappedASID & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capPTMappedASID & ~0xffffull) == ((1 && (capPTMappedASID & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1473, __func__); } } while(0);
-    do { if (!((capPTBasePtr & ~0xffffffffffffull) == ((1 && (capPTBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capPTBasePtr & ~0xffffffffffffull) == ((1 && (capPTBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1474, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_page_table_cap & ~0x1full) == ((1 && ((uint64_t)cap_page_table_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_page_table_cap & ~0x1full) == ((1 && ((uint64_t)cap_page_table_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1475, __func__); } } while(0);
-    do { if (!((capPTIsMapped & ~0x1ull) == ((1 && (capPTIsMapped & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capPTIsMapped & ~0x1ull) == ((1 && (capPTIsMapped & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1476, __func__); } } while(0);
-    do { if (!((capPTMappedAddress & ~0xfffffff00000ull) == ((1 && (capPTMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capPTMappedAddress & ~0xfffffff00000ull) == ((1 && (capPTMappedAddress & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1477, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_page_table_cap & 0x1full) << 59
@@ -2766,7 +2646,7 @@ static inline uint64_t __attribute__((__const__))
 cap_page_table_cap_get_capPTMappedASID(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1494, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffff000000000000ull) >> 48;
     /* Possibly sign extend */
@@ -2779,9 +2659,9 @@ cap_page_table_cap_get_capPTMappedASID(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_page_table_cap_set_capPTMappedASID(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1507, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1509, __func__); } } while(0);
+    ;
 
     cap.words[1] &= ~0xffff000000000000ull;
     cap.words[1] |= (v64 << 48) & 0xffff000000000000ull;
@@ -2792,7 +2672,7 @@ static inline uint64_t __attribute__((__const__))
 cap_page_table_cap_get_capPTBasePtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1520, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2806,7 +2686,7 @@ static inline uint64_t __attribute__((__const__))
 cap_page_table_cap_get_capPTIsMapped(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1534, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x1000000000000ull) >> 48;
     /* Possibly sign extend */
@@ -2819,9 +2699,9 @@ cap_page_table_cap_get_capPTIsMapped(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_page_table_cap_set_capPTIsMapped(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1547, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1549, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x1000000000000ull;
     cap.words[0] |= (v64 << 48) & 0x1000000000000ull;
@@ -2831,10 +2711,10 @@ cap_page_table_cap_set_capPTIsMapped(cap_t cap, uint64_t v64) {
 static inline void
 cap_page_table_cap_ptr_set_capPTIsMapped(cap_t *cap_ptr, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap_ptr->words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap_ptr->words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1559, __func__); } } while(0);
+    ;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x1000000000000ull >> 48) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x1000000000000ull >> 48) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1562, __func__); } } while(0);
+    ;
 
     cap_ptr->words[0] &= ~0x1000000000000ull;
     cap_ptr->words[0] |= (v64 << 48) & 0x1000000000000ull;
@@ -2844,7 +2724,7 @@ static inline uint64_t __attribute__((__const__))
 cap_page_table_cap_get_capPTMappedAddress(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1572, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0xfffffff00000ull) << 0;
     /* Possibly sign extend */
@@ -2857,9 +2737,9 @@ cap_page_table_cap_get_capPTMappedAddress(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_page_table_cap_set_capPTMappedAddress(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_page_table_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1585, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xfffffff00000ull << 0 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0))) { _assert_fail("(((~0xfffffff00000ull << 0 ) | 0xffff000000000000) & v64) == ((1 && (v64 & (1ull << (47)))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1587, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0xfffffff00000ull;
     cap.words[0] |= (v64 >> 0) & 0xfffffff00000ull;
@@ -2871,10 +2751,10 @@ cap_vspace_cap_new(uint64_t capVSMappedASID, uint64_t capVSBasePtr, uint64_t cap
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((capVSMappedASID & ~0xffffull) == ((1 && (capVSMappedASID & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capVSMappedASID & ~0xffffull) == ((1 && (capVSMappedASID & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1599, __func__); } } while(0);
-    do { if (!((capVSBasePtr & ~0xffffffffffffull) == ((1 && (capVSBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capVSBasePtr & ~0xffffffffffffull) == ((1 && (capVSBasePtr & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1600, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_vspace_cap & ~0x1full) == ((1 && ((uint64_t)cap_vspace_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_vspace_cap & ~0x1full) == ((1 && ((uint64_t)cap_vspace_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1601, __func__); } } while(0);
-    do { if (!((capVSIsMapped & ~0x1ull) == ((1 && (capVSIsMapped & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capVSIsMapped & ~0x1ull) == ((1 && (capVSIsMapped & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1602, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_vspace_cap & 0x1full) << 59
@@ -2890,7 +2770,7 @@ static inline uint64_t __attribute__((__const__))
 cap_vspace_cap_get_capVSMappedASID(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1618, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffff000000000000ull) >> 48;
     /* Possibly sign extend */
@@ -2903,9 +2783,9 @@ cap_vspace_cap_get_capVSMappedASID(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_vspace_cap_set_capVSMappedASID(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1631, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0xffff000000000000ull >> 48 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1633, __func__); } } while(0);
+    ;
 
     cap.words[1] &= ~0xffff000000000000ull;
     cap.words[1] |= (v64 << 48) & 0xffff000000000000ull;
@@ -2916,7 +2796,7 @@ static inline uint64_t __attribute__((__const__))
 cap_vspace_cap_get_capVSBasePtr(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1644, __func__); } } while(0);
+    ;
 
     ret = (cap.words[1] & 0xffffffffffffull) << 0;
     /* Possibly sign extend */
@@ -2930,7 +2810,7 @@ static inline uint64_t __attribute__((__const__))
 cap_vspace_cap_get_capVSIsMapped(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1658, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x400000000000000ull) >> 58;
     /* Possibly sign extend */
@@ -2943,9 +2823,9 @@ cap_vspace_cap_get_capVSIsMapped(cap_t cap) {
 static inline cap_t __attribute__((__const__))
 cap_vspace_cap_set_capVSIsMapped(cap_t cap, uint64_t v64) {
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_vspace_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1671, __func__); } } while(0);
+    ;
     /* fail if user has passed bits that we will override */
-    do { if (!((((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0))) { _assert_fail("(((~0x400000000000000ull >> 58 ) | 0x0) & v64) == ((0 && (v64 & (1ull << (47)))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1673, __func__); } } while(0);
+    ;
 
     cap.words[0] &= ~0x400000000000000ull;
     cap.words[0] |= (v64 << 58) & 0x400000000000000ull;
@@ -2957,7 +2837,7 @@ cap_asid_control_cap_new(void) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_asid_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_control_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_asid_control_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_control_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1685, __func__); } } while(0);
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_asid_control_cap & 0x1full) << 59;
@@ -2971,9 +2851,9 @@ cap_asid_pool_cap_new(uint64_t capASIDBase, uint64_t capASIDPool) {
     cap_t cap;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)cap_asid_pool_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_pool_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_asid_pool_cap & ~0x1full) == ((1 && ((uint64_t)cap_asid_pool_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1699, __func__); } } while(0);
-    do { if (!((capASIDBase & ~0xffffull) == ((1 && (capASIDBase & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capASIDBase & ~0xffffull) == ((1 && (capASIDBase & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1700, __func__); } } while(0);
-    do { if (!((capASIDPool & ~0xfffffffff800ull) == ((1 && (capASIDPool & (1ull << 47))) ? 0xffff000000000000 : 0))) { _assert_fail("(capASIDPool & ~0xfffffffff800ull) == ((1 && (capASIDPool & (1ull << 47))) ? 0xffff000000000000 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1701, __func__); } } while(0);
+    ;
+    ;
+    ;
 
     cap.words[0] = 0
         | ((uint64_t)cap_asid_pool_cap & 0x1full) << 59
@@ -2988,7 +2868,7 @@ static inline uint64_t __attribute__((__const__))
 cap_asid_pool_cap_get_capASIDBase(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1716, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x7fff80000000000ull) >> 43;
     /* Possibly sign extend */
@@ -3002,58 +2882,12 @@ static inline uint64_t __attribute__((__const__))
 cap_asid_pool_cap_get_capASIDPool(cap_t cap) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_asid_pool_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1730, __func__); } } while(0);
+    ;
 
     ret = (cap.words[0] & 0x1fffffffffull) << 11;
     /* Possibly sign extend */
     if (__builtin_expect(!!(1 && (ret & (1ull << (47)))), 1)) {
         ret |= 0xffff000000000000;
-    }
-    return ret;
-}
-
-static inline cap_t __attribute__((__const__))
-cap_sgi_signal_cap_new(uint64_t capSGITarget, uint64_t capSGIIRQ) {
-    cap_t cap;
-
-    /* fail if user has passed bits that we will override */
-    do { if (!((capSGITarget & ~0xffffffffull) == ((1 && (capSGITarget & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capSGITarget & ~0xffffffffull) == ((1 && (capSGITarget & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1745, __func__); } } while(0);
-    do { if (!(((uint64_t)cap_sgi_signal_cap & ~0x1full) == ((1 && ((uint64_t)cap_sgi_signal_cap & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)cap_sgi_signal_cap & ~0x1full) == ((1 && ((uint64_t)cap_sgi_signal_cap & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1746, __func__); } } while(0);
-    do { if (!((capSGIIRQ & ~0xfull) == ((1 && (capSGIIRQ & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(capSGIIRQ & ~0xfull) == ((1 && (capSGIIRQ & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1747, __func__); } } while(0);
-
-    cap.words[0] = 0
-        | ((uint64_t)cap_sgi_signal_cap & 0x1full) << 59
-        | (capSGIIRQ & 0xfull) << 55;
-    cap.words[1] = 0
-        | (capSGITarget & 0xffffffffull) << 0;
-
-    return cap;
-}
-
-static inline uint64_t __attribute__((__const__))
-cap_sgi_signal_cap_get_capSGITarget(cap_t cap) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_sgi_signal_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_sgi_signal_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1762, __func__); } } while(0);
-
-    ret = (cap.words[1] & 0xffffffffull) >> 0;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
-}
-
-static inline uint64_t __attribute__((__const__))
-cap_sgi_signal_cap_get_capSGIIRQ(cap_t cap) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    do { if (!(((cap.words[0] >> 59) & 0x1f) == cap_sgi_signal_cap)) { _assert_fail("((cap.words[0] >> 59) & 0x1f) == cap_sgi_signal_cap", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1776, __func__); } } while(0);
-
-    ret = (cap.words[0] & 0x780000000000000ull) >> 55;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
     }
     return ret;
 }
@@ -3081,7 +2915,7 @@ lookup_fault_invalid_root_new(void) {
     lookup_fault_t lookup_fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)lookup_fault_invalid_root & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_invalid_root & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_invalid_root & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_invalid_root & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1809, __func__); } } while(0);
+    ;
 
     lookup_fault.words[0] = 0
         | ((uint64_t)lookup_fault_invalid_root & 0x3ull) << 0;
@@ -3095,8 +2929,8 @@ lookup_fault_missing_capability_new(uint64_t bitsLeft) {
     lookup_fault_t lookup_fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1823, __func__); } } while(0);
-    do { if (!(((uint64_t)lookup_fault_missing_capability & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_missing_capability & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_missing_capability & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_missing_capability & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1824, __func__); } } while(0);
+    ;
+    ;
 
     lookup_fault.words[0] = 0
         | (bitsLeft & 0x7full) << 2
@@ -3110,7 +2944,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_missing_capability_get_bitsLeft(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_missing_capability)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_missing_capability", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1838, __func__); } } while(0);
+    ;
 
     ret = (lookup_fault.words[0] & 0x1fcull) >> 2;
     /* Possibly sign extend */
@@ -3125,9 +2959,9 @@ lookup_fault_depth_mismatch_new(uint64_t bitsFound, uint64_t bitsLeft) {
     lookup_fault_t lookup_fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1853, __func__); } } while(0);
-    do { if (!((bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1854, __func__); } } while(0);
-    do { if (!(((uint64_t)lookup_fault_depth_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_depth_mismatch & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_depth_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_depth_mismatch & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1855, __func__); } } while(0);
+    ;
+    ;
+    ;
 
     lookup_fault.words[0] = 0
         | (bitsFound & 0x7full) << 9
@@ -3142,7 +2976,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_depth_mismatch_get_bitsFound(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1870, __func__); } } while(0);
+    ;
 
     ret = (lookup_fault.words[0] & 0xfe00ull) >> 9;
     /* Possibly sign extend */
@@ -3156,7 +2990,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_depth_mismatch_get_bitsLeft(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_depth_mismatch", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1884, __func__); } } while(0);
+    ;
 
     ret = (lookup_fault.words[0] & 0x1fcull) >> 2;
     /* Possibly sign extend */
@@ -3171,9 +3005,9 @@ lookup_fault_guard_mismatch_new(uint64_t guardFound, uint64_t bitsLeft, uint64_t
     lookup_fault_t lookup_fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsLeft & ~0x7full) == ((1 && (bitsLeft & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1899, __func__); } } while(0);
-    do { if (!((bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(bitsFound & ~0x7full) == ((1 && (bitsFound & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1900, __func__); } } while(0);
-    do { if (!(((uint64_t)lookup_fault_guard_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_guard_mismatch & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)lookup_fault_guard_mismatch & ~0x3ull) == ((1 && ((uint64_t)lookup_fault_guard_mismatch & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1901, __func__); } } while(0);
+    ;
+    ;
+    ;
 
     lookup_fault.words[0] = 0
         | (bitsLeft & 0x7full) << 9
@@ -3189,7 +3023,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_guard_mismatch_get_guardFound(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1917, __func__); } } while(0);
+    ;
 
     ret = (lookup_fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -3203,7 +3037,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_guard_mismatch_get_bitsLeft(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1931, __func__); } } while(0);
+    ;
 
     ret = (lookup_fault.words[0] & 0xfe00ull) >> 9;
     /* Possibly sign extend */
@@ -3217,7 +3051,7 @@ static inline uint64_t __attribute__((__const__))
 lookup_fault_guard_mismatch_get_bitsFound(lookup_fault_t lookup_fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch)) { _assert_fail("((lookup_fault.words[0] >> 0) & 0x3) == lookup_fault_guard_mismatch", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1945, __func__); } } while(0);
+    ;
 
     ret = (lookup_fault.words[0] & 0x1fcull) >> 2;
     /* Possibly sign extend */
@@ -3257,7 +3091,7 @@ pte_pte_table_new(uint64_t pt_base_address) {
     pte_t pte;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((pt_base_address & ~0xfffffffff000ull) == ((0 && (pt_base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(pt_base_address & ~0xfffffffff000ull) == ((0 && (pt_base_address & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1985, __func__); } } while(0);
+    ;
 
     pte.words[0] = 0
         | (pt_base_address & 0xfffffffff000ull) >> 0
@@ -3270,7 +3104,7 @@ static inline uint64_t __attribute__((__pure__))
 pte_pte_table_ptr_get_pt_base_address(pte_t *pte_ptr) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x3ull /* sliced tag pte_pte_table */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x3ull /* sliced tag pte_pte_table */", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 1998, __func__); } } while(0);
+    ;
 
     ret = (pte_ptr->words[0] & 0xfffffffff000ull) << 0;
     /* Possibly sign extend */
@@ -3285,13 +3119,13 @@ pte_pte_page_new(uint64_t UXN, uint64_t page_base_address, uint64_t nG, uint64_t
     pte_t pte;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2013, __func__); } } while(0);
-    do { if (!((page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2014, __func__); } } while(0);
-    do { if (!((nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2015, __func__); } } while(0);
-    do { if (!((AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2016, __func__); } } while(0);
-    do { if (!((SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2017, __func__); } } while(0);
-    do { if (!((AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2018, __func__); } } while(0);
-    do { if (!((AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2019, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
+    ;
+    ;
+    ;
 
     pte.words[0] = 0
         | (UXN & 0x1ull) << 54
@@ -3306,55 +3140,13 @@ pte_pte_page_new(uint64_t UXN, uint64_t page_base_address, uint64_t nG, uint64_t
     return pte;
 }
 
-static inline uint64_t __attribute__((__pure__))
-pte_pte_page_ptr_get_UXN(pte_t *pte_ptr) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2038, __func__); } } while(0);
-
-    ret = (pte_ptr->words[0] & 0x40000000000000ull) >> 54;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
-}
-
-static inline uint64_t __attribute__((__pure__))
-pte_pte_page_ptr_get_SH(pte_t *pte_ptr) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2052, __func__); } } while(0);
-
-    ret = (pte_ptr->words[0] & 0x300ull) >> 8;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
-}
-
 static inline uint64_t __attribute__((__const__))
 pte_pte_page_get_AP(pte_t pte) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((pte.words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte.words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2066, __func__); } } while(0);
+    ;
 
     ret = (pte.words[0] & 0xc0ull) >> 6;
-    /* Possibly sign extend */
-    if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
-        ret |= 0x0;
-    }
-    return ret;
-}
-
-static inline uint64_t __attribute__((__pure__))
-pte_pte_page_ptr_get_AP(pte_t *pte_ptr) {
-    uint64_t ret;
-    /* fail if union does not have the expected tag */
-    do { if (!(((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */)) { _assert_fail("((pte_ptr->words[0] >> 0) & 0x400000000000003) == 0x1ull /* sliced tag pte_pte_page */", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2080, __func__); } } while(0);
-
-    ret = (pte_ptr->words[0] & 0xc0ull) >> 6;
     /* Possibly sign extend */
     if (__builtin_expect(!!(0 && (ret & (1ull << (47)))), 0)) {
         ret |= 0x0;
@@ -3367,13 +3159,13 @@ pte_pte_4k_page_new(uint64_t UXN, uint64_t page_base_address, uint64_t nG, uint6
     pte_t pte;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(UXN & ~0x1ull) == ((0 && (UXN & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2095, __func__); } } while(0);
-    do { if (!((page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(page_base_address & ~0xfffffffff000ull) == ((0 && (page_base_address & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2096, __func__); } } while(0);
-    do { if (!((nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(nG & ~0x1ull) == ((0 && (nG & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2097, __func__); } } while(0);
-    do { if (!((AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AF & ~0x1ull) == ((0 && (AF & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2098, __func__); } } while(0);
-    do { if (!((SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(SH & ~0x3ull) == ((0 && (SH & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2099, __func__); } } while(0);
-    do { if (!((AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AP & ~0x3ull) == ((0 && (AP & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2100, __func__); } } while(0);
-    do { if (!((AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(AttrIndx & ~0x7ull) == ((0 && (AttrIndx & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2101, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
+    ;
+    ;
+    ;
 
     pte.words[0] = 0
         | (UXN & 0x1ull) << 54
@@ -3392,7 +3184,7 @@ static inline uint64_t __attribute__((__const__))
 pte_pte_4k_page_get_AP(pte_t pte) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((pte.words[0] >> 0) & 0x400000000000003) == 0x400000000000003ull /* sliced tag pte_pte_4k_page */)) { _assert_fail("((pte.words[0] >> 0) & 0x400000000000003) == 0x400000000000003ull /* sliced tag pte_pte_4k_page */", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2120, __func__); } } while(0);
+    ;
 
     ret = (pte.words[0] & 0xc0ull) >> 6;
     /* Possibly sign extend */
@@ -3438,7 +3230,7 @@ seL4_Fault_NullFault_new(void) {
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)seL4_Fault_NullFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_NullFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_NullFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_NullFault & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2166, __func__); } } while(0);
+    ;
 
     seL4_Fault.words[0] = 0
         | ((uint64_t)seL4_Fault_NullFault & 0xfull) << 0;
@@ -3452,8 +3244,8 @@ seL4_Fault_CapFault_new(uint64_t address, uint64_t inReceivePhase) {
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((inReceivePhase & ~0x1ull) == ((0 && (inReceivePhase & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(inReceivePhase & ~0x1ull) == ((0 && (inReceivePhase & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2180, __func__); } } while(0);
-    do { if (!(((uint64_t)seL4_Fault_CapFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_CapFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_CapFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_CapFault & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2181, __func__); } } while(0);
+    ;
+    ;
 
     seL4_Fault.words[0] = 0
         | (inReceivePhase & 0x1ull) << 63
@@ -3468,7 +3260,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_CapFault_get_address(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2196, __func__); } } while(0);
+    ;
 
     ret = (seL4_Fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -3482,7 +3274,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_CapFault_get_inReceivePhase(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_CapFault", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2210, __func__); } } while(0);
+    ;
 
     ret = (seL4_Fault.words[0] & 0x8000000000000000ull) >> 63;
     /* Possibly sign extend */
@@ -3497,7 +3289,7 @@ seL4_Fault_UnknownSyscall_new(uint64_t syscallNumber) {
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!(((uint64_t)seL4_Fault_UnknownSyscall & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UnknownSyscall & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_UnknownSyscall & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UnknownSyscall & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2225, __func__); } } while(0);
+    ;
 
     seL4_Fault.words[0] = 0
         | ((uint64_t)seL4_Fault_UnknownSyscall & 0xfull) << 0;
@@ -3511,7 +3303,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_UnknownSyscall_get_syscallNumber(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UnknownSyscall)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UnknownSyscall", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2239, __func__); } } while(0);
+    ;
 
     ret = (seL4_Fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -3526,9 +3318,9 @@ seL4_Fault_UserException_new(uint64_t number, uint64_t code) {
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((number & ~0xffffffffull) == ((0 && (number & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(number & ~0xffffffffull) == ((0 && (number & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2254, __func__); } } while(0);
-    do { if (!((code & ~0xfffffffull) == ((0 && (code & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(code & ~0xfffffffull) == ((0 && (code & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2255, __func__); } } while(0);
-    do { if (!(((uint64_t)seL4_Fault_UserException & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UserException & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_UserException & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_UserException & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2256, __func__); } } while(0);
+    ;
+    ;
+    ;
 
     seL4_Fault.words[0] = 0
         | (number & 0xffffffffull) << 32
@@ -3543,7 +3335,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_UserException_get_number(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2271, __func__); } } while(0);
+    ;
 
     ret = (seL4_Fault.words[0] & 0xffffffff00000000ull) >> 32;
     /* Possibly sign extend */
@@ -3557,7 +3349,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_UserException_get_code(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_UserException", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2285, __func__); } } while(0);
+    ;
 
     ret = (seL4_Fault.words[0] & 0xfffffff0ull) >> 4;
     /* Possibly sign extend */
@@ -3572,9 +3364,9 @@ seL4_Fault_VMFault_new(uint64_t address, uint64_t FSR, uint64_t instructionFault
     seL4_Fault_t seL4_Fault;
 
     /* fail if user has passed bits that we will override */
-    do { if (!((FSR & ~0xffffffffull) == ((0 && (FSR & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(FSR & ~0xffffffffull) == ((0 && (FSR & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2300, __func__); } } while(0);
-    do { if (!((instructionFault & ~0x1ull) == ((0 && (instructionFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("(instructionFault & ~0x1ull) == ((0 && (instructionFault & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2301, __func__); } } while(0);
-    do { if (!(((uint64_t)seL4_Fault_VMFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_VMFault & (1ull << 47))) ? 0x0 : 0))) { _assert_fail("((uint64_t)seL4_Fault_VMFault & ~0xfull) == ((0 && ((uint64_t)seL4_Fault_VMFault & (1ull << 47))) ? 0x0 : 0)", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2302, __func__); } } while(0);
+    ;
+    ;
+    ;
 
     seL4_Fault.words[0] = 0
         | (FSR & 0xffffffffull) << 32
@@ -3590,7 +3382,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_VMFault_get_address(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2318, __func__); } } while(0);
+    ;
 
     ret = (seL4_Fault.words[1] & 0xffffffffffffffffull) >> 0;
     /* Possibly sign extend */
@@ -3604,7 +3396,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_VMFault_get_FSR(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2332, __func__); } } while(0);
+    ;
 
     ret = (seL4_Fault.words[0] & 0xffffffff00000000ull) >> 32;
     /* Possibly sign extend */
@@ -3618,7 +3410,7 @@ static inline uint64_t __attribute__((__const__))
 seL4_Fault_VMFault_get_instructionFault(seL4_Fault_t seL4_Fault) {
     uint64_t ret;
     /* fail if union does not have the expected tag */
-    do { if (!(((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault)) { _assert_fail("((seL4_Fault.words[0] >> 0) & 0xf) == seL4_Fault_VMFault", "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/generated/arch/object/structures_gen.h", 2346, __func__); } } while(0);
+    ;
 
     ret = (seL4_Fault.words[0] & 0x80000000ull) >> 31;
     /* Possibly sign extend */
@@ -3627,10 +3419,10 @@ seL4_Fault_VMFault_get_instructionFault(seL4_Fault_t seL4_Fault) {
     }
     return ret;
 }
-# 13 "/Users/lukasbower/seL4_15/include/object/structures.h" 2
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h" 2
 
 
-# 1 "/Users/lukasbower/seL4_15/libsel4/arch_include/arm/sel4/arch/constants.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/arch_include/arm/sel4/arch/constants.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3638,8 +3430,8 @@ seL4_Fault_VMFault_get_instructionFault(seL4_Fault_t seL4_Fault) {
  */
 
        
-# 16 "/Users/lukasbower/seL4_15/include/object/structures.h" 2
-# 1 "/Users/lukasbower/seL4_15/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h" 1
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3731,7 +3523,7 @@ typedef enum {
     seL4_VCPUReg_AFSR1,
     seL4_VCPUReg_ESR,
     seL4_VCPUReg_FAR,
-    seL4_VCPUReg_ISR,
+    seL4_VCPUReg_PAR,
     seL4_VCPUReg_VBAR,
 
     /* thread pointer/ID registers EL0/EL1 */
@@ -3755,9 +3547,9 @@ typedef enum {
     seL4_VCPUReg_Num,
     _enum_pad_seL4_VCPUReg = ((1ULL << ((sizeof(long)*8) - 1)) - 1),
 } seL4_VCPUReg;
-# 168 "/Users/lukasbower/seL4_15/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
+# 168 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
 /* object sizes - 2^n */
-# 214 "/Users/lukasbower/seL4_15/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
+# 214 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
 /* word size */
 
 
@@ -3769,12 +3561,16 @@ typedef enum {
 typedef int __assert_failed_seL4_PageTableEntryBits_seL4_PageTableIndexBits_seL4_PageTableBits[((3) + (9) == 12) ? 1 : -1] __attribute__((unused));;
 typedef int __assert_failed_seL4_WordSizeBits_seL4_ASIDPoolIndexBits_seL4_ASIDPoolBits[((3) + (9) == 12) ? 1 : -1] __attribute__((unused));;
 typedef int __assert_failed_seL4_VSpaceEntryBits_seL4_VSpaceIndexBits_seL4_VSpaceBits[((3) + (9) == 12) ? 1 : -1] __attribute__((unused));;
-# 234 "/Users/lukasbower/seL4_15/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
+# 234 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
 /* IPC buffer is 1024 bytes, giving size bits of 10 */
-# 256 "/Users/lukasbower/seL4_15/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
-/* First address in the virtual address space that is not accessible to user level */
-# 17 "/Users/lukasbower/seL4_15/include/object/structures.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/benchmark/benchmark_utilisation_.h" 1
+# 256 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/sel4_arch_include/aarch64/sel4/sel4_arch/constants.h"
+/* (Deprecated) Last address in the virtual address space that is accessible to user level */
+
+
+
+/* Last address in the virtual address space that is accessible to user level */
+# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/benchmark/benchmark_utilisation_.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3782,14 +3578,14 @@ typedef int __assert_failed_seL4_VSpaceEntryBits_seL4_VSpaceIndexBits_seL4_VSpac
  */
 
        
-# 18 "/Users/lukasbower/seL4_15/include/object/structures.h" 2
+# 18 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h" 2
 
 enum irq_state {
     IRQInactive = 0,
     IRQSignal = 1,
     IRQTimer = 2,
 
-
+    IRQIPI = 3,
 
     IRQReserved
 };
@@ -3814,7 +3610,7 @@ enum notification_state {
     NtfnState_Active = 2
 };
 typedef word_t notification_state_t;
-# 63 "/Users/lukasbower/seL4_15/include/object/structures.h"
+# 63 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h"
 // We would like the actual 'tcb' region (the portion that contains the tcb_t) of the tcb
 // to be as large as possible, but it still needs to be aligned. As the TCB object contains
 // two sub objects the largest we can make either sub object whilst preserving size alignment
@@ -3844,7 +3640,7 @@ typedef word_t notification_state_t;
 
 
 /* Generate a cte_t pointer from a tcb_t pointer */
-# 107 "/Users/lukasbower/seL4_15/include/object/structures.h"
+# 107 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h"
 static inline cap_t __attribute__((__const__)) Zombie_new(word_t number, word_t type, word_t ptr)
 {
     word_t mask;
@@ -3919,7 +3715,7 @@ enum tcb_cnode_index {
 
     /* VSpace root */
     tcbVTable = 1,
-# 192 "/Users/lukasbower/seL4_15/include/object/structures.h"
+# 192 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h"
     /* Reply cap slot */
     tcbReply = 2,
 
@@ -3933,7 +3729,7 @@ enum tcb_cnode_index {
 };
 typedef word_t tcb_cnode_index_t;
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/structures.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/structures.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -3942,7 +3738,7 @@ typedef word_t tcb_cnode_index_t;
 
        
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/object/structures.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3950,8 +3746,8 @@ typedef word_t tcb_cnode_index_t;
  */
 
        
-# 16 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/object/structures.h"
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/hardware.h" 1
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/hardware.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -3961,7 +3757,7 @@ typedef word_t tcb_cnode_index_t;
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/hardware.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/hardware.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3987,9 +3783,9 @@ typedef word_t tcb_cnode_index_t;
  * PT_LEVEL_SHIFT(n) == PT_INDEX_BITS * (NUM_PT_LEVELS - n) + seL4_PageBits
  * GET_PT_INDEX(addr, n) == (addr >> PT_LEVEL_SHIFT(n)) & MASK(PT_INDEX_BITS)
  */
-# 47 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/hardware.h"
+# 47 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/hardware.h"
 /* Control register fields */
-# 64 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/hardware.h"
+# 64 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/hardware.h"
 enum vm_page_size {
     ARMSmallPage,
     ARMLargePage,
@@ -4016,10 +3812,10 @@ static inline word_t __attribute__((__const__)) pageBitsForSize(vm_page_size_t p
         return ARMHugePageBits;
 
     default:
-        _fail("Invalid page size", "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/hardware.h", 90, __func__);
+        halt();
     }
 }
-# 11 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/hardware.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/hardware.h" 2
 
 
 enum vm_fault_type {
@@ -4027,7 +3823,7 @@ enum vm_fault_type {
     ARMPrefetchAbort = 1
 };
 typedef word_t vm_fault_type_t;
-# 36 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/hardware.h"
+# 36 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/hardware.h"
 /*
  * Used to align the big kernel lock to the exclusive reservation granule size.
  * Without this nearby writes can delay atomic operations implemented with looping
@@ -4048,8 +3844,8 @@ typedef word_t vm_fault_type_t;
  * "The architecture sets an upper limit of 2048 bytes on the Exclusives
  *  reservation granule that can be marked as exclusive."
  */
-# 17 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/object/structures.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/registerset.h" 1
+# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/registerset.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4058,7 +3854,7 @@ typedef word_t vm_fault_type_t;
 
        
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/registerset.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/registerset.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4068,7 +3864,7 @@ typedef word_t vm_fault_type_t;
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/debug_conf.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/debug_conf.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4084,14 +3880,14 @@ typedef word_t vm_fault_type_t;
  * CONFIG_ARM_HYP_ENABLE_VCPU_CP14_SAVE_AND_RESTORE and
  * CONFIG_HARDWARE_DEBUG_API.
  */
-# 11 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/registerset.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/registerset.h" 2
 
 /* CurrentEL register */
 
 
 
 /* PSTATE register */
-# 26 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 26 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 /* DAIF register */
 
 
@@ -4100,7 +3896,7 @@ typedef word_t vm_fault_type_t;
 
 
 /* ESR register */
-# 44 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 44 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 /* ID_AA64PFR0_EL1 register */
 
 
@@ -4112,11 +3908,11 @@ typedef word_t vm_fault_type_t;
  * We cannot allow async aborts in the verified kernel, but they are useful
  * in identifying invalid memory access bugs so we enable them in debug mode.
  */
-# 69 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 69 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 /* Offsets within the user context, these need to match the order in
  * register_t below */
-# 85 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/registerset.h"
-# 1 "/Users/lukasbower/seL4_15/libsel4/sel4_plat_include/qemu-arm-virt/sel4/plat/api/constants.h" 1
+# 85 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/sel4_plat_include/qemu-arm-virt/sel4/plat/api/constants.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4131,7 +3927,7 @@ typedef word_t vm_fault_type_t;
 
 
 
-# 1 "/Users/lukasbower/seL4_15/libsel4/arch_include/arm/sel4/arch/constants_cortex_a53.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/arch_include/arm/sel4/arch/constants_cortex_a53.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4147,10 +3943,8 @@ typedef word_t vm_fault_type_t;
 
 
 /* Cortex-A53 Manual, Section 11.6.1 */
-# 16 "/Users/lukasbower/seL4_15/libsel4/sel4_plat_include/qemu-arm-virt/sel4/plat/api/constants.h" 2
-# 24 "/Users/lukasbower/seL4_15/libsel4/sel4_plat_include/qemu-arm-virt/sel4/plat/api/constants.h"
-/* First address in the virtual address space that is not accessible to user level */
-# 86 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/registerset.h" 2
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/sel4_plat_include/qemu-arm-virt/sel4/plat/api/constants.h" 2
+# 86 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/registerset.h" 2
 
 /* These are the indices of the registers in the saved thread context.
  * The values are determined by the order in which they're saved in the trap handler. */
@@ -4239,11 +4033,11 @@ enum messageSizes {
 
 
 };
-# 236 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 236 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 extern const register_t msgRegisters[];
 extern const register_t frameRegisters[];
 extern const register_t gpRegisters[];
-# 256 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/registerset.h"
+# 256 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/registerset.h"
 typedef struct user_fpu_state {
     uint64_t vregs[64];
     uint32_t fpsr;
@@ -4283,13 +4077,13 @@ _Static_assert(__builtin_offsetof(user_context_t, fpuState) % 16 == 0, "vregs_ar
 
 static inline void Arch_initContext(user_context_t *context)
 {
-    context->registers[SPSR_EL1] = ((1 << 6) | 0 | 0);
+    context->registers[SPSR_EL1] = ((1 << 6) | 0 | (1 << 8));
 
 
 
 }
-# 10 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/registerset.h" 2
-# 18 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/object/structures.h" 2
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/registerset.h" 2
+# 18 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h" 2
 
 typedef struct arch_tcb {
     user_context_t tcbContext;
@@ -4304,10 +4098,10 @@ enum vm_rights {
     VMReadOnly = 3
 };
 typedef word_t vm_rights_t;
-# 44 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/object/structures.h"
+# 44 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h"
 /* Otherwise we use a 4-level translation */
 typedef pte_t vspace_root_t;
-# 57 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/object/structures.h"
+# 57 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h"
 /* Generate a vcpu_t pointer from a vcpu block reference */
 
 
@@ -4321,7 +4115,7 @@ typedef struct asid_pool asid_pool_t;
  * that's a workaround in the time being.
  */
 typedef pte_t pde_t;
-# 83 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/object/structures.h"
+# 83 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h"
 static inline word_t __attribute__((__const__)) cap_get_archCapSizeBits(cap_t cap)
 {
     cap_tag_t ctag;
@@ -4343,16 +4137,7 @@ static inline word_t __attribute__((__const__)) cap_get_archCapSizeBits(cap_t ca
 
     case cap_asid_control_cap:
         return 0;
-
-
-
-
-
-
-    case cap_sgi_signal_cap:
-        return 0;
-
-
+# 114 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h"
     default:
         /* Unreachable, but GCC can't figure that out */
         return 0;
@@ -4381,20 +4166,7 @@ static inline bool_t __attribute__((__const__)) cap_get_archCapIsPhysical(cap_t 
 
     case cap_asid_control_cap:
         return false;
-
-
-
-
-
-
-    case cap_sgi_signal_cap:
-        return false;
-
-
-
-
-
-
+# 156 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h"
     default:
         /* Unreachable, but GCC can't figure that out */
         return false;
@@ -4422,20 +4194,7 @@ static inline void *__attribute__((__const__)) cap_get_archCapPtr(cap_t cap)
 
     case cap_asid_pool_cap:
         return ((asid_pool_t*)cap_asid_pool_cap_get_capASIDPool(cap));
-
-
-
-
-
-
-    case cap_sgi_signal_cap:
-        return ((void *)0);
-
-
-
-
-
-
+# 197 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/object/structures.h"
     default:
         /* Unreachable, but GCC can't figure that out */
         return ((void *)0);
@@ -4471,7 +4230,7 @@ static inline bool_t pte_is_page_type(pte_t pte)
 /** Return base address for both of pte_4k_page and pte_page */
 static inline uint64_t pte_get_page_base_address(pte_t pte)
 {
-    do { if (!(pte_is_page_type(pte))) { _assert_fail("pte_is_page_type(pte)", "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/object/structures.h", 232, __func__); } } while(0);
+    ;
     return pte.words[0] & 0xfffffffff000ull;
 }
 
@@ -4480,23 +4239,19 @@ static inline uint64_t pte_page_ptr_get_page_base_address(pte_t *pt)
 {
     return pte_get_page_base_address(*pt);
 }
-# 10 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/structures.h" 2
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/structures.h" 2
 
 
 
 static inline bool_t __attribute__((__const__)) Arch_isCapRevocable(cap_t derivedCap, cap_t srcCap)
 {
     switch (cap_get_capType(derivedCap)) {
-
-
-    case cap_sgi_signal_cap:
-        return cap_get_capType(srcCap) == cap_irq_control_cap;
-# 28 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/structures.h"
+# 28 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/structures.h"
     default:
         return false;
     }
 }
-# 206 "/Users/lukasbower/seL4_15/include/object/structures.h" 2
+# 206 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h" 2
 
 struct user_data {
     word_t words[(1ul << (12)) / sizeof(word_t)];
@@ -4560,7 +4315,7 @@ struct tcb {
 
     /* Priority, 1 byte (padded to 1 word) */
     prio_t tcbPriority;
-# 278 "/Users/lukasbower/seL4_15/include/object/structures.h"
+# 278 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h"
     /* Timeslice remaining, 1 word */
     word_t tcbTimeSlice;
 
@@ -4572,16 +4327,21 @@ struct tcb {
     word_t tcbIPCBuffer;
 
 
+    /* cpu ID this thread is running on, 1 word */
+    word_t tcbAffinity;
 
 
-
-
-    /* Previous and next pointers for scheduler queues , 2 words */
+    /* Previous and next pointers for scheduler queues, 2 words
+     * also used for endpoint and notification queues in MCS */
     struct tcb *tcbSchedNext;
     struct tcb *tcbSchedPrev;
-    /* Previous and next pointers for endpoint and notification queues, 2 words */
+
+
+    /* Previous and next pointers for endpoint and notification queues, 2 words
+     * only for non-MCS configurations */
     struct tcb *tcbEPNext;
     struct tcb *tcbEPPrev;
+
 
 
 
@@ -4590,21 +4350,8 @@ struct tcb {
 };
 typedef struct tcb tcb_t;
 
-
-/* This debug_tcb object is inserted into the 'unused' region of a TCB object
-   for debug build configurations. */
-struct debug_tcb {
-
-    /* Pointers for list of all tcbs that is maintained
-     * when CONFIG_DEBUG_BUILD is enabled, 2 words */
-    struct tcb *tcbDebugNext;
-    struct tcb *tcbDebugPrev;
-    /* Use any remaining space for a thread name */
-    char tcbName[];
-
-};
-typedef struct debug_tcb debug_tcb_t;
-# 398 "/Users/lukasbower/seL4_15/include/object/structures.h"
+/* To enable more uniform code shape between MCS and non-MCS configurations: */
+# 409 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/structures.h"
 /* Ensure object sizes are sane */
 _Static_assert(sizeof(cte_t) == (1ul << (5)), "cte_size_sane");
 _Static_assert((4 + 5) <= (11 - 1), "tcb_cte_size_sane");
@@ -4631,7 +4378,7 @@ isArchCap(cap_t cap)
 {
     return (cap_get_capType(cap) % 2);
 }
-# 12 "/Users/lukasbower/seL4_15/include/compound_types.h" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/compound_types.h" 2
 
 
 struct pde_range {
@@ -4652,9 +4399,9 @@ struct extra_caps {
     cte_ptr_t excaprefs[((1ul<<(seL4_MsgExtraCapBits))-1)];
 };
 typedef struct extra_caps extra_caps_t;
-# 11 "/Users/lukasbower/seL4_15/include/types.h" 2
-# 9 "/Users/lukasbower/seL4_15/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_15/include/api/faults.h" 1
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/types.h" 2
+# 9 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/faults.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4671,8 +4418,8 @@ word_t Arch_setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffe
 
 bool_t handleFaultReply(tcb_t *receiver, tcb_t *sender);
 bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
-# 10 "/Users/lukasbower/seL4_15/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_15/include/api/syscall.h" 1
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/syscall.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4682,7 +4429,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/machine.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4691,14 +4438,14 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
 
        
 
-# 1 "/Users/lukasbower/seL4_15/include/plat/default/plat/machine.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/plat/machine/devices_gen.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/plat/machine/devices_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4716,7 +4463,7 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/hardware.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/hardware.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5008,8 +4755,8 @@ bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType);
    asserts check that the kernel config won't lead to UTs being created that aren't
    representable. */
 _Static_assert(1099511627776 <= (1ul << (47)), "ut_max_less_than_canonical");;
-# 19 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/plat/machine/devices_gen.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/linker.h" 1
+# 19 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/linker.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5019,7 +4766,7 @@ _Static_assert(1099511627776 <= (1ul << (47)), "ut_max_less_than_canonical");;
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/linker.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/linker.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5028,7 +4775,7 @@ _Static_assert(1099511627776 <= (1ul << (47)), "ut_max_less_than_canonical");;
 
        
 /* Place-holder for ARM-related linker definitions */
-# 11 "/Users/lukasbower/seL4_15/include/linker.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/linker.h" 2
 
 /* code that is only used during kernel bootstrapping */
 
@@ -5050,7 +4797,7 @@ _Static_assert(1099511627776 <= (1ul << (47)), "ut_max_less_than_canonical");;
 
 
 /* bss data that is permitted to be used in the restricted SKIM address space */
-# 20 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/plat/machine/devices_gen.h" 2
+# 20 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/plat/machine/devices_gen.h" 2
 
 
 /* Wrap raw physBase location constant to give it a symbolic name in C that's
@@ -5078,17 +4825,8 @@ static inline __attribute__((__const__)) word_t physBase(void)
 
 
 
-
 static const kernel_frame_t __attribute__((__section__(".boot.rodata"))) kernel_device_frames[] = {
-
-    /* /pl011@9000000 */
-    {
-        .paddr = 0x9000000,
-        .pptr = (0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x0),
-        .armExecuteNever = true,
-        .userAvailable = true
-    },
-
+# 57 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/plat/machine/devices_gen.h"
     /* /intc@8000000 */
     {
         .paddr = 0x8000000,
@@ -5096,14 +4834,1903 @@ static const kernel_frame_t __attribute__((__section__(".boot.rodata"))) kernel_
         .armExecuteNever = true,
         .userAvailable = false
     },
-    /* /intc@8000000 */
     {
-        .paddr = 0x8010000,
-        .pptr = (0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2000),
+        .paddr = 0x8001000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2000,
         .armExecuteNever = true,
         .userAvailable = false
     },
-# 81 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/plat/machine/devices_gen.h"
+    {
+        .paddr = 0x8002000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x3000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8003000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x4000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8004000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x5000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8005000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x6000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8006000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x7000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8007000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x8000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8008000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x9000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8009000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x800a000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x800b000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x800c000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x800d000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x800e000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x800f000,
+        /* contains GICD_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x10000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    /* /intc@8000000 */
+    {
+        .paddr = 0x80a0000,
+        .pptr = (0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x11000),
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80a1000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x12000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80a2000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x13000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80a3000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x14000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80a4000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x15000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80a5000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x16000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80a6000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x17000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80a7000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x18000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80a8000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x19000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80a9000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x1a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80aa000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x1b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ab000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x1c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ac000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x1d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ad000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x1e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ae000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x1f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80af000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x20000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b0000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x21000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b1000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x22000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b2000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x23000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b3000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x24000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b4000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x25000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b5000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x26000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b6000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x27000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b7000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x28000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b8000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x29000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80b9000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ba000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80bb000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80bc000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80bd000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80be000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80bf000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x30000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c0000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x31000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c1000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x32000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c2000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x33000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c3000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x34000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c4000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x35000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c5000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x36000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c6000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x37000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c7000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x38000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c8000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x39000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80c9000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x3a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ca000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x3b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80cb000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x3c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80cc000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x3d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80cd000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x3e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ce000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x3f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80cf000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x40000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d0000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x41000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d1000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x42000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d2000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x43000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d3000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x44000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d4000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x45000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d5000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x46000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d6000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x47000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d7000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x48000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d8000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x49000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80d9000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x4a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80da000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x4b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80db000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x4c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80dc000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x4d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80dd000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x4e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80de000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x4f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80df000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x50000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e0000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x51000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e1000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x52000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e2000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x53000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e3000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x54000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e4000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x55000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e5000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x56000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e6000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x57000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e7000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x58000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e8000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x59000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80e9000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x5a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ea000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x5b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80eb000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x5c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ec000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x5d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ed000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x5e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ee000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x5f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ef000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x60000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f0000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x61000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f1000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x62000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f2000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x63000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f3000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x64000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f4000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x65000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f5000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x66000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f6000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x67000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f7000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x68000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f8000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x69000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80f9000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x6a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80fa000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x6b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80fb000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x6c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80fc000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x6d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80fd000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x6e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80fe000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x6f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x80ff000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x70000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8100000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x71000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8101000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x72000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8102000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x73000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8103000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x74000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8104000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x75000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8105000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x76000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8106000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x77000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8107000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x78000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8108000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x79000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8109000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x7a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x810a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x7b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x810b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x7c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x810c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x7d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x810d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x7e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x810e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x7f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x810f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x80000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8110000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x81000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8111000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x82000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8112000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x83000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8113000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x84000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8114000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x85000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8115000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x86000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8116000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x87000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8117000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x88000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8118000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x89000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8119000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x8a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x811a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x8b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x811b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x8c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x811c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x8d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x811d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x8e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x811e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x8f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x811f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x90000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8120000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x91000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8121000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x92000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8122000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x93000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8123000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x94000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8124000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x95000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8125000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x96000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8126000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x97000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8127000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x98000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8128000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x99000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8129000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x9a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x812a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x9b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x812b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x9c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x812c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x9d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x812d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x9e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x812e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x9f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x812f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa0000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8130000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa1000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8131000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa2000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8132000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa3000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8133000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa4000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8134000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa5000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8135000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa6000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8136000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa7000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8137000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa8000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8138000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xa9000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8139000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xaa000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x813a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xab000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x813b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xac000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x813c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xad000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x813d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xae000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x813e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xaf000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x813f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb0000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8140000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb1000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8141000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb2000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8142000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb3000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8143000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb4000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8144000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb5000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8145000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb6000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8146000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb7000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8147000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb8000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8148000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xb9000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8149000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xba000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x814a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xbb000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x814b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xbc000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x814c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xbd000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x814d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xbe000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x814e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xbf000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x814f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc0000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8150000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc1000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8151000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc2000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8152000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc3000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8153000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc4000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8154000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc5000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8155000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc6000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8156000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc7000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8157000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc8000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8158000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xc9000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8159000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xca000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x815a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xcb000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x815b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xcc000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x815c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xcd000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x815d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xce000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x815e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xcf000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x815f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd0000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8160000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd1000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8161000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd2000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8162000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd3000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8163000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd4000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8164000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd5000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8165000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd6000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8166000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd7000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8167000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd8000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8168000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xd9000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8169000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xda000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x816a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xdb000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x816b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xdc000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x816c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xdd000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x816d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xde000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x816e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xdf000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x816f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe0000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8170000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe1000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8171000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe2000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8172000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe3000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8173000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe4000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8174000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe5000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8175000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe6000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8176000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe7000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8177000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe8000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8178000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xe9000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8179000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xea000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x817a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xeb000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x817b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xec000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x817c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xed000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x817d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xee000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x817e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xef000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x817f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf0000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8180000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf1000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8181000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf2000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8182000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf3000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8183000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf4000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8184000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf5000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8185000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf6000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8186000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf7000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8187000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf8000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8188000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xf9000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8189000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xfa000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x818a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xfb000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x818b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xfc000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x818c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xfd000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x818d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xfe000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x818e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0xff000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x818f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x100000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8190000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x101000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8191000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x102000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8192000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x103000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8193000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x104000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8194000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x105000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8195000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x106000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8196000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x107000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8197000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x108000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8198000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x109000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x8199000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x10a000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x819a000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x10b000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x819b000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x10c000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x819c000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x10d000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x819d000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x10e000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x819e000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x10f000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
+    {
+        .paddr = 0x819f000,
+        /* contains GICR_PPTR */
+        .pptr = 0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x110000,
+        .armExecuteNever = true,
+        .userAvailable = false
+    },
 };
 
 /* Elements in kernel_device_frames may be enabled in specific configurations
@@ -5123,8 +6750,8 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
         .end = 0x80000000
     },
 };
-# 8 "/Users/lukasbower/seL4_15/include/plat/default/plat/machine.h" 2
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/plat/platform_gen.h" 1
+# 8 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/plat/default/plat/machine.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/plat/platform_gen.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5132,23 +6759,25 @@ static const p_region_t __attribute__((__section__(".boot.rodata"))) avail_p_reg
  */
 
        
-# 17 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/plat/platform_gen.h"
+# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/plat/platform_gen.h"
 enum IRQConstants {
     maxIRQ = 159
 };
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/gic_v2.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_v3.h" 1
 /*
- * Copyright 2014, General Dynamics C4 Systems
+ * Copyright 2019, DornerWorks
+ * Copyright 2019, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
 
 /*
- * ARM Generic Interrupt Controller PL-390
+ * Arm Generic Interrupt Controller v3
  */
+
        
 
 /* tell the kernel we have the set trigger feature */
@@ -5157,7 +6786,7 @@ enum IRQConstants {
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/smp/smp.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/smp/smp.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5168,7 +6797,7 @@ enum IRQConstants {
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/kernel/stack.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/stack.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5179,7 +6808,7 @@ enum IRQConstants {
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/kernel/stack.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/kernel/stack.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5187,17 +6816,36 @@ enum IRQConstants {
  */
 
        
-# 12 "/Users/lukasbower/seL4_15/include/kernel/stack.h" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/stack.h" 2
 
 /* These are the stacks used in kernel, shared between architectures/modes.
  * CONFIG_KERNEL_STACK_BITS is defined in kernel/Kconfig. The physical/offset
  * address of the stack is per-arch-mode aligned. KERNEL_STACK_ALIGNMENT is
  * defined for each arch/mode in <mode/kernel/stack.h>
  */
-extern char kernel_stack_alloc[1][(1ul << (12))];
-# 12 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/smp/smp.h" 2
-# 19 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/gic_v2.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/model/statedata.h" 1
+extern char kernel_stack_alloc[4][(1ul << (12))];
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/smp/smp.h" 2
+
+
+
+extern char kernel_stack_alloc[4][(1ul << (12))];
+_Static_assert(4096 == 4096, "kernel_stack_4k_aligned");
+
+
+
+static inline __attribute__((__const__)) cpu_id_t
+getCurrentCPUIndex(void)
+{
+    cpu_id_t id;
+    if (wrap_config_set(0)) {
+        __asm__ volatile("mrs %0, tpidr_el2" : "=r"(id));
+    } else {
+        __asm__ volatile("mrs %0, tpidr_el1" : "=r"(id));
+    }
+    return (id & (4096 - 1));
+}
+# 21 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_v3.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/model/statedata.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5209,7 +6857,7 @@ extern char kernel_stack_alloc[1][(1ul << (12))];
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/object/tcb.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/tcb.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5219,7 +6867,7 @@ extern char kernel_stack_alloc[1][(1ul << (12))];
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/api/failures.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/failures.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5229,7 +6877,7 @@ extern char kernel_stack_alloc[1][(1ul << (12))];
        
 
 
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/errors.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/errors.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5257,7 +6905,7 @@ typedef enum {
      */
     seL4_NumErrors
 } seL4_Error;
-# 11 "/Users/lukasbower/seL4_15/include/api/failures.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/failures.h" 2
 
 /* These datatypes differ markedly from haskell, due to the
  * different implementation of the various fault monads */
@@ -5285,14 +6933,14 @@ struct syscall_error {
     syscall_error_type_t type;
 };
 typedef struct syscall_error syscall_error_t;
-# 47 "/Users/lukasbower/seL4_15/include/api/failures.h"
+# 47 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/failures.h"
 extern lookup_fault_t current_lookup_fault;
 extern seL4_Fault_t current_fault;
 extern syscall_error_t current_syscall_error;
-# 11 "/Users/lukasbower/seL4_15/include/object/tcb.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/tcb.h" 2
 
 
-# 1 "/Users/lukasbower/seL4_15/include/machine/registerset.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/registerset.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5330,8 +6978,8 @@ static inline word_t __attribute__((__pure__)) getRegister(tcb_t *thread, regist
 {
     return thread->tcbArch.tcbContext.registers[reg];
 }
-# 14 "/Users/lukasbower/seL4_15/include/object/tcb.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/object/cnode.h" 1
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/tcb.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/cnode.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5372,12 +7020,12 @@ cap_transfer_t __attribute__((__pure__)) loadCapTransfer(word_t *buffer);
 
 exception_t invokeCNodeSaveCaller(cte_t *destSlot);
 void setupReplyMaster(tcb_t *thread);
-# 15 "/Users/lukasbower/seL4_15/include/object/tcb.h" 2
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/tcb.h" 2
 
 
-/* Maximum length of the tcb name, including null terminator */
 
-_Static_assert(((1ul << (11 -1)) - (tcbCNodeEntries * sizeof(cte_t)) - sizeof(debug_tcb_t)) > 0, "tcb_name_fits");
+
+
 
 
 struct tcb_queue {
@@ -5447,8 +7095,8 @@ static inline void tcb_queue_insert(tcb_t *tcb, tcb_t *after)
     tcb_t *before;
     before = after->tcbSchedPrev;
 
-    do { if (!(before != ((void *)0))) { _assert_fail("before != NULL", "/Users/lukasbower/seL4_15/include/object/tcb.h", 89, __func__); } } while(0);
-    do { if (!(before != after)) { _assert_fail("before != after", "/Users/lukasbower/seL4_15/include/object/tcb.h", 90, __func__); } } while(0);
+    ;
+    ;
 
     tcb->tcbSchedPrev = before;
     tcb->tcbSchedNext = after;
@@ -5456,11 +7104,10 @@ static inline void tcb_queue_insert(tcb_t *tcb, tcb_t *after)
     after->tcbSchedPrev = tcb;
     before->tcbSchedNext = tcb;
 }
-
-
-void tcbDebugAppend(tcb_t *tcb);
-void tcbDebugRemove(tcb_t *tcb);
-# 167 "/Users/lukasbower/seL4_15/include/object/tcb.h"
+# 109 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/tcb.h"
+void remoteQueueUpdate(tcb_t *tcb);
+void remoteTCBStall(tcb_t *tcb);
+# 189 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/tcb.h"
 tcb_queue_t tcbEPAppend(tcb_t *tcb, tcb_queue_t queue);
 tcb_queue_t tcbEPDequeue(tcb_t *tcb, tcb_queue_t queue);
 
@@ -5491,7 +7138,7 @@ exception_t decodeSetSpace(cap_t cap, word_t length,
                            cte_t *slot, word_t *buffer);
 exception_t decodeBindNotification(cap_t cap);
 exception_t decodeUnbindNotification(cap_t cap);
-# 217 "/Users/lukasbower/seL4_15/include/object/tcb.h"
+# 239 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/tcb.h"
 enum thread_control_flag {
     thread_control_update_priority = 0x1,
     thread_control_update_ipc_buffer = 0x2,
@@ -5504,7 +7151,7 @@ typedef word_t thread_control_flag_t;
 
 exception_t invokeTCB_Suspend(tcb_t *thread);
 exception_t invokeTCB_Resume(tcb_t *thread);
-# 244 "/Users/lukasbower/seL4_15/include/object/tcb.h"
+# 266 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/tcb.h"
 exception_t invokeTCB_ThreadControl(tcb_t *target, cte_t *slot, cptr_t faultep,
                                     prio_t mcp, prio_t priority, cap_t cRoot_newCap,
                                     cte_t *cRoot_srcSlot, cap_t vRoot_newCap,
@@ -5530,29 +7177,20 @@ word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer);
 word_t __attribute__((__const__)) Arch_decodeTransfer(word_t flags);
 exception_t __attribute__((__const__)) Arch_performTransfer(word_t arch, tcb_t *tcb_src,
                                        tcb_t *tcb_dest);
-
-
-void setThreadName(tcb_t *thread, const char *name);
-# 13 "/Users/lukasbower/seL4_15/include/model/statedata.h" 2
-# 38 "/Users/lukasbower/seL4_15/include/model/statedata.h"
-/* UP states are declared as VISIBLE so that they are accessible in assembly */
-# 58 "/Users/lukasbower/seL4_15/include/model/statedata.h"
-
-extern tcb_queue_t ksReadyQueues[(1 * 256)] __attribute__((externally_visible));
-extern word_t ksReadyQueuesL1Bitmap[1] __attribute__((externally_visible));
-extern word_t ksReadyQueuesL2Bitmap[1][((256 + (1 << 6) - 1) / (1 << 6))] __attribute__((externally_visible));
-extern tcb_t *ksCurThread __attribute__((externally_visible));
-extern tcb_t *ksIdleThread __attribute__((externally_visible));
-extern tcb_t *ksSchedulerAction __attribute__((externally_visible));
-# 76 "/Users/lukasbower/seL4_15/include/model/statedata.h"
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/model/statedata.h" 2
+# 58 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/model/statedata.h"
+typedef struct nodeState {
+tcb_queue_t ksReadyQueues[(1 * 256)];
+word_t ksReadyQueuesL1Bitmap[1];
+word_t ksReadyQueuesL2Bitmap[1][((256 + (1 << 6) - 1) / (1 << 6))];
+tcb_t *ksCurThread;
+tcb_t *ksIdleThread;
+tcb_t *ksSchedulerAction;
+# 76 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/model/statedata.h"
 /* The thread using the FPU, or NULL if FPU state is invalid */
-extern tcb_t * ksCurFPUOwner __attribute__((externally_visible));
-
-
-
-extern tcb_t * ksDebugTCBs __attribute__((externally_visible));
-# 92 "/Users/lukasbower/seL4_15/include/model/statedata.h"
-;
+tcb_t * ksCurFPUOwner;
+# 92 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/model/statedata.h"
+} nodeState_t;
 
 extern word_t ksNumCPUs;
 
@@ -5570,10 +7208,39 @@ extern dom_t ksCurDomain;
 extern word_t ksDomScheduleStart;
 extern ticks_t ksDomainTime;
 
-extern char ksIdleThreadTCB[1][(1ul << (11))];
-# 20 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/gic_v2.h" 2
+extern char ksIdleThreadTCB[4][(1ul << (11))];
+# 22 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_v3.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/armv/armv8-a/64/armv/machine.h" 1
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/gic_common.h" 1
+       
+
+static inline void dsb(void)
+{
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
+static inline void dsb_ishst(void)
+{
+    __asm__ volatile("dsb ishst" ::: "memory");
+}
+
+static inline void dmb(void)
+{
+    __asm__ volatile("dmb sy" ::: "memory");
+}
+
+static inline void isb(void)
+{
+    __asm__ volatile("isb sy" ::: "memory");
+}
+# 23 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_v3.h" 2
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_common.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5584,7 +7251,7 @@ extern char ksIdleThreadTCB[1][(1ul << (11))];
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/machine/interrupt.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/interrupt.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5623,19 +7290,11 @@ extern char ksIdleThreadTCB[1][(1ul << (11))];
  * Currently only Arm SMP configurations use this scheme.
  */
 
-
-
-
-
-
-typedef word_t irq_t;
-
-
-
-
-
-
-
+typedef struct {
+    word_t irq;
+    word_t target_core;
+} irq_t;
+# 52 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/interrupt.h"
 /**
  * Return a currently pending IRQ.
  *
@@ -5718,10 +7377,7 @@ static inline void handleSpuriousIRQ(void);
 static inline void handleReservedIRQ(irq_t irq);
 
 void setIRQTrigger(irq_t irq, bool_t trigger);
-
-
-static inline void deactivateInterrupt(irq_t irq) {}
-# 12 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/gic_common.h" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_common.h" 2
 
 /* Shift positions for GICD_SGIR register */
 
@@ -5738,8 +7394,28 @@ static inline void deactivateInterrupt(irq_t irq) {}
 
 
 /* Shared Peripheral Interrupts */
-# 59 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/gic_common.h"
-static const irq_t irqInvalid = (uint16_t) -1;
+
+
+
+
+
+
+
+/* In this case irq_t is a struct with an hw irq field and target core field.
+ * The following macros convert between (target_core, hw_irq) <-> irq_t <-> cnode index.
+ * IRQ_IS_PPI returns true if hw_irq < 32 which is a property of the GIC.
+ * The layout of IRQs into the CNode are all of PPI's for each core first, followed
+ * by the global interrupts.  Examples:
+ *   core: 0, irq: 12 -> index 12.
+ *   core: 2, irq: 16 -> (2 * 32) + 16
+ *   core: 1, irq: 33, (4 total cores) -> (4 * 32) + (33-32).
+ */
+# 55 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_common.h"
+static const irq_t irqInvalid = ((irq_t){.irq = (-1), .target_core = (-1)});
+
+
+
+
 
 
 /* Setters/getters helpers for hardware irqs */
@@ -5754,127 +7430,190 @@ static const irq_t irqInvalid = (uint16_t) -1;
  * reads will not return the same value For this reason, we have a
  * global variable to store the IRQ number.
  */
-extern word_t active_irq[1];
+extern word_t active_irq[4];
 
 static inline void handleSpuriousIRQ(void)
 {
 }
 
 void initIRQController(void);
-# 22 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/gic_v2.h" 2
+# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_v3.h" 2
+
+/**
+ * Per §4.8 of ARM GICv3/v4 Spec (IHI0069 Hb):
+ *  - higher numbers are lower priorities
+ *  - the GIC must support at least priority bits [7:4], i.e 0x00-0xF0 in steps of 16.
+ **/
 
 
 
 
 
 
+
+/* Register bits */
+
+/**
+ * The GICD_CTLR distributor control register (per IHI0069 Hb) has various
+ * layouts depending on the security state configuration. seL4 assumes that
+ * we are in:
+ *
+ *   - "access is Non-secure, in a system that supports two Security states", or
+ *   - "When in a system that supports only a single Security state".
+ *
+ * and not "When access is Secure, in a system that supports two Security states".
+ * In both these cases GICD_CTLR_ARE_NS is bit 4. RWP, Enable_G1NS and EnableG0
+ * bits do not move around depending on the layout.
+ */
+# 77 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_v3.h"
+/* System registers for GIC CPU interface */
+# 90 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_v3.h"
+/* Virt control registers */
+# 138 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_v3.h"
 /* Helpers for VGIC */
-# 50 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/gic_v2.h"
+# 160 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/gic_v3.h"
 /* Memory map for GIC distributor */
 struct gic_dist_map {
-    uint32_t enable; /* 0x000 */
-    uint32_t ic_type; /* 0x004 */
-    uint32_t dist_ident; /* 0x008 */
-    uint32_t res1[29]; /* [0x00C, 0x080) */
+    uint32_t ctlr; /* 0x0000 */
+    uint32_t typer; /* 0x0004 */
+    uint32_t iidr; /* 0x0008 */
+    uint32_t res0; /* 0x000C */
+    uint32_t statusr; /* 0x0010 */
+    uint32_t res1[11]; /* [0x0014, 0x0040) */
+    uint32_t setspi_nsr; /* 0x0040 */
+    uint32_t res2; /* 0x0044 */
+    uint32_t clrspi_nsr; /* 0x0048 */
+    uint32_t res3; /* 0x004C */
+    uint32_t setspi_sr; /* 0x0050 */
+    uint32_t res4; /* 0x0054 */
+    uint32_t clrspi_sr; /* 0x0058 */
+    uint32_t res5[9]; /* [0x005C, 0x0080) */
+    uint32_t igrouprn[32]; /* [0x0080, 0x0100) */
 
-    uint32_t security[32]; /* [0x080, 0x100) */
+    uint32_t isenablern[32]; /* [0x100, 0x180) */
+    uint32_t icenablern[32]; /* [0x180, 0x200) */
+    uint32_t ispendrn[32]; /* [0x200, 0x280) */
+    uint32_t icpendrn[32]; /* [0x280, 0x300) */
+    uint32_t isactivern[32]; /* [0x300, 0x380) */
+    uint32_t icactivern[32]; /* [0x380, 0x400) */
 
-    uint32_t enable_set[32]; /* [0x100, 0x180) */
-    uint32_t enable_clr[32]; /* [0x180, 0x200) */
-    uint32_t pending_set[32]; /* [0x200, 0x280) */
-    uint32_t pending_clr[32]; /* [0x280, 0x300) */
-    uint32_t active[32]; /* [0x300, 0x380) */
-    uint32_t res2[32]; /* [0x380, 0x400) */
+    uint32_t ipriorityrn[255]; /* [0x400, 0x7FC) */
+    uint32_t res6; /* 0x7FC */
 
-    uint32_t priority[255]; /* [0x400, 0x7FC) */
-    uint32_t res3; /* 0x7FC */
+    uint32_t itargetsrn[254]; /* [0x800, 0xBF8) */
+    uint32_t res7[2]; /* 0xBF8 */
 
-    uint32_t targets[255]; /* [0x800, 0xBFC) */
-    uint32_t res4; /* 0xBFC */
+    uint32_t icfgrn[64]; /* [0xC00, 0xD00) */
+    uint32_t igrpmodrn[64]; /* [0xD00, 0xE00) */
+    uint32_t nsacrn[64]; /* [0xE00, 0xF00) */
+    uint32_t sgir; /* 0xF00 */
+    uint32_t res8[3]; /* [0xF04, 0xF10) */
+    uint32_t cpendsgirn[4]; /* [0xF10, 0xF20) */
+    uint32_t spendsgirn[4]; /* [0xF20, 0xF30) */
+    uint32_t res9[5236]; /* [0x0F30, 0x6100) */
 
-    uint32_t config[64]; /* [0xC00, 0xD00) */
-
-    uint32_t spi[32]; /* [0xD00, 0xD80) */
-    uint32_t res5[20]; /* [0xD80, 0xDD0) */
-    uint32_t res6; /* 0xDD0 */
-    uint32_t legacy_int; /* 0xDD4 */
-    uint32_t res7[2]; /* [0xDD8, 0xDE0) */
-    uint32_t match_d; /* 0xDE0 */
-    uint32_t enable_d; /* 0xDE4 */
-    uint32_t res8[70]; /* [0xDE8, 0xF00) */
-
-    uint32_t sgi_control; /* 0xF00 */
-    uint32_t res9[3]; /* [0xF04, 0xF10) */
-    uint32_t sgi_pending_clr[4]; /* [0xF10, 0xF20) */
-    uint32_t res10[40]; /* [0xF20, 0xFC0) */
-
-    uint32_t periph_id[12]; /* [0xFC0, 0xFF0) */
-    uint32_t component_id[4]; /* [0xFF0, 0xFFF] */
+    uint64_t iroutern[960]; /* [0x6100, 0x7F00) irouter<n> to configure IRQs
+                                     * with INTID from 32 to 1019. iroutern[0] is the
+                                     * interrupt routing for SPI 32 */
 };
 
-/* Memory map for GIC  cpu interface */
-struct gic_cpu_iface_map {
-    uint32_t icontrol; /*  0x000         */
-    uint32_t pri_msk_c; /*  0x004         */
-    uint32_t pb_c; /*  0x008         */
-    uint32_t int_ack; /*  0x00C         */
-    uint32_t eoi; /*  0x010         */
-    uint32_t run_priority; /*  0x014         */
-    uint32_t hi_pend; /*  0x018         */
-    uint32_t ns_alias_bp_c; /*  0x01C         */
-    uint32_t ns_alias_ack; /*  0x020 GIC400 only */
-    uint32_t ns_alias_eoi; /*  0x024 GIC400 only */
-    uint32_t ns_alias_hi_pend; /*  0x028 GIC400 only */
+/* __builtin_offsetof is not in the verification C subset, so we can only check this in
+   non-verification builds. We specifically do not declare a macro for the builtin, because
+   we do not want break the verification subset by accident. */
+_Static_assert(0x6100 == __builtin_offsetof(struct gic_dist_map, iroutern), "error_in_gic_dist_map");
+                                                                                      ;
 
-    uint32_t res1[5]; /* [0x02C, 0x040) */
+/* Memory map for GIC Redistributor Registers for control and physical LPI's */
+struct gic_rdist_map { /* Starting */
+    uint32_t ctlr; /* 0x0000 */
+    uint32_t iidr; /* 0x0004 */
+    uint64_t typer; /* 0x0008 */
+    uint32_t statusr; /* 0x0010 */
+    uint32_t waker; /* 0x0014 */
+    uint32_t res0[10]; /* 0x0018 */
+    uint64_t setlpir; /* 0x0040 */
+    uint64_t clrlpir; /* 0x0048 */
+    uint32_t res1[8]; /* 0x0050 */
+    uint64_t propbaser; /* 0x0070 */
+    uint64_t pendbaser; /* 0x0078 */
+    uint32_t res2[8]; /* 0x0080 */
+    uint64_t invlpir; /* 0x00a0 */
+    uint32_t res3[2]; /* 0x00a8 */
+    uint64_t invallr; /* 0x00b0 */
+    uint32_t res4[2]; /* 0x00b8 */
+    uint32_t syncr; /* 0x00c0 */
+};
 
-    uint32_t integ_en_c; /*  0x040 PL390 only */
-    uint32_t interrupt_out; /*  0x044 PL390 only */
-    uint32_t res2[2]; /* [0x048, 0x050)    */
-
-    uint32_t match_c; /*  0x050 PL390 only */
-    uint32_t enable_c; /*  0x054 PL390 only */
-
-    uint32_t res3[30]; /* [0x058, 0x0FC)  */
-    uint32_t active_priority[4]; /* [0x0D0, 0xDC] GIC400 only */
-    uint32_t ns_active_priority[4]; /* [0xE0,0xEC] GIC400 only */
-    uint32_t res4[3];
-
-    uint32_t cpu_if_ident; /*  0x0FC         */
-    uint32_t res5[948]; /* [0x100. 0xFC0) */
-
-    uint32_t periph_id[8]; /* [0xFC0, 9xFF0) PL390 only */
-    uint32_t component_id[4]; /* [0xFF0, 0xFFF] PL390 only */
+/* Memory map for the GIC Redistributor Registers for the SGI and PPI's */
+struct gic_rdist_sgi_ppi_map { /* Starting */
+    uint32_t res0[32]; /* 0x0000 */
+    uint32_t igroupr0; /* 0x0080 */
+    uint32_t res1[31]; /* 0x0084 */
+    uint32_t isenabler0; /* 0x0100 */
+    uint32_t res2[31]; /* 0x0104 */
+    uint32_t icenabler0; /* 0x0180 */
+    uint32_t res3[31]; /* 0x0184 */
+    uint32_t ispendr0; /* 0x0200 */
+    uint32_t res4[31]; /* 0x0204 */
+    uint32_t icpendr0; /* 0x0280 */
+    uint32_t res5[31]; /* 0x0284 */
+    uint32_t isactiver0; /* 0x0300 */
+    uint32_t res6[31]; /* 0x0304 */
+    uint32_t icactiver0; /* 0x0380 */
+    uint32_t res7[31]; /* 0x0384 */
+    uint32_t ipriorityrn[8]; /* 0x0400 */
+    uint32_t res8[504]; /* 0x0420 */
+    uint32_t icfgr0; /* 0x0C00 */
+    uint32_t icfgr1; /* 0x0C04 */
+    uint32_t res9[62]; /* 0x0C08 */
+    uint32_t igrpmodr0; /* 0x0D00*/
+    uint32_t res10[63]; /* 0x0D04 */
+    uint32_t nsacr; /* 0x0E00 */
 };
 
 extern volatile struct gic_dist_map *const gic_dist;
-extern volatile struct gic_cpu_iface_map *const gic_cpuiface;
+extern volatile struct gic_rdist_map *gic_rdist_map[4];
+extern volatile struct gic_rdist_sgi_ppi_map *gic_rdist_sgi_ppi_map[4];
 
 /* Helpers */
-static inline void dist_enable_clr(word_t irq)
+static inline void gic_enable_clr(word_t irq)
 {
     int word = ((irq) >> 5u);
     int bit = ((irq) & 0x1f);
     /* Using |= here is detrimental to your health */
-    gic_dist->enable_clr[word] = (1ul << (bit));
+    if (irq < 32u) {
+        gic_rdist_sgi_ppi_map[getCurrentCPUIndex()]->icenabler0 = (1ul << (bit));
+    } else {
+        gic_dist->icenablern[word] = (1ul << (bit));
+    }
+
 }
 
-static inline void dist_enable_set(word_t irq)
+static inline void gic_enable_set(word_t irq)
 {
     int word = ((irq) >> 5u);
     int bit = ((irq) & 0x1f);
-    gic_dist->enable_set[word] = (1ul << (bit));
+
+    if (irq < 32u) {
+        gic_rdist_sgi_ppi_map[getCurrentCPUIndex()]->isenabler0 = (1ul << (bit));
+    } else {
+        gic_dist->isenablern[word] = (1ul << (bit));
+    }
+
 }
 
 static inline irq_t getActiveIRQ(void)
 {
     irq_t irq;
-    if (!(((active_irq[0lu]) & ((1ul << (10u)) - 1ul)) < 1020u)) {
-        active_irq[0lu] = gic_cpuiface->int_ack;
+
+    if (!(((active_irq[getCurrentCPUIndex()]) & ((1ul << (16u)) - 1ul)) < 1020u)) {
+        word_t val = 0;
+        __asm__ volatile("mrs %x0," "S3_0_C12_C12_0" : "=r"(val));
+        active_irq[getCurrentCPUIndex()] = val;
     }
 
-    if ((((active_irq[0lu]) & ((1ul << (10u)) - 1ul)) < 1020u)) {
-        irq = (active_irq[0lu] & ((1ul << (10u)) - 1ul));
+    if ((((active_irq[getCurrentCPUIndex()]) & ((1ul << (16u)) - 1ul)) < 1020u)) {
+        irq = ((irq_t){.irq = (active_irq[getCurrentCPUIndex()] & ((1ul << (16u)) - 1ul)), .target_core = (getCurrentCPUIndex())});
     } else {
         irq = irqInvalid;
     }
@@ -5883,37 +7622,66 @@ static inline irq_t getActiveIRQ(void)
 }
 
 /*
- * GIC has 4 states: pending->active(+pending)->inactive
+ * GIC has 4 states:
  * seL4 expects two states: active->inactive.
  * We ignore the active state in GIC to conform
  */
+/** MODIFIES: phantom_machine_state */
+/** DONT_TRANSLATE */
 static inline bool_t isIRQPending(void)
 {
-    return (((gic_cpuiface->hi_pend) & ((1ul << (10u)) - 1ul)) < 1020u);
+    word_t val = 0;
+    /* Check for pending IRQs in group 1: ICC_HPPIR1_EL1 */
+    __asm__ volatile("mrs %x0," "S3_0_C12_C12_2" : "=r"(val));
+    return (((val) & ((1ul << (16u)) - 1ul)) < 1020u);
 }
 
 static inline void maskInterrupt(bool_t disable, irq_t irq)
 {
 
+    ;
 
 
     if (disable) {
-        dist_enable_clr((irq));
+        gic_enable_clr((irq.irq));
     } else {
-        dist_enable_set((irq));
+        gic_enable_set((irq.irq));
     }
+}
+
+
+static inline void deactivateInterrupt(irq_t irq)
+{
+    word_t hw_irq = (irq.irq);
+    /* Perform deactivation of hw_irq */
+    do { word_t _v = hw_irq; __asm__ volatile("msr " "S3_0_C12_C11_1" ",%x0" :: "r" (_v)); }while(0);
 }
 
 static inline void ackInterrupt(irq_t irq)
 {
-    do { if (!((((active_irq[0lu]) & ((1ul << (10u)) - 1ul)) < 1020u) && (active_irq[0lu] & ((1ul << (10u)) - 1ul)) == (irq))) { _assert_fail("IS_IRQ_VALID(active_irq[CURRENT_CPU_INDEX()]) && (active_irq[CURRENT_CPU_INDEX()] & IRQ_MASK) == IRQT_TO_IRQ(irq)", "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/gic_v2.h", 186, __func__); } } while(0)
+   
                                                                                ;
-    gic_cpuiface->eoi = active_irq[0lu];
-    active_irq[0lu] = 1023u;
+    active_irq[getCurrentCPUIndex()] = 1023u;
+
+    word_t hw_irq = (irq.irq);
+
+    /* Set End of Interrupt for active IRQ: ICC_EOIR1_EL1 */
+    /* Perform priority drop for current IRQ */
+    do { word_t _v = hw_irq; __asm__ volatile("msr " "S3_0_C12_C12_1" ",%x0" :: "r" (_v)); }while(0);
+
+    // If the IRQ is not going to user level then we need to deactivate it too.
+    if (__builtin_expect(!!(hw_irq > maxIRQ), 0) ||
+        intStateIRQTable[(((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq))] != IRQSignal) {
+        /* There needs to be an isb() to ensure completion of the system
+         * register write in ackInterrupt
+         */
+        isb();
+        deactivateInterrupt(irq);
+    }
 
 }
-# 24 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/plat/platform_gen.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/drivers/timer/arm_generic.h" 1
+# 24 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/plat/platform_gen.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/drivers/timer/arm_generic.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5923,59 +7691,7 @@ static inline void ackInterrupt(irq_t irq)
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine.h" 1
-/*
- * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-
-
-
-
-
-# 1 "/Users/lukasbower/seL4_15/include/plat/default/plat/machine/hardware.h" 1
-/*
- * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-# 15 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/armv/armv8-a/64/armv/machine.h" 1
-/*
- * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-static inline void dsb(void)
-{
-    __asm__ volatile("dsb sy" ::: "memory");
-}
-
-static inline void dsb_ishst(void)
-{
-    __asm__ volatile("dsb ishst" ::: "memory");
-}
-
-static inline void dmb(void)
-{
-    __asm__ volatile("dmb sy" ::: "memory");
-}
-
-static inline void isb(void)
-{
-    __asm__ volatile("isb sy" ::: "memory");
-}
-# 16 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/model/smp.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5986,7 +7702,20 @@ static inline void isb(void)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/model/smp.h" 1
+
+
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/plat/default/plat/machine/hardware.h" 1
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine.h" 2
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/model/smp.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5997,7 +7726,18 @@ static inline void isb(void)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/model/statedata.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/model/smp.h" 1
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
+
+
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/model/statedata.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6007,7 +7747,7 @@ static inline void isb(void)
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/vcpu.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/vcpu.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6015,25 +7755,44 @@ static inline void isb(void)
  */
 
        
-# 213 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/vcpu.h"
+# 213 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/vcpu.h"
 static inline void VGICMaintenance(void) {}
-# 11 "/Users/lukasbower/seL4_15/include/arch/arm/arch/model/statedata.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/model/statedata.h" 2
 
 
 
 
-
+typedef struct archNodeState {
 /* TODO: add ARM-dependent fields here */
 /* Bitmask of all cores should receive the reschedule IPI */
-extern word_t ipiReschedulePending __attribute__((externally_visible));
-# 29 "/Users/lukasbower/seL4_15/include/arch/arm/arch/model/statedata.h"
-;
-# 12 "/Users/lukasbower/seL4_15/include/model/smp.h" 2
-# 12 "/Users/lukasbower/seL4_15/include/arch/arm/arch/model/smp.h" 2
-# 17 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine.h" 2
+word_t ipiReschedulePending;
+# 29 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/model/statedata.h"
+} archNodeState_t;
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/model/smp.h" 2
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine_pl2.h" 1
+
+
+typedef struct smpStatedata {
+    archNodeState_t cpu;
+    nodeState_t system;
+    char padding[(1ul << (6)) - ((sizeof(archNodeState_t) + sizeof(nodeState_t)) % (1ul << (6)))];
+} smpStatedata_t;
+
+extern smpStatedata_t ksSMP[4];
+
+void migrateTCB(tcb_t *tcb, word_t new_core);
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/model/smp.h" 2
+
+
+static inline cpu_id_t cpuIndexToID(word_t index)
+{
+    return (1ul << (index));
+}
+# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine.h" 2
+
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine_pl2.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6041,7 +7800,7 @@ extern word_t ipiReschedulePending __attribute__((externally_visible));
  */
 
        
-# 25 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine_pl2.h"
+# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine_pl2.h"
 static inline void writeTPIDR_EL2(word_t reg) {}
 static inline word_t readTPIDR_EL2(void)
 {
@@ -6055,8 +7814,15 @@ static inline void setCurrentPDPL2(paddr_t pa) {}
 static inline void invalidateHypTLB(void) {}
 static inline void writeContextIDPL2(word_t pd_val) {}
 static inline void writeContextIDAndPD(word_t id, word_t pd_val) {}
-# 20 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine.h" 2
-# 46 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine.h"
+# 20 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine.h" 2
+# 39 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine.h"
+/* Use the first two SGI (Software Generated Interrupt) IDs
+ * for seL4 IPI implementation. SGIs are per-core banked.
+ */
+
+
+
+
 word_t __attribute__((__pure__)) getRestartPC(tcb_t *thread);
 void setNextPC(tcb_t *thread, word_t v);
 
@@ -6138,7 +7904,7 @@ static void arm_load_thread_id(tcb_t *thread)
     writeTPIDR_EL0(getRegister(thread, TPIDR_EL0));
     writeTPIDRRO_EL0(getRegister(thread, TPIDRRO_EL0));
 }
-# 155 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine.h"
+# 155 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine.h"
 /* Check if the elfloader set up the TCR_EL2 correctly. */
 static inline bool_t checkTCR_EL2(void)
 {
@@ -6227,7 +7993,7 @@ static inline void invalidateLocalTLB(void)
 
 static inline void invalidateLocalTLB_ASID(asid_t asid)
 {
-    do { if (!(asid < (1ul << (16)))) { _assert_fail("asid < BIT(16)", "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine.h", 243, __func__); } } while(0);
+    ;
 
     dsb();
     __asm__ volatile("tlbi aside1, %0" : : "r"(asid << 48));
@@ -6292,9 +8058,9 @@ static inline void invalidateByVA_I(vptr_t vaddr, paddr_t paddr)
 static inline void invalidate_I_PoU(void)
 {
 
+    __asm__ volatile("ic ialluis");
 
 
-    __asm__ volatile("ic iallu");
 
     isb();
 }
@@ -6367,13 +8133,26 @@ void arch_clean_invalidate_L1_caches(word_t type);
 
 static inline paddr_t addressTranslateS1(vptr_t vaddr)
 {
-    return ats1e1r(vaddr);
+    word_t result;
+    __attribute__((unused)) word_t saved_par;
+
+    if (wrap_config_set(0)) {
+        __asm__ volatile("mrs %x0," "par_el1" : "=r"(saved_par));
+    }
+
+    result = ats1e1r(vaddr);
+
+    if (wrap_config_set(0)) {
+        do { word_t _v = saved_par; __asm__ volatile("msr " "par_el1" ",%x0" :: "r" (_v)); }while(0);
+    }
+
+    return result;
 }
-# 11 "/Users/lukasbower/seL4_15/include/drivers/timer/arm_generic.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/drivers/timer/arm_generic.h" 2
 
 /* ARM generic timer implementation */
-# 41 "/Users/lukasbower/seL4_15/include/drivers/timer/arm_generic.h"
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/timer.h" 1
+# 41 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/drivers/timer/arm_generic.h"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/timer.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6386,8 +8165,8 @@ static inline paddr_t addressTranslateS1(vptr_t vaddr)
 
 
 /* convert to khz first to avoid overflow */
-# 58 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/timer.h"
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/timer.h" 1
+# 58 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/timer.h"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/timer.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6395,7 +8174,7 @@ static inline paddr_t addressTranslateS1(vptr_t vaddr)
  */
 
        
-# 59 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/timer.h" 2
+# 59 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/timer.h" 2
 
 
 /* but multiply by timer tick ms */
@@ -6406,7 +8185,7 @@ static inline paddr_t addressTranslateS1(vptr_t vaddr)
 
 
 void initTimer(void);
-# 42 "/Users/lukasbower/seL4_15/include/drivers/timer/arm_generic.h" 2
+# 42 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/drivers/timer/arm_generic.h" 2
 static inline void resetTimer(void)
 {
     do { word_t _v = ((62500000llu / 1000llu) * 2); __asm__ volatile("msr " "cntv_tval_el0" ",%x0" :: "r" (_v)); }while(0);
@@ -6419,7 +8198,7 @@ static inline void resetTimer(void)
 
 
 __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
-# 25 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/plat/platform_gen.h" 2
+# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/plat/platform_gen.h" 2
 
 /* #undef CONFIGURE_SMMU */
 
@@ -6427,10 +8206,10 @@ __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
 
 
 /* #undef CONFIGURE_SMMU */
-# 9 "/Users/lukasbower/seL4_15/include/plat/default/plat/machine.h" 2
-# 10 "/Users/lukasbower/seL4_15/include/machine.h" 2
+# 9 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/plat/default/plat/machine.h" 2
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine.h" 2
 
-# 1 "/Users/lukasbower/seL4_15/include/hardware.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/hardware.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6480,7 +8259,7 @@ __attribute__((__section__(".boot.text"))) void initGenericTimer(void);
 /* This symbol is generated by the linker and marks the last valid
  * address in the kernel's virtual region */
 extern char ki_end[1];
-# 12 "/Users/lukasbower/seL4_15/include/machine.h" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine.h" 2
 
 /* When translating a physical address into an address accessible to the
  * kernel via virtual addressing we always use the mapping of the memory
@@ -6502,8 +8281,8 @@ static inline paddr_t __attribute__((__const__)) addrFromPPtr(const void *pptr)
  * the kernel ELF mapping, this function must be used. */
 static inline paddr_t __attribute__((__const__)) addrFromKPPtr(const void *pptr)
 {
-    do { if (!((paddr_t)pptr >= ((0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul) + physBase()))) { _assert_fail("(paddr_t)pptr >= KERNEL_ELF_BASE", "/Users/lukasbower/seL4_15/include/machine.h", 33, __func__); } } while(0);
-    do { if (!((paddr_t)pptr <= ((paddr_t)ki_end))) { _assert_fail("(paddr_t)pptr <= KERNEL_ELF_TOP", "/Users/lukasbower/seL4_15/include/machine.h", 34, __func__); } } while(0);
+    ;
+    ;
     return (paddr_t)pptr - (((0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul) + physBase()) - physBase());
 }
 
@@ -6526,10 +8305,10 @@ static inline p_region_t __attribute__((__const__)) pptr_to_paddr_reg(const regi
         .end = addrFromPPtr((const void *)reg.end),
     };
 }
-# 11 "/Users/lukasbower/seL4_15/include/api/syscall.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/syscall.h" 2
 
 
-# 1 "/Users/lukasbower/seL4_15/include/kernel/vspace.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/vspace.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6538,7 +8317,7 @@ static inline p_region_t __attribute__((__const__)) pptr_to_paddr_reg(const regi
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/kernel/vspace.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/kernel/vspace.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6551,7 +8330,7 @@ static inline p_region_t __attribute__((__const__)) pptr_to_paddr_reg(const regi
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/kernel/vspace.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/kernel/vspace.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6559,7 +8338,7 @@ static inline p_region_t __attribute__((__const__)) pptr_to_paddr_reg(const regi
  */
 
        
-# 16 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/kernel/vspace.h"
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/kernel/vspace.h"
 /* ==================== BOOT CODE FINISHES HERE ==================== */
 
 bool_t __attribute__((__const__)) isVTableRoot(cap_t cap);
@@ -6610,7 +8389,7 @@ static inline exception_t performASIDPoolInvocation(asid_t asid, asid_pool_t *po
 
 void increaseASIDBindCB(asid_t asid);
 void decreaseASIDBindCB(asid_t asid);
-# 14 "/Users/lukasbower/seL4_15/include/arch/arm/arch/kernel/vspace.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/kernel/vspace.h" 2
 
 
 
@@ -6640,12 +8419,9 @@ vm_rights_t __attribute__((__const__)) maskVMRights(vm_rights_t vm_rights,
 
 exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
                                    cte_t *cte, cap_t cap, bool_t call, word_t *buffer);
-
-
-void Arch_userStackTrace(tcb_t *tptr);
-# 10 "/Users/lukasbower/seL4_15/include/kernel/vspace.h" 2
-# 14 "/Users/lukasbower/seL4_15/include/api/syscall.h" 2
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/arch/api/syscall.h" 1
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/vspace.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/syscall.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/arch/api/syscall.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6659,7 +8435,7 @@ void Arch_userStackTrace(tcb_t *tptr);
  *
  */
        
-# 34 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/arch/api/syscall.h"
+# 34 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/arch/api/syscall.h"
 enum syscall {
     SysCall = -1,
     SysReplyRecv = -2,
@@ -6669,209 +8445,39 @@ enum syscall {
     SysReply = -6,
     SysYield = -7,
     SysNBRecv = -8,
-
-    SysDebugPutChar = -9,
-    SysDebugDumpScheduler = -10,
-
-
-    SysDebugHalt = -11,
-    SysDebugCapIdentify = -12,
-    SysDebugSnapshot = -13,
-    SysDebugNameThread = -14,
-
-
-    SysDebugSendIPI = -15,
-# 84 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/arch/api/syscall.h"
+# 85 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/arch/api/syscall.h"
 };
 typedef word_t syscall_t;
 
 /* System call names */
-
-static char *syscall_names[] __attribute__((unused)) = {
-         [1] = "Call",
-         [2] = "ReplyRecv",
-         [3] = "Send",
-         [4] = "NBSend",
-         [5] = "Recv",
-         [6] = "Reply",
-         [7] = "Yield",
-         [8] = "NBRecv",
-};
-# 15 "/Users/lukasbower/seL4_15/include/api/syscall.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/api/debug.h" 1
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/syscall.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/debug.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/syscall.h" 2
+# 32 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/syscall.h"
+exception_t handleSyscall(syscall_t syscall);
+exception_t handleInterruptEntry(void);
+exception_t handleUnknownSyscall(word_t w);
+exception_t handleUserLevelFault(word_t w_a, word_t w_b);
+exception_t handleVMFaultEvent(vm_fault_type_t vm_faultType);
 
-
-
-
-       
-
-# 1 "/Users/lukasbower/seL4_15/include/benchmark/benchmark_track.h" 1
-/*
- * Copyright 2016, General Dynamics C4 Systems
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/benchmark.h" 1
-/*
- * Copyright 2014, General Dynamics C4 Systems
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-# 11 "/Users/lukasbower/seL4_15/include/benchmark/benchmark_track.h" 2
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/benchmark_track_types.h" 1
-/*
- * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
- *
- * SPDX-License-Identifier: BSD-2-Clause
- */
-
-       
-
-
-
-
-
-
-/* the following code can be used at any point in the kernel
- * to determine detail about the kernel entry point.
- * Note that all these values must fit in 3 bits for the `seL4_Word path: 3`
- * bitfield below.
- */
-typedef enum {
-    /* The kernel doesn't know why */
-    Entry_Unknown,
-    Entry_Interrupt,
-    Entry_UnknownSyscall,
-    Entry_UserLevelFault,
-    Entry_DebugFault,
-    Entry_VMFault,
-    Entry_Syscall,
-
-    Entry_VCPUFault,
-
-
-
-
-} entry_type_t;
-
-/**
- * @brief Kernel entry logging
- *
- * Encapsulates useful info about the cause of the kernel entry
- */
-typedef struct __attribute__((packed)) kernel_entry {
-    seL4_Word path: 3;
-    union {
-        struct {
-            seL4_Word core: 3;
-            seL4_Word word: 26;
-        };
-        /* Tracked kernel entry info filled from outside this file */
-        struct {
-            seL4_Word syscall_no: 4;
-            seL4_Word cap_type: 5;
-            seL4_Word is_fastpath: 1;
-            seL4_Word invocation_tag: 19;
-        };
-    };
-} kernel_entry_t;
-# 12 "/Users/lukasbower/seL4_15/include/benchmark/benchmark_track.h" 2
-
-
-# 1 "/Users/lukasbower/seL4_15/include/kernel/cspace.h" 1
-/*
- * Copyright 2014, General Dynamics C4 Systems
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-
-
-
-
-
-struct lookupCap_ret {
-    exception_t status;
-    cap_t cap;
-};
-typedef struct lookupCap_ret lookupCap_ret_t;
-
-struct lookupCapAndSlot_ret {
-    exception_t status;
-    cap_t cap;
-    cte_t *slot;
-};
-typedef struct lookupCapAndSlot_ret lookupCapAndSlot_ret_t;
-
-struct lookupSlot_raw_ret {
-    exception_t status;
-    cte_t *slot;
-};
-typedef struct lookupSlot_raw_ret lookupSlot_raw_ret_t;
-
-struct lookupSlot_ret {
-    exception_t status;
-    cte_t *slot;
-};
-typedef struct lookupSlot_ret lookupSlot_ret_t;
-
-struct resolveAddressBits_ret {
-    exception_t status;
-    cte_t *slot;
-    word_t bitsRemaining;
-};
-typedef struct resolveAddressBits_ret resolveAddressBits_ret_t;
-
-lookupCap_ret_t lookupCap(tcb_t *thread, cptr_t cPtr);
-lookupCapAndSlot_ret_t lookupCapAndSlot(tcb_t *thread, cptr_t cPtr);
-lookupSlot_raw_ret_t lookupSlot(tcb_t *thread, cptr_t capptr);
-lookupSlot_ret_t lookupSlotForCNodeOp(bool_t isSource,
-                                      cap_t root, cptr_t capptr,
-                                      word_t depth);
-lookupSlot_ret_t lookupSourceSlot(cap_t root, cptr_t capptr,
-                                  word_t depth);
-lookupSlot_ret_t lookupTargetSlot(cap_t root, cptr_t capptr,
-                                  word_t depth);
-lookupSlot_ret_t lookupPivotSlot(cap_t root, cptr_t capptr,
-                                 word_t depth);
-resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap,
-                                            cptr_t capptr,
-                                            word_t n_bits);
-# 15 "/Users/lukasbower/seL4_15/include/benchmark/benchmark_track.h" 2
-
-
-
-
-
-extern kernel_entry_t ksKernelEntry;
-# 50 "/Users/lukasbower/seL4_15/include/benchmark/benchmark_track.h"
-static inline void benchmark_debug_syscall_start(word_t cptr, word_t msgInfo, word_t syscall)
+static inline word_t __attribute__((__pure__)) getSyscallArg(word_t i, word_t *ipc_buffer)
 {
-    seL4_MessageInfo_t info = messageInfoFromWord_raw(msgInfo);
-    lookupCapAndSlot_ret_t lu_ret = lookupCapAndSlot(ksCurThread, cptr);
-    ksKernelEntry.path = Entry_Syscall;
-    ksKernelEntry.syscall_no = -syscall;
-    ksKernelEntry.cap_type = cap_get_capType(lu_ret.cap);
-    ksKernelEntry.invocation_tag = seL4_MessageInfo_get_label(info);
+    if (i < n_msgRegisters) {
+        return getRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, msgRegisters[i]);
+    }
+
+    ;
+    return ipc_buffer[i + 1];
 }
-# 13 "/Users/lukasbower/seL4_15/include/api/debug.h" 2
 
-
-
-# 1 "/Users/lukasbower/seL4_15/include/kernel/thread.h" 1
+extern extra_caps_t current_extra_caps;
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/thread.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6883,7 +8489,7 @@ static inline void benchmark_debug_syscall_start(word_t cptr, word_t msgInfo, wo
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6891,7 +8497,7 @@ static inline void benchmark_debug_syscall_start(word_t cptr, word_t msgInfo, wo
  */
 
        
-# 16 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine.h"
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine.h"
 void map_kernel_devices(void);
 
 void initL2Cache(void);
@@ -6899,7 +8505,7 @@ void initL2Cache(void);
 void initIRQController(void);
 void cpu_initLocalIRQController(void);
 
-
+void setIRQTarget(irq_t irq, seL4_Word target);
 
 bool_t plat_SGITargetValid(word_t target);
 void plat_sendSGI(word_t irq, word_t target);
@@ -6935,16 +8541,23 @@ static inline void clearMemory_PT(word_t *ptr, word_t bits)
     cleanCacheRange_PoU((word_t)ptr, (word_t)ptr + (1ul << (bits)) - 1,
                         addrFromPPtr(ptr));
 }
-# 67 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine.h"
+
+
+static inline void arch_pause(void)
+{
+    /* TODO */
+}
+
+
 /* Update the value of the actual register to hold the expected value */
 static inline exception_t Arch_setTLSRegister(word_t tls_base)
 {
     /* This register is saved and restored on kernel exit and entry so
      * we only update it in the saved context. */
-    setRegister(ksCurThread, TLS_BASE, tls_base);
+    setRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, TLS_BASE, tls_base);
     return EXCEPTION_NONE;
 }
-# 13 "/Users/lukasbower/seL4_15/include/kernel/thread.h" 2
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/thread.h" 2
 
 
 
@@ -6956,7 +8569,7 @@ static inline __attribute__((__const__)) word_t ready_queues_index(word_t dom, w
     if (numDomains > 1) {
         return dom * 256 + prio;
     } else {
-        do { if (!(dom == 0)) { _assert_fail("dom == 0", "/Users/lukasbower/seL4_15/include/kernel/thread.h", 24, __func__); } } while(0);
+        ;
         return prio;
     }
 }
@@ -6989,7 +8602,7 @@ static inline bool_t __attribute__((__pure__)) isRunnable(const tcb_t *thread)
 static inline __attribute__((__const__)) word_t invert_l1index(word_t l1index)
 {
     word_t inverted = (((256 + (1 << 6) - 1) / (1 << 6)) - 1 - l1index);
-    do { if (!(inverted < ((256 + (1 << 6) - 1) / (1 << 6)))) { _assert_fail("inverted < L2_BITMAP_SIZE", "/Users/lukasbower/seL4_15/include/kernel/thread.h", 57, __func__); } } while(0);
+    ;
     return inverted;
 }
 
@@ -7000,18 +8613,18 @@ static inline prio_t getHighestPrio(word_t dom)
     word_t l1index_inverted;
 
     /* it's undefined to call clzl on 0 */
-    do { if (!(ksReadyQueuesL1Bitmap[dom] != 0)) { _assert_fail("NODE_STATE(ksReadyQueuesL1Bitmap)[dom] != 0", "/Users/lukasbower/seL4_15/include/kernel/thread.h", 68, __func__); } } while(0);
+    ;
 
-    l1index = (1 << 6) - 1 - clzl(ksReadyQueuesL1Bitmap[dom]);
+    l1index = (1 << 6) - 1 - clzl(ksSMP[(getCurrentCPUIndex())].system.ksReadyQueuesL1Bitmap[dom]);
     l1index_inverted = invert_l1index(l1index);
-    do { if (!(ksReadyQueuesL2Bitmap[dom][l1index_inverted] != 0)) { _assert_fail("NODE_STATE(ksReadyQueuesL2Bitmap)[dom][l1index_inverted] != 0", "/Users/lukasbower/seL4_15/include/kernel/thread.h", 72, __func__); } } while(0);
-    l2index = (1 << 6) - 1 - clzl(ksReadyQueuesL2Bitmap[dom][l1index_inverted]);
+    ;
+    l2index = (1 << 6) - 1 - clzl(ksSMP[(getCurrentCPUIndex())].system.ksReadyQueuesL2Bitmap[dom][l1index_inverted]);
     return (l1index_to_prio(l1index) | l2index);
 }
 
 static inline bool_t isHighestPrio(word_t dom, prio_t prio)
 {
-    return ksReadyQueuesL1Bitmap[dom] == 0 ||
+    return ksSMP[(getCurrentCPUIndex())].system.ksReadyQueuesL1Bitmap[dom] == 0 ||
            prio >= getHighestPrio(dom);
 }
 
@@ -7043,7 +8656,7 @@ static inline bool_t __attribute__((__pure__)) isStopped(const tcb_t *thread)
         return false;
     }
 }
-# 163 "/Users/lukasbower/seL4_15/include/kernel/thread.h"
+# 163 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/thread.h"
 void Arch_switchToThread(tcb_t *tcb);
 void Arch_switchToIdleThread(void);
 void Arch_configureIdleThread(tcb_t *tcb);
@@ -7097,146 +8710,8 @@ static inline void updateRestartPC(tcb_t *tcb)
 {
     setRegister(tcb, FaultIP, getRegister(tcb, NextIP));
 }
-# 17 "/Users/lukasbower/seL4_15/include/api/debug.h" 2
-
-
-
-static inline void debug_printKernelEntryReason(void)
-{
-    printf("\nKernel entry via ");
-    switch (ksKernelEntry.path) {
-    case Entry_Interrupt:
-        printf("Interrupt, irq %lu\n", (unsigned long) ksKernelEntry.word);
-        break;
-    case Entry_UnknownSyscall:
-        printf("Unknown syscall, word: %lu", (unsigned long) ksKernelEntry.word);
-        break;
-    case Entry_VMFault:
-        printf("VM Fault, fault type: %lu\n", (unsigned long) ksKernelEntry.word);
-        break;
-    case Entry_UserLevelFault:
-        printf("User level fault, number: %lu", (unsigned long) ksKernelEntry.word);
-        break;
-
-
-
-
-
-    case Entry_Syscall:
-        printf("Syscall, number: %ld, %s\n", (long) ksKernelEntry.syscall_no, syscall_names[ksKernelEntry.syscall_no]);
-        if (ksKernelEntry.syscall_no == -SysSend ||
-            ksKernelEntry.syscall_no == -SysNBSend ||
-            ksKernelEntry.syscall_no == -SysCall) {
-
-            printf("Cap type: %lu, Invocation tag: %lu\n", (unsigned long) ksKernelEntry.cap_type,
-                   (unsigned long) ksKernelEntry.invocation_tag);
-        }
-        break;
-
-    case Entry_VCPUFault:
-        printf("VCPUFault\n");
-        break;
-
-
-
-
-
-
-    default:
-        printf("Unknown (%u)\n", ksKernelEntry.path);
-        break;
-
-    }
-}
-
-/* Prints the user context and stack trace of the current thread */
-static inline void debug_printUserState(void)
-{
-    tcb_t *tptr = ksCurThread;
-    printf("Current thread: %s\n", ((debug_tcb_t *)(((cte_t *)((word_t)(tptr)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName);
-    printf("Next instruction address: %lx\n", getRestartPC(tptr));
-    printf("Stack:\n");
-    Arch_userStackTrace(tptr);
-}
-
-static inline void debug_printTCB(tcb_t *tcb)
-{
-    printf("%40s\t", ((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName);
-    char *state;
-    switch (thread_state_get_tsType(tcb->tcbState)) {
-    case ThreadState_Inactive:
-        state = "inactive";
-        break;
-    case ThreadState_Running:
-        state = "running";
-        break;
-    case ThreadState_Restart:
-        state = "restart";
-        break;
-    case ThreadState_BlockedOnReceive:
-        state = "blocked on recv";
-        break;
-    case ThreadState_BlockedOnSend:
-        state = "blocked on send";
-        break;
-    case ThreadState_BlockedOnReply:
-        state = "blocked on reply";
-        break;
-    case ThreadState_BlockedOnNotification:
-        state = "blocked on ntfn";
-        break;
-
-
-
-
-
-    case ThreadState_IdleThreadState:
-        state = "idle";
-        break;
-    default:
-        _fail("Unknown thread state", "/Users/lukasbower/seL4_15/include/api/debug.h", 113, __func__);
-    }
-
-    word_t core = 0;
-    printf("%15s\t%p\t%20lu\t%lu", state, (void *) getRestartPC(tcb), tcb->tcbPriority, core);
-
-
-
-    printf("\n");
-}
-
-static inline void debug_dumpScheduler(void)
-{
-    printf("Dumping all tcbs!\n");
-    printf("Name                                    \tState          \tIP                  \t Prio \t Core%s\n",
-           wrap_config_set(0) ? "\t InReleaseQueue" : "");
-    printf("--------------------------------------------------------------------------------------\n");
-    for (tcb_t *curr = ksDebugTCBs; curr != ((void *)0); curr = ((debug_tcb_t *)(((cte_t *)((word_t)(curr)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbDebugNext) {
-        debug_printTCB(curr);
-    }
-}
-# 16 "/Users/lukasbower/seL4_15/include/api/syscall.h" 2
-# 32 "/Users/lukasbower/seL4_15/include/api/syscall.h"
-exception_t handleSyscall(syscall_t syscall);
-exception_t handleInterruptEntry(void);
-exception_t handleUnknownSyscall(word_t w);
-exception_t handleUserLevelFault(word_t w_a, word_t w_b);
-exception_t handleVMFaultEvent(vm_fault_type_t vm_faultType);
-
-static inline word_t __attribute__((__pure__)) getSyscallArg(word_t i, word_t *ipc_buffer)
-{
-    if (i < n_msgRegisters) {
-        return getRegister(ksCurThread, msgRegisters[i]);
-    }
-
-    do { if (!(ipc_buffer != ((void *)0))) { _assert_fail("ipc_buffer != NULL", "/Users/lukasbower/seL4_15/include/api/syscall.h", 44, __func__); } } while(0);
-    return ipc_buffer[i + 1];
-}
-
-extern extra_caps_t current_extra_caps;
-# 11 "/Users/lukasbower/seL4_15/src/api/faults.c" 2
-
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/kernel/thread.h" 1
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/kernel/thread.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7245,7 +8720,7 @@ extern extra_caps_t current_extra_caps;
 
        
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/kernel/thread.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/kernel/thread.h" 1
 /*
  * Copyright 2017, General Dynamics C4 Systems
  *
@@ -7267,7 +8742,7 @@ static inline word_t __attribute__((__const__)) sanitiseRegister(register_t reg,
                 break;
             }
         }
-        return (v & 0xf0000000) | ((1 << 6) | 0 | 0);
+        return (v & 0xf0000000) | ((1 << 6) | 0 | (1 << 8));
     } else {
         return v;
     }
@@ -7281,9 +8756,9 @@ static inline bool_t __attribute__((__const__)) Arch_getSanitiseRegisterInfo(tcb
     return 0;
 
 }
-# 10 "/Users/lukasbower/seL4_15/include/arch/arm/arch/kernel/thread.h" 2
-# 13 "/Users/lukasbower/seL4_15/src/api/faults.c" 2
-# 1 "/Users/lukasbower/seL4_15/include/machine/debug.h" 1
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/kernel/thread.h" 2
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/debug.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7291,7 +8766,7 @@ static inline bool_t __attribute__((__const__)) Arch_getSanitiseRegisterInfo(tcb
  */
 
        
-# 14 "/Users/lukasbower/seL4_15/src/api/faults.c" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c" 2
 
 
 
@@ -7317,12 +8792,12 @@ setMRs_lookup_failure(tcb_t *receiver, word_t *receiveIPCBuffer,
 
     /* check constants match libsel4 */
     if (offset == seL4_CapFault_LookupFailureType) {
-        do { if (!(offset + 1 == seL4_CapFault_BitsLeft)) { _assert_fail("offset + 1 == seL4_CapFault_BitsLeft", "/Users/lukasbower/seL4_15/src/api/faults.c", 39, __func__); } } while(0);
-        do { if (!(offset + 2 == seL4_CapFault_DepthMismatch_BitsFound)) { _assert_fail("offset + 2 == seL4_CapFault_DepthMismatch_BitsFound", "/Users/lukasbower/seL4_15/src/api/faults.c", 40, __func__); } } while(0);
-        do { if (!(offset + 2 == seL4_CapFault_GuardMismatch_GuardFound)) { _assert_fail("offset + 2 == seL4_CapFault_GuardMismatch_GuardFound", "/Users/lukasbower/seL4_15/src/api/faults.c", 41, __func__); } } while(0);
-        do { if (!(offset + 3 == seL4_CapFault_GuardMismatch_BitsFound)) { _assert_fail("offset + 3 == seL4_CapFault_GuardMismatch_BitsFound", "/Users/lukasbower/seL4_15/src/api/faults.c", 42, __func__); } } while(0);
+        ;
+        ;
+        ;
+        ;
     } else {
-        do { if (!(offset == 1)) { _assert_fail("offset == 1", "/Users/lukasbower/seL4_15/src/api/faults.c", 44, __func__); } } while(0);
+        ;
     }
 
     switch (lufType) {
@@ -7348,7 +8823,7 @@ setMRs_lookup_failure(tcb_t *receiver, word_t *receiveIPCBuffer,
                      lookup_fault_guard_mismatch_get_bitsFound(luf));
 
     default:
-        _fail("Invalid lookup failure", "/Users/lukasbower/seL4_15/src/api/faults.c", 70, __func__);
+        halt();
     }
 }
 
@@ -7411,7 +8886,7 @@ bool_t handleFaultReply(tcb_t *receiver, tcb_t *sender)
     case seL4_Fault_UserException:
         copyMRsFaultReply(sender, receiver, MessageID_Exception, (((length)<(n_exceptionMessage))?(length):(n_exceptionMessage)));
         return (label == 0);
-# 186 "/Users/lukasbower/seL4_15/src/api/faults.c"
+# 186 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c"
     default:
         return Arch_handleFaultReply(receiver, sender, seL4_Fault_get_seL4_FaultType(fault));
     }
@@ -7445,13 +8920,13 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
         return setMR(receiver, receiveIPCBuffer, n_exceptionMessage + 1u,
                      seL4_Fault_UserException_get_code(sender->tcbFault));
     }
-# 257 "/Users/lukasbower/seL4_15/src/api/faults.c"
+# 257 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/faults.c"
     default:
         return Arch_setMRs_fault(sender, receiver, receiveIPCBuffer,
                                  seL4_Fault_get_seL4_FaultType(sender->tcbFault));
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/api/syscall.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7460,7 +8935,7 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/benchmark/benchmark.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/benchmark/benchmark.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7470,11 +8945,19 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
        
 
 
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/benchmark.h" 1
+/*
+ * Copyright 2014, General Dynamics C4 Systems
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/benchmark/benchmark.h" 2
 
 
 
-
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/benchmark_tracepoints_types.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/benchmark_tracepoints_types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7482,11 +8965,10 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
  */
 
        
-# 15 "/Users/lukasbower/seL4_15/include/benchmark/benchmark.h" 2
-# 10 "/Users/lukasbower/seL4_15/src/api/syscall.c" 2
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/benchmark/benchmark.h" 2
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c" 2
 
-
-# 1 "/Users/lukasbower/seL4_15/include/benchmark/benchmark_utilisation.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/benchmark/benchmark_track.h" 1
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -7497,7 +8979,7 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/benchmark_utilisation_types.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/benchmark_track_types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7505,32 +8987,10 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
  */
 
        
-# 12 "/Users/lukasbower/seL4_15/include/benchmark/benchmark_utilisation.h" 2
-# 13 "/Users/lukasbower/seL4_15/src/api/syscall.c" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/benchmark/benchmark_track.h" 2
 
 
-
-
-# 1 "/Users/lukasbower/seL4_15/include/kernel/faulthandler.h" 1
-/*
- * Copyright 2014, General Dynamics C4 Systems
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-# 1 "/Users/lukasbower/seL4_15/include/object.h" 1
-/*
- * Copyright 2014, General Dynamics C4 Systems
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-
-# 1 "/Users/lukasbower/seL4_15/include/object/objecttype.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/cspace.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7544,7 +9004,114 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/object/cap.h" 1
+struct lookupCap_ret {
+    exception_t status;
+    cap_t cap;
+};
+typedef struct lookupCap_ret lookupCap_ret_t;
+
+struct lookupCapAndSlot_ret {
+    exception_t status;
+    cap_t cap;
+    cte_t *slot;
+};
+typedef struct lookupCapAndSlot_ret lookupCapAndSlot_ret_t;
+
+struct lookupSlot_raw_ret {
+    exception_t status;
+    cte_t *slot;
+};
+typedef struct lookupSlot_raw_ret lookupSlot_raw_ret_t;
+
+struct lookupSlot_ret {
+    exception_t status;
+    cte_t *slot;
+};
+typedef struct lookupSlot_ret lookupSlot_ret_t;
+
+struct resolveAddressBits_ret {
+    exception_t status;
+    cte_t *slot;
+    word_t bitsRemaining;
+};
+typedef struct resolveAddressBits_ret resolveAddressBits_ret_t;
+
+lookupCap_ret_t lookupCap(tcb_t *thread, cptr_t cPtr);
+lookupCapAndSlot_ret_t lookupCapAndSlot(tcb_t *thread, cptr_t cPtr);
+lookupSlot_raw_ret_t lookupSlot(tcb_t *thread, cptr_t capptr);
+lookupSlot_ret_t lookupSlotForCNodeOp(bool_t isSource,
+                                      cap_t root, cptr_t capptr,
+                                      word_t depth);
+lookupSlot_ret_t lookupSourceSlot(cap_t root, cptr_t capptr,
+                                  word_t depth);
+lookupSlot_ret_t lookupTargetSlot(cap_t root, cptr_t capptr,
+                                  word_t depth);
+lookupSlot_ret_t lookupPivotSlot(cap_t root, cptr_t capptr,
+                                 word_t depth);
+resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap,
+                                            cptr_t capptr,
+                                            word_t n_bits);
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/benchmark/benchmark_track.h" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/benchmark/benchmark_utilisation.h" 1
+/*
+ * Copyright 2016, General Dynamics C4 Systems
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
+
+
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/benchmark_utilisation_types.h" 1
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+       
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/benchmark/benchmark_utilisation.h" 2
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c" 2
+
+
+
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/faulthandler.h" 1
+/*
+ * Copyright 2014, General Dynamics C4 Systems
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object.h" 1
+/*
+ * Copyright 2014, General Dynamics C4 Systems
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
+
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/objecttype.h" 1
+/*
+ * Copyright 2014, General Dynamics C4 Systems
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
+
+
+
+
+
+
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/cap.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7566,8 +9133,8 @@ struct finaliseCap_ret {
     cap_t cleanupInfo;
 };
 typedef struct finaliseCap_ret finaliseCap_ret_t;
-# 15 "/Users/lukasbower/seL4_15/include/object/objecttype.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/objecttype.h" 1
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/objecttype.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/objecttype.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7606,9 +9173,9 @@ static inline void Arch_postCapDeletion(cap_t cap)
 static inline __attribute__((__const__)) bool_t Arch_isIRQControlDescendant(cap_t cap)
 {
 
-    return cap_get_capType(cap) == cap_sgi_signal_cap;
 
 
+    return false;
 
 }
 
@@ -7624,17 +9191,13 @@ static inline __attribute__((__const__)) bool_t Arch_isIRQControlDescendant(cap_
 static inline __attribute__((__const__)) bool_t Arch_isMDBParentOf(cap_t cap_a, cap_t cap_b, bool_t firstBadged)
 {
     switch (cap_get_capType(cap_a)) {
-
-    case cap_sgi_signal_cap:
-        return !firstBadged;
-        break;
-# 77 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/objecttype.h"
+# 77 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/objecttype.h"
     default:
         return true;
     }
 }
-# 16 "/Users/lukasbower/seL4_15/include/object/objecttype.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/object/interrupt.h" 1
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/objecttype.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/interrupt.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7646,7 +9209,7 @@ static inline __attribute__((__const__)) bool_t Arch_isMDBParentOf(cap_t cap_a, 
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/interrupt.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/interrupt.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7659,13 +9222,13 @@ static inline __attribute__((__const__)) bool_t Arch_isMDBParentOf(cap_t cap_a, 
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/plat/default/plat/machine.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 14 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/interrupt.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/interrupt.h" 2
 
 exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
                                             cte_t *srcSlot, word_t *buffer);
@@ -7676,9 +9239,7 @@ exception_t decodeSGISignalInvocation(word_t invLabel, word_t length,
 /* Handle a platform-reserved IRQ. */
 static inline void handleReservedIRQ(irq_t irq)
 {
-# 52 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/interrupt.h"
-    printf("Received unhandled reserved IRQ: 0x%lx\n", (irq));
-
+# 54 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/interrupt.h"
 }
 
 
@@ -7688,19 +9249,19 @@ static inline exception_t Arch_checkIRQ(word_t irq_w)
         current_syscall_error.type = seL4_RangeError;
         current_syscall_error.rangeErrorMin = 0;
         current_syscall_error.rangeErrorMax = maxIRQ;
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Rejecting request for IRQ %u. IRQ is out of range [0..%u]." ">>" "\033[0m" "\n", 0lu, __func__, 63, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (int)irq_w, maxIRQ); } while (0);
+        ;
         return EXCEPTION_SYSCALL_ERROR;
     }
     return EXCEPTION_NONE;
 }
-# 13 "/Users/lukasbower/seL4_15/include/object/interrupt.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/plat/default/plat/machine.h" 1
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/interrupt.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 14 "/Users/lukasbower/seL4_15/include/object/interrupt.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/interrupt.h" 2
 
 exception_t decodeIRQControlInvocation(word_t invLabel, word_t length,
                                        cte_t *srcSlot, word_t *buffer);
@@ -7714,7 +9275,7 @@ void deletedIRQHandler(irq_t irq);
 void handleInterrupt(irq_t irq);
 bool_t isIRQActive(irq_t irq);
 void setIRQState(irq_state_t irqState, irq_t irq);
-# 17 "/Users/lukasbower/seL4_15/include/object/objecttype.h" 2
+# 17 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/objecttype.h" 2
 
 deriveCap_ret_t deriveCap(cte_t *slot, cap_t cap);
 finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed);
@@ -7727,7 +9288,7 @@ cap_t createObject(object_t t, void *regionBase, word_t, bool_t deviceMemory);
 void createNewObjects(object_t t, cte_t *parent,
                       cte_t *destCNode, word_t destOffset, word_t destLength,
                       void *regionBase, word_t userSize, bool_t deviceMemory);
-# 41 "/Users/lukasbower/seL4_15/include/object/objecttype.h"
+# 41 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/objecttype.h"
 exception_t decodeInvocation(word_t invLabel, word_t length,
                              cptr_t capIndex, cte_t *slot, cap_t cap,
                              bool_t block, bool_t call, word_t *buffer);
@@ -7743,7 +9304,7 @@ word_t getObjectSize(word_t t, word_t userObjSize);
 static inline void postCapDeletion(cap_t cap)
 {
     if (cap_get_capType(cap) == cap_irq_handler_cap) {
-        irq_t irq = (cap_irq_handler_cap_get_capIRQ(cap));
+        irq_t irq = (((cap_irq_handler_cap_get_capIRQ(cap)) < 32u*4) ? ((irq_t){.irq = ((cap_irq_handler_cap_get_capIRQ(cap)) - ((cap_irq_handler_cap_get_capIRQ(cap))/32u)*32u), .target_core = ((cap_irq_handler_cap_get_capIRQ(cap)) / 32u)}): ((irq_t){.irq = ((cap_irq_handler_cap_get_capIRQ(cap)) - (4 -1)*32u), .target_core = (0)}));
         deletedIRQHandler(irq);
     } else if (isArchCap(cap)) {
         Arch_postCapDeletion(cap);
@@ -7754,8 +9315,8 @@ word_t __attribute__((__const__)) cap_get_capSizeBits(cap_t cap);
 bool_t __attribute__((__const__)) cap_get_capIsPhysical(cap_t cap);
 void *__attribute__((__const__)) cap_get_capPtr(cap_t cap);
 bool_t __attribute__((__const__)) isCapRevocable(cap_t derivedCap, cap_t srcCap);
-# 11 "/Users/lukasbower/seL4_15/include/object.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/object/notification.h" 1
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/notification.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7775,15 +9336,15 @@ void completeSignal(notification_t *ntfnPtr, tcb_t *tcb);
 void unbindMaybeNotification(notification_t *ntfnPtr);
 void unbindNotification(tcb_t *tcb);
 void bindNotification(tcb_t *tcb, notification_t *ntfnPtr);
-# 39 "/Users/lukasbower/seL4_15/include/object/notification.h"
+# 41 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/notification.h"
 static inline void ntfn_set_active(notification_t *ntfnPtr, word_t badge)
 {
     notification_ptr_set_state(ntfnPtr, NtfnState_Active);
     notification_ptr_set_ntfnMsgIdentifier(ntfnPtr, badge);
 }
-# 12 "/Users/lukasbower/seL4_15/include/object.h" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object.h" 2
 
-# 1 "/Users/lukasbower/seL4_15/include/object/endpoint.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/endpoint.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7810,7 +9371,7 @@ static inline void ep_ptr_set_queue(endpoint_t *epptr, tcb_queue_t queue)
     endpoint_ptr_set_epQueue_head(epptr, (word_t)queue.head);
     endpoint_ptr_set_epQueue_tail(epptr, (word_t)queue.end);
 }
-# 35 "/Users/lukasbower/seL4_15/include/object/endpoint.h"
+# 37 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/endpoint.h"
 void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
              bool_t canGrant, bool_t canGrantReply, tcb_t *thread,
              endpoint_t *epptr);
@@ -7821,11 +9382,11 @@ void cancelAllIPC(endpoint_t *epptr);
 void cancelBadgedSends(endpoint_t *epptr, word_t badge);
 void replyFromKernel_error(tcb_t *thread);
 void replyFromKernel_success_empty(tcb_t *thread);
-# 14 "/Users/lukasbower/seL4_15/include/object.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object.h" 2
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/object/untyped.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/untyped.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7833,7 +9394,7 @@ void replyFromKernel_success_empty(tcb_t *thread);
  */
 
        
-# 16 "/Users/lukasbower/seL4_15/include/object/untyped.h"
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/untyped.h"
 /* It is assumed that every untyped is within seL4_MinUntypedBits and seL4_MaxUntypedBits
  * (inclusive). This means that every untyped stored as seL4_MinUntypedBits
  * subtracted from its size before it is stored in capBlockSize, and
@@ -7855,21 +9416,21 @@ exception_t invokeUntyped_Retype(cte_t *srcSlot, bool_t reset,
                                  void *retypeBase, object_t newType, word_t userSize,
                                  cte_t *destCNode, word_t destOffset, word_t destLength,
                                  bool_t deviceMemory);
-# 18 "/Users/lukasbower/seL4_15/include/object.h" 2
-# 10 "/Users/lukasbower/seL4_15/include/kernel/faulthandler.h" 2
-# 22 "/Users/lukasbower/seL4_15/include/kernel/faulthandler.h"
+# 18 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object.h" 2
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/faulthandler.h" 2
+# 22 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/faulthandler.h"
 exception_t sendFaultIPC(tcb_t *tptr);
 void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1);
 
 void handleFault(tcb_t *tptr);
-# 18 "/Users/lukasbower/seL4_15/src/api/syscall.c" 2
+# 18 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c" 2
 
 
 
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/string.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/string.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -7883,8 +9444,8 @@ void handleFault(tcb_t *tptr);
 word_t strnlen(const char *s, word_t maxlen);
 word_t strlcpy(char *dest, const char *src, word_t size);
 word_t strlcat(char *dest, const char *src, word_t size);
-# 25 "/Users/lukasbower/seL4_15/src/api/syscall.c" 2
-# 1 "/Users/lukasbower/seL4_15/include/kernel/traps.h" 1
+# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/traps.h" 1
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -7895,7 +9456,7 @@ word_t strlcat(char *dest, const char *src, word_t size);
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/kernel/traps.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/kernel/traps.h" 1
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -7910,12 +9471,12 @@ word_t strlcat(char *dest, const char *src, word_t size);
 
 static inline void arch_c_entry_hook(void)
 {
-    arm_save_thread_id(ksCurThread);
+    arm_save_thread_id(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
 }
 
 static inline void arch_c_exit_hook(void)
 {
-    arm_load_thread_id(ksCurThread);
+    arm_load_thread_id(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
 }
 
 void __attribute__((externally_visible)) __attribute__((__noreturn__)) restore_user_context(void);
@@ -7949,8 +9510,8 @@ __attribute__((externally_visible)) __attribute__((__section__(".vectors.text"))
 
 void c_handle_instruction_fault(void)
 __attribute__((externally_visible)) __attribute__((__section__(".vectors.text")));
-# 12 "/Users/lukasbower/seL4_15/include/kernel/traps.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/smp/lock.h" 1
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/traps.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/smp/lock.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7964,7 +9525,7 @@ __attribute__((externally_visible)) __attribute__((__section__(".vectors.text"))
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/smp/ipi.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/smp/ipi.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7975,14 +9536,14 @@ __attribute__((externally_visible)) __attribute__((__section__(".vectors.text"))
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/plat/default/plat/machine.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 12 "/Users/lukasbower/seL4_15/include/smp/ipi.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/smp/ipi.h" 1
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/smp/ipi.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/smp/ipi.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -7990,9 +9551,246 @@ __attribute__((externally_visible)) __attribute__((__section__(".vectors.text"))
  */
 
        
-# 13 "/Users/lukasbower/seL4_15/include/smp/ipi.h" 2
-# 15 "/Users/lukasbower/seL4_15/include/smp/lock.h" 2
-# 13 "/Users/lukasbower/seL4_15/include/kernel/traps.h" 2
+
+
+
+
+typedef enum {
+    IpiRemoteCall_Stall,
+    IpiRemoteCall_InvalidateTranslationSingle,
+    IpiRemoteCall_InvalidateTranslationASID,
+    IpiRemoteCall_InvalidateTranslationAll,
+    IpiRemoteCall_switchFpuOwner,
+    IpiRemoteCall_MaskPrivateInterrupt,
+
+    IpiRemoteCall_DeactivatePrivateInterrupt,
+
+
+
+
+    /* Add relevant calls here upon required */
+    IpiNumArchRemoteCall
+} IpiRemoteCall_t;
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/smp/ipi.h" 2
+
+
+
+
+typedef struct {
+    word_t count; /* IPI barrier for remote call synchronization */
+    word_t globalsense;
+    word_t totalCoreBarrier; /* number of cores involved in IPI 'in progress' */
+    IpiRemoteCall_t remoteCall; /* the remote call being requested */
+    word_t args[3 /* Maximum number of parameters to remote function */]; /* data to be passed to the remote call function */
+} ipi_state_t;
+
+void ipi_wait(void);
+
+/* Architecture independent function for sending handling pre-hardware-send IPIs */
+void generic_ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking);
+
+/* An architecture/platform should implement this function either as a wrapper to
+ * its own arch_ipi_send_mask() or using the generic_ipi_send_mask() function
+ * provided to be architecture agnostic.
+ */
+void ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking);
+
+/* Hardware implementation for sending IPIs */
+void ipi_send_target(irq_t irq, word_t cpuTargetList);
+
+/* An architecture/platform should implement this function */
+void handleRemoteCall(IpiRemoteCall_t call, word_t arg0, word_t arg1, word_t arg2, bool_t irqPath);
+
+/* This function switches the core it is called on to the idle thread,
+ * in order to avoid IPI storms. If the core is waiting on the lock, the actual
+ * switch will not occur until the core attempts to obtain the lock, at which
+ * point the core will capture the pending IPI, which is discarded.
+
+ * The core who triggered the store is responsible for triggering a reschedule,
+ * or this call will idle forever */
+void ipiStallCoreCallback(bool_t irqPath);
+
+/* IPIs could be handled, both using hardware interrupts and software flag
+ * in CLH lock. 'irqPath' is used to differentiate the caller path, i.e.
+ * if it is called while waiting on the lock to handle the IRQ or not. The
+ * remote call handler, would decide if 'handleIPI' should return base
+ * on this value, as IRQs could be re/triggered asynchronous */
+void handleIPI(irq_t irq, bool_t irqPath);
+
+/*
+ * Run a synchronous function on all cores specified by mask. Return when target cores
+ * have all executed the function. Caller must hold the lock.
+ *
+ * @param func the function to run
+ * @param data1 passed to the function as first parameter
+ * @param data2 passed to the function as second parameter
+ * @param mask cores to run function on
+ */
+void doRemoteMaskOp(IpiRemoteCall_t func, word_t data1, word_t data2, word_t data3, word_t mask);
+
+/* Run a synchronous function on a core specified by cpu.
+ *
+ * @param func the function to run
+ * @param data1 passed to the function as first parameter
+ * @param data2 passed to the function as second parameter
+ * @param cpu core to run function on
+ */
+static void inline doRemoteOp(IpiRemoteCall_t func, word_t data1, word_t data2, word_t data3, word_t cpu)
+{
+    doRemoteMaskOp(func, data1, data2, data3, (1ul << (cpu)));
+}
+
+/* List of wrapper functions
+ *
+ * doRemote[Mask]Op0Arg: do remote operation without any argument
+ * doRemote[Mask]Op1Arg: do remote operation with one argument
+ * doRemote[Mask]Op2Arg: do remote operation with two arguments
+ * These should be used in favour of directly calling 'doRemote[Mask]Op'
+ * in case arguments change in future.
+ *
+ * @param func the function to run
+ * @param data passed to the function as parameters
+ * @param cpu[mask] cores to run function on
+ */
+static void inline doRemoteMaskOp0Arg(IpiRemoteCall_t func, word_t mask)
+{
+    doRemoteMaskOp(func, 0, 0, 0, mask);
+}
+
+static void inline doRemoteMaskOp1Arg(IpiRemoteCall_t func, word_t data1, word_t mask)
+{
+    doRemoteMaskOp(func, data1, 0, 0, mask);
+}
+
+static void inline doRemoteMaskOp2Arg(IpiRemoteCall_t func, word_t data1, word_t data2, word_t mask)
+{
+    doRemoteMaskOp(func, data1, data2, 0, mask);
+}
+
+static void inline doRemoteMaskOp3Arg(IpiRemoteCall_t func, word_t data1, word_t data2, word_t data3, word_t mask)
+{
+    doRemoteMaskOp(func, data1, data2, data3, mask);
+}
+
+static void inline doRemoteOp0Arg(IpiRemoteCall_t func, word_t cpu)
+{
+    doRemoteOp(func, 0, 0, 0, cpu);
+}
+
+static void inline doRemoteOp1Arg(IpiRemoteCall_t func, word_t data1, word_t cpu)
+{
+    doRemoteOp(func, data1, 0, 0, cpu);
+}
+
+static void inline doRemoteOp2Arg(IpiRemoteCall_t func, word_t data1, word_t data2, word_t cpu)
+{
+    doRemoteOp(func, data1, data2, 0, cpu);
+}
+
+static void inline doRemoteOp3Arg(IpiRemoteCall_t func, word_t data1, word_t data2, word_t data3, word_t cpu)
+{
+    doRemoteOp(func, data1, data2, data3, cpu);
+}
+
+/* This is asynchronous call and could be called outside the lock.
+ * Returns immediately.
+ *
+ * @param mask cores to request rescheduling
+ */
+void doMaskReschedule(word_t mask);
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/smp/lock.h" 2
+
+
+
+
+/* CLH lock is FIFO lock for machines with coherent caches (coherent-FIFO lock).
+ * See ftp://ftp.cs.washington.edu/tr/1993/02/UW-CSE-93-02-02.pdf */
+
+typedef enum {
+    CLHState_Granted = 0,
+    CLHState_Pending
+} clh_req_state_t;
+
+/* Lock request */
+typedef struct clh_req {
+    clh_req_state_t state;
+} __attribute__((__aligned__((1ul << (6))))) clh_req_t;
+
+/* Our node (called "Process" in the paper) */
+typedef struct clh_node {
+    clh_req_t *watch; // Used by predecessor to grant the lock to us.
+    clh_req_t *myreq; // Used to grant the lock to our successor.
+    /* This is the software blocking IPI flag */
+    word_t ipi;
+} __attribute__((__aligned__((1ul << (6))))) clh_node_t;
+
+typedef struct clh_lock {
+    clh_req_t request[4 + 1];
+    clh_node_t node[4];
+
+    clh_req_t *tail;
+
+    /* Global IPI state */
+    ipi_state_t ipi;
+} __attribute__((__aligned__(2048))) clh_lock_t;
+
+extern clh_lock_t big_kernel_lock;
+__attribute__((__section__(".boot.text"))) void clh_lock_init(void);
+
+static inline bool_t __attribute__((always_inline)) clh_is_ipi_pending(word_t cpu)
+{
+    /* Asssure IPI data is accessed only when this flag is set */
+    return __atomic_load_n(&big_kernel_lock.node[cpu].ipi, 2);
+}
+
+static inline void __attribute__((always_inline)) clh_lock_acquire(bool_t irqPath)
+{
+    word_t cpu = getCurrentCPUIndex();
+    clh_node_t *node = &big_kernel_lock.node[cpu];
+
+    /* Tell successor to wait */
+    node->myreq->state = CLHState_Pending;
+    /* Enqueue our request */
+    node->watch = __atomic_exchange_n(&big_kernel_lock.tail, node->myreq, 4);
+
+    /* Wait until predecessor finishes */
+    while (node->watch->state != CLHState_Granted) {
+        /* As we are in a loop we need to ensure that any loads of future iterations of the
+         * loop are performed after this one */
+        __atomic_thread_fence(2);
+        if (clh_is_ipi_pending(cpu)) {
+            /* we only handle irq_remote_call_ipi here as other type of IPIs
+             * are async and could be delayed. 'handleIPI' may not return
+             * based on value of the 'irqPath'. */
+            handleIPI(((irq_t){.irq = (0), .target_core = (cpu)}), irqPath);
+            /* We do not need to perform a memory release here as we would have only modified
+             * local state that we do not need to make visible */
+        }
+        arch_pause();
+    }
+
+    /* make sure no resource access passes from this point */
+    __atomic_thread_fence(2);
+}
+
+static inline void __attribute__((always_inline)) clh_lock_release(void)
+{
+    clh_node_t *node = &big_kernel_lock.node[getCurrentCPUIndex()];
+
+    /* make sure no resource access passes from this point */
+    __atomic_thread_fence(3);
+
+    /* Pass lock to successor */
+    node->myreq->state = CLHState_Granted;
+    /* Take ownership of watched request, to use next time we take the lock */
+    node->myreq = node->watch;
+}
+
+static inline bool_t __attribute__((always_inline)) clh_is_self_in_queue(void)
+{
+    return big_kernel_lock.node[getCurrentCPUIndex()].myreq->state == CLHState_Pending;
+}
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/traps.h" 2
 
 /* This C function should be the first thing called from C after entry from
  * assembly. It provides a single place to do any entry work that is not
@@ -8011,96 +9809,11 @@ static inline void c_entry_hook(void)
  * in C before leaving the kernel */
 static inline void c_exit_hook(void)
 {
-# 45 "/Users/lukasbower/seL4_15/include/kernel/traps.h"
-    ksKernelEntry.path = Entry_Unknown;
-
-
+# 48 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/traps.h"
     arch_c_exit_hook();
 }
-# 26 "/Users/lukasbower/seL4_15/src/api/syscall.c" 2
-
-
-
-
-
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/capdl.h" 1
-/*
- * Copyright 2014, General Dynamics C4 Systems
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-
-# 1 "/Users/lukasbower/seL4_15/include/machine/capdl.h" 1
-/*
- * Copyright 2014, General Dynamics C4 Systems
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-
-       
-
-
-
-/* helpers */
-void add_to_seen(cap_t c);
-void reset_seen_list(void);
-bool_t seen(cap_t c);
-bool_t same_cap(cap_t a, cap_t b);
-bool_t root_or_idle_tcb(tcb_t *tcb);
-word_t get_tcb_sp(tcb_t *tcb);
-
-/* common */
-void debug_capDL(void);
-
-
-
-
-
-void obj_tcb_print_cnodes(cap_t cnode, tcb_t *tcb);
-void print_caps(void);
-void print_objects(void);
-void print_cap(cap_t cap);
-void print_object(cap_t cap);
-
-void obj_tcb_print_attrs(tcb_t *tcb);
-void obj_sc_print_attrs(cap_t sc);
-void obj_cnode_print_attrs(cap_t cnode);
-void obj_ut_print_attrs(cte_t *slot, tcb_t *tcb);
-
-void obj_tcb_print_slots(tcb_t *tcb);
-void obj_cnode_print_slots(tcb_t *tcb);
-void obj_irq_print_slots(cap_t irq_cap);
-void obj_irq_print_maps(void);
-
-void cap_ep_print_attrs(cap_t ep);
-void cap_ntfn_print_attrs(cap_t ntfn);
-void cap_cnode_print_attrs(cap_t cnode);
-
-/* arch specific functions */
-void print_ipc_buffer_slot(tcb_t *tcb);
-/* TBD: currently the capDL extractor declaring an object for every entry in the vspace.
- * However, frames can be mapped into multiple locations but sould only be declared once.
- */
-void obj_vtable_print_slots(tcb_t *tcb);
-
-void print_cap_arch(cap_t cap);
-void print_object_arch(cap_t cap);
-void obj_tcb_print_vtable(tcb_t *tcb);
-# 11 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/capdl.h" 2
-# 21 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/capdl.h"
-static inline void obj_asidpool_print_attrs(cap_t asid_cap)
-{
-    printf("(asid_high: 0x%lx)\n", (long unsigned int)((cap_asid_pool_cap_get_capASIDBase(asid_cap)) >> asidLowBits));
-}
-# 32 "/Users/lukasbower/seL4_15/src/api/syscall.c" 2
-
-
-
-
-
+# 26 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c" 2
+# 37 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
 /**
  * FIXME: This is a temporary hack to prevent the printing of incorrect
  *        spurious interrupt warnings on MCS when checkInterrupt() is called
@@ -8110,28 +9823,28 @@ static inline void obj_asidpool_print_attrs(cap_t asid_cap)
  *        https://github.com/seL4/seL4/pull/1544.
  **/
 
-static inline void checkInterrupt(bool_t was_interrupt_entry)
 
 
+static inline void checkInterrupt(void)
 
 {
     irq_t irq;
 
     irq = getActiveIRQ();
-    if ((irq) != (irqInvalid)) {
+    if ((irq.irq) != (irqInvalid.irq)) {
         handleInterrupt(irq);
     } else {
 
-        if (was_interrupt_entry) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Spurious interrupt!" ">>" "\033[0m" "\n", 0lu, __func__, 59, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
-        }
+
+
+
 
         handleSpuriousIRQ();
     }
 }
 
 
-
+/** Part of the temporary hack above **/
 
 
 
@@ -8147,7 +9860,7 @@ exception_t handleInterruptEntry(void)
 
 
 
-    checkInterrupt(/* was_interrupt_entry */ true);
+    checkInterrupt();
 
 
 
@@ -8163,70 +9876,9 @@ exception_t handleInterruptEntry(void)
 
 exception_t handleUnknownSyscall(word_t w)
 {
-
-    if (w == SysDebugPutChar) {
-        kernel_putchar(getRegister(ksCurThread, capRegister));
-        return EXCEPTION_NONE;
-    }
-    if (w == SysDebugDumpScheduler) {
-
-        debug_dumpScheduler();
-
-        return EXCEPTION_NONE;
-    }
-
-
-    if (w == SysDebugHalt) {
-        tcb_t *__attribute__((unused)) tptr = ksCurThread;
-        printf("Debug halt syscall from user thread %p \"%s\"\n", tptr, ((debug_tcb_t *)(((cte_t *)((word_t)(tptr)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName);
-        halt();
-    }
-    if (w == SysDebugSnapshot) {
-        tcb_t *__attribute__((unused)) tptr = ksCurThread;
-        printf("Debug snapshot syscall from user thread %p \"%s\"\n",
-               tptr, ((debug_tcb_t *)(((cte_t *)((word_t)(tptr)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName);
-        debug_capDL();
-        return EXCEPTION_NONE;
-    }
-    if (w == SysDebugCapIdentify) {
-        word_t cptr = getRegister(ksCurThread, capRegister);
-        lookupCapAndSlot_ret_t lu_ret = lookupCapAndSlot(ksCurThread, cptr);
-        word_t cap_type = cap_get_capType(lu_ret.cap);
-        setRegister(ksCurThread, capRegister, cap_type);
-        return EXCEPTION_NONE;
-    }
-
-    if (w == SysDebugNameThread) {
-        /* This is a syscall meant to aid debugging, so if anything goes wrong
-         * then assume the system is completely misconfigured and halt */
-        const char *name;
-        word_t len;
-        word_t cptr = getRegister(ksCurThread, capRegister);
-        lookupCapAndSlot_ret_t lu_ret = lookupCapAndSlot(ksCurThread, cptr);
-        /* ensure we got a TCB cap */
-        word_t cap_type = cap_get_capType(lu_ret.cap);
-        if (cap_type != cap_thread_cap) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "SysDebugNameThread: cap is not a TCB, halting" ">>" "\033[0m" "\n", 0lu, __func__, 142, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
-            halt();
-        }
-        /* Add 1 to the IPC buffer to skip the message info word */
-        name = (const char *)(lookupIPCBuffer(true, ksCurThread) + 1);
-        if (!name) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "SysDebugNameThread: Failed to lookup IPC buffer, halting" ">>" "\033[0m" "\n", 0lu, __func__, 148, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
-            halt();
-        }
-        /* ensure the name isn't too long */
-        len = strnlen(name, seL4_MsgMaxLength * sizeof(word_t));
-        if (len == seL4_MsgMaxLength * sizeof(word_t)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "SysDebugNameThread: Name too long, halting" ">>" "\033[0m" "\n", 0lu, __func__, 154, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
-            halt();
-        }
-        setThreadName(((tcb_t *)(cap_thread_cap_get_capTCBPtr(lu_ret.cap))), name);
-        return EXCEPTION_NONE;
-    }
-# 234 "/Users/lukasbower/seL4_15/src/api/syscall.c"
-    { { current_fault = seL4_Fault_UnknownSyscall_new(w); handleFault(ksCurThread); } }
-# 251 "/Users/lukasbower/seL4_15/src/api/syscall.c"
+# 247 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
+    { { current_fault = seL4_Fault_UnknownSyscall_new(w); handleFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread); } }
+# 264 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
     schedule();
     activateThread();
 
@@ -8235,7 +9887,7 @@ exception_t handleUnknownSyscall(word_t w)
 
 exception_t handleUserLevelFault(word_t w_a, word_t w_b)
 {
-    { { current_fault = seL4_Fault_UserException_new(w_a, w_b); handleFault(ksCurThread); } }
+    { { current_fault = seL4_Fault_UserException_new(w_a, w_b); handleFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread); } }
 
 
 
@@ -8247,8 +9899,8 @@ exception_t handleUserLevelFault(word_t w_a, word_t w_b)
 
 exception_t handleVMFaultEvent(vm_fault_type_t vm_faultType)
 {
-    { { exception_t status = handleVMFault(ksCurThread, vm_faultType); if (status != EXCEPTION_NONE) { handleFault(ksCurThread); } } }
-# 280 "/Users/lukasbower/seL4_15/src/api/syscall.c"
+    { { exception_t status = handleVMFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, vm_faultType); if (status != EXCEPTION_NONE) { handleFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread); } } }
+# 293 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
     schedule();
     activateThread();
 
@@ -8268,7 +9920,7 @@ static exception_t handleInvocation(bool_t isCall, bool_t isBlocking)
     word_t length;
     tcb_t *thread;
 
-    thread = ksCurThread;
+    thread = ksSMP[(getCurrentCPUIndex())].system.ksCurThread;
 
     info = messageInfoFromWord(getRegister(thread, msgInfoRegister));
 
@@ -8279,7 +9931,7 @@ static exception_t handleInvocation(bool_t isCall, bool_t isBlocking)
     lu_ret = lookupCapAndSlot(thread, cptr);
 
     if (__builtin_expect(!!(lu_ret.status != EXCEPTION_NONE), 0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Invocation of invalid cap #%lu." ">>" "\033[0m" "\n", 0lu, __func__, 310, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), cptr); } while (0);
+        ;
         current_fault = seL4_Fault_CapFault_new(cptr, false);
 
         if (isBlocking) {
@@ -8294,7 +9946,7 @@ static exception_t handleInvocation(bool_t isCall, bool_t isBlocking)
     status = lookupExtraCaps(thread, buffer, info);
 
     if (__builtin_expect(!!(status != EXCEPTION_NONE), 0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Lookup of extra caps failed." ">>" "\033[0m" "\n", 0lu, __func__, 325, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         if (isBlocking) {
             handleFault(thread);
         }
@@ -8304,6 +9956,11 @@ static exception_t handleInvocation(bool_t isCall, bool_t isBlocking)
     /* Syscall error/Preemptible section */
     length = seL4_MessageInfo_get_length(info);
     if (__builtin_expect(!!(length > n_msgRegisters && !buffer), 0)) {
+        /* If no IPC buffer is present the kernel truncates the maximum message length to n_msgRegisters.
+         * The kernel truncates rather than returns because not all message transfer points in the kernel
+         * are allowed to return an error.
+         */
+        ;
         length = n_msgRegisters;
     }
 
@@ -8338,13 +9995,13 @@ static exception_t handleInvocation(bool_t isCall, bool_t isBlocking)
 
     return EXCEPTION_NONE;
 }
-# 393 "/Users/lukasbower/seL4_15/src/api/syscall.c"
+# 411 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
 static void handleReply(void)
 {
     cte_t *callerSlot;
     cap_t callerCap;
 
-    callerSlot = (((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCaller));
+    callerSlot = (((cte_t *)((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCaller));
     callerCap = callerSlot->cap;
 
     switch (cap_get_capType(callerCap)) {
@@ -8357,8 +10014,8 @@ static void handleReply(void)
         caller = ((tcb_t *)(cap_reply_cap_get_capTCBPtr(callerCap)));
         /* Haskell error:
          * "handleReply: caller must not be the current thread" */
-        do { if (!(caller != ksCurThread)) { _assert_fail("caller != NODE_STATE(ksCurThread)", "/Users/lukasbower/seL4_15/src/api/syscall.c", 411, __func__); } } while(0);
-        doReplyTransfer(ksCurThread, caller, callerSlot,
+        ;
+        doReplyTransfer(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, caller, callerSlot,
                         cap_reply_cap_get_capReplyCanGrant(callerCap));
         return;
     }
@@ -8371,7 +10028,7 @@ static void handleReply(void)
         break;
     }
 
-    _fail("handleReply: invalid caller cap", "/Users/lukasbower/seL4_15/src/api/syscall.c", 425, __func__);
+    halt();
 }
 
 
@@ -8384,14 +10041,14 @@ static void handleRecv(bool_t isBlocking)
     word_t epCPtr;
     lookupCap_ret_t lu_ret;
 
-    epCPtr = getRegister(ksCurThread, capRegister);
+    epCPtr = getRegister(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, capRegister);
 
-    lu_ret = lookupCap(ksCurThread, epCPtr);
+    lu_ret = lookupCap(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, epCPtr);
 
     if (__builtin_expect(!!(lu_ret.status != EXCEPTION_NONE), 0)) {
         /* current_lookup_fault has been set by lookupCap */
         current_fault = seL4_Fault_CapFault_new(epCPtr, true);
-        handleFault(ksCurThread);
+        handleFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
         return;
     }
 
@@ -8400,12 +10057,12 @@ static void handleRecv(bool_t isBlocking)
         if (__builtin_expect(!!(!cap_endpoint_cap_get_capCanReceive(lu_ret.cap)), 0)) {
             current_lookup_fault = lookup_fault_missing_capability_new(0);
             current_fault = seL4_Fault_CapFault_new(epCPtr, true);
-            handleFault(ksCurThread);
+            handleFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
             break;
         }
-# 471 "/Users/lukasbower/seL4_15/src/api/syscall.c"
-        deleteCallerCap(ksCurThread);
-        receiveIPC(ksCurThread, lu_ret.cap, isBlocking);
+# 491 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
+        deleteCallerCap(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
+        receiveIPC(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, lu_ret.cap, isBlocking);
 
         break;
 
@@ -8414,30 +10071,30 @@ static void handleRecv(bool_t isBlocking)
         tcb_t *boundTCB;
         ntfnPtr = ((notification_t *)(cap_notification_cap_get_capNtfnPtr(lu_ret.cap)));
         boundTCB = (tcb_t *)notification_ptr_get_ntfnBoundTCB(ntfnPtr);
-        if (__builtin_expect(!!(!cap_notification_cap_get_capNtfnCanReceive(lu_ret.cap) || (boundTCB && boundTCB != ksCurThread)), 0)
+        if (__builtin_expect(!!(!cap_notification_cap_get_capNtfnCanReceive(lu_ret.cap) || (boundTCB && boundTCB != ksSMP[(getCurrentCPUIndex())].system.ksCurThread)), 0)
                                                                           ) {
             current_lookup_fault = lookup_fault_missing_capability_new(0);
             current_fault = seL4_Fault_CapFault_new(epCPtr, true);
-            handleFault(ksCurThread);
+            handleFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
             break;
         }
 
-        receiveSignal(ksCurThread, lu_ret.cap, isBlocking);
+        receiveSignal(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, lu_ret.cap, isBlocking);
         break;
     }
     default:
         current_lookup_fault = lookup_fault_missing_capability_new(0);
         current_fault = seL4_Fault_CapFault_new(epCPtr, true);
-        handleFault(ksCurThread);
+        handleFault(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
         break;
     }
 }
-# 526 "/Users/lukasbower/seL4_15/src/api/syscall.c"
+# 546 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
 static void handleYield(void)
 {
-# 536 "/Users/lukasbower/seL4_15/src/api/syscall.c"
-    tcbSchedDequeue(ksCurThread);
-    tcbSchedAppend(ksCurThread);
+# 556 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
+    tcbSchedDequeue(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
+    tcbSchedAppend(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
     rescheduleRequired();
 
 }
@@ -8445,14 +10102,14 @@ static void handleYield(void)
 exception_t handleSyscall(syscall_t syscall)
 {
     exception_t ret;
-    { { switch (syscall) { case SysSend: ret = handleInvocation(false, true); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { ; checkInterrupt(/* was_interrupt_entry */ false); } break; case SysNBSend: ret = handleInvocation(false, false); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { ; checkInterrupt(/* was_interrupt_entry */ false); } break; case SysCall: ret = handleInvocation(true, true); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { ; checkInterrupt(/* was_interrupt_entry */ false); } break; case SysRecv: handleRecv(true); break; case SysReply: handleReply(); break; case SysReplyRecv: handleReply(); handleRecv(true); break; case SysNBRecv: handleRecv(false); break; case SysYield: handleYield(); break; default: _fail("Invalid syscall", "/Users/lukasbower/seL4_15/src/api/syscall.c", 634, __func__); } } }
-# 639 "/Users/lukasbower/seL4_15/src/api/syscall.c"
+    { { switch (syscall) { case SysSend: ret = handleInvocation(false, true); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { ; checkInterrupt(); } break; case SysNBSend: ret = handleInvocation(false, false); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { ; checkInterrupt(); } break; case SysCall: ret = handleInvocation(true, true); if (__builtin_expect(!!(ret != EXCEPTION_NONE), 0)) { ; checkInterrupt(); } break; case SysRecv: handleRecv(true); break; case SysReply: handleReply(); break; case SysReplyRecv: handleReply(); handleRecv(true); break; case SysNBRecv: handleRecv(false); break; case SysYield: handleYield(); break; default: halt(); } } }
+# 663 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/api/syscall.c"
     schedule();
     activateThread();
 
     return EXCEPTION_NONE;
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/c_traps.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8461,7 +10118,7 @@ exception_t handleSyscall(syscall_t syscall)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/fastpath/fastpath.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/fastpath/fastpath.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8471,7 +10128,7 @@ exception_t handleSyscall(syscall_t syscall)
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8485,7 +10142,7 @@ exception_t handleSyscall(syscall_t syscall)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/armv/armv8-a/64/armv/context_switch.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/armv/armv8-a/64/armv/context_switch.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8514,8 +10171,8 @@ static inline void armv_contextSwitch(vspace_root_t *vspace, asid_t asid)
 
     setCurrentUserVSpaceRoot(ttbr_new(asid, addrFromPPtr(vspace)));
 }
-# 15 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/model/statedata.h" 1
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/model/statedata.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8523,7 +10180,7 @@ static inline void armv_contextSwitch(vspace_root_t *vspace, asid_t asid)
  */
 
        
-# 23 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/model/statedata.h"
+# 23 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/model/statedata.h"
 /* The top level asid mapping table */
 extern asid_pool_t *armKSASIDTable[(1ul << (asidHighBits))] __attribute__((externally_visible));
 
@@ -8535,9 +10192,9 @@ extern pte_t armKSGlobalKernelPGD[(1ul << (9))] __attribute__((externally_visibl
 extern pte_t armKSGlobalKernelPUD[(1ul << (9))] __attribute__((externally_visible));
 extern pte_t armKSGlobalKernelPDs[(1ul << (9))][(1ul << (9))] __attribute__((externally_visible));
 extern pte_t armKSGlobalKernelPT[(1ul << (9))] __attribute__((externally_visible));
-# 16 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
 
-# 1 "/Users/lukasbower/seL4_15/include/machine/fpu.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/fpu.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8549,7 +10206,7 @@ extern pte_t armKSGlobalKernelPT[(1ul << (9))] __attribute__((externally_visible
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/fpu.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/fpu.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8557,7 +10214,7 @@ extern pte_t armKSGlobalKernelPT[(1ul << (9))] __attribute__((externally_visible
  */
 
        
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/fpu.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/fpu.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8716,11 +10373,11 @@ static inline void disableFpu(void)
         disableFpuEL0();
     }
 }
-# 9 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/fpu.h" 2
+# 9 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/fpu.h" 2
 
 bool_t fpsimd_HWCapTest(void);
 bool_t fpsimd_init(void);
-# 13 "/Users/lukasbower/seL4_15/include/machine/fpu.h" 2
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/fpu.h" 2
 
 
 
@@ -8735,7 +10392,7 @@ void switchFpuOwner(tcb_t *new_owner, word_t cpu);
 /* Returns whether or not the passed thread is using the current active fpu state */
 static inline bool_t nativeThreadUsingFPU(tcb_t *thread)
 {
-    return thread == ksCurFPUOwner;
+    return thread == ksSMP[(thread->tcbAffinity)].system.ksCurFPUOwner;
 }
 
 static inline void __attribute__((always_inline)) lazyFPURestore(tcb_t *thread)
@@ -8748,7 +10405,7 @@ static inline void __attribute__((always_inline)) lazyFPURestore(tcb_t *thread)
         switchLocalFpuOwner(thread);
     }
 }
-# 18 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
+# 18 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h" 2
 
 
 /* When building the fastpath the assembler in traps.S makes these
@@ -8780,9 +10437,9 @@ switchToThread_fp(tcb_t *thread, vspace_root_t *vroot, pde_t stored_hw_asid)
     lazyFPURestore(thread);
 
 
-    ksCurThread = thread;
+    ksSMP[(getCurrentCPUIndex())].system.ksCurThread = thread;
 }
-# 89 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/fastpath/fastpath.h"
+# 89 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/fastpath/fastpath.h"
 static inline void mdb_node_ptr_mset_mdbNext_mdbRevocable_mdbFirstBadged(
     mdb_node_t *node_ptr, word_t mdbNext,
     word_t mdbRevocable, word_t mdbFirstBadged)
@@ -8842,7 +10499,7 @@ static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) 
 
 
 
-    do {} while (0);
+    do { clh_lock_release(); } while(0);
 
     register word_t badge_reg __asm__("x0") = badge;
     register word_t msgInfo_reg __asm__("x1") = msgInfo;
@@ -8888,9 +10545,9 @@ static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) 
 
     __builtin_unreachable();
 }
-# 11 "/Users/lukasbower/seL4_15/include/arch/arm/arch/fastpath/fastpath.h" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/fastpath/fastpath.h" 2
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/debug.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/debug.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8903,7 +10560,7 @@ static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) 
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/machine/debug.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/machine/debug.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8911,8 +10568,8 @@ static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) 
  */
 
        
-# 14 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/debug.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/armv/armv8-a/64/armv/debug.h" 1
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/debug.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/armv/armv8-a/64/armv/debug.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8920,8 +10577,8 @@ static inline void __attribute__((__noreturn__)) __attribute__((always_inline)) 
  */
 
        
-# 15 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/debug.h" 2
-# 13 "/Users/lukasbower/seL4_15/include/arch/arm/arch/fastpath/fastpath.h" 2
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/debug.h" 2
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/fastpath/fastpath.h" 2
 
 void slowpath(syscall_t syscall)
 __attribute__((__noreturn__));
@@ -8935,7 +10592,7 @@ __attribute__((__noreturn__));
 static inline
 void fastpath_call(word_t cptr, word_t r_msgInfo)
 __attribute__((__noreturn__));
-# 37 "/Users/lukasbower/seL4_15/include/arch/arm/arch/fastpath/fastpath.h"
+# 37 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/fastpath/fastpath.h"
 static inline
 
 
@@ -8943,8 +10600,8 @@ static inline
 void fastpath_reply_recv(word_t cptr, word_t r_msgInfo)
 
 __attribute__((__noreturn__));
-# 10 "/Users/lukasbower/seL4_15/src/arch/arm/64/c_traps.c" 2
-# 18 "/Users/lukasbower/seL4_15/src/arch/arm/64/c_traps.c"
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/c_traps.c" 2
+# 18 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/c_traps.c"
 /** DONT_TRANSLATE */
 void __attribute__((externally_visible)) __attribute__((__noreturn__)) restore_user_context(void)
 {
@@ -8954,7 +10611,7 @@ void __attribute__((externally_visible)) __attribute__((__noreturn__)) restore_u
 
 
 
-    do {} while (0);
+    do { if(clh_is_self_in_queue()) { do { clh_lock_release(); } while(0); } } while(0);
 
     __asm__ volatile(
         "mov     sp, %0                     \n"
@@ -8989,13 +10646,13 @@ void __attribute__((externally_visible)) __attribute__((__noreturn__)) restore_u
         "ldr     x30, [sp, %[LR]]          \n"
         "eret"
         :
-        : "r"(ksCurThread->tcbArch.tcbContext.registers),
+        : "r"(ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbArch.tcbContext.registers),
         [SP_EL0] "i"((31 * 8)), [SPSR_EL1] "i"((33 * 8)), [LR] "i"((30 * 8))
         : "memory"
     );
     __builtin_unreachable();
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/idle.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/idle.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9004,7 +10661,13 @@ void __attribute__((externally_visible)) __attribute__((__noreturn__)) restore_u
 
 
 
-
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/debug.h" 1
+/*
+ * Copyright 2014, General Dynamics C4 Systems
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/idle.c" 2
 
 /** DONT_TRANSLATE */
 void __attribute__((__noreturn__)) __attribute__((noinline)) __attribute__((externally_visible)) halt(void)
@@ -9013,21 +10676,21 @@ void __attribute__((__noreturn__)) __attribute__((noinline)) __attribute__((exte
     do { word_t _v = ((1 << 9) | (1 << 8) | (1 << 7) | (1 << 6)); __asm__ volatile("msr " "daif" ",%x0" :: "r" (_v)); }while(0);
 
 
-    printf("halting...");
 
-    debug_printKernelEntryReason();
+
+
 
 
     idle_thread();
     __builtin_unreachable();
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/thread.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 14 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/thread.c"
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/thread.c"
 void Arch_switchToThread(tcb_t *tcb)
 {
     if (wrap_config_set(0)) {
@@ -9038,7 +10701,7 @@ void Arch_switchToThread(tcb_t *tcb)
 
 __attribute__((__section__(".boot.text"))) void Arch_configureIdleThread(tcb_t *tcb)
 {
-    setRegister(tcb, SPSR_EL1, ((1 << 6) | 5 | 0));
+    setRegister(tcb, SPSR_EL1, ((1 << 6) | 5 | (1 << 8)));
     setRegister(tcb, ELR_EL1, (word_t)&idle_thread);
 }
 
@@ -9054,7 +10717,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 {
     /* Don't need to do anything */
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9066,7 +10729,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/kernel/boot.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/boot.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -9077,7 +10740,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/bootinfo.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/bootinfo.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -9088,7 +10751,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/libsel4/include/sel4/bootinfo_types.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/libsel4/include/sel4/bootinfo_types.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9211,11 +10874,11 @@ typedef struct seL4_BootInfoHeader {
 typedef int __assert_failed_invalid_seL4_BootInfoHeader[(sizeof(seL4_BootInfoHeader) == 2 * sizeof(seL4_Word)) ? 1 : -1] __attribute__((unused));
 
                                                          ;
-# 12 "/Users/lukasbower/seL4_15/include/bootinfo.h" 2
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/bootinfo.h" 2
 
 /* declare object-specific macros to hide the casting */
-# 12 "/Users/lukasbower/seL4_15/include/kernel/boot.h" 2
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/bootinfo.h" 1
+# 12 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/boot.h" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/bootinfo.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9250,7 +10913,7 @@ typedef int __assert_failed_invalid_seL4_BootInfoHeader[(sizeof(seL4_BootInfoHea
  * +1 for each kernel frame (NUM_KERNEL_DEVICE_FRAMES, there might be none)
  * +1 for each region reserved by the boot code (NUM_RESERVED_REGIONS)
  */
-# 13 "/Users/lukasbower/seL4_15/include/kernel/boot.h" 2
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/kernel/boot.h" 2
 
 /*
  * Resolve naming differences between the abstract specifications
@@ -9372,15 +11035,15 @@ static inline __attribute__((__section__(".boot.text"))) pptr_t it_alloc_paging(
 {
     pptr_t allocated = rootserver.paging.start;
     rootserver.paging.start += (1ul << (12));
-    do { if (!(rootserver.paging.start <= rootserver.paging.end)) { _assert_fail("rootserver.paging.start <= rootserver.paging.end", "/Users/lukasbower/seL4_15/include/kernel/boot.h", 134, __func__); } } while(0);
+    ;
     return allocated;
 }
 
 /* return the amount of paging structures required to cover v_reg */
 word_t arch_get_n_paging(v_region_t it_veg);
-# 13 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c" 2
-# 21 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c"
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/arch/api/invocation.h" 1
+# 13 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c" 2
+# 21 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/arch/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -9393,7 +11056,7 @@ word_t arch_get_n_paging(v_region_t it_veg);
  *
  */
        
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/arch/api/sel4_invocation.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/arch/api/sel4_invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -9406,7 +11069,7 @@ word_t arch_get_n_paging(v_region_t it_veg);
  *
  */
        
-# 1 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/api/invocation.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/api/invocation.h" 1
 
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
@@ -9454,7 +11117,9 @@ enum invocation_label {
     TCBResume,
     TCBBindNotification,
     TCBUnbindNotification,
-# 63 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/api/invocation.h"
+
+    TCBSetAffinity,
+# 63 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/api/invocation.h"
     TCBSetTLSBase,
     TCBSetFlags,
     CNodeRevoke,
@@ -9475,10 +11140,10 @@ enum invocation_label {
     DomainSetSet,
     DomainScheduleConfigure,
     DomainScheduleSetStart,
-# 101 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/api/invocation.h"
+# 101 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/api/invocation.h"
     nInvocationLabels
 };
-# 14 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/arch/api/sel4_invocation.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/arch/api/sel4_invocation.h" 2
 
 enum sel4_arch_invocation_label {
     ARMVSpaceClean_Data = nInvocationLabels,
@@ -9488,7 +11153,7 @@ enum sel4_arch_invocation_label {
     ARMSMCCall,
     nSeL4ArchInvocationLabels
 };
-# 14 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/arch/api/invocation.h" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/arch/api/invocation.h" 2
 
 enum arch_invocation_label {
     ARMPageTableMap = nSeL4ArchInvocationLabels,
@@ -9511,22 +11176,19 @@ enum arch_invocation_label {
     ARMPageGetAddress,
     ARMASIDControlMakePool,
     ARMASIDPoolAssign,
-# 51 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/arch/api/invocation.h"
+# 51 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/arch/api/invocation.h"
     ARMIRQIssueIRQHandlerTrigger,
 
-
-
-
-    ARMIRQIssueSGISignal,
-# 94 "/Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/arch/api/invocation.h"
+    ARMIRQIssueIRQHandlerTriggerCore,
+# 94 "/Users/lukasbower/GitHub/cohesix/out/sel4/profile-v2/qemu-smp-production/kernel/gen_headers/arch/api/invocation.h"
     nArchInvocationLabels
 };
-# 22 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c" 2
+# 22 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c" 2
 
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/iospace.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/iospace.h" 1
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9534,7 +11196,7 @@ enum arch_invocation_label {
  */
 
        
-# 26 "/Users/lukasbower/seL4_15/include/arch/arm/arch/object/iospace.h"
+# 26 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/object/iospace.h"
 /* define dummy functions */
 static inline seL4_SlotRegion create_iospace_caps(cap_t root_cnode_cap)
 {
@@ -9574,9 +11236,9 @@ static inline void deleteIOPageTable(cap_t cap)
 static inline void clearIOPageDirectory(cap_t cap)
 {
 }
-# 27 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c" 2
+# 27 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c" 2
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/tlb.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/tlb.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9586,7 +11248,7 @@ static inline void clearIOPageDirectory(cap_t cap)
        
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/smp/ipi_inline.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/smp/ipi_inline.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9594,7 +11256,49 @@ static inline void clearIOPageDirectory(cap_t cap)
  */
 
        
-# 11 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/tlb.h" 2
+
+
+
+
+
+static inline void doRemoteStall(word_t cpu)
+{
+    doRemoteOp0Arg(IpiRemoteCall_Stall, cpu);
+}
+
+
+static inline void doRemoteswitchFpuOwner(tcb_t *new_owner, word_t cpu)
+{
+    doRemoteOp1Arg(IpiRemoteCall_switchFpuOwner, (word_t)new_owner, cpu);
+}
+
+
+static inline void doRemoteInvalidateTranslationSingle(vptr_t vptr, word_t mask)
+{
+    doRemoteMaskOp1Arg(IpiRemoteCall_InvalidateTranslationSingle, vptr, mask);
+}
+
+static inline void doRemoteInvalidateTranslationASID(asid_t asid, word_t mask)
+{
+    doRemoteMaskOp1Arg(IpiRemoteCall_InvalidateTranslationASID, asid, mask);
+}
+
+static inline void doRemoteInvalidateTranslationAll(word_t mask)
+{
+    doRemoteMaskOp0Arg(IpiRemoteCall_InvalidateTranslationAll, mask);
+}
+
+static inline void doRemoteMaskPrivateInterrupt(word_t cpu, word_t disable, word_t irq)
+{
+    doRemoteOp2Arg(IpiRemoteCall_MaskPrivateInterrupt, disable, irq, cpu);
+}
+
+
+static inline void doRemoteDeactivatePrivateInterrupt(word_t cpu, word_t irq)
+{
+    doRemoteOp1Arg(IpiRemoteCall_DeactivatePrivateInterrupt, irq, cpu);
+}
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/tlb.h" 2
 
 
 
@@ -9625,21 +11329,21 @@ static inline void invalidateTranslationAllLocal(void)
 static inline void invalidateTranslationSingle(vptr_t vptr)
 {
     invalidateTranslationSingleLocal(vptr);
-    ;
+    doRemoteInvalidateTranslationSingle(vptr, ((1ul << (4)) - 1ul));
 }
 
 static inline void invalidateTranslationASID(hw_asid_t hw_asid)
 {
     invalidateTranslationASIDLocal(hw_asid);
-    ;
+    doRemoteInvalidateTranslationASID(hw_asid, ((1ul << (4)) - 1ul));
 }
 
 static inline void invalidateTranslationAll(void)
 {
     invalidateTranslationAllLocal();
-    ;
+    doRemoteInvalidateTranslationAll(((1ul << (4)) - 1ul));
 }
-# 29 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c" 2
+# 29 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c" 2
 
 /*
  * Memory types are defined in Memory Attribute Indirection Register.
@@ -9745,14 +11449,14 @@ static word_t __attribute__((__const__)) APFromVMRights(vm_rights_t vm_rights)
         }
 
     default:
-        _fail("Invalid VM rights", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 134, __func__);
+        halt();
     }
 }
 
 
 static inline __attribute__((__const__)) word_t pte_get_AP(pte_t pte)
 {
-    do { if (!(pte_is_page_type(pte))) { _assert_fail("pte_is_page_type(pte)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 141, __func__); } } while(0);
+    ;
     switch (pte_get_pte_type(pte)) {
     case pte_pte_4k_page:
         return pte_pte_4k_page_get_AP(pte);
@@ -9777,7 +11481,7 @@ static vm_rights_t __attribute__((__const__)) vmRightsFromPTE(pte_t pte)
     case 3:
         return VMReadOnly;
     default:
-        _fail("Invalid AP bit", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 166, __func__);
+        halt();
     }
 }
 
@@ -9799,7 +11503,7 @@ vm_rights_t __attribute__((__const__)) maskVMRights(vm_rights_t vm_rights, seL4_
     if (vm_rights == VMReadWrite &&
         !seL4_CapRights_get_capAllowRead(cap_rights_mask) &&
         seL4_CapRights_get_capAllowWrite(cap_rights_mask)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Attempted to make unsupported write only mapping" ">>" "\033[0m" "\n", 0lu, __func__, 188, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
     }
     return VMKernelOnly;
 }
@@ -9823,7 +11527,7 @@ vm_rights_t __attribute__((__const__)) maskVMRights(vm_rights_t vm_rights, seL4_
  */
 __attribute__((__section__(".boot.text"))) void map_kernel_frame(paddr_t paddr, pptr_t vaddr, vm_rights_t vm_rights, vm_attributes_t attributes)
 {
-    do { if (!(vaddr >= 0xffffffffc0000000ul /* 2^64 - 2^30 */)) { _assert_fail("vaddr >= PPTR_TOP", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 212, __func__); } } while(0);
+    ;
 
 
 
@@ -9834,7 +11538,7 @@ __attribute__((__section__(".boot.text"))) void map_kernel_frame(paddr_t paddr, 
     word_t shareable;
     if (vm_attributes_get_armPageCacheable(attributes)) {
         attr_index = NORMAL;
-        shareable = 0;
+        shareable = 3;
     } else {
         attr_index = DEVICE_nGnRnE;
         shareable = 0;
@@ -9859,12 +11563,12 @@ __attribute__((__section__(".boot.text"))) void map_kernel_window(void)
 
 
     /* verify that the kernel window as at the last entry of the PGD */
-    do { if (!((((0xffffff8000000000ul /* 2^64 - 2^39 */) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (9)) - 1ul)) == (1ul << (9)) - 1)) { _assert_fail("GET_KPT_INDEX(PPTR_BASE, KLVL_FRM_ARM_PT_LVL(0)) == BIT(PT_INDEX_BITS) - 1", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 248, __func__); } } while(0);
+    ;
 
-    do { if (!((!((0xffffff8000000000ul /* 2^64 - 2^39 */) & ((1ul << (21)) - 1ul))))) { _assert_fail("IS_ALIGNED(PPTR_BASE, seL4_LargePageBits)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 250, __func__); } } while(0);
+    ;
     /* verify that the kernel device window is 1gb aligned and 1gb in size */
-    do { if (!((((0xffffffffc0000000ul /* 2^64 - 2^30 */) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (9)) - 1ul)) == (1ul << (9)) - 1)) { _assert_fail("GET_KPT_INDEX(PPTR_TOP, KLVL_FRM_ARM_PT_LVL(1)) == BIT(PT_INDEX_BITS) - 1", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 252, __func__); } } while(0);
-    do { if (!((!((0xffffffffc0000000ul /* 2^64 - 2^30 */) & ((1ul << (30)) - 1ul))))) { _assert_fail("IS_ALIGNED(PPTR_TOP, seL4_HugePageBits)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 253, __func__); } } while(0);
+    ;
+    ;
 
     /* place the PUD into the PGD */
     armKSGlobalKernelPGD[(((0xffffff8000000000ul /* 2^64 - 2^39 */) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (9)) - 1ul))] = pte_pte_table_new(
@@ -9891,7 +11595,7 @@ __attribute__((__section__(".boot.text"))) void map_kernel_window(void)
                                                                                                                         paddr,
                                                                                                                         0, /* global */
                                                                                                                         1, /* access flag */
-                                                                                                                        0, /* Inner-shareable if SMP enabled, otherwise unshared */
+                                                                                                                        3, /* Inner-shareable if SMP enabled, otherwise unshared */
                                                                                                                         0, /* VMKernelOnly */
                                                                                                                         NORMAL
                                                                                                                     );
@@ -9926,20 +11630,20 @@ static __attribute__((__section__(".boot.text"))) void map_it_frame_cap(cap_t vs
     vptr_t vptr = cap_frame_cap_get_capFMappedAddress(frame_cap);
     void *pptr = (void *)cap_frame_cap_get_capFBasePtr(frame_cap);
 
-    do { if (!(cap_frame_cap_get_capFMappedASID(frame_cap) != 0)) { _assert_fail("cap_frame_cap_get_capFMappedASID(frame_cap) != 0", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 315, __func__); } } while(0);
+    ;
 
 
 
 
     vspaceRoot += (((vptr) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (((0) == 0 ? 9 : 9))) - 1ul));
-    do { if (!(pte_pte_table_ptr_get_present(vspaceRoot))) { _assert_fail("pte_pte_table_ptr_get_present(vspaceRoot)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 321, __func__); } } while(0);
+    ;
     pud = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(vspaceRoot));
 
     pud += (((vptr) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (((1) == 0 ? 9 : 9))) - 1ul));
-    do { if (!(pte_pte_table_ptr_get_present(pud))) { _assert_fail("pte_pte_table_ptr_get_present(pud)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 325, __func__); } } while(0);
+    ;
     pd = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(pud));
     pd += (((vptr) >> (((9) * (((4) - 1) - ((2)))) + 12)) & ((1ul << (((2) == 0 ? 9 : 9))) - 1ul));
-    do { if (!(pte_pte_table_ptr_get_present(pd))) { _assert_fail("pte_pte_table_ptr_get_present(pd)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 328, __func__); } } while(0);
+    ;
     pt = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(pd));
     *(pt + (((vptr) >> (((9) * (((4) - 1) - ((3)))) + 12)) & ((1ul << (((3) == 0 ? 9 : 9))) - 1ul))) = pte_pte_4k_page_new(
                                                               !executable, /* unprivileged execute never */
@@ -9950,7 +11654,7 @@ static __attribute__((__section__(".boot.text"))) void map_it_frame_cap(cap_t vs
                                                               1, /* not global */
 
                                                               1, /* access flag */
-                                                              0, /* Inner-shareable if SMP enabled, otherwise unshared */
+                                                              3, /* Inner-shareable if SMP enabled, otherwise unshared */
                                                               APFromVMRights(VMReadWrite),
 
 
@@ -9987,17 +11691,17 @@ static __attribute__((__section__(".boot.text"))) void map_it_pt_cap(cap_t vspac
     pte_t *pt = ((pte_t *)(cap_page_table_cap_get_capPTBasePtr(pt_cap)));
     vptr_t vptr = cap_page_table_cap_get_capPTMappedAddress(pt_cap);
 
-    do { if (!(cap_page_table_cap_get_capPTIsMapped(pt_cap))) { _assert_fail("cap_page_table_cap_get_capPTIsMapped(pt_cap)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 376, __func__); } } while(0);
+    ;
 
 
 
 
     vspaceRoot += (((vptr) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (((0) == 0 ? 9 : 9))) - 1ul));
-    do { if (!(pte_pte_table_ptr_get_present(vspaceRoot))) { _assert_fail("pte_pte_table_ptr_get_present(vspaceRoot)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 382, __func__); } } while(0);
+    ;
     pud = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(vspaceRoot));
 
     pud += (((vptr) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (((1) == 0 ? 9 : 9))) - 1ul));
-    do { if (!(pte_pte_table_ptr_get_present(pud))) { _assert_fail("pte_pte_table_ptr_get_present(pud)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 386, __func__); } } while(0);
+    ;
     pd = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(pud));
     *(pd + (((vptr) >> (((9) * (((4) - 1) - ((2)))) + 12)) & ((1ul << (((2) == 0 ? 9 : 9))) - 1ul))) = pte_pte_table_new(
                                                               addrFromPPtr(pt)
@@ -10024,13 +11728,13 @@ static __attribute__((__section__(".boot.text"))) void map_it_pd_cap(cap_t vspac
     pte_t *pd = ((pte_t *)(cap_page_table_cap_get_capPTBasePtr(pd_cap)));
     vptr_t vptr = cap_page_table_cap_get_capPTMappedAddress(pd_cap);
 
-    do { if (!(cap_page_table_cap_get_capPTIsMapped(pd_cap))) { _assert_fail("cap_page_table_cap_get_capPTIsMapped(pd_cap)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 413, __func__); } } while(0);
+    ;
 
 
 
 
     vspaceRoot += (((vptr) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (((0) == 0 ? 9 : 9))) - 1ul));
-    do { if (!(pte_pte_table_ptr_get_present(vspaceRoot))) { _assert_fail("pte_pte_table_ptr_get_present(vspaceRoot)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 419, __func__); } } while(0);
+    ;
     pud = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(vspaceRoot));
 
     *(pud + (((vptr) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (((1) == 0 ? 9 : 9))) - 1ul))) = pte_pte_table_new(
@@ -10058,7 +11762,7 @@ static __attribute__((__section__(".boot.text"))) void map_it_pud_cap(cap_t vspa
     pte_t *pud = ((pte_t *)(cap_page_table_cap_get_capPTBasePtr(pud_cap)));
     vptr_t vptr = cap_page_table_cap_get_capPTMappedAddress(pud_cap);
 
-    do { if (!(cap_page_table_cap_get_capPTIsMapped(pud_cap))) { _assert_fail("cap_page_table_cap_get_capPTIsMapped(pud_cap)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 447, __func__); } } while(0);
+    ;
 
     *(pgd + (((vptr) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (((0) == 0 ? 9 : 9))) - 1ul))) = pte_pte_table_new(
                                                                addrFromPPtr(pud));
@@ -10251,19 +11955,19 @@ word_t *__attribute__((__pure__)) lookupIPCBuffer(bool_t isReceiver, tcb_t *thre
 exception_t checkValidIPCBuffer(vptr_t vptr, cap_t cap)
 {
     if (cap_get_capType(cap) != cap_frame_cap) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IPC Buffer is an invalid cap." ">>" "\033[0m" "\n", 0lu, __func__, 640, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
     if (__builtin_expect(!!(cap_frame_cap_get_capFIsDevice(cap)), 0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Specifying a device frame as an IPC buffer is not permitted." ">>" "\033[0m" "\n", 0lu, __func__, 646, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
     if (!(!((vptr) & ((1ul << (10)) - 1ul)))) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IPC Buffer vaddr 0x%x is not aligned." ">>" "\033[0m" "\n", 0lu, __func__, 652, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (int)vptr); } while (0);
+        ;
         current_syscall_error.type = seL4_AlignmentError;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -10313,7 +12017,7 @@ static pte_t makeUserPagePTE(paddr_t paddr, vm_rights_t vm_rights, vm_attributes
 
 
     /* Inner-shareable if SMP enabled, otherwise unshared (ignored for devices) */
-    word_t shareable = cacheable ? 0 : 0;
+    word_t shareable = cacheable ? 3 : 0;
 
     if (page_size == ARMSmallPage) {
         return pte_pte_4k_page_new(nonexecutable, paddr, nG, 1 /* access flag */,
@@ -10359,7 +12063,7 @@ exception_t handleVMFault(tcb_t *thread, vm_fault_type_t vm_faultType)
     }
 
     default:
-        _fail("Invalid VM fault type", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 748, __func__);
+        halt();
     }
 }
 
@@ -10408,7 +12112,7 @@ static bool_t setVMRootForFlush(vspace_root_t *vspace, asid_t asid)
 {
     cap_t threadRoot;
 
-    threadRoot = (((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap;
+    threadRoot = (((cte_t *)((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap;
 
     if (cap_get_capType(threadRoot) == cap_vspace_cap &&
         cap_vspace_cap_get_capVSIsMapped(threadRoot) &&
@@ -10419,17 +12123,17 @@ static bool_t setVMRootForFlush(vspace_root_t *vspace, asid_t asid)
     armv_contextSwitch(vspace, asid);
     return true;
 }
-# 961 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c"
+# 961 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c"
 static inline void invalidateTLBByASID(asid_t asid)
 {
-# 978 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c"
+# 978 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c"
     invalidateTranslationASID(asid);
 
 }
 
 static inline void invalidateTLBByASIDVA(asid_t asid, vptr_t vaddr)
 {
-# 1000 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c"
+# 1000 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c"
     invalidateTranslationSingle((asid << 48) | vaddr >> 12);
 
 }
@@ -10459,7 +12163,7 @@ void unmapPageTable(asid_t asid, vptr_t vptr, pte_t *target_pt)
         return;
     }
     /* If we found a pt then ptSlot won't be null */
-    do { if (!(ptSlot != ((void *)0))) { _assert_fail("ptSlot != NULL", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 1029, __func__); } } while(0);
+    ;
     *ptSlot = pte_pte_invalid_new();
     cleanByVA_PoU((vptr_t)ptSlot, addrFromPPtr(ptSlot));
     invalidateTLBByASID(asid);
@@ -10495,7 +12199,7 @@ void unmapPage(vm_page_size_t page_size, asid_t asid, vptr_t vptr, pptr_t pptr)
 
     *(lu_ret.ptSlot) = pte_pte_invalid_new();
     cleanByVA_PoU((vptr_t)lu_ret.ptSlot, addrFromPPtr(lu_ret.ptSlot));
-    do { if (!(asid < (1ul << (16)))) { _assert_fail("asid < BIT(16)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 1065, __func__); } } while(0);
+    ;
     invalidateTLBByASIDVA(asid, vptr);
 }
 
@@ -10514,7 +12218,7 @@ void deleteASID(asid_t asid, vspace_root_t *vspace)
 
 
             poolPtr->array[((asid) & ((1ul << (asidLowBits)) - 1ul))] = asid_map_asid_map_none_new();
-            setVMRoot(ksCurThread);
+            setVMRoot(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
         }
     }
 }
@@ -10523,7 +12227,7 @@ void deleteASIDPool(asid_t asid_base, asid_pool_t *pool)
 {
     word_t offset;
 
-    do { if (!((asid_base & ((1ul << (asidLowBits)) - 1ul)) == 0)) { _assert_fail("(asid_base & MASK(asidLowBits)) == 0", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 1093, __func__); } } while(0);
+    ;
 
     if (armKSASIDTable[((asid_base) >> asidLowBits)] == pool) {
         for (offset = 0; offset < (1ul << (asidLowBits)); offset++) {
@@ -10536,7 +12240,7 @@ void deleteASIDPool(asid_t asid_base, asid_pool_t *pool)
             }
         }
         armKSASIDTable[((asid_base) >> asidLowBits)] = ((void *)0);
-        setVMRoot(ksCurThread);
+        setVMRoot(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
     }
 }
 
@@ -10567,11 +12271,13 @@ static void doFlush(word_t invLabel, vptr_t start, vptr_t end, paddr_t pstart)
         /* ...then invalidate the corresponding instruction lines
            to point of unification... */
         invalidateCacheRange_I(start, end, pstart);
+        /* ... then wait for the completion of invalidations... */
+        dsb();
         /* ... and ensure new instructions come from fresh cache lines. */
         isb();
         break;
     default:
-        _fail("Invalid operation, shouldn't get here.\n", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 1141, __func__);
+        halt();
     }
 }
 
@@ -10596,7 +12302,7 @@ static exception_t performVSpaceFlush(word_t invLabel, vspace_root_t *vspaceRoot
             root_switched = setVMRootForFlush(vspaceRoot, asid);
             doFlush(invLabel, start, end, pstart);
             if (root_switched) {
-                setVMRoot(ksCurThread);
+                setVMRoot(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
             }
         }
     }
@@ -10636,7 +12342,7 @@ static exception_t performPageInvocationMap(asid_t asid, cap_t cap, cte_t *ctSlo
 
     cleanByVA_PoU((vptr_t)ptSlot, addrFromPPtr(ptSlot));
     if (__builtin_expect(!!(tlbflush_required), 0)) {
-        do { if (!(asid < (1ul << (16)))) { _assert_fail("asid < BIT(16)", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 1206, __func__); } } while(0);
+        ;
         invalidateTLBByASIDVA(asid, cap_frame_cap_get_capFMappedAddress(cap));
     }
 
@@ -10684,7 +12390,7 @@ static exception_t performPageFlush(word_t invLabel, vspace_root_t *vspaceRoot, 
             root_switched = setVMRootForFlush(vspaceRoot, asid);
             doFlush(invLabel, start, end, pstart);
             if (root_switched) {
-                setVMRoot(ksCurThread);
+                setVMRoot(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
             }
         }
     }
@@ -10696,7 +12402,7 @@ static exception_t performPageGetAddress(pptr_t base_ptr, bool_t call)
     paddr_t base = addrFromPPtr((void *)base_ptr);
 
     tcb_t *thread;
-    thread = ksCurThread;
+    thread = ksSMP[(getCurrentCPUIndex())].system.ksCurThread;
     if (call) {
         word_t *ipcBuffer = lookupIPCBuffer(true, thread);
         setRegister(thread, badgeRegister, 0);
@@ -10704,7 +12410,7 @@ static exception_t performPageGetAddress(pptr_t base_ptr, bool_t call)
         setRegister(thread, msgInfoRegister, wordFromMessageInfo(
                         seL4_MessageInfo_new(0, 0, 0, length)));
     }
-    setThreadState(ksCurThread, ThreadState_Running);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Running);
     return EXCEPTION_NONE;
 }
 
@@ -10725,7 +12431,7 @@ static exception_t performASIDControlInvocation(void *frame, cte_t *slot,
             ((word_t)(frame)) /* capASIDPool  */
         ), parent, slot);
 
-    do { if (!((asid_base & ((1ul << (asidLowBits)) - 1ul)) == 0)) { _assert_fail("(asid_base & MASK(asidLowBits)) == 0", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 1295, __func__); } } while(0);
+    ;
     armKSASIDTable[((asid_base) >> asidLowBits)] = (asid_pool_t *)frame;
 
     return EXCEPTION_NONE;
@@ -10749,7 +12455,7 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
     case ARMVSpaceUnify_Instruction:
 
         if (length < 2) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "VSpaceRoot Flush: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1319, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_TruncatedMessage;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -10759,7 +12465,7 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
 
         /* Check sanity of arguments */
         if (end <= start) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "VSpaceRoot Flush: Invalid range." ">>" "\033[0m" "\n", 0lu, __func__, 1329, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_InvalidArgument;
             current_syscall_error.invalidArgumentNumber = 1;
             return EXCEPTION_SYSCALL_ERROR;
@@ -10767,7 +12473,7 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
 
         /* Don't let applications flush kernel regions. */
         if (end > 0x00007fffffffffff) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "VSpaceRoot Flush: Exceed the user addressable region." ">>" "\033[0m" "\n", 0lu, __func__, 1337, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -10784,14 +12490,14 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
 
         find_ret = findVSpaceForASID(asid);
         if (__builtin_expect(!!(find_ret.status != EXCEPTION_NONE), 0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "VSpaceRoot Flush: No VSpace for ASID" ">>" "\033[0m" "\n", 0lu, __func__, 1354, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_FailedLookup;
             current_syscall_error.failedLookupWasSource = false;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
         if (__builtin_expect(!!(find_ret.vspace_root != vspaceRoot), 0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "VSpaceRoot Flush: Invalid VSpace Cap" ">>" "\033[0m" "\n", 0lu, __func__, 1361, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 0;
             return EXCEPTION_SYSCALL_ERROR;
@@ -10807,7 +12513,7 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
             /* Fail silently, as there can't be any stale cached data (for the
              * given address space), and getting a syscall error because the
              * relevant page is non-resident would be 'astonishing'. */
-            setThreadState(ksCurThread, ThreadState_Restart);
+            setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
             return EXCEPTION_NONE;
         }
 
@@ -10817,7 +12523,7 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
             current_syscall_error.rangeErrorMin = start;
             current_syscall_error.rangeErrorMax = (((start) >> (resolve_ret.ptBitsLeft)) << (resolve_ret.ptBitsLeft)) +
                                                   ((1ul << (resolve_ret.ptBitsLeft)) - 1ul);
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "VSpaceRoot Flush: cannot cross page boundary, valid range is [0x%lx..0x%lx)" ">>" "\033[0m" "\n", 0lu, __func__, 1387, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), current_syscall_error.rangeErrorMin, current_syscall_error.rangeErrorMax); } while (0)
+           
                                                                                                ;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -10825,7 +12531,7 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
 
         /* When in EL1, the mapping must be write-able for ARMVSpaceInvalidate_Data */
         if (invLabel == ARMVSpaceInvalidate_Data && vmRightsFromPTE(pte) != VMReadWrite) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "ARMVSpaceInvalidate_Data: Cannot call on mapping without write rights." ">>" "\033[0m" "\n", 0lu, __func__, 1395, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -10836,7 +12542,7 @@ static exception_t decodeARMVSpaceRootInvocation(word_t invLabel, word_t length,
 
         pstart = frame_base + (start & ((1ul << (resolve_ret.ptBitsLeft)) - 1ul));
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performVSpaceFlush(invLabel, vspaceRoot, asid, start, end - 1, pstart);
 
     default:
@@ -10863,7 +12569,7 @@ static exception_t decodeARMPageTableInvocation(word_t invLabel, word_t length,
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performPageTableInvocationUnmap(cap, cte);
     }
 
@@ -10927,7 +12633,7 @@ static exception_t decodeARMPageTableInvocation(word_t invLabel, word_t length,
     cap = cap_page_table_cap_set_capPTMappedASID(cap, asid);
     cap = cap_page_table_cap_set_capPTMappedAddress(cap, (vaddr & ~((1ul << (ptSlot.ptBitsLeft)) - 1ul)));
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     return performPageTableInvocationMap(cap, cte, pte, ptSlot.ptSlot);
 }
 
@@ -10996,13 +12702,13 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
 
         if (frame_asid != asidInvalid) {
             if (frame_asid != asid) {
-                do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "ARMPageMap: Attempting to remap a frame that does not belong to the passed address space" ">>" "\033[0m" "\n", 0lu, __func__, 1566, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+                ;
                 current_syscall_error.type = seL4_InvalidCapability;
                 current_syscall_error.invalidCapNumber = 1;
                 return EXCEPTION_SYSCALL_ERROR;
 
             } else if (cap_frame_cap_get_capFMappedAddress(cap) != vaddr) {
-                do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "ARMPageMap: Attempting to map frame into multiple addresses" ">>" "\033[0m" "\n", 0lu, __func__, 1572, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+                ;
                 current_syscall_error.type = seL4_InvalidArgument;
                 current_syscall_error.invalidArgumentNumber = 0;
                 return EXCEPTION_SYSCALL_ERROR;
@@ -11028,13 +12734,13 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performPageInvocationMap(asid, cap, cte,
                                         makeUserPagePTE(base, vmRights, attributes, frameSize), lu_ret.ptSlot);
     }
 
     case ARMPageUnmap:
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performPageInvocationUnmap(cap, cte);
 
     case ARMPageClean_Data:
@@ -11048,13 +12754,13 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
         findVSpaceForASID_ret_t find_ret;
 
         if (length < 2) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Page Flush: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1618, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_TruncatedMessage;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
         if (__builtin_expect(!!(cap_frame_cap_get_capFMappedASID(cap) == 0), 0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Page Flush: Frame is not mapped." ">>" "\033[0m" "\n", 0lu, __func__, 1624, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -11064,7 +12770,7 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
 
         find_ret = findVSpaceForASID(asid);
         if (__builtin_expect(!!(find_ret.status != EXCEPTION_NONE), 0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Page Flush: No PGD for ASID" ">>" "\033[0m" "\n", 0lu, __func__, 1634, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_FailedLookup;
             current_syscall_error.failedLookupWasSource = false;
             return EXCEPTION_SYSCALL_ERROR;
@@ -11075,7 +12781,7 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
 
         /* check that the range is sane */
         if (end <= start) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "PageFlush: Invalid range" ">>" "\033[0m" "\n", 0lu, __func__, 1645, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_InvalidArgument;
             current_syscall_error.invalidArgumentNumber = 1;
             return EXCEPTION_SYSCALL_ERROR;
@@ -11084,14 +12790,14 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
         /* start and end are currently relative inside this page */
         page_size = (1ul << (pageBitsForSize(cap_frame_cap_get_capFSize(cap))));
         if (start >= page_size || end > page_size) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Page Flush: Requested range not inside page" ">>" "\033[0m" "\n", 0lu, __func__, 1654, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_InvalidArgument;
             current_syscall_error.invalidArgumentNumber = 0;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
         word_t pstart = addrFromPPtr((void *)cap_frame_cap_get_capFBasePtr(cap)) + start;
-# 1669 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c"
+# 1671 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/kernel/vspace.c"
         /* When in EL1, we are using the user page table for flushing and need to make sure
            the mapping info in the cap is not stale. */
         lookupPTSlot_ret_t lu_ret = lookupPTSlot(find_ret.vspace_root, vaddr);
@@ -11100,7 +12806,7 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
         if (__builtin_expect(!!(lu_ret.ptBitsLeft != pageBitsForSize(cap_frame_cap_get_capFSize(cap)) || !pte_is_page_type(pte) || pte_get_page_base_address(pte) != addrFromPPtr(base_ptr)), 0)
 
                                                                                ) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Page Flush: Attempting to use cap with stale mapping information." ">>" "\033[0m" "\n", 0lu, __func__, 1677, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 0;
             return EXCEPTION_SYSCALL_ERROR;
@@ -11108,18 +12814,18 @@ static exception_t decodeARMFrameInvocation(word_t invLabel, word_t length,
 
         /* When in EL1, the mapping must be writeable for DC IVAC */
         if (invLabel == ARMPageInvalidate_Data && vmRightsFromPTE(pte) != VMReadWrite) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "ARMPageInvalidate_Data: Cannot call on mapping without write rights." ">>" "\033[0m" "\n", 0lu, __func__, 1685, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performPageFlush(invLabel, find_ret.vspace_root, asid, vaddr + start, vaddr + end - 1,
                                 pstart);
     }
 
     case ARMPageGetAddress:
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performPageGetAddress(cap_frame_cap_get_capFBasePtr(cap), call);
 
     default:
@@ -11174,7 +12880,7 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
         for (i = 0; i < (1ul << (asidHighBits)) && armKSASIDTable[i]; i++);
 
         if (__builtin_expect(!!(i == (1ul << (asidHighBits))), 0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "ASIDControlMakePool: No unallocated pools found." ">>" "\033[0m" "\n", 0lu, __func__, 1751, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_DeleteFirst;
 
             return EXCEPTION_SYSCALL_ERROR;
@@ -11209,7 +12915,7 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
             return status;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performASIDControlInvocation(frame, destSlot, parentSlot, asid_base);
     }
 
@@ -11272,600 +12978,27 @@ exception_t decodeARMMMUInvocation(word_t invLabel, word_t length, cptr_t cptr,
 
         asid += i;
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performASIDPoolInvocation(asid, pool, vspaceCapSlot);
     }
 
     default:
-        _fail("Invalid ARM arch cap type", "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c", 1854, __func__);
+        halt();
     }
 }
-
-
-void kernelPrefetchAbort(word_t pc) __attribute__((externally_visible));
-void kernelDataAbort(word_t pc) __attribute__((externally_visible));
-
-void kernelPrefetchAbort(word_t pc)
-{
-    printf("\n\nKERNEL PREFETCH ABORT!\n");
-    printf("Faulting instruction: 0x%""lx""\n", pc);
-    printf("ESR (IFSR): 0x%""lx""\n", getESR());
-    halt();
-}
-
-void kernelDataAbort(word_t pc)
-{
-    printf("\n\nKERNEL DATA ABORT!\n");
-    printf("Faulting instruction: 0x%""lx""\n", pc);
-    printf("FAR: 0x%""lx"" ESR (DFSR): 0x%""lx""\n",
-           getFAR(), getESR());
-    halt();
-}
-
-
-
-typedef struct readWordFromVSpace_ret {
-    exception_t status;
-    word_t value;
-} readWordFromVSpace_ret_t;
-
-static readWordFromVSpace_ret_t readWordFromVSpace(vspace_root_t *pd, word_t vaddr)
-{
-    readWordFromVSpace_ret_t ret;
-    word_t offset;
-    pptr_t kernel_vaddr;
-    word_t *value;
-
-    lookupPTSlot_ret_t lookup_ret = lookupPTSlot(pd, vaddr);
-
-    /* Check that the returned slot is a page. */
-    if (!pte_ptr_get_valid(lookup_ret.ptSlot) ||
-        (pte_pte_table_ptr_get_present(lookup_ret.ptSlot) && lookup_ret.ptBitsLeft > 12)) {
-        ret.status = EXCEPTION_LOOKUP_FAULT;
-        return ret;
-    }
-
-    offset = vaddr & ((1ul << (lookup_ret.ptBitsLeft)) - 1ul);
-    kernel_vaddr = (word_t)ptrFromPAddr(pte_page_ptr_get_page_base_address(lookup_ret.ptSlot));
-    value = (word_t *)(kernel_vaddr + offset);
-
-    ret.status = EXCEPTION_NONE;
-    ret.value = *value;
-    return ret;
-}
-
-void Arch_userStackTrace(tcb_t *tptr)
-{
-    cap_t threadRoot;
-    vspace_root_t *vspaceRoot;
-    word_t sp;
-
-    threadRoot = (((cte_t *)((word_t)(tptr)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap;
-
-    /* lookup the vspace root */
-    if (cap_get_capType(threadRoot) != cap_vspace_cap) {
-        printf("Invalid vspace\n");
-        return;
-    }
-
-    vspaceRoot = ((vspace_root_t *)(cap_vspace_cap_get_capVSBasePtr(threadRoot)));
-    sp = getRegister(tptr, SP_EL0);
-
-    /* check for alignment so we don't have to worry about accessing
-     * words that might be on two different pages */
-    if (!(!((sp) & ((1ul << (3)) - 1ul)))) {
-        printf("SP not aligned\n");
-        return;
-    }
-
-    for (unsigned int i = 0; i < 16; i++) {
-        word_t address = sp + (i * sizeof(word_t));
-        readWordFromVSpace_ret_t result = readWordFromVSpace(vspaceRoot,
-                                                             address);
-        if (result.status == EXCEPTION_NONE) {
-            printf("0x%""lx"": 0x%""lx""\n",
-                   address, result.value);
-        } else {
-            printf("0x%""lx"": INVALID\n", address);
-        }
-    }
-}
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/capdl.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/capdl.c"
-word_t get_tcb_sp(tcb_t *tcb)
-{
-    return tcb->tcbArch.tcbContext.registers[SP_EL0];
-}
-
-
-
-static void obj_frame_print_attrs(vm_page_size_t frameSize, paddr_t frameBase);
-static void cap_frame_print_attrs_pt(pte_t *ptSlot);
-static void cap_frame_print_attrs_impl(word_t SH, word_t AP, word_t NXN);
-static void cap_frame_print_attrs_vptr(word_t vptr, cap_t vspace);
-
-static void _cap_frame_print_attrs_vptr(word_t vptr, vspace_root_t *vspaceRoot);
-
-static void arm64_obj_pt_print_slots(pte_t *pdSlot);
-static void arm64_obj_pd_print_slots(pte_t *pudSlot);
-static void arm64_obj_pud_print_slots(void *pgdSlot_or_vspace);
-
-static void arm64_cap_pt_print_slots(pte_t *pdSlot, vptr_t vptr);
-static void arm64_cap_pd_print_slots(pte_t *pudSlot, vptr_t vptr);
-static void arm64_cap_pud_print_slots(void *pgdSlot_or_vspace, vptr_t vptr);
-
-/* Stage-1 access permissions:
- * AP[2:1]  higher EL        EL0
- *   00       rw            None
- *   01       rw            rw
- *   10       r             None
- *   11       r             r
- *
- * Stage-2 access permissions:
- * S2AP    Access from Nonsecure EL1 or Non-secure EL0
- *  00                      None
- *  01                      r
- *  10                      w
- *  11                      rw
- *
- *  For VMs or native seL4 applications, if hypervisor support
- *  is enabled, we use the S2AP. The kernel itself running in
- *  EL2 still uses the Stage-1 AP format.
- */
-/* use when only have access to pte of frames */
-static void cap_frame_print_attrs_pt(pte_t *ptSlot)
-{
-    cap_frame_print_attrs_impl(pte_pte_page_ptr_get_SH(ptSlot),
-                               pte_pte_page_ptr_get_AP(ptSlot),
-                               pte_pte_page_ptr_get_UXN(ptSlot));
-}
-
-static void cap_frame_print_attrs_impl(word_t SH, word_t AP, word_t NXN)
-{
-    printf("(");
-
-    /* rights */
-    switch (AP) {
-# 82 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/capdl.c"
-    case 0b00:
-        break;
-    case 0b01:
-        printf("RW");
-    case 0b10:
-        break;
-    case 0b11:
-        printf("R");
-
-    default:
-        break;
-    }
-
-    if (!NXN) {
-        printf("X");
-    }
-
-    /* Only has effect if SMP enabled */
-    if (SH != 0) {
-        printf(", uncached");
-    }
-
-    printf(")\n");
-}
-
-/* use when only have access to vptr of frames */
-static void _cap_frame_print_attrs_vptr(word_t vptr, vspace_root_t *vspace)
-{
-    lookupPTSlot_ret_t ret = lookupPTSlot(vspace, vptr);
-
-    /* Check that the returned slot is a page. */
-    if (!pte_ptr_get_valid(ret.ptSlot) ||
-        (pte_pte_table_ptr_get_present(ret.ptSlot) && ret.ptBitsLeft > 12)) {
-        do { if (!(0)) { _assert_fail("0", "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/capdl.c", 115, __func__); } } while(0);
-    }
-
-    word_t table_index;
-    switch (ret.ptBitsLeft) {
-
-    case ARMHugePage:
-        table_index = (((vptr) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (((1) == 0 ? 9 : 9))) - 1ul));
-        break;
-    case ARMLargePage:
-        table_index = (((vptr) >> (((9) * (((4) - 1) - ((2)))) + 12)) & ((1ul << (((2) == 0 ? 9 : 9))) - 1ul));
-        break;
-    case ARMSmallPage:
-        table_index = (((vptr) >> (((9) * (((4) - 1) - ((3)))) + 12)) & ((1ul << (((3) == 0 ? 9 : 9))) - 1ul));
-        break;
-    default:
-        do { if (!(0)) { _assert_fail("0", "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/capdl.c", 131, __func__); } } while(0);
-
-    }
-    printf("frame_%p_%04lu ", ret.ptSlot, table_index);
-    cap_frame_print_attrs_pt(ret.ptSlot);
-}
-
-void cap_frame_print_attrs_vptr(word_t vptr, cap_t vspace)
-{
-    _cap_frame_print_attrs_vptr(vptr, ((vspace_root_t *)(((pptr_t)cap_get_capPtr(vspace)))));
-}
-
-/*
- * print object slots
- */
-static void arm64_cap_pt_print_slots(pte_t *pdSlot, vptr_t vptr)
-{
-    pte_t *pt = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(pdSlot));
-    printf("pt_%p_%04lu {\n", pdSlot, (((vptr) >> (((9) * (((4) - 1) - ((2)))) + 12)) & ((1ul << (((2) == 0 ? 9 : 9))) - 1ul)));
-
-    for (word_t i = 0; i < (1ul << (9)); i ++) {
-        pte_t *ptSlot = pt + i;
-
-        if (pte_4k_page_ptr_get_present(ptSlot)) {
-            // print pte entries
-            printf("0x%lx: frame_%p_%04lu", i, ptSlot, i);
-            cap_frame_print_attrs_pt(ptSlot);
-        }
-    }
-    printf("}\n"); /* pt */
-}
-
-static void arm64_cap_pd_print_slots(pte_t *pudSlot, vptr_t vptr)
-{
-    printf("pd_%p_%04lu {\n", pudSlot, (((vptr) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (((1) == 0 ? 9 : 9))) - 1ul)));
-    pte_t *pd = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(pudSlot));
-
-    for (word_t i = 0; i < (1ul << (9)); i++) {
-        pte_t *pdSlot = pd + i;
-
-        switch (pte_ptr_get_pte_type(pdSlot)) {
-
-        case pte_pte_page:
-            printf("0x%lx: frame_%p_%04lu", i, pdSlot, i);
-            cap_frame_print_attrs_pt(pdSlot);
-            break;
-
-        case pte_pte_table:
-            printf("0x%lx: pt_%p_%04lu\n", i, pdSlot, i);
-            break;
-        }
-    }
-
-    printf("}\n"); /* pd */
-
-    for (word_t i = 0; i < (1ul << (9)); i++) {
-        pte_t *pdSlot = pd + i;
-        if (pte_ptr_get_pte_type(pdSlot) == pte_pte_table) {
-            arm64_cap_pt_print_slots(pdSlot, vptr + (i * (1ul << ((((9) * (((4) - 1) - (((2))))) + 12)))));
-        }
-    }
-}
-
-static void arm64_cap_pud_print_slots(void *pgdSlot_or_vspace, vptr_t vptr)
-{
-
-
-
-
-
-    pte_t *pud = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(pgdSlot_or_vspace));
-    word_t index_bits = 9;
-    printf("pud_%p_%04lu {\n", pgdSlot_or_vspace, (((vptr) >> (((9) * (((4) - 1) - ((0)))) + 12)) & ((1ul << (((0) == 0 ? 9 : 9))) - 1ul)));
-
-
-    for (word_t i = 0; i < (1ul << (index_bits)); i++) {
-        pte_t *pudSlot = pud + i;
-        if (pte_ptr_get_pte_type(pudSlot) == pte_pte_table) {
-            printf("0x%lx: pd_%p_%04lu\n", i, pudSlot, i);
-        }
-    }
-
-    printf("}\n"); /* pgd/pud */
-
-    for (word_t i = 0; i < (1ul << (index_bits)); i++) {
-        pte_t *pudSlot = pud + (((i) >> (((9) * (((4) - 1) - ((1)))) + 12)) & ((1ul << (((1) == 0 ? 9 : 9))) - 1ul));
-        if (pte_ptr_get_pte_type(pudSlot) == pte_pte_table) {
-            arm64_cap_pd_print_slots(pudSlot, vptr + (i * (1ul << ((((9) * (((4) - 1) - (((1))))) + 12)))));
-        }
-    }
-}
-
-void obj_vtable_print_slots(tcb_t *tcb)
-{
-    if (isVTableRoot((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap) && !seen((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap)) {
-        add_to_seen((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap);
-        vspace_root_t *vspace = ((vspace_root_t *)(cap_vspace_cap_get_capVSBasePtr((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap)));
-
-        /*
-        * ARM hyp uses 3 level translation rather than the usual 4 level.
-        * levels: PGD -> UPD -> PD -> PT
-        */
-
-
-
-        printf("%p_pd {\n", vspace);
-        for (word_t i = 0; i < 9; i++) {
-            pte_t *ptSlot = vspace + i;
-            if (pte_pte_table_ptr_get_present(ptSlot)) {
-                printf("0x%lx: pud_%p_%04lu\n", i, ptSlot, i);
-            }
-        }
-        printf("}\n"); /* pd */
-
-        for (word_t i = 0; i < 9; i++) {
-            pte_t *ptSlot = vspace + i;
-            if (pte_pte_table_ptr_get_present(ptSlot)) {
-                arm64_cap_pud_print_slots(ptSlot, i * (1ul << ((((9) * (((4) - 1) - ((0)))) + 12))));
-            }
-        }
-
-    }
-}
-
-void print_ipc_buffer_slot(tcb_t *tcb)
-{
-    word_t vptr = tcb->tcbIPCBuffer;
-    printf("ipc_buffer_slot: ");
-    cap_frame_print_attrs_vptr(vptr, (((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap);
-}
-
-void print_cap_arch(cap_t cap)
-{
-
-    switch (cap_get_capType(cap)) {
-    case cap_page_table_cap: {
-        asid_t asid = cap_page_table_cap_get_capPTMappedASID(cap);
-        vptr_t vptr = cap_page_table_cap_get_capPTMappedAddress(cap);
-        pte_t *target_pt = ((pte_t *)(cap_page_table_cap_get_capPTBasePtr(cap)));
-
-        findVSpaceForASID_ret_t find_ret = findVSpaceForASID(asid);
-        pte_t *ptSlot = ((void *)0);
-        pte_t *pt = (pte_t *)find_ret.vspace_root;
-        word_t level;
-        for (level = 0; level < 4 - 1 && pt != target_pt; level++) {
-            ptSlot = pt + (((vptr) >> (((9) * (((4) - 1) - (level))) + 12)) & ((1ul << ((level == 0 ? 9 : 9))) - 1ul));
-            if (__builtin_expect(!!(!pte_pte_table_ptr_get_present(ptSlot)), 0)) {
-                /* couldn't find it */
-                break;
-            }
-            pt = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(ptSlot));
-        }
-        if (pt != target_pt) {
-            /* didn't find it */
-            break;
-        }
-
-
-        if (asid) {
-            printf("pt_%p_%04lu (asid: %lu)\n",
-                   target_pt, (((vptr) >> (((9) * (((4) - 1) - (level))) + 12)) & ((1ul << ((level == 0 ? 9 : 9))) - 1ul)), (long unsigned int)asid);
-        } else {
-            printf("pt_%p_%04lu\n", target_pt, (((vptr) >> (((9) * (((4) - 1) - (level))) + 12)) & ((1ul << ((level == 0 ? 9 : 9))) - 1ul)));
-        }
-        break;
-    }
-    case cap_vspace_cap: {
-        asid_t asid = cap_vspace_cap_get_capVSMappedASID(cap);
-        findVSpaceForASID_ret_t find_ret = findVSpaceForASID(asid);
-        if (asid) {
-            printf("%p_pd (asid: %lu)\n",
-                   find_ret.vspace_root, (long unsigned int)asid);
-        } else {
-            printf("%p_pd\n", find_ret.vspace_root);
-        }
-        break;
-    }
-    case cap_asid_control_cap: {
-        /* only one in the system */
-        printf("asid_control\n");
-        break;
-    }
-    case cap_frame_cap: {
-        vptr_t vptr = cap_frame_cap_get_capFMappedAddress(cap);
-        findVSpaceForASID_ret_t find_ret = findVSpaceForASID(cap_frame_cap_get_capFMappedASID(cap));
-        do { if (!(find_ret.status == EXCEPTION_NONE)) { _assert_fail("find_ret.status == EXCEPTION_NONE", "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/capdl.c", 316, __func__); } } while(0);
-        _cap_frame_print_attrs_vptr(vptr, find_ret.vspace_root);
-        break;
-    }
-    case cap_asid_pool_cap: {
-        printf("%p_asid_pool\n", (void *)cap_asid_pool_cap_get_capASIDPool(cap));
-        break;
-    }
-
-
-
-
-
-
-
-        /* ARM specific caps */
-
-
-
-
-
-
-    default: {
-        printf("[unknown cap %lu]\n", (long unsigned int)cap_get_capType(cap));
-        break;
-    }
-    }
-}
-
-void print_object_arch(cap_t cap)
-{
-    switch (cap_get_capType(cap)) {
-    case cap_frame_cap:
-    case cap_page_table_cap:
-    case cap_vspace_cap:
-        /* don't need to deal with these objects since they get handled from vtable */
-        break;
-
-    case cap_asid_pool_cap: {
-        printf("%p_asid_pool = asid_pool ",
-               (void *)cap_asid_pool_cap_get_capASIDPool(cap));
-        obj_asidpool_print_attrs(cap);
-        break;
-    }
-
-
-
-
-
-
-        /* ARM specific objects */
-
-
-
-
-
-
-
-    default: {
-        printf("[unknown object %lu]\n", (long unsigned int)cap_get_capType(cap));
-        break;
-    }
-    }
-}
-
-void obj_frame_print_attrs(vm_page_size_t frameSize, paddr_t frameBase)
-{
-    printf("(");
-
-    /* VM size */
-    switch (frameSize) {
-    case ARMHugePage:
-        printf("1G");
-        break;
-    case ARMLargePage:
-        printf("2M");
-        break;
-    case ARMSmallPage:
-        printf("4k");
-        break;
-    }
-
-    printf(", paddr: 0x%p)\n", (void *)frameBase);
-}
-
-void arm64_obj_pt_print_slots(pte_t *pdSlot)
-{
-    pte_t *pt = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(pdSlot));
-
-    for (word_t i = 0; i < (1ul << (9)); i++) {
-        pte_t *ptSlot = pt + i;
-
-        if (pte_4k_page_ptr_get_present(ptSlot)) {
-            printf("frame_%p_%04lu = frame ", ptSlot, i);
-            obj_frame_print_attrs(ARMSmallPage, pte_page_ptr_get_page_base_address(ptSlot));
-        }
-    }
-}
-
-void arm64_obj_pd_print_slots(pte_t *pudSlot)
-{
-    pte_t *pd = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(pudSlot));
-
-    for (word_t i = 0; i < (1ul << (9)); i++) {
-        pte_t *pdSlot = pd + i;
-
-        if (pte_ptr_get_pte_type(pdSlot) == pte_pte_page) {
-            printf("frame_%p_%04lu = frame ", pdSlot, i);
-            obj_frame_print_attrs(ARMLargePage, pte_page_ptr_get_page_base_address(pdSlot));
-        }
-
-        if (pte_ptr_get_pte_type(pdSlot) == pte_pte_table) {
-            printf("pt_%p_%04lu = pt\n", pdSlot, i);
-            arm64_obj_pt_print_slots(pdSlot);
-        }
-    }
-}
-
-void arm64_obj_pud_print_slots(void *pgdSlot_or_vspace)
-{
-    pte_t *pud = ptrFromPAddr(pte_pte_table_ptr_get_pt_base_address(pgdSlot_or_vspace));
-
-
-
-    word_t index_bits = 9;
-
-    for (word_t i = 0; i < (1ul << (index_bits)); i++) {
-        pte_t *pudSlot = pud + i;
-
-        switch (pte_ptr_get_pte_type(pudSlot)) {
-        case pte_pte_page:
-            printf("frame_%p_%04lu = frame ", pudSlot, i);
-            obj_frame_print_attrs(ARMHugePage, pte_page_ptr_get_page_base_address(pudSlot));
-            break;
-
-        case pte_pte_table: {
-            printf("pd_%p_%04lu = pd\n", pudSlot, i);
-            arm64_obj_pd_print_slots(pudSlot);
-
-        }
-        }
-    }
-}
-
-void obj_tcb_print_vtable(tcb_t *tcb)
-{
-    if (isVTableRoot((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap) && !seen((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap)) {
-        add_to_seen((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap);
-        vspace_root_t *vspace = ((vspace_root_t *)(cap_vspace_cap_get_capVSBasePtr((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap)));
-
-        /*
-         * ARM hyp uses 3 level translation rather than the usual 4 level.
-         * levels: PGD -> PUD -> PD -> PT
-         */
-
-
-
-
-        printf("%p_pd = pgd\n", vspace);
-        for (word_t i = 0; i < 9; i++) {
-            pte_t *ptSlot = vspace + i;
-            if (pte_pte_table_ptr_get_present(ptSlot)) {
-                printf("pud_%p_%04lu = pud\n", ptSlot, i);
-                arm64_obj_pud_print_slots(ptSlot);
-            }
-        }
-
-    }
-}
-
-
-
-void debug_capDL(void)
-{
-    printf("arch aarch64\n");
-    printf("objects {\n");
-
-    print_objects();
-
-    printf("}\n");
-
-    printf("caps {\n");
-
-    /* reset the seen list */
-    reset_seen_list();
-
-
-    print_caps();
-    printf("}\n");
-
-    obj_irq_print_maps();
-
-}
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/debug.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/fpu.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -11904,7 +13037,7 @@ __attribute__((__section__(".boot.text"))) bool_t fpsimd_HWCapTest(void)
 
     return true;
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/registerset.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -11940,13 +13073,13 @@ _Static_assert(sizeof(gpRegisters) / sizeof(gpRegisters[0]) == n_gpRegisters, "c
 
 
  ;
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/model/statedata.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/model/statedata.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 21 "/Users/lukasbower/seL4_15/src/arch/arm/64/model/statedata.c"
+# 21 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/model/statedata.c"
 asid_pool_t *armKSASIDTable[(1ul << (asidHighBits))];
 
 /* AArch64 Memory map explanation:
@@ -12017,13 +13150,13 @@ pte_t armKSGlobalKernelPGD[(1ul << (9))] __attribute__((__aligned__((1ul << (12)
 pte_t armKSGlobalKernelPUD[(1ul << (9))] __attribute__((__aligned__((1ul << (12))))) __attribute__((__section__(".bss.aligned")));
 pte_t armKSGlobalKernelPDs[(1ul << (9))][(1ul << (9))] __attribute__((__aligned__((1ul << (12))))) __attribute__((__section__(".bss.aligned")));
 pte_t armKSGlobalKernelPT[(1ul << (9))] __attribute__((__aligned__((1ul << (12))))) __attribute__((__section__(".bss.aligned")));
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 16 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
 bool_t Arch_isFrameType(word_t type)
 {
     switch (type) {
@@ -12048,7 +13181,7 @@ deriveCap_ret_t Arch_deriveCap(cte_t *slot, cap_t cap)
             ret.cap = cap;
             ret.status = EXCEPTION_NONE;
         } else {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Deriving a VSpace cap without an assigned ASID" ">>" "\033[0m" "\n", 0lu, __func__, 40, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             ret.cap = cap_null_cap_new();
             ret.status = EXCEPTION_SYSCALL_ERROR;
@@ -12060,7 +13193,7 @@ deriveCap_ret_t Arch_deriveCap(cte_t *slot, cap_t cap)
             ret.cap = cap;
             ret.status = EXCEPTION_NONE;
         } else {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Deriving a PT cap without an assigned ASID" ">>" "\033[0m" "\n", 0lu, __func__, 52, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             ret.cap = cap_null_cap_new();
             ret.status = EXCEPTION_SYSCALL_ERROR;
@@ -12077,22 +13210,17 @@ deriveCap_ret_t Arch_deriveCap(cte_t *slot, cap_t cap)
         ret.cap = cap;
         ret.status = EXCEPTION_NONE;
         return ret;
-# 77 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
-    case cap_sgi_signal_cap:
-        ret.cap = cap;
-        ret.status = EXCEPTION_NONE;
-        return ret;
-# 101 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
+# 101 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
     default:
         /* This assert has no equivalent in haskell,
          * as the options are restricted by type */
-        _fail("Invalid arch cap", "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c", 104, __func__);
+        halt();
     }
 }
 
 cap_t __attribute__((__const__)) Arch_updateCapData(bool_t preserve, word_t data, cap_t cap)
 {
-# 119 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
+# 119 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
         return cap;
 
 
@@ -12154,11 +13282,7 @@ finaliseCap_ret_t Arch_finaliseCap(cap_t cap, bool_t final)
                       cap_frame_cap_get_capFBasePtr(cap));
         }
         break;
-# 188 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
-    case cap_sgi_signal_cap:
-        // do nothing
-        break;
-# 209 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
+# 209 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
     }
 
     fc_ret.remainder = cap_null_cap_new();
@@ -12207,16 +13331,7 @@ bool_t __attribute__((__const__)) Arch_sameRegionAs(cap_t cap_a, cap_t cap_b)
                    cap_asid_pool_cap_get_capASIDPool(cap_b);
         }
         break;
-# 267 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
-    case cap_sgi_signal_cap:
-        if (cap_get_capType(cap_b) == cap_sgi_signal_cap) {
-            return (cap_sgi_signal_cap_get_capSGIIRQ(cap_a) ==
-                    cap_sgi_signal_cap_get_capSGIIRQ(cap_b) &&
-                    cap_sgi_signal_cap_get_capSGITarget(cap_a) ==
-                    cap_sgi_signal_cap_get_capSGITarget(cap_b));
-        }
-        break;
-# 310 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
+# 310 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
     }
     return false;
 }
@@ -12233,12 +13348,7 @@ bool_t __attribute__((__const__)) Arch_sameObjectAs(cap_t cap_a, cap_t cap_b)
                      (cap_frame_cap_get_capFIsDevice(cap_b) == 0)));
         }
     }
-# 337 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
-    if (cap_get_capType(cap_a) == cap_sgi_signal_cap) {
-        return false;
-    }
-
-
+# 342 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
     return Arch_sameRegionAs(cap_a, cap_b);
 }
 
@@ -12260,7 +13370,7 @@ word_t Arch_getObjectSize(word_t t)
 
 
     default:
-        _fail("Invalid object type", "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c", 363, __func__);
+        halt();
         return 0;
     }
 }
@@ -12352,7 +13462,7 @@ cap_t Arch_createObject(object_t t, void *regionBase, word_t userSize, bool_t de
         cleanCacheRange_PoU((word_t)regionBase,
                             (word_t)regionBase + ((1ul << (12)) - 1ul),
                             addrFromPPtr(regionBase));
-# 463 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
+# 463 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
         return cap_vspace_cap_new(
                    asidInvalid, /* capVSMappedASID */
                    (word_t)regionBase, /* capVSBasePtr    */
@@ -12372,9 +13482,9 @@ cap_t Arch_createObject(object_t t, void *regionBase, word_t userSize, bool_t de
                    0, /* capPTIsMapped      */
                    0 /* capPTMappedAddress */
                );
-# 491 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
+# 491 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
     default:
-        _fail("Arch_createObject got an API type or invalid object type", "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c", 492, __func__);
+        halt();
     }
 }
 
@@ -12386,19 +13496,8 @@ exception_t Arch_decodeInvocation(word_t label, word_t length, cptr_t cptr,
     /* The C parser cannot handle a switch statement with only a default
      * case. So we need to do some gymnastics to remove the switch if
      * there are no other cases */
-
-    switch (cap_get_capType(cap)) {
-
-
-
-
-
-    case cap_sgi_signal_cap:
-        return decodeSGISignalInvocation(label, length, cap, buffer);
-# 528 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
-    default:
-
-
+# 530 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/64/object/objecttype.c"
+{
 
     return decodeARMMMUInvocation(label, length, cptr, slot, cap, call, buffer);
 }
@@ -12416,21 +13515,21 @@ Arch_prepareThreadDelete(tcb_t * thread) {
     fpuRelease(thread);
 
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/api/faults.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 14 "/Users/lukasbower/seL4_15/src/arch/arm/api/faults.c"
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/api/faults.c"
 bool_t Arch_handleFaultReply(tcb_t *receiver, tcb_t *sender, word_t faultType)
 {
     switch (faultType) {
     case seL4_Fault_VMFault:
         return true;
-# 28 "/Users/lukasbower/seL4_15/src/arch/arm/api/faults.c"
+# 28 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/api/faults.c"
     default:
-        _fail("Invalid fault", "/Users/lukasbower/seL4_15/src/arch/arm/api/faults.c", 29, __func__);
+        halt();
     }
 }
 
@@ -12446,12 +13545,12 @@ word_t Arch_setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffe
         return setMR(receiver, receiveIPCBuffer, seL4_VMFault_FSR,
                      seL4_Fault_VMFault_get_FSR(sender->tcbFault));
     }
-# 60 "/Users/lukasbower/seL4_15/src/arch/arm/api/faults.c"
+# 60 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/api/faults.c"
     default:
-        _fail("Invalid fault", "/Users/lukasbower/seL4_15/src/arch/arm/api/faults.c", 61, __func__);
+        halt();
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/armv/armv8-a/64/cache.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/armv/armv8-a/64/cache.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -12560,7 +13659,7 @@ void cleanInvalidate_L1D(void)
 {
     cleanInvalidate_D_by_level(0);
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/armv/armv8-a/64/user_access.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -12568,7 +13667,7 @@ void cleanInvalidate_L1D(void)
  */
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/user_access.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/user_access.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -12577,7 +13676,7 @@ void cleanInvalidate_L1D(void)
        
 
 void armv_init_user_access(void);
-# 9 "/Users/lukasbower/seL4_15/src/arch/arm/armv/armv8-a/64/user_access.c" 2
+# 9 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/armv/armv8-a/64/user_access.c" 2
 
 /* bits in the CNTKCTL_EL1 */
 
@@ -12603,9 +13702,9 @@ static void check_export_pmu(void)
 static void check_export_arch_timer(void)
 {
     uint32_t val = 0;
-# 46 "/Users/lukasbower/seL4_15/src/arch/arm/armv/armv8-a/64/user_access.c"
+# 46 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
     do { word_t _v = val; __asm__ volatile("msr " "CNTKCTL_EL1" ",%x0" :: "r" (_v)); }while(0);
-# 58 "/Users/lukasbower/seL4_15/src/arch/arm/armv/armv8-a/64/user_access.c"
+# 58 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
 }
 
 void armv_init_user_access(void)
@@ -12613,27 +13712,27 @@ void armv_init_user_access(void)
     check_export_pmu();
     check_export_arch_timer();
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/benchmark/benchmark.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/benchmark/benchmark.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/c_traps.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 20 "/Users/lukasbower/seL4_15/src/arch/arm/c_traps.c"
+# 20 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/c_traps.c"
 void __attribute__((externally_visible)) __attribute__((__noreturn__)) c_handle_undefined_instruction(void)
 {
-    do {} while (0);
+    do { clh_lock_acquire(false); } while(0);
     c_entry_hook();
 
 
-    ksKernelEntry.path = Entry_UserLevelFault;
-    ksKernelEntry.word = getRegister(ksCurThread, NextIP);
+
+
 
 
     /* There's only one user-level fault on ARM, and the code is (0,0) */
@@ -12653,21 +13752,12 @@ void __attribute__((externally_visible)) __attribute__((__noreturn__)) c_handle_
     restore_user_context();
     __builtin_unreachable();
 }
-# 57 "/Users/lukasbower/seL4_15/src/arch/arm/c_traps.c"
+# 57 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/c_traps.c"
 static inline void __attribute__((__noreturn__)) c_handle_vm_fault(vm_fault_type_t type)
 {
-    do {} while (0);
+    do { clh_lock_acquire(false); } while(0);
     c_entry_hook();
-
-
-    ksKernelEntry.path = Entry_VMFault;
-    ksKernelEntry.word = getRegister(ksCurThread, NextIP);
-    ksKernelEntry.is_fastpath = false;
-
-
-
-
-
+# 71 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/c_traps.c"
     handleVMFaultEvent(type);
     restore_user_context();
 
@@ -12686,13 +13776,13 @@ void __attribute__((externally_visible)) __attribute__((__noreturn__)) c_handle_
 
 void __attribute__((externally_visible)) __attribute__((__noreturn__)) c_handle_interrupt(void)
 {
-    do {} while (0);
+    do { if(((getActiveIRQ().irq) != 0)) { do { clh_lock_acquire(true); } while(0); } } while(0);
     c_entry_hook();
 
 
-    ksKernelEntry.path = Entry_Interrupt;
-    ksKernelEntry.word = (getActiveIRQ());
-    ksKernelEntry.core = 0lu;
+
+
+
 
 
     handleInterruptEntry();
@@ -12703,8 +13793,8 @@ void __attribute__((__noreturn__)) slowpath(syscall_t syscall)
 {
     if (__builtin_expect(!!(syscall < (-8) || syscall > (-1)), 0)) {
 
-        ksKernelEntry.path = Entry_UnknownSyscall;
-        /* ksKernelEntry.word word is already set to syscall */
+
+
 
         /* Contrary to the name, this handles all non-standard syscalls used in
          * debug builds also.
@@ -12712,7 +13802,7 @@ void __attribute__((__noreturn__)) slowpath(syscall_t syscall)
         handleUnknownSyscall(syscall);
     } else {
 
-        ksKernelEntry.is_fastpath = 0;
+
 
         handleSyscall(syscall);
     }
@@ -12723,12 +13813,12 @@ void __attribute__((__noreturn__)) slowpath(syscall_t syscall)
 
 void __attribute__((externally_visible)) c_handle_syscall(word_t cptr, word_t msgInfo, syscall_t syscall)
 {
-    do {} while (0);
+    do { clh_lock_acquire(false); } while(0);
 
     c_entry_hook();
 
-    benchmark_debug_syscall_start(cptr, msgInfo, syscall);
-    ksKernelEntry.is_fastpath = 0;
+
+
 
 
     slowpath(syscall);
@@ -12739,18 +13829,18 @@ void __attribute__((externally_visible)) c_handle_syscall(word_t cptr, word_t ms
 __attribute__((__aligned__((1ul << (6)))))
 void __attribute__((externally_visible)) c_handle_fastpath_call(word_t cptr, word_t msgInfo)
 {
-    do {} while (0);
+    do { clh_lock_acquire(false); } while(0);
 
     c_entry_hook();
 
-    benchmark_debug_syscall_start(cptr, msgInfo, SysCall);
-    ksKernelEntry.is_fastpath = 1;
+
+
 
 
     fastpath_call(cptr, msgInfo);
     __builtin_unreachable();
 }
-# 172 "/Users/lukasbower/seL4_15/src/arch/arm/c_traps.c"
+# 172 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/c_traps.c"
 __attribute__((__aligned__((1ul << (6)))))
 
 
@@ -12758,30 +13848,23 @@ __attribute__((__aligned__((1ul << (6)))))
 void __attribute__((externally_visible)) c_handle_fastpath_reply_recv(word_t cptr, word_t msgInfo)
 
 {
-    do {} while (0);
+    do { clh_lock_acquire(false); } while(0);
 
     c_entry_hook();
-
-    benchmark_debug_syscall_start(cptr, msgInfo, SysReplyRecv);
-    ksKernelEntry.is_fastpath = 1;
-
-
-
-
-
+# 190 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/c_traps.c"
     fastpath_reply_recv(cptr, msgInfo);
 
     __builtin_unreachable();
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2021, HENSOLDT Cyber
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/kernel/boot.h" 1
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/kernel/boot.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -12804,8 +13887,16 @@ void init_kernel(
     paddr_t dtb_addr_p,
     uint32_t dtb_size
 );
-# 16 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c" 2
-# 40 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
+# 16 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c" 2
+# 32 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
+/* SMP boot synchronization works based on a global variable with the initial
+ * value 0, as the loader must zero all BSS variables. Secondary cores keep
+ * spinning until the primary core has initialized all kernel structures and
+ * then set it to 1.
+ */
+__attribute__((__section__(".boot.bss"))) static volatile _Atomic int node_boot_lock;
+
+
 __attribute__((__section__(".boot.bss"))) static region_t reserved[(3 + 0)];
 
 __attribute__((__section__(".boot.text"))) static bool_t arch_init_freemem(p_region_t ui_p_reg,
@@ -12821,7 +13912,7 @@ __attribute__((__section__(".boot.text"))) static bool_t arch_init_freemem(p_reg
     /* add the dtb region, if it is not empty */
     if (dtb_p_reg.start) {
         if (index >= (sizeof(reserved) / sizeof((reserved)[0]))) {
-            printf("ERROR: no slot to add DTB to reserved regions\n");
+            ((void)(0));
             return false;
         }
         reserved[index].start = (pptr_t) ptrFromPAddr(dtb_p_reg.start);
@@ -12834,15 +13925,15 @@ __attribute__((__section__(".boot.text"))) static bool_t arch_init_freemem(p_reg
      * needed.
      */
     if (0 > 1) {
-        printf("ERROR: MODE_RESERVED > 1 unsupported!\n");
+        ((void)(0));
         return false;
     }
     if (ui_p_reg.start < (0xffffffffc0000000ul /* 2^64 - 2^30 */ - (0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul))) {
         region_t ui_reg = paddr_to_pptr_reg(ui_p_reg);
         if (0 == 1) {
             if (index + 1 >= (sizeof(reserved) / sizeof((reserved)[0]))) {
-                printf("ERROR: no slot to add the user image and the "
-                       "mode-reserved region to the reserved regions\n");
+                ((void)(0))
+                                                                        ;
                 return false;
             }
             if (ui_reg.end > mode_reserved_region[0].start) {
@@ -12857,8 +13948,8 @@ __attribute__((__section__(".boot.text"))) static bool_t arch_init_freemem(p_reg
             index++;
         } else {
             if (index >= (sizeof(reserved) / sizeof((reserved)[0]))) {
-                printf("ERROR: no slot to add the user image to the reserved"
-                       "regions\n");
+                ((void)(0))
+                                   ;
                 return false;
             }
             reserved[index] = ui_reg;
@@ -12867,7 +13958,7 @@ __attribute__((__section__(".boot.text"))) static bool_t arch_init_freemem(p_reg
     } else {
         if (0 == 1) {
             if (index >= (sizeof(reserved) / sizeof((reserved)[0]))) {
-                printf("ERROR: no slot to add the mode-reserved region\n");
+                ((void)(0));
                 return false;
             }
             reserved[index] = mode_reserved_region[0];
@@ -12890,14 +13981,18 @@ __attribute__((__section__(".boot.text"))) static void init_irqs(cap_t root_cnod
     unsigned i;
 
     for (i = 0; i <= maxIRQ ; i++) {
-        setIRQState(IRQInactive, (i));
+        setIRQState(IRQInactive, ((irq_t){.irq = (i), .target_core = (0)}));
     }
-    setIRQState(IRQTimer, (27));
-# 152 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
+    setIRQState(IRQTimer, ((irq_t){.irq = (27), .target_core = (0)}));
+# 148 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
+    setIRQState(IRQIPI, ((irq_t){.irq = (0), .target_core = (getCurrentCPUIndex())}));
+    setIRQState(IRQIPI, ((irq_t){.irq = (1), .target_core = (getCurrentCPUIndex())}));
+
+
     /* provide the IRQ control cap */
     write_slot((((slot_ptr_t)(((pptr_t)cap_get_capPtr(root_cnode_cap)))) + (seL4_CapIRQControl)), cap_irq_control_cap_new());
 }
-# 175 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
+# 175 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
 /** This and only this function initialises the CPU.
  *
  * It does NOT initialise any kernel state.
@@ -12919,12 +14014,20 @@ __attribute__((__section__(".boot.text"))) static bool_t init_cpu(void)
     if (wrap_config_set(0)) {
         do {} while(0);
     }
-# 205 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
+# 205 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
     /* Setup kernel stack pointer.
      * On ARM SMP, the array index here is the CPU ID
      */
-    word_t stack_top = ((word_t) kernel_stack_alloc[0lu]) + (1ul << (12));
-# 218 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
+    word_t stack_top = ((word_t) kernel_stack_alloc[getCurrentCPUIndex()]) + (1ul << (12));
+
+
+    /* the least 12 bits are used to store logical core ID */
+    stack_top |= getCurrentCPUIndex();
+
+
+
+
+
     setKernelStack(stack_top);
 
 
@@ -12945,7 +14048,7 @@ __attribute__((__section__(".boot.text"))) static bool_t init_cpu(void)
             return false;
         }
     } else {
-        printf("Platform claims to have FP hardware, but does not!\n");
+        ((void)(0));
         return false;
     }
 
@@ -12974,7 +14077,71 @@ __attribute__((__section__(".boot.text"))) static void init_plat(void)
 
 
 }
-# 332 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
+
+
+__attribute__((__section__(".boot.text"))) static bool_t try_init_kernel_secondary_core(void)
+{
+    /* need to first wait until some kernel init has been done */
+    while (!node_boot_lock);
+
+    /* Perform cpu init */
+    init_cpu();
+
+    for (unsigned int i = 0; i < 32u; i++) {
+        maskInterrupt(true, ((irq_t){.irq = (i), .target_core = (getCurrentCPUIndex())}));
+    }
+    setIRQState(IRQIPI, ((irq_t){.irq = (0), .target_core = (getCurrentCPUIndex())}));
+    setIRQState(IRQIPI, ((irq_t){.irq = (1), .target_core = (getCurrentCPUIndex())}));
+    /* Enable per-CPU timer interrupts */
+    setIRQState(IRQTimer, ((irq_t){.irq = (27), .target_core = (getCurrentCPUIndex())}));
+
+
+
+
+    do { clh_lock_acquire(false); } while(0);
+
+    ;
+    ksNumCPUs++;
+
+    init_core_state(((tcb_t*)0));
+
+    return true;
+}
+
+__attribute__((__section__(".boot.text"))) static void release_secondary_cpus(void)
+{
+    /* release the cpus at the same time */
+    ; /* Sanity check for a proper lock state. */
+    node_boot_lock = 1;
+
+    /*
+     * At this point in time the primary core (executing this code) already uses
+     * the seL4 MMU/cache setup. However, the secondary cores are still using
+     * the elfloader's MMU/cache setup, and thus any memory updates may not
+     * be visible there.
+     *
+     * On AARCH64, both elfloader and seL4 map memory inner shareable and have
+     * the caches enabled, so no explicit cache maintenance is necessary.
+     *
+     * On AARCH32 the elfloader uses strongly ordered uncached memory, but seL4
+     * has caching enabled, thus explicit cache cleaning is required.
+     */
+
+
+
+
+
+    /* Wait until all the secondary cores are done initialising */
+    while (ksNumCPUs != 4) {
+
+
+
+        /* perform a memory acquire to get new values of ksNumCPUs, release for ksCurTime */
+        __atomic_thread_fence(4);
+    }
+}
+
+
 /* Main kernel initialisation function. */
 
 static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
@@ -13017,12 +14184,12 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
 
     /* initialise the CPU */
     if (!init_cpu()) {
-        printf("ERROR: CPU init failed\n");
+        ((void)(0));
         return false;
     }
 
     /* debug output via serial port is only available from here */
-    printf("Bootstrapping kernel\n");
+    ((void)(0));
 
     /* initialise the platform */
     init_plat();
@@ -13035,18 +14202,18 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
             /* An integer overflow happened in DTB end address calculation, the
              * location or size passed seems invalid.
              */
-            printf("ERROR: DTB location at %""lx"
-                   " len %""lu"" invalid\n",
-                   dtb_phys_addr, dtb_size);
+            ((void)(0))
+
+                                           ;
             return false;
         }
         /* If the DTB is located in physical memory that is not mapped in the
          * kernel window we cannot access it.
          */
         if (dtb_phys_end >= (0xffffffffc0000000ul /* 2^64 - 2^30 */ - (0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul))) {
-            printf("ERROR: DTB at [%""lx""..%""lx"") "
-                   "exceeds PADDR_TOP (%""lx"")\n",
-                   dtb_phys_addr, dtb_phys_end, (0xffffffffc0000000ul /* 2^64 - 2^30 */ - (0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul)));
+            ((void)(0))
+
+                                                          ;
             return false;
         }
         /* DTB seems valid and accessible, pass it on in bootinfo. */
@@ -13069,21 +14236,21 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
          * work properly. Unfortunately, the definition of USER_TOP differs
          * between platforms (int, long), so we have to cast here to play safe.
          */
-        printf("ERROR: userland image virt [%""lx""..%""lx"")"
-               "exceeds USER_TOP (%""lx"")\n",
-               it_v_reg.start, it_v_reg.end, (word_t)0x00007fffffffffff);
+        ((void)(0))
+
+                                                              ;
         return false;
     }
 
     if (!arch_init_freemem(ui_p_reg, dtb_p_reg, it_v_reg, extra_bi_size_bits)) {
-        printf("ERROR: free memory management initialization failed\n");
+        ((void)(0));
         return false;
     }
 
     /* create the root cnode */
     root_cnode_cap = create_root_cnode();
     if (cap_get_capType(root_cnode_cap) == cap_null_cap) {
-        printf("ERROR: root c-node creation failed\n");
+        ((void)(0));
         return false;
     }
 
@@ -13092,8 +14259,8 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
 
     /* initialise the IRQ states and provide the IRQ control cap */
     init_irqs(root_cnode_cap);
-# 458 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
-    populate_bi_frame(0, 1, ipcbuf_vptr, extra_bi_size);
+# 458 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
+    populate_bi_frame(0, 4, ipcbuf_vptr, extra_bi_size);
 
     /* put DTB in the bootinfo block, if present. */
     seL4_BootInfoHeader header;
@@ -13108,18 +14275,13 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
         extra_bi_offset += dtb_size;
     }
 
-    if (extra_bi_size > extra_bi_offset) {
-        /* provide a chunk for any leftover padding in the extended boot info */
-        header.id = SEL4_BOOTINFO_HEADER_PADDING;
-        header.len = (extra_bi_size - extra_bi_offset);
-        *(seL4_BootInfoHeader *)(rootserver.extra_bi + extra_bi_offset) = header;
-    }
+    ;
 
     if (wrap_config_set(0)) {
         ndks_boot.bi_frame->ioSpaceCaps = create_iospace_caps(root_cnode_cap);
         if (ndks_boot.bi_frame->ioSpaceCaps.start == 0 &&
             ndks_boot.bi_frame->ioSpaceCaps.end == 0) {
-            printf("ERROR: SMMU I/O space creation failed\n");
+            ((void)(0));
             return false;
         }
     } else {
@@ -13130,7 +14292,7 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
      * to cover the user image + ipc buffer and bootinfo frames */
     it_pd_cap = create_it_address_space(root_cnode_cap, it_v_reg);
     if (cap_get_capType(it_pd_cap) == cap_null_cap) {
-        printf("ERROR: address space creation for initial thread failed\n");
+        ((void)(0));
         return false;
     }
 
@@ -13156,7 +14318,7 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
                 addrFromPPtr((void *)extra_bi_region.start) - extra_bi_frame_vptr
             );
         if (!extra_bi_ret.success) {
-            printf("ERROR: mapping extra boot info to initial thread failed\n");
+            ((void)(0));
             return false;
         }
         ndks_boot.bi_frame->extraBIPages = extra_bi_ret.region;
@@ -13169,7 +14331,7 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
     /* create the initial thread's IPC buffer */
     ipcbuf_cap = create_ipcbuf_frame_cap(root_cnode_cap, it_pd_cap, ipcbuf_vptr);
     if (cap_get_capType(ipcbuf_cap) == cap_null_cap) {
-        printf("ERROR: could not create IPC buffer for initial thread\n");
+        ((void)(0));
         return false;
     }
 
@@ -13183,7 +14345,7 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
             pv_offset
         );
     if (!create_frames_ret.success) {
-        printf("ERROR: could not create all userland image frames\n");
+        ((void)(0));
         return false;
     }
     ndks_boot.bi_frame->userImageFrames = create_frames_ret.region;
@@ -13191,7 +14353,7 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
     /* create/initialise the initial thread's ASID pool */
     it_ap_cap = create_it_asid_pool(root_cnode_cap);
     if (cap_get_capType(it_ap_cap) == cap_null_cap) {
-        printf("ERROR: could not create ASID pool for initial thread\n");
+        ((void)(0));
         return false;
     }
     write_it_asid_pool(it_ap_cap, it_pd_cap);
@@ -13220,7 +14382,7 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
                      );
 
     if (initial == ((void *)0)) {
-        printf("ERROR: could not create initial thread\n");
+        ((void)(0));
         return false;
     }
 
@@ -13228,7 +14390,7 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
 
     /* create all of the untypeds. Both devices and kernel window memory */
     if (!create_untypeds(root_cnode_cap)) {
-        printf("ERROR: could not create untypteds for kernel image boot memory\n");
+        ((void)(0));
         return false;
     }
 
@@ -13253,17 +14415,17 @@ static __attribute__((__section__(".boot.text"))) bool_t try_init_kernel(
     ksNumCPUs = 1;
 
     /* initialize BKL before booting up other cores */
-    ;
-    ;
+    clh_lock_init();
+    release_secondary_cpus();
 
     /* All cores are up now, so there can be concurrency. The kernel booting is
      * supposed to be finished before the secondary cores are released, all the
      * primary has to do now is schedule the initial thread. Currently there is
      * nothing that touches any global data structures, nevertheless we grab the
      * BKL here to play safe. It is released when the kernel is left. */
-    do {} while (0);
+    do { clh_lock_acquire(false); } while(0);
 
-    printf("Booting all finished, dropped to user space\n");
+    ((void)(0));
 
     /* kernel successfully initialized */
     return true;
@@ -13279,17 +14441,21 @@ __attribute__((__section__(".boot.text"))) __attribute__((externally_visible)) v
 )
 {
     bool_t result;
-# 658 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
-    result = try_init_kernel(ui_p_reg_start,
-                             ui_p_reg_end,
-                             pv_offset,
-                             v_entry,
-                             dtb_addr_p, dtb_size);
 
 
-
+    /* we assume there exists a cpu with id 0 and will use it for bootstrapping */
+    if (getCurrentCPUIndex() == 0) {
+        result = try_init_kernel(ui_p_reg_start,
+                                 ui_p_reg_end,
+                                 pv_offset,
+                                 v_entry,
+                                 dtb_addr_p, dtb_size);
+    } else {
+        result = try_init_kernel_secondary_core();
+    }
+# 661 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/boot.c"
     if (!result) {
-        _fail("ERROR: kernel init failed", "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c", 667, __func__);
+        halt();
         __builtin_unreachable();
     }
 
@@ -13300,7 +14466,7 @@ __attribute__((__section__(".boot.text"))) __attribute__((externally_visible)) v
     schedule();
     activateThread();
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/thread.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13327,7 +14493,7 @@ void Arch_prepareSetDomain(tcb_t *tptr, dom_t dom)
         do {} while(0);
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/cache.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/cache.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13337,7 +14503,7 @@ void Arch_prepareSetDomain(tcb_t *tptr, dom_t dom)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/machine/l2c_310.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/machine/l2c_310.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13360,7 +14526,7 @@ void plat_cleanCache(void);
 void plat_cleanL2Range(paddr_t start, paddr_t end);
 void plat_invalidateL2Range(paddr_t start, paddr_t end);
 void plat_cleanInvalidateL2Range(paddr_t start, paddr_t end);
-# 11 "/Users/lukasbower/seL4_15/src/arch/arm/machine/cache.c" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/cache.c" 2
 
 
 
@@ -13487,7 +14653,7 @@ void invalidateCacheRange_RAM(vptr_t start, vptr_t end, paddr_t pstart)
 
 void invalidateCacheRange_I(vptr_t start, vptr_t end, paddr_t pstart)
 {
-# 149 "/Users/lukasbower/seL4_15/src/arch/arm/machine/cache.c"
+# 149 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/cache.c"
     vptr_t line;
     word_t index;
 
@@ -13548,13 +14714,13 @@ void arch_clean_invalidate_L1_caches(word_t type)
         isb();
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/debug.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/errata.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/errata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13569,191 +14735,435 @@ void arch_clean_invalidate_L1_caches(word_t type)
 
 /* Prototyped here as this is referenced from assembly */
 void arm_errata(void);
-# 39 "/Users/lukasbower/seL4_15/src/arch/arm/machine/errata.c"
+# 39 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/errata.c"
 __attribute__((__section__(".boot.text"))) void __attribute__((externally_visible)) arm_errata(void)
 {
 
 
 
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/gic_v2.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/gic_v3.c"
 /*
- * Copyright 2014, General Dynamics C4 Systems
+ * Copyright 2019, DornerWorks
+ * Copyright 2019, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 18 "/Users/lukasbower/seL4_15/src/arch/arm/machine/gic_v2.c"
-/* Use this to forward interrupts to all CPUs when debugging */
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/gic_v3.c"
+/* One GICR region and one GICR_SGI region */
 
+/* Assume 8 cores */
+# 37 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/gic_v3.c"
+volatile struct gic_dist_map *const gic_dist = (volatile struct gic_dist_map *)((0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x1000));
+volatile void *const gicr_base = (volatile uint8_t *)((0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x11000));
 
+word_t active_irq[4];
+volatile struct gic_rdist_map *gic_rdist_map[4] = { 0 };
+volatile struct gic_rdist_sgi_ppi_map *gic_rdist_sgi_ppi_map[4] = { 0 };
+# 58 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/gic_v3.c"
+static word_t mpidr_map[4];
 
-
-
-
-
-volatile struct gic_dist_map *const gic_dist =
-    (volatile struct gic_dist_map *)((0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x1000));
-
-
-
-
-
-volatile struct gic_cpu_iface_map *const gic_cpuiface =
-    (volatile struct gic_cpu_iface_map *)((0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x2000));
-
-
-word_t active_irq[1];
-
-/* Get the target id for this processor. We rely on the constraint that the registers
- * for PPI are read only and return only the current processor as the target.
- * If this doesn't lead to a valid ID, we emit a warning and default to core 0.
- */
-__attribute__((__section__(".boot.text"))) static uint8_t infer_cpu_gic_id(int nirqs)
+static inline word_t get_mpidr(word_t core_id)
 {
-    word_t i;
-    uint32_t target = 0;
-    for (i = 0; i < nirqs; i += 4) {
-        target = gic_dist->targets[i >> 2];
-        target |= target >> 16;
-        target |= target >> 8;
-        if (target) {
-            break;
+    return mpidr_map[core_id];
+}
+
+static inline word_t get_current_mpidr(void)
+{
+    word_t core_id = getCurrentCPUIndex();
+    return get_mpidr(core_id);
+}
+
+static inline uint64_t mpidr_to_gic_affinity(void)
+{
+    word_t mpidr = get_current_mpidr();
+    uint64_t affinity = 0;
+    affinity = (uint64_t)((mpidr >> 32) & 0xff) << 32 | ((mpidr >> 16) & 0xff) << 16 |
+               ((mpidr >> 8) & 0xff) << 8 | (mpidr & 0xff);
+    return affinity;
+}
+
+static inline uint64_t sgir_word_from_args(word_t irq, word_t target)
+{
+    uint64_t t = target; /* make sure shifts below are on 64 bit */
+    return (uint64_t) irq << (24)
+           | (1llu << (t & 0xf)) // AFF0 base
+           | ((t >> 4) & 0x0f) << (44) // AFF0 Range select
+           | ((t >> 8) & 0xff) << (16) // AFF1
+           | ((t >> 16) & 0xff) << (32) // AFF2
+           | ((t >> 24) & 0xff) << (32); // AFF3
+}
+
+/* Wait for completion of a distributor change */
+/** DONT_TRANSLATE */
+static uint32_t gicv3_do_wait_for_rwp(volatile uint32_t *ctlr_addr)
+{
+    uint32_t val;
+    bool_t waiting = true;
+    uint32_t ret = 0;
+
+    uint64_t gpt_cnt_tval = 0;
+    uint32_t deadline_ms = 2;
+    uint64_t gpt_cnt_ciel;
+
+    /* Check the value before reading the generic timer */
+    val = *ctlr_addr;
+    if (!(val & (1ul << (31)))) {
+        return 0;
+    }
+    __asm__ volatile("mrs %x0," "cntvct_el0" : "=r"(gpt_cnt_tval));
+    gpt_cnt_ciel = gpt_cnt_tval + (deadline_ms * (62500000llu / 1000llu));
+
+    while (waiting) {
+        __asm__ volatile("mrs %x0," "cntvct_el0" : "=r"(gpt_cnt_tval));
+        val = *ctlr_addr;
+
+        if (gpt_cnt_tval >= gpt_cnt_ciel) {
+            ((void)(0));
+            ret = 1;
+            waiting = false;
+
+        } else if (!(val & (1ul << (31)))) {
+            ret = 0;
+            waiting = false;
         }
     }
-    if (!target) {
-        printf("Warning: Could not infer GIC interrupt target ID, assuming 0.\n");
-        target = (1ul << (0));
-    }
-    return target & 0xff;
+    return ret;
 }
+
+static void gicv3_dist_wait_for_rwp(void)
+{
+    gicv3_do_wait_for_rwp(&gic_dist->ctlr);
+}
+
+static void gicv3_redist_wait_for_rwp(void)
+{
+    gicv3_do_wait_for_rwp(&gic_rdist_map[getCurrentCPUIndex()]->ctlr);
+}
+
+static void gicv3_enable_sre(void)
+{
+    word_t val;
+# 153 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/gic_v3.c"
+    /* Enable register interface for GICv3 in EL1. Disable IRQ/FIQ legacy bypass. */
+    val = (1ul << (0)) | (1ul << (2)) | (1ul << (1));
+    do { word_t _v = val; __asm__ volatile("msr " "S3_0_C12_C12_5" ",%x0" :: "r" (_v)); }while(0);
+    isb();
+}
+
 
 __attribute__((__section__(".boot.text"))) static void dist_init(void)
 {
     word_t i;
-    int nirqs = 32 * ((gic_dist->ic_type & 0x1f) + 1);
-    gic_dist->enable = 0;
+    uint32_t type;
+    unsigned int nr_lines;
+    uint64_t affinity;
+    uint32_t priority;
 
-    for (i = 0; i < nirqs; i += 32) {
-        /* disable */
-        gic_dist->enable_clr[i >> 5] = 0xffffffff;
-        /* clear pending */
-        gic_dist->pending_clr[i >> 5] = 0xffffffff;
+    /* Disable GIC Distributor */
+    gic_dist->ctlr = 0;
+    gicv3_dist_wait_for_rwp();
+
+    type = gic_dist->typer;
+
+    nr_lines = 32 * ((type & 0x01f) + 1);
+
+    /* Assume level-triggered */
+    for (i = 32u; i < nr_lines; i += 16) {
+        gic_dist->icfgrn[(i / 16)] = 0;
     }
 
-    /* reset interrupts priority */
-    for (i = 32; i < nirqs; i += 4) {
-        if (wrap_config_set(0)) {
-            gic_dist->priority[i >> 2] = 0x80808080;
-        } else {
-            gic_dist->priority[i >> 2] = 0;
+    /* Default priority for global interrupts */
+    priority = (0xa0 << 24 | 0xa0 << 16 | 0xa0 << 8 |
+                0xa0);
+    for (i = 32u; i < nr_lines; i += 4) {
+        gic_dist->ipriorityrn[(i / 4)] = priority;
+    }
+    /* Disable and clear all global interrupts */
+    for (i = 32u; i < nr_lines; i += 32) {
+        gic_dist->icenablern[(i / 32)] = 0xffffffff;
+        gic_dist->icpendrn[(i / 32)] = 0xffffffff;
+    }
+
+    /* group 1 for non-secure */
+    if (wrap_config_set(1)) {
+        for (i = 32u; i < nr_lines; i += 32) {
+            gic_dist->igrouprn[(i / 32)] = 0xffffffff;
         }
+    }
+
+    gic_dist->ctlr = (1ul << (4)) | (1ul << (1)) | (1ul << (0));
+    gicv3_dist_wait_for_rwp();
+
+    /* Route all global IRQs to this CPU */
+    affinity = mpidr_to_gic_affinity();
+    for (i = 32u; i < nr_lines; i++) {
+        gic_dist->iroutern[i - 32u] = affinity;
+    }
+
+}
+
+__attribute__((__section__(".boot.text"))) static uint32_t gicr_enable_rdist(int core_id)
+{
+    uint32_t deadline_ms = 2;
+    bool_t waiting = true;
+    uint32_t val;
+    uint64_t gpt_cnt_tval = 0;
+    uint64_t gpt_cnt_ciel;
+    uint32_t ret = 0;
+
+    val = gic_rdist_map[core_id]->waker;
+    val &= ~(1ul << (1));
+    gic_rdist_map[core_id]->waker = val;
+
+    __asm__ volatile("mrs %x0," "cntvct_el0" : "=r"(gpt_cnt_tval));
+    gpt_cnt_ciel = gpt_cnt_tval + (deadline_ms * (62500000llu / 1000llu));
+
+    while (waiting) {
+        __asm__ volatile("mrs %x0," "cntvct_el0" : "=r"(gpt_cnt_tval));
+        val = gic_rdist_map[core_id]->waker;
+
+        if (gpt_cnt_tval >= gpt_cnt_ciel) {
+            ((void)(0));
+            ret = 1;
+            waiting = false;
+
+        } else if (!(val & (1ul << (2)))) {
+            ret = 0;
+            waiting = false;
+        }
+    }
+    return ret;
+}
+
+__attribute__((__section__(".boot.text"))) static void gicr_locate_interface(void)
+{
+    word_t offset;
+    int core_id = getCurrentCPUIndex();
+    word_t mpidr = get_current_mpidr();
+    uint32_t val;
+
+    /*
+     * Iterate through all redistributor interfaces looking for one that matches
+     * our mpidr.
+     */
+    for (offset = 0; offset < (0x100000); offset += (0x20000)) {
+
+        uint64_t typer = ((struct gic_rdist_map *)((word_t)gicr_base + offset))->typer;
+        if ((typer >> 32) == ((((mpidr >> 32) & 0xff) << 24) |
+                              (((mpidr >> 16) & 0xff) << 16) |
+                              (((mpidr >> 8) & 0xff) << 8) |
+                              (mpidr & 0xff))) {
+
+            word_t gicr = (word_t)gicr_base + offset;
+            if (gic_rdist_map[core_id] != ((void *)0) || gic_rdist_sgi_ppi_map[core_id] != ((void *)0)) {
+                ((void)(0))
+
+
+                                                                                                                                ;
+                halt();
+            }
+            gic_rdist_map[core_id] = (void *)gicr;
+            gic_rdist_sgi_ppi_map[core_id] = (void *)(gicr + 0x00010000);
+
+            /*
+             * GICR_WAKER should be Read-all-zeros in Non-secure world
+             * and we expect redistributors to be already awoken by an earlier loader.
+             * However if we get a value back then something is probably wrong.
+             */
+            val = gic_rdist_map[core_id]->waker;
+            if (val & (1ul << (2))) {
+                /* On QEMU, the redistributor may not be woken by an earlier
+                 * loader, so we need to explicitly wake it here. */
+                int ret = gicr_enable_rdist(core_id);
+                if (ret == 1) {
+                    halt();
+                }
+            }
+            break;
+        }
+    }
+    if (offset >= (0x100000)) {
+        ((void)(0))
+
+                                                                       ;
+        halt();
+    }
+
+
+}
+
+__attribute__((__section__(".boot.text"))) static void gicr_init(void)
+{
+    int i;
+    uint32_t priority;
+
+    /* Find redistributor for this core. */
+    gicr_locate_interface();
+
+    /* Deactivate SGIs/PPIs */
+    gic_rdist_sgi_ppi_map[getCurrentCPUIndex()]->icactiver0 = ~0;
+
+    /* Set priority on PPI and SGI interrupts */
+    priority = (0xa0 << 24 | 0xa0 << 16 | 0xa0 << 8 |
+                0xa0);
+    for (i = 0; i < 32u; i += 4) {
+        gic_rdist_sgi_ppi_map[getCurrentCPUIndex()]->ipriorityrn[i / 4] = priority;
     }
 
     /*
-     * reset int target to current cpu
-     * We query which id that the GIC uses for us and use that.
+     * Disable all PPI interrupts, ensure all SGI interrupts are
+     * enabled.
      */
-    uint8_t target = infer_cpu_gic_id(nirqs);
-    for (i = 0; i < nirqs; i += 4) {
-        gic_dist->targets[i >> 2] = ( ( ((target)&0xff)<<0u ) | ( ((target)&0xff)<<8u ) | ( ((target)&0xff)<<16u ) | ( ((target)&0xff)<<24u ) );
+    gic_rdist_sgi_ppi_map[getCurrentCPUIndex()]->icenabler0 = 0xffff0000;
+    gic_rdist_sgi_ppi_map[getCurrentCPUIndex()]->isenabler0 = 0x0000ffff;
+    if (wrap_config_set(1)) {
+        gic_rdist_sgi_ppi_map[getCurrentCPUIndex()]->igroupr0 = 0xffffffff;
     }
 
-    /* level-triggered, 1-N */
-    for (i = 64; i < nirqs; i += 32) {
-        gic_dist->config[i >> 5] = 0x55555555;
-    }
+    /* Set ICFGR1 for PPIs as level-triggered */
+    gic_rdist_sgi_ppi_map[getCurrentCPUIndex()]->icfgr1 = 0x0;
 
-    /* group 0 for secure; group 1 for non-secure */
-    for (i = 0; i < nirqs; i += 32) {
-        if (wrap_config_set(0) && !wrap_config_set(1)) {
-            gic_dist->security[i >> 5] = 0xffffffff;
-        } else {
-            gic_dist->security[i >> 5] = 0;
-        }
-    }
-    /* enable the int controller */
-    gic_dist->enable = 1;
+    gicv3_redist_wait_for_rwp();
 }
 
 __attribute__((__section__(".boot.text"))) static void cpu_iface_init(void)
 {
-    uint32_t i;
+    word_t icc_ctlr = 0;
 
-    /* For non-Exynos4, the registers are banked per CPU, need to clear them */
-    gic_dist->enable_clr[0] = 0xffffffff;
-    gic_dist->pending_clr[0] = 0xffffffff;
+    /* Enable system registers */
+    gicv3_enable_sre();
 
-    /* put everything in group 0; group 1 if in hyp mode */
-    if (wrap_config_set(0) && !wrap_config_set(1)) {
-        gic_dist->security[0] = 0xffffffff;
-        gic_dist->priority[0] = 0x80808080;
-    } else {
-        gic_dist->security[0] = 0;
-        gic_dist->priority[0] = 0x0;
-    }
+    /* No priority grouping: ICC_BPR1_EL1 */
+    do { word_t _v = 0; __asm__ volatile("msr " "S3_0_C12_C12_3" ",%x0" :: "r" (_v)); }while(0);
 
-    /* clear any software generated interrupts */
-    for (i = 0; i < 16; i += 4) {
-        gic_dist->sgi_pending_clr[i >> 2] = 0xffffffff;
-    }
+    /* Set priority mask register: ICC_PMR_EL1 */
+    do { word_t _v = 0xff; __asm__ volatile("msr " "S3_0_C4_C6_0" ",%x0" :: "r" (_v)); }while(0);
 
-    gic_cpuiface->icontrol = 0;
-    /* the write to priority mask is ignored if the kernel is
-     * in non-secure mode and the priority mask is already configured
-     * by secure mode software. the elfloader should config the
-     * interrupt routing properly to ensure that the hyp-mode kernel
-     * can get interrupts
-     */
-    gic_cpuiface->pri_msk_c = 0x000000f0;
-    gic_cpuiface->pb_c = 0x00000003;
+    /* EOI drops priority of the interrupt, deactivation happens separately: ICC_CTLR_EL1 */
+    __asm__ volatile("mrs %x0," "S3_0_C12_C12_4" : "=r"(icc_ctlr));
+    icc_ctlr |= (1ul << (1));
+    do { word_t _v = icc_ctlr; __asm__ volatile("msr " "S3_0_C12_C12_4" ",%x0" :: "r" (_v)); }while(0);
 
-    i = gic_cpuiface->int_ack;
-    while ((i & ((1ul << (10u)) - 1ul)) != 1023u) {
-        gic_cpuiface->eoi = i;
-        i = gic_cpuiface->int_ack;
-    }
-    gic_cpuiface->icontrol = 1;
+    /* Enable Group1 interrupts: ICC_IGRPEN1_EL1 */
+    do { word_t _v = 1; __asm__ volatile("msr " "S3_0_C12_C12_7" ",%x0" :: "r" (_v)); }while(0);
+
+    /* Sync at once at the end of cpu interface configuration */
+    isb();
 }
 
 void setIRQTrigger(irq_t irq, bool_t trigger)
 {
-    /* in the gic_config, there is a 2 bit field for each irq,
-     * setting the most significant bit of this field makes the irq edge-triggered,
-     * while 0 indicates that it is level-triggered */
-    word_t index = (irq) / 16u;
-    word_t offset = ((irq) % 16u) * 2;
-    if (trigger) {
-        /* set the bit */
-        gic_dist->config[index] |= (1ul << (offset + 1));
-    } else {
-        gic_dist->config[index] &= ~(1ul << (offset + 1));
+
+    /* GICv3 has read-only GICR_ICFG0 for SGI with
+     * default value 0xaaaaaaaa, and read-write GICR_ICFG1
+     * for PPI with default 0x00000000.*/
+    word_t hw_irq = (irq.irq);
+    word_t core = (irq.target_core);
+    if (((hw_irq) < 16u)) {
+        return;
     }
+    int word = hw_irq >> 4;
+    int bit = ((hw_irq & 0xf) * 2);
+    uint32_t icfgr = 0;
+    if (((hw_irq) < 32u)) {
+        icfgr = gic_rdist_sgi_ppi_map[core]->icfgr1;
+    } else {
+        icfgr = gic_dist->icfgrn[word];
+    }
+
+    if (trigger) {
+        icfgr |= (2 << bit);
+    } else {
+        icfgr &= ~(3 << bit);
+    }
+
+    if (((hw_irq) < 32u)) {
+        gic_rdist_sgi_ppi_map[core]->icfgr1 = icfgr;
+    } else {
+        /* Update GICD_ICFGR<n>. Note that the interrupt should
+         * be disabled before changing the field, and this function
+         * assumes the caller has disabled the interrupt. */
+        gic_dist->icfgrn[word] = icfgr;
+    }
+
+    return;
 }
 
 __attribute__((__section__(".boot.text"))) void initIRQController(void)
 {
-    /* irqInvalid cannot correspond to a valid IRQ index into the irq state array */
-    do { if (!((maxIRQ + 1) < (irqInvalid))) { _assert_fail("INT_STATE_ARRAY_SIZE < IRQT_TO_IRQ(irqInvalid)", "/Users/lukasbower/seL4_15/src/arch/arm/machine/gic_v2.c", 168, __func__); } } while(0);
     dist_init();
 }
 
 __attribute__((__section__(".boot.text"))) void cpu_initLocalIRQController(void)
 {
-    active_irq[0lu] = 1023u;
+    word_t mpidr = 0;
+    __asm__ volatile("mrs %x0," "mpidr_el1" : "=r"(mpidr));
+
+    mpidr_map[getCurrentCPUIndex()] = mpidr;
+    active_irq[getCurrentCPUIndex()] = 1023u;
+
+    gicr_init();
     cpu_iface_init();
 }
 
 bool_t plat_SGITargetValid(word_t target)
 {
-    /* written as <= so that the term is the same as in gic_v3 for the proofs */
-    return target <= 8 - 1;
+    /* Aff0+Aff1+Aff2+Aff3 values are not guaranteed to be contiguous
+     * and the first core may have a non-zero affinity value. */
+    return target <= (0xFFFFFFFF);
 }
 
 void plat_sendSGI(word_t irq, word_t target)
 {
-    gic_dist->sgi_control = ((1ul << (target)) << (16)) | (irq << 0);
+    uint64_t sgi1r_base = sgir_word_from_args(irq, target);
+    do { word_t _v = sgi1r_base; __asm__ volatile("msr " "S3_0_C12_C11_5" ",%x0" :: "r" (_v)); }while(0);
+    isb();
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/hardware.c"
+
+
+
+
+void ipi_send_target(irq_t irq, word_t cpuTargetList)
+{
+    uint64_t sgi1r_base = ((word_t) (irq.irq)) << (24);
+    word_t sgi1r[4];
+    word_t last_aff1 = 0;
+
+    for (word_t i = 0; i < 4; i++) {
+        sgi1r[i] = 0;
+        if (cpuTargetList & (1ul << (i))) {
+            word_t mpidr = mpidr_map[i];
+            word_t aff1 = ((mpidr >> 8) & 0xff);
+            word_t aff0 = (mpidr & 0xff);
+            // AFF1 is assumed to be contiguous and less than CONFIG_MAX_NUM_NODES.
+            // The targets are grouped by AFF1.
+            ;
+            sgi1r[aff1] |= sgi1r_base | (aff1 << (16)) | (1 << aff0);
+            if (aff1 > last_aff1) {
+                last_aff1 = aff1;
+            }
+        }
+    }
+    for (word_t i = 0; i <= last_aff1; i++) {
+        if (sgi1r[i] != 0) {
+            do { word_t _v = sgi1r[i]; __asm__ volatile("msr " "S3_0_C12_C11_5" ",%x0" :: "r" (_v)); }while(0);
+        }
+    }
+    isb();
+}
+
+void setIRQTarget(irq_t irq, seL4_Word target)
+{
+    if ((((irq.irq) < 32u))) {
+        halt();
+        return;
+    }
+
+    word_t hw_irq = (irq.irq);
+    gic_dist->iroutern[hw_irq - 32u] = (mpidr_map[target] & 0xff00ffffff);
+}
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/hardware.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13786,7 +15196,7 @@ __attribute__((__section__(".boot.text"))) void map_kernel_devices(void)
         /* all frames are supposed to describe device memory, so they should
          * never be marked as executable.
          */
-        do { if (!(frame->armExecuteNever)) { _assert_fail("frame->armExecuteNever", "/Users/lukasbower/seL4_15/src/arch/arm/machine/hardware.c", 33, __func__); } } while(0);
+        ;
         map_kernel_frame(frame->paddr, frame->pptr, VMKernelOnly,
                          vm_attributes_new(frame->armExecuteNever, false,
                                            false));
@@ -13798,7 +15208,7 @@ __attribute__((__section__(".boot.text"))) void map_kernel_devices(void)
         }
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/io.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/io.c"
 /*
  * Copyright 2021, Axel Heider <axelheider@gmx.de>
  *
@@ -13807,7 +15217,7 @@ __attribute__((__section__(".boot.text"))) void map_kernel_devices(void)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/drivers/uart.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/drivers/uart.h" 1
 /*
  * Copyright 2021, Axel Heider <axelheider@gmx.de>
  *
@@ -13815,40 +15225,8 @@ __attribute__((__section__(".boot.text"))) void map_kernel_devices(void)
  */
 
        
-
-
-
-void uart_drv_putchar(unsigned char c);
-
-static inline void uart_console_putchar(
-    unsigned char c)
-{
-    /* UART console requires printing a '\r' (CR) before any '\n' (LF) */
-    if (c == '\n') {
-        uart_drv_putchar('\r');
-    }
-    uart_drv_putchar(c);
-}
-
-
-
-
-unsigned char uart_drv_getchar(void);
-# 10 "/Users/lukasbower/seL4_15/src/arch/arm/machine/io.c" 2
-
-
-void kernel_putDebugChar(unsigned char c)
-{
-    uart_console_putchar(c);
-}
-
-
-
-unsigned char kernel_getDebugChar(void)
-{
-    return uart_drv_getchar();
-}
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/l2c_nop.c"
+# 10 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/io.c" 2
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/machine/l2c_nop.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13865,7 +15243,7 @@ void plat_cleanL2Range(paddr_t start, paddr_t end) {}
 void plat_invalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Cache(void) {}
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/interrupt.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13885,18 +15263,7 @@ static exception_t Arch_invokeIRQControl(irq_t irq, cte_t *handlerSlot, cte_t *c
     }
     return invokeIRQControl(irq, handlerSlot, controlSlot);
 }
-
-
-
-
-static exception_t Arch_invokeIssueSGISignal(word_t irq, word_t target, cte_t *sgiSlot, cte_t *controlSlot)
-{
-    cteInsert(cap_sgi_signal_cap_new(target, irq), controlSlot, sgiSlot);
-    return EXCEPTION_NONE;
-}
-
-
-
+# 32 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/interrupt.c"
 exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
                                             cte_t *srcSlot, word_t *buffer)
 {
@@ -13907,13 +15274,13 @@ exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
         }
 
         if (!wrap_config_set(1)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "This platform does not support setting the IRQ trigger" ">>" "\033[0m" "\n", 0lu, __func__, 42, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
         word_t irq_w = getSyscallArg(0, buffer);
-        irq_t irq = (irq_t) (irq_w);
+        irq_t irq = (irq_t) ((irq_t){.irq = (irq_w), .target_core = (0)});
         bool_t trigger = !!getSyscallArg(1, buffer);
         word_t index = getSyscallArg(2, buffer);
         word_t depth = getSyscallArg(3, buffer);
@@ -13924,16 +15291,23 @@ exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
         if (status != EXCEPTION_NONE) {
             return status;
         }
-# 67 "/Users/lukasbower/seL4_15/src/arch/arm/object/interrupt.c"
+
+
+        if ((((irq.irq) < 32u))) {
+            ;
+            current_syscall_error.type = seL4_IllegalOperation;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
         if (isIRQActive(irq)) {
             current_syscall_error.type = seL4_RevokeFirst;
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Rejecting request for IRQ %u. Already active." ">>" "\033[0m" "\n", 0lu, __func__, 69, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (int)(irq)); } while (0);
+            ;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
         lookupSlot_ret_t lu_ret = lookupTargetSlot(cnodeCap, index, depth);
         if (lu_ret.status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Target slot for new IRQ Handler cap invalid: cap %lu, IRQ %u." ">>" "\033[0m" "\n", 0lu, __func__, 75, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), getExtraCPtr(buffer, 0), (int)(irq)); } while (0)
+           
                                                                      ;
             return lu_ret.status;
         }
@@ -13942,120 +15316,96 @@ exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
 
         status = ensureEmptySlot(destSlot);
         if (status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Target slot for new IRQ Handler cap not empty: cap %lu, IRQ %u." ">>" "\033[0m" "\n", 0lu, __func__, 84, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), getExtraCPtr(buffer, 0), (int)(irq)); } while (0)
+           
                                                                      ;
             return status;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return Arch_invokeIRQControl(irq, destSlot, srcSlot, trigger);
-
-    } else if (invLabel == ARMIRQIssueSGISignal) {
-        if (length < 4 || current_extra_caps.excaprefs[0] == ((void *)0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IRQControl: IssueSGISignal: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 94, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
-            current_syscall_error.type = seL4_TruncatedMessage;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        /* wrap_config_set to prevent verification automation from simplifying
-           away the condition when NUM_SGIS = 0 */
-        if (wrap_config_set(16u) == 0) {
-            current_syscall_error.type = seL4_IllegalOperation;
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IRQControl: IssueSGISignal not available on this platform." ">>" "\033[0m" "\n", 0lu, __func__, 103, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-
-        word_t irq = getSyscallArg(0, buffer);
-        word_t target = getSyscallArg(1, buffer);
+# 150 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/interrupt.c"
+    } else if (invLabel == ARMIRQIssueIRQHandlerTriggerCore) {
+        word_t irq_w = getSyscallArg(0, buffer);
+        bool_t trigger = !!getSyscallArg(1, buffer);
         word_t index = getSyscallArg(2, buffer);
-        word_t depth = getSyscallArg(3, buffer);
-
+        word_t depth = getSyscallArg(3, buffer) & 0xfful;
+        seL4_Word target = getSyscallArg(4, buffer);
         cap_t cnodeCap = current_extra_caps.excaprefs[0]->cap;
+        exception_t status = Arch_checkIRQ(irq_w);
+        irq_t irq = ((irq_t){.irq = (irq_w), .target_core = (target)});
 
-        /* wrap_config_set to prevent verification automation from simplifying
-           away the condition when NUM_SGIS = 0 */
-        if (irq >= wrap_config_set(16u)) {
-            current_syscall_error.type = seL4_RangeError;
-            current_syscall_error.rangeErrorMin = 0;
-            current_syscall_error.rangeErrorMax = 16u - 1;
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IRQControl: IssueSGISignal: Invalid SGI IRQ 0x%lx." ">>" "\033[0m" "\n", 0lu, __func__, 120, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), irq); } while (0);
+        if (status != EXCEPTION_NONE) {
+            return status;
+        }
+
+        if (target >= 4) {
+            current_syscall_error.type = seL4_InvalidArgument;
+            ;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        if (!plat_SGITargetValid(target)) {
-            current_syscall_error.type = seL4_InvalidArgument;
-            current_syscall_error.invalidArgumentNumber = 1;
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IRQControl: IssueSGISignal: Invalid SGI Target 0x%lx." ">>" "\033[0m" "\n", 0lu, __func__, 127, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), target); } while (0);
+        if (isIRQActive(irq)) {
+            current_syscall_error.type = seL4_RevokeFirst;
+            ;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
         lookupSlot_ret_t lu_ret = lookupTargetSlot(cnodeCap, index, depth);
         if (lu_ret.status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IRQControl: IssueSGISignal: Target slot for new ARM_SGI_Signal cap invalid: cap %lu." ">>" "\033[0m" "\n", 0lu, __func__, 133, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), getExtraCPtr(buffer, 0)); } while (0)
-                                              ;
+           
+                                                                     ;
             return lu_ret.status;
         }
+
         cte_t *destSlot = lu_ret.slot;
 
-        exception_t status = ensureEmptySlot(destSlot);
+        status = ensureEmptySlot(destSlot);
         if (status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IRQControl: IssueSGISignal: Target slot for new ARM_SGI_Signal cap not empty: cap %lu." ">>" "\033[0m" "\n", 0lu, __func__, 141, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), getExtraCPtr(buffer, 0)); } while (0)
-                                              ;
+           
+                                                                     ;
             return status;
         }
-        setThreadState(ksCurThread, ThreadState_Restart);
-        return Arch_invokeIssueSGISignal(irq, target, destSlot, srcSlot);
-# 202 "/Users/lukasbower/seL4_15/src/arch/arm/object/interrupt.c"
+
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
+
+        /* If the IRQ is not a private interrupt, then the role of the syscall is to set
+         * target core to which the shared interrupt will be physically delivered.
+         */
+        if (!(((irq.irq) < 32u))) {
+            setIRQTarget(irq, target);
+        }
+        return Arch_invokeIRQControl(irq, destSlot, srcSlot, trigger);
+
     } else {
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 }
-
-
-
-static exception_t invokeSGISignalGenerate(word_t irq, word_t target)
-{
-    plat_sendSGI(irq, target);
-    return EXCEPTION_NONE;
-}
-
-
-exception_t decodeSGISignalInvocation(word_t invLabel, word_t length,
-                                      cap_t cap, word_t *buffer)
-{
-
-    word_t irq = cap_sgi_signal_cap_get_capSGIIRQ(cap);
-    word_t target = cap_sgi_signal_cap_get_capSGITarget(cap);
-
-    setThreadState(ksCurThread, ThreadState_Restart);
-    return invokeSGISignalGenerate(irq, target);
-}
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/iospace.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/iospace.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/smc.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/smc.c"
 /*
  * Copyright 2021, DornerWorks Ltd.
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/smmu.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/smmu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/tcb.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_15/src/arch/arm/object/tcb.c"
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/tcb.c"
 word_t __attribute__((__const__)) Arch_decodeTransfer(word_t flags)
 {
     return 0;
@@ -14065,13 +15415,13 @@ exception_t __attribute__((__const__)) Arch_performTransfer(word_t arch, tcb_t *
 {
     return EXCEPTION_NONE;
 }
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/vcpu.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/object/vcpu.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/arch/arm/smp/ipi.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14079,7 +15429,7 @@ exception_t __attribute__((__const__)) Arch_performTransfer(word_t arch, tcb_t *
  */
 
 
-# 1 "/Users/lukasbower/seL4_15/include/arch/arm/arch/64/mode/smp/ipi.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/arch/arm/arch/64/mode/smp/ipi.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14087,90 +15437,105 @@ exception_t __attribute__((__const__)) Arch_performTransfer(word_t arch, tcb_t *
  */
 
        
-# 9 "/Users/lukasbower/seL4_15/src/arch/arm/smp/ipi.c" 2
-# 1 "/Users/lukasbower/seL4_15/src/assert.c"
+
+
+
+
+
+
+
+typedef enum {
+    /* placeholder for 64-bit ARM IPI types */
+    IpiNumModeRemoteCall
+} IpiModeRemoteCall_t;
+# 9 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/smp/ipi.c" 2
+
+
+
+
+
+void handleRemoteCall(IpiRemoteCall_t call, word_t arg0, word_t arg1, word_t arg2, bool_t irqPath)
+{
+    /* we gets spurious irq_remote_call_ipi calls, e.g. when handling IPI
+     * in lock while hardware IPI is pending. Guard against spurious IPIs! */
+    if (clh_is_ipi_pending(getCurrentCPUIndex())) {
+        switch (call) {
+        case IpiRemoteCall_Stall:
+            ipiStallCoreCallback(irqPath);
+            break;
+
+
+        case IpiRemoteCall_switchFpuOwner:
+            switchLocalFpuOwner((tcb_t *)arg0);
+            break;
+
+
+        case IpiRemoteCall_InvalidateTranslationSingle:
+            invalidateTranslationSingleLocal(arg0);
+            break;
+
+        case IpiRemoteCall_InvalidateTranslationASID:
+            invalidateTranslationASIDLocal(arg0);
+            break;
+
+        case IpiRemoteCall_InvalidateTranslationAll:
+            invalidateTranslationAllLocal();
+            break;
+
+        case IpiRemoteCall_MaskPrivateInterrupt:
+            maskInterrupt(arg0, (((arg1) < 32u*4) ? ((irq_t){.irq = ((arg1) - ((arg1)/32u)*32u), .target_core = ((arg1) / 32u)}): ((irq_t){.irq = ((arg1) - (4 -1)*32u), .target_core = (0)})));
+            break;
+
+
+        case IpiRemoteCall_DeactivatePrivateInterrupt:
+            deactivateInterrupt((((arg1) < 32u*4) ? ((irq_t){.irq = ((arg1) - ((arg1)/32u)*32u), .target_core = ((arg1) / 32u)}): ((irq_t){.irq = ((arg1) - (4 -1)*32u), .target_core = (0)})));
+            break;
+# 61 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/arch/arm/smp/ipi.c"
+        default:
+            halt();
+            break;
+        }
+
+        big_kernel_lock.node[getCurrentCPUIndex()].ipi = 0;
+        ipi_wait();
+    }
+}
+
+void ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking)
+{
+    generic_ipi_send_mask(ipi, mask, isBlocking);
+}
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/assert.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-
-
-
-
-
-
-void _fail(
-    const char *s,
-    const char *file,
-    unsigned int line,
-    const char *function)
-{
-    printf(
-        "seL4 called fail at %s:%u in function %s, saying \"%s\"\n",
-        file,
-        line,
-        function,
-        s
-    );
-    halt();
-}
-
-void _assert_fail(
-    const char *assertion,
-    const char *file,
-    unsigned int line,
-    const char *function)
-{
-    printf("seL4 failed assertion '%s' at %s:%u in function %s\n",
-           assertion,
-           file,
-           line,
-           function
-          );
-    halt();
-}
-# 1 "/Users/lukasbower/seL4_15/src/benchmark/benchmark.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/benchmark/benchmark.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/benchmark/benchmark_track.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/benchmark/benchmark_track.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/benchmark/benchmark_utilisation.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/benchmark/benchmark_utilisation.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/drivers/serial/pl011.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/drivers/serial/pl011.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 22 "/Users/lukasbower/seL4_15/src/drivers/serial/pl011.c"
-void uart_drv_putchar(unsigned char c)
-{
-    while ((*((volatile uint32_t *)((0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x0) + (0x018))) & (1ul << (5))) != 0);
-
-    *((volatile uint32_t *)((0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x0) + (0x000))) = c;
-}
-
-
-
-unsigned char uart_drv_getchar(void)
-{
-    while ((*((volatile uint32_t *)((0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x0) + (0x018))) & (1ul << (4))) != 0);
-
-    return *((volatile uint32_t *)((0xffffffffffe00000ul /* 2^64 - 2^21 */ + 0x0) + (0x000)));
-}
-# 1 "/Users/lukasbower/seL4_15/src/drivers/timer/generic_timer.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/drivers/timer/generic_timer.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -14181,7 +15546,7 @@ unsigned char uart_drv_getchar(void)
 
 __attribute__((__section__(".boot.text"))) void initGenericTimer(void)
 {
-    if (wrap_config_set(1)) {
+    if (wrap_config_set(0)) {
         /* check the frequency is correct */
         word_t gpt_cntfrq = 0;
         __asm__ volatile("mrs %x0," "cntfrq_el0" : "=r"(gpt_cntfrq));
@@ -14191,8 +15556,8 @@ __attribute__((__section__(".boot.text"))) void initGenericTimer(void)
         if ((gpt_cntfrq != 0) && (gpt_cntfrq != 62500000llu)) {
             /* TIMER_CLOCK_HZ is defined as a unsigned long long constant on
              * every architecture. */
-            printf("Warning:  gpt_cntfrq %""lu"", expected %llu\n",
-                   gpt_cntfrq, 62500000llu);
+            ((void)(0))
+                                              ;
         }
     }
 
@@ -14218,7 +15583,7 @@ __attribute__((__section__(".boot.text"))) void initTimer(void)
 {
     initGenericTimer();
 }
-# 1 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14226,7 +15591,7 @@ __attribute__((__section__(".boot.text"))) void initTimer(void)
  */
 
 
-# 1 "/Users/lukasbower/seL4_15/include/fastpath/fastpath.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/fastpath/fastpath.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14234,7 +15599,7 @@ __attribute__((__section__(".boot.text"))) void initTimer(void)
  */
 
        
-# 88 "/Users/lukasbower/seL4_15/include/fastpath/fastpath.h"
+# 64 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/fastpath/fastpath.h"
 /* Fastpath cap lookup.  Returns a null_cap on failure. */
 static inline cap_t __attribute__((always_inline)) lookup_fp(cap_t cap, cptr_t cptr)
 {
@@ -14318,7 +15683,7 @@ static inline void endpoint_ptr_set_epQueue_head_np(endpoint_t *ep_ptr, word_t e
 {
     ep_ptr->words[1] = epQueue_head;
 }
-# 9 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c" 2
+# 9 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c" 2
 
 
 
@@ -14346,7 +15711,7 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
     /* Get message info, length, and fault type. */
     info = messageInfoFromWord_raw(msgInfo);
     length = seL4_MessageInfo_get_length(info);
-    fault_type = seL4_Fault_get_seL4_FaultType(ksCurThread->tcbFault);
+    fault_type = seL4_Fault_get_seL4_FaultType(ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbFault);
 
     /* Check there's no extra caps, the length is ok and there's no
      * saved fault. */
@@ -14356,7 +15721,7 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
     }
 
     /* Lookup the cap */
-    ep_cap = lookup_fp((((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap, cptr);
+    ep_cap = lookup_fp((((cte_t *)((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap, cptr);
 
     /* Check it's an endpoint */
     if (__builtin_expect(!!(!cap_capType_equals(ep_cap, cap_endpoint_cap) || !cap_endpoint_cap_get_capCanSend(ep_cap)), 0)
@@ -14393,7 +15758,7 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
     if (__builtin_expect(!!(! isValidVTableRoot_fp(newVTable)), 0)) {
         slowpath(SysCall);
     }
-# 99 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 99 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     /* Need to test that the ASID is still valid */
     asid_t asid = cap_vspace_cap_get_capVSMappedASID(newVTable);
     asid_map_t asid_map = findMapForASID(asid);
@@ -14401,13 +15766,13 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
                                                                                           ) {
         slowpath(SysCall);
     }
-# 114 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 114 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     stored_hw_asid.words[0] = asid;
-# 123 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 123 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     /* let gcc optimise this out for 1 domain */
     dom = maxDom ? ksCurDomain : 0;
     /* ensure only the idle thread or lower prio threads are present in the scheduler */
-    if (__builtin_expect(!!(dest->tcbPriority < ksCurThread->tcbPriority && !isHighestPrio(dom, dest->tcbPriority)), 0)
+    if (__builtin_expect(!!(dest->tcbPriority < ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbPriority && !isHighestPrio(dom, dest->tcbPriority)), 0)
                                                         ) {
         slowpath(SysCall);
     }
@@ -14429,7 +15794,13 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
     if (__builtin_expect(!!(dest->tcbDomain != ksCurDomain && 0 < maxDom), 0)) {
         slowpath(SysCall);
     }
-# 167 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 161 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
+    /* Ensure both threads have the same affinity */
+    if (__builtin_expect(!!(ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbAffinity != dest->tcbAffinity), 0)) {
+        slowpath(SysCall);
+    }
+
+
     /*
      * --- POINT OF NO RETURN ---
      *
@@ -14451,11 +15822,11 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
     badge = cap_endpoint_cap_get_capEPBadge(ep_cap);
 
     /* Unlink dest <-> reply, link src (cur thread) <-> reply */
-    thread_state_ptr_set_tsType_np(&ksCurThread->tcbState,
+    thread_state_ptr_set_tsType_np(&ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbState,
                                    ThreadState_BlockedOnReply);
-# 208 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 208 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     /* Get sender reply slot */
-    cte_t *replySlot = (((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbReply));
+    cte_t *replySlot = (((cte_t *)((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbReply));
 
     /* Get dest caller slot */
     cte_t *callerSlot = (((cte_t *)((word_t)(dest)&~((1ul << (11)) - 1ul)))+(tcbCaller));
@@ -14463,13 +15834,13 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
     /* Insert reply cap */
     word_t replyCanGrant = thread_state_ptr_get_blockingIPCCanGrant(&dest->tcbState);;
     cap_reply_cap_ptr_new_np(&callerSlot->cap, replyCanGrant, 0,
-                             ((word_t)(ksCurThread)));
+                             ((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)));
     mdb_node_ptr_set_mdbPrev_np(&callerSlot->cteMDBNode, ((word_t)(replySlot)));
     mdb_node_ptr_mset_mdbNext_mdbRevocable_mdbFirstBadged(
         &replySlot->cteMDBNode, ((word_t)(callerSlot)), 1, 1);
 
 
-    fastpath_copy_mrs(length, ksCurThread, dest);
+    fastpath_copy_mrs(length, ksSMP[(getCurrentCPUIndex())].system.ksCurThread, dest);
 
     /* Dest thread is set Running, but not queued. */
     thread_state_ptr_set_tsType_np(&dest->tcbState,
@@ -14478,7 +15849,7 @@ void __attribute__((__noreturn__)) fastpath_call(word_t cptr, word_t msgInfo)
 
     msgInfo = wordFromMessageInfo(seL4_MessageInfo_set_capsUnwrapped(info, 0));
 
-    fastpath_restore(badge, msgInfo, ksCurThread);
+    fastpath_restore(badge, msgInfo, ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
 }
 
 
@@ -14508,7 +15879,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
     /* Get message info and length */
     info = messageInfoFromWord_raw(msgInfo);
     length = seL4_MessageInfo_get_length(info);
-    fault_type = seL4_Fault_get_seL4_FaultType(ksCurThread->tcbFault);
+    fault_type = seL4_Fault_get_seL4_FaultType(ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbFault);
 
     /* Check there's no extra caps, the length is ok and there's no
      * saved fault. */
@@ -14518,7 +15889,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
     }
 
     /* Lookup the cap */
-    ep_cap = lookup_fp((((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap,
+    ep_cap = lookup_fp((((cte_t *)((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap,
                        cptr);
 
     /* Check it's an endpoint */
@@ -14526,9 +15897,9 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
                                                              ) {
         slowpath(SysReplyRecv);
     }
-# 291 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 291 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     /* Check there is nothing waiting on the notification */
-    if (__builtin_expect(!!(ksCurThread->tcbBoundNotification && notification_ptr_get_state(ksCurThread->tcbBoundNotification) == NtfnState_Active), 0)
+    if (__builtin_expect(!!(ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbBoundNotification && notification_ptr_get_state(ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbBoundNotification) == NtfnState_Active), 0)
                                                                                                                ) {
         slowpath(SysReplyRecv);
     }
@@ -14540,9 +15911,9 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
     if (__builtin_expect(!!(endpoint_ptr_get_state(ep_ptr) == EPState_Send), 0)) {
         slowpath(SysReplyRecv);
     }
-# 319 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 319 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     /* Only reply if the reply cap is valid. */
-    cte_t *callerSlot = (((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCaller));
+    cte_t *callerSlot = (((cte_t *)((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCaller));
     cap_t callerCap = callerSlot->cap;
     if (__builtin_expect(!!(!fastpath_reply_cap_check(callerCap)), 0)) {
         slowpath(SysReplyRecv);
@@ -14584,7 +15955,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
     if (__builtin_expect(!!(! isValidVTableRoot_fp(newVTable)), 0)) {
         slowpath(SysReplyRecv);
     }
-# 376 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 376 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     /* Need to test that the ASID is still valid */
     asid_t asid = cap_vspace_cap_get_capVSMappedASID(newVTable);
     asid_map_t asid_map = findMapForASID(asid);
@@ -14592,7 +15963,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
                                                                                           ) {
         slowpath(SysReplyRecv);
     }
-# 392 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 392 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     stored_hw_asid.words[0] = asid;
 
 
@@ -14606,12 +15977,18 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
     if (__builtin_expect(!!(!isHighestPrio(dom, caller->tcbPriority)), 0)) {
         slowpath(SysReplyRecv);
     }
-# 413 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 413 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     /* Ensure the original caller is in the current domain and can be scheduled directly. */
     if (__builtin_expect(!!(caller->tcbDomain != ksCurDomain && 0 < maxDom), 0)) {
         slowpath(SysReplyRecv);
     }
-# 431 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 425 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
+    /* Ensure both threads have the same affinity */
+    if (__builtin_expect(!!(ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbAffinity != caller->tcbAffinity), 0)) {
+        slowpath(SysReplyRecv);
+    }
+
+
     /*
      * --- POINT OF NO RETURN ---
      *
@@ -14624,7 +16001,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
 
     /* Set thread state to BlockedOnReceive */
     thread_state_ptr_mset_blockingObject_tsType(
-        &ksCurThread->tcbState, (word_t)ep_ptr, ThreadState_BlockedOnReceive);
+        &ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbState, (word_t)ep_ptr, ThreadState_BlockedOnReceive);
 
 
 
@@ -14632,19 +16009,19 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
 
 
 
-    thread_state_ptr_set_blockingIPCCanGrant(&ksCurThread->tcbState,
+    thread_state_ptr_set_blockingIPCCanGrant(&ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbState,
                                              cap_endpoint_cap_get_capCanGrant(ep_cap));;
 
 
     /* Place the thread in the endpoint queue */
     endpointTail = ((tcb_t *)(endpoint_ptr_get_epQueue_tail(ep_ptr)));
     if (__builtin_expect(!!(!endpointTail), 1)) {
-        ksCurThread->tcbEPPrev = ((void *)0);
-        ksCurThread->tcbEPNext = ((void *)0);
+        ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbEPPrev = ((void *)0);
+        ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbEPNext = ((void *)0);
 
         /* Set head/tail of queue and endpoint state. */
-        endpoint_ptr_set_epQueue_head_np(ep_ptr, ((word_t)(ksCurThread)));
-        endpoint_ptr_mset_epQueue_tail_state(ep_ptr, ((word_t)(ksCurThread)),
+        endpoint_ptr_set_epQueue_head_np(ep_ptr, ((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)));
+        endpoint_ptr_mset_epQueue_tail_state(ep_ptr, ((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)),
                                              EPState_Recv);
     } else {
 
@@ -14654,29 +16031,29 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
 
 
         /* Append current thread onto the queue. */
-        endpointTail->tcbEPNext = ksCurThread;
-        ksCurThread->tcbEPPrev = endpointTail;
-        ksCurThread->tcbEPNext = ((void *)0);
+        endpointTail->tcbEPNext = ksSMP[(getCurrentCPUIndex())].system.ksCurThread;
+        ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbEPPrev = endpointTail;
+        ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbEPNext = ((void *)0);
 
         /* Update tail of queue. */
-        endpoint_ptr_mset_epQueue_tail_state(ep_ptr, ((word_t)(ksCurThread)),
+        endpoint_ptr_mset_epQueue_tail_state(ep_ptr, ((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)),
                                              EPState_Recv);
 
     }
-# 500 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 500 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
     /* Delete the reply cap. */
     mdb_node_ptr_mset_mdbNext_mdbRevocable_mdbFirstBadged(
         &((cte_t *)(mdb_node_get_mdbPrev(callerSlot->cteMDBNode)))->cteMDBNode,
         0, 1, 1);
     callerSlot->cap = cap_null_cap_new();
     callerSlot->cteMDBNode = mdb_node_new(0, false, false, 0);
-# 533 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
+# 533 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/fastpath/fastpath.c"
         /* There's no fault, so straight to the transfer. */
 
         /* Replies don't have a badge. */
         badge = 0;
 
-        fastpath_copy_mrs(length, ksCurThread, caller);
+        fastpath_copy_mrs(length, ksSMP[(getCurrentCPUIndex())].system.ksCurThread, caller);
 
         /* Dest thread is set Running, but not queued. */
         thread_state_ptr_set_tsType_np(&caller->tcbState, ThreadState_Running);
@@ -14684,13 +16061,13 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
 
         msgInfo = wordFromMessageInfo(seL4_MessageInfo_set_capsUnwrapped(info, 0));
 
-        fastpath_restore(badge, msgInfo, ksCurThread);
+        fastpath_restore(badge, msgInfo, ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
 
 
 
 
 }
-# 1 "/Users/lukasbower/seL4_15/src/inlines.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/inlines.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14703,7 +16080,7 @@ void __attribute__((__noreturn__)) fastpath_reply_recv(word_t cptr, word_t msgIn
 lookup_fault_t current_lookup_fault;
 seL4_Fault_t current_fault;
 syscall_error_t current_syscall_error;
-# 1 "/Users/lukasbower/seL4_15/src/kernel/boot.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14716,7 +16093,7 @@ syscall_error_t current_syscall_error;
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/object/domain.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/object/domain.h" 1
 /*
  * Copyright 2025, Indan Zupancic
  *
@@ -14759,7 +16136,7 @@ static inline bool_t dschedule_is_end_marker(word_t index)
 }
 
 exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffer);
-# 14 "/Users/lukasbower/seL4_15/src/kernel/boot.c" 2
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/boot.c" 2
 
 
 
@@ -14816,7 +16193,7 @@ __attribute__((__section__(".boot.text"))) static void merge_regions(void)
 __attribute__((__section__(".boot.text"))) bool_t reserve_region(p_region_t reg)
 {
     word_t i;
-    do { if (!(reg.start <= reg.end)) { _assert_fail("reg.start <= reg.end", "/Users/lukasbower/seL4_15/src/kernel/boot.c", 70, __func__); } } while(0);
+    ;
     if (reg.start == reg.end) {
         return true;
     }
@@ -14838,9 +16215,9 @@ __attribute__((__section__(".boot.text"))) bool_t reserve_region(p_region_t reg)
         if (ndks_boot.reserved[i].start > reg.end) {
             /* move regions down, making sure there's enough room */
             if (ndks_boot.resv_count + 1 >= (((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_frames) / sizeof((kernel_device_frames)[0])) + (3 + 0))) {
-                printf("Can't mark region 0x%""lx""-0x%""lx"
-                       " as reserved, try increasing MAX_NUM_RESV_REG (currently %d)\n",
-                       reg.start, reg.end, (int)(((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_frames) / sizeof((kernel_device_frames)[0])) + (3 + 0)));
+                ((void)(0))
+
+                                                                 ;
                 return false;
             }
             for (word_t j = ndks_boot.resv_count; j > i; j--) {
@@ -14854,9 +16231,9 @@ __attribute__((__section__(".boot.text"))) bool_t reserve_region(p_region_t reg)
     }
 
     if (i + 1 == (((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_frames) / sizeof((kernel_device_frames)[0])) + (3 + 0))) {
-        printf("Can't mark region 0x%""lx""-0x%""lx"
-               " as reserved, try increasing MAX_NUM_RESV_REG (currently %d)\n",
-               reg.start, reg.end, (int)(((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1) + (sizeof(kernel_device_frames) / sizeof((kernel_device_frames)[0])) + (3 + 0)));
+        ((void)(0))
+
+                                                         ;
         return false;
     }
 
@@ -14868,7 +16245,7 @@ __attribute__((__section__(".boot.text"))) bool_t reserve_region(p_region_t reg)
 
 __attribute__((__section__(".boot.text"))) static bool_t insert_region(region_t reg)
 {
-    do { if (!(reg.start <= reg.end)) { _assert_fail("reg.start <= reg.end", "/Users/lukasbower/seL4_15/src/kernel/boot.c", 122, __func__); } } while(0);
+    ;
     if (is_reg_empty(reg)) {
         return true;
     }
@@ -14890,14 +16267,14 @@ __attribute__((__section__(".boot.text"))) static bool_t insert_region(region_t 
      * don't stop the boot process here, but return an error. The caller should
      * decide how bad this is.
      */
-    printf("no free memory slot left for [%""lx""..%""lx""),"
-           " consider increasing MAX_NUM_FREEMEM_REG (%u)\n",
-           reg.start, reg.end, (unsigned int)((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1));
+    ((void)(0))
+
+                                                                 ;
 
     /* For debug builds we consider this a fatal error. Rationale is, that the
      * caller does not check the error code at the moment, but just ignores any
      * failures silently. */
-    do { if (!(0)) { _assert_fail("0", "/Users/lukasbower/seL4_15/src/kernel/boot.c", 151, __func__); } } while(0);
+    ;
 
     return false;
 }
@@ -14906,10 +16283,10 @@ __attribute__((__section__(".boot.text"))) static pptr_t alloc_rootserver_obj(wo
 {
     pptr_t allocated = rootserver_mem.start;
     /* allocated memory must be aligned */
-    do { if (!(allocated % (1ul << (size_bits)) == 0)) { _assert_fail("allocated % BIT(size_bits) == 0", "/Users/lukasbower/seL4_15/src/kernel/boot.c", 160, __func__); } } while(0);
+    ;
     rootserver_mem.start += (n * (1ul << (size_bits)));
     /* we must not have run out of memory */
-    do { if (!(rootserver_mem.start <= rootserver_mem.end)) { _assert_fail("rootserver_mem.start <= rootserver_mem.end", "/Users/lukasbower/seL4_15/src/kernel/boot.c", 163, __func__); } } while(0);
+    ;
     memzero((void *) allocated, n * (1ul << (size_bits)));
     return allocated;
 }
@@ -15004,7 +16381,7 @@ __attribute__((__section__(".boot.text"))) static void create_rootserver_objects
 
 
     /* we should have allocated all our memory */
-    do { if (!(rootserver_mem.start == rootserver_mem.end)) { _assert_fail("rootserver_mem.start == rootserver_mem.end", "/Users/lukasbower/seL4_15/src/kernel/boot.c", 258, __func__); } } while(0);
+    ;
 }
 
 __attribute__((__section__(".boot.text"))) void write_slot(slot_ptr_t slot_ptr, cap_t cap)
@@ -15123,9 +16500,9 @@ __attribute__((__section__(".boot.text"))) void populate_bi_frame(node_id_t node
 __attribute__((__section__(".boot.text"))) bool_t provide_cap(cap_t root_cnode_cap, cap_t cap)
 {
     if (ndks_boot.slot_pos_cur >= (1ul << (13))) {
-        printf("ERROR: can't add another cap, all %""lu"
-               " (=2^CONFIG_ROOT_CNODE_SIZE_BITS) slots used\n",
-               (1ul << (13)));
+        ((void)(0))
+
+                                                ;
         return false;
     }
     write_slot((((slot_ptr_t)(((pptr_t)cap_get_capPtr(root_cnode_cap)))) + (ndks_boot.slot_pos_cur)), cap);
@@ -15186,22 +16563,30 @@ __attribute__((__section__(".boot.text"))) cap_t create_it_asid_pool(cap_t root_
 
     return ap_cap;
 }
-# 471 "/Users/lukasbower/seL4_15/src/kernel/boot.c"
+# 471 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/boot.c"
 __attribute__((__section__(".boot.text"))) void create_idle_thread(void)
 {
     pptr_t pptr;
 
 
+    for (unsigned int i = 0; i < 4; i++) {
+
+        pptr = (pptr_t) &ksIdleThreadTCB[i];
+        ksSMP[(i)].system.ksIdleThread = ((tcb_t *)(pptr + (1ul << ((11 - 1)))));
+        configureIdleThread(ksSMP[(i)].system.ksIdleThread);
 
 
-        pptr = (pptr_t) &ksIdleThreadTCB[0];
-        ksIdleThread = ((tcb_t *)(pptr + (1ul << ((11 - 1)))));
-        configureIdleThread(ksIdleThread);
 
-        setThreadName(ksIdleThread, "idle_thread");
+        ksSMP[(i)].system.ksIdleThread->tcbAffinity = i;
 
-        ;
-# 494 "/Users/lukasbower/seL4_15/src/kernel/boot.c"
+
+
+
+
+
+
+    }
+
 }
 
 __attribute__((__section__(".boot.text"))) tcb_t *create_initial_thread(cap_t root_cnode_cap, cap_t it_pd_cap, vptr_t ui_v_entry, vptr_t bi_frame_vptr,
@@ -15217,7 +16602,7 @@ __attribute__((__section__(".boot.text"))) tcb_t *create_initial_thread(cap_t ro
     /* derive a copy of the IPC buffer cap for inserting */
     deriveCap_ret_t dc_ret = deriveCap((((slot_ptr_t)(((pptr_t)cap_get_capPtr(root_cnode_cap)))) + (seL4_CapInitThreadIPCBuffer)), ipcbuf_cap);
     if (dc_ret.status != EXCEPTION_NONE) {
-        printf("Failed to derive copy of IPC Buffer\n");
+        ((void)(0));
         return ((void *)0);
     }
 
@@ -15256,41 +16641,24 @@ __attribute__((__section__(".boot.text"))) tcb_t *create_initial_thread(cap_t ro
     setThreadState(tcb, ThreadState_Running);
 
 
-    ;
+    tcb->tcbAffinity = 0;
 
 
     /* create initial thread's TCB cap */
     cap_t cap = cap_thread_cap_new(((word_t)(tcb)));
     write_slot((((slot_ptr_t)(((pptr_t)cap_get_capPtr(root_cnode_cap)))) + (seL4_CapInitThreadTCB)), cap);
-
-
-
-
-
-
-    setThreadName(tcb, "rootserver");
-
-
+# 563 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/boot.c"
     return tcb;
 }
-# 610 "/Users/lukasbower/seL4_15/src/kernel/boot.c"
+# 610 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/boot.c"
 __attribute__((__section__(".boot.text"))) void init_core_state(tcb_t *scheduler_action)
 {
 
-    ksCurFPUOwner = ((void *)0);
-
-
-    /* add initial threads to the debug queue */
-    ksDebugTCBs = ((void *)0);
-    if (scheduler_action != ((tcb_t*)0) &&
-        scheduler_action != ((tcb_t*) 1)) {
-        tcbDebugAppend(scheduler_action);
-    }
-    tcbDebugAppend(ksIdleThread);
-
-    ksSchedulerAction = scheduler_action;
-    ksCurThread = ksIdleThread;
-# 634 "/Users/lukasbower/seL4_15/src/kernel/boot.c"
+    ksSMP[(getCurrentCPUIndex())].system.ksCurFPUOwner = ((void *)0);
+# 624 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/boot.c"
+    ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = scheduler_action;
+    ksSMP[(getCurrentCPUIndex())].system.ksCurThread = ksSMP[(getCurrentCPUIndex())].system.ksIdleThread;
+# 634 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/boot.c"
     /* No need for NODE_STATE() as there is no SMP support for domains */
     ksCurDomain = 0;
     ksDomainTime = ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 255 domains supported*/);
@@ -15342,20 +16710,20 @@ __attribute__((__section__(".boot.text"))) static bool_t provide_untyped_cap(
 
     /* Bounds check for size parameter */
     if (size_bits > 47 || size_bits < 4) {
-        printf("Kernel init: Invalid untyped size %""lu""\n", size_bits);
+        ((void)(0));
         return false;
     }
 
     /* All cap ptrs must be aligned to object size */
     if (!(!((pptr) & ((1ul << (size_bits)) - 1ul)))) {
-        printf("Kernel init: Unaligned untyped pptr %p (alignment %""lu"")\n", (void *)pptr, size_bits);
+        ((void)(0));
         return false;
     }
 
     /* All cap ptrs apart from device untypeds must be in the kernel window. */
     if (!device_memory && !pptr_in_kernel_window(pptr)) {
-        printf("Kernel init: Non-device untyped pptr %p outside kernel window\n",
-               (void *)pptr);
+        ((void)(0))
+                            ;
         return false;
     }
 
@@ -15363,8 +16731,8 @@ __attribute__((__section__(".boot.text"))) static bool_t provide_untyped_cap(
        need to assume that the kernel window is aligned up to potentially
        seL4_MaxUntypedBits. */
     if (!device_memory && !pptr_in_kernel_window(pptr + ((1ul << (size_bits)) - 1ul))) {
-        printf("Kernel init: End of non-device untyped at %p outside kernel window (size %""lu"")\n",
-               (void *)pptr, size_bits);
+        ((void)(0))
+                                       ;
         return false;
     }
 
@@ -15380,7 +16748,7 @@ __attribute__((__section__(".boot.text"))) static bool_t provide_untyped_cap(
                                      device_memory, size_bits, pptr);
         ret = provide_cap(root_cnode_cap, ut_cap);
     } else {
-        printf("Kernel init: Too many untyped regions for boot info\n");
+        ((void)(0));
         ret = true;
     }
     return ret;
@@ -15458,9 +16826,9 @@ __attribute__((__section__(".boot.text"))) bool_t create_untypeds(cap_t root_cno
                 start, ndks_boot.reserved[i].start
             });
             if (!create_untypeds_for_region(root_cnode_cap, true, reg, first_untyped_slot)) {
-                printf("ERROR: creation of untypeds for device region #%u at"
-                       " [%""lx""..%""lx"") failed\n",
-                       (unsigned int)i, reg.start, reg.end);
+                ((void)(0))
+
+                                                           ;
                 return false;
             }
         }
@@ -15468,15 +16836,17 @@ __attribute__((__section__(".boot.text"))) bool_t create_untypeds(cap_t root_cno
         start = ndks_boot.reserved[i].end;
     }
 
-    if (start < 1099511627776) {
+    if (start <= 1099511627776 - 1) {
         region_t reg = paddr_to_pptr_reg((p_region_t) {
-            start, 1099511627776
+            /* CONFIG_PADDR_USER_DEVICE_TOP cast to paddr_t can be 0.
+             * create_untypeds_for_region() can deal with that correctly. */
+            start, (paddr_t) 1099511627776
         });
 
         if (!create_untypeds_for_region(root_cnode_cap, true, reg, first_untyped_slot)) {
-            printf("ERROR: creation of untypeds for top device region"
-                   " [%""lx""..%""lx"") failed\n",
-                   reg.start, reg.end);
+            ((void)(0))
+
+                                      ;
             return false;
         }
     }
@@ -15487,9 +16857,9 @@ __attribute__((__section__(".boot.text"))) bool_t create_untypeds(cap_t root_cno
      */
     region_t boot_mem_reuse_reg = paddr_to_pptr_reg(get_p_reg_kernel_img_boot());
     if (!create_untypeds_for_region(root_cnode_cap, false, boot_mem_reuse_reg, first_untyped_slot)) {
-        printf("ERROR: creation of untypeds for recycled boot memory"
-               " [%""lx""..%""lx""] failed\n",
-               boot_mem_reuse_reg.start, boot_mem_reuse_reg.end);
+        ((void)(0))
+
+                                                                ;
         return false;
     }
 
@@ -15498,9 +16868,9 @@ __attribute__((__section__(".boot.text"))) bool_t create_untypeds(cap_t root_cno
         region_t reg = ndks_boot.freemem[i];
         ndks_boot.freemem[i] = (region_t){ .start = 0, .end = 0 };
         if (!create_untypeds_for_region(root_cnode_cap, false, reg, first_untyped_slot)) {
-            printf("ERROR: creation of untypeds for free memory region #%u at"
-                   " [%""lx""..%""lx"") failed\n",
-                   (unsigned int)i, reg.start, reg.end);
+            ((void)(0))
+
+                                                       ;
             return false;
         }
     }
@@ -15517,8 +16887,8 @@ __attribute__((__section__(".boot.text"))) void bi_finalise(void)
 {
 
     if (rootserver.paging.start != rootserver.paging.end) {
-        printf("WARNING: internal book keeping error. Less pagetables allocated than predicted: "
-               "%ld page tables allocated but not used.\n", (rootserver.paging.end - rootserver.paging.start) >> 12);
+        ((void)(0))
+                                                                                                                                    ;
     }
 
     ndks_boot.bi_frame->empty = (seL4_SlotRegion) {
@@ -15527,76 +16897,116 @@ __attribute__((__section__(".boot.text"))) void bi_finalise(void)
     };
 }
 
-__attribute__((__section__(".boot.text"))) static inline pptr_t ceiling_kernel_window(pptr_t p)
-{
-    /* Adjust address if it exceeds the kernel window
-     * Note that we compare physical address in case of overflow.
-     */
-    if (addrFromPPtr((void *)p) > (0xffffffffc0000000ul /* 2^64 - 2^30 */ - (0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul))) {
-        p = 0xffffffffc0000000ul /* 2^64 - 2^30 */;
-    }
-    return p;
-}
-
 __attribute__((__section__(".boot.text"))) static bool_t check_available_memory(word_t n_available,
                                                const p_region_t *available)
 {
     /* The system configuration is broken if no region is available. */
     if (0 == n_available) {
-        printf("ERROR: no memory regions available\n");
+        ((void)(0));
         return false;
     }
 
-    printf("available phys memory regions: %""lu""\n", n_available);
+    ((void)(0));
     /* Force ordering and exclusivity of available regions. */
     for (word_t i = 0; i < n_available; i++) {
         const p_region_t *r = &available[i];
-        printf("  [%""lx""..%""lx"")\n", r->start, r->end);
+        ((void)(0));
 
-        /* Available regions must be sane */
+        /* Available regions must not wrap */
         if (r->start > r->end) {
-            printf("ERROR: memory region %""lu"" has start > end\n", i);
+            ((void)(0));
             return false;
         }
 
-        /* Available regions can't be empty. */
+        /* Available regions must be non-empty. */
         if (r->start == r->end) {
-            printf("ERROR: memory region %""lu"" empty\n", i);
+            ((void)(0));
             return false;
         }
 
         /* Regions must be ordered and must not overlap. Regions are [start..end),
-           so the == case is fine. Directly adjacent regions are allowed. */
+         * so the '==' case is fine. Directly adjacent regions are allowed.
+         */
         if ((i > 0) && (r->start < available[i - 1].end)) {
-            printf("ERROR: memory region %d in wrong order\n", (int)i);
+            ((void)(0));
             return false;
         }
     }
 
     return true;
+}
+
+/* We can't declare arrays on the stack, so this is space for init_avail_reg()
+ * below to populate and init_freemem() to consume. */
+__attribute__((__section__(".boot.bss"))) static region_t avail_reg[((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1)];
+
+/**
+ * Initialise avail_reg with the parts of the available memory regions that are
+ * in the kernel window, converted to kernel pointers. Only this memory can be
+ * used for kernel objects. On 32-bit architectures it is not uncommon for
+ * regions to be completely or partially outside of the kernel window, because
+ * the available address space is small. Memory outside of the kernel window is
+ * discarded here, but it may be made available as device untyped memory instead
+ * if it is not also in a reserved region. Regions must have passed
+ * check_available_memory(). Returns the number of entries populated in
+ * avail_reg.
+ */
+__attribute__((__section__(".boot.text"))) static word_t init_avail_reg(word_t n_available,
+                                       const p_region_t *available)
+{
+    word_t cnt = 0;
+    for (word_t i = 0; i < n_available; i++) {
+        const p_region_t *r = &available[i];
+
+        if ((r->start >= (0xffffffffc0000000ul /* 2^64 - 2^30 */ - (0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul))) || (r->end <= 0x0ul)) {
+            ((void)(0))
+                                                                                                ;
+        } else {
+            p_region_t usable_reg = {
+                .start = (((r->start)>(0x0ul))?(r->start):(0x0ul)),
+                .end = (((r->end)<((0xffffffffc0000000ul /* 2^64 - 2^30 */ - (0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul))))?(r->end):((0xffffffffc0000000ul /* 2^64 - 2^30 */ - (0xffffff8000000000ul /* 2^64 - 2^39 */ - 0x0ul))))
+            };
+
+            if (cnt >= (sizeof(avail_reg) / sizeof((avail_reg)[0]))) {
+                /* No space left in the array, seems MAX_NUM_FREEMEM_REG should
+                 * be increased. Debug builds raise an assert here because this
+                 * is likely a porting issue that should be looked into. Release
+                 * builds will continue booting, but can't use this memory
+                 * region. This might still be sufficient to run.
+                 */
+                ((void)(0))
+                                                                  ;
+                ;
+            } else {
+                avail_reg[cnt] = paddr_to_pptr_reg(usable_reg);
+                cnt++;
+            }
+        }
+    }
+    return cnt;
 }
 
 
 __attribute__((__section__(".boot.text"))) static bool_t check_reserved_memory(word_t n_reserved,
                                               const region_t *reserved)
 {
-    printf("reserved virt address space regions: %""lu""\n",
-           n_reserved);
+    ((void)(0))
+                      ;
     /* Force ordering and exclusivity of reserved regions. */
     for (word_t i = 0; i < n_reserved; i++) {
         const region_t *r = &reserved[i];
-        printf("  [%""lx""..%""lx"")\n", r->start, r->end);
+        ((void)(0));
 
         /* Reserved regions must be sane, the size is allowed to be zero. */
         if (r->start > r->end) {
-            printf("ERROR: reserved region %""lu"" has start > end\n", i);
+            ((void)(0));
             return false;
         }
 
         /* Regions must be ordered and must not overlap. Regions are [start..end),
            so the == case is fine. Directly adjacent regions are allowed. */
         if ((i > 0) && (r->start < reserved[i - 1].end)) {
-            printf("ERROR: reserved region %""lu"" in wrong order\n", i);
+            ((void)(0));
             return false;
         }
     }
@@ -15604,9 +17014,6 @@ __attribute__((__section__(".boot.text"))) static bool_t check_reserved_memory(w
     return true;
 }
 
-/* we can't declare arrays on the stack, so this is space for
- * the function below to use. */
-__attribute__((__section__(".boot.bss"))) static region_t avail_reg[((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1)];
 /**
  * Dynamically initialise the available memory on the platform.
  * A region represents an area of memory.
@@ -15615,8 +17022,14 @@ __attribute__((__section__(".boot.text"))) bool_t init_freemem(word_t n_availabl
                               word_t n_reserved, const region_t *reserved,
                               v_region_t it_v_reg, word_t extra_bi_size_bits)
 {
-
     if (!check_available_memory(n_available, available)) {
+        return false;
+    }
+
+    /* After here, avail_reg[0..n_available) are all regions within the kernel window. */
+    n_available = init_avail_reg(n_available, available);
+    if (0 == n_available) {
+        ((void)(0));
         return false;
     }
 
@@ -15626,13 +17039,6 @@ __attribute__((__section__(".boot.text"))) bool_t init_freemem(word_t n_availabl
 
     for (word_t i = 0; i < (sizeof(ndks_boot.freemem) / sizeof((ndks_boot.freemem)[0])); i++) {
         ndks_boot.freemem[i] = (region_t){ .start = 0, .end = 0 };
-    }
-
-    /* convert the available regions to pptrs */
-    for (word_t i = 0; i < n_available; i++) {
-        avail_reg[i] = paddr_to_pptr_reg(available[i]);
-        avail_reg[i].end = ceiling_kernel_window(avail_reg[i].end);
-        avail_reg[i].start = ceiling_kernel_window(avail_reg[i].start);
     }
 
     word_t a = 0;
@@ -15661,7 +17067,7 @@ __attribute__((__section__(".boot.text"))) bool_t init_freemem(word_t n_availabl
                 avail_reg[a].start = (((avail_reg[a].end)<(reserved[r].end))?(avail_reg[a].end):(reserved[r].end));
                 /* do not increment reserved index here - there could be more overlapping regions */
             } else {
-                do { if (!(reserved[r].start < avail_reg[a].end)) { _assert_fail("reserved[r].start < avail_reg[a].end", "/Users/lukasbower/seL4_15/src/kernel/boot.c", 1004, __func__); } } while(0);
+                ;
                 /* take the first chunk of the available region and move
                  * the start to the end of the reserved region */
                 region_t m = avail_reg[a];
@@ -15694,8 +17100,8 @@ __attribute__((__section__(".boot.text"))) bool_t init_freemem(word_t n_availabl
     /* now try to fit the root server objects into a region */
     int i = (sizeof(ndks_boot.freemem) / sizeof((ndks_boot.freemem)[0])) - 1;
     if (!is_reg_empty(ndks_boot.freemem[i])) {
-        printf("ERROR: insufficient MAX_NUM_FREEMEM_REG (%u)\n",
-               (unsigned int)((sizeof(avail_p_regs) / sizeof((avail_p_regs)[0])) + 0 + 1 + 1));
+        ((void)(0))
+                                                 ;
         return false;
     }
     /* skip any empty regions */
@@ -15707,11 +17113,11 @@ __attribute__((__section__(".boot.text"))) bool_t init_freemem(word_t n_availabl
     word_t max = rootserver_max_size_bits(extra_bi_size_bits);
     for (; i >= 0; i--) {
         /* Invariant: both i and (i + 1) are valid indices in ndks_boot.freemem. */
-        do { if (!(i < (sizeof(ndks_boot.freemem) / sizeof((ndks_boot.freemem)[0])) - 1)) { _assert_fail("i < ARRAY_SIZE(ndks_boot.freemem) - 1", "/Users/lukasbower/seL4_15/src/kernel/boot.c", 1050, __func__); } } while(0);
+        ;
         /* Invariant; the region at index i is the current candidate.
          * Invariant: regions 0 up to (i - 1), if any, are additional candidates.
          * Invariant: region (i + 1) is empty. */
-        do { if (!(is_reg_empty(ndks_boot.freemem[i + 1]))) { _assert_fail("is_reg_empty(ndks_boot.freemem[i + 1])", "/Users/lukasbower/seL4_15/src/kernel/boot.c", 1054, __func__); } } while(0);
+        ;
         /* Invariant: regions above (i + 1), if any, are empty or too small to use.
          * Invariant: all non-empty regions are ordered, disjoint and unallocated. */
 
@@ -15749,17 +17155,17 @@ __attribute__((__section__(".boot.text"))) bool_t init_freemem(word_t n_availabl
     }
 
     /* We didn't find a big enough region. */
-    printf("ERROR: no free memory region is big enough for root server "
-           "objects, need size/alignment of 2^%""lu""\n", max);
+    ((void)(0))
+                                                                        ;
     return false;
 }
-# 1 "/Users/lukasbower/seL4_15/src/kernel/cspace.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/cspace.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 15 "/Users/lukasbower/seL4_15/src/kernel/cspace.c"
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/cspace.c"
 lookupCap_ret_t lookupCap(tcb_t *thread, cptr_t cPtr)
 {
     lookupSlot_raw_ret_t lu_ret;
@@ -15893,7 +17299,7 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap, cptr_t capptr, word_t
         levelBits = radixBits + guardBits;
 
         /* Haskell error: "All CNodes must resolve bits" */
-        do { if (!(levelBits != 0)) { _assert_fail("levelBits != 0", "/Users/lukasbower/seL4_15/src/kernel/cspace.c", 148, __func__); } } while(0);
+        ;
 
         capGuard = cap_cnode_cap_get_capCNodeGuard(nodeCap);
 
@@ -15939,13 +17345,13 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap, cptr_t capptr, word_t
         }
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/kernel/faulthandler.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/faulthandler.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 54 "/Users/lukasbower/seL4_15/src/kernel/faulthandler.c"
+# 55 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/faulthandler.c"
 void handleFault(tcb_t *tptr)
 {
     exception_t status;
@@ -15995,77 +17401,15 @@ exception_t sendFaultIPC(tcb_t *tptr)
         return EXCEPTION_FAULT;
     }
 }
-
-
-
-static void print_fault(seL4_Fault_t f)
-{
-    switch (seL4_Fault_get_seL4_FaultType(f)) {
-    case seL4_Fault_NullFault:
-        printf("null fault");
-        break;
-    case seL4_Fault_CapFault:
-        printf("cap fault in %s phase at address %p",
-               seL4_Fault_CapFault_get_inReceivePhase(f) ? "receive" : "send",
-               (void *)seL4_Fault_CapFault_get_address(f));
-        break;
-    case seL4_Fault_VMFault:
-        printf("vm fault on %s at address %p with status %p",
-               seL4_Fault_VMFault_get_instructionFault(f) ? "code" : "data",
-               (void *)seL4_Fault_VMFault_get_address(f),
-               (void *)seL4_Fault_VMFault_get_FSR(f));
-        break;
-    case seL4_Fault_UnknownSyscall:
-        printf("unknown syscall %p",
-               (void *)seL4_Fault_UnknownSyscall_get_syscallNumber(f));
-        break;
-    case seL4_Fault_UserException:
-        printf("user exception %p code %p",
-               (void *)seL4_Fault_UserException_get_number(f),
-               (void *)seL4_Fault_UserException_get_code(f));
-        break;
-
-
-
-
-
-    default:
-        printf("unknown fault");
-        break;
-    }
-}
-
-
-
-
-
+# 148 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/faulthandler.c"
 /* The second fault, ex2, is stored in the global current_fault */
 void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
 {
-
-
-
-
-
-    seL4_Fault_t ex2 = current_fault;
-    printf("Caught ");
-    print_fault(ex2);
-    printf("\nwhile trying to handle:\n");
-    print_fault(ex1);
-
-
-    printf("\nin thread %p \"%s\" ", tptr, ((debug_tcb_t *)(((cte_t *)((word_t)(tptr)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName);
-
-
-    printf("at address %p\n", (void *)getRestartPC(tptr));
-    printf("With stack:\n");
-    Arch_userStackTrace(tptr);
-
-
+# 172 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/faulthandler.c"
     setThreadState(tptr, ThreadState_Inactive);
 }
-# 1 "/Users/lukasbower/seL4_15/src/kernel/stack.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/stack.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -16075,14 +17419,14 @@ void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
 
 __attribute__((externally_visible)) __attribute__((__aligned__(4096)))
-char kernel_stack_alloc[1][(1ul << (12))];
-# 1 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+char kernel_stack_alloc[4][(1ul << (12))];
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 26 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+# 26 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
 static seL4_MessageInfo_t
 transferCaps(seL4_MessageInfo_t info,
              endpoint_t *endpoint, tcb_t *receiver,
@@ -16104,7 +17448,7 @@ void activateThread(void)
 
 
 
-    switch (thread_state_get_tsType(ksCurThread->tcbState)) {
+    switch (thread_state_get_tsType(ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbState)) {
     case ThreadState_Running:
 
 
@@ -16114,18 +17458,18 @@ void activateThread(void)
     case ThreadState_Restart: {
         word_t pc;
 
-        pc = getRestartPC(ksCurThread);
-        setNextPC(ksCurThread, pc);
-        setThreadState(ksCurThread, ThreadState_Running);
+        pc = getRestartPC(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
+        setNextPC(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, pc);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Running);
         break;
     }
 
     case ThreadState_IdleThreadState:
-        Arch_activateIdleThread(ksCurThread);
+        Arch_activateIdleThread(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
         break;
 
     default:
-        _fail("Current thread is blocked", "/Users/lukasbower/seL4_15/src/kernel/thread.c", 68, __func__);
+        halt();
     }
 }
 
@@ -16140,22 +17484,22 @@ void suspend(tcb_t *target)
          * running */
         updateRestartPC(target);
     }
-    setThreadState(target, ThreadState_Inactive);
     tcbSchedDequeue(target);
 
 
 
 
+    setThreadState(target, ThreadState_Inactive);
 }
 
 void restart(tcb_t *target)
 {
     if (isStopped(target)) {
         cancelIPC(target);
-# 106 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+# 106 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
         setupReplyMaster(target);
         setThreadState(target, ThreadState_Restart);
-        tcbSchedEnqueue(target);
+        do { tcbSchedEnqueue(target); remoteQueueUpdate(target); } while (0);
         possibleSwitchTo(target);
 
     }
@@ -16183,8 +17527,8 @@ void doIPCTransfer(tcb_t *sender, endpoint_t *endpoint, word_t badge,
 void doReplyTransfer(tcb_t *sender, tcb_t *receiver, cte_t *slot, bool_t grant)
 
 {
-# 153 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
-    do { if (!(thread_state_get_tsType(receiver->tcbState) == ThreadState_BlockedOnReply)) { _assert_fail("thread_state_get_tsType(receiver->tcbState) == ThreadState_BlockedOnReply", "/Users/lukasbower/seL4_15/src/kernel/thread.c", 153, __func__); } } while(0)
+# 153 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
+   
                                       ;
 
 
@@ -16215,7 +17559,7 @@ void doReplyTransfer(tcb_t *sender, tcb_t *receiver, cte_t *slot, bool_t grant)
             setThreadState(receiver, ThreadState_Inactive);
         }
     }
-# 200 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+# 200 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
 }
 
 void doNormalTransfer(tcb_t *sender, word_t *sendBuffer, endpoint_t *endpoint,
@@ -16355,7 +17699,7 @@ static void nextDomain(void)
     ksCurDomain = dschedule_domain(ksDomSchedule[ksDomScheduleIdx]);
     ksDomainTime = dschedule_duration(ksDomSchedule[ksDomScheduleIdx]);
 }
-# 363 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+# 363 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
 static void scheduleChooseNewThread(void)
 {
     if (ksDomainTime == 0) {
@@ -16372,48 +17716,51 @@ void schedule(void)
 
 
 
-    if (ksSchedulerAction != ((tcb_t*)0)) {
+    if (ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction != ((tcb_t*)0)) {
         bool_t was_runnable;
-        if (isRunnable(ksCurThread)) {
+        if (isRunnable(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)) {
             was_runnable = true;
-            tcbSchedEnqueue(ksCurThread);
+            tcbSchedEnqueue(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
         } else {
             was_runnable = false;
         }
 
-        if (ksSchedulerAction == ((tcb_t*) 1)) {
+        if (ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction == ((tcb_t*) 1)) {
             scheduleChooseNewThread();
         } else {
-            tcb_t *candidate = ksSchedulerAction;
-            do { if (!(isRunnable(candidate))) { _assert_fail("isSchedulable(candidate)", "/Users/lukasbower/seL4_15/src/kernel/thread.c", 392, __func__); } } while(0);
+            tcb_t *candidate = ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction;
+            ;
             /* Avoid checking bitmap when ksCurThread is higher prio, to
              * match fast path.
              * Don't look at ksCurThread prio when it's idle, to respect
              * information flow in non-fastpath cases. */
             bool_t fastfail =
-                ksCurThread == ksIdleThread
-                || (candidate->tcbPriority < ksCurThread->tcbPriority);
+                ksSMP[(getCurrentCPUIndex())].system.ksCurThread == ksSMP[(getCurrentCPUIndex())].system.ksIdleThread
+                || (candidate->tcbPriority < ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbPriority);
             if (fastfail &&
                 !isHighestPrio(ksCurDomain, candidate->tcbPriority)) {
-                tcbSchedEnqueue(candidate);
+                do { tcbSchedEnqueue(candidate); remoteQueueUpdate(candidate); } while (0);
                 /* we can't, need to reschedule */
-                ksSchedulerAction = ((tcb_t*) 1);
+                ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = ((tcb_t*) 1);
                 scheduleChooseNewThread();
-            } else if (was_runnable && candidate->tcbPriority == ksCurThread->tcbPriority) {
+            } else if (was_runnable && candidate->tcbPriority == ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbPriority) {
                 /* We append the candidate at the end of the scheduling queue, that way the
                  * current thread, that was enqueued at the start of the scheduling queue
                  * will get picked during chooseNewThread */
-                tcbSchedAppend(candidate);
-                ksSchedulerAction = ((tcb_t*) 1);
+                do { tcbSchedAppend(candidate); remoteQueueUpdate(candidate); } while (0);
+                ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = ((tcb_t*) 1);
                 scheduleChooseNewThread();
             } else {
-                do { if (!(candidate != ksCurThread)) { _assert_fail("candidate != NODE_STATE(ksCurThread)", "/Users/lukasbower/seL4_15/src/kernel/thread.c", 414, __func__); } } while(0);
+                ;
                 switchToThread(candidate);
             }
         }
     }
-    ksSchedulerAction = ((tcb_t*)0);
-# 433 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+    ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = ((tcb_t*)0);
+
+    doMaskReschedule(ksSMP[(getCurrentCPUIndex())].cpu.ipiReschedulePending);
+    ksSMP[(getCurrentCPUIndex())].cpu.ipiReschedulePending = 0;
+# 433 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
 }
 
 void chooseThread(void)
@@ -16428,11 +17775,11 @@ void chooseThread(void)
         dom = 0;
     }
 
-    if (__builtin_expect(!!(ksReadyQueuesL1Bitmap[dom]), 1)) {
+    if (__builtin_expect(!!(ksSMP[(getCurrentCPUIndex())].system.ksReadyQueuesL1Bitmap[dom]), 1)) {
         prio = getHighestPrio(dom);
-        thread = ksReadyQueues[ready_queues_index(dom, prio)].head;
-        do { if (!(thread)) { _assert_fail("thread", "/Users/lukasbower/seL4_15/src/kernel/thread.c", 450, __func__); } } while(0);
-        do { if (!(isRunnable(thread))) { _assert_fail("isSchedulable(thread)", "/Users/lukasbower/seL4_15/src/kernel/thread.c", 451, __func__); } } while(0);
+        thread = ksSMP[(getCurrentCPUIndex())].system.ksReadyQueues[ready_queues_index(dom, prio)].head;
+        ;
+        ;
 
 
 
@@ -16445,7 +17792,7 @@ void chooseThread(void)
 
 void switchToThread(tcb_t *thread)
 {
-# 474 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+# 474 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
     Arch_switchToThread(thread);
 
 
@@ -16453,7 +17800,7 @@ void switchToThread(tcb_t *thread)
 
 
     tcbSchedDequeue(thread);
-    ksCurThread = thread;
+    ksSMP[(getCurrentCPUIndex())].system.ksCurThread = thread;
 }
 
 void switchToIdleThread(void)
@@ -16462,7 +17809,7 @@ void switchToIdleThread(void)
 
 
     Arch_switchToIdleThread();
-    ksCurThread = ksIdleThread;
+    ksSMP[(getCurrentCPUIndex())].system.ksCurThread = ksSMP[(getCurrentCPUIndex())].system.ksIdleThread;
 }
 
 void setDomain(tcb_t *tptr, dom_t dom)
@@ -16470,9 +17817,9 @@ void setDomain(tcb_t *tptr, dom_t dom)
     tcbSchedDequeue(tptr);
     tptr->tcbDomain = dom;
     if (isRunnable(tptr)) {
-        tcbSchedEnqueue(tptr);
+        do { tcbSchedEnqueue(tptr); remoteQueueUpdate(tptr); } while (0);
     }
-    if (tptr == ksCurThread) {
+    if (tptr == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
         rescheduleRequired();
     }
 }
@@ -16481,13 +17828,13 @@ void setMCPriority(tcb_t *tptr, prio_t mcp)
 {
     tptr->tcbMCP = mcp;
 }
-# 539 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+# 539 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
 void setPriority(tcb_t *tptr, prio_t prio)
 {
     tcbSchedDequeue(tptr);
     tptr->tcbPriority = prio;
     if (isRunnable(tptr)) {
-        if (tptr == ksCurThread) {
+        if (tptr == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
             rescheduleRequired();
         } else {
             possibleSwitchTo(tptr);
@@ -16506,14 +17853,14 @@ void possibleSwitchTo(tcb_t *target)
 
 
         if (ksCurDomain != target->tcbDomain
-            ) {
-            tcbSchedEnqueue(target);
-        } else if (ksSchedulerAction != ((tcb_t*)0)) {
+            || target->tcbAffinity != getCurrentCPUIndex()) {
+            do { tcbSchedEnqueue(target); remoteQueueUpdate(target); } while (0);
+        } else if (ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction != ((tcb_t*)0)) {
             /* Too many threads want special treatment, use regular queues. */
             rescheduleRequired();
-            tcbSchedEnqueue(target);
+            do { tcbSchedEnqueue(target); remoteQueueUpdate(target); } while (0);
         } else {
-            ksSchedulerAction = target;
+            ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = target;
         }
 
 
@@ -16529,27 +17876,28 @@ void setThreadState(tcb_t *tptr, _thread_state_t ts)
 
 void scheduleTCB(tcb_t *tptr)
 {
-    if (tptr == ksCurThread &&
-        ksSchedulerAction == ((tcb_t*)0) &&
+    if (tptr == ksSMP[(getCurrentCPUIndex())].system.ksCurThread &&
+        ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction == ((tcb_t*)0) &&
         !isRunnable(tptr)) {
-        rescheduleRequired();
+        /* short-cut rescheduleRequired(), because we know what the scheduler action is. */
+        ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = ((tcb_t*) 1);
     }
 }
-# 675 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
+# 676 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/kernel/thread.c"
 void timerTick(void)
 {
-    if (__builtin_expect(!!(thread_state_get_tsType(ksCurThread->tcbState) == ThreadState_Running), 1)
+    if (__builtin_expect(!!(thread_state_get_tsType(ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbState) == ThreadState_Running), 1)
 
 
 
 
 
        ) {
-        if (ksCurThread->tcbTimeSlice > 1) {
-            ksCurThread->tcbTimeSlice--;
+        if (ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbTimeSlice > 1) {
+            ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbTimeSlice--;
         } else {
-            ksCurThread->tcbTimeSlice = 5;
-            tcbSchedAppend(ksCurThread);
+            ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbTimeSlice = 5;
+            tcbSchedAppend(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
             rescheduleRequired();
         }
     }
@@ -16565,8 +17913,8 @@ void timerTick(void)
 
 void rescheduleRequired(void)
 {
-    if (ksSchedulerAction != ((tcb_t*)0)
-        && ksSchedulerAction != ((tcb_t*) 1)
+    if (ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction != ((tcb_t*)0)
+        && ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction != ((tcb_t*) 1)
 
 
 
@@ -16575,471 +17923,44 @@ void rescheduleRequired(void)
 
 
 
-        tcbSchedEnqueue(ksSchedulerAction);
+        do { tcbSchedEnqueue(ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction); remoteQueueUpdate(ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction); } while (0);
     }
-    ksSchedulerAction = ((tcb_t*) 1);
+    ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = ((tcb_t*) 1);
 }
-# 1 "/Users/lukasbower/seL4_15/src/machine/capdl.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-
-
-
-
-
-
-
-# 1 "/Users/lukasbower/seL4_15/include/machine/timer.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-
-       
-# 34 "/Users/lukasbower/seL4_15/include/machine/timer.h"
-static inline void resetTimer(void);
-# 14 "/Users/lukasbower/seL4_15/src/machine/capdl.c" 2
-# 22 "/Users/lukasbower/seL4_15/src/machine/capdl.c"
-/* seen list - check this array before we print cnode and vspace */
-/* TBD: This is to avoid traversing the same cnode. It should be applied to object
- * as well since the extractor might comes across multiple caps to the same object.
- */
-cap_t seen_list[256];
-int watermark = 0;
-
-void add_to_seen(cap_t c)
-{
-    /* Won't work well if there're more than SEEN_SZ cnode */
-    if (watermark < 256) {
-        seen_list[watermark] = c;
-        watermark++;
-    }
-}
-
-void reset_seen_list(void)
-{
-    memset(seen_list, 0, 256 * sizeof(seen_list[0]));
-    watermark = 0;
-}
-
-bool_t seen(cap_t c)
-{
-    for (int i = 0; i < watermark; i++) {
-        if (same_cap(seen_list[i], c)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool_t same_cap(cap_t a, cap_t b)
-{
-    return (a.words[0] == b.words[0] && a.words[1] == b.words[1]);
-}
-
-/* Return true if strings are the same */
-static inline bool_t strings_equal(const char *str1, const char *str2)
-{
-    while (*str1 && *str2 && (*str1 == *str2)) {
-        str1++;
-        str2++;
-    }
-    return !(*(const unsigned char *)str1 - * (const unsigned char *)str2);
-}
-
-/* Return true if the tcb is for rootserver or idle thread */
-bool_t root_or_idle_tcb(tcb_t *tcb)
-{
-    return (strings_equal(((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, "rootserver")
-            || strings_equal(((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, "idle_thread"));
-}
-
-/*
- * Print objects
- */
-
-
-
-void obj_tcb_print_attrs(tcb_t *tcb)
-{
-    printf("(addr: 0x%lx, ip: 0x%lx, sp: 0x%lx, prio: %lu, max_prio: %lu",
-           (long unsigned int)tcb->tcbIPCBuffer,
-           (long unsigned int)getRestartPC(tcb),
-           (long unsigned int)get_tcb_sp(tcb),
-           (long unsigned int)tcb->tcbPriority,
-           (long unsigned int)tcb->tcbMCP);
-
-
-
-
-
-    /* init */
-# 104 "/Users/lukasbower/seL4_15/src/machine/capdl.c"
-    printf(", dom: %ld)\n", tcb->tcbDomain);
-}
-# 135 "/Users/lukasbower/seL4_15/src/machine/capdl.c"
-void obj_ut_print_attrs(cte_t *slot, tcb_t *tcb)
-{
-    /* might have two untypeds with the same address but different size */
-    printf("%p_%lu_untyped = ut (%lu bits, paddr: %p) {",
-           (void *)cap_untyped_cap_get_capPtr(slot->cap),
-           (long unsigned int)cap_untyped_cap_get_capBlockSize(slot->cap),
-           (long unsigned int)cap_untyped_cap_get_capBlockSize(slot->cap),
-           ((word_t *)(cap_untyped_cap_get_capPtr(slot->cap))));
-
-    /* there is no need to check for a NullCap as NullCaps are
-    always accompanied by null mdb pointers */
-    for (cte_t *nextPtr = ((cte_t *)(mdb_node_get_mdbNext(slot->cteMDBNode)));
-         nextPtr && isMDBParentOf(slot, nextPtr);
-         nextPtr = ((cte_t *)(mdb_node_get_mdbNext(slot->cteMDBNode)))) {
-        if (!sameRegionAs(slot->cap, nextPtr->cap)) {
-            /* TBD:
-             * - this will print out the attributes of the cap, which it shouldn't
-             *
-             * - might be a pathological case where an untyped has a child cap that
-             *   isn't reachable from any of the non root threads. This would result
-             *   in an object being mentioned but never properly defined
-             */
-            print_cap(nextPtr->cap);
-        }
-    }
-    printf("}\n");
-}
-
-void obj_cnode_print_attrs(cap_t cnode)
-{
-    printf("(%lu bits)\n", (long unsigned int)cap_cnode_cap_get_capCNodeRadix(cnode));
-}
-
-void obj_tcb_print_cnodes(cap_t cnode, tcb_t *tcb)
-{
-    if (seen(cnode)) {
-        return;
-    }
-    add_to_seen(cnode);
-    printf("%p_cnode = cnode ", (void *)cap_cnode_cap_get_capCNodePtr(cnode));
-    obj_cnode_print_attrs(cnode);
-    word_t radix = cap_cnode_cap_get_capCNodeRadix(cnode);
-
-    for (uint32_t i = 0; i < (1 << radix); i++) {
-        lookupCapAndSlot_ret_t c = lookupCapAndSlot(tcb, i);
-        if (cap_get_capType(c.cap) == cap_untyped_cap) {
-            /* we need `cte_t *` to print out the slots of an untyped object */
-            obj_ut_print_attrs(c.slot, tcb);
-
-        } else if (cap_get_capType(c.cap) == cap_cnode_cap) {
-            /* TBD: deal with nested cnodes */
-
-        } else if (cap_get_capType(c.cap) != cap_null_cap) {
-            print_object(c.cap);
-        }
-    }
-}
-
-/*
- * Caps
- */
-
-void cap_cnode_print_attrs(cap_t cnode)
-{
-    printf("(guard: %lu, guard_size: %lu)\n",
-           (long unsigned int)cap_cnode_cap_get_capCNodeGuard(cnode),
-           (long unsigned int)cap_cnode_cap_get_capCNodeGuardSize(cnode));
-}
-
-void cap_ep_print_attrs(cap_t ep)
-{
-    printf("(");
-    cap_endpoint_cap_get_capCanReceive(ep) ? putchar('R') : 0;
-    cap_endpoint_cap_get_capCanSend(ep) ? putchar('W') : 0;
-    cap_endpoint_cap_get_capCanGrant(ep) ? putchar('G') : 0;
-    cap_endpoint_cap_get_capCanGrantReply(ep) ? putchar('P') : 0;
-    long unsigned int badge = cap_endpoint_cap_get_capEPBadge(ep);
-    badge ? printf(", badge: %lu)\n", badge) : printf(")\n");
-}
-
-void cap_ntfn_print_attrs(cap_t ntfn)
-{
-    printf("(");
-    cap_notification_cap_get_capNtfnCanReceive(ntfn) ? putchar('R') : 0;
-    cap_notification_cap_get_capNtfnCanSend(ntfn) ? putchar('W') : 0;
-    long unsigned int badge = cap_notification_cap_get_capNtfnBadge(ntfn);
-    badge ? printf(", badge: %lu)\n", badge) : printf(")\n");
-}
-
-/*
- * print object slots
- */
-
-void obj_tcb_print_slots(tcb_t *tcb)
-{
-    printf("%p_tcb {\n", tcb);
-
-    /* CSpace root */
-    if (cap_get_capType((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap) != cap_null_cap) {
-        printf("cspace: %p_cnode ",
-               (void *)cap_cnode_cap_get_capCNodePtr((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap));
-        cap_cnode_print_attrs((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap);
-    }
-
-    /* VSpace root */
-    if (cap_get_capType((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap) != cap_null_cap) {
-        printf("vspace: %p_pd\n",
-               ((vspace_root_t *)(cap_vspace_cap_get_capVSBasePtr((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbVTable))->cap))));
-
-    }
-
-    /* IPC buffer cap slot */
-    if (cap_get_capType((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbBuffer))->cap) != cap_null_cap) {
-        /* TBD: print out the bound vcpu */
-        print_ipc_buffer_slot(tcb);
-    }
-# 274 "/Users/lukasbower/seL4_15/src/machine/capdl.c"
-    /* Reply cap slot */
-    if (cap_get_capType((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbReply))->cap) != cap_null_cap) {
-        printf("reply_slot: %p_reply\n",
-               (void *)cap_reply_cap_get_capTCBPtr((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbReply))->cap));
-    }
-
-    /* TCB of most recent IPC sender */
-    if (cap_get_capType((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCaller))->cap) != cap_null_cap) {
-        tcb_t *caller = ((tcb_t *)(cap_thread_cap_get_capTCBPtr((((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCaller))->cap)));
-        printf("caller_slot: %p_tcb\n", caller);
-    }
-
-    printf("}\n");
-}
-
-/* TBD: deal with nested cnodes */
-void obj_cnode_print_slots(tcb_t *tcb)
-{
-    cap_t root = (((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap;
-    if (cap_get_capType(root) != cap_cnode_cap) {
-        return;
-    }
-
-    word_t radix = cap_cnode_cap_get_capCNodeRadix(root);
-    if (seen(root)) {
-        return;
-    }
-    add_to_seen(root);
-
-    printf("%p_cnode {\n", (void *)cap_cnode_cap_get_capCNodePtr(root));
-
-    for (uint32_t i = 0; i < (1 << radix); i++) {
-        lookupCapAndSlot_ret_t c = lookupCapAndSlot(tcb, i);
-        if (cap_get_capType(c.cap) != cap_null_cap) {
-            printf("0x%x: ", i);
-            print_cap(c.cap);
-        }
-    }
-    printf("}\n");
-
-    for (uint32_t i = 0; i < (1 << radix); i++) {
-        lookupCapAndSlot_ret_t c = lookupCapAndSlot(tcb, i);
-        if (cap_get_capType(c.cap) == cap_irq_handler_cap) {
-            /* TBD: should instead print it from IRQNode */
-            obj_irq_print_slots(c.cap);
-        }
-    }
-}
-
-void obj_irq_print_maps(void)
-{
-    printf("irq maps {\n");
-
-    for (seL4_Word target = 0; target < 1; target++) {
-        for (unsigned i = 0; i <= maxIRQ; i++) {
-            irq_t irq = (i);
-            if (isIRQActive(irq)) {
-                cap_t cap = intStateIRQNode[(irq)].cap;
-                if (cap_get_capType(cap) != cap_null_cap) {
-                    printf("%d: 0x%lx_%lu_irq\n",
-                           i,
-
-
-
-                           (long unsigned int)irq,
-
-                           (long unsigned int)target);
-                }
-            }
-        }
-    }
-    printf("}\n");
-}
-
-void obj_irq_print_slots(cap_t irq_cap)
-{
-    irq_t irq = (cap_irq_handler_cap_get_capIRQ(irq_cap));
-    if (isIRQActive(irq)) {
-        printf("0x%lx_%lu_irq {\n",
-
-
-
-               (long unsigned int)irq,
-
-               (long unsigned int)0);
-        cap_t ntfn_cap = intStateIRQNode[(irq)].cap;
-        if (cap_get_capType(ntfn_cap) != cap_null_cap) {
-            printf("0x0: ");
-            print_cap(ntfn_cap);
-        }
-        printf("}\n");
-    }
-}
-
-void print_objects(void)
-{
-    for (tcb_t *curr = ksDebugTCBs; curr != ((void *)0); curr = ((debug_tcb_t *)(((cte_t *)((word_t)(curr)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbDebugNext) {
-        if (root_or_idle_tcb(curr)) {
-            continue;
-        }
-        /* print the contains of the tcb's vtable as objects */
-        obj_tcb_print_vtable(curr);
-    }
-
-    for (tcb_t *curr = ksDebugTCBs; curr != ((void *)0); curr = ((debug_tcb_t *)(((cte_t *)((word_t)(curr)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbDebugNext) {
-        if (root_or_idle_tcb(curr)) {
-            continue;
-        }
-
-        /* print the tcb as objects */
-        printf("%p_tcb = tcb ", curr);
-        obj_tcb_print_attrs(curr);
-
-        /* print the contains of the tcb's ctable as objects */
-        if (cap_get_capType((((cte_t *)((word_t)(curr)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap) == cap_cnode_cap) {
-            obj_tcb_print_cnodes((((cte_t *)((word_t)(curr)&~((1ul << (11)) - 1ul)))+(tcbCTable))->cap, curr);
-        }
-    }
-}
-
-void print_caps(void)
-{
-    for (tcb_t *curr = ksDebugTCBs; curr != ((void *)0); curr = ((debug_tcb_t *)(((cte_t *)((word_t)(curr)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbDebugNext) {
-        if (root_or_idle_tcb(curr)) {
-            continue;
-        }
-        obj_cnode_print_slots(curr);
-        obj_vtable_print_slots(curr);
-        obj_tcb_print_slots(curr);
-    }
-}
-
-void print_cap(cap_t cap)
-{
-    switch (cap_get_capType(cap)) {
-    case cap_endpoint_cap: {
-        printf("%p_ep ",
-               (void *)cap_endpoint_cap_get_capEPPtr(cap));
-        cap_ep_print_attrs(cap);
-        break;
-    }
-    case cap_notification_cap: {
-        printf("%p_notification ",
-               (void *)cap_notification_cap_get_capNtfnPtr(cap));
-        cap_ntfn_print_attrs(cap);
-        break;
-    }
-    case cap_untyped_cap: {
-        printf("%p_untyped\n",
-               (void *)cap_untyped_cap_get_capPtr(cap));
-        break;
-    }
-    case cap_thread_cap: {
-        printf("%p_tcb\n",
-               (void *)cap_thread_cap_get_capTCBPtr(cap));
-        break;
-    }
-    case cap_cnode_cap: {
-        printf("%p_cnode ",
-               (void *)cap_cnode_cap_get_capCNodePtr(cap));
-        cap_cnode_print_attrs(cap);
-        break;
-    }
-# 454 "/Users/lukasbower/seL4_15/src/machine/capdl.c"
-    case cap_irq_control_cap: {
-        printf("irq_control\n"); /* only one in the system */
-        break;
-    }
-    case cap_irq_handler_cap: {
-        printf("%p_%lu_irq\n",
-               (void *)cap_irq_handler_cap_get_capIRQ(cap),
-               (long unsigned int)0);
-        break;
-    }
-    default: {
-        print_cap_arch(cap);
-        break;
-    }
-    }
-}
-
-void print_object(cap_t cap)
-{
-    switch (cap_get_capType(cap)) {
-    case cap_endpoint_cap: {
-        printf("%p_ep = ep\n",
-               (void *)cap_endpoint_cap_get_capEPPtr(cap));
-        break;
-    }
-    case cap_notification_cap: {
-        printf("%p_notification = notification\n",
-               (void *)cap_notification_cap_get_capNtfnPtr(cap));
-        break;
-    }
-    case cap_thread_cap: {
-        /* this object has already got handle by `print_objects` */
-        break;
-    }
-    case cap_cnode_cap: {
-        do { if (!(!"should not happend")) { _assert_fail("!\"should not happend\"", "/Users/lukasbower/seL4_15/src/machine/capdl.c", 489, __func__); } } while(0);
-    }
-# 504 "/Users/lukasbower/seL4_15/src/machine/capdl.c"
-    case cap_irq_handler_cap: {
-        printf("%p_%lu_irq = irq\n",
-               (void *)cap_irq_handler_cap_get_capIRQ(cap),
-               (long unsigned int)0);
-        break;
-    }
-    default:
-        print_object_arch(cap);
-        break;
-    }
-}
-# 1 "/Users/lukasbower/seL4_15/src/machine/fpu.c"
-/*
- * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
- *
- * SPDX-License-Identifier: GPL-2.0-only
- */
-# 14 "/Users/lukasbower/seL4_15/src/machine/fpu.c"
+# 14 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/fpu.c"
 /* Switch the owner of the FPU to the given thread on local core. */
 void switchLocalFpuOwner(tcb_t *new_owner)
 {
     enableFpu();
-    if (ksCurFPUOwner) {
-        saveFpuState(ksCurFPUOwner);
+    if (ksSMP[(getCurrentCPUIndex())].system.ksCurFPUOwner) {
+        saveFpuState(ksSMP[(getCurrentCPUIndex())].system.ksCurFPUOwner);
     }
     if (new_owner) {
         loadFpuState(new_owner);
     } else {
         disableFpu();
     }
-    ksCurFPUOwner = new_owner;
+    ksSMP[(getCurrentCPUIndex())].system.ksCurFPUOwner = new_owner;
 }
 
 void switchFpuOwner(tcb_t *new_owner, word_t cpu)
 {
 
-
-
-
+    if (cpu != getCurrentCPUIndex()) {
+        doRemoteswitchFpuOwner(new_owner, cpu);
+    } else
 
     {
         switchLocalFpuOwner(new_owner);
@@ -17052,10 +17973,10 @@ void fpuRelease(tcb_t *thread)
     /* If the thread being deleted currently owns the FPU, switch away from it
      * so that 'ksCurFPUOwner' doesn't point to invalid memory. */
     if (nativeThreadUsingFPU(thread)) {
-        switchFpuOwner(((void *)0), 0);
+        switchFpuOwner(((void *)0), thread->tcbAffinity);
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/machine/io.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/io.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17067,611 +17988,7 @@ void fpuRelease(tcb_t *thread)
  *
  * SPDX-License-Identifier: MIT
  */
-# 21 "/Users/lukasbower/seL4_15/src/machine/io.c"
-/*
- *------------------------------------------------------------------------------
- * printf() core output channel management
- *------------------------------------------------------------------------------
- */
-
-typedef struct _out_wrap_t out_wrap_t;
-
-/* handler defining how/where to actually output a buffer */
-typedef void (*out_write_fn)(out_wrap_t *out, const char *buf, word_t len);
-
-struct _out_wrap_t {
-    const out_write_fn write;
-    char *const buf;
-    const word_t maxlen;
-    word_t used;
-};
-
-/* printf_core() and its helpers call this to actually output something. The
- * parameter 'out_wrap' cam be NULL, e.g. when printf_core() is just caller to
- * validate the format string. In this case we do nothing.
- */
-static void out(out_wrap_t *out_wrap, const char *buf, word_t len)
-{
-    if (out_wrap) {
-        out_wrap->write(out_wrap, buf, len);
-    }
-}
-
-/* An out_write_fn implementation to print the characters via putchar(). It is
- * guaranteed here that 'out' is not NULL. The current implementation also never
- * passes NULL for 'buf'. */
-static void do_output_to_putchar(
-    __attribute__((unused)) out_wrap_t *out,
-    const char *buf,
-    word_t len)
-{
-    if (buf) {
-        while (len-- > 0) {
-            putchar(*buf++);
-        }
-    }
-}
-
-/* An out_write_fn implementation to copy the buffer into the out buffer. It is
- * guaranteed here that 'out' is not NULL. The current implementation also never
- * passes NULL for 'buf'. */
-static void do_output_to_buffer(
-    out_wrap_t *out,
-    const char *buf,
-    word_t len)
-{
-    /* It's guaranteed here that 'out' is not NULL. The current implementation
-     * also never passes NULL for 'buf'. */
-    if (buf && (out->used < out->maxlen)) {
-        /* there is still space in the buffer*/
-        word_t free = out->maxlen - out->used;
-        if (len > free) {
-            len = free;
-        }
-        memcpy(&out->buf[out->used], buf, len);
-        out->used += len;
-    }
-}
-
-/*
- *------------------------------------------------------------------------------
- * printf() core implementation
- *------------------------------------------------------------------------------
- */
-
-static inline bool_t isdigit(char c)
-{
-    return c >= '0' &&
-           c <= '9';
-}
-
-/* Convenient bit representation for modifier flags, which all fall within 31
- * codepoints of the space character.
- */
-# 112 "/Users/lukasbower/seL4_15/src/machine/io.c"
-/* State machine to accept length modifiers + conversion specifiers.
- * Result is 0 on failure, or an argument type to pop on success.
- */
-
-enum {
-    BARE, LPRE, LLPRE, HPRE, HHPRE, BIGLPRE,
-    ZTPRE, JPRE,
-    STOP,
-    PTR, INT, UINT, ULLONG,
-    LONG, ULONG,
-    SHORT, USHORT, CHAR, UCHAR,
-    WORDT, LLONG,
-
-
-
-
-    NOARG,
-    MAXSTATE
-};
-
-
-
-static const unsigned char states[]['z' - 'A' + 1] = {
-    { /* 0: bare types */
-        [('d')-'A'] = INT, [('i')-'A'] = INT,
-        [('o')-'A'] = UINT, [('u')-'A'] = UINT, [('x')-'A'] = UINT, [('X')-'A'] = UINT,
-        [('c')-'A'] = CHAR,
-        [('s')-'A'] = PTR, [('p')-'A'] = ULONG, [('n')-'A'] = PTR,
-        [('l')-'A'] = LPRE, [('h')-'A'] = HPRE,
-        [('z')-'A'] = ZTPRE, [('j')-'A'] = JPRE, [('t')-'A'] = ZTPRE,
-    }, { /* 1: l-prefixed */
-        [('d')-'A'] = LONG, [('i')-'A'] = LONG,
-        [('o')-'A'] = ULONG, [('u')-'A'] = ULONG, [('x')-'A'] = ULONG, [('X')-'A'] = ULONG,
-        [('n')-'A'] = PTR,
-        [('l')-'A'] = LLPRE,
-    }, { /* 2: ll-prefixed */
-        [('d')-'A'] = LLONG, [('i')-'A'] = LLONG,
-        [('o')-'A'] = ULLONG, [('u')-'A'] = ULLONG,
-        [('x')-'A'] = ULLONG, [('X')-'A'] = ULLONG,
-        [('n')-'A'] = PTR,
-    }, { /* 3: h-prefixed */
-        [('d')-'A'] = SHORT, [('i')-'A'] = SHORT,
-        [('o')-'A'] = USHORT, [('u')-'A'] = USHORT,
-        [('x')-'A'] = USHORT, [('X')-'A'] = USHORT,
-        [('n')-'A'] = PTR,
-        [('h')-'A'] = HHPRE,
-    }, { /* 4: hh-prefixed */
-        [('d')-'A'] = CHAR, [('i')-'A'] = CHAR,
-        [('o')-'A'] = UCHAR, [('u')-'A'] = UCHAR,
-        [('x')-'A'] = UCHAR, [('X')-'A'] = UCHAR,
-        [('n')-'A'] = PTR,
-    }, { /* 5: L-prefixed not supported */
-    }, { /* 6: z- or t-prefixed (assumed to be same size) */
-        [('d')-'A'] = LONG, [('i')-'A'] = LONG,
-        [('o')-'A'] = WORDT, [('u')-'A'] = WORDT,
-        [('x')-'A'] = WORDT, [('X')-'A'] = WORDT,
-        [('n')-'A'] = PTR,
-    }, { /* 7: j-prefixed */
-        [('d')-'A'] = LLONG, [('i')-'A'] = LLONG,
-        [('o')-'A'] = ULLONG, [('u')-'A'] = ULLONG,
-        [('x')-'A'] = ULLONG, [('X')-'A'] = ULLONG,
-        [('n')-'A'] = PTR,
-    }
-};
-
-
-
-
-union arg {
-    uintmax_t i;
-    long double f;
-    void *p;
-};
-
-static void pop_arg(union arg *arg, int type, va_list *ap)
-{
-    switch (type) {
-    case PTR:
-        arg->p = __builtin_va_arg(*ap,void *);
-        break;
-    case INT:
-        arg->i = __builtin_va_arg(*ap,int);
-        break;
-    case UINT:
-        arg->i = __builtin_va_arg(*ap,unsigned int);
-        break;
-    case LONG:
-        arg->i = __builtin_va_arg(*ap,long);
-        break;
-    case ULONG:
-        arg->i = __builtin_va_arg(*ap,unsigned long);
-        break;
-    case LLONG:
-        arg->i = __builtin_va_arg(*ap,long long);
-        break;
-    case ULLONG:
-        arg->i = __builtin_va_arg(*ap,unsigned long long);
-        break;
-    case SHORT:
-        arg->i = (short)__builtin_va_arg(*ap,int);
-        break;
-    case USHORT:
-        arg->i = (unsigned short)__builtin_va_arg(*ap,int);
-        break;
-    case CHAR:
-        arg->i = (signed char)__builtin_va_arg(*ap,int);
-        break;
-    case UCHAR:
-        arg->i = (unsigned char)__builtin_va_arg(*ap,int);
-        break;
-    case WORDT:
-        arg->i = __builtin_va_arg(*ap,word_t);
-    }
-}
-
-
-static void pad(out_wrap_t *f, char c, int w, int l, int fl)
-{
-    char pad[32]; /* good enough for what the kernel prints */
-    if (fl & ((1U<<('-'-' ')) | (1U<<('0'-' '))) || l >= w) {
-        return;
-    }
-    l = w - l;
-    memset(pad, c, l > sizeof(pad) ? sizeof(pad) : l);
-    for (; l >= sizeof(pad); l -= sizeof(pad)) {
-        out(f, pad, sizeof(pad));
-    }
-    out(f, pad, l);
-}
-
-static const char xdigits[16] = {
-    "0123456789ABCDEF"
-};
-
-static char *fmt_x(uintmax_t x, char *s, int lower)
-{
-    for (; x; x >>= 4) {
-        *--s = xdigits[(x & 15)] | lower;
-    }
-    return s;
-}
-
-static char *fmt_o(uintmax_t x, char *s)
-{
-    for (; x; x >>= 3) {
-        *--s = '0' + (x & 7);
-    }
-    return s;
-}
-
-static char *fmt_u(uintmax_t x, char *s)
-{
-    while (0 != x) {
-# 287 "/Users/lukasbower/seL4_15/src/machine/io.c"
-        uintmax_t q = x / 10;
-        unsigned int rem = x % 10;
-
-        *--s = '0' + rem;
-        x = q;
-    }
-    return s;
-}
-
-/* Maximum buffer size taken to ensure correct adaptation. However, it could be
- * reduced/removed if we could measure the buf length under all code paths
- */
-
-
-
-
-static int getint(char **s)
-{
-    int i;
-    for (i = 0; isdigit(**s); (*s)++) {
-        if (i > (0xFFFFFFFFFFFFFFFF) / 10U || (**s - '0') > (0xFFFFFFFFFFFFFFFF) - 10 * i) {
-            i = -1;
-        } else {
-            i = 10 * i + (**s - '0');
-        }
-    }
-    return i;
-}
-
-static int printf_core(out_wrap_t *f, const char *fmt, va_list *ap, union arg *nl_arg, int *nl_type)
-{
-    char *a, *z, *s = (char *)fmt;
-    unsigned l10n = 0, fl;
-    int w, p, xp;
-    union arg arg;
-    int argpos;
-    unsigned st, ps;
-    int cnt = 0, l = 0;
-    char buf[sizeof(uintmax_t) * 3 + 3 + 113 / 4];
-    const char *prefix;
-    int t, pl;
-
-    for (;;) {
-        if (l > (0xFFFFFFFFFFFFFFFF) - cnt) {
-            /* This error is only specified for snprintf, for other function
-             * from the printf() family the behavior is unspecified. Stopping
-             * immediately here also seems sane, otherwise %n could produce
-             * wrong results.
-             */
-            return -1; /* overflow */
-        }
-
-        /* Update output count, end loop when fmt is exhausted */
-        cnt += l;
-        if (!*s) {
-            break;
-        }
-
-        /* Handle literal text and %% format specifiers */
-        for (a = s; *s && *s != '%'; s++);
-        for (z = s; s[0] == '%' && s[1] == '%'; z++, s += 2);
-        if (z - a > (0xFFFFFFFFFFFFFFFF) - cnt) {
-            return -1; /* overflow */
-        }
-        l = z - a;
-        out(f, a, l);
-        if (l) {
-            continue;
-        }
-
-        if (isdigit(s[1]) && s[2] == '$') {
-            l10n = 1;
-            argpos = (s[1] - '0');
-            s += 3;
-        } else {
-            argpos = -1;
-            s++;
-        }
-
-        /* Read modifier flags */
-        for (fl = 0; (unsigned)*s - ' ' < 32 && (((1U<<('#'-' '))|(1U<<('0'-' '))|(1U<<('-'-' '))|(1U<<(' '-' '))|(1U<<('+'-' '))|(1U<<('\''-' '))) & (1U<<( *s -' '))); s++) {
-            fl |= (1U<<( *s -' '));
-        }
-
-        /* Read field width */
-        if (*s == '*') {
-            if (isdigit(s[1]) && s[2] == '$') {
-                l10n = 1;
-                nl_type[(s[1] - '0')] = INT;
-                w = nl_arg[(s[1] - '0')].i;
-                s += 3;
-            } else if (!l10n) {
-                w = f ? __builtin_va_arg(*ap,int) : 0;
-                s++;
-            } else {
-                return -1; /* invalid */
-            }
-            if (w < 0) {
-                fl |= (1U<<('-'-' '));
-                w = -w;
-            }
-        } else if ((w = getint(&s)) < 0) {
-            return -1; /* overflow */
-        }
-
-        /* Read precision */
-        if (*s == '.' && s[1] == '*') {
-            if (isdigit(s[2]) && s[3] == '$') {
-                nl_type[(s[2] - '0')] = INT;
-                p = nl_arg[(s[2] - '0')].i;
-                s += 4;
-            } else if (!l10n) {
-                p = f ? __builtin_va_arg(*ap,int) : 0;
-                s += 2;
-            } else {
-                return -1;/* invalid */
-            }
-            xp = (p >= 0);
-        } else if (*s == '.') {
-            s++;
-            p = getint(&s);
-            xp = 1;
-        } else {
-            p = -1;
-            xp = 0;
-        }
-
-        /* Format specifier state machine */
-        st = 0;
-        do {
-            if (((unsigned)(*s)-'A' > 'z'-'A')) {
-                return -1; /* invalid */
-            }
-            ps = st;
-            st = states[st][(*s++)-'A'];
-        } while (st - 1 < STOP);
-        if (!st) {
-            return -1; /* invalid */
-        }
-
-        /* Check validity of argument type (nl/normal) */
-        if (st == NOARG) {
-            if (argpos >= 0) {
-                return -1; /* invalid */
-            }
-        } else {
-            if (argpos >= 0) {
-                nl_type[argpos] = st;
-                arg = nl_arg[argpos];
-            } else if (f) {
-                pop_arg(&arg, st, ap);
-            } else {
-                return 0;
-            }
-        }
-
-        if (!f) {
-            continue;
-        }
-
-        z = buf + sizeof(buf);
-        prefix = "-+   0X0x";
-        pl = 0;
-        t = s[-1];
-
-        /* - and 0 flags are mutually exclusive */
-        if (fl & (1U<<('-'-' '))) {
-            fl &= ~(1U<<('0'-' '));
-        }
-
-        if (t == 'n') {
-            if (!arg.p) {
-                continue;
-            }
-            switch (ps) {
-            case BARE:
-                *(int *)arg.p = cnt;
-                break;
-            case LPRE:
-                *(long *)arg.p = cnt;
-                break;
-            case LLPRE:
-                *(long long *)arg.p = cnt;
-                break;
-            case HPRE:
-                *(unsigned short *)arg.p = cnt;
-                break;
-            case HHPRE:
-                *(unsigned char *)arg.p = cnt;
-                break;
-            case ZTPRE:
-                *(word_t *)arg.p = cnt;
-                break;
-            case JPRE:
-                *(word_t *)arg.p = cnt;
-                break;
-            }
-            continue;
-        } else if (t == 'c') {
-            p = 1;
-            a = z - p;
-            *a = arg.i;
-            fl &= ~(1U<<('0'-' '));
-        } else if (t == 's') {
-            a = arg.p ? arg.p : "(null)";
-            z = a + strnlen(a, p < 0 ? (0xFFFFFFFFFFFFFFFF) : p);
-            if (p < 0 && *z) {
-                return -1; /* overflow */
-            }
-            p = z - a;
-            fl &= ~(1U<<('0'-' '));
-        } else {
-            switch (t) {
-            case 'p':
-                p = (((p)>(2 * sizeof(void *)))?(p):(2 * sizeof(void *)));
-                t = 'x';
-                fl |= (1U<<('#'-' '));
-            case 'x':
-            case 'X':
-                a = fmt_x(arg.i, z, t & 32);
-                if (arg.i && (fl & (1U<<('#'-' ')))) {
-                    prefix += (t >> 4);
-                    pl = 2;
-                }
-                break;
-            case 'o':
-                a = fmt_o(arg.i, z);
-                if ((fl & (1U<<('#'-' '))) && p < (z - a + 1)) {
-                    p = z - a + 1;
-                }
-                break;
-            case 'd':
-            case 'i':
-                pl = 1;
-                if (arg.i > (0xFFFFFFFFFFFFFFFF)) {
-                    arg.i = -arg.i;
-                } else if (fl & (1U<<('+'-' '))) {
-                    prefix++;
-                } else if (fl & (1U<<(' '-' '))) {
-                    prefix += 2;
-                } else {
-                    pl = 0;
-                }
-            case 'u':
-                a = fmt_u(arg.i, z);
-                break;
-            }
-            if (xp && p < 0) {
-                return -1; /* overflow */
-            }
-            if (xp) {
-                fl &= ~(1U<<('0'-' '));
-            }
-            if (!arg.i && !p) {
-                a = z;
-            } else {
-                p = (((p)>(z - a + !arg.i))?(p):(z - a + !arg.i));
-            }
-        }
-
-        if (p < z - a) {
-            p = z - a;
-        }
-        if (p > (0xFFFFFFFFFFFFFFFF) - pl) {
-            return -1; /* overflow */
-        }
-        if (w < pl + p) {
-            w = pl + p;
-        }
-        if (w > (0xFFFFFFFFFFFFFFFF) - cnt) {
-            return -1; /* overflow */
-        }
-
-        pad(f, ' ', w, pl + p, fl);
-        out(f, prefix, pl);
-        pad(f, '0', w, pl + p, fl ^ (1U<<('0'-' ')));
-        pad(f, '0', p, z - a, 0);
-        out(f, a, z - a);
-        pad(f, ' ', w, pl + p, fl ^ (1U<<('-'-' ')));
-
-        l = w;
-    }
-
-    if (f) {
-        return cnt;
-    }
-    if (!l10n) {
-        return 0;
-    }
-
-    int i;
-    for (i = 1; i <= 9 && nl_type[i]; i++) {
-        pop_arg(nl_arg + i, nl_type[i], ap);
-    }
-    for (; i <= 9 && !nl_type[i]; i++);
-    if (i <= 9) {
-        return -1; /* invalid */
-    }
-
-    return 1;
-}
-
-static int vprintf(out_wrap_t *out, const char *fmt, va_list ap)
-{
-    va_list ap2;
-    int nl_type[9 + 1] = {0};
-    union arg nl_arg[9 + 1];
-    int ret;
-
-    /* validate format string */
-    __builtin_va_copy(ap2,ap);
-    if (printf_core(((void *)0), fmt, &ap2, nl_arg, nl_type) < 0) {
-        __builtin_va_end(ap2);
-        return -1;
-    }
-
-    ret = printf_core(out, fmt, &ap2, nl_arg, nl_type);
-    __builtin_va_end(ap2);
-    return ret;
-}
-
-/*
- *------------------------------------------------------------------------------
- * Kernel printing API
- *------------------------------------------------------------------------------
- */
-
-int impl_kvprintf(const char *format, va_list ap)
-{
-    out_wrap_t out_wrap = {
-        .write = do_output_to_putchar,
-        .buf = ((void *)0),
-        .maxlen = 0,
-        .used = 0
-    };
-
-    return vprintf(&out_wrap, format, ap);
-}
-
-int impl_ksnvprintf(char *str, word_t size, const char *format, va_list ap)
-{
-    if (!str) {
-        size = 0;
-    }
-
-    out_wrap_t out_wrap = {
-        .write = do_output_to_buffer,
-        .buf = str,
-        .maxlen = size,
-        .used = 0
-    };
-
-    int ret = vprintf(&out_wrap, format, ap);
-
-    /* We return the number of characters written into the buffer, excluding the
-     * terminating null char. However, we do never write more than 'size' bytes,
-     * that includes the terminating null char. If the output was truncated due
-     * to this limit, then the return value is the number of chars excluding the
-     * terminating null byte, which would have been written to the buffer, if
-     * enough space had been available. Thus, a return value of 'size' or more
-     * means that the output was truncated.
-     */
-    if ((ret > 0) && (size > 0)) {
-        str[(ret < size) ? ret : size - 1] = '\0';
-    }
-
-    return ret;
-}
-# 1 "/Users/lukasbower/seL4_15/src/machine/registerset.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -17687,7 +18004,7 @@ const register_t fault_messages[][(((n_syscallMessage)>(n_exceptionMessage))?(n_
 
 
 };
-# 1 "/Users/lukasbower/seL4_15/src/model/preemption.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/preemption.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17695,7 +18012,7 @@ const register_t fault_messages[][(((n_syscallMessage)>(n_exceptionMessage))?(n_
  */
 
 
-# 1 "/Users/lukasbower/seL4_15/include/model/preemption.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/model/preemption.h" 1
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17707,7 +18024,7 @@ const register_t fault_messages[][(((n_syscallMessage)>(n_exceptionMessage))?(n_
 
 
 exception_t preemptionPoint(void);
-# 9 "/Users/lukasbower/seL4_15/src/model/preemption.c" 2
+# 9 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/preemption.c" 2
 
 
 
@@ -17743,13 +18060,40 @@ exception_t preemptionPoint(void)
 
     return EXCEPTION_NONE;
 }
-# 1 "/Users/lukasbower/seL4_15/src/model/smp.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/smp.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/model/statedata.c"
+
+
+
+
+
+
+
+void migrateTCB(tcb_t *tcb, word_t new_core)
+{
+    if (new_core == tcb->tcbAffinity) {
+        return;
+    }
+
+
+
+
+    /* If the thread owns the FPU of the core it is currently running on (which
+     * is not necessarily the core, that we are now running on), then release
+     * that cores's FPU.
+     */
+    fpuRelease(tcb);
+
+    tcb->tcbAffinity = new_core;
+
+
+
+}
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/statedata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17757,15 +18101,21 @@ exception_t preemptionPoint(void)
  */
 
 
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/api/debug.h" 1
+/*
+ * Copyright 2014, General Dynamics C4 Systems
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+# 9 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/statedata.c" 2
 
-
-# 1 "/Users/lukasbower/seL4_15/include/plat/default/plat/machine.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/plat/default/plat/machine.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 11 "/Users/lukasbower/seL4_15/src/model/statedata.c" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/statedata.c" 2
 
 
 
@@ -17773,15 +18123,15 @@ exception_t preemptionPoint(void)
 
 
 /* Collective cpu states, including both pre core architecture dependant and independent data */
-;
+smpStatedata_t ksSMP[4] __attribute__((__aligned__((1ul << (6)))));
 
 /* Global count of how many cpus there are */
 word_t ksNumCPUs;
 
 /* Pointer to the head of the scheduler queue for each priority */
-tcb_queue_t ksReadyQueues[(1 * 256)];
-word_t ksReadyQueuesL1Bitmap[1];
-word_t ksReadyQueuesL2Bitmap[1][((256 + (1 << 6) - 1) / (1 << 6))];
+;
+;
+;
 _Static_assert((((256 + (1 << 6) - 1) / (1 << 6)) - 1) <= (1 << 6), "ksReadyQueuesL1BitmapBigEnough");
 
 
@@ -17789,31 +18139,29 @@ _Static_assert((((256 + (1 << 6) - 1) / (1 << 6)) - 1) <= (1 << 6), "ksReadyQueu
 
 
 /* Current thread TCB pointer */
-tcb_t * ksCurThread;
+;
 
 /* Idle thread TCB pointer */
-tcb_t * ksIdleThread;
+;
 
 /* Values of 0 and ~0 encode ResumeCurrentThread and ChooseNewThread
  * respectively; other values encode SwitchToThread and must be valid
  * tcb pointers */
-tcb_t * ksSchedulerAction;
+;
 
 
 /* The thread using the FPU, or NULL if FPU state is invalid */
-tcb_t * ksCurFPUOwner;
-# 62 "/Users/lukasbower/seL4_15/src/model/statedata.c"
-tcb_t * ksDebugTCBs;
-# 73 "/Users/lukasbower/seL4_15/src/model/statedata.c"
+;
+# 73 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/model/statedata.c"
 /* Units of work we have completed since the last time we checked for
  * pending interrupts */
 word_t ksWorkUnitsCompleted;
 
-irq_state_t intStateIRQTable[(maxIRQ + 1)];
+irq_state_t intStateIRQTable[((4 - 1) * 32u + maxIRQ + 1)];
 /* CNode containing interrupt handler endpoints - like all seL4 objects, this CNode needs to be
  * of a size that is a power of 2 and aligned to its size. */
 cte_t intStateIRQNode[(1ul << ((8)))] __attribute__((__aligned__((1ul << ((8) + 5)))));
-_Static_assert(sizeof(intStateIRQNode) >= (((maxIRQ + 1)) *sizeof(cte_t)), "irqCNodeSize");;
+_Static_assert(sizeof(intStateIRQNode) >= ((((4 - 1) * 32u + maxIRQ + 1)) *sizeof(cte_t)), "irqCNodeSize");;
 
 /* Currently active domain */
 dom_t ksCurDomain;
@@ -17829,22 +18177,14 @@ word_t ksDomScheduleIdx;
 word_t ksDomScheduleStart;
 
 /* Idle thread. */
-__attribute__((__section__("._idle_thread"))) char ksIdleThreadTCB[1][(1ul << (11))] __attribute__((__aligned__((1ul << (11)))));
-
-
-
-
-
-
-
-kernel_entry_t ksKernelEntry;
-# 1 "/Users/lukasbower/seL4_15/src/object/cnode.c"
+__attribute__((__section__("._idle_thread"))) char ksIdleThreadTCB[4][(1ul << (11))] __attribute__((__aligned__((1ul << (11)))));
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/cnode.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 25 "/Users/lukasbower/seL4_15/src/object/cnode.c"
+# 25 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/cnode.c"
 struct finaliseSlot_ret {
     exception_t status;
     bool_t success;
@@ -17871,16 +18211,16 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
     exception_t status;
 
     /* Haskell error: "decodeCNodeInvocation: invalid cap" */
-    do { if (!(cap_get_capType(cap) == cap_cnode_cap)) { _assert_fail("cap_get_capType(cap) == cap_cnode_cap", "/Users/lukasbower/seL4_15/src/object/cnode.c", 51, __func__); } } while(0);
+    ;
 
     if (invLabel < CNodeRevoke || invLabel > CNodeSaveCaller) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNodeCap: Illegal Operation attempted." ">>" "\033[0m" "\n", 0lu, __func__, 54, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
     if (length < 2) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode operation: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 60, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -17889,7 +18229,7 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
 
     lu_ret = lookupTargetSlot(cap, index, w_bits);
     if (lu_ret.status != EXCEPTION_NONE) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode operation: Target slot invalid." ">>" "\033[0m" "\n", 0lu, __func__, 69, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         return lu_ret.status;
     }
     destSlot = lu_ret.slot;
@@ -17904,7 +18244,7 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
         cap_t srcCap;
 
         if (length < 4 || current_extra_caps.excaprefs[0] == ((void *)0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Copy/Mint/Move/Mutate: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 84, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_TruncatedMessage;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -17915,19 +18255,19 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
 
         status = ensureEmptySlot(destSlot);
         if (status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Copy/Mint/Move/Mutate: Destination not empty." ">>" "\033[0m" "\n", 0lu, __func__, 95, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             return status;
         }
 
         lu_ret = lookupSourceSlot(srcRoot, srcIndex, srcDepth);
         if (lu_ret.status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Copy/Mint/Move/Mutate: Invalid source slot." ">>" "\033[0m" "\n", 0lu, __func__, 101, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             return lu_ret.status;
         }
         srcSlot = lu_ret.slot;
 
         if (cap_get_capType(srcSlot->cap) == cap_null_cap) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Copy/Mint/Move/Mutate: Source slot invalid or empty." ">>" "\033[0m" "\n", 0lu, __func__, 107, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_FailedLookup;
             current_syscall_error.failedLookupWasSource = 1;
             current_lookup_fault =
@@ -17939,7 +18279,7 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
         case CNodeCopy:
 
             if (length < 5) {
-                do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Truncated message for CNode Copy operation." ">>" "\033[0m" "\n", 0lu, __func__, 119, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+                ;
                 current_syscall_error.type = seL4_TruncatedMessage;
                 return EXCEPTION_SYSCALL_ERROR;
             }
@@ -17948,7 +18288,7 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
             srcCap = maskCapRights(cap_rights, srcSlot->cap);
             dc_ret = deriveCap(srcSlot, srcCap);
             if (dc_ret.status != EXCEPTION_NONE) {
-                do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Error deriving cap for CNode Copy operation." ">>" "\033[0m" "\n", 0lu, __func__, 128, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+                ;
                 return dc_ret.status;
             }
             newCap = dc_ret.cap;
@@ -17958,7 +18298,7 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
 
         case CNodeMint:
             if (length < 6) {
-                do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Mint: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 138, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+                ;
                 current_syscall_error.type = seL4_TruncatedMessage;
                 return EXCEPTION_SYSCALL_ERROR;
             }
@@ -17969,7 +18309,7 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
             dc_ret = deriveCap(srcSlot,
                                updateCapData(false, capData, srcCap));
             if (dc_ret.status != EXCEPTION_NONE) {
-                do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Error deriving cap for CNode Mint operation." ">>" "\033[0m" "\n", 0lu, __func__, 149, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+                ;
                 return dc_ret.status;
             }
             newCap = dc_ret.cap;
@@ -17985,7 +18325,7 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
 
         case CNodeMutate:
             if (length < 5) {
-                do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Mutate: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 165, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+                ;
                 current_syscall_error.type = seL4_TruncatedMessage;
                 return EXCEPTION_SYSCALL_ERROR;
             }
@@ -17997,17 +18337,17 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
             break;
 
         default:
-            do { if (!(0)) { _assert_fail("0", "/Users/lukasbower/seL4_15/src/object/cnode.c", 177, __func__); } } while(0);
+            ;
             return EXCEPTION_NONE;
         }
 
         if (cap_get_capType(newCap) == cap_null_cap) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Copy/Mint/Move/Mutate: Mutated cap would be invalid." ">>" "\033[0m" "\n", 0lu, __func__, 182, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         if (isMove) {
             return invokeCNodeMove(newCap, srcSlot, destSlot);
         } else {
@@ -18016,12 +18356,12 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
     }
 
     if (invLabel == CNodeRevoke) {
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return invokeCNodeRevoke(destSlot);
     }
 
     if (invLabel == CNodeDelete) {
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return invokeCNodeDelete(destSlot);
     }
 
@@ -18029,11 +18369,11 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
     if (invLabel == CNodeSaveCaller) {
         status = ensureEmptySlot(destSlot);
         if (status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode SaveCaller: Destination slot not empty." ">>" "\033[0m" "\n", 0lu, __func__, 209, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             return status;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return invokeCNodeSaveCaller(destSlot);
     }
 
@@ -18044,11 +18384,11 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
         destCap = destSlot->cap;
 
         if (!hasCancelSendRights(destCap)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode CancelBadgedSends: Target cap invalid." ">>" "\033[0m" "\n", 0lu, __func__, 224, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return invokeCNodeCancelBadgedSends(destCap);
     }
 
@@ -18086,7 +18426,7 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
         pivotSlot = lu_ret.slot;
 
         if (pivotSlot == srcSlot || pivotSlot == destSlot) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Rotate: Pivot slot the same as source or dest slot." ">>" "\033[0m" "\n", 0lu, __func__, 266, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
@@ -18116,18 +18456,18 @@ exception_t decodeCNodeInvocation(word_t invLabel, word_t length, cap_t cap,
         newPivotCap = updateCapData(true, pivotNewData, pivotSlot->cap);
 
         if (cap_get_capType(newSrcCap) == cap_null_cap) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Rotate: Source cap invalid." ">>" "\033[0m" "\n", 0lu, __func__, 296, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
         if (cap_get_capType(newPivotCap) == cap_null_cap) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode Rotate: Pivot cap invalid." ">>" "\033[0m" "\n", 0lu, __func__, 302, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             current_syscall_error.type = seL4_IllegalOperation;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return invokeCNodeRotate(newSrcCap, newPivotCap,
                                  srcSlot, pivotSlot, destSlot);
     }
@@ -18189,12 +18529,12 @@ exception_t invokeCNodeSaveCaller(cte_t *destSlot)
     cap_t cap;
     cte_t *srcSlot;
 
-    srcSlot = (((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCaller));
+    srcSlot = (((cte_t *)((word_t)(ksSMP[(getCurrentCPUIndex())].system.ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCaller));
     cap = srcSlot->cap;
 
     switch (cap_get_capType(cap)) {
     case cap_null_cap:
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "CNode SaveCaller: Reply cap not present." ">>" "\033[0m" "\n", 0lu, __func__, 374, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         break;
 
     case cap_reply_cap:
@@ -18204,7 +18544,7 @@ exception_t invokeCNodeSaveCaller(cte_t *destSlot)
         break;
 
     default:
-        _fail("caller capability must be null or reply", "/Users/lukasbower/seL4_15/src/object/cnode.c", 384, __func__);
+        halt();
         break;
     }
 
@@ -18246,9 +18586,9 @@ void cteInsert(cap_t newCap, cte_t *srcSlot, cte_t *destSlot)
     newMDB = mdb_node_set_mdbFirstBadged(newMDB, newCapIsRevocable);
 
     /* Haskell error: "cteInsert to non-empty destination" */
-    do { if (!(cap_get_capType(destSlot->cap) == cap_null_cap)) { _assert_fail("cap_get_capType(destSlot->cap) == cap_null_cap", "/Users/lukasbower/seL4_15/src/object/cnode.c", 426, __func__); } } while(0);
+    ;
     /* Haskell error: "cteInsert: mdb entry must be empty" */
-    do { if (!((cte_t *)mdb_node_get_mdbNext(destSlot->cteMDBNode) == ((void *)0) && (cte_t *)mdb_node_get_mdbPrev(destSlot->cteMDBNode) == ((void *)0))) { _assert_fail("(cte_t *)mdb_node_get_mdbNext(destSlot->cteMDBNode) == NULL && (cte_t *)mdb_node_get_mdbPrev(destSlot->cteMDBNode) == NULL", "/Users/lukasbower/seL4_15/src/object/cnode.c", 428, __func__); } } while(0)
+   
                                                                        ;
 
     /* Prevent parent untyped cap from being used again if creating a child
@@ -18271,9 +18611,9 @@ void cteMove(cap_t newCap, cte_t *srcSlot, cte_t *destSlot)
     word_t prev_ptr, next_ptr;
 
     /* Haskell error: "cteMove to non-empty destination" */
-    do { if (!(cap_get_capType(destSlot->cap) == cap_null_cap)) { _assert_fail("cap_get_capType(destSlot->cap) == cap_null_cap", "/Users/lukasbower/seL4_15/src/object/cnode.c", 451, __func__); } } while(0);
+    ;
     /* Haskell error: "cteMove: mdb entry must be empty" */
-    do { if (!((cte_t *)mdb_node_get_mdbNext(destSlot->cteMDBNode) == ((void *)0) && (cte_t *)mdb_node_get_mdbPrev(destSlot->cteMDBNode) == ((void *)0))) { _assert_fail("(cte_t *)mdb_node_get_mdbNext(destSlot->cteMDBNode) == NULL && (cte_t *)mdb_node_get_mdbPrev(destSlot->cteMDBNode) == NULL", "/Users/lukasbower/seL4_15/src/object/cnode.c", 453, __func__); } } while(0)
+   
                                                                        ;
 
     mdb = srcSlot->cteMDBNode;
@@ -18425,7 +18765,7 @@ static inline bool_t __attribute__((__const__)) capRemovable(cap_t cap, cte_t *s
         return (n == 0 || (n == 1 && slot == z_slot));
     }
     default:
-        _fail("finaliseCap should only return Zombie or NullCap", "/Users/lukasbower/seL4_15/src/object/cnode.c", 605, __func__);
+        halt();
     }
 }
 
@@ -18490,13 +18830,13 @@ static exception_t reduceZombie(cte_t *slot, bool_t immediate)
     word_t n, type;
     exception_t status;
 
-    do { if (!(cap_get_capType(slot->cap) == cap_zombie_cap)) { _assert_fail("cap_get_capType(slot->cap) == cap_zombie_cap", "/Users/lukasbower/seL4_15/src/object/cnode.c", 670, __func__); } } while(0);
+    ;
     ptr = (cte_t *)cap_zombie_cap_get_capZombiePtr(slot->cap);
     n = cap_zombie_cap_get_capZombieNumber(slot->cap);
     type = cap_zombie_cap_get_capZombieType(slot->cap);
 
     /* Haskell error: "reduceZombie: expected unremovable zombie" */
-    do { if (!(n > 0)) { _assert_fail("n > 0", "/Users/lukasbower/seL4_15/src/object/cnode.c", 676, __func__); } } while(0);
+    ;
 
     if (immediate) {
         cte_t *endSlot = &ptr[n - 1];
@@ -18517,28 +18857,28 @@ static exception_t reduceZombie(cte_t *slot, bool_t immediate)
             if (ptr == ptr2 &&
                 cap_zombie_cap_get_capZombieNumber(slot->cap) == n &&
                 cap_zombie_cap_get_capZombieType(slot->cap) == type) {
-                do { if (!(cap_get_capType(endSlot->cap) == cap_null_cap)) { _assert_fail("cap_get_capType(endSlot->cap) == cap_null_cap", "/Users/lukasbower/seL4_15/src/object/cnode.c", 697, __func__); } } while(0);
+                ;
                 slot->cap =
                     cap_zombie_cap_set_capZombieNumber(slot->cap, n - 1);
             } else {
                 /* Haskell error:
                  * "Expected new Zombie to be self-referential."
                  */
-                do { if (!(ptr2 == slot && ptr != slot)) { _assert_fail("ptr2 == slot && ptr != slot", "/Users/lukasbower/seL4_15/src/object/cnode.c", 704, __func__); } } while(0);
+                ;
             }
             break;
         }
 
         default:
-            _fail("Expected recursion to result in Zombie.", "/Users/lukasbower/seL4_15/src/object/cnode.c", 710, __func__);
+            halt();
         }
     } else {
         /* Haskell error: "Cyclic zombie passed to unexposed reduceZombie" */
-        do { if (!(ptr != slot)) { _assert_fail("ptr != slot", "/Users/lukasbower/seL4_15/src/object/cnode.c", 714, __func__); } } while(0);
+        ;
 
         if (cap_get_capType(ptr->cap) == cap_zombie_cap) {
             /* Haskell error: "Moving self-referential Zombie aside." */
-            do { if (!(ptr != ((cte_t *)(cap_zombie_cap_get_capZombiePtr(ptr->cap))))) { _assert_fail("ptr != CTE_PTR(cap_zombie_cap_get_capZombiePtr(ptr->cap))", "/Users/lukasbower/seL4_15/src/object/cnode.c", 718, __func__); } } while(0);
+            ;
         }
 
         capSwapForDelete(ptr, slot);
@@ -18559,7 +18899,7 @@ void cteDeleteOne(cte_t *slot)
         final = isFinalCapability(slot);
         fc_ret = finaliseCap(slot->cap, final, true);
         /* Haskell error: "cteDeleteOne: cap should be removable" */
-        do { if (!(capRemovable(fc_ret.remainder, slot) && cap_get_capType(fc_ret.cleanupInfo) == cap_null_cap)) { _assert_fail("capRemovable(fc_ret.remainder, slot) && cap_get_capType(fc_ret.cleanupInfo) == cap_null_cap", "/Users/lukasbower/seL4_15/src/object/cnode.c", 739, __func__); } } while(0)
+       
                                                                    ;
         emptySlot(slot, cap_null_cap_new());
     }
@@ -18755,7 +19095,7 @@ cap_transfer_t __attribute__((__pure__)) loadCapTransfer(word_t *buffer)
     const int offset = seL4_MsgMaxLength + ((1ul<<(seL4_MsgExtraCapBits))-1) + 2;
     return capTransferFromWords(buffer + offset);
 }
-# 1 "/Users/lukasbower/seL4_15/src/object/domain.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/domain.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2025, Indan Zupancic
@@ -18765,7 +19105,7 @@ cap_transfer_t __attribute__((__pure__)) loadCapTransfer(word_t *buffer)
 
 
 
-# 1 "/Users/lukasbower/seL4_15/include/64/mode/api/ipc_buffer.h" 1
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/64/mode/api/ipc_buffer.h" 1
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -18786,7 +19126,7 @@ static inline word_t mode_setTimeArg(word_t i, time_t time, word_t *buffer, tcb_
 {
     return setMR(thread, buffer, i, time);
 }
-# 11 "/Users/lukasbower/seL4_15/src/object/domain.c" 2
+# 11 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/domain.c" 2
 
 
 
@@ -18806,13 +19146,13 @@ static exception_t decodeDomainSetSetInvocation(word_t length, word_t *buffer)
     cap_t tcap;
 
     if (__builtin_expect(!!(length == 0), 0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Configure: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 30, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     } else {
         domain = getSyscallArg(0, buffer);
         if (domain >= numDomains) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Configure: invalid domain (%lu >= %u)." ">>" "\033[0m" "\n", 0lu, __func__, 36, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), domain, numDomains); } while (0)
+           
                                          ;
             current_syscall_error.type = seL4_InvalidArgument;
             current_syscall_error.invalidArgumentNumber = 0;
@@ -18821,19 +19161,19 @@ static exception_t decodeDomainSetSetInvocation(word_t length, word_t *buffer)
     }
 
     if (__builtin_expect(!!(current_extra_caps.excaprefs[0] == ((void *)0)), 0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Configure: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 45, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
     tcap = current_extra_caps.excaprefs[0]->cap;
     if (__builtin_expect(!!(cap_get_capType(tcap) != cap_thread_cap), 0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Configure: thread cap required." ">>" "\033[0m" "\n", 0lu, __func__, 52, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidArgument;
         current_syscall_error.invalidArgumentNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     invokeDomainSetSet(((tcb_t *)(cap_thread_cap_get_capTCBPtr(tcap))), domain);
     return EXCEPTION_NONE;
 }
@@ -18850,7 +19190,7 @@ static exception_t decodeDomainScheduleConfigure(word_t length, word_t *buffer)
     ticks_t duration;
 
     if (__builtin_expect(!!(length < 2 + (sizeof(ticks_t) / sizeof(word_t))), 0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Schedule Configure: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 74, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -18860,38 +19200,38 @@ static exception_t decodeDomainScheduleConfigure(word_t length, word_t *buffer)
 
     /* Last entry must stay an end marker, hence the -1: */
     if (index >= domScheduleLength - 1) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Schedule Configure: Invalid index." ">>" "\033[0m" "\n", 0lu, __func__, 84, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_RangeError;
         current_syscall_error.rangeErrorMin = 0;
         current_syscall_error.rangeErrorMax = domScheduleLength - 2;
         return EXCEPTION_SYSCALL_ERROR;
     }
     if (domain >= numDomains) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Schedule Configure: Invalid domain." ">>" "\033[0m" "\n", 0lu, __func__, 91, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_RangeError;
         current_syscall_error.rangeErrorMin = 0;
         current_syscall_error.rangeErrorMax = numDomains - 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
     if (duration > ((0xFFFFFFFFFFFFFFFF) >> 8 /* Maximum of 255 domains supported*/)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Schedule Configure: Duration must fit in 56 bits." ">>" "\033[0m" "\n", 0lu, __func__, 98, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.invalidArgumentNumber = 2;
         current_syscall_error.type = seL4_InvalidArgument;
         return EXCEPTION_SYSCALL_ERROR;
     }
     if (duration == 0 && domain != 0) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Schedule Configure: Both domain and duration must be zero for end markers." ">>" "\033[0m" "\n", 0lu, __func__, 104, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.invalidArgumentNumber = 1;
         current_syscall_error.type = seL4_InvalidArgument;
         return EXCEPTION_SYSCALL_ERROR;
     }
     if (index == ksDomScheduleStart && duration == 0) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Schedule Configure: Starting schedule's duration must not be zero." ">>" "\033[0m" "\n", 0lu, __func__, 110, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.invalidArgumentNumber = 2;
         current_syscall_error.type = seL4_InvalidArgument;
         return EXCEPTION_SYSCALL_ERROR;
     }
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     invokeDomainScheduleConfigure(index, domain, duration);
     return EXCEPTION_NONE;
 }
@@ -18911,26 +19251,26 @@ static exception_t decodeDomainScheduleSetStart(word_t length, word_t *buffer)
     word_t index;
 
     if (__builtin_expect(!!(length < 1), 0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Schedule Configure: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 135, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
     index = getSyscallArg(0, buffer);
 
     if (index >= domScheduleLength) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Schedule Set Start: Invalid index." ">>" "\033[0m" "\n", 0lu, __func__, 142, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_RangeError;
         current_syscall_error.rangeErrorMin = 0;
         current_syscall_error.rangeErrorMax = domScheduleLength - 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
     if (dschedule_is_end_marker(index)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Domain Schedule Set Start: Starting schedule must not be an end marker." ">>" "\033[0m" "\n", 0lu, __func__, 149, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.invalidArgumentNumber = 0;
         current_syscall_error.type = seL4_InvalidArgument;
         return EXCEPTION_SYSCALL_ERROR;
     }
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     invokeDomainScheduleSetStart(index);
     return EXCEPTION_NONE;
 }
@@ -18949,13 +19289,13 @@ exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffe
         return EXCEPTION_SYSCALL_ERROR;
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 23 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+# 23 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
 void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
              bool_t canGrant, bool_t canGrantReply, tcb_t *thread, endpoint_t *epptr)
 
@@ -18964,7 +19304,6 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
     case EPState_Idle:
     case EPState_Send:
         if (blocking) {
-            tcb_queue_t queue;
 
             /* Set thread state to BlockedOnSend */
             thread_state_ptr_set_tsType(&thread->tcbState,
@@ -18983,10 +19322,16 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
             scheduleTCB(thread);
 
             /* Place calling thread in endpoint queue */
+
+
+
+            tcb_queue_t queue;
             queue = ep_ptr_get_queue(epptr);
             queue = tcbEPAppend(thread, queue);
             endpoint_ptr_set_state(epptr, EPState_Send);
             ep_ptr_set_queue(epptr, queue);
+
+
         }
         break;
 
@@ -18999,9 +19344,12 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
         dest = queue.head;
 
         /* Haskell error "Receive endpoint queue must not be empty" */
-        do { if (!(dest)) { _assert_fail("dest", "/Users/lukasbower/seL4_15/src/object/endpoint.c", 66, __func__); } } while(0);
+        ;
 
         /* Dequeue the first TCB */
+
+
+
         queue = tcbEPDequeue(dest, queue);
         ep_ptr_set_queue(epptr, queue);
 
@@ -19009,9 +19357,10 @@ void sendIPC(bool_t blocking, bool_t do_call, word_t badge,
             endpoint_ptr_set_state(epptr, EPState_Idle);
         }
 
+
         /* Do the transfer */
         doIPCTransfer(thread, epptr, badge, canGrant, dest);
-# 105 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+# 115 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
         bool_t replyCanGrant = thread_state_ptr_get_blockingIPCCanGrant(&dest->tcbState);;
 
         setThreadState(dest, ThreadState_Running);
@@ -19040,20 +19389,19 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
     notification_t *ntfnPtr;
 
     /* Haskell error "receiveIPC: invalid cap" */
-    do { if (!(cap_get_capType(cap) == cap_endpoint_cap)) { _assert_fail("cap_get_capType(cap) == cap_endpoint_cap", "/Users/lukasbower/seL4_15/src/object/endpoint.c", 133, __func__); } } while(0);
+    ;
 
     epptr = ((endpoint_t *)(cap_endpoint_cap_get_capEPPtr(cap)));
-# 148 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+# 159 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
     /* Check for anything waiting in the notification */
     ntfnPtr = thread->tcbBoundNotification;
     if (ntfnPtr && notification_ptr_get_state(ntfnPtr) == NtfnState_Active) {
         completeSignal(ntfnPtr, thread);
     } else {
-# 163 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+# 174 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
         switch (endpoint_ptr_get_state(epptr)) {
         case EPState_Idle:
         case EPState_Recv: {
-            tcb_queue_t queue;
 
             if (isBlocking) {
                 /* Set thread state to BlockedOnReceive */
@@ -19064,19 +19412,26 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
 
 
 
-
-
-
                 thread_state_ptr_set_blockingIPCCanGrant(
                     &thread->tcbState, cap_endpoint_cap_get_capCanGrant(cap));
 
                 scheduleTCB(thread);
 
+
+
+
+
+
                 /* Place calling thread in endpoint queue */
+
+
+
+                tcb_queue_t queue;
                 queue = ep_ptr_get_queue(epptr);
                 queue = tcbEPAppend(thread, queue);
                 endpoint_ptr_set_state(epptr, EPState_Recv);
                 ep_ptr_set_queue(epptr, queue);
+
             } else {
                 doNBRecvFailedTransfer(thread);
             }
@@ -19096,15 +19451,19 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
             sender = queue.head;
 
             /* Haskell error "Send endpoint queue must not be empty" */
-            do { if (!(sender)) { _assert_fail("sender", "/Users/lukasbower/seL4_15/src/object/endpoint.c", 209, __func__); } } while(0);
+            ;
 
             /* Dequeue the first TCB */
+
+
+
             queue = tcbEPDequeue(sender, queue);
             ep_ptr_set_queue(epptr, queue);
 
             if (!queue.head) {
                 endpoint_ptr_set_state(epptr, EPState_Idle);
             }
+
 
             /* Get sender IPC details */
             badge = thread_state_ptr_get_blockingIPCBadge(&sender->tcbState);
@@ -19118,7 +19477,7 @@ void receiveIPC(tcb_t *thread, cap_t cap, bool_t isBlocking)
                           canGrant, thread);
 
             do_call = thread_state_ptr_get_blockingIPCIsCall(&sender->tcbState);
-# 261 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+# 282 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
             if (do_call) {
                 if (canGrant || canGrantReply) {
                     setupCallerCap(sender, thread, cap_endpoint_cap_get_capCanGrant(cap));
@@ -19144,7 +19503,7 @@ void replyFromKernel_error(tcb_t *thread)
     ipcBuffer = lookupIPCBuffer(true, thread);
     setRegister(thread, badgeRegister, 0);
     len = setMRs_syscall_error(thread, ipcBuffer);
-# 295 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+# 316 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
     setRegister(thread, msgInfoRegister, wordFromMessageInfo(
                     seL4_MessageInfo_new(current_syscall_error.type, 0, 0, len)));
 }
@@ -19170,14 +19529,17 @@ void cancelIPC(tcb_t *tptr)
     case ThreadState_BlockedOnReceive: {
         /* blockedIPCCancel state */
         endpoint_t *epptr;
-        tcb_queue_t queue;
 
         epptr = ((endpoint_t *)(thread_state_ptr_get_blockingObject(state)));
 
         /* Haskell error "blockedIPCCancel: endpoint must not be idle" */
-        do { if (!(endpoint_ptr_get_state(epptr) != EPState_Idle)) { _assert_fail("endpoint_ptr_get_state(epptr) != EPState_Idle", "/Users/lukasbower/seL4_15/src/object/endpoint.c", 325, __func__); } } while(0);
+        ;
 
         /* Dequeue TCB */
+
+
+
+        tcb_queue_t queue;
         queue = ep_ptr_get_queue(epptr);
         queue = tcbEPDequeue(tptr, queue);
         ep_ptr_set_queue(epptr, queue);
@@ -19185,7 +19547,7 @@ void cancelIPC(tcb_t *tptr)
         if (!queue.head) {
             endpoint_ptr_set_state(epptr, EPState_Idle);
         }
-# 344 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+# 369 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
         setThreadState(tptr, ThreadState_Inactive);
         break;
     }
@@ -19218,7 +19580,7 @@ void cancelIPC(tcb_t *tptr)
     }
     }
 }
-# 400 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+# 437 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
 void cancelAllIPC(endpoint_t *epptr)
 {
     switch (endpoint_ptr_get_state(epptr)) {
@@ -19226,6 +19588,8 @@ void cancelAllIPC(endpoint_t *epptr)
         break;
 
     default: {
+        /* Clear the queue and set all blocked threads to restart */
+# 456 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
         tcb_t *thread = ((tcb_t *)(endpoint_ptr_get_epQueue_head(epptr)));
 
         /* Make endpoint idle */
@@ -19233,20 +19597,18 @@ void cancelAllIPC(endpoint_t *epptr)
         endpoint_ptr_set_epQueue_head(epptr, 0);
         endpoint_ptr_set_epQueue_tail(epptr, 0);
 
-        /* Set all blocked threads to restart */
         for (; thread; thread = thread->tcbEPNext) {
-# 425 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
             setThreadState(thread, ThreadState_Restart);
-            tcbSchedEnqueue(thread);
-
+            do { tcbSchedEnqueue(thread); remoteQueueUpdate(thread); } while (0);
         }
+
 
         rescheduleRequired();
         break;
     }
     }
 }
-
+# 489 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/endpoint.c"
 void cancelBadgedSends(endpoint_t *epptr, word_t badge)
 {
     switch (endpoint_ptr_get_state(epptr)) {
@@ -19257,6 +19619,12 @@ void cancelBadgedSends(endpoint_t *epptr, word_t badge)
     case EPState_Send: {
         tcb_t *thread, *next;
         tcb_queue_t queue = ep_ptr_get_queue(epptr);
+
+
+
+
+
+
 
         /* this is a de-optimisation for verification
          * reasons. it allows the contents of the endpoint
@@ -19269,10 +19637,10 @@ void cancelBadgedSends(endpoint_t *epptr, word_t badge)
             word_t b = thread_state_ptr_get_blockingIPCBadge(
                            &thread->tcbState);
             next = thread->tcbEPNext;
-# 466 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
+
             if (b == badge) {
                 setThreadState(thread, ThreadState_Restart);
-                tcbSchedEnqueue(thread);
+                do { tcbSchedEnqueue(thread); remoteQueueUpdate(thread); } while (0);
                 queue = tcbEPDequeue(thread, queue);
             }
 
@@ -19289,16 +19657,29 @@ void cancelBadgedSends(endpoint_t *epptr, word_t badge)
     }
 
     default:
-        _fail("invalid EP state", "/Users/lukasbower/seL4_15/src/object/endpoint.c", 485, __func__);
+        halt();
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/object/interrupt.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 23 "/Users/lukasbower/seL4_15/src/object/interrupt.c"
+# 20 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/interrupt.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/timer.h" 1
+/*
+ * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+
+       
+# 34 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/include/machine/timer.h"
+static inline void resetTimer(void);
+# 21 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/interrupt.c" 2
+
+
 exception_t decodeIRQControlInvocation(word_t invLabel, word_t length,
                                        cte_t *srcSlot, word_t *buffer)
 {
@@ -19315,7 +19696,7 @@ exception_t decodeIRQControlInvocation(word_t invLabel, word_t length,
             return EXCEPTION_SYSCALL_ERROR;
         }
         irq_w = getSyscallArg(0, buffer);
-        irq = (irq_w);
+        irq = ((irq_t){.irq = (irq_w), .target_core = (0)});
         index = getSyscallArg(1, buffer);
         depth = getSyscallArg(2, buffer);
 
@@ -19328,13 +19709,13 @@ exception_t decodeIRQControlInvocation(word_t invLabel, word_t length,
 
         if (isIRQActive(irq)) {
             current_syscall_error.type = seL4_RevokeFirst;
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Rejecting request for IRQ %u. Already active." ">>" "\033[0m" "\n", 0lu, __func__, 52, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (int)(irq)); } while (0);
+            ;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
         lu_ret = lookupTargetSlot(cnodeCap, index, depth);
         if (lu_ret.status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Target slot for new IRQ Handler cap invalid: cap %lu, IRQ %u." ">>" "\033[0m" "\n", 0lu, __func__, 58, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), getExtraCPtr(buffer, 0), (int)(irq)); } while (0)
+           
                                                                      ;
             return lu_ret.status;
         }
@@ -19342,12 +19723,12 @@ exception_t decodeIRQControlInvocation(word_t invLabel, word_t length,
 
         status = ensureEmptySlot(destSlot);
         if (status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Target slot for new IRQ Handler cap not empty: cap %lu, IRQ %u." ">>" "\033[0m" "\n", 0lu, __func__, 66, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), getExtraCPtr(buffer, 0), (int)(irq)); } while (0)
+           
                                                                      ;
             return status;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return invokeIRQControl(irq, destSlot, srcSlot);
     } else {
         return Arch_decodeIRQControlInvocation(invLabel, length, srcSlot, buffer);
@@ -19357,7 +19738,7 @@ exception_t decodeIRQControlInvocation(word_t invLabel, word_t length,
 exception_t invokeIRQControl(irq_t irq, cte_t *handlerSlot, cte_t *controlSlot)
 {
     setIRQState(IRQSignal, irq);
-    cteInsert(cap_irq_handler_cap_new((irq)), controlSlot, handlerSlot);
+    cteInsert(cap_irq_handler_cap_new((((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq))), controlSlot, handlerSlot);
 
     return EXCEPTION_NONE;
 }
@@ -19366,7 +19747,7 @@ exception_t decodeIRQHandlerInvocation(word_t invLabel, irq_t irq)
 {
     switch (invLabel) {
     case IRQAckIRQ:
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         invokeIRQHandler_AckIRQ(irq);
         return EXCEPTION_NONE;
 
@@ -19384,27 +19765,27 @@ exception_t decodeIRQHandlerInvocation(word_t invLabel, irq_t irq)
         if (cap_get_capType(ntfnCap) != cap_notification_cap ||
             !cap_notification_cap_get_capNtfnCanSend(ntfnCap)) {
             if (cap_get_capType(ntfnCap) != cap_notification_cap) {
-                do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IRQSetHandler: provided cap is not an notification capability." ">>" "\033[0m" "\n", 0lu, __func__, 108, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+                ;
             } else {
-                do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IRQSetHandler: caller does not have send rights on the endpoint." ">>" "\033[0m" "\n", 0lu, __func__, 110, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+                ;
             }
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 0;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         invokeIRQHandler_SetIRQHandler(irq, ntfnCap, slot);
         return EXCEPTION_NONE;
     }
 
     case IRQClearIRQHandler:
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         invokeIRQHandler_ClearIRQHandler(irq);
         return EXCEPTION_NONE;
 
     default:
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "IRQHandler: Illegal operation." ">>" "\033[0m" "\n", 0lu, __func__, 128, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -19412,8 +19793,20 @@ exception_t decodeIRQHandlerInvocation(word_t invLabel, irq_t irq)
 
 void invokeIRQHandler_AckIRQ(irq_t irq)
 {
-# 159 "/Users/lukasbower/seL4_15/src/object/interrupt.c"
-    if (wrap_config_set(0)) {
+# 147 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/interrupt.c"
+    if ((((irq.irq) < 32u)) && (irq.target_core) != getCurrentCPUIndex()) {
+
+        /* According to the GICv3 spec, SPIs can be deactivated from any PE,
+         * but SGIs and PPIs must be deactivated from their target PE.
+         */
+        doRemoteDeactivatePrivateInterrupt((irq.target_core), (((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq)));
+
+
+
+        return;
+    }
+
+    if (wrap_config_set(1)) {
         deactivateInterrupt(irq);
     } else {
         maskInterrupt(false, irq);
@@ -19425,7 +19818,7 @@ void invokeIRQHandler_SetIRQHandler(irq_t irq, cap_t cap, cte_t *slot)
 {
     cte_t *irqSlot;
 
-    irqSlot = intStateIRQNode + (irq);
+    irqSlot = intStateIRQNode + (((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq));
     /** GHOSTUPD: "(True, gs_set_assn cteDeleteOne_'proc (-1))" */
     cteDeleteOne(irqSlot);
     cteInsert(cap, slot, irqSlot);
@@ -19435,7 +19828,7 @@ void invokeIRQHandler_ClearIRQHandler(irq_t irq)
 {
     cte_t *irqSlot;
 
-    irqSlot = intStateIRQNode + (irq);
+    irqSlot = intStateIRQNode + (((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq));
     /** GHOSTUPD: "(True, gs_set_assn cteDeleteOne_'proc (-1))" */
     cteDeleteOne(irqSlot);
 }
@@ -19444,7 +19837,7 @@ void deletingIRQHandler(irq_t irq)
 {
     cte_t *slot;
 
-    slot = intStateIRQNode + (irq);
+    slot = intStateIRQNode + (((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq));
     /** GHOSTUPD: "(True, gs_set_assn cteDeleteOne_'proc (ucast cap_notification_cap))" */
     cteDeleteOne(slot);
 }
@@ -19456,37 +19849,37 @@ void deletedIRQHandler(irq_t irq)
 
 void handleInterrupt(irq_t irq)
 {
-    if (__builtin_expect(!!((irq) > maxIRQ), 0)) {
+    if (__builtin_expect(!!((irq.irq) > maxIRQ), 0)) {
         /* The interrupt number is out of range. Pretend it did not happen by
          * handling it like an inactive interrupt (mask and ack). We assume this
          * is acceptable, because the platform specific interrupt controller
          * driver reported this interrupt. Maybe the value maxIRQ is just wrong
          * or set to a lower value because the interrupts are unused.
          */
-        printf("Received IRQ %d, which is above the platforms maxIRQ of %d\n", (int)(irq), (int)maxIRQ);
+        ((void)(0));
         maskInterrupt(true, irq);
         ackInterrupt(irq);
         return;
     }
 
-    switch (intStateIRQTable[(irq)]) {
+    switch (intStateIRQTable[(((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq))]) {
     case IRQSignal: {
         /* Merging the variable declaration and initialization into one line
          * requires an update in the proofs first. Might be a c89 legacy.
          */
         cap_t cap;
-        cap = intStateIRQNode[(irq)].cap;
+        cap = intStateIRQNode[(((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq))].cap;
         if (cap_get_capType(cap) == cap_notification_cap &&
             cap_notification_cap_get_capNtfnCanSend(cap)) {
             sendSignal(((notification_t *)(cap_notification_cap_get_capNtfnPtr(cap))),
                        cap_notification_cap_get_capNtfnBadge(cap));
         } else {
 
-            printf("Undelivered IRQ: %d\n", (int)(irq));
+
 
         }
 
-        if (!wrap_config_set(0)) {
+        if (!wrap_config_set(1)) {
             maskInterrupt(true, irq);
         }
 
@@ -19505,9 +19898,9 @@ void handleInterrupt(irq_t irq)
         break;
 
 
-
-
-
+    case IRQIPI:
+        handleIPI(irq, true);
+        break;
 
 
     case IRQReserved:
@@ -19521,13 +19914,13 @@ void handleInterrupt(irq_t irq)
          */
         maskInterrupt(true, irq);
 
-        printf("Received disabled IRQ: %d\n", (int)(irq));
+
 
         break;
 
     default:
         /* No corresponding haskell error */
-        _fail("Invalid IRQ state", "/Users/lukasbower/seL4_15/src/object/interrupt.c", 273, __func__);
+        halt();
     }
 
     /* Every interrupt is ack'd, even if it is an inactive one. Rationale is,
@@ -19538,27 +19931,27 @@ void handleInterrupt(irq_t irq)
 
 bool_t isIRQActive(irq_t irq)
 {
-    return intStateIRQTable[(irq)] != IRQInactive;
+    return intStateIRQTable[(((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq))] != IRQInactive;
 }
 
 void setIRQState(irq_state_t irqState, irq_t irq)
 {
-    intStateIRQTable[(irq)] = irqState;
+    intStateIRQTable[(((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq))] = irqState;
 
-
-
-
-
+    if ((((irq.irq) < 32u)) && (irq.target_core) != getCurrentCPUIndex()) {
+        doRemoteMaskPrivateInterrupt((irq.target_core), irqState == IRQInactive, (((irq.irq) < 32u) ? (irq.target_core) * 32u + (irq.irq) : (4 - 1) * 32u + (irq.irq)));
+        return;
+    }
 
     maskInterrupt(irqState == IRQInactive, irq);
 }
-# 1 "/Users/lukasbower/seL4_15/src/object/notification.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 19 "/Users/lukasbower/seL4_15/src/object/notification.c"
+# 19 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
 static inline tcb_queue_t __attribute__((__pure__)) ntfn_ptr_get_queue(notification_t *ntfnPtr)
 {
     tcb_queue_t ntfn_queue;
@@ -19574,7 +19967,7 @@ static inline void ntfn_ptr_set_queue(notification_t *ntfnPtr, tcb_queue_t ntfn_
     notification_ptr_set_ntfnQueue_head(ntfnPtr, (word_t)ntfn_queue.head);
     notification_ptr_set_ntfnQueue_tail(ntfnPtr, (word_t)ntfn_queue.end);
 }
-# 62 "/Users/lukasbower/seL4_15/src/object/notification.c"
+# 62 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
 void sendSignal(notification_t *ntfnPtr, word_t badge)
 {
     switch (notification_ptr_get_state(ntfnPtr)) {
@@ -19588,7 +19981,7 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
                 setThreadState(tcb, ThreadState_Running);
                 setRegister(tcb, badgeRegister, badge);
                 { { possibleSwitchTo(tcb); } }
-# 122 "/Users/lukasbower/seL4_15/src/object/notification.c"
+# 122 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
             } else {
                 /* In particular, this path is taken when a thread
                  * is waiting on a reply cap since BlockedOnReply
@@ -19612,9 +20005,12 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
         dest = ntfn_queue.head;
 
         /* Haskell error "WaitingNtfn Notification must have non-empty queue" */
-        do { if (!(dest)) { _assert_fail("dest", "/Users/lukasbower/seL4_15/src/object/notification.c", 145, __func__); } } while(0);
+        ;
 
         /* Dequeue TCB */
+
+
+
         ntfn_queue = tcbEPDequeue(dest, ntfn_queue);
         ntfn_ptr_set_queue(ntfnPtr, ntfn_queue);
 
@@ -19623,10 +20019,11 @@ void sendSignal(notification_t *ntfnPtr, word_t badge)
             notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
         }
 
+
         setThreadState(dest, ThreadState_Running);
         setRegister(dest, badgeRegister, badge);
         { { possibleSwitchTo(dest); } }
-# 175 "/Users/lukasbower/seL4_15/src/object/notification.c"
+# 179 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
         break;
     }
 
@@ -19651,7 +20048,6 @@ void receiveSignal(tcb_t *thread, cap_t cap, bool_t isBlocking)
     switch (notification_ptr_get_state(ntfnPtr)) {
     case NtfnState_Idle:
     case NtfnState_Waiting: {
-        tcb_queue_t ntfn_queue;
 
         if (isBlocking) {
             /* Block thread on notification object */
@@ -19662,11 +20058,16 @@ void receiveSignal(tcb_t *thread, cap_t cap, bool_t isBlocking)
             scheduleTCB(thread);
 
             /* Enqueue TCB */
+
+
+
+            tcb_queue_t ntfn_queue;
             ntfn_queue = ntfn_ptr_get_queue(ntfnPtr);
             ntfn_queue = tcbEPAppend(thread, ntfn_queue);
 
             notification_ptr_set_state(ntfnPtr, NtfnState_Waiting);
             ntfn_ptr_set_queue(ntfnPtr, ntfn_queue);
+
 
 
 
@@ -19683,39 +20084,42 @@ void receiveSignal(tcb_t *thread, cap_t cap, bool_t isBlocking)
             thread, badgeRegister,
             notification_ptr_get_ntfnMsgIdentifier(ntfnPtr));
         notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
-# 239 "/Users/lukasbower/seL4_15/src/object/notification.c"
+# 247 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
         break;
     }
 }
-
+# 270 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
 void cancelAllSignals(notification_t *ntfnPtr)
 {
     if (notification_ptr_get_state(ntfnPtr) == NtfnState_Waiting) {
+        /* Clear the queue and set all blocked threads to Restart */
+# 285 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
         tcb_t *thread = ((tcb_t *)(notification_ptr_get_ntfnQueue_head(ntfnPtr)));
 
         notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
         notification_ptr_set_ntfnQueue_head(ntfnPtr, 0);
         notification_ptr_set_ntfnQueue_tail(ntfnPtr, 0);
 
-        /* Set all waiting threads to Restart */
         for (; thread; thread = thread->tcbEPNext) {
             setThreadState(thread, ThreadState_Restart);
-# 269 "/Users/lukasbower/seL4_15/src/object/notification.c"
-            tcbSchedEnqueue(thread);
-
+            do { tcbSchedEnqueue(thread); remoteQueueUpdate(thread); } while (0);
         }
+
         rescheduleRequired();
     }
 }
 
 void cancelSignal(tcb_t *threadPtr, notification_t *ntfnPtr)
 {
-    tcb_queue_t ntfn_queue;
 
     /* Haskell error "cancelSignal: notification object must be in a waiting" state */
-    do { if (!(notification_ptr_get_state(ntfnPtr) == NtfnState_Waiting)) { _assert_fail("notification_ptr_get_state(ntfnPtr) == NtfnState_Waiting", "/Users/lukasbower/seL4_15/src/object/notification.c", 281, __func__); } } while(0);
+    ;
 
     /* Dequeue TCB */
+
+
+
+    tcb_queue_t ntfn_queue;
     ntfn_queue = ntfn_ptr_get_queue(ntfnPtr);
     ntfn_queue = tcbEPDequeue(threadPtr, ntfn_queue);
     ntfn_ptr_set_queue(ntfnPtr, ntfn_queue);
@@ -19724,6 +20128,7 @@ void cancelSignal(tcb_t *threadPtr, notification_t *ntfnPtr)
     if (!ntfn_queue.head) {
         notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
     }
+
 
     /* Make thread inactive */
     setThreadState(threadPtr, ThreadState_Inactive);
@@ -19737,9 +20142,9 @@ void completeSignal(notification_t *ntfnPtr, tcb_t *tcb)
         badge = notification_ptr_get_ntfnMsgIdentifier(ntfnPtr);
         setRegister(tcb, badgeRegister, badge);
         notification_ptr_set_state(ntfnPtr, NtfnState_Idle);
-# 321 "/Users/lukasbower/seL4_15/src/object/notification.c"
+# 349 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/notification.c"
     } else {
-        _fail("tried to complete signal with inactive notification object", "/Users/lukasbower/seL4_15/src/object/notification.c", 322, __func__);
+        halt();
     }
 }
 
@@ -19774,13 +20179,13 @@ void bindNotification(tcb_t *tcb, notification_t *ntfnPtr)
     notification_ptr_set_ntfnBoundTCB(ntfnPtr, (word_t)tcb);
     tcb->tcbBoundNotification = ntfnPtr;
 }
-# 1 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 33 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 33 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
 word_t getObjectSize(word_t t, word_t userObjSize)
 {
     if (t >= seL4_NonArchObjectTypeCount) {
@@ -19804,7 +20209,7 @@ word_t getObjectSize(word_t t, word_t userObjSize)
 
 
         default:
-            _fail("Invalid object type", "/Users/lukasbower/seL4_15/src/object/objecttype.c", 56, __func__);
+            halt();
             return 0;
         }
     }
@@ -19884,7 +20289,7 @@ finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed)
         return fc_ret;
 
     case cap_reply_cap:
-# 157 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 157 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
     case cap_null_cap:
     case cap_domain_cap:
         fc_ret.remainder = cap_null_cap_new();
@@ -19893,7 +20298,7 @@ finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed)
     }
 
     if (exposed) {
-        _fail("finaliseCap: failed to finalise immediately.", "/Users/lukasbower/seL4_15/src/object/objecttype.c", 165, __func__);
+        halt();
     }
 
     switch (cap_get_capType(cap)) {
@@ -19917,13 +20322,13 @@ finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed)
             cte_t *cte_ptr;
 
             tcb = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap)));
-           
+            remoteTCBStall(tcb);
             cte_ptr = (((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCTable));
             unbindNotification(tcb);
-# 201 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 201 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
             suspend(tcb);
 
-            tcbDebugRemove(tcb);
+
 
             Arch_prepareThreadDelete(tcb);
             fc_ret.remainder =
@@ -19937,7 +20342,7 @@ finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed)
         }
         break;
     }
-# 238 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 238 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
     case cap_zombie_cap:
         fc_ret.remainder = cap;
         fc_ret.cleanupInfo = cap_null_cap_new();
@@ -19945,7 +20350,7 @@ finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed)
 
     case cap_irq_handler_cap:
         if (final) {
-            irq_t irq = (cap_irq_handler_cap_get_capIRQ(cap));
+            irq_t irq = (((cap_irq_handler_cap_get_capIRQ(cap)) < 32u*4) ? ((irq_t){.irq = ((cap_irq_handler_cap_get_capIRQ(cap)) - ((cap_irq_handler_cap_get_capIRQ(cap))/32u)*32u), .target_core = ((cap_irq_handler_cap_get_capIRQ(cap)) / 32u)}): ((irq_t){.irq = ((cap_irq_handler_cap_get_capIRQ(cap)) - (4 -1)*32u), .target_core = (0)}));
 
             deletingIRQHandler(irq);
 
@@ -20054,7 +20459,7 @@ bool_t __attribute__((__const__)) sameRegionAs(cap_t cap_a, cap_t cap_b)
                    (word_t)cap_irq_handler_cap_get_capIRQ(cap_b);
         }
         break;
-# 370 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 370 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
     default:
         if (isArchCap(cap_a) &&
             isArchCap(cap_b)) {
@@ -20189,7 +20594,7 @@ cap_t __attribute__((__const__)) maskCapRights(seL4_CapRights_t cap_rights, cap_
 
 
     default:
-        _fail("Invalid cap type", "/Users/lukasbower/seL4_15/src/object/objecttype.c", 504, __func__); /* Sentinel for invalid enums */
+        halt(); /* Sentinel for invalid enums */
     }
 }
 
@@ -20218,15 +20623,8 @@ cap_t createObject(object_t t, void *regionBase, word_t userSize, bool_t deviceM
         tcb->tcbDomain = ksCurDomain;
 
         /* Initialize the new TCB to the current core */
-        ;
-
-
-        strlcpy(((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, "child of: '", ((1ul << (11 -1)) - (tcbCNodeEntries * sizeof(cte_t)) - sizeof(debug_tcb_t)));
-        strlcat(((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, ((1ul << (11 -1)) - (tcbCNodeEntries * sizeof(cte_t)) - sizeof(debug_tcb_t)));
-        strlcat(((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, "'", ((1ul << (11 -1)) - (tcbCNodeEntries * sizeof(cte_t)) - sizeof(debug_tcb_t)));
-        tcbDebugAppend(tcb);
-
-
+        tcb->tcbAffinity = getCurrentCPUIndex();
+# 542 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
         return cap_thread_cap_new(((word_t)(tcb)));
     }
 
@@ -20256,9 +20654,9 @@ cap_t createObject(object_t t, void *regionBase, word_t userSize, bool_t deviceM
          * the destination slots.
          */
         return cap_untyped_cap_new(0, !!deviceMemory, userSize, ((word_t)(regionBase)));
-# 590 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 590 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
     default:
-        _fail("Invalid object type", "/Users/lukasbower/seL4_15/src/object/objecttype.c", 591, __func__);
+        halt();
     }
 }
 
@@ -20310,27 +20708,27 @@ exception_t decodeInvocation(word_t invLabel, word_t length,
 
     switch (cap_get_capType(cap)) {
     case cap_null_cap:
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Attempted to invoke a null cap #%lu." ">>" "\033[0m" "\n", 0lu, __func__, 643, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), capIndex); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 0;
         return EXCEPTION_SYSCALL_ERROR;
 
     case cap_zombie_cap:
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Attempted to invoke a zombie cap #%lu." ">>" "\033[0m" "\n", 0lu, __func__, 649, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), capIndex); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 0;
         return EXCEPTION_SYSCALL_ERROR;
 
     case cap_endpoint_cap:
         if (__builtin_expect(!!(!cap_endpoint_cap_get_capCanSend(cap)), 0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Attempted to invoke a read-only endpoint cap #%lu." ">>" "\033[0m" "\n", 0lu, __func__, 656, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), capIndex); } while (0)
+           
                                ;
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 0;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
 
 
 
@@ -20347,29 +20745,29 @@ exception_t decodeInvocation(word_t invLabel, word_t length,
 
     case cap_notification_cap: {
         if (__builtin_expect(!!(!cap_notification_cap_get_capNtfnCanSend(cap)), 0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Attempted to invoke a read-only notification cap #%lu." ">>" "\033[0m" "\n", 0lu, __func__, 680, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), capIndex); } while (0)
+           
                                ;
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 0;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performInvocation_Notification(
                    ((notification_t *)(cap_notification_cap_get_capNtfnPtr(cap))),
                    cap_notification_cap_get_capNtfnBadge(cap));
     }
-# 701 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 701 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
     case cap_reply_cap:
         if (__builtin_expect(!!(cap_reply_cap_get_capReplyMaster(cap)), 0)) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Attempted to invoke an invalid reply cap #%lu." ">>" "\033[0m" "\n", 0lu, __func__, 703, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), capIndex); } while (0)
+           
                                ;
             current_syscall_error.type = seL4_InvalidCapability;
             current_syscall_error.invalidCapNumber = 0;
             return EXCEPTION_SYSCALL_ERROR;
         }
 
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return performInvocation_Reply(
                    ((tcb_t *)(cap_reply_cap_get_capTCBPtr(cap))), slot,
                    cap_reply_cap_get_capReplyCanGrant(cap));
@@ -20377,15 +20775,15 @@ exception_t decodeInvocation(word_t invLabel, word_t length,
 
 
     case cap_thread_cap:
-# 726 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 726 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
         return decodeTCBInvocation(invLabel, length, cap, slot, call, buffer);
 
     case cap_domain_cap:
-# 737 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 737 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
         return decodeDomainInvocation(invLabel, length, buffer);
 
     case cap_cnode_cap:
-# 748 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 748 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
         return decodeCNodeInvocation(invLabel, length, cap, buffer);
 
     case cap_untyped_cap:
@@ -20396,18 +20794,18 @@ exception_t decodeInvocation(word_t invLabel, word_t length,
 
     case cap_irq_handler_cap:
         return decodeIRQHandlerInvocation(invLabel,
-                                          (cap_irq_handler_cap_get_capIRQ(cap)));
-# 780 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+                                          (((cap_irq_handler_cap_get_capIRQ(cap)) < 32u*4) ? ((irq_t){.irq = ((cap_irq_handler_cap_get_capIRQ(cap)) - ((cap_irq_handler_cap_get_capIRQ(cap))/32u)*32u), .target_core = ((cap_irq_handler_cap_get_capIRQ(cap)) / 32u)}): ((irq_t){.irq = ((cap_irq_handler_cap_get_capIRQ(cap)) - (4 -1)*32u), .target_core = (0)})));
+# 780 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
     default:
-        _fail("Invalid cap type", "/Users/lukasbower/seL4_15/src/object/objecttype.c", 781, __func__);
+        halt();
     }
 }
-# 795 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 795 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
 exception_t performInvocation_Endpoint(endpoint_t *ep, word_t badge,
                                        bool_t canGrant, bool_t canGrantReply,
                                        bool_t block, bool_t call)
 {
-    sendIPC(block, call, badge, canGrant, canGrantReply, ksCurThread, ep);
+    sendIPC(block, call, badge, canGrant, canGrantReply, ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ep);
 
     return EXCEPTION_NONE;
 }
@@ -20419,10 +20817,10 @@ exception_t performInvocation_Notification(notification_t *ntfn, word_t badge)
 
     return EXCEPTION_NONE;
 }
-# 819 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
+# 819 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/objecttype.c"
 exception_t performInvocation_Reply(tcb_t *thread, cte_t *slot, bool_t canGrant)
 {
-    doReplyTransfer(ksCurThread, thread, slot, canGrant);
+    doReplyTransfer(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, thread, slot, canGrant);
     return EXCEPTION_NONE;
 }
 
@@ -20626,13 +21024,13 @@ bool_t __attribute__((__const__)) isCapRevocable(cap_t derivedCap, cap_t srcCap)
         return false;
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 32 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 32 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 static exception_t checkPrio(prio_t prio, tcb_t *auth)
 {
     prio_t mcp;
@@ -20640,7 +21038,7 @@ static exception_t checkPrio(prio_t prio, tcb_t *auth)
     mcp = auth->tcbMCP;
 
     /* system invariant: existing MCPs are bounded */
-    do { if (!(mcp <= seL4_MaxPrio)) { _assert_fail("mcp <= seL4_MaxPrio", "/Users/lukasbower/seL4_15/src/object/tcb.c", 39, __func__); } } while(0);
+    ;
 
     /* can't assign a priority greater than our own mcp */
     if (prio > mcp) {
@@ -20661,12 +21059,12 @@ static inline void addToBitmap(word_t cpu, word_t dom, word_t prio)
     l1index = prio_to_l1index(prio);
     l1index_inverted = invert_l1index(l1index);
 
-    ksReadyQueuesL1Bitmap[dom] |= (1ul << (l1index));
+    ksSMP[(cpu)].system.ksReadyQueuesL1Bitmap[dom] |= (1ul << (l1index));
     /* we invert the l1 index when accessed the 2nd level of the bitmap in
        order to increase the likelihood that high prio threads l2 index word will
        be on the same cache line as the l1 index word - this makes sure the
        fastpath is fastest for high prio threads */
-    ksReadyQueuesL2Bitmap[dom][l1index_inverted] |= (1ul << (prio & ((1ul << (6)) - 1ul)));
+    ksSMP[(cpu)].system.ksReadyQueuesL2Bitmap[dom][l1index_inverted] |= (1ul << (prio & ((1ul << (6)) - 1ul)));
 }
 
 static inline void removeFromBitmap(word_t cpu, word_t dom, word_t prio)
@@ -20676,9 +21074,9 @@ static inline void removeFromBitmap(word_t cpu, word_t dom, word_t prio)
 
     l1index = prio_to_l1index(prio);
     l1index_inverted = invert_l1index(l1index);
-    ksReadyQueuesL2Bitmap[dom][l1index_inverted] &= ~(1ul << (prio & ((1ul << (6)) - 1ul)));
-    if (__builtin_expect(!!(!ksReadyQueuesL2Bitmap[dom][l1index_inverted]), 0)) {
-        ksReadyQueuesL1Bitmap[dom] &= ~(1ul << (l1index));
+    ksSMP[(cpu)].system.ksReadyQueuesL2Bitmap[dom][l1index_inverted] &= ~(1ul << (prio & ((1ul << (6)) - 1ul)));
+    if (__builtin_expect(!!(!ksSMP[(cpu)].system.ksReadyQueuesL2Bitmap[dom][l1index_inverted]), 0)) {
+        ksSMP[(cpu)].system.ksReadyQueuesL1Bitmap[dom] &= ~(1ul << (l1index));
     }
 }
 
@@ -20732,13 +21130,13 @@ void tcbSchedEnqueue(tcb_t *tcb)
         dom = tcb->tcbDomain;
         prio = tcb->tcbPriority;
         idx = ready_queues_index(dom, prio);
-        queue = ksReadyQueues[idx];
+        queue = ksSMP[(tcb->tcbAffinity)].system.ksReadyQueues[idx];
 
         if (tcb_queue_empty(queue)) {
-            addToBitmap(0, dom, prio);
+            addToBitmap(tcb->tcbAffinity, dom, prio);
         }
 
-        ksReadyQueues[idx] = tcb_queue_prepend(queue, tcb);
+        ksSMP[(tcb->tcbAffinity)].system.ksReadyQueues[idx] = tcb_queue_prepend(queue, tcb);
 
         thread_state_ptr_set_tcbQueued(&tcb->tcbState, true);
     }
@@ -20761,13 +21159,13 @@ void tcbSchedAppend(tcb_t *tcb)
         dom = tcb->tcbDomain;
         prio = tcb->tcbPriority;
         idx = ready_queues_index(dom, prio);
-        queue = ksReadyQueues[idx];
+        queue = ksSMP[(tcb->tcbAffinity)].system.ksReadyQueues[idx];
 
         if (tcb_queue_empty(queue)) {
-            addToBitmap(0, dom, prio);
+            addToBitmap(tcb->tcbAffinity, dom, prio);
         }
 
-        ksReadyQueues[idx] = tcb_queue_append(queue, tcb);
+        ksSMP[(tcb->tcbAffinity)].system.ksReadyQueues[idx] = tcb_queue_append(queue, tcb);
 
         thread_state_ptr_set_tcbQueued(&tcb->tcbState, true);
     }
@@ -20786,59 +21184,20 @@ void tcbSchedDequeue(tcb_t *tcb)
         dom = tcb->tcbDomain;
         prio = tcb->tcbPriority;
         idx = ready_queues_index(dom, prio);
-        queue = ksReadyQueues[idx];
+        queue = ksSMP[(tcb->tcbAffinity)].system.ksReadyQueues[idx];
 
         new_queue = tcb_queue_remove(queue, tcb);
 
-        ksReadyQueues[idx] = new_queue;
+        ksSMP[(tcb->tcbAffinity)].system.ksReadyQueues[idx] = new_queue;
 
         thread_state_ptr_set_tcbQueued(&tcb->tcbState, false);
 
         if (__builtin_expect(!!(tcb_queue_empty(new_queue)), 1)) {
-            removeFromBitmap(0, dom, prio);
+            removeFromBitmap(tcb->tcbAffinity, dom, prio);
         }
     }
 }
-
-
-void tcbDebugAppend(tcb_t *tcb)
-{
-    debug_tcb_t *debug_tcb = ((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)));
-    /* prepend to the list */
-    debug_tcb->tcbDebugPrev = ((void *)0);
-
-    debug_tcb->tcbDebugNext = ksDebugTCBs;
-
-    if (ksDebugTCBs) {
-        ((debug_tcb_t *)(((cte_t *)((word_t)(ksDebugTCBs)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbDebugPrev = tcb;
-    }
-
-    ksDebugTCBs = tcb;
-}
-
-void tcbDebugRemove(tcb_t *tcb)
-{
-    debug_tcb_t *debug_tcb = ((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)));
-
-    do { if (!(ksDebugTCBs != ((void *)0))) { _assert_fail("NODE_STATE_ON_CORE(ksDebugTCBs, tcb->tcbAffinity) != NULL", "/Users/lukasbower/seL4_15/src/object/tcb.c", 219, __func__); } } while(0);
-    if (tcb == ksDebugTCBs) {
-        ksDebugTCBs = ((debug_tcb_t *)(((cte_t *)((word_t)(ksDebugTCBs)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))
-                                                                                                                   ->tcbDebugNext;
-    } else {
-        do { if (!(((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbDebugPrev)) { _assert_fail("TCB_PTR_DEBUG_PTR(tcb)->tcbDebugPrev", "/Users/lukasbower/seL4_15/src/object/tcb.c", 224, __func__); } } while(0);
-        ((debug_tcb_t *)(((cte_t *)((word_t)(debug_tcb->tcbDebugPrev)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbDebugNext = debug_tcb->tcbDebugNext;
-    }
-
-    if (debug_tcb->tcbDebugNext) {
-        ((debug_tcb_t *)(((cte_t *)((word_t)(debug_tcb->tcbDebugNext)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbDebugPrev = debug_tcb->tcbDebugPrev;
-    }
-
-    debug_tcb->tcbDebugPrev = ((void *)0);
-    debug_tcb->tcbDebugNext = ((void *)0);
-}
-
-
-
+# 238 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 /* Add TCB to the end of an endpoint queue */
 tcb_queue_t tcbEPAppend(tcb_t *tcb, tcb_queue_t queue)
 {
@@ -20853,7 +21212,6 @@ tcb_queue_t tcbEPAppend(tcb_t *tcb, tcb_queue_t queue)
 
     return queue;
 }
-
 
 /* Remove TCB from an endpoint queue */
 tcb_queue_t tcbEPDequeue(tcb_t *tcb, tcb_queue_t queue)
@@ -20872,7 +21230,7 @@ tcb_queue_t tcbEPDequeue(tcb_t *tcb, tcb_queue_t queue)
 
     return queue;
 }
-# 338 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 341 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 cptr_t __attribute__((__pure__)) getExtraCPtr(word_t *bufferPtr, word_t i)
 {
     return (cptr_t)bufferPtr[seL4_MsgMaxLength + 2 + i];
@@ -20894,14 +21252,14 @@ void setupCallerCap(tcb_t *sender, tcb_t *receiver, bool_t canGrant)
     replySlot = (((cte_t *)((word_t)(sender)&~((1ul << (11)) - 1ul)))+(tcbReply));
     masterCap = replySlot->cap;
     /* Haskell error: "Sender must have a valid master reply cap" */
-    do { if (!(cap_get_capType(masterCap) == cap_reply_cap)) { _assert_fail("cap_get_capType(masterCap) == cap_reply_cap", "/Users/lukasbower/seL4_15/src/object/tcb.c", 359, __func__); } } while(0);
-    do { if (!(cap_reply_cap_get_capReplyMaster(masterCap))) { _assert_fail("cap_reply_cap_get_capReplyMaster(masterCap)", "/Users/lukasbower/seL4_15/src/object/tcb.c", 360, __func__); } } while(0);
-    do { if (!(cap_reply_cap_get_capReplyCanGrant(masterCap))) { _assert_fail("cap_reply_cap_get_capReplyCanGrant(masterCap)", "/Users/lukasbower/seL4_15/src/object/tcb.c", 361, __func__); } } while(0);
-    do { if (!(((tcb_t *)(cap_reply_cap_get_capTCBPtr(masterCap))) == sender)) { _assert_fail("TCB_PTR(cap_reply_cap_get_capTCBPtr(masterCap)) == sender", "/Users/lukasbower/seL4_15/src/object/tcb.c", 362, __func__); } } while(0);
+    ;
+    ;
+    ;
+    ;
     callerSlot = (((cte_t *)((word_t)(receiver)&~((1ul << (11)) - 1ul)))+(tcbCaller));
     callerCap = callerSlot->cap;
     /* Haskell error: "Caller cap must not already exist" */
-    do { if (!(cap_get_capType(callerCap) == cap_null_cap)) { _assert_fail("cap_get_capType(callerCap) == cap_null_cap", "/Users/lukasbower/seL4_15/src/object/tcb.c", 366, __func__); } } while(0);
+    ;
     cteInsert(cap_reply_cap_new(canGrant, false, ((word_t)(sender))),
               replySlot, callerSlot);
 }
@@ -20972,11 +21330,91 @@ word_t copyMRs(tcb_t *sender, word_t *sendBuf, tcb_t *receiver,
 
     return i;
 }
-# 767 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+
+
+/* This checks if the current updated to scheduler queue is changing the previous scheduling
+ * decision made by the scheduler. If its a case, an `irq_reschedule_ipi` is sent */
+void remoteQueueUpdate(tcb_t *tcb)
+{
+    /* only ipi if the target is for the current domain */
+    if (tcb->tcbAffinity != getCurrentCPUIndex() && tcb->tcbDomain == ksCurDomain) {
+        tcb_t *targetCurThread = ksSMP[(tcb->tcbAffinity)].system.ksCurThread;
+
+        /* reschedule if the target core is idle or we are waking a higher priority thread (or
+         * if a new irq would need to be set on MCS) */
+        if (targetCurThread == ksSMP[(tcb->tcbAffinity)].system.ksIdleThread ||
+            tcb->tcbPriority > targetCurThread->tcbPriority
+
+
+
+           ) {
+            ksSMP[(getCurrentCPUIndex())].cpu.ipiReschedulePending |= (1ul << (tcb->tcbAffinity));
+        }
+    }
+}
+
+/* This makes sure the the TCB is not being run on other core.
+ * It would request 'IpiRemoteCall_Stall' to switch the core from this TCB
+ * We also request the 'irq_reschedule_ipi' to restore the state of target core */
+void remoteTCBStall(tcb_t *tcb)
+{
+
+    if (
+
+
+
+        tcb->tcbAffinity != getCurrentCPUIndex() &&
+        ksSMP[(tcb->tcbAffinity)].system.ksCurThread == tcb) {
+        doRemoteStall(tcb->tcbAffinity);
+        ksSMP[(getCurrentCPUIndex())].cpu.ipiReschedulePending |= (1ul << (tcb->tcbAffinity));
+    }
+}
+
+
+static exception_t invokeTCB_SetAffinity(tcb_t *thread, word_t affinity)
+{
+    /* remove the tcb from scheduler queue in case it is already in one
+     * and add it to new queue if required */
+    tcbSchedDequeue(thread);
+    migrateTCB(thread, affinity);
+    if (isRunnable(thread)) {
+        do { tcbSchedAppend(thread); remoteQueueUpdate(thread); } while (0);
+    }
+    /* reschedule current cpu if tcb moves itself */
+    if (thread == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
+        rescheduleRequired();
+    }
+    return EXCEPTION_NONE;
+}
+
+static exception_t decodeSetAffinity(cap_t cap, word_t length, word_t *buffer)
+{
+    tcb_t *tcb;
+    word_t affinity;
+
+    if (length < 1) {
+        ;
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    tcb = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap)));
+
+    affinity = getSyscallArg(0, buffer);
+    if (affinity >= ksNumCPUs) {
+        ;
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
+    return invokeTCB_SetAffinity(tcb, affinity);
+}
+# 770 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 static exception_t invokeSetTLSBase(tcb_t *thread, word_t tls_base)
 {
     setRegister(thread, TLS_BASE, tls_base);
-    if (thread == ksCurThread) {
+    if (thread == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
         /* If this is the current thread force a reschedule to ensure that any changes
          * to the TLS_BASE are realized */
         rescheduleRequired();
@@ -20990,20 +21428,20 @@ static exception_t decodeSetTLSBase(cap_t cap, word_t length, word_t *buffer)
     word_t tls_base;
 
     if (length < 1) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetTLSBase: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 784, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
     tls_base = getSyscallArg(0, buffer);
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     return invokeSetTLSBase(((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap))), tls_base);
 }
 
 static void invokeSetFlags(tcb_t *thread, word_t clear, word_t set, bool_t call)
 {
-    tcb_t *cur_thread = ksCurThread;
+    tcb_t *cur_thread = ksSMP[(getCurrentCPUIndex())].system.ksCurThread;
     word_t flags = thread->tcbFlags;
 
     flags &= ~clear;
@@ -21034,7 +21472,7 @@ static exception_t decodeSetFlags(cap_t cap, word_t length, bool_t call, word_t 
     tcb_t *thread = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap)));
 
     if (length < 2) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetFlags: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 828, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21042,7 +21480,7 @@ static exception_t decodeSetFlags(cap_t cap, word_t length, bool_t call, word_t 
     word_t clear = getSyscallArg(0, buffer);
     word_t set = getSyscallArg(1, buffer);
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     invokeSetFlags(thread, clear, set, call);
     return EXCEPTION_NONE;
 }
@@ -21055,7 +21493,7 @@ exception_t decodeTCBInvocation(word_t invLabel, word_t length, cap_t cap,
                                 cte_t *slot, bool_t call, word_t *buffer)
 {
     /* Stall the core if we are operating on a remote TCB that is currently running */
-   
+    remoteTCBStall(((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap))));
 
     switch (invLabel) {
     case TCBReadRegisters:
@@ -21070,12 +21508,12 @@ exception_t decodeTCBInvocation(word_t invLabel, word_t length, cap_t cap,
 
     case TCBSuspend:
         /* Jump straight to the invoke */
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return invokeTCB_Suspend(
                    ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap))));
 
     case TCBResume:
-        setThreadState(ksCurThread, ThreadState_Restart);
+        setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
         return invokeTCB_Resume(
                    ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap))));
 
@@ -21106,9 +21544,19 @@ exception_t decodeTCBInvocation(word_t invLabel, word_t length, cap_t cap,
 
     case TCBUnbindNotification:
         return decodeUnbindNotification(cap);
-# 911 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+
+
+
+
+
+
+    case TCBSetAffinity:
+        return decodeSetAffinity(cap, length, buffer);
+
+
+
         /* There is no notion of arch specific TCB invocations so this needs to go here */
-# 931 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 934 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
     case TCBSetTLSBase:
         return decodeSetTLSBase(cap, length, buffer);
 
@@ -21117,7 +21565,7 @@ exception_t decodeTCBInvocation(word_t invLabel, word_t length, cap_t cap,
 
     default:
         /* Haskell: "throw IllegalOperation" */
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB: Illegal operation." ">>" "\033[0m" "\n", 0lu, __func__, 939, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21138,7 +21586,7 @@ exception_t decodeCopyRegisters(cap_t cap, word_t length, word_t *buffer)
     word_t flags;
 
     if (length < 1 || current_extra_caps.excaprefs[0] == ((void *)0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB CopyRegisters: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 960, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21152,13 +21600,13 @@ exception_t decodeCopyRegisters(cap_t cap, word_t length, word_t *buffer)
     if (cap_get_capType(source_cap) == cap_thread_cap) {
         srcTCB = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(source_cap)));
     } else {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB CopyRegisters: Invalid source TCB." ">>" "\033[0m" "\n", 0lu, __func__, 974, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     return invokeTCB_CopyRegisters(
                ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap))), srcTCB,
                flags & (1ul << (CopyRegisters_suspendSource)),
@@ -21180,7 +21628,7 @@ exception_t decodeReadRegisters(cap_t cap, word_t length, bool_t call,
     tcb_t *thread;
 
     if (length < 2) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB ReadRegisters: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1002, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21189,7 +21637,7 @@ exception_t decodeReadRegisters(cap_t cap, word_t length, bool_t call,
     n = getSyscallArg(1, buffer);
 
     if (n < 1 || n > n_frameRegisters + n_gpRegisters) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB ReadRegisters: Attempted to read an invalid number of registers (%d)." ">>" "\033[0m" "\n", 0lu, __func__, 1011, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (int)n); } while (0)
+       
                          ;
         current_syscall_error.type = seL4_RangeError;
         current_syscall_error.rangeErrorMin = 1;
@@ -21201,13 +21649,13 @@ exception_t decodeReadRegisters(cap_t cap, word_t length, bool_t call,
     transferArch = Arch_decodeTransfer(flags >> 8);
 
     thread = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap)));
-    if (thread == ksCurThread) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB ReadRegisters: Attempted to read our own registers." ">>" "\033[0m" "\n", 0lu, __func__, 1024, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+    if (thread == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     return invokeTCB_ReadRegisters(
                ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap))),
                flags & (1ul << (ReadRegisters_suspend)),
@@ -21225,7 +21673,7 @@ exception_t decodeWriteRegisters(cap_t cap, word_t length, word_t *buffer)
     tcb_t *thread;
 
     if (length < 2) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB WriteRegisters: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1047, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21234,7 +21682,7 @@ exception_t decodeWriteRegisters(cap_t cap, word_t length, word_t *buffer)
     w = getSyscallArg(1, buffer);
 
     if (length - 2 < w) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB WriteRegisters: Message too short for requested write size (%d/%d)." ">>" "\033[0m" "\n", 0lu, __func__, 1056, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (int)(length - 2), (int)w); } while (0)
+       
                                             ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
@@ -21243,18 +21691,18 @@ exception_t decodeWriteRegisters(cap_t cap, word_t length, word_t *buffer)
     transferArch = Arch_decodeTransfer(flags >> 8);
 
     thread = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap)));
-    if (thread == ksCurThread) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB WriteRegisters: Attempted to write our own registers." ">>" "\033[0m" "\n", 0lu, __func__, 1066, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+    if (thread == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     return invokeTCB_WriteRegisters(thread,
                                     flags & (1ul << (WriteRegisters_resume)),
                                     w, transferArch, buffer);
 }
-# 1098 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 1097 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 /* TCBConfigure batches SetIPCBuffer and parts of SetSpace. */
 exception_t decodeTCBConfigure(cap_t cap, word_t length, cte_t *slot, word_t *buffer)
 {
@@ -21270,7 +21718,7 @@ exception_t decodeTCBConfigure(cap_t cap, word_t length, cte_t *slot, word_t *bu
     if (length < 4 || current_extra_caps.excaprefs[0] == ((void *)0)
         || current_extra_caps.excaprefs[1] == ((void *)0)
         || current_extra_caps.excaprefs[2] == ((void *)0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB Configure: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1113, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21312,7 +21760,7 @@ exception_t decodeTCBConfigure(cap_t cap, word_t length, cte_t *slot, word_t *bu
             (((cte_t *)((word_t)(cap_thread_cap_get_capTCBPtr(cap))&~((1ul << (11)) - 1ul)))+(tcbCTable))) ||
         slotCapLongRunningDelete(
             (((cte_t *)((word_t)(cap_thread_cap_get_capTCBPtr(cap))&~((1ul << (11)) - 1ul)))+(tcbVTable)))) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB Configure: CSpace or VSpace currently being deleted." ">>" "\033[0m" "\n", 0lu, __func__, 1155, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21328,7 +21776,7 @@ exception_t decodeTCBConfigure(cap_t cap, word_t length, cte_t *slot, word_t *bu
     cRootCap = dc_ret.cap;
 
     if (cap_get_capType(cRootCap) != cap_cnode_cap) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB Configure: CSpace cap is invalid." ">>" "\033[0m" "\n", 0lu, __func__, 1171, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21344,13 +21792,13 @@ exception_t decodeTCBConfigure(cap_t cap, word_t length, cte_t *slot, word_t *bu
     vRootCap = dc_ret.cap;
 
     if (!isValidVTableRoot(vRootCap)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB Configure: VSpace cap is invalid." ">>" "\033[0m" "\n", 0lu, __func__, 1187, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    setThreadState(ksCurThread, ThreadState_Restart);
-# 1204 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
+# 1203 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
     return invokeTCB_ThreadControl(
                ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap))), slot,
                faultEP, 0, 0,
@@ -21365,7 +21813,7 @@ exception_t decodeTCBConfigure(cap_t cap, word_t length, cte_t *slot, word_t *bu
 exception_t decodeSetPriority(cap_t cap, word_t length, word_t *buffer)
 {
     if (length < 1 || current_extra_caps.excaprefs[0] == ((void *)0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetPriority: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1218, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21374,7 +21822,7 @@ exception_t decodeSetPriority(cap_t cap, word_t length, word_t *buffer)
     cap_t authCap = current_extra_caps.excaprefs[0]->cap;
 
     if (cap_get_capType(authCap) != cap_thread_cap) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Set priority: authority cap not a TCB." ">>" "\033[0m" "\n", 0lu, __func__, 1227, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
@@ -21383,12 +21831,12 @@ exception_t decodeSetPriority(cap_t cap, word_t length, word_t *buffer)
     tcb_t *authTCB = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(authCap)));
     exception_t status = checkPrio(newPrio, authTCB);
     if (status != EXCEPTION_NONE) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetPriority: Requested priority %lu too high (max %lu)." ">>" "\033[0m" "\n", 0lu, __func__, 1236, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (unsigned long) newPrio, (unsigned long) authTCB->tcbMCP); } while (0)
+       
                                                                            ;
         return status;
     }
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
 
 
 
@@ -21409,7 +21857,7 @@ exception_t decodeSetPriority(cap_t cap, word_t length, word_t *buffer)
 exception_t decodeSetMCPriority(cap_t cap, word_t length, word_t *buffer)
 {
     if (length < 1 || current_extra_caps.excaprefs[0] == ((void *)0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetMCPriority: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1262, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21418,7 +21866,7 @@ exception_t decodeSetMCPriority(cap_t cap, word_t length, word_t *buffer)
     cap_t authCap = current_extra_caps.excaprefs[0]->cap;
 
     if (cap_get_capType(authCap) != cap_thread_cap) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetMCPriority: authority cap not a TCB." ">>" "\033[0m" "\n", 0lu, __func__, 1271, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
@@ -21427,12 +21875,12 @@ exception_t decodeSetMCPriority(cap_t cap, word_t length, word_t *buffer)
     tcb_t *authTCB = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(authCap)));
     exception_t status = checkPrio(newMcp, authTCB);
     if (status != EXCEPTION_NONE) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetMCPriority: Requested maximum controlled priority %lu too high (max %lu)." ">>" "\033[0m" "\n", 0lu, __func__, 1280, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (unsigned long) newMcp, (unsigned long) authTCB->tcbMCP); } while (0)
+       
                                                                           ;
         return status;
     }
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
 
 
 
@@ -21449,7 +21897,7 @@ exception_t decodeSetMCPriority(cap_t cap, word_t length, word_t *buffer)
                ((void *)0), thread_control_update_mcp);
 
 }
-# 1338 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 1337 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 exception_t decodeSetSchedParams(cap_t cap, word_t length, word_t *buffer)
 
 {
@@ -21458,7 +21906,7 @@ exception_t decodeSetSchedParams(cap_t cap, word_t length, word_t *buffer)
 
 
        ) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetSchedParams: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1346, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21473,7 +21921,7 @@ exception_t decodeSetSchedParams(cap_t cap, word_t length, word_t *buffer)
 
 
     if (cap_get_capType(authCap) != cap_thread_cap) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetSchedParams: authority cap not a TCB." ">>" "\033[0m" "\n", 0lu, __func__, 1361, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidCapability;
         current_syscall_error.invalidCapNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
@@ -21482,19 +21930,19 @@ exception_t decodeSetSchedParams(cap_t cap, word_t length, word_t *buffer)
     tcb_t *authTCB = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(authCap)));
     exception_t status = checkPrio(newMcp, authTCB);
     if (status != EXCEPTION_NONE) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetSchedParams: Requested maximum controlled priority %lu too high (max %lu)." ">>" "\033[0m" "\n", 0lu, __func__, 1370, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (unsigned long) newMcp, (unsigned long) authTCB->tcbMCP); } while (0)
+       
                                                                           ;
         return status;
     }
 
     status = checkPrio(newPrio, authTCB);
     if (status != EXCEPTION_NONE) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetSchedParams: Requested priority %lu too high (max %lu)." ">>" "\033[0m" "\n", 0lu, __func__, 1377, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (unsigned long) newPrio, (unsigned long) authTCB->tcbMCP); } while (0)
+       
                                                                            ;
         return status;
     }
-# 1435 "/Users/lukasbower/seL4_15/src/object/tcb.c"
-    setThreadState(ksCurThread, ThreadState_Restart);
+# 1434 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
 
 
 
@@ -21521,7 +21969,7 @@ exception_t decodeSetIPCBuffer(cap_t cap, word_t length, cte_t *slot, word_t *bu
     cte_t *bufferSlot;
 
     if (length < 1 || current_extra_caps.excaprefs[0] == ((void *)0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetIPCBuffer: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1462, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21547,8 +21995,8 @@ exception_t decodeSetIPCBuffer(cap_t cap, word_t length, cte_t *slot, word_t *bu
         }
     }
 
-    setThreadState(ksCurThread, ThreadState_Restart);
-# 1499 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
+# 1498 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
     return invokeTCB_ThreadControl(
                ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap))), slot,
                0, 0, 0,
@@ -21578,11 +22026,11 @@ exception_t decodeSetSpace(cap_t cap, word_t length, cte_t *slot, word_t *buffer
 
 
        ) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetSpace: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1528, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
-# 1544 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 1543 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
     cptr_t faultEP = getSyscallArg(0, buffer);
     cRootData = getSyscallArg(1, buffer);
     vRootData = getSyscallArg(2, buffer);
@@ -21597,7 +22045,7 @@ exception_t decodeSetSpace(cap_t cap, word_t length, cte_t *slot, word_t *buffer
             (((cte_t *)((word_t)(cap_thread_cap_get_capTCBPtr(cap))&~((1ul << (11)) - 1ul)))+(tcbCTable))) ||
         slotCapLongRunningDelete(
             (((cte_t *)((word_t)(cap_thread_cap_get_capTCBPtr(cap))&~((1ul << (11)) - 1ul)))+(tcbVTable)))) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetSpace: CSpace or VSpace currently being deleted." ">>" "\033[0m" "\n", 0lu, __func__, 1558, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21613,7 +22061,7 @@ exception_t decodeSetSpace(cap_t cap, word_t length, cte_t *slot, word_t *buffer
     cRootCap = dc_ret.cap;
 
     if (cap_get_capType(cRootCap) != cap_cnode_cap) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetSpace: Invalid CNode cap." ">>" "\033[0m" "\n", 0lu, __func__, 1574, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21629,13 +22077,13 @@ exception_t decodeSetSpace(cap_t cap, word_t length, cte_t *slot, word_t *buffer
     vRootCap = dc_ret.cap;
 
     if (!isValidVTableRoot(vRootCap)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB SetSpace: Invalid VSpace cap." ">>" "\033[0m" "\n", 0lu, __func__, 1590, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
-# 1605 "/Users/lukasbower/seL4_15/src/object/tcb.c"
-    setThreadState(ksCurThread, ThreadState_Restart);
-# 1615 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 1604 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
+# 1614 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
     return invokeTCB_ThreadControl(
                ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap))), slot,
                faultEP,
@@ -21653,7 +22101,7 @@ exception_t decodeBindNotification(cap_t cap)
     cap_t ntfn_cap;
 
     if (current_extra_caps.excaprefs[0] == ((void *)0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB BindNotification: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 1632, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21661,7 +22109,7 @@ exception_t decodeBindNotification(cap_t cap)
     tcb = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap)));
 
     if (tcb->tcbBoundNotification) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB BindNotification: TCB already has a bound notification." ">>" "\033[0m" "\n", 0lu, __func__, 1640, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -21671,26 +22119,26 @@ exception_t decodeBindNotification(cap_t cap)
     if (cap_get_capType(ntfn_cap) == cap_notification_cap) {
         ntfnPtr = ((notification_t *)(cap_notification_cap_get_capNtfnPtr(ntfn_cap)));
     } else {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB BindNotification: Notification is invalid." ">>" "\033[0m" "\n", 0lu, __func__, 1650, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
     if (!cap_notification_cap_get_capNtfnCanReceive(ntfn_cap)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB BindNotification: Insufficient access rights" ">>" "\033[0m" "\n", 0lu, __func__, 1656, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
     if ((tcb_t *)notification_ptr_get_ntfnQueue_head(ntfnPtr)
         || (tcb_t *)notification_ptr_get_ntfnBoundTCB(ntfnPtr)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB BindNotification: Notification cannot be bound." ">>" "\033[0m" "\n", 0lu, __func__, 1663, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     return invokeTCB_NotificationControl(tcb, ntfnPtr);
 }
 
@@ -21701,12 +22149,12 @@ exception_t decodeUnbindNotification(cap_t cap)
     tcb = ((tcb_t *)(cap_thread_cap_get_capTCBPtr(cap)));
 
     if (!tcb->tcbBoundNotification) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "TCB UnbindNotification: TCB already has no bound Notification." ">>" "\033[0m" "\n", 0lu, __func__, 1680, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     return invokeTCB_NotificationControl(tcb, ((void *)0));
 }
 
@@ -21723,7 +22171,7 @@ exception_t invokeTCB_Resume(tcb_t *thread)
     restart(thread);
     return EXCEPTION_NONE;
 }
-# 1787 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 1786 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 exception_t invokeTCB_ThreadControl(tcb_t *target, cte_t *slot,
                                     cptr_t faultep, prio_t mcp, prio_t priority,
                                     cap_t cRoot_newCap, cte_t *cRoot_srcSlot,
@@ -21786,7 +22234,7 @@ exception_t invokeTCB_ThreadControl(tcb_t *target, cte_t *slot,
             cteInsert(bufferCap, bufferSrcSlot, bufferSlot);
         }
 
-        if (target == ksCurThread) {
+        if (target == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
             rescheduleRequired();
         }
     }
@@ -21797,7 +22245,7 @@ exception_t invokeTCB_ThreadControl(tcb_t *target, cte_t *slot,
 
     return EXCEPTION_NONE;
 }
-# 1897 "/Users/lukasbower/seL4_15/src/object/tcb.c"
+# 1896 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 exception_t invokeTCB_CopyRegisters(tcb_t *dest, tcb_t *tcb_src,
                                     bool_t suspendSource, bool_t resumeTarget,
                                     bool_t transferFrame, bool_t transferInteger,
@@ -21837,7 +22285,7 @@ exception_t invokeTCB_CopyRegisters(tcb_t *dest, tcb_t *tcb_src,
 
     Arch_postModifyRegisters(dest);
 
-    if (dest == ksCurThread) {
+    if (dest == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
         /* If we modified the current thread we may need to reschedule
          * due to changing registers are only reloaded in Arch_switchToThread */
         rescheduleRequired();
@@ -21859,13 +22307,13 @@ exception_t invokeTCB_ReadRegisters(tcb_t *tcb_src, bool_t suspendSource,
     exception_t e;
     tcb_t *thread;
 
-    thread = ksCurThread;
+    thread = ksSMP[(getCurrentCPUIndex())].system.ksCurThread;
 
     if (suspendSource) {
         suspend(tcb_src);
     }
 
-    e = Arch_performTransfer(arch, tcb_src, ksCurThread);
+    e = Arch_performTransfer(arch, tcb_src, ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
     if (e != EXCEPTION_NONE) {
         return e;
     }
@@ -21920,7 +22368,7 @@ exception_t invokeTCB_WriteRegisters(tcb_t *dest, bool_t resumeTarget,
     exception_t e;
     bool_t archInfo;
 
-    e = Arch_performTransfer(arch, ksCurThread, dest);
+    e = Arch_performTransfer(arch, ksSMP[(getCurrentCPUIndex())].system.ksCurThread, dest);
     if (e != EXCEPTION_NONE) {
         return e;
     }
@@ -21954,7 +22402,7 @@ exception_t invokeTCB_WriteRegisters(tcb_t *dest, bool_t resumeTarget,
         restart(dest);
     }
 
-    if (dest == ksCurThread) {
+    if (dest == ksSMP[(getCurrentCPUIndex())].system.ksCurThread) {
         /* If we modified the current thread we may need to reschedule
          * due to changing registers are only reloaded in Arch_switchToThread */
         rescheduleRequired();
@@ -21973,14 +22421,7 @@ exception_t invokeTCB_NotificationControl(tcb_t *tcb, notification_t *ntfnPtr)
 
     return EXCEPTION_NONE;
 }
-
-
-void setThreadName(tcb_t *tcb, const char *name)
-{
-    strlcpy(((debug_tcb_t *)(((cte_t *)((word_t)(tcb)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, name, ((1ul << (11 -1)) - (tcbCNodeEntries * sizeof(cte_t)) - sizeof(debug_tcb_t)));
-}
-
-
+# 2079 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/tcb.c"
 word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer)
 {
     switch (current_syscall_error.type) {
@@ -22018,16 +22459,16 @@ word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer)
         return setMR(thread, receiveIPCBuffer, 0,
                      current_syscall_error.memoryLeft);
     default:
-        _fail("Invalid syscall error", "/Users/lukasbower/seL4_15/src/object/tcb.c", 2117, __func__);
+        halt();
     }
 }
-# 1 "/Users/lukasbower/seL4_15/src/object/untyped.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/untyped.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 21 "/Users/lukasbower/seL4_15/src/object/untyped.c"
+# 21 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/untyped.c"
 static word_t alignUp(word_t baseValue, word_t alignment)
 {
     return (baseValue + ((1ul << (alignment)) - 1)) & ~((1ul << (alignment)) - 1ul);
@@ -22052,14 +22493,14 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
 
     /* Ensure operation is valid. */
     if (invLabel != UntypedRetype) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped cap: Illegal operation attempted." ">>" "\033[0m" "\n", 0lu, __func__, 45, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_IllegalOperation;
         return EXCEPTION_SYSCALL_ERROR;
     }
 
     /* Ensure message length valid. */
     if (length < 6 || current_extra_caps.excaprefs[0] == ((void *)0)) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped invocation: Truncated message." ">>" "\033[0m" "\n", 0lu, __func__, 52, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_TruncatedMessage;
         return EXCEPTION_SYSCALL_ERROR;
     }
@@ -22075,7 +22516,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
 
     /* Is the requested object type valid? */
     if (newType >= seL4_ObjectTypeCount) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Invalid object type." ">>" "\033[0m" "\n", 0lu, __func__, 68, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidArgument;
         current_syscall_error.invalidArgumentNumber = 0;
         return EXCEPTION_SYSCALL_ERROR;
@@ -22087,7 +22528,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
        is close to 2^wordBits, which is nonsensical in any case, so we check that this
        did not happen. userObjSize will always need to be less than wordBits. */
     if (userObjSize >= (1 << 6) || objectSize > 47) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Invalid object size." ">>" "\033[0m" "\n", 0lu, __func__, 80, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_RangeError;
         current_syscall_error.rangeErrorMin = 0;
         current_syscall_error.rangeErrorMax = 47;
@@ -22096,7 +22537,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
 
     /* If the target object is a CNode, is it at least size 1? */
     if (newType == seL4_CapTableObject && userObjSize == 0) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Requested CapTable size too small." ">>" "\033[0m" "\n", 0lu, __func__, 89, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidArgument;
         current_syscall_error.invalidArgumentNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
@@ -22104,12 +22545,12 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
 
     /* If the target object is a Untyped, is it at least size 4? */
     if (newType == seL4_UntypedObject && userObjSize < 4) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Requested UntypedItem size too small." ">>" "\033[0m" "\n", 0lu, __func__, 97, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidArgument;
         current_syscall_error.invalidArgumentNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
     }
-# 112 "/Users/lukasbower/seL4_15/src/object/untyped.c"
+# 112 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/object/untyped.c"
     /* Lookup the destination CNode (where our caps will be placed in). */
     if (nodeDepth == 0) {
         nodeCap = rootSlot->cap;
@@ -22117,7 +22558,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
         cap_t rootCap = rootSlot->cap;
         lu_ret = lookupTargetSlot(rootCap, nodeIndex, nodeDepth);
         if (lu_ret.status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Invalid destination address." ">>" "\033[0m" "\n", 0lu, __func__, 119, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+            ;
             return lu_ret.status;
         }
         nodeCap = lu_ret.slot->cap;
@@ -22125,7 +22566,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
 
     /* Is the destination actually a CNode? */
     if (cap_get_capType(nodeCap) != cap_cnode_cap) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Destination cap invalid or read-only." ">>" "\033[0m" "\n", 0lu, __func__, 127, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_FailedLookup;
         current_syscall_error.failedLookupWasSource = 0;
         current_lookup_fault = lookup_fault_missing_capability_new(nodeDepth);
@@ -22135,7 +22576,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
     /* Is the region where the user wants to put the caps valid? */
     nodeSize = 1ul << cap_cnode_cap_get_capCNodeRadix(nodeCap);
     if (nodeOffset > nodeSize - 1) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Destination node offset #%d too large." ">>" "\033[0m" "\n", 0lu, __func__, 137, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (int)nodeOffset); } while (0)
+       
                                   ;
         current_syscall_error.type = seL4_RangeError;
         current_syscall_error.rangeErrorMin = 0;
@@ -22143,7 +22584,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
         return EXCEPTION_SYSCALL_ERROR;
     }
     if (nodeWindow < 1 || nodeWindow > 256) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Number of requested objects (%d) too small or large." ">>" "\033[0m" "\n", 0lu, __func__, 145, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (int)nodeWindow); } while (0)
+       
                                   ;
         current_syscall_error.type = seL4_RangeError;
         current_syscall_error.rangeErrorMin = 1;
@@ -22151,7 +22592,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
         return EXCEPTION_SYSCALL_ERROR;
     }
     if (nodeWindow > nodeSize - nodeOffset) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Requested destination window overruns size of node." ">>" "\033[0m" "\n", 0lu, __func__, 153, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_RangeError;
         current_syscall_error.rangeErrorMin = 1;
         current_syscall_error.rangeErrorMax = nodeSize - nodeOffset;
@@ -22163,7 +22604,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
     for (i = nodeOffset; i < nodeOffset + nodeWindow; i++) {
         status = ensureEmptySlot(destCNode + i);
         if (status != EXCEPTION_NONE) {
-            do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Slot #%d in destination window non-empty." ">>" "\033[0m" "\n", 0lu, __func__, 165, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (int)i); } while (0)
+           
                              ;
             return status;
         }
@@ -22202,7 +22643,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
                        ((freeIndex)<<4);
 
     if ((untypedFreeBytes >> objectSize) < nodeWindow) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Insufficient memory " "(%lu * %lu bytes needed, %lu bytes available)." ">>" "\033[0m" "\n", 0lu, __func__, 204, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread), (word_t)nodeWindow, (objectSize >= (1 << 6) ? -1 : (1ul << objectSize)), (word_t)(untypedFreeBytes)); } while (0)
+       
 
 
 
@@ -22215,7 +22656,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
     deviceMemory = cap_untyped_cap_get_capIsDevice(cap);
     if ((deviceMemory && !Arch_isFrameType(newType))
         && newType != seL4_UntypedObject) {
-        do { printf("\033[0m" "\033[1m" "<<" "\033[0m" "\033[32m" "seL4(CPU %" "lu" ")" "\033[0m" "\033[1m" " [%s/%d T%p \"%s\" @%lx]: " "Untyped Retype: Creating kernel objects with device untyped" ">>" "\033[0m" "\n", 0lu, __func__, 217, ksCurThread, ((debug_tcb_t *)(((cte_t *)((word_t)(ksCurThread)&~((1ul << (11)) - 1ul)))+(tcbCNodeEntries)))->tcbName, (word_t)getRestartPC(ksCurThread)); } while (0);
+        ;
         current_syscall_error.type = seL4_InvalidArgument;
         current_syscall_error.invalidArgumentNumber = 1;
         return EXCEPTION_SYSCALL_ERROR;
@@ -22226,7 +22667,7 @@ exception_t decodeUntypedInvocation(word_t invLabel, word_t length, cte_t *slot,
     alignedFreeRef = alignUp(freeRef, objectSize);
 
     /* Perform the retype. */
-    setThreadState(ksCurThread, ThreadState_Restart);
+    setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
     return invokeUntyped_Retype(slot, reset,
                                 (void *)alignedFreeRef, newType, userObjSize,
                                 destCNode, nodeOffset, nodeWindow, deviceMemory);
@@ -22304,19 +22745,221 @@ exception_t invokeUntyped_Retype(cte_t *srcSlot,
 
     return EXCEPTION_NONE;
 }
-# 1 "/Users/lukasbower/seL4_15/src/smp/ipi.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/smp/lock.c"
+# 15 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/smp/ipi.c"
+/* This function switches the core it is called on to the idle thread,
+ * in order to avoid IPI storms. If the core is waiting on the lock, the actual
+ * switch will not occur until the core attempts to obtain the lock, at which
+ * point the core will capture the pending IPI, which is discarded.
+
+ * The core who triggered the store is responsible for triggering a reschedule,
+ * or this call will idle forever */
+void ipiStallCoreCallback(bool_t irqPath)
+{
+    word_t cpu = getCurrentCPUIndex();
+    clh_node_t *node = &big_kernel_lock.node[cpu];
+
+    if (clh_is_self_in_queue() && !irqPath) {
+        /* The current thread is running as we would replace this thread with an idle thread
+         *
+         * The instruction should be re-executed if we are in kernel to handle syscalls.
+         * Also, thread in 'ThreadState_RunningVM' should remain in same state.
+         * Note that, 'ThreadState_Restart' does not always result in regenerating exception
+         * if we are in kernel to handle them, e.g. hardware single step exception. */
+        if (thread_state_ptr_get_tsType(&ksSMP[(getCurrentCPUIndex())].system.ksCurThread->tcbState) == ThreadState_Running) {
+            setThreadState(ksSMP[(getCurrentCPUIndex())].system.ksCurThread, ThreadState_Restart);
+        }
+
+        tcbSchedEnqueue(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
+        switchToIdleThread();
+
+
+
+
+        ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = ((tcb_t*)0);
+
+        /* Let the cpu requesting this IPI continue while we wait on the lock */
+        node->ipi = 0;
+
+
+
+        ipi_wait();
+
+        /* Continue waiting on lock */
+        while (node->watch->state != CLHState_Granted) {
+            __atomic_thread_fence(2);
+            if (clh_is_ipi_pending(cpu)) {
+                /* Multiple calls for similar reason could result in stack overflow */
+                ;
+                handleIPI(((irq_t){.irq = (0), .target_core = (cpu)}), irqPath);
+            }
+            arch_pause();
+        }
+
+        /* make sure no resource access passes from this point */
+        __asm__ volatile("" ::: "memory");
+
+        /* Start idle thread to capture the pending IPI */
+        activateThread();
+        restore_user_context();
+    } else {
+        /* We get here either without grabbing the lock from normal interrupt path or from
+         * inside the lock while waiting to grab the lock for handling pending interrupt.
+         * In latter case, we return to the 'clh_lock_acquire' to grab the lock and
+         * handle the pending interrupt. Its valid as interrupts are async events! */
+        tcbSchedEnqueue(ksSMP[(getCurrentCPUIndex())].system.ksCurThread);
+        switchToIdleThread();
+
+
+
+
+        ksSMP[(getCurrentCPUIndex())].system.ksSchedulerAction = ((tcb_t*)0);
+    }
+}
+
+void ipi_wait(void)
+{
+    ipi_state_t *ipi = &big_kernel_lock.ipi;
+    word_t cores = ipi->totalCoreBarrier;
+    word_t localsense = ipi->globalsense;
+    word_t *count = &ipi->count;
+
+    if (__atomic_fetch_add(count, 1, 4) == cores) {
+        *count = 0;
+        ipi->globalsense++;
+        __atomic_thread_fence(3);
+    }
+    /* Check globalsense instead of count to protect against a race where
+     * a new IPI started before this core saw that the old one finished. */
+    while (localsense == ipi->globalsense) {
+        __atomic_thread_fence(2);
+        arch_pause();
+    }
+}
+
+static inline void init_ipi_args(IpiRemoteCall_t func,
+                                 word_t data1, word_t data2, word_t data3,
+                                 word_t mask)
+{
+    ipi_state_t *ipi = &big_kernel_lock.ipi;
+
+    ipi->remoteCall = func;
+    ipi->args[0] = data1;
+    ipi->args[1] = data2;
+    ipi->args[2] = data3;
+
+    /* get number of cores involved in this IPI */
+    ipi->totalCoreBarrier = popcountl(mask);
+}
+
+void handleIPI(irq_t irq, bool_t irqPath)
+{
+    ipi_state_t *ipi = &big_kernel_lock.ipi;
+
+    if ((irq.irq) == 0) {
+        handleRemoteCall(ipi->remoteCall, ipi->args[0], ipi->args[1], ipi->args[2], irqPath);
+    } else if ((irq.irq) == 1) {
+        rescheduleRequired();
+
+
+
+    } else {
+        halt();
+    }
+}
+
+void doRemoteMaskOp(IpiRemoteCall_t func, word_t data1, word_t data2, word_t data3, word_t mask)
+{
+    /* make sure the current core is not set in the mask */
+    mask &= ~(1ul << (getCurrentCPUIndex()));
+
+    /* this may happen, e.g. the caller tries to map a pagetable in
+     * newly created PD which has not been run yet. Guard against them! */
+    if (mask != 0) {
+        init_ipi_args(func, data1, data2, data3, mask);
+
+        /* make sure no resource access passes from this point */
+        __asm__ volatile("" ::: "memory");
+        ipi_send_mask(((irq_t){.irq = (0), .target_core = (0)}), mask, true);
+        ipi_wait();
+    }
+}
+
+void doMaskReschedule(word_t mask)
+{
+    /* make sure the current core is not set in the mask */
+    mask &= ~(1ul << (getCurrentCPUIndex()));
+    if (mask != 0) {
+        ipi_send_mask(((irq_t){.irq = (1), .target_core = (0)}), mask, false);
+    }
+}
+
+void generic_ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking)
+{
+    word_t nr_target_cores = 0;
+    uint16_t target_cores[4];
+
+    while (mask) {
+        int index = (1 << 6) - 1 - clzl(mask);
+        if (isBlocking) {
+            /*
+             * All writes before setting ipi to 1 must be observed,
+             * as other cores may check the ipi flag at any moment.
+             * IPI_MEM_BARRIER is too late to prevent reordering
+             * between IPI data and flag reads.
+             */
+            __atomic_store_n(&big_kernel_lock.node[index].ipi, 1, 3);
+            target_cores[nr_target_cores] = index;
+            nr_target_cores++;
+        } else {
+            do { /* This can be relaxed for GICv2 but for GICv3 dmb() no longer works */ /* since the way IPI is triggered is different (memory-mapped or MSR inst.) */ /* and dmb() is not able to avoid re-ordering between memory accesses and */ /* instructions. In order to support both GICv2 and v3 dsb() is required. */ dsb_ishst(); } while (0);
+            ipi_send_target(ipi, cpuIndexToID(index));
+        }
+        mask &= ~(1ul << (index));
+    }
+
+    if (nr_target_cores > 0) {
+        /* sending IPIs... */
+        do { /* This can be relaxed for GICv2 but for GICv3 dmb() no longer works */ /* since the way IPI is triggered is different (memory-mapped or MSR inst.) */ /* and dmb() is not able to avoid re-ordering between memory accesses and */ /* instructions. In order to support both GICv2 and v3 dsb() is required. */ dsb_ishst(); } while (0);
+        for (int i = 0; i < nr_target_cores; i++) {
+            ipi_send_target(ipi, cpuIndexToID(target_cores[i]));
+        }
+    }
+}
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/smp/lock.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
  * SPDX-License-Identifier: GPL-2.0-only
  */
-# 1 "/Users/lukasbower/seL4_15/src/string.c"
+
+
+
+
+
+
+_Static_assert(sizeof(big_kernel_lock) % 2048 == 0, "BKL_not_padded");;
+
+clh_lock_t big_kernel_lock;
+
+__attribute__((__section__(".boot.text"))) void clh_lock_init(void)
+{
+    /* Check if linker honoured alignment */
+    ;
+    for (int i = 0; i < 4; i++) {
+        big_kernel_lock.node[i].myreq = &big_kernel_lock.request[i];
+    }
+
+    /* Initialize the CLH tail */
+    big_kernel_lock.request[4].state = CLHState_Granted;
+    big_kernel_lock.tail = &big_kernel_lock.request[4];
+}
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/string.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -22359,7 +23002,7 @@ word_t strlcat(char *dest, const char *src, word_t size)
     }
     return len;
 }
-# 1 "/Users/lukasbower/seL4_15/src/util.c"
+# 1 "/Users/lukasbower/GitHub/cohesix/out/sel4/v16-worktree-project/kernel/src/util.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -22386,8 +23029,8 @@ void memzero(void *s, unsigned long n)
     uint8_t *p = s;
 
     /* Ensure alignment constraints are met. */
-    do { if (!((unsigned long)s % sizeof(unsigned long) == 0)) { _assert_fail("(unsigned long)s % sizeof(unsigned long) == 0", "/Users/lukasbower/seL4_15/src/util.c", 27, __func__); } } while(0);
-    do { if (!(n % sizeof(unsigned long) == 0)) { _assert_fail("n % sizeof(unsigned long) == 0", "/Users/lukasbower/seL4_15/src/util.c", 28, __func__); } } while(0);
+    ;
+    ;
 
     /* We will never memzero an area larger than the largest current
        live object */

@@ -1,4 +1,3 @@
-/* Author: Lukas Bower */
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -41,6 +40,12 @@
 #define LIBSEL4_INLINE          LIBSEL4_NOINLINE LIBSEL4_UNUSED LIBSEL4_WEAK
 #define LIBSEL4_INLINE_FUNC     static inline
 
+#endif
+
+#if defined(CONFIG_LIB_SEL4_USE_THREAD_LOCALS)
+#define LIBSEL4_THREAD_LOCAL    __thread
+#else
+#define LIBSEL4_THREAD_LOCAL
 #endif
 
 /* _Static_assert() is a c11 feature. Since the kernel is currently compiled

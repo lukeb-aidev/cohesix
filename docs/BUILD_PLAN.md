@@ -31,10 +31,10 @@ ad-hoc host RPC authority path.
 
 Current terminology: a **shard** is a manifest-derived worker namespace bucket, and the canonical worker telemetry path is `/shard/<label>/worker/<id>/telemetry`. Older milestone records may mention the legacy `/worker/<id>/telemetry` alias; that alias is valid only when `sharding.legacy_worker_alias = true`.
 
-## seL4 Reference Manual Alignment (v15.0.0)
+## seL4 Reference Manual Alignment (v16.0.0)
 
-We treat the official seL4 Reference Manual v15.0.0
-([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)) as the
+We treat the official seL4 Reference Manual v16.0.0
+([PDF](https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf)) as the
 authoritative description of kernel semantics. The selected profile-specific
 seL4 build directory, generated headers, and generated metadata define which
 configuration options, object layouts, and APIs are active in an as-built
@@ -138,7 +138,7 @@ manual availability, profile selection, implementation, and target proof.
 | [26a](#26a) | Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation | Complete |
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Reopened |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Reopened (Worker execution truth correction only) |
-| [26d](#26d) | seL4 15 Baseline Refresh + Reference/Performance Realignment | In Progress |
+| [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | In Progress |
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Pending |
 | [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
 | [27b](#27b) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
@@ -1595,7 +1595,7 @@ Commands:
   - SEL4_BUILD_DIR=seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu
   - SEL4_BUILD_DIR=seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
   - scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none
-  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-kernel-source-dir "$HOME/seL4_15"
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-kernel-source-dir "$HOME/seL4_16"
   - scripts/check-generated.sh
   - scripts/ci/check_test_plan.sh
   - scripts/ci/test_plan_run.sh --list
@@ -7558,7 +7558,7 @@ Changes:
   - docs/BUILD_PLAN.md — record this restoration-only scope and return 26c to `Complete` only after every check below passes.
   - docs/OPERATOR_RECIPES.md — when needed, own task-oriented evidence, mount, lifecycle, PEFT, and federation workflows so the canonical walkthrough remains one ordered journey.
   - docs/GLOSSARY.md — own plain-language definitions for Cohesix-specific terms and the foundational OS, security, protocol, AI, hardware, and proof concepts needed to understand them; link to owning contract documents rather than restating full schemas or limits.
-  - CONTRIBUTING.md + docs/QUICKSTART.md + docs/SECURITY.md + docs/TOOLCHAIN_MAC_ARM64.md — keep the transitive onboarding and project-governance perimeter consistent with current security, validation, release, and seL4 15 requirements.
+  - CONTRIBUTING.md + docs/QUICKSTART.md + docs/SECURITY.md + docs/TOOLCHAIN_MAC_ARM64.md — keep the transitive onboarding and project-governance perimeter consistent with current security, validation, release, and seL4 16 requirements.
   - Canonical Mermaid blocks — retain only diagrams that materially clarify an as-built boundary or sequence; validate both syntax and semantic ownership against code, manifests, and current evidence.
   - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md + docs/audit/M26C_DOC_DRIFT_LEDGER.md + docs/audit/M26C_MERMAID_INVENTORY.csv + docs/audit/M26C_MERMAID_GITHUB_RENDER_AUDIT.md + docs/audit/M26C_AGENT_HANDOFFS.md + docs/audit/M26C_SIMPLICITY_SCORECARD.md — refresh the live audit records with source anchors, before/after size and ownership evidence, lane handoffs, and the final Mermaid inventory/render result.
 Commands:
@@ -7975,28 +7975,29 @@ Deliverables:
 
 ---
 
-## Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment <a id="26d"></a>
+## Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment <a id="26d"></a>
 [Milestones](#Milestones)
 
-**Status:** In Progress — hardware-free repository, linked-runtime, restart,
-operator-liveness, and exact-image evidence closure is active. Live Pi 4
-10-cold/10-warm Wi-Fi proof and refreshed Pi performance evidence remain
-hardware-gated and are not implied by offline PASS results. The five-profile
-`out/sel4/profile-v2/*` source/configuration/artifact aggregate is complete
-(`PASS profiles=5`); it closes only the canonical static seL4 profile and
-supply-chain portion of this milestone. The external Pi diagnostic input has
-previously been rebuilt, but the current evidence-class validator guard makes
-its causal stamp stale. The linked canonical GICv3 QEMU image now passes all
-five target-qualified Test Plan stages at
-`out/test-plan/m26d-qemu-sel4-15-gap-audit`. The coordinated CYW43-lane
-external-tree rebuild, sealed exact-image integration, current-image board
-proof, CYW43 repeatability, Pi TCP/`cohsh`, operator-liveness, and refreshed
-benchmarks remain open evidence classes.
+**Status:** In Progress — the accepted seL4 15 profile and QEMU artifacts are
+retained as historical comparators, while the seL4 16 source, profile,
+compatibility, and regression refresh is active. Live Pi 4 10-cold/10-warm
+Wi-Fi proof and refreshed Pi performance evidence remain hardware-gated and
+are not implied by offline PASS results. No seL4 15 build, renamed directory,
+or relabeled evidence can satisfy a seL4 16 gate. As of 2026-07-23, all five
+fresh `out/sel4/profile-v2/*` source-and-artifact profiles, the direct
+`~/seL4_16` Pi diagnostic build, QEMU/Pi root-task target checks, and a linked
+GICv3 QEMU `--no-run` package build pass. The repo-managed
+`seL4/{build,SMP_build,build_UBOOT}` reference trees and manual/elfloader
+references have also been refreshed to v16; the former v15 memoization cache
+is removed. Booted QEMU Test Plan evidence, clean-worktree sealed exact-image
+integration, current-image board proof, CYW43 repeatability, Pi TCP/`cohsh`,
+operator-liveness, and refreshed benchmarks remain open evidence classes until
+their exact seL4 16 artifacts pass.
 
 **Why now (kernel truth):**
-Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 15.0.0, anchors manual alignment to the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)), proves the reopened 26a/26b driver-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions. Because a kernel refresh changes scheduler, syscall, timer, cache, and generated-artifact behavior that can move measured latency or throughput, 26d also owns a bounded benchmark revalidation and regression-tuning lane: compare historical-best, accepted 26b, first seL4 15, and post-tuning evidence before later milestones rely on the refreshed baseline.
+Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 16.0.0, anchors manual alignment to the official seL4 Reference Manual v16.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf)), proves the reopened 26a/26b driver-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions. Because a kernel refresh changes scheduler, syscall, timer, cache, and generated-artifact behavior that can move measured latency or throughput, 26d also owns a bounded benchmark revalidation and regression-tuning lane: compare historical-best, accepted 26b, accepted seL4 15, first seL4 16, and post-tuning seL4 16 evidence before later milestones rely on the refreshed baseline.
 
-The seL4 15 capability audit also found three pre-existing assurance defects that
+The seL4 16 capability audit also found three pre-existing assurance defects that
 must close before the refreshed-baseline claim is credible: isolated runtime
 mappings were not uniformly fail-closed for execute permission, QEMU kernel
 intent was not reproducible from one pinned upstream manifest/profile contract,
@@ -8006,21 +8007,25 @@ to imply new product behavior or completed Pi 4 Wi-Fi evidence.
 
 **Non-negotiable constraints:**
 - No further system-model change beyond the reopened 26a/26b driver-task baseline, except the explicitly named W^X enforcement, canonical profile, and generated/docs-as-built Worker truth repairs in this milestone. Cohesix remains an upstream seL4, pure-Rust root-task authority system with hardware driver tasks; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26d.
+- CAmkES 3.13.0 is recorded only as the upstream component-framework release
+  paired with seL4 16.0.0. A separate host smoke build may test that upstream
+  pairing, but CAmkES, capDL component generation, and their Haskell/Python
+  dependency closure must not enter Cohesix profiles, target artifacts, or TCB.
 - No new operator-visible protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a kernel-refresh label.
 - Concurrent CYW43/SDIO reliability, exact-image identity, operator-liveness, and Pi evidence files remain owned by their active 26b/26d closure lane. Capability work must not rewrite driver timing/state-machine logic, evidence classification, image packaging, or hardware claims, and offline capability PASS results must not be counted as Wi-Fi or exact-image proof.
 - `rust-sel4` adoption is out of scope. Cohesix may audit upstream Rust support for compatibility reference, but 26d must preserve the current Cohesix-owned `sel4-sys` / `sel4-runtime` / root-task bootstrap stack unless a separate milestone authorizes replacement.
 - Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
-- Canonical seL4 builds must be configured from the pinned official seL4 15.0.0 manifest through a source-controlled Cohesix profile wrapper. Hand-edited CMake caches, stripped generated settings, or copied external build trees are diagnostic inputs only and cannot establish production, diagnostic, or proof-profile closure.
-- Older manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 15 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
-- Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 15 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
+- Canonical seL4 builds must be configured from the pinned official seL4 16.0.0 manifest through a source-controlled Cohesix profile wrapper. Hand-edited CMake caches, stripped generated settings, or copied external build trees are diagnostic inputs only and cannot establish production, diagnostic, or proof-profile closure.
+- Older manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 16 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
+- Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 16 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
 - Generated Worker roles may be described as implemented, capability-backed, notification-backed, or live only when the selected target actually creates the declared TCB, CSpace, VSpace, IPC buffer, stack, endpoint badge, lifecycle notifications, and fault/revocation path. Model-only or in-process Worker behavior must be emitted and documented as such.
 - MCS activation and root-service decomposition remain explicit decisions, not
   implicit benefits of the version refresh. Milestone 26d keeps the accepted
   non-MCS scheduling model and current root-task service boundary. Pending
   Milestone 26e owns both the ordered root-service/Worker split and the SMP+MCS
   ABI, generated policy, and exact-target acceptance after 26d closes.
-- The seL4 15 refresh must preserve the Pi 4 hardware-counter contract used by isolated runtime performance proof: `release-pi4` / `timers-arch-counter` builds expose only the read-only EL0 virtual counter (`KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`), keep physical counter and EL0 timer-control exports disabled, and derive elapsed-time proof from refreshed `TIMER_CLOCK_HZ=54000000` generated headers. Kernel refresh work must not reclassify dummy-timer or physical-counter captures as valid latency evidence.
-- Performance tuning is permitted in 26d only when tied to a measured same-harness regression, regression-risk, or drift exposed by the seL4 15 refresh. Allowed tuning includes bounded scheduler/budget constants, driver-runtime service-turn cadence, cache-maintenance batching thresholds, TCP/REST gateway timeout plumbing, harness provenance/reporting fixes, and comparator hygiene. Tuning must preserve Secure9P semantics, ACK/ERR/END grammar, manifest authority, HAL-only physical-device authority, root/driver-task ownership boundaries, no-retry benchmark accounting, and the documented Pi 4 wired/GENET versus Wi-Fi proof split.
+- The seL4 16 refresh must preserve the Pi 4 hardware-counter contract used by isolated runtime performance proof: `release-pi4` / `timers-arch-counter` builds expose only the read-only EL0 virtual counter (`KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`), keep physical counter and EL0 timer-control exports disabled, and derive elapsed-time proof from refreshed `TIMER_CLOCK_HZ=54000000` generated headers. Kernel refresh work must not reclassify dummy-timer or physical-counter captures as valid latency evidence.
+- Performance tuning is permitted in 26d only when tied to a measured same-harness regression, regression-risk, or drift exposed by the seL4 16 refresh. Allowed tuning includes bounded scheduler/budget constants, driver-runtime service-turn cadence, cache-maintenance batching thresholds, TCP/REST gateway timeout plumbing, harness provenance/reporting fixes, and comparator hygiene. Tuning must preserve Secure9P semantics, ACK/ERR/END grammar, manifest authority, HAL-only physical-device authority, root/driver-task ownership boundaries, no-retry benchmark accounting, and the documented Pi 4 wired/GENET versus Wi-Fi proof split.
 - 26d tuning must not become service-bucket/core-local redesign, new protocol work, new namespace or telemetry grammar, relaxed error budgets, retry masking, root-owned physical-driver shortcuts, larger unbounded queues, or a reclassification of Wi-Fi stress diagnostics as production parity. Those remain reopened 26b, 27c, or later scoped work.
 - QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
 
@@ -8039,29 +8044,29 @@ to imply new product behavior or completed Pi 4 Wi-Fi evidence.
   neither can be inferred from driver-runtime TCB evidence or model tests.
 
 ### Goal
-Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0 while preserving root-task authority plus the reopened 26a/26b hardware driver-task model, prove zero operator-visible drift across QEMU and Pi 4, and preserve or recover the accepted 26b REST/driver-runtime benchmark envelope when the refreshed kernel baseline exposes a bounded performance regression.
+Upgrade Cohesix's external seL4 baseline and normative references to seL4 16.0.0 while preserving root-task authority plus the reopened 26a/26b hardware driver-task model, prove zero operator-visible drift across QEMU and Pi 4, and preserve or recover the accepted 26b REST/driver-runtime benchmark envelope when the refreshed kernel baseline exposes a bounded performance regression.
 
 ### Deliverables
 - **Kernel baseline refresh**
-  - Refresh external seL4 build inputs used by Cohesix bring-up, CI, and Pi 4 image flows to seL4 15.0.0.
+  - Refresh external seL4 build inputs used by Cohesix bring-up, CI, and Pi 4 image flows to seL4 16.0.0.
   - Record the exact upstream seL4 version/commit accepted for Cohesix in canonical docs and test evidence.
   - Record refreshed Pi 4 counter-export evidence for `KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`, forbidden physical-counter/timer-control exports, and `TIMER_CLOCK_HZ`.
 
 - **Reference-manual and docs realignment**
-  - Update `docs/BUILD_PLAN.md`, `docs/TOOLCHAIN_MAC_ARM64.md`, `README.md`, and other canonical docs that currently describe the normative seL4 manual/baseline so they align with seL4 15.0.0 as built and link the official seL4 Reference Manual v15.0.0 PDF (`https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf`).
+  - Update `docs/BUILD_PLAN.md`, `docs/TOOLCHAIN_MAC_ARM64.md`, `README.md`, and other canonical docs that currently describe the normative seL4 manual/baseline so they align with seL4 16.0.0 as built and link the official seL4 Reference Manual v16.0.0 PDF (`https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf`).
   - Refresh the carried seL4 manual mirror under `seL4/` if the repo continues to store it as a tracked reference artifact.
-  - Record any seL4 15 changes that are intentionally irrelevant to Cohesix today, especially domain-schedule features tied to Microkit/CAmkES/capDL workflows.
+  - Record any seL4 16 changes that are intentionally irrelevant to Cohesix today, especially domain-schedule features tied to Microkit/CAmkES/capDL workflows.
 
 - **Direct-API compatibility audit and fixes**
-  - Audit `crates/sel4-sys`, `crates/sel4-runtime`, `crates/pi4-driver-abi`, profile-selected `apps/pi4-driver-runtime` images, generated `root_task.driver_images` descriptors, and root-task bootstrap code against seL4 15 headers and generated metadata.
+  - Audit `crates/sel4-sys`, `crates/sel4-runtime`, `crates/pi4-driver-abi`, profile-selected `apps/pi4-driver-runtime` images, generated `root_task.driver_images` descriptors, and root-task bootstrap code against seL4 16 headers and generated metadata.
   - Preserve Cohesix’s explicit TLS and IPC-buffer installation path unless a compatibility fix requires adjustment.
-  - Keep SMP affinity, boot-info handling, CSpace assumptions, and debug-syscall guards aligned with seL4 15 generated headers for both single-core and SMP builds.
-  - Keep root-task and linked-driver-runtime timer build guards aligned with seL4 15 generated `TIMER_CLOCK_HZ` and VCNT export truth; compatibility fixes may not introduce `CNTPCT_EL0`, EL0 timer-control register use, or raw CPU-speed spin loops for elapsed time.
+  - Keep SMP affinity, boot-info handling, CSpace assumptions, and debug-syscall guards aligned with seL4 16 generated headers for both single-core and SMP builds.
+  - Keep root-task and linked-driver-runtime timer build guards aligned with seL4 16 generated `TIMER_CLOCK_HZ` and VCNT export truth; compatibility fixes may not introduce `CNTPCT_EL0`, EL0 timer-control register use, or raw CPU-speed spin loops for elapsed time.
 
 - **Domain-schedule debt removal**
   - Audit build caches and Pi 4/U-Boot kernel configuration for stale `KernelDomainSchedule` / `domain_schedule.c` assumptions.
   - For configurations with `KernelNumDomains=1`, remove or document any stale schedule-file dependency so Cohesix does not inherit `sel4test` domain-schedule defaults as an accidental build requirement.
-  - If any Cohesix-owned configuration genuinely uses domains later, migrate that path to seL4 15 runtime/domain-schedule semantics in a scoped follow-on task before enabling it.
+  - If any Cohesix-owned configuration genuinely uses domains later, migrate that path to seL4 16 runtime/domain-schedule semantics in a scoped follow-on task before enabling it.
 
 - **Isolated-runtime W^X closure**
   - Reject malformed, unknown-flag, write-plus-execute, and effective page-level W+X ELF load plans before allocating child authority.
@@ -8069,7 +8074,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
   - Preserve device/cache attributes while adding execute-never and retain the reviewed read-only executable trampoline exception.
 
 - **Canonical profile intent and validation**
-  - Define pinned production, diagnostic, and proof profile contracts from the official seL4 15.0.0 manifest, including allowed debug/benchmark features and claim eligibility.
+  - Define pinned production, diagnostic, and proof profile contracts from the official seL4 16.0.0 manifest, including allowed debug/benchmark features and claim eligibility.
   - Make QEMU `aarch64/virt` GICv3 and one-domain/no-schedule-file intent explicit, then validate source provenance, cache settings, generated headers, DTB/launcher inputs, and forbidden settings as one contract.
   - Make the validated `qemu_smp_production` tree the default for QEMU build,
     release, regression, staged-test, and newcomer runbooks; explicit legacy
@@ -8083,7 +8088,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
   - Keep actual general Worker TCB creation, badged IPC, lifecycle notifications, fault suspension/revocation, and QEMU/Pi execution evidence as an explicit reopened phase rather than borrowing isolated driver-runtime proof.
 
 - **Capability, MCS, and root-TCB decision evidence**
-  - Publish the seL4 15 capability-use matrix with implemented, partial/model-only, intentionally unused, and blocker classifications.
+  - Publish the seL4 16 capability-use matrix with implemented, partial/model-only, intentionally unused, and blocker classifications.
   - Record why non-MCS remains the accepted 26d baseline, compare classic SMP,
     single-core MCS, and SMP+MCS, identify MCS as the preferred Cohesix temporal
     architecture, and route staged implementation/admission to the exact 26e
@@ -8093,11 +8098,11 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
     claiming that decomposition has occurred.
 
 - **Regression and evidence refresh**
-  - Re-run generated-artifact guards, root-task checks/tests, QEMU bring-up, Pi 4 image build, and the full target-qualified Test Plan on the seL4 15 baseline.
+  - Re-run generated-artifact guards, root-task checks/tests, QEMU bring-up, Pi 4 image build, and the full target-qualified Test Plan on the seL4 16 baseline.
   - Publish refreshed audit artifacts proving that operator-visible semantics remain unchanged, that the VM build remains `no_std`, and that Pi 4 latency/performance proof still uses the virtual-counter backend rather than dummy timers or physical-counter exports.
 
 - **Benchmark revalidation and bounded tuning**
-  - Archive a before/after benchmark ledger with four explicit lanes: historical top benchmark, accepted 26b baseline, first seL4 15 baseline before tuning, and final seL4 15 evidence after any tuning.
+  - Archive a before/after benchmark ledger with five explicit lanes: historical top benchmark, accepted 26b baseline, accepted seL4 15 comparator, first seL4 16 baseline before tuning, and final seL4 16 evidence after any tuning.
   - Re-run the REST performance harness in the same-harness QEMU/Pi shape used by 26b, keeping raw direct `cohsh`/TCP proof, REST gateway overhead, QEMU semantic/capacity reference, wired/GENET production parity, and Wi-Fi research/diagnostic evidence separate.
   - Permit only bounded tuning that preserves existing authority and protocol semantics; every performance fix must identify the moved layer as kernel/generated-artifact drift, root-task scheduling cadence, isolated driver-runtime service cadence, gateway/harness behavior, physical-target variance, or pre-existing 26b debt.
   - Update `docs/BENCHMARKS.md` only for refreshed artifact indexes, verdict changes, or explicit non-blocking debt. Do not erase historical-best evidence or convert uncommitted local diagnostics into canonical proof without archived artifacts.
@@ -8119,33 +8124,33 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::tests::runtime_`
 - `SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/pi4-production" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
 - `scripts/cohesix-build-run.sh --sel4-build out/sel4/profile-v2/qemu-smp-production --no-run --cargo-target aarch64-unknown-none --profile release --root-task-features cohesix-dev`
-- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "${COHESIX_SEL4_PI4_BUILD:-/Users/lukasbower/seL4/build_UBOOT}" --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel"`
+- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "${COHESIX_SEL4_PI4_BUILD:-$PWD/out/sel4/profile-v2/pi4-diagnostic}" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel"`
 - `python3 -m pytest -q tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py`
-- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-15-initial`
-- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-15-initial`
-- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-15-final`
-- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-15-final`
-- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu-sel4-15-gap-audit`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-16-initial`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-16-initial`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-16-final`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-16-final`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu-sel4-16-gap-audit`
 - `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4`
 
 ### Checks (DoD)
-- Canonical docs link the official seL4 Reference Manual v15.0.0 PDF and explicitly align to the accepted seL4 15.0.0 baseline, remaining consistent with the refreshed as-built evidence.
-- `crates/sel4-sys`, `crates/sel4-runtime`, `crates/pi4-driver-abi`, `apps/pi4-driver-runtime`, generated driver-image descriptors, driver-runtime CPIO packaging, and root-task bootstrap code build cleanly against seL4 15 generated headers/artifacts for the QEMU baseline, SMP baseline, and Pi 4 U-Boot baseline used by Cohesix.
+- Canonical docs link the official seL4 Reference Manual v16.0.0 PDF and explicitly align to the accepted seL4 16.0.0 baseline, remaining consistent with the refreshed as-built evidence.
+- `crates/sel4-sys`, `crates/sel4-runtime`, `crates/pi4-driver-abi`, `apps/pi4-driver-runtime`, generated driver-image descriptors, driver-runtime CPIO packaging, and root-task bootstrap code build cleanly against seL4 16 generated headers/artifacts for the QEMU baseline, SMP baseline, and Pi 4 U-Boot baseline used by Cohesix.
 - QEMU and Pi 4 target-qualified Test Plan runs pass on the refreshed kernel baseline with no `*.incomplete` markers and no undocumented operator-visible output drift.
 - Secure9P bounds, console grammar, manifest outputs, release semantics, and host/VM runtime boundaries remain unchanged unless separately documented as defects fixed in the same change.
 - Build artifacts and documentation no longer rely on an accidental `sel4test`-provided `domain_schedule.c` dependency for one-domain Cohesix configurations; any remaining dependency is explicit, justified, and documented.
-- Canonical QEMU configuration is reproducible from the pinned official seL4 15.0.0 manifest, official Arm GNU compiler archive, exact hash-locked Python closure, and DENX mkimage source provenance; selects GICv3 for `aarch64/virt`; omits the legacy domain-schedule input; and has matching source, cache, generated-header, parsed-DTB, launcher, strict executable-ELF, and causal build-stamp evidence. The aggregate closure gate requires all five fresh `out/sel4/profile-v2/*` source and artifact sets by default; configuration-only relaxation is explicit and claim-ineligible. Production, diagnostic, and proof profile contracts reject unknown evidence classes, class/eligibility mismatches, stale outputs, forbidden settings, shipping-artifact RWX, malformed/non-executable ELF inputs, and claim-ineligible settings rather than silently normalizing them, while upstream seL4Test RWX exceptions remain machine-recorded and non-shipping. Active QEMU build, release, regression, staged-test, and runbook defaults consume `out/sel4/profile-v2/qemu-smp-production` and validate it before runtime/release claims; explicit legacy trees remain diagnostic unless a named contract passes.
+- Canonical QEMU configuration is reproducible from the pinned official seL4 16.0.0 manifest, official Arm GNU compiler archive, exact hash-locked Python closure, and DENX mkimage source provenance; selects GICv3 for `aarch64/virt`; omits the legacy domain-schedule input; and has matching source, cache, generated-header, parsed-DTB, launcher, strict executable-ELF, and causal build-stamp evidence. The aggregate closure gate requires all five fresh `out/sel4/profile-v2/*` source and artifact sets by default; configuration-only relaxation is explicit and claim-ineligible. Production, diagnostic, and proof profile contracts reject unknown evidence classes, class/eligibility mismatches, stale outputs, forbidden settings, shipping-artifact RWX, malformed/non-executable ELF inputs, and claim-ineligible settings rather than silently normalizing them, while upstream seL4Test RWX exceptions remain machine-recorded and non-shipping. Active QEMU build, release, regression, staged-test, and runbook defaults consume `out/sel4/profile-v2/qemu-smp-production` and validate it before runtime/release claims; explicit legacy trees remain diagnostic unless a named contract passes.
 - Every isolated child mapping is W^X by construction: only validated read-only executable image pages and the reviewed trampoline are executable; writable/data/hole/stack/IPC/ring/shared/DMA/MMIO/framebuffer mappings are execute-never; malformed, unknown, RWX, and page-colliding ELF segments are rejected before launch.
 - Generated outputs and canonical docs describe general Workers as model-only until target TCB/CSpace/VSpace/IPC/stack, badged endpoint, lifecycle notification, and fault/revocation evidence exists. Isolated driver-runtime execution and host/session ticket behavior do not satisfy that gate.
 - The accepted 26d scheduler remains non-MCS and the accepted service boundary remains root-owned exactly as recorded in the decision audits; neither is presented as an implemented isolation improvement.
 - Pi 4 refreshed evidence reports `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no`; any missing/mismatched counter export leaves isolated runtime latency proof red until fixed or explicitly scoped back to reopened 26a/26b acceptance.
-- 26d benchmark evidence includes the historical-best, accepted 26b, first seL4 15, and final seL4 15 lanes; any tuning is explained by layer, bounded by existing authority/protocol rules, and rechecked with the REST performance harness without retry masking or relaxed error budgets.
-- If final seL4 15 benchmark evidence remains below the accepted 26b envelope, the closure record classifies the gap as blocking regression, physical-target variance with evidence, pre-existing 26b debt, or explicitly deferred later-milestone work. Deferred work cannot be counted as 26d closure evidence for downstream milestones.
-- The carried seL4 manual/reference artifacts, if tracked in-repo, match the accepted kernel baseline or are explicitly relinked to the authoritative upstream 15.0.0 source.
+- 26d benchmark evidence includes the historical-best, accepted 26b, first seL4 16, and final seL4 16 lanes; any tuning is explained by layer, bounded by existing authority/protocol rules, and rechecked with the REST performance harness without retry masking or relaxed error budgets.
+- If final seL4 16 benchmark evidence remains below the accepted 26b envelope, the closure record classifies the gap as blocking regression, physical-target variance with evidence, pre-existing 26b debt, or explicitly deferred later-milestone work. Deferred work cannot be counted as 26d closure evidence for downstream milestones.
+- The carried seL4 manual/reference artifacts, if tracked in-repo, match the accepted kernel baseline or are explicitly relinked to the authoritative upstream 16.0.0 source.
 
 ### Compiler / docsystem touchpoints
-- `coh-rtc` outputs, docs snippets, and manifest fingerprints remain authoritative; 26d may update generators or schemas only when required by the seL4 15 baseline refresh, and any such change must be reflected in the same evidence set.
-- Pi 4 manifest-declared isolated driver runtime ABI/descriptors/images remain authoritative for driver-task bootstrap evidence during the kernel refresh; 26d may adapt them only for seL4 15 compatibility and must not reclassify runtime-spec acceptance or board-proof boundaries without reopened 26a/26b hardware acceptance evidence.
+- `coh-rtc` outputs, docs snippets, and manifest fingerprints remain authoritative; 26d may update generators or schemas only when required by the seL4 16 baseline refresh, and any such change must be reflected in the same evidence set.
+- Pi 4 manifest-declared isolated driver runtime ABI/descriptors/images remain authoritative for driver-task bootstrap evidence during the kernel refresh; 26d may adapt them only for seL4 16 compatibility and must not reclassify runtime-spec acceptance or board-proof boundaries without reopened 26a/26b hardware acceptance evidence.
 - Root-task and linked-driver-runtime hardware-counter guards remain authoritative for performance proof during the kernel refresh. Generated seL4 headers and CMake/cache config must agree before `timers-arch-counter` evidence can satisfy 26d closure.
 - REST harness output, benchmark provenance fields, and `docs/BENCHMARKS.md` artifact indexes remain the source of truth for same-harness performance claims during the refresh. Any harness change made in 26d must improve provenance, strictness, or failure classification without changing the workload contract used for comparison.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and target-qualified state-dir evidence remain the source of truth for QEMU/Pi 4 pass semantics during the kernel refresh.
@@ -8155,26 +8160,26 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 ### Atomic tasks
 ```
 Title/ID: m26d-kernel-provenance-refresh
-Goal: Refresh Cohesix seL4 baseline inputs and record accepted seL4 15.0.0 provenance.
-Inputs: external seL4 source/build trees, seL4 15.0.0 release notes, official seL4 Reference Manual v15.0.0 PDF (`https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf`), docs/TOOLCHAIN_MAC_ARM64.md, README.md.
+Goal: Refresh Cohesix seL4 baseline inputs and record accepted seL4 16.0.0 provenance.
+Inputs: external seL4 source/build trees, seL4 16.0.0 release notes, official seL4 Reference Manual v16.0.0 PDF (`https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf`), docs/TOOLCHAIN_MAC_ARM64.md, README.md.
 Changes:
-  - docs/TOOLCHAIN_MAC_ARM64.md — record the accepted seL4 15.0.0 baseline and external-build expectations.
+  - docs/TOOLCHAIN_MAC_ARM64.md — record the accepted seL4 16.0.0 baseline and external-build expectations.
   - README.md — update high-level kernel/manual baseline references if they mention stale versions or assumptions.
   - seL4/ — refresh tracked manual/reference artifacts only if the repo continues carrying them as canonical mirrors.
 Commands: cargo check --workspace
-Checks: canonical docs and carried references identify the accepted seL4 15.0.0 baseline with no stale older-manual pin left in normative guidance.
+Checks: canonical docs and carried references identify the accepted seL4 16.0.0 baseline with no stale older-manual pin left in normative guidance.
 Deliverables: updated docs/reference provenance and a checked-in note of the accepted upstream version/commit.
 ```
 
 ```
 Title/ID: m26d-sel4-api-compat-audit
-Goal: Bring Cohesix-owned seL4 bindings/runtime/bootstrap code into clean alignment with seL4 15 generated artifacts.
-Inputs: crates/sel4-sys, crates/sel4-runtime, crates/pi4-driver-abi, apps/pi4-driver-runtime, apps/root-task, configs/root_task*.toml, out/sel4/profile-v2/qemu-smp-production, out/sel4/profile-v2/qemu-smp-diagnostic, out/sel4/profile-v2/pi4-production, out/sel4/profile-v2/pi4-diagnostic, and the separately coordinated external Pi exact-image tree selected by `COHESIX_SEL4_PI4_BUILD`.
+Goal: Bring Cohesix-owned seL4 bindings/runtime/bootstrap code into clean alignment with seL4 16 generated artifacts.
+Inputs: crates/sel4-sys, crates/sel4-runtime, crates/pi4-driver-abi, apps/pi4-driver-runtime, apps/root-task, configs/root_task*.toml, out/sel4/profile-v2/qemu-smp-production, out/sel4/profile-v2/qemu-smp-diagnostic, out/sel4/profile-v2/pi4-production, out/sel4/profile-v2/pi4-diagnostic, and the repo-managed `seL4/{build,SMP_build,build_UBOOT}` v16 reference mirrors.
 Changes:
-  - crates/sel4-sys — compatibility fixes required by seL4 15 headers/generated metadata.
-  - crates/sel4-runtime — compatibility fixes required by seL4 15 root-task startup behavior.
-  - crates/pi4-driver-abi + apps/pi4-driver-runtime — compatibility fixes required by seL4 15 runtime-init descriptor layout, pointer-free ring transport, or target build rules.
-  - apps/root-task — bootstrap and generated driver-image handoff adjustments only where required by seL4 15 semantics.
+  - crates/sel4-sys — compatibility fixes required by seL4 16 headers/generated metadata.
+  - crates/sel4-runtime — compatibility fixes required by seL4 16 root-task startup behavior.
+  - crates/pi4-driver-abi + apps/pi4-driver-runtime — compatibility fixes required by seL4 16 runtime-init descriptor layout, pointer-free ring transport, or target build rules.
+  - apps/root-task — bootstrap and generated driver-image handoff adjustments only where required by seL4 16 semantics.
 Commands:
   - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"
   - cargo test -p pi4-driver-abi
@@ -8186,66 +8191,66 @@ Deliverables: passing workspace/build-target checks and refreshed low-level comp
 
 ```
 Title/ID: m26d-pi4-counter-contract-refresh
-Goal: Reprove the Pi 4 virtual-counter timer contract on the seL4 15 baseline before accepting isolated runtime latency or performance evidence.
-Inputs: out/sel4/profile-v2/pi4-production, out/sel4/profile-v2/pi4-diagnostic, the external `${COHESIX_SEL4_PI4_BUILD:-/Users/lukasbower/seL4/build_UBOOT}` exact-image tree, apps/root-task/build.rs, apps/root-task/src/arch/aarch64/timer.rs, apps/pi4-driver-runtime/build.rs, apps/pi4-driver-runtime/src/lib.rs, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, scripts/pi4_trace_normalize.py, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
+Goal: Reprove the Pi 4 virtual-counter timer contract on the seL4 16 baseline before accepting isolated runtime latency or performance evidence.
+Inputs: out/sel4/profile-v2/pi4-production, out/sel4/profile-v2/pi4-diagnostic, the repo-managed `seL4/build_UBOOT` v16 reference mirror, apps/root-task/build.rs, apps/root-task/src/arch/aarch64/timer.rs, apps/pi4-driver-runtime/build.rs, apps/pi4-driver-runtime/src/lib.rs, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, scripts/pi4_trace_normalize.py, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
 Changes:
-  - scripts/pi4-image-build.sh — keep seL4 15 Pi 4 staging blocked unless VCNT export is enabled, physical counter/timer-control exports are disabled, and generated `TIMER_CLOCK_HZ` matches the accepted Pi profile.
+  - scripts/pi4-image-build.sh — keep seL4 16 Pi 4 staging blocked unless VCNT export is enabled, physical counter/timer-control exports are disabled, and generated `TIMER_CLOCK_HZ` matches the accepted Pi profile.
   - apps/root-task/build.rs + apps/root-task/src/arch/aarch64/timer.rs — preserve root-task build/runtime checks that use `CNTVCT_EL0` only under the `timers-arch-counter` profile and scale elapsed-time proof from generated frequency.
   - apps/pi4-driver-runtime/build.rs + apps/pi4-driver-runtime/src/lib.rs — preserve isolated runtime build/runtime checks and `RuntimeDeadline` conversion from legacy retry counts to counter-backed deadlines.
   - scripts/pi4_gate_proof.sh + scripts/pi4_trace_normalize.py + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — ensure refreshed Pi 4 proof gates require `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no` before latency proof is accepted.
 Commands:
-  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "${COHESIX_SEL4_PI4_BUILD:-/Users/lukasbower/seL4/build_UBOOT}" --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel"
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel"
   - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"
   - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
   - scripts/pi4_gate_proof.sh --require-driver-task-proof
 Checks:
-  - Refreshed seL4 15 Pi 4 generated headers and cache expose only the accepted virtual-counter path for EL0 timing.
+  - Refreshed seL4 16 Pi 4 generated headers and cache expose only the accepted virtual-counter path for EL0 timing.
   - Root-task and isolated runtime builds fail on missing VCNT export, nonzero physical-counter/timer-control export, or missing/nonzero-invalid `TIMER_CLOCK_HZ`.
   - Runtime latency telemetry and proof normalizer output reject dummy-timer captures, stale logs, physical-counter exports, and missing timer frequency as performance evidence.
 Deliverables:
-  - Checked-in 26d evidence tying seL4 15 provenance, Pi 4 counter configuration, isolated runtime deadline behavior, and target-qualified performance proof into one refreshed contract.
+  - Checked-in 26d evidence tying seL4 16 provenance, Pi 4 counter configuration, isolated runtime deadline behavior, and target-qualified performance proof into one refreshed contract.
 ```
 
 ```
 Title/ID: m26d-benchmark-revalidation-and-tuning
-Goal: Revalidate and, where needed, recover the accepted 26b REST/driver-runtime benchmark envelope on the seL4 15 baseline.
-Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, tests/test_pi4_compare_driver_models.py, docs/BENCHMARKS.md, out/bench/m26b-* artifacts, refreshed seL4 15 QEMU/Pi build artifacts, fresh Pi serial/pcap proof for the selected transport.
+Goal: Revalidate and, where needed, recover the accepted 26b REST/driver-runtime benchmark envelope on the seL4 16 baseline.
+Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, tests/test_pi4_compare_driver_models.py, docs/BENCHMARKS.md, out/bench/m26b-* artifacts, refreshed seL4 16 QEMU/Pi build artifacts, fresh Pi serial/pcap proof for the selected transport.
 Changes:
   - docs/BENCHMARKS.md — record refreshed artifact indexes, before/after verdicts, and any explicitly classified non-blocking debt.
-  - scripts/rest_perf_harness.py + tests/test_rest_perf_harness.py — provenance/reporting or strictness fixes only when needed to compare the seL4 15 run against the accepted 26b workload without changing the workload contract.
-  - apps/root-task/src/**, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, or apps/hive-gateway/src/** — bounded tuning only where same-harness evidence points to a moved layer caused or exposed by the seL4 15 refresh.
+  - scripts/rest_perf_harness.py + tests/test_rest_perf_harness.py — provenance/reporting or strictness fixes only when needed to compare the seL4 16 run against the accepted 26b workload without changing the workload contract.
+  - apps/root-task/src/**, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, or apps/hive-gateway/src/** — bounded tuning only where same-harness evidence points to a moved layer caused or exposed by the seL4 16 refresh.
 Commands:
   - python3 -m pytest -q tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py
-  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-15-initial
-  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-15-initial
-  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-15-final
-  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-15-final
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-16-initial
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-16-initial
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-16-final
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-16-final
 Checks:
-  - Historical top, accepted 26b, first seL4 15, and final seL4 15 lanes are all recorded with artifact paths, workload parameters, tool version/provenance, selected seL4 build, gateway/auth mode, QEMU SMP topology, target transport, and error-budget policy.
+  - Historical top, accepted 26b, first seL4 16, and final seL4 16 lanes are all recorded with artifact paths, workload parameters, tool version/provenance, selected seL4 build, gateway/auth mode, QEMU SMP topology, target transport, and error-budget policy.
   - QEMU/Pi comparisons reject stale or mismatched artifacts before any verdict; Pi evidence remains fresh, timer-qualified, and paired with raw TCP/cohsh proof for the selected transport.
   - Tuning preserves Secure9P bounds, console grammar, manifest authority, no-retry failure accounting, HAL/driver-task ownership, and root-task no-std constraints.
   - Wi-Fi remains a research/diagnostic lane with the documented worker envelope; production throughput parity still requires fresh wired/GENET evidence.
 Deliverables:
-  - Benchmark ledger and refreshed artifacts that make the seL4 15 performance delta reviewable before later milestones depend on the refreshed baseline.
+  - Benchmark ledger and refreshed artifacts that make the seL4 16 performance delta reviewable before later milestones depend on the refreshed baseline.
 ```
 
 ```
 Title/ID: m26d-domain-schedule-debt-removal
 Goal: Remove or explicitly resolve stale legacy domain-schedule dependencies from Cohesix seL4 build configurations.
-Inputs: out/sel4/profile-v2/pi4-{production,diagnostic}, the external `${COHESIX_SEL4_PI4_BUILD:-/Users/lukasbower/seL4/build_UBOOT}` exact-image tree, Pi 4 build scripts, seL4 15.0.0 upgrade notes.
+Inputs: out/sel4/profile-v2/pi4-{production,diagnostic}, the repo-managed `seL4/build_UBOOT` v16 reference mirror, Pi 4 build scripts, seL4 16.0.0 upgrade notes.
 Changes:
   - scripts/pi4-image-build.sh and related build docs — ensure Cohesix-owned Pi 4 flows do not silently depend on stale `domain_schedule.c` defaults when domains are not in use.
-  - docs/HARDWARE_BRINGUP.md and docs/BUILD_PLAN.md — document the resolved seL4 15 domain-schedule posture for Cohesix.
-Commands: scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "${COHESIX_SEL4_PI4_BUILD:-/Users/lukasbower/seL4/build_UBOOT}" --sel4-kernel-source-dir "$PWD/out/sel4/v15-pi4-project/kernel"
+  - docs/HARDWARE_BRINGUP.md and docs/BUILD_PLAN.md — document the resolved seL4 16 domain-schedule posture for Cohesix.
+Commands: scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel"
 Checks: one-domain Cohesix builds no longer inherit accidental `sel4test` schedule-file assumptions.
-Deliverables: documented and verified domain-schedule posture for Cohesix seL4 15 builds.
+Deliverables: documented and verified domain-schedule posture for Cohesix seL4 16 builds.
 ```
 
 ```
 Title/ID: m26d-isolated-runtime-wx-closure
-Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / isolated-runtime W^X closure
+Milestone: Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment / isolated-runtime W^X closure
 Goal: Make every isolated-runtime VSpace mapping fail-closed for execute permission without changing the driver-task ABI or CYW43 behavior.
-Inputs: apps/root-task/src/hal/mod.rs, apps/root-task/src/sel4.rs, seL4 15 AArch64 page attributes, profile-selected isolated runtime ELF images.
+Inputs: apps/root-task/src/hal/mod.rs, apps/root-task/src/sel4.rs, seL4 16 AArch64 page attributes, profile-selected isolated runtime ELF images.
 Changes:
   - apps/root-task/src/hal/mod.rs — validate ELF load flags and checked ranges, reject W+X and effective page-level permission collisions, and derive executable-page intent before child allocation.
   - apps/root-task/src/hal/mod.rs + apps/root-task/src/sel4.rs — add execute-never while preserving cache/device attributes for every non-code root alias and child mapping; retain only validated read-only code and the reviewed trampoline as executable.
@@ -8260,9 +8265,9 @@ Deliverables: reviewed W^X implementation, focused regression tests, and Pi 4 ta
 
 ```
 Title/ID: m26d-canonical-sel4-profile-closure
-Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / canonical seL4 profile closure
-Goal: Make the accepted seL4 15 production, diagnostic, and proof configurations reproducible and fail-closed from pinned upstream source, then make the validated production contract the operational QEMU default.
-Inputs: official seL4 15.0.0 manifest and project revisions, official Arm GNU Toolchain 15.2.Rel1 macOS ARM64 archive, official DENX U-Boot 2026.01 archive, configs/sel4/profiles.toml, configs/sel4/python-*.lock, toolchain/setup_macos_arm64.sh, tools/sel4-profile-project/CMakeLists.txt, scripts/sel4_profile.py, scripts/cohesix-build-run.sh, scripts/release_bundle.sh, scripts/qemu-run.sh, scripts/cohsh/run_regression_batch.sh, staged Test Plan scripts, seL4 build outputs, QEMU launch inputs.
+Milestone: Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment / canonical seL4 profile closure
+Goal: Make the accepted seL4 16 production, diagnostic, and proof configurations reproducible and fail-closed from pinned upstream source, then make the validated production contract the operational QEMU default.
+Inputs: official seL4 16.0.0 manifest and project revisions, official Arm GNU Toolchain 15.2.Rel1 macOS ARM64 archive, official DENX U-Boot 2026.01 archive, configs/sel4/profiles.toml, configs/sel4/python-*.lock, toolchain/setup_macos_arm64.sh, tools/sel4-profile-project/CMakeLists.txt, scripts/sel4_profile.py, scripts/cohesix-build-run.sh, scripts/release_bundle.sh, scripts/qemu-run.sh, scripts/cohsh/run_regression_batch.sh, staged Test Plan scripts, seL4 build outputs, QEMU launch inputs.
 Changes:
   - configs/sel4/profiles.toml + configs/sel4/python-*.lock — pin official project revisions, the self-contained Arm compiler archive and executable identities, the exact Python distribution closure, the DENX mkimage source archive, and target, GIC, SMP, domain, debug, benchmark, counter-export, and claim-eligibility contracts for each supported profile.
   - toolchain/setup_macos_arm64.sh — provision the pinned compiler, isolated hash-locked Python environment, and mkimage build without using a rolling compiler formula or a dirty/incomplete repository source tree; emit provenance records bound to the setup script and profile contract.
@@ -8270,19 +8275,19 @@ Changes:
   - scripts/sel4_profile.py — require fresh build directories, disable configure-time memoization, reject stale or pre-existing stamps and outputs, bind a causally fresh completed stamp to every input and output, reject unknown evidence classes or class/eligibility mismatches, and validate source provenance, compiler/Python/mkimage identities, caches, generated headers including the rootservers-last elfloader memory map, QEMU rootserver-archive capacity, independently parsed DTB/launcher agreement, strict executable ELF structure, shipping/RWX policy, forbidden settings, and proof eligibility without mutating evidence to make it pass.
   - scripts/cohesix-build-run.sh + scripts/release_bundle.sh + scripts/qemu-run.sh + scripts/tcp_*.sh + scripts/cohsh/run_regression_batch.sh + staged Test Plan scripts — default QEMU consumers to `out/sel4/profile-v2/qemu-smp-production`; validate runtime or release intent before consuming the canonical tree and classify explicit unvalidated alternatives as claim-ineligible.
   - README.md + docs/QUICKSTART.md + docs/HARDWARE_BRINGUP.md + docs/DRIVERS.md + docs/OPERATOR_WALKTHROUGH.md + docs/TEST_PLAN.md + apps/root-task/README.md — publish the same canonical default while preserving explicit diagnostic/historical qualifications.
-  - docs/TOOLCHAIN_MAC_ARM64.md + docs/audit/M26D_SEL4_15_PROVENANCE.md — document the canonical workflow and distinguish accepted builds from legacy/diagnostic inputs.
+  - docs/TOOLCHAIN_MAC_ARM64.md + docs/audit/M26D_SEL4_16_PROVENANCE.md — document the canonical workflow and distinguish accepted builds from legacy/diagnostic inputs.
 Commands:
   - toolchain/setup_macos_arm64.sh
   - out/toolchain/sel4-profile-venv/bin/python -m pytest -q tests/test_sel4_profile.py
   - out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate --all --require-source --require-artifacts --evidence out/audit/m26d-profile-v2-all.json
   - scripts/cohesix-build-run.sh --sel4-build out/sel4/profile-v2/qemu-smp-production --no-run --cargo-target aarch64-unknown-none
-Checks: QEMU uses GICv3 in both parsed DTBs; one-domain profiles have no schedule-file dependency; fixed-address Pi rootservers-last builds contain generated `memory_region` metadata; the QEMU production elfloader archive meets its declared minimum and accepts the current boot-minimized Cohesix root task without in-place ELF growth; source revisions and canonical Pi overlay digest match the official pin; compiler archive/version/target/binary identities, exact Python locks and installed-file digest, DENX source and mkimage provenance, caches, generated outputs, immutable input hashes/values, causal build times, and strict `ET_EXEC`/RX-entry ELF structure agree; aggregate closure requires all five fresh `out/sel4/profile-v2/*` source and artifact sets unless explicitly diagnostic-relaxed; evidence classes have fixed release/runtime eligibility; upstream wrapper artifacts remain machine-classified non-shipping; shipping artifacts reject RWX; diagnostic settings cannot earn proof claims; all active QEMU build/release/regression/test defaults consume the canonical production path and revalidate it before claims; validation fails on drift. The separate target-qualified run at `out/test-plan/m26d-qemu-sel4-15-gap-audit` passes linked GICv3 boot, authenticated TCP regression, REST parity, and due diligence.
+Checks: QEMU uses GICv3 in both parsed DTBs; one-domain profiles have no schedule-file dependency; fixed-address Pi rootservers-last builds contain generated `memory_region` metadata; the QEMU production elfloader archive meets its declared minimum and accepts the current boot-minimized Cohesix root task without in-place ELF growth; source revisions and canonical Pi overlay digest match the official pin; compiler archive/version/target/binary identities, exact Python locks and installed-file digest, DENX source and mkimage provenance, caches, generated outputs, immutable input hashes/values, causal build times, and strict `ET_EXEC`/RX-entry ELF structure agree; aggregate closure requires all five fresh `out/sel4/profile-v2/*` source and artifact sets unless explicitly diagnostic-relaxed; evidence classes have fixed release/runtime eligibility; upstream wrapper artifacts remain machine-classified non-shipping; shipping artifacts reject RWX; diagnostic settings cannot earn proof claims; all active QEMU build/release/regression/test defaults consume the canonical production path and revalidate it before claims; validation fails on drift. A fresh target-qualified run at `out/test-plan/m26d-qemu-sel4-16-gap-audit` must pass linked GICv3 boot, authenticated TCP regression, REST parity, and due diligence before replacing the retained seL4 15 comparator.
 Deliverables: source-controlled profile contract, wrapper, validator, operational/release adoption, tests, runbook alignment, and provenance record.
 ```
 
 ```
 Title/ID: m26d-worker-execution-truth-repair
-Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / reopened Milestone 25 task-isolation and 26c Worker execution truth
+Milestone: Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment / reopened Milestone 25 task-isolation and 26c Worker execution truth
 Goal: Make generated and documented Worker execution claims match the currently launched target objects while preserving existing host/session behavior.
 Inputs: configs/root_task*.toml, tools/coh-rtc, generated root-task artifacts, apps/root-task/src/worker_authority.rs, canonical Worker/security/interface docs, Milestone 25/26c audit ledgers.
 Changes:
@@ -8299,11 +8304,11 @@ Deliverables: regenerated as-built Worker truth plus an explicit, separately gat
 
 ```
 Title/ID: m26d-sel4-capability-utilization-audit
-Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / capability, scheduling, and TCB decision closure
-Goal: Bound what Cohesix uses from seL4 15 today and prevent unused features or model-only code from becoming product claims.
-Inputs: seL4 Reference Manual v15.0.0, generated kernel headers, root-task/HAL/Worker code, docs/audit/M26D_SEL4_15_CAPABILITY_AUDIT.md, docs/audit/M26D_MCS_DECISION.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
+Milestone: Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment / capability, scheduling, and TCB decision closure
+Goal: Bound what Cohesix uses from seL4 16 today and prevent unused features or model-only code from becoming product claims.
+Inputs: seL4 Reference Manual v16.0.0, generated kernel headers, root-task/HAL/Worker code, docs/audit/M26D_SEL4_16_CAPABILITY_AUDIT.md, docs/audit/M26D_MCS_DECISION.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
 Changes:
-  - docs/audit/M26D_SEL4_15_CAPABILITY_AUDIT.md — classify each relevant kernel capability as implemented, partial/model-only, intentionally unused, or blocked, with direct evidence and closure routing.
+  - docs/audit/M26D_SEL4_16_CAPABILITY_AUDIT.md — classify each relevant kernel capability as implemented, partial/model-only, intentionally unused, or blocked, with direct evidence and closure routing.
   - docs/audit/M26D_MCS_DECISION.md — retain non-MCS for 26d, record the strong architectural-fit verdict and selected SMP+MCS successor, compare classic SMP/single-core MCS/SMP+MCS, define bindings, scheduling-contract, WCET/budget, fault, target-evidence, and atomic-reversion gates, and route implementation to `m26e-mcs-abi-foundation` and `m26e-mcs-smp-target-acceptance`.
   - docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md — record current root-owned parsers, networking, supervision, policy, and audit surfaces plus the exact ordered Milestone 26e split tasks and required evidence.
 Commands:
@@ -8315,7 +8320,7 @@ Deliverables: capability matrix and accepted MCS/root-TCB boundary decisions tie
 
 ```
 Title/ID: m26d-repository-gate-closure
-Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / repository-wide regression gate closure
+Milestone: Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment / repository-wide regression gate closure
 Goal: Restore every mandatory repository-wide source, dependency, packaging, and staged-regression gate exposed while preparing the refreshed QEMU and Pi 4 evidence, without changing operator-visible semantics or hardware authority.
 Inputs: Cargo.toml, Cargo.lock, deny.toml, apps/root-task/build.rs, apps/root-task/build_support.rs, apps/root-task/sel4.ld, apps/root-task/src, scripts/cohesix-build-run.sh, scripts/pi4-image-build.sh, scripts/pi4_image_identity.py, scripts/pi4_wifi_repeatability.py, scripts/pi4_trace_normalize.py, scripts/ci/test_plan_*.sh, scripts/ci/due_diligence_gate.sh, .github/workflows/*.yml, README.md, docs/TEST_PLAN.md, docs/audit risk registers, current M26b/M26d source and build evidence.
 Changes:
@@ -8349,7 +8354,7 @@ Deliverables: reviewable dependency resolution and risk register, deterministic 
 
 ```
 Title/ID: m26d-cyw43-hardware-free-closure
-Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / hardware-free CYW43 reliability closure; Reopened Milestone 26b / m26b-wifi-sdio-notification-dpc-closure
+Milestone: Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment / hardware-free CYW43 reliability closure; Reopened Milestone 26b / m26b-wifi-sdio-notification-dpc-closure
 Goal: Make the Pi 4 CYW43/SDIO linked-runtime design software-complete, deterministic, event-pump-driven, adversarially tested, artifact-bound, and repository-green without claiming unavailable repeatability proof from physical hardware.
 Inputs: AGENTS.md, docs/BUILD_PLAN.md, docs/DRIVERS.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md, /Users/lukasbower/REBOOT.md, newest non-empty Pi serial logs and boot-paired pcaps, configs/root_task.toml, configs/root_task_pi4_uboot_aarch64.toml, configs/generated/root_task_resolved.json, tools/coh-rtc, generated bootstrap/profile outputs, crates/pi4-driver-abi/src/lib.rs, apps/pi4-driver-runtime/src/lib.rs, apps/root-task/src/{drivers/driver_task_net.rs,event,hal,serial,userland}, scripts/pi4-image-build.sh, scripts/pi4_image_identity.py, scripts/pi4_wifi_repeatability.py, scripts/pi4_trace_normalize.py, and focused/runtime/repository gate suites.
 Changes:
@@ -8378,14 +8383,14 @@ Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-cyw43-hardware-free-qemu
   - scripts/ci/test_plan_run.sh --target pi4 --stage 1 --state-dir out/test-plan/m26d-cyw43-hardware-free-pi4
   - scripts/ci/test_plan_run.sh --target pi4 --stage 2 --state-dir out/test-plan/m26d-cyw43-hardware-free-pi4
-  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir /Users/lukasbower/seL4/build_UBOOT --sel4-kernel-source-dir /Users/lukasbower/GitHub/cohesix/out/sel4/v15-pi4-project/kernel --venv .venv
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel" --venv .venv
 Checks: every retained production action consumes at most one outer turn; each delegated `Pending` quantum requires one fresh exact acknowledged grant and follows `Poll -> Grant -> Poll`; the real production firmware parent crosses the sequence-last reciprocal ring and retained SDIO controller as `511 * 64 + 1 * 64`, rather than fabricated child completions; Function 2 IORx readiness, backplane-window selection, and CMD53 issue consume separate turns; control/EAPOL TX crosses the exact five-child owner path; post-F2 release crosses the exact 18-child owner path through real DPC activation; one real DPC RX episode drains before queue-only foreground service; the 256-frame drain consumes 256 turns and zero queue-only owner operations; a DPC frame hint is admitted once per sequence and never resurrected by a continuation; foreground and DPC paths reject torn, stale, wrong-generation, mutated, replayed, exhausted-id, or already-consumed grants; issued-unknown work is never replayed; stale completions cannot mutate a replacement generation; pair restart preserves exact owner-first order and cannot cycle indefinitely after context replay; only attached address/TCP network-ready proof resets the inner restart streak; the emitted Pi release call chain retains material headroom inside the 256-KiB root stack; operator surfaces remain bounded and live; all deterministic repository gates pass; the exact clean image is internally self-consistent and bound to its commit.
 Deliverables: retained linked-runtime implementation, production-chain adversarial tests, aligned canonical docs, exact-image identity metadata, deterministic gate records, and a Pi-ready exact image. Closure is hardware-free only: the same committed/read-back image must still pass 10 cold and 10 warm boots with association, all Wi-Fi gates including every Gate 7 sub-gate, EAPOL, DHCP, ARP, raw TCP/authenticated `cohsh`, USB/local-seat, boot-paired pcaps, and benchmark evidence before physical repeatability can be claimed.
 ```
 
 ```
 Title/ID: m26d-linked-runtime-unsafe-exception-remediation
-Milestone: Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment / repository-wide regression gate closure; reopened Milestone 26b / m26b-wifi-sdio-notification-dpc-closure defect remediation
+Milestone: Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment / repository-wide regression gate closure; reopened Milestone 26b / m26b-wifi-sdio-notification-dpc-closure defect remediation
 Goal: Remove the accepted linked-runtime Rust unsafe delta by enforcing shared-state exclusivity and concentrating fixed mapped-memory and seL4 operations behind bounded reviewed abstractions without changing the CYW43/SDIO protocol or hardware authority.
 Inputs: Cargo.toml, Cargo.lock, rust-toolchain.toml, apps/pi4-driver-runtime/src/lib.rs, apps/pi4-driver-runtime/build.rs, apps/root-task/build.rs, apps/root-task/src/hal, apps/root-task/src/drivers/driver_task_net.rs, crates/pi4-driver-abi/src, crates/cargo-build-directive, crates/sel4-sys/build.rs, tools/rust-risk-audit, scripts/ci/rust_risk_gate.sh, scripts/ci/test_rust_risk_gate.py, scripts/ci/due_diligence_gate.sh, scripts/ci/test_due_diligence_lifecycle.py, docs/audit/rust_risk_baseline.toml, docs/audit/findings.csv, docs/audit/EXCEPTIONS.md, docs/audit/BLOCKERS.md, docs/audit/CONTROL_TRACEABILITY.md, docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md, the `cf8f9ee30` Milestone 26c baseline, and current repository-gate evidence.
 Changes:
@@ -8426,16 +8431,16 @@ Deliverables: mechanically enforced linked-runtime state ownership, concentrated
 
 ```
 Title/ID: m26d-full-regression-refresh
-Goal: Prove the seL4 15 baseline refresh preserves operator-visible behavior and accepted benchmark envelopes across QEMU and Pi 4.
-Inputs: refreshed generated artifacts, seL4 15 build trees, docs/TEST_PLAN.md, scripts/ci/test_plan_run.sh, m26d benchmark ledger.
+Goal: Prove the seL4 16 baseline refresh preserves operator-visible behavior and accepted benchmark envelopes across QEMU and Pi 4.
+Inputs: refreshed generated artifacts, seL4 16 build trees, docs/TEST_PLAN.md, scripts/ci/test_plan_run.sh, m26d benchmark ledger.
 Changes:
   - docs/TEST_PLAN.md — update kernel-baseline references only where needed to match the refreshed evidence.
-  - out/test-plan/m26d-qemu-sel4-15-gap-audit and out/test-plan/m26d-pi4 — target-qualified PASS evidence on the refreshed baseline; the named QEMU run is complete while the Pi path remains hardware-gated.
+  - out/test-plan/m26d-qemu-sel4-16-gap-audit and out/test-plan/m26d-pi4 — fresh target-qualified PASS evidence required on the refreshed baseline; QEMU is build/runtime-gated and the Pi path remains hardware-gated.
 Commands:
-  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu-sel4-15-gap-audit
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu-sel4-16-gap-audit
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4
 Checks: QEMU and Pi 4 staged Test Plan runs are PASS with no undocumented drift, and benchmark revalidation has either recovered the accepted 26b envelope or recorded a scoped blocker/defer decision that downstream milestones cannot count as satisfied evidence.
-Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety and performance continuity for Cohesix.
+Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety and performance continuity for Cohesix.
 ```
 
 ---
@@ -8447,7 +8452,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 does not authorize implementation during the active CYW43/current-image lane.
 
 **Why now (userspace TCB reduction):** Milestone 26d establishes honest
-seL4 15 kernel/profile truth and records that NineDoor parsing, TCP/smoltcp,
+seL4 16 kernel/profile truth and records that NineDoor parsing, TCP/smoltcp,
 provider dispatch, policy, supervision, and Worker model state still execute in
 the principal root-task authority domain. It also corrects the former claim
 that general Workers already run as isolated target tasks. Once the refreshed
@@ -8474,7 +8479,7 @@ time evidence match Cohesix's mixed-criticality shape: root/Queen policy,
 emergency serial, and fault supervision must remain live beside untrusted
 parsers, network ingress, Workers, drivers, telemetry, and display work. The
 split must therefore establish the MCS task/IPC contract before child ABIs
-freeze. seL4 15 still describes SMP+MCS as less explored and experimental, so
+freeze. seL4 16 still describes SMP+MCS as less explored and experimental, so
 exact QEMU/Pi acceptance is a hard evidence gate. Cohesix nevertheless selects
 one architecture: accepted 26e operational profiles use SMP+MCS on both targets.
 There is no compiled classic-SMP fallback; an unforeseen blocker requires
@@ -8637,7 +8642,7 @@ operator-visible contract explicit.
   may be passive only if its donation chain is compiler-validated.
 - Serial, USB, and every physical driver runtime retain generated dedicated
   active SCs during 26e. The shared driver command/Reply and runtime-init paths
-  are ported explicitly to the seL4 15 MCS ABI, but passive driver donation and
+  are ported explicitly to the seL4 16 MCS ABI, but passive driver donation and
   CYW43/SDIO behavioral changes are prohibited. IRQ/DPC and other autonomous
   work is notification-woken and always executes on the active SC bound to the
   driver TCB, never to a notification; locality-bound paths may not accept
@@ -9031,8 +9036,8 @@ required live provider, authority, package, recovery, and evidence row.
 ```
 Title/ID: m26e-mcs-abi-foundation
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / MCS ABI and generated temporal-authority foundation
-Goal: Establish the seL4 15 SMP+MCS syscall, object, IPC, profile, and compiler contract and prove it with minimal four-core QEMU and fresh Pi scheduler probes before service-child ABIs freeze.
-Inputs: seL4 Reference Manual v15.0.0, tag-pinned seL4 15 headers/caveats, configs/sel4/profiles.toml, crates/sel4-sys/**, crates/sel4-runtime/**, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, selected QEMU/Pi kernel builds, docs/audit/M26D_MCS_DECISION.md.
+Goal: Establish the seL4 16 SMP+MCS syscall, object, IPC, profile, and compiler contract and prove it with minimal four-core QEMU and fresh Pi scheduler probes before service-child ABIs freeze.
+Inputs: seL4 Reference Manual v16.0.0, tag-pinned seL4 16 headers/caveats, configs/sel4/profiles.toml, crates/sel4-sys/**, crates/sel4-runtime/**, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, selected QEMU/Pi kernel builds, docs/audit/M26D_MCS_DECISION.md.
 Changes:
   - crates/sel4-sys/** + crates/sel4-runtime/** — add version-pinned SchedContext, SchedControl, Reply, timeout-fault, `Consumed`, `YieldTo`, TCB setup, receive, call, reply, and reply-receive bindings with ABI/negative tests; remove classic reply/scheduling behavior from the QEMU/Pi operational VM closure.
   - configs/sel4/profiles.toml + profile tooling — make the four-node QEMU and Pi production/diagnostic runtime contracts MCS-only, validate `KernelIsMCS`, object sizes, cores, and generated headers, and provide no non-MCS runtime-eligible counterpart.
@@ -9079,7 +9084,7 @@ Deliverables: Compiler-owned production-surface inventory, fail-closed operation
 Title/ID: m26e-worker-resource-admission-critical-tcbs
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / executable-slot admission and critical root TCB reserves
 Goal: Prove the complete kernel-object, memory, CSpace, and per-core time budget for every executable slot while creating independent root-control, fault, emergency, Worker-supervisor, and driver-supervisor progress domains.
-Inputs: `m26e-mcs-abi-foundation`, `m26e-production-surface-truth-and-stub-retirement`, selected seL4 15 generated headers/object sizes, BootInfo/untyped inventory, apps/root-task/src/hal/**, apps/root-task/src/kernel.rs, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
+Inputs: `m26e-mcs-abi-foundation`, `m26e-production-surface-truth-and-stub-retirement`, selected seL4 16 generated headers/object sizes, BootInfo/untyped inventory, apps/root-task/src/hal/**, apps/root-task/src/kernel.rs, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/audit/M26D_ROOT_TCB_BOUNDARY_AUDIT.md.
 Changes:
   - tools/coh-rtc/src/** + configs/root_task*.toml — separate namespace/model capacity from per-role executable slots; declare allowed role mixes, fixed core placement, TCB/CNode/VSpace/page-table/ASID/frame/endpoint/notification/fault/timeout/Reply/SC/CSpace-slot/untyped costs, budget/period/deadline/refill/priority/MCP/blocking/jitter/WCET inputs, and fail-closed per-core response-time/admission results.
   - apps/root-task/src/hal/** + generated records — reserve compiler-bounded per-slot untyped/CSpace pools and supervisor-owned revoke anchors without changing the existing isolated driver-runtime constructor or allocator contract.
@@ -9102,7 +9107,7 @@ Deliverables: Compiler-proven executable resource pools, generated fault capacit
 
 Title/ID: m26e-driver-runtime-mcs-port-and-cyw43-coexistence
 Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation / linked-driver MCS port and behavioral coexistence proof
-Goal: Replace the current MCS driver stubs with the real seL4 15 MCS command, Reply, notification, fault, active-SC, and faulted-call recovery paths for every linked Pi driver while preserving CYW43/SDIO behavior and re-proving it under the new binary identity.
+Goal: Replace the current MCS driver stubs with the real seL4 16 MCS command, Reply, notification, fault, active-SC, and faulted-call recovery paths for every linked Pi driver while preserving CYW43/SDIO behavior and re-proving it under the new binary identity.
 Inputs: `m26e-mcs-abi-foundation`, `m26e-worker-resource-admission-critical-tcbs`, crates/pi4-driver-abi/**, apps/pi4-driver-runtime/**, apps/root-task/src/kernel.rs, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/sel4/**, tools/coh-rtc/src/**, configs/root_task_pi4_uboot_aarch64.toml, scripts/cohesix-build-run.sh, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, the accepted classic driver archive/hash and exact CYW43 evidence, and selected QEMU/Pi MCS generated headers.
 Changes:
   - crates/pi4-driver-abi/** + tools/coh-rtc/src/** — add/version the scheduler-specific runtime-init fields and generated cap/slot inventory required for active SCs, per-runtime command Reply objects, separate standard/timeout fault Reply lanes, command endpoints, IRQ/DPC notifications, one-way completion wakes, containment anchors, and at most one in-flight root command per runtime without changing device command/completion ring semantics. Root command caps are `Write + GrantReply` with no `Grant`; driver receive and IRQ-wait caps are Read-only; software signal/completion caps are Write-only; SCs bind only to driver TCBs; and command, IRQ, completion, and fault badge domains are disjoint.
@@ -9395,7 +9400,7 @@ Deliverables: One target-qualified SMP+MCS scheduling architecture for QEMU and 
 ## Post-26d Benchmark Cadence (Milestones 26e+) <a id="post-26d-benchmark-cadence"></a>
 [Milestones](#Milestones)
 
-26d establishes the refreshed seL4 15 performance baseline. Later milestones must use that evidence as the rolling comparison point, but they must not turn every feature into a full hardware benchmark gate. Benchmarking after 26d is tiered:
+26d establishes the refreshed seL4 16 performance baseline. Later milestones must use that evidence as the rolling comparison point, but they must not turn every feature into a full hardware benchmark gate. Benchmarking after 26d is tiered:
 
 - **Full same-harness benchmark gate:** required only when a milestone changes runtime scheduling, physical driver/runtime service, hot network paths, gateway broker behavior used by the canonical REST harness, or a new physical target. The run must compare against the latest accepted rolling baseline and archive QEMU/Pi or target-specific artifacts in `out/bench/` or `docs/bench/` as appropriate.
 - **Targeted microbenchmark gate:** required when a milestone adds bounded storage drains, namespace roots, read/write authorization checks, protocol projections, exporters, UI render loops, or evidence-pack processing that can add measurable overhead but does not change the physical network/runtime path.
@@ -13504,7 +13509,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 **As-built alignment note:** The repo currently has UEFI profile/configuration material, a UEFI shim crate, and `scripts/uefi/*` helpers, but it does not have AWS profile admission, `scripts/aws/*`, isolated ENA runtime descriptors/images, outbound 9door mount code, or approved root-task TLS/HTTP/IMDS support. Milestone 30 must start with boot-chain and TCB reconciliation before runtime code depends on UEFI, TLS/HTTP, IMDS, or AWS-specific assumptions.
 
 **Prerequisites**
-- Milestone **26d** completed for the accepted seL4 15 provenance and timer/syscall baseline. Milestone 30 must still create and validate a separate AWS-selected seL4 build; Pi 4 or QEMU artifacts are not AWS boot proof.
+- Milestone **26d** completed for the accepted seL4 16 provenance and timer/syscall baseline. Milestone 30 must still create and validate a separate AWS-selected seL4 build; Pi 4 or QEMU artifacts are not AWS boot proof.
 - Milestone **27b** completed before production AWS assurance claims so generated witnesses, HAL authority checks, and claim-class separation cover the AWS profile.
 - Milestone **27c** completed before D2 peak-performance work so ENA queue affinity and service-bucket evidence consume the generated core-local scheduling substrate rather than inventing a parallel scheduler.
 - Milestone **28e** completed before any production profile claims complete ENA runtime-inventory ledger projection or structured quarantine/recovery. Live ENA cap-bundle authority itself must be complete in the Milestone 30 implementation and exact target evidence, following the 26e driver contract; a pre-28e EC2 boot/first-link probe is permitted only as explicitly non-production feasibility evidence.

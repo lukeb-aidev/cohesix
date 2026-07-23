@@ -32,7 +32,7 @@ host and Rust tools:
 source "$HOME/.cargo/env"
 ```
 
-For a QEMU target run, the selected seL4 15.0.0 output directory must already
+For a QEMU target run, the selected seL4 16.0.0 output directory must already
 contain the kernel, elfloader, generated headers, and configuration for that
 profile. The canonical operational/release input is
 `out/sel4/profile-v2/qemu-smp-production`; preserved `seL4/*` trees are

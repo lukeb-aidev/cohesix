@@ -41,7 +41,7 @@ SECTIONS
     {
         . = ALIGN(0x1000);
         core_stack_alloc = .;
-        . = . + 4 * 1 << 12;
+        . = . + 4 * (1 << 12);
         core_stack_alloc_end = .;
         _bss = .;
         *(.sbss*)
@@ -50,4 +50,8 @@ SECTIONS
         _bss_end = .;
     }
      _end = .;
+    /DISCARD/ :
+    {
+        *(.eh_frame)
+    }
 }
