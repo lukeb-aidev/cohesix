@@ -517,13 +517,15 @@ This as-built closure is authorized by Milestone 26d task
   `Poll` turn observes the result. Foreground and DPC-owned children use the
   same `Poll -> Grant -> Poll` separation.
 
-  IRQ and linked-peer notifications remain coalescing service wakes and cannot
+  IRQ and linked-peer notifications remain coalescing wake hints and cannot
   advance a retained cursor without the exact endpoint rendezvous or shared
-  grant appropriate to that command's authority path. The first pending
-  peer/IRQ source may consume one notification-service quantum; immediately
-  reasserted level wakes are retained until a later admitted foreground turn.
-  Explicit scheduler handoffs follow service and rejected immediately-ready
-  wakes, so a
+  grant appropriate to that command's authority path. For the SDIO owner, the
+  pure peer badge is only the durable-ring/grant doorbell and never authorizes
+  CARD_INT service. A real SDIO IRQ may consume one notification-service
+  quantum; immediately reasserted level wakes are retained until a later
+  admitted foreground turn, and that service turn cannot spend an exact
+  foreground grant. Explicit scheduler handoffs follow service and rejected
+  immediately-ready wakes, so a
   priority-255 runtime cannot form a private IRQ loop. The reserved high
   notification bit is excluded from service badges but is not foreground grant
   authority. Root keeps the original unbadged notification cap private for TCB
