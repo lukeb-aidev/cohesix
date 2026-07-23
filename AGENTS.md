@@ -304,6 +304,10 @@ Host tools MUST remain protocol-faithful: they consume the as-built interfaces a
 - **All device authority, mapping, and resource admission goes through HAL.**
 - No direct physical-address discovery, device-untyped retyping, DMA allocation/publish, IRQ binding, or ad-hoc `unsafe` outside HAL.
 - Manifest-declared isolated driver runtimes may touch only HAL-declared mapped pages and generated runtime-init resources delivered through the fixed driver-task ABI; any runtime MMIO helper must stay bounded, volatile, and documented at the call site.
+- Multiple scheduling lanes may submit driver work, but no DPC, helper,
+  compatibility path, or fallback may independently issue, complete, retry, or
+  recover physical device operations outside the single compiler-declared
+  owner.
 - Pi 4 hardware timing MUST use the selected seL4 build's generated timer
   truth. Root-task and manifest-declared isolated driver runtimes must use the read-only virtual
   counter (`CNTVCT_EL0`) only when `KernelArmExportVCNTUser` /
