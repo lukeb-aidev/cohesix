@@ -741,7 +741,16 @@ This as-built closure is authorized by Milestone 26d task
   `PMUCONTROL.RES_RELOAD`, Function 2 disable, `CHIPCLKCSR=0`, a fresh
   `ALP_AVAIL_REQ`, ALP readiness, and SoCRAM upload preparation. The
   `CHIPCLKCSR=0` edge is Linux's `CLK_SDONLY` boundary between probe attach and
-  the asynchronous firmware callback; omitting it is invalid. As in Linux
+  the asynchronous firmware callback; omitting it is invalid. ARMCR4 and D11
+  have deliberately different passive states. The ARMCR4 cursor programs its
+  LOW/MID/HIGH window, asserts reset, configures the in-reset `CPUHALT` state,
+  clears `RESETCTRL` with the bounded Linux retry/deadline, and finishes with
+  `IOCTRL=CPUHALT|CLK`; firmware is uploaded into TCM while ARMCR4 is
+  reset-deasserted, clocked, and halted. D11 is core-disabled and remains reset
+  asserted for firmware to enable. Each window byte, control write, flush read,
+  retained settle, reset read, KSO operation, and probe-attach operation is an
+  explicit cursor phase, so even an immediately completed SDIO child cannot
+  authorize a second physical operation in that EventPump turn. As in Linux
   `brcmf_sdiod_readl()`/`brcmf_sdiod_writel()`, each PMUCONTROL read or write is
   one incrementing four-byte Function 1 CMD53 with the backplane 2/4-byte flag.
   Four independent CMD52 bytes are invalid because they expose a partially

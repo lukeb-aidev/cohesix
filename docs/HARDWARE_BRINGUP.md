@@ -866,7 +866,13 @@ Firmware preparation repeats neither that initial trace nor the initial
 `FORCE_ALP` policy. It uses a second request- and generation-bound cursor with
 the Linux order `ARMCR4/D11 passive -> KSO -> CARDCTRL.WLANRESET ->
 PMUCONTROL.RES_RELOAD -> IOEx.F2=0 -> CHIPCLKCSR=0 -> ALP_AVAIL_REQ ->
-SoCRAM/upload preparation`. The zero write is the required `CLK_SDONLY` edge
+SoCRAM/upload preparation`. “Passive” is not the same reset state for both
+cores: before the first firmware CMD53, ARMCR4 completes a reset cycle and is
+left reset-deasserted with `CPUHALT|CLK`, making its TCM available for download;
+D11 remains reset asserted for firmware to enable. LOW/MID/HIGH window writes,
+each IOCTRL/RESETCTRL write, each flush/readback, retained settle, KSO action,
+CARDCTRL action, atomic PMU word, and Function 2 disable are separate outer
+turns even when the child completes immediately. The zero write is the required `CLK_SDONLY` edge
 before the asynchronous firmware-download ALP request. Each zero write, ALP
 request, ALP read, retained five-millisecond virtual-counter settle, and
 one-second absolute-deadline observation consumes its own outer EventPump turn.

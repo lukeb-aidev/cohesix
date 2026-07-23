@@ -643,6 +643,12 @@ capacity must never substitute for the one-second timeout.
 Firmware-preparation coverage must separately drive the production op-9 cursor
 through passive cores, KSO, CARDCTRL, PMUCONTROL, Function 2 disable,
 `CHIPCLKCSR=0`, `ALP_AVAIL_REQ`, ALP polling, and SoCRAM preparation. Tests must
+prove ARMCR4 reset is asserted, configured, then cleared before a final
+`IOCTRL=CPUHALT|CLK` fence, while D11 remains reset asserted. The ARMCR4 and D11
+LOW/MID/HIGH window bytes, IOCTRL/RESETCTRL writes, flush reads, retained
+settles, KSO read/conditional write, CARDCTRL read/write, PMU window/read/write,
+and Function 2 disable read/write must each consume distinct outer turns,
+including when the real controller seam completes immediately. Tests must
 prove the zero write precedes the single ALP request on initial attach, every
 child operation and deadline observation consumes a distinct outer turn, and
 unavailable reads are separated by retained five-millisecond virtual-counter
