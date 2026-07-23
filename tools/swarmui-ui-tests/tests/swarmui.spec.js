@@ -495,7 +495,11 @@ test("Live Hive overlays remain interactive under load", async ({ page }) => {
 
 test("Live Hive performance harness stays responsive", async ({ page }) => {
   await focusHiveCanvas(page);
-  await page.waitForTimeout(500);
+  await page.waitForFunction(
+    () => window.__SWARMUI_HIVE_DEBUG?.getMetrics?.().renders >= 5,
+    null,
+    { timeout: 3000 }
+  );
   const metrics = await page.evaluate(() =>
     window.__SWARMUI_HIVE_DEBUG.getMetrics()
   );
