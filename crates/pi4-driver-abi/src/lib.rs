@@ -1468,8 +1468,6 @@ pub const DRIVER_RUNTIME_SDIO_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_IRQ + 1;
 /// mask makes stale authority fail closed, while foreground quanta use only the
 /// immutable command endpoint and never mint or signal this badge.
 pub const DRIVER_RUNTIME_RESERVED_ROOT_BADGE: u32 = 1 << 31;
-/// Badge delivered to the SDIO owner when CYW43 signals its reciprocal peer cap.
-pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1;
 /// Badge delivered to CYW43 when the SDIO owner signals its reciprocal peer cap.
 pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE: u32 = 2;
 
@@ -1584,11 +1582,8 @@ pub const DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL: u16 = 0;
 pub const DRIVER_RUNTIME_IRQ_TRIGGER_EDGE: u16 = 1;
 /// Child CSpace slot where USB receives the PCIe/VL805 bus-owner endpoint cap.
 pub const DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT: u32 = 9;
-/// CYW43 CSpace slot containing the send-only SDIO-owner notification cap.
-pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT: u32 = 8;
-/// Legacy name for the CYW43-to-SDIO doorbell slot during endpoint cutover.
-pub const DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT: u32 =
-    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT;
+/// CYW43 CSpace slot containing the send-only SDIO-owner command endpoint cap.
+pub const DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT: u32 = 8;
 /// SDIO-owner CSpace slot containing the send-only CYW43 notification cap.
 pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT: u32 = 10;
 /// USB-local virtual address where root maps the PCIe owner command ring.
@@ -1652,7 +1647,7 @@ pub const DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT: u32 = 1 << 0;
 pub const DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE: u32 = 1 << 1;
 /// Bus link flag: this descriptor is the bus-owner side of a reciprocal link.
 pub const DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER: u32 = 1 << 2;
-/// Bus link flag: both peers use bounded notification doorbells.
+/// Bus link flag: the linked DPC path includes bounded notification delivery.
 pub const DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS: u32 = 1 << 3;
 /// Bus link flag: the owner publishes events through the bounded DPC event ring.
 pub const DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING: u32 = 1 << 4;
@@ -2592,11 +2587,14 @@ pub struct DriverRuntimeBusLinkDescriptor {
     pub token: u32,
     /// Generated epoch shared by both peers for the DPC event ring.
     pub shared_epoch: u32,
-    /// Peer runtime hot path for reciprocal notification delivery.
+    /// Peer runtime hot path for reciprocal doorbell delivery.
     pub peer_hot_path: u32,
     /// Local notification receive slot in this runtime's CSpace.
     pub local_notification_slot: u32,
-    /// Send-only peer notification slot in this runtime's CSpace.
+    /// Send-only peer doorbell slot in this runtime's CSpace.
+    ///
+    /// The CYW43 client receives the SDIO owner's command endpoint here; the
+    /// SDIO owner receives the CYW43 client's completion/DPC notification.
     pub peer_notification_slot: u32,
     /// Fixed DPC event-ring offset inside the owner command page.
     pub event_offset: u16,
@@ -2659,7 +2657,7 @@ impl DriverRuntimeBusLinkDescriptor {
         }
     }
 
-    /// Attach reciprocal notification and bounded DPC event-ring metadata.
+    /// Attach the role-specific peer doorbell and bounded DPC event-ring metadata.
     #[must_use]
     pub const fn with_notification_dpc(
         mut self,
@@ -2756,7 +2754,7 @@ impl DriverRuntimeBusLinkDescriptor {
         let peer_matches = if client {
             self.owner_hot_path == HOT_PATH_SDIO_HOST
                 && self.peer_hot_path == HOT_PATH_SDIO_HOST
-                && self.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT
+                && self.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT
         } else if owner {
             self.owner_hot_path == HOT_PATH_SDIO_HOST
                 && self.peer_hot_path == HOT_PATH_CYW43_WIFI
@@ -3879,31 +3877,16 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_sdio_bus_link_supports_reciprocal_notification_dpc_descriptors() {
+    fn cyw43_sdio_bus_link_supports_endpoint_command_and_notification_dpc_descriptors() {
         assert_ne!(DRIVER_RUNTIME_RESERVED_ROOT_BADGE, 0);
-        assert_ne!(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, 0);
         assert_ne!(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE, 0);
-        assert_ne!(
-            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
-            DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
-        );
-        assert_ne!(
-            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
-            DRIVER_RUNTIME_SDIO_IRQ_BADGE
-        );
         assert_ne!(
             DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
             DRIVER_RUNTIME_SDIO_IRQ_BADGE
         );
         assert_eq!(
-            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE & DRIVER_RUNTIME_SDIO_IRQ_BADGE,
-            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
-            "the SDIO peer wake intentionally coalesces into the durable IRQ wake"
-        );
-        assert_eq!(
             DRIVER_RUNTIME_RESERVED_ROOT_BADGE
-                & (DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
-                    | DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
+                & (DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
                     | DRIVER_RUNTIME_SDIO_IRQ_BADGE),
             0,
             "the reserved root bit must remain outside every service badge"
@@ -3918,7 +3901,7 @@ mod tests {
         .with_notification_dpc(
             HOT_PATH_SDIO_HOST,
             DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
-            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+            DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
             0x4359_5301,
         );
         assert!(client.valid());

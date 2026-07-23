@@ -35,8 +35,6 @@ use font8x8::legacy::BASIC_LEGACY;
 #[cfg(target_os = "none")]
 use pi4_driver_abi::DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO;
 #[cfg(test)]
-use pi4_driver_abi::DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE;
-#[cfg(test)]
 use pi4_driver_abi::DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US;
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET;
@@ -57,7 +55,7 @@ use pi4_driver_abi::{
     DriverRuntimeSdioCommandDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
     DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
     DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR, DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
     DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_ASSERT_WRITE,
     DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_CLEAR_WRITE,
@@ -574,15 +572,12 @@ pub const DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr =
 /// Child CSpace slot containing the SDIO IRQ-handler cap.
 pub const DRIVER_TASK_CHILD_SDIO_IRQ_HANDLER_SLOT: sel4_sys::seL4_CPtr =
     DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT as sel4_sys::seL4_CPtr;
-/// Child CSpace slot used by CYW43 to signal the linked SDIO bus owner.
-pub const DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr =
-    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr;
+/// Child CSpace slot containing the send-only linked SDIO-owner endpoint.
+pub const DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT as sel4_sys::seL4_CPtr;
 /// Child CSpace slot used by SDIO to signal the linked CYW43 runtime.
 pub const DRIVER_TASK_CHILD_CYW43_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr =
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr;
-/// Legacy source-compatible alias for the SDIO notification slot.
-pub const DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
-    DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT;
 /// Child CSpace slot containing the linked PCIe/VL805 bus-owner endpoint.
 pub const DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
     DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT as sel4_sys::seL4_CPtr;
@@ -3845,6 +3840,8 @@ struct Cyw43RuntimeState {
     dpc_pending_epoch: u32,
     dpc_active_sequence: u32,
     dpc_events_consumed: u32,
+    // Generation-scoped nonblocking endpoint publication attempts. Delivery
+    // is inferred only from durable SDIO owner/ring progress telemetry.
     dpc_owner_rearms: u32,
     dpc_epoch_errors: u32,
     dpc_sequence_errors: u32,
@@ -5611,18 +5608,15 @@ const fn runtime_command_loop_route(
 }
 
 /// Retained foreground commands release exactly one physical quantum per
-/// endpoint rendezvous or exact sequence-last shared continuation grant.
+/// admitted endpoint rendezvous.
 ///
-/// Ring sequence commit is the issue boundary. A later matching endpoint
-/// message or shared grant is only continuation authority for that exact
-/// retained intake: neither can republish, mutate, or replay the action.
-/// Notifications are wake hints and may coalesce; the shared grant's immutable
-/// request, action, generation, and monotonic ID decide whether foreground work
-/// is admitted. Route-authorized persistent-source work remains local and
-/// alternates with foreground grants, so a continuously asserted level source
-/// cannot starve the immutable command. A pure SDIO peer badge is only the
-/// doorbell for the durable ring/grant state; it is never CARD_INT authority.
-/// Each delivered wake still selects exactly one service or foreground quantum.
+/// Ring sequence commit is the initial issue boundary. A later matching
+/// endpoint message cannot replace or replay that intake. Root-owned retained
+/// commands use the exact endpoint rendezvous; delegated CYW43 work also
+/// requires a fresh sequence-last grant binding request, action, generation,
+/// and monotonic ID. Notifications may service one route-authorized persistent
+/// source but can never spend foreground authority. Each admitted endpoint or
+/// notification therefore selects exactly one foreground or service quantum.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimePendingCommandGate {
@@ -5717,13 +5711,23 @@ impl RuntimePendingCommandGate {
                 // The endpoint message is only a rendezvous for the already
                 // retained immutable one-way command. It cannot replace the
                 // intake, introduce a reply cap, or change any action ticket
-                // field. seL4 endpoints do not queue NBSend messages, so one
-                // delivered matching doorbell admits exactly one child quantum
-                // and all sends while the child is running are discarded.
+                // field. Delegated CYW43 work additionally requires the exact
+                // sequence-last generation grant; the endpoint payload alone
+                // is never continuation authority. seL4 endpoints do not queue
+                // NBSend messages, so all sends while the child is running are
+                // discarded.
                 if candidate != *retained || candidate.reply_cap_available {
                     return RuntimePendingWakeRoute::Rejected;
                 }
+                let delegated = self.retained_generation.is_some();
+                let exact_grant = grant.filter(|grant| self.grant_matches(*retained, *grant));
+                if delegated && exact_grant.is_none() {
+                    return RuntimePendingWakeRoute::Rejected;
+                }
                 if self.foreground_due_after_service {
+                    if let Some(grant) = exact_grant {
+                        self.consume_grant(grant);
+                    }
                     self.continuation_required = false;
                     self.foreground_due_after_service = false;
                     return RuntimePendingWakeRoute::ContinueForeground;
@@ -5732,6 +5736,9 @@ impl RuntimePendingCommandGate {
                     self.foreground_due_after_service = true;
                     return RuntimePendingWakeRoute::ServiceNotification(service_badge);
                 }
+                if let Some(grant) = exact_grant {
+                    self.consume_grant(grant);
+                }
                 self.continuation_required = false;
                 self.foreground_due_after_service = false;
                 RuntimePendingWakeRoute::ContinueForeground
@@ -5739,34 +5746,19 @@ impl RuntimePendingCommandGate {
             RuntimeWake::Notification(badge) => {
                 let service_badge = badge & !DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
                 self.deferred_service_badge |= service_badge;
-                let exact_grant = grant.filter(|grant| self.grant_matches(*retained, *grant));
-                if let (true, Some(grant)) = (self.foreground_due_after_service, exact_grant) {
-                    self.consume_grant(grant);
-                    self.continuation_required = false;
-                    self.foreground_due_after_service = false;
-                    RuntimePendingWakeRoute::ContinueForeground
-                } else if self.foreground_due_after_service {
+                if self.foreground_due_after_service {
                     // A priority-255 linked runtime must not turn a continuously
                     // reasserted level source into a private service loop. Only
-                    // the next exact endpoint rendezvous or committed shared
-                    // grant can return to the retained foreground command.
+                    // the next exact endpoint rendezvous with its committed
+                    // shared grant can return to delegated foreground work.
                     RuntimePendingWakeRoute::Rejected
                 } else if let Some(service_badge) = self.take_deferred_service() {
-                    // Service at most one persistent-source quantum. Keeping
-                    // the continuation requirement armed makes the following
-                    // producer grant eligible for foreground work even when
-                    // the same level IRQ immediately reasserts. The exact
-                    // grant authorizes the retained foreground command, not
-                    // unrelated persistent-source service, so leave it
-                    // unconsumed for the producer to resignal with the same
-                    // immutable ID.
+                    // Service at most one persistent-source quantum. A
+                    // notification can never spend foreground authority; the
+                    // producer must re-send the endpoint doorbell carrying the
+                    // same still-unconsumed exact grant.
                     self.foreground_due_after_service = true;
                     RuntimePendingWakeRoute::ServiceNotification(service_badge)
-                } else if let Some(grant) = exact_grant {
-                    self.consume_grant(grant);
-                    self.continuation_required = false;
-                    self.foreground_due_after_service = false;
-                    RuntimePendingWakeRoute::ContinueForeground
                 } else {
                     RuntimePendingWakeRoute::Rejected
                 }
@@ -5832,14 +5824,12 @@ fn poll_runtime_command(
     } else {
         0
     };
-    if ipc_delivered && (command.sequence == 0 || command.sequence != ipc_sequence) {
-        for _ in 0..8 {
-            command = read_runtime_command_record();
-            if command.sequence != 0 && command.sequence == ipc_sequence {
-                break;
-            }
-            runtime_poll_pause();
-        }
+    if ipc_delivered {
+        // The producer publishes the durable record sequence-last before the
+        // endpoint hint. Re-read it exactly once after consuming the hint; a
+        // mismatch is deferred to a later outer turn and producer re-signal,
+        // never converted into a private polling loop.
+        command = read_runtime_command_record();
     }
     if command.sequence == 0 || command.sequence == last_sequence {
         return None;
@@ -5879,16 +5869,11 @@ fn wait_runtime_command_or_notification(last_sequence: u32) -> RuntimeWake {
     }
     // SAFETY: The fixed endpoint ABI carries the shared-ring sequence in MR0.
     let ipc_sequence = unsafe { sel4_sys::seL4_GetMR(0) as u32 };
-    let mut command = read_runtime_command_record();
-    if command.sequence != ipc_sequence {
-        for _ in 0..8 {
-            command = read_runtime_command_record();
-            if command.sequence == ipc_sequence {
-                break;
-            }
-            runtime_poll_pause();
-        }
-    }
+    // The sequence-last ring record is authoritative. One stable read per
+    // endpoint rendezvous preserves the one-operation outer-turn bound; a
+    // stale, duplicate, zero, or early hint is rejected and the producer's
+    // exact re-signal supplies liveness on a later turn.
+    let command = read_runtime_command_record();
     if command.sequence == 0
         || command.sequence == last_sequence
         || command.sequence != ipc_sequence
@@ -7666,7 +7651,7 @@ fn descriptor_notification_dpc_link(
             role == DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT
                 && link.peer_hot_path == HOT_PATH_SDIO_HOST
                 && link.local_notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
-                && link.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT
+                && link.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT
         }
         HOT_PATH_SDIO_HOST => {
             role == DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER
@@ -10081,7 +10066,7 @@ fn cyw43_runtime_service_dpc_event() -> bool {
         CYW43_DPC_DEFERRED.store(true, Ordering::Release);
     }
     if should_rearm_owner {
-        let _ = cyw43_publish_owner_rearm_notification();
+        let _ = cyw43_publish_owner_rearm_doorbell();
     }
     serviced
 }
@@ -10411,7 +10396,7 @@ fn service_hdmi_text(command: DriverTaskCommandRecord) -> DriverTaskCompletionRe
 #[cfg(target_os = "none")]
 fn runtime_signal_notification(slot: u32) {
     // SAFETY: Generated topology admission proves that `slot` is a send-only
-    // notification cap for the reciprocal CYW43/SDIO peer.
+    // notification cap for the SDIO-to-CYW43 completion/DPC route.
     unsafe {
         sel4_sys::seL4_Signal(slot as sel4_sys::seL4_CPtr);
     }
@@ -10420,19 +10405,105 @@ fn runtime_signal_notification(slot: u32) {
 #[cfg(not(target_os = "none"))]
 fn runtime_signal_notification(_slot: u32) {}
 
-fn cyw43_publish_owner_rearm_notification() -> bool {
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeSdioOwnerDoorbell {
+    slot: sel4_sys::seL4_CPtr,
+    sequence: u32,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_sdio_owner_doorbell(sequence: u32) -> RuntimeSdioOwnerDoorbell {
+    RuntimeSdioOwnerDoorbell {
+        slot: DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT,
+        sequence,
+    }
+}
+
+#[cfg(test)]
+const TEST_SDIO_OWNER_DOORBELL_TRACE_DEPTH: usize = 32;
+
+#[cfg(test)]
+static TEST_SDIO_OWNER_DOORBELL_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+static TEST_SDIO_OWNER_DOORBELL_TRACE: [AtomicU64; TEST_SDIO_OWNER_DOORBELL_TRACE_DEPTH] =
+    [const { AtomicU64::new(0) }; TEST_SDIO_OWNER_DOORBELL_TRACE_DEPTH];
+
+#[cfg(test)]
+fn reset_test_sdio_owner_doorbells() {
+    TEST_SDIO_OWNER_DOORBELL_COUNT.store(0, Ordering::Release);
+    for entry in &TEST_SDIO_OWNER_DOORBELL_TRACE {
+        entry.store(0, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+fn record_test_sdio_owner_doorbell(doorbell: RuntimeSdioOwnerDoorbell) {
+    let index = TEST_SDIO_OWNER_DOORBELL_COUNT.fetch_add(1, Ordering::AcqRel);
+    if index >= TEST_SDIO_OWNER_DOORBELL_TRACE_DEPTH {
+        return;
+    }
+    let packed = (doorbell.slot << 32) | u64::from(doorbell.sequence);
+    TEST_SDIO_OWNER_DOORBELL_TRACE[index].store(packed, Ordering::Release);
+}
+
+#[cfg(test)]
+fn test_sdio_owner_doorbell(index: usize) -> Option<RuntimeSdioOwnerDoorbell> {
+    if index >= TEST_SDIO_OWNER_DOORBELL_COUNT.load(Ordering::Acquire)
+        || index >= TEST_SDIO_OWNER_DOORBELL_TRACE_DEPTH
+    {
+        return None;
+    }
+    let packed = TEST_SDIO_OWNER_DOORBELL_TRACE[index].load(Ordering::Acquire);
+    Some(RuntimeSdioOwnerDoorbell {
+        slot: packed >> 32,
+        sequence: packed as u32,
+    })
+}
+
+#[cfg(target_os = "none")]
+fn runtime_nbsend_sdio_owner_doorbell(sequence: u32) {
+    let doorbell = runtime_sdio_owner_doorbell(sequence);
+    let mr0 = doorbell.sequence as sel4_sys::seL4_Word;
+    // SAFETY: HAL admission installs exactly one send-only copy of the SDIO
+    // owner's command endpoint in this fixed CYW43 slot. The durable shared
+    // ring or DPC state is authoritative; MR0 is only the immutable command
+    // sequence (or zero for owner rearm), and NBSend cannot retain a sender.
+    unsafe {
+        sel4_sys::seL4_NBSendWithMRs(
+            doorbell.slot,
+            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+            core::ptr::from_ref(&mr0),
+            core::ptr::null(),
+            core::ptr::null(),
+            core::ptr::null(),
+        );
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn runtime_nbsend_sdio_owner_doorbell(sequence: u32) {
+    record_test_sdio_owner_doorbell(runtime_sdio_owner_doorbell(sequence));
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+fn runtime_nbsend_sdio_owner_doorbell(_sequence: u32) {}
+
+fn cyw43_publish_owner_rearm_doorbell() -> bool {
     let admitted = CYW43_RUNTIME_STATE.with_mut(|state| {
         if !state.dpc_link_ready || state.dpc_shared_epoch == 0 {
             return false;
         }
-        // This is generation-scoped publication truth, distinct from the
-        // SOURCE_ASSERTED_EMPTY preserve/rearm diagnostic at trace offset 176.
-        // Increment only at the actual reciprocal OwnerRearm signal path.
+        // This is a generation-scoped publication-attempt count, distinct
+        // from the SOURCE_ASSERTED_EMPTY preserve/rearm diagnostic at trace
+        // offset 176. Actual delivery is established only by durable SDIO
+        // owner/ring progress.
         state.dpc_owner_rearms = state.dpc_owner_rearms.saturating_add(1);
         true
     });
     if admitted {
-        runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT);
+        runtime_nbsend_sdio_owner_doorbell(0);
     }
     admitted
 }
@@ -18062,7 +18133,7 @@ fn cyw43_dpc_child_submit_once(
     }
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(DRIVER_TASK_SDIO_BUS_RING_VADDR, core::mem::size_of::<u32>());
-    runtime_signal_notification(DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT as u32);
+    runtime_nbsend_sdio_owner_doorbell(command.sequence);
     publish_runtime_progress(
         progress_sequence,
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
@@ -18141,7 +18212,7 @@ fn cyw43_dpc_child_grant_once(cursor: &mut Cyw43DpcCursor) -> bool {
     cursor.child.continuation_grant_publish = false;
     // The exact grant is visible before this wake hint. SDIO validates and
     // acknowledges the immutable generation-bound ID before spending it.
-    runtime_signal_notification(DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT as u32);
+    runtime_nbsend_sdio_owner_doorbell(child.command.sequence);
     true
 }
 
@@ -18611,10 +18682,10 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
     }
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(DRIVER_TASK_SDIO_BUS_RING_VADDR, core::mem::size_of::<u32>());
-    // The HAL installed the generated peer-notification cap in this fixed
+    // HAL installed the SDIO owner's send-only endpoint cap in this fixed
     // child slot. The immutable sequence is already globally visible; this
-    // signal is only a best-effort liveness doorbell.
-    runtime_signal_notification(DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT as u32);
+    // one-way message is only the serialized owner-service doorbell.
+    runtime_nbsend_sdio_owner_doorbell(entry.command.sequence);
     publish_runtime_progress(
         progress_sequence,
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
@@ -18665,10 +18736,10 @@ fn cyw43_foreground_grant_frontier(transaction: &mut Cyw43ForegroundTransaction)
         return false;
     }
     transaction.retain_frontier_grant(grant_id);
-    // The exact grant is sequence-last and globally visible. This signal is
-    // only its one-operation wake hint; a duplicate or coalesced badge cannot
-    // advance the retained owner command without a fresh ID.
-    runtime_signal_notification(DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT as u32);
+    // The exact grant is sequence-last and globally visible. This endpoint
+    // message is only its one-operation wake hint; a duplicate rendezvous
+    // cannot advance the retained owner command without a fresh ID.
+    runtime_nbsend_sdio_owner_doorbell(entry.command.sequence);
     true
 }
 
@@ -41796,15 +41867,17 @@ pub fn runtime_main(task_key: usize) -> ! {
         ) == RuntimeCommandLoopRoute::WaitForRetainedContinuation
         {
             // A retained command has already consumed its one physical
-            // quantum. An exact endpoint rendezvous or a sequence-last shared
-            // grant can advance it. The latter keeps the delegated CYW43->SDIO
-            // producer viable after root intentionally deletes its steady
-            // command cap. Peer/IRQ notifications remain wake hints only.
+            // quantum. Root work needs the exact endpoint rendezvous;
+            // delegated CYW43->SDIO work needs that rendezvous plus its
+            // sequence-last shared grant. Root intentionally deleted its
+            // steady producer cap, leaving CYW43 as the only sender. IRQ and
+            // completion/DPC notifications can never advance foreground work.
             let wake = wait_runtime_command_or_notification(last_sequence);
-            let continuation_grant = if matches!(wake, RuntimeWake::Notification(_)) {
-                read_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR)
-            } else {
-                None
+            let continuation_grant = match wake {
+                RuntimeWake::Command(_) => {
+                    read_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR)
+                }
+                RuntimeWake::Notification(_) | RuntimeWake::None => None,
             };
             let gated_wake = runtime_pending_wake_for_route(notification_route, wake);
             let gate_before_wake = pending_command_gate;
@@ -42132,7 +42205,7 @@ pub fn runtime_main(task_key: usize) -> ! {
         let RuntimeCommandTurn::Complete(completion) = turn else {
             // Retain the exact command intake and any implicit reply cap while
             // one Linux-ordered SDIO power-sequence phase is pending. No
-            // completion sequence or peer notification is published until the
+            // completion sequence or completion/DPC notification is published until the
             // hardware sequence reaches a terminal state.
             pending_intake = Some(intake);
             // One foreground quantum has run. Re-arm from the next loop's
@@ -43170,6 +43243,7 @@ mod tests {
 
     fn reset_runtime_for_test() {
         reset_test_ring();
+        reset_test_sdio_owner_doorbells();
         RUNTIME_DESCRIPTOR.store(DriverRuntimeInitDescriptor::empty());
         RUNTIME_INIT_HOT_PATH.store(0, Ordering::Release);
         RUNTIME_INIT_FLAGS.store(0, Ordering::Release);
@@ -44693,18 +44767,27 @@ mod tests {
     }
 
     #[test]
-    fn dpc_owner_rearm_counter_tracks_actual_publications_per_generation() {
+    fn dpc_owner_rearm_counter_and_transport_track_publication_attempts() {
         let _guard = test_guard();
         reset_runtime_for_test();
-        assert!(!cyw43_publish_owner_rearm_notification());
+        assert!(!cyw43_publish_owner_rearm_doorbell());
+        assert_eq!(test_sdio_owner_doorbell(0), None);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.dpc_link_ready = true;
             state.dpc_shared_epoch = 0x4359_5301;
         });
 
-        assert!(cyw43_publish_owner_rearm_notification());
-        assert!(cyw43_publish_owner_rearm_notification());
+        assert!(cyw43_publish_owner_rearm_doorbell());
+        assert!(cyw43_publish_owner_rearm_doorbell());
         CYW43_RUNTIME_STATE.with_ref(|state| assert_eq!(state.dpc_owner_rearms, 2));
+        assert_eq!(
+            test_sdio_owner_doorbell(0),
+            Some(runtime_sdio_owner_doorbell(0)),
+        );
+        assert_eq!(
+            test_sdio_owner_doorbell(1),
+            Some(runtime_sdio_owner_doorbell(0)),
+        );
 
         CYW43_RUNTIME_STATE.with_mut(|state| {
             let next = state.dpc_shared_epoch.wrapping_add(1);
@@ -44716,8 +44799,13 @@ mod tests {
             ));
             assert_eq!(state.dpc_owner_rearms, 0);
         });
-        assert!(cyw43_publish_owner_rearm_notification());
+        assert!(cyw43_publish_owner_rearm_doorbell());
         CYW43_RUNTIME_STATE.with_ref(|state| assert_eq!(state.dpc_owner_rearms, 1));
+        assert_eq!(
+            test_sdio_owner_doorbell(2),
+            Some(runtime_sdio_owner_doorbell(0)),
+        );
+        assert_eq!(test_sdio_owner_doorbell(3), None);
     }
 
     #[test]
@@ -46908,14 +46996,10 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_sdio_bus_link_uses_one_generated_notification_doorbell() {
-        assert_eq!(
-            DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT,
-            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr
-        );
+    fn cyw43_sdio_bus_link_uses_one_generated_owner_endpoint() {
         assert_eq!(
             DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT,
-            DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT
+            DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT as sel4_sys::seL4_CPtr
         );
         assert_ne!(
             DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
@@ -47253,7 +47337,7 @@ mod tests {
                 .with_notification_dpc(
                     HOT_PATH_SDIO_HOST,
                     DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
-                    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+                    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
                     TEST_CYW43_SDIO_SHARED_EPOCH,
                 );
             }
@@ -48892,19 +48976,13 @@ mod tests {
     }
 
     #[test]
-    fn pending_quantum_coalesced_peer_irq_arbitration_is_fair_and_durable() {
+    fn pending_quantum_notification_arbitration_is_fair_and_durable() {
         let mut retained = retained_gate_test_intake(0x8000_0042);
         let mut gate = RuntimePendingCommandGate::new();
 
         assert_eq!(
-            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
-            DRIVER_RUNTIME_SDIO_IRQ_BADGE,
-            "the lower peer/IRQ badge OR closure is deliberate",
-        );
-        assert_eq!(
             DRIVER_RUNTIME_RESERVED_ROOT_BADGE
-                & (DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
-                    | DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
+                & (DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
                     | DRIVER_RUNTIME_SDIO_IRQ_BADGE),
             0,
             "the reserved root badge must remain disjoint from service badges",
@@ -49136,9 +49214,15 @@ mod tests {
         already_consumed.consumed_grant_id = exact_first.grant_id;
         let wrong_first_generation =
             retained_gate_test_grant(original, generation.wrapping_add(1), 1);
+        let endpoint_wake = RuntimeWake::Command(original);
 
         let mut gate = RuntimePendingCommandGate::new();
         gate.retain_after_pending_generation(generation);
+        assert_eq!(
+            gate.route_wake_with_grant(&mut retained, endpoint_wake, None),
+            RuntimePendingWakeRoute::Rejected,
+            "a delegated endpoint rendezvous without an exact grant is wake-only",
+        );
         for grant in [
             stale_sequence,
             mutated_action,
@@ -49148,11 +49232,7 @@ mod tests {
             wrong_first_generation,
         ] {
             assert_eq!(
-                gate.route_wake_with_grant(
-                    &mut retained,
-                    RuntimeWake::Notification(0),
-                    Some(grant),
-                ),
+                gate.route_wake_with_grant(&mut retained, endpoint_wake, Some(grant),),
                 RuntimePendingWakeRoute::Rejected,
             );
             assert!(gate.continuation_required());
@@ -49176,11 +49256,7 @@ mod tests {
         );
         let wrong_generation = retained_gate_test_grant(original, generation.wrapping_add(1), 2);
         assert_eq!(
-            gate.route_wake_with_grant(
-                &mut retained,
-                RuntimeWake::Notification(0),
-                Some(wrong_generation),
-            ),
+            gate.route_wake_with_grant(&mut retained, endpoint_wake, Some(wrong_generation),),
             RuntimePendingWakeRoute::Rejected,
             "a stale-generation grant cannot mutate retained ownership",
         );
@@ -49188,18 +49264,14 @@ mod tests {
         assert_eq!(gate.last_grant_id, 0);
 
         assert_eq!(
-            gate.route_wake_with_grant(
-                &mut retained,
-                RuntimeWake::Notification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
-                Some(exact_first),
-            ),
+            gate.route_wake_with_grant(&mut retained, endpoint_wake, Some(exact_first),),
             RuntimePendingWakeRoute::ContinueForeground,
         );
         assert!(!gate.continuation_required());
         assert_eq!(gate.last_grant_id, 1);
         assert_eq!(
-            gate.deferred_service_badge, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
-            "the reasserted level source remains durable after foreground wins",
+            gate.deferred_service_badge, 0,
+            "the separately serviced source is drained until it reasserts",
         );
         assert_eq!(retained, original);
 
@@ -49207,14 +49279,21 @@ mod tests {
         assert_eq!(
             gate.route_wake_with_grant(
                 &mut retained,
-                RuntimeWake::Notification(0),
+                RuntimeWake::Notification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
                 Some(exact_second),
             ),
             RuntimePendingWakeRoute::ServiceNotification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
-            "the durable IRQ receives its separate bounded service quantum",
+            "a reasserted IRQ receives its separate bounded service quantum",
         );
         assert_eq!(gate.last_grant_id, 1);
         assert!(gate.continuation_required());
+        assert_eq!(
+            gate.route_wake_with_grant(&mut retained, endpoint_wake, Some(exact_second)),
+            RuntimePendingWakeRoute::ContinueForeground,
+            "the re-sent endpoint doorbell spends the still-unconsumed exact grant",
+        );
+        assert_eq!(gate.last_grant_id, 2);
+        assert!(!gate.continuation_required());
     }
 
     #[test]
@@ -49245,14 +49324,6 @@ mod tests {
         assert_eq!(
             runtime_notification_service_badge(
                 RuntimeNotificationRoute::SdioOwner,
-                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
-            ),
-            None,
-            "the CYW43 peer badge is a ring/grant doorbell, not CARD_INT",
-        );
-        assert_eq!(
-            runtime_notification_service_badge(
-                RuntimeNotificationRoute::SdioOwner,
                 DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_SDIO_IRQ_BADGE,
             ),
             Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
@@ -49277,13 +49348,6 @@ mod tests {
         }
         assert_eq!(
             runtime_notification_service_badge(
-                RuntimeNotificationRoute::Cyw43Client,
-                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
-            ),
-            None,
-        );
-        assert_eq!(
-            runtime_notification_service_badge(
                 RuntimeNotificationRoute::Unavailable,
                 DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
             ),
@@ -49292,7 +49356,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_peer_doorbell_grants_foreground_without_spurious_irq_service() {
+    fn sdio_owner_endpoint_requires_grant_and_notifications_cannot_advance_foreground() {
         let intake = retained_gate_test_intake(0x8000_0042);
         let generation = intake.command.aux1;
         let grant = retained_gate_test_grant(intake, generation, 1);
@@ -49300,20 +49364,20 @@ mod tests {
         let mut gate = RuntimePendingCommandGate::new();
         gate.retain_after_pending_generation(generation);
 
-        let peer_wake = runtime_pending_wake_for_route(
+        let endpoint_wake = runtime_pending_wake_for_route(
             RuntimeNotificationRoute::SdioOwner,
-            RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+            RuntimeWake::Command(intake),
         );
-        assert_eq!(peer_wake, RuntimeWake::Notification(0));
+        assert_eq!(endpoint_wake, RuntimeWake::Command(intake));
         assert_eq!(
-            gate.route_wake_with_grant(&mut retained, peer_wake, None),
+            gate.route_wake_with_grant(&mut retained, endpoint_wake, None),
             RuntimePendingWakeRoute::Rejected,
-            "a peer wake without immutable authority cannot advance the owner",
+            "an endpoint wake without immutable authority cannot advance the owner",
         );
         assert_eq!(
-            gate.route_wake_with_grant(&mut retained, peer_wake, Some(grant)),
+            gate.route_wake_with_grant(&mut retained, endpoint_wake, Some(grant)),
             RuntimePendingWakeRoute::ContinueForeground,
-            "the exact grant advances one retained owner quantum directly",
+            "the endpoint plus exact grant advances one retained owner quantum",
         );
         assert_eq!(gate.last_grant_id, 1);
         assert!(!gate.continuation_required());
@@ -49338,8 +49402,13 @@ mod tests {
         );
         assert_eq!(
             gate.route_wake_with_grant(&mut retained, irq_wake, Some(second)),
+            RuntimePendingWakeRoute::Rejected,
+            "a repeated IRQ notification cannot spend foreground authority",
+        );
+        assert_eq!(
+            gate.route_wake_with_grant(&mut retained, endpoint_wake, Some(second)),
             RuntimePendingWakeRoute::ContinueForeground,
-            "the producer may resignal the same unspent grant after IRQ service",
+            "only the re-sent endpoint doorbell may spend the unconsumed grant",
         );
         assert_eq!(gate.last_grant_id, 2);
     }
@@ -58182,15 +58251,15 @@ mod tests {
                 RuntimeContinuationGrantProducerState::Pending,
             );
             granted_quanta = grant_id;
-            let peer_wake = runtime_pending_wake_for_route(
+            let endpoint_wake = runtime_pending_wake_for_route(
                 RuntimeNotificationRoute::SdioOwner,
-                RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                RuntimeWake::Command(intake),
             );
-            assert_eq!(peer_wake, RuntimeWake::Notification(0));
+            assert_eq!(endpoint_wake, RuntimeWake::Command(intake));
             assert_eq!(
-                gate.route_wake_with_grant(&mut retained, peer_wake, Some(grant)),
+                gate.route_wake_with_grant(&mut retained, endpoint_wake, Some(grant)),
                 RuntimePendingWakeRoute::ContinueForeground,
-                "a pre-DPC peer doorbell directly admits the retained owner quantum",
+                "the owner endpoint plus exact grant admits one retained quantum",
             );
             assert!(acknowledge_runtime_continuation_grant_at(
                 grant_base, grant_id,
@@ -58209,7 +58278,7 @@ mod tests {
             assert_eq!(
                 gate.route_wake_with_grant(
                     &mut retained,
-                    peer_wake,
+                    endpoint_wake,
                     read_runtime_continuation_grant_at(grant_base),
                 ),
                 RuntimePendingWakeRoute::Rejected,
@@ -58359,15 +58428,15 @@ mod tests {
                 retained,
                 retained_gate_test_grant(intake, requested, grant.grant_id),
             ));
-            let peer_wake = runtime_pending_wake_for_route(
+            let endpoint_wake = runtime_pending_wake_for_route(
                 RuntimeNotificationRoute::SdioOwner,
-                RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                RuntimeWake::Command(intake),
             );
-            let route = gate.route_wake_with_grant(&mut retained, peer_wake, Some(grant));
+            let route = gate.route_wake_with_grant(&mut retained, endpoint_wake, Some(grant));
             assert_eq!(
                 route,
                 RuntimePendingWakeRoute::ContinueForeground,
-                "the reciprocal peer doorbell cannot consume a DPC child grant as SDIO IRQ work",
+                "the owner endpoint plus exact grant admits one DPC child quantum",
             );
             assert!(acknowledge_runtime_continuation_grant_at(
                 grant_base,
@@ -58376,7 +58445,7 @@ mod tests {
             let acknowledged = read_runtime_continuation_grant_at(grant_base)
                 .expect("DPC grant acknowledgement remains visible");
             assert_eq!(
-                gate.route_wake_with_grant(&mut retained, peer_wake, Some(acknowledged),),
+                gate.route_wake_with_grant(&mut retained, endpoint_wake, Some(acknowledged),),
                 RuntimePendingWakeRoute::Rejected,
                 "an acknowledged DPC grant cannot be replayed",
             );
@@ -63844,6 +63913,216 @@ mod tests {
             completion,
             issued_unknown,
         }
+    }
+
+    #[test]
+    fn production_owner_doorbell_recovers_drop_and_fences_irq_stale_and_duplicate_wakes() {
+        let _guard = test_guard();
+        let generation = 0x4359_f101;
+        let parent = stage_production_firmware_parent(generation, 0x4359_f110);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let child = drive_production_parent_until_first_child(parent);
+        let expected_doorbell = runtime_sdio_owner_doorbell(child.sequence);
+        assert_eq!(test_sdio_owner_doorbell(0), Some(expected_doorbell));
+        assert_eq!(
+            test_sdio_owner_doorbell(1),
+            None,
+            "the actual submit path publishes exactly one initial wake hint",
+        );
+
+        let owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        let durable_child = runtime_ring_read_command_stable(&owner_ring)
+            .expect("sequence-last owner command survives a dropped NBSend");
+        assert_eq!(durable_child, child);
+        assert_eq!(
+            runtime_command_admission(durable_child, 0),
+            RuntimeCommandAdmission::OneWay,
+        );
+        let descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+            .expect("actual submit publishes a stable owner descriptor");
+        let mut io = production_owner_io();
+        configure_production_owner_child(&mut io, descriptor);
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(child, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+            "the durable owner ring recovers a deliberately undelivered initial hint",
+        );
+        assert!(SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active()));
+        assert!(
+            io.command_issue_count() <= 1,
+            "one owner turn cannot issue more than one controller command",
+        );
+
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        assert_eq!(
+            test_sdio_owner_doorbell(1),
+            None,
+            "a completion miss consumes its turn without also publishing a grant",
+        );
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        assert_eq!(
+            test_sdio_owner_doorbell(1),
+            Some(expected_doorbell),
+            "the following outer turn re-signals the exact immutable child",
+        );
+        assert_eq!(test_sdio_owner_doorbell(2), None);
+        let grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
+            .expect("actual producer publishes an exact sequence-last continuation grant");
+        assert_eq!(grant.request_sequence, child.sequence);
+        assert_eq!(grant.generation, generation);
+        assert_eq!(
+            grant.action_fingerprint,
+            runtime_continuation_action_fingerprint(child),
+        );
+
+        let intake = RuntimeCommandIntake {
+            command: durable_child,
+            reply_cap_available: false,
+        };
+        let mut retained = intake;
+        let mut gate = RuntimePendingCommandGate::new();
+        gate.retain_after_pending_generation(generation);
+        let irq = runtime_pending_wake_for_route(
+            RuntimeNotificationRoute::SdioOwner,
+            RuntimeWake::Notification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+        );
+        assert_eq!(
+            gate.route_wake_with_grant(&mut retained, irq, Some(grant)),
+            RuntimePendingWakeRoute::ServiceNotification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+            "an IRQ may win one service turn but cannot spend foreground authority",
+        );
+        assert_eq!(
+            gate.route_wake_with_grant(&mut retained, irq, Some(grant)),
+            RuntimePendingWakeRoute::Rejected,
+            "a reasserted IRQ cannot form a private service loop",
+        );
+
+        let mut stale = intake;
+        stale.command.sequence = stale.command.sequence.wrapping_sub(1);
+        assert_eq!(
+            gate.route_wake_with_grant(&mut retained, RuntimeWake::Command(stale), Some(grant),),
+            RuntimePendingWakeRoute::Rejected,
+            "a stale endpoint payload cannot mutate the retained generation",
+        );
+        let mut wrong_generation = grant;
+        wrong_generation.generation = generation.wrapping_add(1);
+        assert_eq!(
+            gate.route_wake_with_grant(
+                &mut retained,
+                RuntimeWake::Command(intake),
+                Some(wrong_generation),
+            ),
+            RuntimePendingWakeRoute::Rejected,
+        );
+        assert_eq!(
+            gate.route_wake_with_grant(&mut retained, RuntimeWake::Command(intake), Some(grant),),
+            RuntimePendingWakeRoute::ContinueForeground,
+            "only the re-signaled endpoint plus its exact grant advances the owner",
+        );
+        gate.retain_after_pending_generation(generation);
+        assert_eq!(
+            gate.route_wake_with_grant(&mut retained, RuntimeWake::Command(intake), Some(grant),),
+            RuntimePendingWakeRoute::Rejected,
+            "the consumed grant cannot replay the same owner quantum",
+        );
+        assert_eq!(
+            test_sdio_owner_doorbell(2),
+            None,
+            "consumer arbitration cannot synthesize producer sends",
+        );
+        drop(_production_mode);
+    }
+
+    #[test]
+    fn completion_between_poll_and_resignal_never_reissues_owner_action() {
+        let _guard = test_guard();
+        let generation = 0x4359_f181;
+        initialize_production_foreground_pair(generation);
+        let parent = cyw43_descriptor_command(0x4359_f190);
+        CYW43_ACTIVE_PARENT_SEQUENCE.store(parent.sequence, Ordering::Release);
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD52_READ,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: SDIO_CCCR_IORX,
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 1,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut child = stage_sdio_descriptor_service_command(0x8000_f191, descriptor);
+        child.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        child.aux1 = generation;
+        let mut transaction = Cyw43ForegroundTransaction::new();
+        transaction.generation = generation;
+        assert!(transaction.begin_turn(parent, 1));
+        transaction.prepared_sequence = child.sequence;
+        transaction.prepared_descriptor = descriptor;
+        transaction.prepared_descriptor_valid = true;
+        transaction.prepared_write_len = 0;
+        assert!(cyw43_foreground_reserve_frontier(&mut transaction, child));
+        assert!(cyw43_foreground_submit_frontier(&mut transaction));
+        assert_eq!(
+            test_sdio_owner_doorbell(0),
+            Some(runtime_sdio_owner_doorbell(child.sequence)),
+        );
+
+        assert!(transaction.begin_turn(parent, 2));
+        assert_eq!(cyw43_foreground_poll_frontier(&mut transaction), None);
+        assert!(transaction.frontier_continuation_grant_required);
+        assert_eq!(test_sdio_owner_doorbell(1), None);
+
+        let owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        let owner_command = runtime_ring_read_command_stable(&owner_ring)
+            .expect("owner observes the durable child before the planned re-signal");
+        let mut io = TestSdioHostIo::new();
+        io.use_sdio_owner_payload = true;
+        io.command_status = SDHCI_INT_RESPONSE;
+        io.command_response = u32::from(SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2);
+        let completion = service_sdio_descriptor_command_with_io(owner_command, &mut io);
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::frame_ready_at(
+                child.sequence,
+                CYW43_SDIO_BUS_LINK_DATA_OFFSET as u32,
+                1,
+            ),
+        );
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            completion.sequence,
+        ));
+
+        assert!(transaction.begin_turn(parent, 3));
+        assert!(cyw43_foreground_grant_frontier(&mut transaction));
+        assert_eq!(
+            test_sdio_owner_doorbell(1),
+            Some(runtime_sdio_owner_doorbell(child.sequence)),
+            "the already-planned re-signal remains a harmless lossy hint",
+        );
+        assert_eq!(io.command_issue_count(), 1);
+
+        assert!(transaction.begin_turn(parent, 4));
+        assert_eq!(
+            cyw43_foreground_poll_frontier(&mut transaction),
+            Some(completion),
+        );
+        assert_eq!(
+            io.command_issue_count(),
+            1,
+            "an exact completion racing the grant cannot replay physical I/O",
+        );
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
     }
 
     #[test]

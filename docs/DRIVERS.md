@@ -510,31 +510,35 @@ This as-built closure is authorized by Milestone 26d task
   retained SDIO generation before the first physical action, binds that
   generation when the command first returns `Pending`, validates the stable
   grant against that retained intake, and irrevocably acknowledges exactly one
-  grant before spending its one continuation quantum. The reciprocal
-  notification is only a coalescing wake hint; it cannot create, duplicate, or
-  mutate authority. A failed completion poll plans publication or re-signal,
-  the next `Grant` turn performs that one retained grant action, and a later
-  `Poll` turn observes the result. Foreground and DPC-owned children use the
-  same `Poll -> Grant -> Poll` separation.
+  grant before spending its one continuation quantum. CYW43 alone holds a
+  send-only copy of the SDIO owner's command endpoint after root deletes its
+  steady producer cap. Its endpoint message carries only the immutable ring
+  sequence: first intake requires the sequence-last command, and every retained
+  phase additionally requires the exact unused shared grant. A failed
+  completion poll plans publication or re-signal, the next `Grant` turn
+  performs that one retained grant action and one endpoint doorbell, and a
+  later `Poll` turn observes the result. Foreground and DPC-owned children use
+  the same `Poll -> Grant -> Poll` separation.
 
-  IRQ and linked-peer notifications remain coalescing wake hints and cannot
-  advance a retained cursor without the exact endpoint rendezvous or shared
-  grant appropriate to that command's authority path. For the SDIO owner, the
-  pure peer badge is only the durable-ring/grant doorbell and never authorizes
-  CARD_INT service. A real SDIO IRQ may consume one notification-service
-  quantum; immediately reasserted level wakes are retained until a later
-  admitted foreground turn, and that service turn cannot spend an exact
-  foreground grant. Explicit scheduler handoffs follow service and rejected
-  immediately-ready wakes, so a
+  IRQ and completion/DPC notifications remain coalescing service wakes and can
+  never advance a retained foreground cursor. A real SDIO IRQ may consume one
+  notification-service quantum; immediately reasserted level wakes are
+  retained until a later admitted endpoint turn, and that service turn cannot
+  spend an exact foreground grant. Explicit scheduler handoffs follow service
+  and rejected immediately-ready wakes, so a
   priority-255 runtime cannot form a private IRQ loop. The reserved high
   notification bit is excluded from service badges but is not foreground grant
   authority. Root keeps the original unbadged notification cap private for TCB
   bind/restart, the child's bound local-notification cap is receive-only, and
-  the only child-held send caps are the generated peer routes:
-  CYW43-to-SDIO badge 1 and SDIO-to-CYW43 badge 2; the SDIO IRQ carries badge
-  159. Autonomous committed-ring polling still prevents a lost initial
-  endpoint send from stranding first command intake. An idle runtime blocks for
-  a new endpoint command instead of polling or yielding.
+  the generated child-held routes are the CYW43-to-SDIO owner endpoint and the
+  SDIO-to-CYW43 badge-2 notification; the SDIO IRQ carries badge 159. A dropped
+  nonblocking initial endpoint send cannot replay work: the later completion
+  miss publishes or re-signals the same immutable grant and endpoint sequence
+  on separate outer turns. An idle runtime blocks for a new endpoint command
+  instead of polling or yielding. The legacy `dpc_owner_rearms` trace field
+  counts generation-scoped nonblocking owner-endpoint publication attempts,
+  not proven message delivery. Actual SDIO owner progress and rearm are
+  established by durable ring and owner telemetry such as `card_irq_rearms`.
   Request, full command fingerprint, and pair generation must match throughout;
   an issued-unknown request cannot be recommitted or granted again. Pair restart
   clears an unresolved lease only after both runtimes are suspended and fenced.
@@ -839,9 +843,9 @@ This as-built closure is authorized by Milestone 26d task
   action. Any remaining foreground work blocks for another endpoint
   rendezvous. Reciprocal CYW43-to-SDIO foreground and DPC work separates
   child-ring submission, each completion poll, and each acknowledged shared
-  grant into retained quanta. Neither path contains a private yield/resignal
-  loop; peer notifications report peer work or wake the owner to inspect an
-  already-published exact grant and never grant a quantum by themselves.
+  grant plus endpoint doorbell into retained quanta. Neither path contains a
+  private yield/resignal loop; notifications report only owner completion/DPC
+  or IRQ work and never grant a foreground quantum.
   A DPC event's immutable source/frame-length hint is admitted only when its
   sequence first becomes active. Retained grant and completion turns continue
   from the DPC cursor without reapplying that hint; otherwise a completed F2

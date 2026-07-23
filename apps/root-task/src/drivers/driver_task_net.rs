@@ -3992,6 +3992,35 @@ pub(crate) struct SdioRuntimeReplayStatus {
     pub status: &'static str,
 }
 
+/// Return whether Gate 1 lacks physical power/reset evidence because the
+/// reciprocal CYW43 producer never reached the SDIO owner's delegated intake.
+///
+/// The pair-restart marker is recovery fallout, while the unchanged SDIO
+/// engine-init marker is the last direct owner evidence. Keep this predicate
+/// deliberately narrow so a real power-sequence snapshot or fault remains
+/// authoritative.
+#[cfg(feature = "kernel")]
+pub(crate) fn wifi_reciprocal_sdio_owner_intake_blocked(
+    cyw43_progress: Option<DriverTaskRingProgressSnapshot>,
+    sdio_progress: Option<DriverTaskRingProgressSnapshot>,
+    direct_pwrseq_proof: bool,
+) -> bool {
+    if direct_pwrseq_proof {
+        return false;
+    }
+    matches!(
+        (cyw43_progress, sdio_progress),
+        (Some(cyw43), Some(sdio))
+            if cyw43.marker_valid
+                && cyw43.phase
+                    == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED
+                && cyw43.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+                && sdio.marker_valid
+                && sdio.phase == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
+                && sdio.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX
+    )
+}
+
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Cyw43SdioOwnerFaultStatus {
@@ -33995,6 +34024,84 @@ mod tests {
         crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn reciprocal_sdio_owner_intake_blocker_requires_exact_stale_engine_frontier() {
+        let cyw43 = DriverTaskRingProgressSnapshot {
+            marker_valid: true,
+            sequence: 3,
+            phase: pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
+            phase_name: "cyw43-sdio-pair-restart-required",
+            aux0: DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        };
+        let sdio = DriverTaskRingProgressSnapshot {
+            marker_valid: true,
+            sequence: 2,
+            phase: pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            phase_name: "command-observed",
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+        };
+
+        assert!(wifi_reciprocal_sdio_owner_intake_blocked(
+            Some(cyw43),
+            Some(sdio),
+            false,
+        ));
+        assert!(
+            !wifi_reciprocal_sdio_owner_intake_blocked(Some(cyw43), Some(sdio), true),
+            "direct power-sequence proof must remain authoritative",
+        );
+        for (cyw43_progress, sdio_progress) in [
+            (None, Some(sdio)),
+            (Some(cyw43), None),
+            (
+                Some(DriverTaskRingProgressSnapshot {
+                    marker_valid: false,
+                    ..cyw43
+                }),
+                Some(sdio),
+            ),
+            (
+                Some(DriverTaskRingProgressSnapshot {
+                    phase:
+                        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
+                    ..cyw43
+                }),
+                Some(sdio),
+            ),
+            (
+                Some(DriverTaskRingProgressSnapshot { aux0: 0, ..cyw43 }),
+                Some(sdio),
+            ),
+            (
+                Some(cyw43),
+                Some(DriverTaskRingProgressSnapshot {
+                    marker_valid: false,
+                    ..sdio
+                }),
+            ),
+            (
+                Some(cyw43),
+                Some(DriverTaskRingProgressSnapshot {
+                    phase: pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+                    ..sdio
+                }),
+            ),
+            (
+                Some(cyw43),
+                Some(DriverTaskRingProgressSnapshot {
+                    aux0: DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+                    ..sdio
+                }),
+            ),
+        ] {
+            assert!(
+                !wifi_reciprocal_sdio_owner_intake_blocked(cyw43_progress, sdio_progress, false,),
+                "partial or mutated progress evidence must fail closed",
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]

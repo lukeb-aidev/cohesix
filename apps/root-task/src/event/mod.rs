@@ -11744,6 +11744,20 @@ where
             .and_then(|progress| Self::wifi_sdio_runtime_progress_gate(progress.phase));
         let cyw43_progress_gate = cyw43_runtime_progress
             .and_then(|progress| Self::wifi_cyw43_runtime_progress_gate(progress.phase));
+        let direct_pwrseq_proof = snapshot.is_some()
+            || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready)
+            || sdio_runtime_status.is_some_and(|status| {
+                status.stage == "engine-init" && status.status == "wifi-pwrseq-failed"
+            })
+            || sdio_runtime_progress.is_some_and(|progress| {
+                Self::wifi_sdio_runtime_progress_gate(progress.phase) == Some(1)
+            });
+        let reciprocal_sdio_owner_intake_blocked = !runtime_bootstrap_failed
+            && crate::drivers::driver_task_net::wifi_reciprocal_sdio_owner_intake_blocked(
+                cyw43_runtime_progress,
+                sdio_runtime_progress,
+                direct_pwrseq_proof,
+            );
         let cyw43_fault_gate: Option<u8> = if explicit_join_security {
             None
         } else {
@@ -12034,10 +12048,18 @@ where
             ));
             self.emit_console_line(prerequisite.as_str());
         }
+        if reciprocal_sdio_owner_intake_blocked {
+            let prerequisite = format_message(format_args!(
+                "wifi: prerequisite name=reciprocal-sdio-owner-intake status=fail cyw43_phase={} sdio_phase={} next=runtime-power-reset",
+                cyw43_runtime_progress.map_or("none", |progress| progress.phase_name),
+                sdio_runtime_progress.map_or("none", |progress| progress.phase_name),
+            ));
+            self.emit_console_line(prerequisite.as_str());
+        }
         self.emit_wifi_gate_line(
             1,
             "runtime-power-reset",
-            if runtime_bootstrap_failed {
+            if runtime_bootstrap_failed || reciprocal_sdio_owner_intake_blocked {
                 "blocked"
             } else {
                 Self::wifi_startup_gate_status(1, direct_proof_gate, failing_gate)
@@ -12050,6 +12072,8 @@ where
                 sdio_runtime_progress.map_or("none", |progress| progress.phase_name),
                 if runtime_bootstrap_failed {
                     "runtime-resource-admission"
+                } else if reciprocal_sdio_owner_intake_blocked {
+                    "reciprocal-sdio-owner-intake"
                 } else {
                     "none"
                 },
@@ -25393,6 +25417,129 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_cyw43_runtime_progress_next_action(phase),
             "inspect-prior-cyw43-sdio-owner-frontier-and-restart-cause",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_pair_restart_with_stale_sdio_engine_marker_blocks_gate_one_on_owner_intake() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let sdio = crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT;
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            cyw43,
+            3,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            sdio,
+            2,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            pi4_driver_abi::DRIVER_RUNTIME_ENGINE_INIT_AUX,
+        );
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.emit_wifi_startup_gates_from_evidence(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "linked-runtime-test",
+        );
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
+
+        assert!(
+            rendered.contains(
+                "wifi: prerequisite name=reciprocal-sdio-owner-intake status=fail cyw43_phase=cyw43-sdio-pair-restart-required sdio_phase=command-observed next=runtime-power-reset"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: gate 1 name=runtime-power-reset status=blocked evidence=power=unknown reset=unknown pwrseq_status=unknown pwrseq_phase=command-observed dependency=reciprocal-sdio-owner-intake"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("wifi: gate 1 name=runtime-power-reset status=fail"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("failure_domain=cyw43-sdio-pair-restart-required"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_real_pwrseq_fault_remains_a_gate_one_failure_during_pair_restart() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let sdio = crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT;
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            cyw43,
+            3,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            sdio,
+            2,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            pi4_driver_abi::DRIVER_RUNTIME_ENGINE_INIT_AUX,
+        );
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.emit_wifi_startup_gates_from_evidence(
+            None,
+            None,
+            None,
+            None,
+            Some(crate::drivers::driver_task_net::SdioRuntimeReplayStatus {
+                stage: "engine-init",
+                status: "wifi-pwrseq-failed",
+            }),
+            None,
+            None,
+            "linked-runtime-test",
+        );
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
+
+        assert!(
+            !rendered.contains("prerequisite name=reciprocal-sdio-owner-intake"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: gate 1 name=runtime-power-reset status=fail evidence=power=unknown reset=unknown pwrseq_status=wifi-pwrseq-failed pwrseq_phase=command-observed dependency=none"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: next_action=inspect-sdio-owned-mailbox-wl-on-low-high blocker=wifi-pwrseq-failed"),
+            "{rendered}"
         );
     }
 

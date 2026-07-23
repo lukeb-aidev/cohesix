@@ -4951,8 +4951,8 @@ const fn sdio_handoff_must_delete_endpoint(endpoint: usize, recovery_endpoint: u
 /// Root may use this ring only for descriptor replay and SDIO engine bootstrap.
 /// The transition succeeds only after those turns are drained and both sealed
 /// peers are admitted. Deleting root's endpoint cap leaves the child receive
-/// cap alive for notification-driven CYW43 service while removing root's send
-/// authority.
+/// cap and CYW43's separately installed send-only copy alive for serialized
+/// owner service while removing root's steady send authority.
 #[cfg(feature = "kernel")]
 pub fn handoff_sdio_command_ring_to_cyw43(
     cyw43_engine_completion: DriverTaskCompletionRecord,

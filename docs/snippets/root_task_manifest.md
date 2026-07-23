@@ -31,7 +31,7 @@
 - `root_task.driver_images.pi4-sdio-runtime`: contract=`sdio-host` hot_path=`sdio-host` artifact=`cohesix/bin/pi4-driver-sdio` root_context_required=`false` hardware_state_migrated=`true`
 - `root_task.driver_images.pi4-pcie-runtime`: contract=`pcie-root` hot_path=`pcie-root` artifact=`cohesix/bin/pi4-driver-pcie` root_context_required=`false` hardware_state_migrated=`true`
 - `root_task.driver_images.irq.sdio-host`: irq=`158` badge=`159` handler_slot=`4` notification_slot=`3` trigger=`level`
-- `root_task.driver_images.bus_link.cyw43-sdio`: client=`cyw43-wifi` owner=`sdio-host` notifications=`3:3:8:10` shared=`4096+32768` link_epoch=`1129927425` dpc_event=`160+96` depth=`4`
+- `root_task.driver_images.bus_link.cyw43-sdio`: client=`cyw43-wifi` owner=`sdio-host` local_notifications=`3:3` client_to_owner=`endpoint:8` owner_to_client=`notification:10` shared=`4096+32768` link_epoch=`1129927425` dpc_event=`160+96` depth=`4`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`

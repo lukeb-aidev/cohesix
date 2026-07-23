@@ -2578,7 +2578,7 @@ impl DriverRuntimeImagePolicy {
                 .any(DriverRuntimeBusLinkSpec::is_cyw43_sdio_dpc_link);
             if !has_cyw43_sdio_link {
                 bail!(
-                    "root_task.driver_images.required missing reciprocal cyw43-sdio notification topology"
+                    "root_task.driver_images.required missing cyw43-sdio endpoint/notification DPC topology"
                 );
             }
         }
@@ -2684,7 +2684,7 @@ impl DriverRuntimeBusLinkSpec {
             || self.owner_notification_slot == self.owner_to_client_slot
         {
             bail!(
-                "driver runtime bus link {} local and peer notification slots must differ",
+                "driver runtime bus link {} local-notification and peer-doorbell slots must differ",
                 self.channel
             );
         }
