@@ -6699,10 +6699,11 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn physical_pi_cspace_preflight_rejects_13_bits_and_admits_14_bits() {
-        const CURRENT_LINKED_RUNTIME_PAGES: usize = 203;
+        const CURRENT_LINKED_RUNTIME_PAGES: usize = 257;
+        const DECLARED_LINKED_RUNTIME_PAGE_BOUND: usize = 320;
         const OBSERVED_EMPTY_START: usize = 0x0a6a;
 
-        fn required_slots(contracts: &[super::DriverTaskContract]) -> usize {
+        fn required_slots(contracts: &[super::DriverTaskContract], code_pages: usize) -> usize {
             contracts
                 .iter()
                 .try_fold(
@@ -6714,7 +6715,7 @@ mod tests {
                             )?;
                         let slots = super::isolated_runtime_cspace_upper_bound(
                             spec,
-                            CURRENT_LINKED_RUNTIME_PAGES,
+                            code_pages,
                             *contract == super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
                         )?;
                         total.checked_add(slots)
@@ -6729,15 +6730,20 @@ mod tests {
             super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_SELECTED,
             super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_SELECTED,
         ] {
-            let required = required_slots(contracts);
-            assert!(
-                required > capacity_13,
-                "13-bit Pi CSpace must reject the linked-runtime upper bound"
-            );
-            assert!(
-                required <= capacity_14,
-                "14-bit Pi CSpace must retain the declared post-bootstrap reserve"
-            );
+            for code_pages in [
+                CURRENT_LINKED_RUNTIME_PAGES,
+                DECLARED_LINKED_RUNTIME_PAGE_BOUND,
+            ] {
+                let required = required_slots(contracts, code_pages);
+                assert!(
+                    required > capacity_13,
+                    "13-bit Pi CSpace must reject the linked-runtime upper bound"
+                );
+                assert!(
+                    required <= capacity_14,
+                    "14-bit Pi CSpace must retain the declared post-bootstrap reserve"
+                );
+            }
         }
     }
 
@@ -6749,9 +6755,9 @@ mod tests {
         )
         .expect("HDMI runtime spec");
         let without_framebuffer =
-            super::isolated_runtime_cspace_upper_bound(spec, 203, false).expect("bounded plan");
+            super::isolated_runtime_cspace_upper_bound(spec, 320, false).expect("bounded plan");
         let with_framebuffer =
-            super::isolated_runtime_cspace_upper_bound(spec, 203, true).expect("bounded plan");
+            super::isolated_runtime_cspace_upper_bound(spec, 320, true).expect("bounded plan");
 
         assert_eq!(
             with_framebuffer - without_framebuffer,

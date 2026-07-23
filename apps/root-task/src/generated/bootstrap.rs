@@ -31,7 +31,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "8edc337391b19802d98ed1732dfda0444d10bc8e51a0e81559bca9a00858a2f6";
+    "539fdc782bbce2c01b986ee68d2d0837061aa79900d63800fbfb496048d774e8";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -227,7 +227,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "serial-console",
         artifact: "cohesix/bin/pi4-driver-serial",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 256,
+        code_pages: 320,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -243,7 +243,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "usb-keyboard",
         artifact: "cohesix/bin/pi4-driver-usb",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 256,
+        code_pages: 320,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -259,7 +259,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "hdmi-text",
         artifact: "cohesix/bin/pi4-driver-hdmi",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 256,
+        code_pages: 320,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -275,7 +275,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "genet-nic",
         artifact: "cohesix/bin/pi4-driver-genet",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 256,
+        code_pages: 320,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -291,7 +291,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "cyw43-wifi",
         artifact: "cohesix/bin/pi4-driver-cyw43",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 256,
+        code_pages: 320,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -307,7 +307,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "sdio-host",
         artifact: "cohesix/bin/pi4-driver-sdio",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 256,
+        code_pages: 320,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -323,7 +323,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "pcie-root",
         artifact: "cohesix/bin/pi4-driver-pcie",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 256,
+        code_pages: 320,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -750,7 +750,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.6",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=ee489ec164ec1cd68dab659446d67526142a4e2ddaa2b6895dfc9f307143fd6c",
+    "manifest.sha256=0c716655fb26b840529d581b247fd66d2e1c4875ff9f4dc886de43bce1ba6777",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
