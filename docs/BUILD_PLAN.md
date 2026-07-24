@@ -9716,6 +9716,9 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
    return, timeout, cancellation, fault, and revoke invariants,
 8. explicit proof assumptions, residual gaps, and non-claims,
 9. a claim ladder that downstream milestones can cite without collapsing static proof, model checking, QEMU evidence, Pi 4 evidence, and AWS target evidence into one assurance label.
+10. a version-pinned NIST SP 800-53 LOW assessment layer that consumes named
+    Cohesix claims and test-plan evidence without presenting a crosswalk as
+    certification.
 
 ### Deliverables
 
@@ -9791,9 +9794,47 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
 - Emit evidence under `out/verification/<run-id>/` with machine-readable summaries and human-readable logs.
 - Update `docs/TEST_PLAN.md` so formal verification augments, but does not replace, the staged Test Plan and hardware proof gates.
 
+#### G) NIST assessment-evidence integrity
+- Reintegrate `tools/security-nist` as an assessment-evidence consumer of the
+  verification claim register, generated manifest witnesses, staged Test Plan,
+  and target-qualified evidence archive. It must not become an independent
+  authority for runtime behavior or proof claims.
+- Pin the registry to the selected NIST SP 800-53, SP 800-53A, and SP 800-53B
+  releases, including source provenance and digests. Use the official
+  machine-readable OSCAL content to validate identifiers and LOW-baseline
+  membership; builds and release checks must not depend on an unpinned live
+  network fetch.
+- Require the tailored registry to account for every selected LOW-baseline
+  control and enhancement with an implementation disposition of `implemented`,
+  `inherited`, `planned`, or `not_applicable`, plus a separate assessment result
+  of `satisfied`, `failed`, or `not_assessed`. Record explicit tailoring
+  rationale, implementation responsibility, and assessment methods. Absence is
+  an error, not implicit tailoring.
+- Replace path-existence and documentation-phrase evidence with typed records
+  that identify a verification claim id or Test Plan action, assessment
+  objective, target/profile, manifest or image identity, result artifact,
+  evidence class, and freshness rule. A generic smoke script or existing file
+  cannot by itself satisfy multiple unrelated implemented controls.
+- Preserve proof-layer separation: static checks, bounded model checking, QEMU,
+  Pi 4, host, and inherited-provider evidence are not interchangeable. Missing,
+  expired, wrong-profile, or identity-mismatched evidence produces
+  `not_assessed` or a failed objective without silently changing or validating
+  the separately recorded implementation disposition.
+- Generate the human-readable NIST report and a machine-readable,
+  OSCAL-compatible component/assessment-results projection from the same
+  registry and reviewed run evidence. Generated reports must be regenerated and
+  compared in CI and must state that the output is a tailored evidence index,
+  not certification or authorization.
+- Run fast registry/schema/report-drift checks on affected pull requests and a
+  target-qualified assessment during scheduled or release verification.
+  Physical-hardware objectives require fresh Pi 4 evidence only when the
+  assessed claim requires hardware; routine host/QEMU changes must not fabricate
+  or silently inherit that proof.
+
 ### Commands
 - `scripts/check-generated.sh`
 - `cargo test -p coh-rtc`
+- `cargo test -p security-nist`
 - `cargo test -p secure9p-codec`
 - `cargo test -p secure9p-core`
 - `cargo test -p pi4-driver-abi`
@@ -9810,6 +9851,13 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
 - State models run at documented bounds and any counterexample is either fixed or recorded as a blocker with a named later milestone.
 - `docs/FORMAL_VERIFICATION.md` states exact claims, assumptions, and non-claims, including that Pi 4 hardware behavior still requires fresh board evidence.
 - Verification evidence is reproducible and archived under `out/verification/<run-id>/`.
+- The NIST LOW registry is complete for its pinned baseline, every positive
+  assessment result resolves to current typed evidence for the exact
+  claim/profile/identity, and the Markdown and machine-readable reports are
+  deterministic and drift-checked.
+- No NIST output upgrades a documentation phrase, file-existence check, stale
+  run, QEMU result, inherited assertion, or unsigned measurement into stronger
+  proof or a certification claim.
 
 ### Compiler touchpoints
 - `coh-rtc` emits proof witnesses from the same IR used for generated Rust, docs snippets, policies, and manifests.
@@ -9903,6 +9951,29 @@ Checks:
   - The gate emits stable evidence under `out/verification/<run-id>/` and fails closed on drift, proof failures, or unsupported proof claims.
 Deliverables:
   - CI-ready verification baseline that later milestones can cite.
+
+Title/ID: m27b-nist-assessment-evidence-integrity
+Milestone: Milestone 27b — Formal Verification Baseline + Proof-Carrying Manifests / NIST assessment-evidence integrity
+Goal: Reintegrate the dormant NIST harness as a version-pinned, target-qualified assessment-evidence gate over canonical Cohesix claims and Test Plan results.
+Inputs: tools/security-nist, docs/nist/controls.toml, docs/nist/REPORT.md, docs/SECURITY_NIST_800_53.md, docs/FORMAL_VERIFICATION.md, configs/test_plan_actions.toml, scripts/ci/test_plan_run.sh, scripts/ci/verification_gate.sh, generated manifest witnesses, pinned official NIST SP 800-53/53A/53B and OSCAL release metadata.
+Changes:
+  - tools/security-nist — validate pinned catalog/baseline provenance, complete tailored LOW-baseline accounting, typed assessment objectives, claim/Test Plan bindings, target/profile and manifest/image identity, evidence freshness, and deterministic Markdown plus OSCAL-compatible output; add unit and negative tests.
+  - docs/nist/controls.toml — add release metadata, tailoring rationale, implementation responsibility, assessment methods/objectives, typed evidence bindings, target classes, and freshness rules without making it a second source of generated Cohesix behavior.
+  - scripts/ci/verification_gate.sh + configs/test_plan_actions.toml — add fast structural/report-drift checks and scheduled/release target-qualified assessment actions with bounded archived evidence.
+  - docs/nist/REPORT.md — regenerate only from the registry and reviewed run artifacts, including explicit gaps, stale/unavailable evidence, non-claims, and the no-certification disclaimer.
+  - docs/SECURITY_NIST_800_53.md + docs/TEST_PLAN.md — document tailoring, assessment cadence, proof-class separation, inherited-control assumptions, report provenance, and the distinction between automated evidence and human review.
+Commands:
+  - cargo test -p security-nist
+  - scripts/ci/verification_gate.sh --nist-only --state-dir out/verification/m27b-nist
+  - scripts/check-generated.sh
+Checks:
+  - Every control and enhancement in the pinned tailored LOW baseline is explicitly accounted for; unknown, duplicate, omitted, or release-mismatched identifiers fail closed.
+  - Every positive automated objective resolves to a passing named claim or Test Plan action for the exact target/profile and manifest/image identity within its freshness window.
+  - Missing, stale, wrong-profile, inherited-without-provider, documentation-only, and QEMU-for-hardware substitutions remain visible gaps and cannot produce an implemented assessment result.
+  - Consecutive report generation is byte-stable; committed Markdown and machine-readable outputs drift-fail in CI; tests cover malformed registries, stale artifacts, profile mismatches, incomplete baselines, and evidence-strength downgrades.
+  - Reports describe a tailored evidence assessment, never certification, accreditation, authorization, or proof beyond the underlying Cohesix claim.
+Deliverables:
+  - Tested NIST assessment harness, complete version-pinned LOW registry, deterministic human and machine-readable reports, and archived target-qualified assessment evidence.
 ```
 
 
