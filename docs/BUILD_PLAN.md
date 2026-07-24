@@ -147,7 +147,9 @@ manual availability, profile selection, implementation, and target proof.
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
 | [28b1](#28b1) | Host Integration Registry + Provider/Executor + Use-Case Conformance | Pending |
+| [28b2](#28b2) | Persistent Semantic Object Fabric + Context Capsules (Host-Side) | Pending |
 | [28c](#28c) | Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT | Pending |
+| [28c1](#28c1) | Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) | Pending |
 | [28d](#28d) | MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later | Pending |
 | [28e](#28e) | Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle | Pending |
 | [28f](#28f) | SwarmUI Desktop Workbench: Spectrum Shell + Live Hive Continuity | Pending |
@@ -9702,14 +9704,14 @@ Deliverables:
 ## Milestone 27b — Formal Verification Baseline + Proof-Carrying Manifests <a id="27b"></a>
 [Milestones](#Milestones)
 
-**Why now (assurance):** After Milestone 27 gives Cohesix a persistent, manifest-bound Pi 4/QEMU substrate, later operator, production-authority, AI, and AWS milestones need stronger assurance than regression tests and evidence packs alone. Milestone 27b establishes the first formal-verification baseline around the actual Cohesix authority model: generated manifests, Secure9P/NineDoor bounds, HAL admission, driver-task ABI/resource grants, ticket/namespace confinement, and replayable state transitions. It does not claim full end-to-end formal verification of the whole OS or physical hardware behavior.
+**Why now (assurance):** After Milestone 27 gives Cohesix a persistent, manifest-bound Pi 4/QEMU substrate, later operator, production-authority, semantic-object, AI, inference, and AWS milestones need stronger assurance than regression tests and evidence packs alone. Milestone 27b establishes the first formal-verification baseline around the actual Cohesix authority model: generated manifests, Secure9P/NineDoor bounds, HAL admission, driver-task ABI/resource grants, ticket/namespace confinement, and replayable state transitions. It does not claim full end-to-end formal verification of the whole OS or physical hardware behavior.
 
 **As-built alignment note:** Cohesix already has strong verification hooks: compiler-generated manifests, Secure9P red lines, no-unsafe protocol crates, HAL ownership rules, staged regression plans, evidence packs, and seL4 as the upstream kernel proof base. It does **not** yet have machine-checked Cohesix-specific proof artifacts, proof-carrying manifest witnesses, TLA+/PlusCal state models, Kani/Miri proof jobs, or a CI verification gate that binds those artifacts to generated Rust and docs. Milestone 27b introduces those surfaces; older prose must not describe Cohesix as formally verified until the claims in this milestone have passing evidence.
 
 **Non-negotiable constraints**
 - No proof claim may exceed the checked artifact. QEMU proof, Pi 4 hardware evidence, static analysis, bounded model checking, TLA+ state exploration, and inherited seL4 kernel assumptions must remain separate.
 - Do not claim full seL4-style refinement proof from Cohesix spec to binary unless that proof exists. The accepted claim for this milestone is bounded, machine-checked verification of selected Cohesix contracts plus explicit assumptions.
-- Later milestones may cite 27b only through named claim ids and evidence classes. A downstream production, AI, MCP/A2A, or AWS task must state whether it depends on inherited seL4 assumptions, Cohesix static/generated checks, bounded model checks, state-model exploration, QEMU/staged evidence, fresh Pi 4 evidence, or target-specific AWS evidence.
+- Later milestones may cite 27b only through named claim ids and evidence classes. A downstream production, semantic-extraction, AI, inference, MCP/A2A, or AWS task must state whether it depends on inherited seL4 assumptions, Cohesix static/generated checks, bounded model checks, state-model exploration, QEMU/staged evidence, fresh Pi 4 evidence, host-provider evidence, or target-specific AWS evidence. Importing a proof or assurance artifact into a semantic object, Context Capsule, or inference receipt never strengthens its original evidence class.
 - Formal models must describe generated/as-built interfaces, not desired future behavior. If a model and generated manifest disagree, the fix is IR/codegen/docs alignment, not weakening the model.
 - Verification tooling must be deterministic on macOS ARM64 and CI-friendly; heavyweight tools may be optional locally only if CI has a bounded equivalent or checked artifact.
 - No new runtime protocols, namespace roots, ticket semantics, or HAL bypasses are permitted under the banner of verification.
@@ -9770,7 +9772,7 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
   - scheduling-context/core ownership, budget/period/refills, per-core admitted
     demand and reserves, Reply-object cardinality, donation depth, timeout
     routing, overrun policy, and consumed-time evidence,
-  - claim ids and evidence-class tags consumed by downstream production, AI, MCP/A2A, Pi 4, and AWS milestone gates.
+  - claim ids and evidence-class tags consumed by downstream production, semantic-object, AI, inference, MCP/A2A, Pi 4, and AWS milestone gates.
 - Add a verifier that checks the witness against the resolved manifest and generated Rust tables, failing closed on drift.
 - Witnesses must be regenerated from IR; hand-editing witness output is invalid.
 
@@ -11163,7 +11165,8 @@ Commands:
 Checks:
   - Profiles cannot claim 28e production Worker ticket/lease binding, driver-inventory ledger projection, or structured quarantine authority from 28b alone, and cannot reduce executable 26e Worker/driver authority to endpoint-only metadata compatibility.
 Deliverables:
-  - Honest dependency gate for 28c/28d/29b host actuation work and 28e VM authority closure.
+  - Honest dependency gate for 28b2/28c/28c1/28d/29b host semantic,
+    inference, and actuation work plus 28e VM authority closure.
 
 Title/ID: m28b-gateway-authority-performance
 Goal: Prove delegated REST identity, idempotency, writer-epoch fencing, and audit/replay emission stay bounded in the gateway path.
@@ -11174,7 +11177,7 @@ Changes:
 Commands:
   - scripts/ci/gateway_perf_probe.sh --scenario delegated-rest-authority --state-dir out/bench/m28b-gateway-authority
 Checks:
-  - Read/status latency, delegated write latency, refusal counts, broker queue depth, ticket-cache behavior, and audit emission cost remain bounded or are classified before 28c/28d depend on the gateway.
+  - Read/status latency, delegated write latency, refusal counts, broker queue depth, ticket-cache behavior, and audit emission cost remain bounded or are classified before 28b2/28c/28c1/28d depend on the gateway.
   - Probe evidence preserves no-retry accounting and does not count as fresh Pi hardware throughput proof unless it exposes a runtime-path regression that triggers the full REST harness.
 Deliverables:
   - Gateway authority performance ledger for downstream MCP/A2A and AI-host-control milestones.
@@ -11200,9 +11203,9 @@ After Milestone 28b:
 [Milestones](#Milestones)
 
 **Why now (coexistence floor):**
-Milestone 25g delivered the host-ticket mechanism and high-value adapters. Milestone 28b makes writes attributable, replay-safe, fenced, durable, and audit-first. The remaining adoption gap is broader: Cohesix needs one compiler-owned provider/action contract, real conformance evidence for each ecosystem it claims to coexist with, and installable host-side deployment shapes that do not smuggle new authority or heavy stacks into the VM. This milestone turns the hardened authority floor into a production coexistence gate before AI run control, MCP/A2A, or AI namespace work can depend on those providers.
+Milestone 25g delivered the host-ticket mechanism and high-value adapters. Milestone 28b makes writes attributable, replay-safe, fenced, durable, and audit-first. The remaining adoption gap is broader: Cohesix needs one compiler-owned provider/action contract, real conformance evidence for each ecosystem it claims to coexist with, and installable host-side deployment shapes that do not smuggle new authority or heavy stacks into the VM. This milestone turns the hardened authority floor into a production coexistence gate before semantic extraction, AI run control, inference interoperability, MCP/A2A, or AI namespace work can depend on those providers.
 
-**As-built alignment note:** Current host tools already project some live GPU/CUDA/NVML inventory, host-side PEFT/model lifecycle files, host sidecar state, host tickets, REST gateway access, evidence packs, and SIEM exports. Kubernetes, systemd, Docker, launchd/macOS, NVIDIA/CUDA/NVML/MIG, Apple GPU runtimes, PEFT, FUSE, federation, and sidecar flows have an uneven mix of real commands, fixtures, mock/dry-run coverage, and known production gaps. In particular, current GPU publication is not GPU execution/device-isolation proof; MIG exists only in the Python mock; `coh run` and the vadd/matmul job path execute locally or synthesize status without binding CUDA; live model publication can fall back to fixture models and an implicit active model; Python can author its own “receipts”; PEFT examples create literal fake adapter bytes; FUSE does not yet prove the canonical `/shard` view on every supported host; federation is not yet a durable end-to-end receipt relay; systemd/Kubernetes/NVIDIA “discovery” can read target-preseeded topology; Jetson/network providers are success no-ops; MODBUS/DNP3 delivery is an in-memory model; all nine built-in playbooks stop after generic control writes/probes; SwarmUI's Playwright lane injects a fake Tauri bridge; and evidence/SIEM/release helpers do not yet provide one strict proof and package boundary. Cohesix therefore does **not** yet have one generated integration dependency and provider/action contract shared by host-ticket-agent, REST, Python, FUSE, UI, MCP/A2A, docs, packaging, release checks, and tests. It also lacks ecosystem-wide live conformance, production install bundles, identity-federation mappings, Prometheus/OpenTelemetry projections, and a use-case evidence matrix that separates executable-Worker proof from real external execution.
+**As-built alignment note:** Current host tools already project some live GPU/CUDA/NVML inventory, host-side PEFT/model lifecycle files, host sidecar state, host tickets, REST gateway access, evidence packs, and SIEM exports. Kubernetes, systemd, Docker, launchd/macOS, NVIDIA/CUDA/NVML/MIG, Apple GPU runtimes, PEFT, FUSE, federation, and sidecar flows have an uneven mix of real commands, fixtures, mock/dry-run coverage, and known production gaps. In particular, current GPU publication is not GPU execution/device-isolation proof; MIG exists only in the Python mock; `coh run` and the vadd/matmul job path execute locally or synthesize status without binding CUDA; live model publication can fall back to fixture models and an implicit active model; Python can author its own “receipts”; PEFT examples create literal fake adapter bytes; FUSE does not yet prove the canonical `/shard` view on every supported host; federation is not yet a durable end-to-end receipt relay; systemd/Kubernetes/NVIDIA “discovery” can read target-preseeded topology; Jetson/network providers are success no-ops; MODBUS/DNP3 delivery is an in-memory model; all nine built-in playbooks stop after generic control writes/probes; SwarmUI's Playwright lane injects a fake Tauri bridge; and evidence/SIEM/release helpers do not yet provide one strict proof and package boundary. Cohesix therefore does **not** yet have one generated integration dependency and provider/action contract shared by host-ticket-agent, REST, Python, FUSE, UI, later semantic extractors, inference gateways, MCP/A2A, docs, packaging, release checks, and tests. It also lacks ecosystem-wide live conformance, production install bundles, identity-federation mappings, Prometheus/OpenTelemetry projections, and a use-case evidence matrix that separates executable-Worker proof from real external execution.
 
 Milestone 26e freezes the compiler-owned `host-integration-dependency/v1` graph and proves direct executable Worker control plus fixture-backed GPU and PEFT result-to-Worker receipt paths. This milestone extends that same graph; it must not create a parallel hand-maintained catalog. A 26e `worker-runtime` release is a prerequisite for any use-case row that names an executable Worker, but it is not by itself production provider, data-plane, or use-case acceptance.
 
@@ -11215,7 +11218,7 @@ Milestone 26e freezes the compiler-owned `host-integration-dependency/v1` graph 
 
 **Goal**
 Define and prove the production coexistence contract:
-1. Extend the 26e integration dependency graph with one provider/action and integration-surface registry from compiler IR, and use it everywhere host-side actuation or projection is described, validated, displayed, packaged, or exposed.
+1. Extend the 26e integration dependency graph with one provider/action and integration-surface registry from compiler IR, and use it everywhere host-side actuation, semantic extraction, inference, or projection is described, validated, displayed, packaged, or exposed.
 2. Map enterprise, Kubernetes, and host identities into delegated Cohesix tickets without making an identity provider part of the VM TCB.
 3. Prove provider and external-executor conformance for systemd, launchd, Docker, Kubernetes, NVIDIA/CUDA/NVML/MIG, optional Apple MPS/MLX/Metal execution, real bounded GPU workloads, PEFT/model registry, inference reload, Jetson/network state, SIEM, Prometheus/OpenTelemetry, federation, and live OT/industry sidecars.
 4. Prove the non-provider surfaces that complete a workflow: direct console/`cohsh`, REST/gateway, FUSE, Python, SwarmUI, federation/fleet, CAS, evidence/release, telemetry/exporters, and Jetson/network sidecars.
@@ -11240,7 +11243,9 @@ Implementation requirements:
 - Extend `coh-rtc` with `providers.*` IR for:
   - provider id, version, enablement profile, action names, target selectors, dry-run/live mode, idempotency requirements, writer-epoch requirements, policy approval requirements, receipt schema, redaction rules, and evidence refs.
   - initial families: `systemd`, `launchd`, `docker`, `k8s`, `nvidia`, `cuda`, `nvml`, `mig`, `apple_ml`, `jetson`, `network`, `gpu.lease`, `gpu.workload`, `peft`, `model_registry`, `mac_release`, `endpoint_compliance`, `siem`, `prometheus`, `otel`, `modbus`, `dnp3`, `can`, `iec104`, `dicom`, and `ccsds`.
-  - optional future families may be reserved but must generate unavailable status until an implementation and tests exist.
+  - optional future families, including semantic extractors/stores and inference
+    gateways/providers, may be reserved but must generate unavailable status
+    until their owning Milestone 28b2 or 28c1 implementation and tests exist.
 - Extend the same IR with `integration_surfaces.*` records for:
   - `direct_console`, `cohsh`, `coh`, `host_ticket_agent`, `hive_gateway`, `rest`, `fuse_direct`, `fuse_rest`, `python_sdk`, `swarmui`, `federation`, `fleet`, `gpu_bridge`, `host_sidecar`, `cas`, `evidence`, `release_bundle`, `siem`, `prometheus`, `otel`, `jetson`, and `network`;
   - surface owner, transport/topology, read/write posture, required provider actions, required Worker roles and evidence tier, identity/secret requirements, durability owner, package artifacts, conformance runner, and explicit `live`, `fixture`, `mock`, `dry_run`, `disabled`, `missing`, or `unknown` observed mode;
@@ -11254,7 +11259,8 @@ Implementation requirements:
   - `coh` and `cohsh` host-tool help,
   - Python SDK integration defaults,
   - OpenAPI/REST docs,
-  - later MCP tool schemas and A2A skill schemas,
+  - later semantic extractor/object schemas, inference compatibility/provider
+    profiles, MCP tool schemas, and A2A skill schemas,
   - docs snippets and test fixtures.
 - Reject provider actions with free-form shell commands, arbitrary host paths, raw provider credentials, unbounded payloads, or target grammars that cannot be validated before executor dispatch.
 - Fail generation when a public scenario, playbook, demo, runbook, package, or host binary references an unregistered provider/surface, or when an enabled surface lacks an exact package artifact and conformance owner.
@@ -11304,7 +11310,12 @@ Implementation requirements:
   direct `subprocess.run`, `echo ok`, vadd/matmul descriptor synthesis, and
   status breadcrumbs remain diagnostics/fixtures and cannot satisfy execution.
 - A use case may remain `integration_pattern`, `fixture`, `mock`, `dry_run`, or `not_enabled` without a reference executor. It may become `production_proven` only when a named external executor/data-plane implementation, deployment profile, failure/recovery tests, and live evidence are shipped or explicitly supplied and accepted by the conformance runner.
-- Milestone 28c owns the production PEFT/training/evaluation/reload transaction. This milestone owns the common executor schema, system/GPU/provider conformance, federation closure, and the fail-closed classification used by every use case.
+- Milestone 28b2 owns semantic object/extractor/capsule implementation and
+  Milestone 28c owns the production PEFT/training/evaluation/reload
+  transaction. Milestone 28c1 owns the compatible inference wire, provider
+  adapters, and inference receipts. This milestone owns their common registry
+  floor, system/GPU/provider conformance, federation closure, and the
+  fail-closed classification used by every use case.
 
 ### 3) Read visibility classification
 **Purpose:** Ensure read-only projections do not leak cross-caller state.
@@ -11399,7 +11410,7 @@ Implementation requirements:
 - The initial inventory must include the six AI Hive scenarios; all nine built-in playbooks (`mac-release-factory`, `mac-private-peft-grid`, `mac-endpoint-compliance`, `jetson-traffic-safety`, `jetson-manufacturing-safety`, `jetson-critical-infra`, `mixed-closed-loop-ai-factory`, `mixed-medical-edge-ai`, and `mixed-logistics-digital-twin`); the Security Evidence, Operator-First, LeJEPA, and Jetson Gesture Language activities; and Milestone 18 industrial patterns.
 - Classify each row as exactly one of `current_primitive`, `integration_pattern`, `workflow_template`, `mock_only`, `read_only`, `not_enabled`, `planned`, or `production_proven`. A playbook that runs against a mock backend remains `workflow_template` or `mock_only`, never `production_proven`.
 - Each row records milestone prerequisites; target/profile; Worker tier (`model_or_session`, `m26e_executable`, or `m28e_production_bundle`); topology/transport; required host tools and exact package artifacts; provider actions and read surfaces; external executor/data-plane owner; authority/identity/secret refs; durability/retention owner; rollback/recovery/fail-safe behavior; observability/evidence; and proof class.
-- Conditional validation is fail-closed: a row claiming an executable Worker requires accepted 26e target evidence; restart-persistent VM state requires Milestone 27; a production ticket/lease bound to a deployed Worker requires Milestone 28e; and a PEFT training-to-runtime claim requires the Milestone 28c transaction.
+- Conditional validation is fail-closed: a row claiming an executable Worker requires accepted 26e target evidence; restart-persistent VM state requires Milestone 27; a production ticket/lease bound to a deployed Worker requires Milestone 28e; a semantic-context claim requires accepted Milestone 28b2 snapshot/capsule evidence; a PEFT training-to-runtime claim requires the Milestone 28c transaction; and an auditable compatible-inference claim requires accepted Milestone 28c1 provider/receipt evidence.
 - Each production-proven row must link to:
   - provider registry action(s),
   - delegated authority requirement,
@@ -11461,7 +11472,7 @@ Implementation requirements:
 - OT/industry sidecars remain host-only, read-only-first, and profile-gated; write-capable actions are refused unless explicitly admitted by provider policy and approval flow.
 - Evidence packs include provider registry, conformance matrix, identity-mapping refs, packaging profile, exporter schemas, and provider receipts.
 - Every public scenario, playbook, demo, runbook, and example has one stable use-case row. A row can reach `production_proven` only when its Worker tier, provider/surface modes, external executor, package artifacts, authority, recovery, and live evidence all satisfy the generated graph.
-- Provider/exporter performance evidence shows registry lookup, validation/refusal, identity mapping, receipt rendering, and exporter projection remain bounded; material regressions are classified as host provider overhead, gateway/auth overhead, or evidence-pack size overhead before 28c/28d/29b depend on the coexistence registry.
+- Provider/exporter performance evidence shows registry lookup, validation/refusal, identity mapping, receipt rendering, and exporter projection remain bounded; material regressions are classified as host provider overhead, gateway/auth overhead, or evidence-pack size overhead before 28b2/28c/28c1/28d/29b depend on the coexistence registry.
 - `docs/USE_CASES.md`, `docs/HOST_TOOLS.md`, `docs/API_GUIDELINES.md`, `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and `docs/TEST_PLAN.md` describe support levels exactly as proven.
 
 **Compiler touchpoints**
@@ -11686,7 +11697,7 @@ Inputs: m28b1-public-surface-live-mode-gate, m28b1-live-reference-workflows, m28
 Changes:
   - tools/coh-rtc/src/ir.rs + generated docs — stable use-case rows with proof class, Worker tier, topology, host tools, provider/surface dependencies, external executor/data plane, authority/secrets, durability/recovery, package, and evidence obligations.
   - docs/USE_CASES.md — checked support-level matrix covering all six scenarios, all nine built-in playbooks, Milestone 18 patterns, and all post-M24 demo/runbook activities.
-  - scripts/ci/use_case_gate.sh — inventory every public claim source, validate conditional 26e/27/28c/28e dependencies, scan examples/manifests for argv or embedded secrets, and require exact integration/evidence/package links.
+  - scripts/ci/use_case_gate.sh — inventory every public claim source, validate conditional 26e/27/28b2/28c/28c1/28e dependencies, scan examples/manifests for argv or embedded secrets, and require exact integration/evidence/package links.
   - generated playbook records — consume the accepted `m28b1-live-reference-workflows` DAG/evidence records and reject missing stages, controller/target topology, provider/data-plane ownership, recovery, or authoritative terminal correlation.
   - apps/coh/src/evidence.rs — include provider registry and conformance snapshots in evidence packs.
 Commands: scripts/ci/use_case_gate.sh --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28b1 && cargo test -p coh --test evidence_pack
@@ -11702,7 +11713,8 @@ Changes:
   - docs/BENCHMARKS.md + docs/TEST_PLAN.md — classify coexistence overhead separately from REST hardware performance.
 Commands: scripts/ci/provider_conformance_run.sh --perf-only --matrix configs/provider_conformance.toml --state-dir out/bench/m28b1-provider-overhead
 Checks: Provider/exporter timing stays bounded by generated limits and reports artifact-size context; failures classify host-provider, gateway/auth, or evidence-pack overhead.
-Deliverables: Provider/exporter overhead evidence for downstream AI and gateway protocol work.
+Deliverables: Provider/exporter overhead evidence for downstream semantic,
+AI, inference, and gateway protocol work.
 ```
 
 ## Outcome
@@ -11711,30 +11723,452 @@ After Milestone 28b1:
 - Provider actions, integration surfaces, exact package contents, external-executor obligations, and public use-case claims extend one compiler-owned graph shared by host tickets, REST, FUSE, Python, SwarmUI, docs, tests, release tooling, and later MCP/A2A schemas.
 - Existing ecosystems stay outside the VM TCB while still gaining delegated authority, receipts, evidence, deployment profiles, identity mapping, and observability exports.
 - Executable Worker proof remains distinct from CUDA/NVML discovery, real GPU execution/isolation, PEFT training/reload, and service/federation side effects; each production use case names and proves every required layer.
-- AI run control and MCP/A2A interop can build on proven provider and integration schemas instead of inventing action catalogs or silently treating mock workflows as live.
+- Semantic extraction, AI run control, inference interoperability, and MCP/A2A interop can build on proven provider and integration schemas instead of inventing action catalogs or silently treating mock workflows as live.
+
+## Milestone 28b2 — Persistent Semantic Object Fabric + Context Capsules (Host-Side) <a id="28b2"></a>
+[Milestones](#Milestones)
+
+**Why now (semantic substrate):**
+Milestone 28b1 establishes the compiler-owned provider, integration-surface,
+visibility, package, and evidence graph that every host-facing ecosystem
+projection must consume. Milestone 28c already plans durable AI runs,
+retrieval manifests, checkpoints, context budgets, and prefix reuse, but those
+records otherwise have no canonical semantic substrate beneath them. Treating
+repositories, compiler outputs, tests, findings, proofs, and benchmark history
+as repeatedly concatenated text would preserve the same prompt duplication and
+provenance ambiguity that the AI run model is intended to remove.
+
+This milestone introduces a host-side, content-addressed semantic object fabric
+before AI run control. It turns repository and analysis inputs into immutable,
+typed, provenance-bound objects and edges, then emits deterministic Context
+Capsules containing only the admitted views needed for a task. Cohesix remains
+the authority, evidence, and policy layer: source manifests, compilers, test
+systems, and external analyzers remain authoritative for their own outputs, and
+the semantic fabric records and relates those outputs without replacing them.
+
+**As-built alignment note:** Cohesix already has content-addressed artifacts,
+evidence packs, generated manifests, provider/integration records, bounded host
+tools, and read-visibility classes. It does **not** yet have a semantic object
+schema, immutable repository snapshot manifest, typed semantic edge model,
+extractor registry, rebuildable object index, Context Capsule schema,
+deterministic capsule planner/renderer, or semantic-selection conformance
+evidence. No current `/proc`, `/models`, `/updates`, evidence-pack, Python, or
+host-tool surface may be relabelled as that implementation. This milestone is
+host-only and must not add an in-VM semantic parser, graph database, or
+namespace root.
+
+**Prerequisites**
+- Milestone **28b1** completed for the generated provider/integration graph,
+  visibility classes, identity mapping, package profiles, authoritative
+  receipt/evidence core, and use-case maturity rules.
+- Milestone **28** completed for deterministic inspect, evidence bundle,
+  timeline, diff, and attestation utilities that semantic provenance extends
+  rather than replaces.
+- Milestone **27b** claim/evidence vocabulary available for any formal or
+  assurance statement attached to proofs, analyzer results, or generated
+  manifests. Semantic extraction must not strengthen the evidence class of an
+  imported artifact.
+
+**Goal**
+Create a persistent host-side knowledge substrate that lets Cohesix select,
+authorize, render, and audit the semantic working set used by AI and operator
+workflows:
+1. Represent source entities, interfaces, tests, documentation, findings,
+   proofs, benchmarks, models, services, devices, and capabilities as typed,
+   immutable semantic objects with explicit provenance.
+2. Represent callers, callees, ownership, test coverage, documentation,
+   benchmark, security, proof, model, service, and capability relationships as
+   typed, versioned edges.
+3. Materialize expensive views such as AST, CFG, ownership/borrow summaries,
+   call relationships, test links, benchmark history, and security history once
+   per exact source/toolchain/extractor identity.
+4. Produce deterministic `context-capsule/v1` manifests containing ordered
+   object-view references, selection reasons, omissions, truncations, authority
+   constraints, budgets, and renderer identity.
+5. Reuse Milestone 28b1 visibility and delegated-identity policy so a derived
+   object or edge never reveals more authority than its inputs.
+6. Expose local host tooling and generated SDK helpers for snapshot, inspect,
+   query, capsule plan/render, verification, evidence, and health checks without
+   requiring users to learn 9P or a new graph query language.
+7. Measure semantic paging directly: objects considered/materialized/selected,
+   bytes and estimated tokens submitted or avoided, cache/invalidation reasons,
+   query/capsule latency, and provenance/evidence overhead.
+
+**Non-Goals (Explicit)**
+- No semantic parsing, repository checkout, graph index, compiler frontend,
+  vector database, embedding model, or LLM inside the VM or root-task.
+- No in-VM `/semantic`, `/functions`, `/objects`, or Context Capsule namespace
+  root in this milestone.
+- No replacement for Git, compiler IR, rust-analyzer, SCIP, SARIF, test
+  frameworks, benchmark harnesses, SBOMs, proof tools, or Cohesix generated
+  manifests. Imported data retains its original authority and evidence class.
+- No public custom graph query protocol, ad-hoc RPC, mutable POSIX-like object
+  tree, or requirement that ecosystem clients speak Secure9P.
+- No generic prompt/blob store and no opaque transcript as semantic truth.
+  Prompt text may be rendered transiently under policy but is not the canonical
+  object representation.
+- No inference execution, model routing, provider API compatibility, token
+  streaming, or model-result claim. Milestone 28c1 owns the inference boundary.
+- No model-controlled mutation of source, semantic objects, extractor policy,
+  visibility, or capabilities.
+- No database engine as an authority source. Any query index is rebuildable
+  from immutable object packs and manifests.
+- No automatic promotion from semantic availability to implementation,
+  provider, Worker, security, formal-proof, or use-case acceptance.
+
+**Deliverables**
+
+### 1) Canonical semantic objects, views, edges, and snapshots
+**Purpose:** Establish one compiler-owned contract so extractors, host tools,
+AI runs, inference, MCP, A2A, evidence, and later namespace projections cannot
+invent incompatible knowledge records.
+
+Implementation requirements:
+- Add versioned schemas:
+  - `semantic-snapshot/v1`
+  - `semantic-object/v1`
+  - `semantic-view/v1`
+  - `semantic-edge/v1`
+  - `semantic-extractor-receipt/v1`
+  - `context-capsule/v1`
+  - `context-render/v1`.
+- Each immutable object/view records source snapshot, stable logical key,
+  content digest, object type, source span or artifact ref where applicable,
+  extractor id/version/config hash, toolchain/profile identity, parent inputs,
+  visibility class, required delegated scope, evidence class, and explicit
+  unavailable/partial state.
+- Separate stable logical identity from immutable materialization identity.
+  Renames, source edits, extractor upgrades, toolchain changes, generated
+  manifest changes, and policy changes create new versions and never mutate an
+  accepted historical object in place.
+- A snapshot records Git tree/commit identity when committed. Dirty worktrees,
+  generated outputs, and external artifact sets use explicit content manifests
+  and may not masquerade as the clean commit.
+- Edge records are typed, directed where applicable, provenance-bound, and
+  versioned. An edge may not outlive or silently rebind either endpoint.
+
+### 2) Extractor registry, immutable object packs, and rebuildable indexes
+**Purpose:** Ingest common ecosystem outputs without requiring bespoke project
+formats or making the query engine authoritative.
+
+Implementation requirements:
+- Provide bounded host extractors for:
+  - Git repository snapshots and diffs,
+  - Rust compiler/rust-analyzer and SCIP-compatible symbol/reference data,
+  - source, signature, documentation, AST, CFG, ownership/borrow, caller, and
+    callee views when the selected extractor can prove them,
+  - unit/integration/test-result and coverage summaries,
+  - benchmark history,
+  - SARIF/security findings,
+  - SBOM, attestation, verification-claim, Cohesix manifest, provider receipt,
+    and evidence-pack references.
+- Every extractor is registered through the 28b1 integration graph with
+  version, accepted input types, output schema ids, resource limits, secret and
+  redaction posture, package owner, conformance runner, and observed mode.
+- Store immutable object packs and manifests using existing CAS/evidence
+  discipline. Maintain a bounded, rebuildable host-side index for lookup and
+  traversal; deleting or corrupting the index must not destroy canonical
+  objects or change their digests.
+- Incremental extraction invalidates only objects whose exact source, tool,
+  extractor, configuration, dependency, or policy inputs changed. Cross-snapshot
+  edges and cache reuse require an explicit compatibility proof.
+- Missing extractor support returns typed unavailable/partial state; it never
+  fabricates an AST, CFG, ownership graph, test link, finding, or proof.
+
+### 3) Deterministic Context Capsule planning and rendering
+**Purpose:** Page knowledge by task and authority rather than concatenate whole
+repositories into every prompt.
+
+Implementation requirements:
+- A Context Capsule contains:
+  - snapshot and dependency-graph identities,
+  - task-intent hash/ref and requesting run/task/step identity when present,
+  - ordered object/view refs,
+  - selection reason and bounded relevance evidence for every selected view,
+  - candidate-set digest,
+  - explicitly excluded, unavailable, stale, truncated, or budget-evicted refs,
+  - byte and estimated-token budgets,
+  - visibility/delegated-scope decision refs,
+  - renderer/schema/tool-profile hashes,
+  - prefix/cache eligibility inputs,
+  - capsule digest and creation receipt.
+- Planning is deterministic for identical objects, policy, task descriptor,
+  budgets, extractor versions, and planner version. Tie-breaking and ordering
+  are explicit and fixture-tested.
+- Rendering supports bounded text plus structured JSON/CBOR views for downstream
+  consumers. The rendered payload receives its own digest linked to the capsule;
+  it never replaces the capsule as the source of context provenance.
+- Selection may use lexical, graph, compiler, test, finding, and optional
+  embedding-derived signals, but each signal source and score normalization is
+  recorded. Embeddings are derived indexes, not authority.
+- Capsule expansion is explicit and produces a successor capsule linked to its
+  predecessor; agents cannot silently widen context or authority.
+
+### 4) Capability, visibility, provenance, and redaction enforcement
+**Purpose:** Make fine-grained semantic access safer than handing every agent a
+repository checkout.
+
+Implementation requirements:
+- Reuse the Milestone 28b1 `public`, `ticket_scoped`, and `admin_only`
+  visibility classes plus generated delegated scopes for every object and view.
+- Derived visibility is at least as restrictive as every contributing input.
+  Names, relationships, hashes, scores, omissions, and object existence are
+  treated as potentially sensitive metadata, not automatically public.
+- Context planning filters unauthorized candidates before ranking, rendering,
+  token estimation, or payload construction so side channels do not reveal
+  inaccessible objects.
+- Evidence records the normalized caller, ticket hash, policy decision,
+  selected capsule/view ids, redaction profile, and refusal reason without raw
+  credentials or secret-bearing payloads.
+- A capsule is immutable and transferable only within its recorded audience,
+  TTL, snapshot, and policy constraints. A capsule ref is not itself authority.
+
+### 5) Host tools, SDK helpers, packaging, and operator workflow
+**Purpose:** Make the semantic substrate usable without exposing its storage
+implementation or requiring new agent-framework code.
+
+Implementation requirements:
+- Add host-only `coh semantic` commands for:
+  - `snapshot`
+  - `status`
+  - `inspect`
+  - `query`
+  - `capsule plan`
+  - `capsule render`
+  - `verify`.
+- Extend `coh doctor` with generated checks for extractor availability and
+  version, store/index integrity, schema compatibility, source/toolchain
+  identity, visibility policy, evidence export, and optional embedding
+  capability. Missing optional extractors remain typed unavailable.
+- Add `cohesix` Python read-only helpers for snapshots, object/view inspection,
+  capsule planning/rendering, and receipt verification. Python consumes
+  generated schema ids, bounds, and fixtures and cannot author authoritative
+  semantic objects or receipts.
+- Add a batch-oriented `semantic-index-host` binary and shared
+  `cohesix-semantic-core` library. The indexer has no VM component or public
+  listener; later gateways consume the same core/store contract rather than a
+  second schema.
+- Package exact extractor/runtime versions, schema registry, default policy,
+  service/job definitions where applicable, doctor checks, and conformance
+  fixtures in the existing 28b1 host deployment profiles.
+- Update `docs/HOST_TOOLS.md`, `docs/PYTHON_SUPPORT.md`,
+  `docs/ARCHITECTURE.md`, `docs/INTERFACES.md`, `docs/SECURITY.md`,
+  `docs/TEST_PLAN.md`, and `docs/OPERATOR_WALKTHROUGH.md` with the host-only
+  topology, canonical commands, trust boundaries, failure recovery, and
+  evidence workflow.
+- `cohsh` gains no semantic command or grammar in this milestone. It remains a
+  consumer of existing target paths; semantic access is host-side until later
+  generated projections are separately accepted.
+
+### 6) Semantic conformance, evidence, and performance
+**Purpose:** Prove that semantic compression comes from justified selection,
+not silent omission or lossy untraceable summarization.
+
+Implementation requirements:
+- Add checked fixture repositories and imported analyzer/test/benchmark/finding
+  artifacts with stable expected objects, edges, unavailable states, and
+  capsules.
+- Conformance covers clean and dirty snapshots, rename/edit/incremental
+  invalidation, extractor/version drift, stale/corrupt index rebuild, path and
+  symlink attacks, unauthorized edge traversal, redaction, deterministic
+  ordering, budget eviction, and capsule expansion.
+- Evidence packs and timelines include snapshot, extractor, object-pack,
+  capsule, render, visibility, and refusal receipts while retaining original
+  analyzer/test/proof evidence classes.
+- Add benchmarks for cold snapshot extraction, incremental refresh, object/view
+  lookup, bounded graph traversal, capsule planning/rendering, index rebuild,
+  and evidence export. Report object/edge counts, bytes, estimated tokens,
+  cache hits/misses, invalidation reasons, p50/p95 latency, and artifact sizes.
+- Semantic benchmarks are host-side. They do not prove Pi/QEMU runtime
+  performance, LLM quality, inference determinism, or provider cache hits.
+
+**Commands**
+- `cargo test -p cohesix-semantic-core`
+- `cargo test -p semantic-index-host`
+- `cargo test -p coh --test semantic`
+- `cargo test -p coh --test semantic_evidence`
+- `cargo test -p coh-rtc`
+- `python3 -m pytest -q tools/cohesix-py/tests/test_semantic.py`
+- `scripts/ci/semantic_conformance_run.sh --state-dir out/semantic/m28b2`
+- `scripts/ci/semantic_perf_probe.sh --state-dir out/bench/m28b2-semantic`
+- `scripts/check-generated.sh`
+- `scripts/ci/test_plan_run.sh --state-dir out/test-plan/m28b2-semantic`
+
+**Checks (Definition of Done)**
+- Identical snapshot, extractor, toolchain, configuration, policy, planner, and
+  budget inputs produce byte-identical object packs, indexes after rebuild,
+  capsules, renders, and receipts.
+- Dirty, stale, partial, unsupported, mismatched-toolchain, or
+  mismatched-extractor state is explicit and cannot pass as a clean accepted
+  snapshot.
+- Source/compiler/analyzer/test/benchmark/finding/proof authority and evidence
+  classes remain distinct; a semantic edge or capsule never upgrades them.
+- Unauthorized objects and relationships are removed before ranking or payload
+  construction, and negative tests show no metadata, size, score, or existence
+  disclosure across visibility boundaries.
+- An unavailable extractor yields typed unavailable views; no synthetic AST,
+  CFG, ownership, test, security, benchmark, or proof object can enter a
+  production capsule.
+- The canonical store survives index deletion/rebuild and detects corrupt,
+  forged, missing, duplicate, or cross-snapshot objects and edges.
+- Context Capsules record exact selected and omitted views, reasons, budgets,
+  policy, renderer, and lineage; expansion creates a new linked capsule rather
+  than mutating the original.
+- `coh`, Python, evidence tools, generated docs, packages, and future gateway
+  schema inputs consume one schema registry and agree on bounds and receipts.
+- `coh doctor` distinguishes required failures from optional unavailable
+  extractors and reports enough identity to reproduce a snapshot/capsule.
+- Host performance evidence demonstrates bounded incremental refresh, lookup,
+  planning, rendering, and evidence overhead at representative repository
+  scales. Token/byte avoidance is reported without claiming model-quality or
+  inference-speed improvement that was not measured downstream.
+- No VM dependency, listener, namespace root, console verb, Secure9P verb,
+  provider mutation, inference call, or agent-framework authority is added.
+
+**Compiler touchpoints**
+- `coh-rtc` extends the Milestone 28b1 graph with semantic extractor, store,
+  planner, renderer, host-tool, package, and evidence surfaces. Each record has
+  stable ids, version/profile bounds, visibility, redaction, schema outputs,
+  observed mode, conformance owner, and explicit unavailable behavior.
+- `coh-rtc` emits the semantic schema registry, object/view/edge type tables,
+  extractor allowlists, snapshot and capsule bounds, visibility rules,
+  renderer profiles, metric/evidence bounds, Python defaults, `coh` defaults,
+  doctor checks, package manifests, and documentation snippets.
+- Validation rejects unknown object/view/edge types, unregistered extractors,
+  mutable accepted objects, unbounded graph walks, visibility weakening,
+  capsule refs without snapshot/policy identity, hand-maintained Python schema
+  catalogs, and enabled public surfaces without packages/conformance evidence.
+- Generated semantic records extend, and never fork, the existing
+  `host-integration-dependency/v1` and use-case graph.
+
+**Task Breakdown**
+```
+Title/ID: m28b2-semantic-ir-and-object-contract
+Milestone: Milestone 28b2 — Persistent Semantic Object Fabric + Context Capsules (Host-Side) / semantic IR and object contract
+Goal: Define compiler-owned semantic snapshot, object, view, edge, extractor-receipt, capsule, and render schemas with stable identity and authority rules.
+Inputs: Milestone 28b1 provider/integration/visibility/evidence registries, tools/coh-rtc/src/**, existing CAS and evidence schemas, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs + validation/codegen — semantic types, extractor registry, snapshot/capsule/render bounds, visibility/redaction derivation, and generated Rust/Python/docs outputs.
+  - crates/cohesix-semantic-core/src/schema.rs — canonical host-side types and strict validators generated or checked against `coh-rtc`.
+  - tests/fixtures/semantic/** — canonical valid, invalid, partial, stale, cross-snapshot, and visibility fixtures.
+  - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURITY.md — object identity, source-of-truth, authority, provenance, redaction, and host/VM boundaries.
+Commands:
+  - cargo test -p coh-rtc
+  - cargo test -p cohesix-semantic-core
+  - scripts/check-generated.sh
+Checks: Every semantic type and bound is compiler-owned; logical and immutable identities cannot be conflated; unknown, mutable, cross-snapshot, unproven, or visibility-weakened records fail closed.
+Deliverables: One generated semantic schema registry shared by all later extractors, host tools, AI runs, inference, MCP/A2A, and evidence consumers.
+
+Title/ID: m28b2-extraction-store-and-index
+Milestone: Milestone 28b2 — Persistent Semantic Object Fabric + Context Capsules (Host-Side) / extraction, immutable packs, and rebuildable index
+Goal: Materialize common repository and analysis outputs into immutable semantic packs with deterministic incremental invalidation and a non-authoritative rebuildable index.
+Inputs: m28b2-semantic-ir-and-object-contract, Git/source fixtures, compiler/rust-analyzer/SCIP outputs, test/coverage/benchmark/SARIF/SBOM/verification/evidence fixtures, existing CAS helpers.
+Changes:
+  - crates/cohesix-semantic-core/src/{extract,store,index}.rs — bounded extractor contract, object-pack verification, atomic publication, deterministic index build/rebuild, and incremental invalidation.
+  - apps/semantic-index-host/src/** — batch snapshot/extraction/index command with exact tool/extractor identity, resource bounds, and typed partial/unavailable results.
+  - scripts/ci/semantic_conformance_run.sh + fixtures — cross-extractor, corruption, stale-index, symlink/path, rename/edit, and deterministic rebuild coverage.
+  - docs/HOST_TOOLS.md + docs/TEST_PLAN.md — extractor availability, operation, recovery, and conformance guidance.
+Commands:
+  - cargo test -p cohesix-semantic-core
+  - cargo test -p semantic-index-host
+  - scripts/ci/semantic_conformance_run.sh --only extraction,index --state-dir out/semantic/m28b2-extraction
+Checks: Canonical packs are immutable and content-addressed; index loss is recoverable; changed inputs invalidate exact dependents; unsupported extractors are explicit; no imported evidence class is strengthened.
+Deliverables: Persistent host semantic snapshots that can be incrementally refreshed and independently verified.
+
+Title/ID: m28b2-context-capsule-planner
+Milestone: Milestone 28b2 — Persistent Semantic Object Fabric + Context Capsules (Host-Side) / deterministic Context Capsule planning and rendering
+Goal: Select and render the smallest authorized semantic working set that satisfies explicit task and budget inputs while preserving exact omissions and lineage.
+Inputs: m28b2-extraction-store-and-index, generated visibility policy, representative repo-analysis task fixtures, token estimators and renderer profiles.
+Changes:
+  - crates/cohesix-semantic-core/src/{planner,capsule,render}.rs — deterministic candidate construction, authority filtering, ranking, budget eviction, expansion lineage, text/JSON/CBOR rendering, and receipt generation.
+  - tests/fixtures/semantic/capsules/** — stable selection, tie-break, omission, truncation, unavailable, expansion, and renderer fixtures.
+  - scripts/ci/semantic_perf_probe.sh — capsule planning/render and semantic-paging measurements at representative scales.
+  - docs/INTERFACES.md + docs/BENCHMARKS.md — capsule contract, semantic paging metrics, and non-claims.
+Commands:
+  - cargo test -p cohesix-semantic-core --test context_capsules
+  - scripts/ci/semantic_perf_probe.sh --state-dir out/bench/m28b2-semantic
+Checks: Identical admitted inputs produce byte-identical capsules/renders; unauthorized candidates are filtered before scoring; every inclusion, omission, expansion, and truncation is reconstructable.
+Deliverables: Auditable Context Capsules suitable for 28c AI runs and 28c1 inference without repository-wide prompt assembly.
+
+Title/ID: m28b2-host-tools-sdk-and-evidence
+Milestone: Milestone 28b2 — Persistent Semantic Object Fabric + Context Capsules (Host-Side) / host tools, Python helpers, doctor, and evidence
+Goal: Make semantic snapshots and Context Capsules operable through existing Cohesix host-tool and evidence workflows without creating new authority.
+Inputs: m28b2-context-capsule-planner, apps/coh/src/{main.rs,doctor.rs,evidence.rs,evidence_timeline.rs}, tools/cohesix-py/cohesix/**, tools/coh-rtc generated host defaults, packaging profiles, canonical host-tool docs.
+Changes:
+  - apps/coh/src/semantic.rs + CLI wiring — `snapshot`, `status`, `inspect`, `query`, `capsule plan`, `capsule render`, and `verify`.
+  - apps/coh/src/{doctor,evidence,evidence_timeline}.rs — semantic store/extractor/schema checks plus snapshot/object/capsule/render/refusal evidence reconstruction.
+  - tools/cohesix-py/cohesix/{semantic.py,context.py,evidence.py} + tests — generated read-only helpers and canonical receipt validation; Python cannot mint authoritative objects/capsules/receipts.
+  - tools/coh-rtc/src/codegen/{coh,cohesix_py,docs}.rs + package manifests — generated defaults, doctor checks, examples, exact binary/extractor contents, and docs snippets.
+  - docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md + docs/OPERATOR_WALKTHROUGH.md + docs/TEST_PLAN.md — end-to-end operator workflow and failure recovery.
+Commands:
+  - cargo test -p coh --test semantic
+  - cargo test -p coh --test semantic_evidence
+  - python3 -m pytest -q tools/cohesix-py/tests/test_semantic.py
+  - scripts/check-generated.sh
+Checks: Rust and Python render the same generated schemas/bounds and verify the same fixtures; doctor distinguishes missing optional extractors from corrupt required state; evidence reconstruction needs no raw prompt or secret.
+Deliverables: Installable, diagnosable semantic host tools and SDK helpers integrated with existing Cohesix evidence workflows.
+
+Title/ID: m28b2-semantic-acceptance
+Milestone: Milestone 28b2 — Persistent Semantic Object Fabric + Context Capsules (Host-Side) / conformance, performance, and release acceptance
+Goal: Prove the semantic substrate is deterministic, bounded, authority-preserving, package-complete, and ready for 28c/28c1 consumers.
+Inputs: all m28b2 tasks, generated provider/integration/package records, semantic fixtures, docs/BENCHMARKS.md, docs/TEST_PLAN.md, release evidence checklist.
+Changes:
+  - scripts/ci/semantic_conformance_run.sh — complete extractor/store/index/capsule/visibility/redaction/evidence matrix with archived summaries.
+  - scripts/ci/semantic_perf_probe.sh — cold/incremental/index-rebuild/query/capsule/render/evidence timing and size ledger.
+  - scripts/ci/use_case_gate.sh + release packaging — require accepted semantic dependencies only for use cases that claim semantic context; preserve typed unavailable mode elsewhere.
+  - docs/BENCHMARKS.md + docs/TEST_PLAN.md + release checklist — semantic acceptance lane, thresholds, artifacts, and explicit inference/model-quality non-claims.
+Commands:
+  - scripts/ci/semantic_conformance_run.sh --state-dir out/semantic/m28b2
+  - scripts/ci/semantic_perf_probe.sh --state-dir out/bench/m28b2-semantic
+  - scripts/ci/test_plan_run.sh --state-dir out/test-plan/m28b2-semantic
+Checks: Conformance, package, authority, evidence, and performance artifacts all bind the same schema/snapshot/toolchain identities; no mock, partial, dirty, stale, or unsupported state is promoted.
+Deliverables: Accepted semantic object and Context Capsule substrate for Milestones 28c, 28c1, 28d, and 29b.
+```
+
+## Outcome
+After Milestone 28b2:
+- Cohesix has a persistent host-side semantic object fabric without adding AI
+  runtimes, compiler frontends, graph databases, or listeners to the VM.
+- Repository, compiler, analyzer, test, benchmark, finding, proof, provider, and
+  evidence inputs remain distinct and provenance-bound while becoming
+  queryable through one generated object/edge contract.
+- Context Capsules make the exact authorized semantic working set, omissions,
+  budgets, renderer, and lineage explicit and reproducible.
+- `coh`, `coh doctor`, Python helpers, evidence packs, timelines, packages, and
+  downstream gateway schemas consume one generated semantic contract.
+- Milestone 28c can build run/checkpoint policy on immutable capsule refs, and
+  Milestone 28c1 can measure actual inference efficiency and audit receipts
+  without treating text prompts as the semantic source of truth.
 
 ## Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT <a id="28c"></a>
 [Milestones](#Milestones)
 
 **Why now (bridge):**
-Milestone 28b makes writes attributable, replay-safe, fenced, and audit-first. Milestone 28b1 then freezes provider action schemas, identity mapping, deployment posture, read visibility, observability exports, and conformance evidence for the ecosystems AI supervisors will touch. Before promoting AI lifecycle state into first-class VM-visible namespace roots in 29b, Cohesix needs a host-only proving ground for the operating model refined here:
+Milestone 28b makes writes attributable, replay-safe, fenced, and audit-first. Milestone 28b1 then freezes provider action schemas, identity mapping, deployment posture, read visibility, observability exports, and conformance evidence for the ecosystems AI supervisors will touch. Milestone 28b2 adds immutable semantic objects, provenance-complete snapshots, and deterministic Context Capsules without creating a second authority plane. Before promoting AI lifecycle state into first-class VM-visible namespace roots in 29b, Cohesix needs a host-only proving ground for the operating model refined here:
 1. Cohesix is the trusted execution, evidence, and governance layer beneath agent frameworks, not a replacement for them.
 2. Long-context cost is dominated by repeated prefill, duplicated prompt state, and lossy summarization.
-3. The highest-leverage fix is to keep durable run state, retrieval manifests, approvals, and evidence outside the live prompt, then route each run to the right host-side inference strategy under ticketed authority.
+3. The highest-leverage fix is to keep durable run state, Context Capsule
+   references, retrieval manifests, approvals, and evidence outside the live
+   prompt, then route each run to the right host-side inference strategy under
+   ticketed authority.
 
-This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, the 28b1 provider/integration graph, evidence packs, GPU leases, telemetry ingest, Python playbooks) and the accepted 26e executable Worker/receipt substrate to prove that model without adding VM AI roots yet.
+This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, the 28b1 provider/integration graph, the accepted 28b2 semantic-object and Context Capsule contracts, evidence packs, GPU leases, telemetry ingest, Python playbooks) and the accepted 26e executable Worker/receipt substrate to prove that model without adding VM AI roots yet.
 
-**As-built alignment note:** Python orchestration currently provides typed schedule, lease, export, host-ticket, federation, and Kubernetes coexistence helpers over existing control files. Cohesix also has host-side PEFT filesystem helpers and, after 26e, an executable WorkerLora receipt path. Those substrates are useful leverage, but they are not yet the AI run/task graph envelope, checkpoint model, context-budget contract, prefix/hotset lifecycle, NeMo provider family, or production PEFT transaction described here. In particular, no existing mock playbook, local registry mutation, `/gpu/models` publication, or WorkerLora receipt proves training, evaluation, artifact scanning, inference-runtime reload, or rollback. Milestone 28c extends the 28b1 integration/use-case graph; it must not re-label generic orchestration or 26e fixture receipts as completed AI run control.
+**As-built alignment note:** Python orchestration currently provides typed schedule, lease, export, host-ticket, federation, and Kubernetes coexistence helpers over existing control files. Cohesix also has host-side PEFT filesystem helpers and, after 26e, an executable WorkerLora receipt path. Those substrates are useful leverage, but they are not yet the AI run/task graph envelope, checkpoint model, context-budget contract, prefix/hotset lifecycle, NeMo provider family, or production PEFT transaction described here. The accepted 28b2 substrate supplies semantic objects and Context Capsules, but it does not itself admit AI runs, select providers, invoke inference, or prove PEFT lifecycle execution. In particular, no existing mock playbook, local registry mutation, `/gpu/models` publication, WorkerLora receipt, semantic snapshot, or capsule proves training, evaluation, artifact scanning, inference-runtime reload, or rollback. Milestone 28c extends the 28b1 integration/use-case graph and consumes 28b2 artifacts by reference; it must not re-label generic orchestration, semantic extraction, or 26e fixture receipts as completed AI run control.
 
 **Prerequisites**
 - Milestone **28b** completed for delegated REST identity, idempotency, writer-epoch fencing, host-ticket durable execution, audit/replay defaults, and production secret/debug gates.
 - Milestone **26e** completed for executable WorkerLora and strict, crash-safe version-2 PEFT result-to-Worker receipts on QEMU and Pi 4.
 - Milestone **28b1** completed for the extended provider/integration graph, external-executor contract, read visibility classification, provider conformance, identity mapping, packaging profiles, observability exports, and exhaustive use-case evidence matrix.
+- Milestone **28b2** completed for immutable semantic snapshots, typed object
+  views and edges, provenance/redaction, deterministic Context Capsules, host
+  query/render tooling, and semantic conformance evidence.
 
 **Goal**
 Add a host-side AI run substrate that lets external supervisors and agent frameworks coordinate long-context workflows through delegated tickets and existing host-ticket flows while preserving Cohesix's single-writer, append-only, audit-first discipline:
 1. Make run/task/step identity and context budget explicit.
-2. Keep checkpoints, exact constraints, retrieved spans, and tool receipts durable outside the prompt.
+2. Keep checkpoints, exact constraints, Context Capsule and semantic snapshot
+   references, retrieved spans, and tool receipts durable outside the prompt.
 3. Route workloads to host-side inference backends by recall/cost policy rather than one fixed attention strategy.
 4. Reuse warmed prefixes and hotsets across related runs within bounded quotas and TTLs.
 5. Expose TTFT, decode, cache-hit, and resume metrics as first-class evidence.
@@ -11742,6 +12176,10 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 7. Consume the accepted 26e executable WorkerHeart/WorkerGpu/WorkerLora contracts without weakening their image, capability, notification, MCS scheduling, fault, revocation, QEMU, or Pi evidence requirements; `ATTACH` remains session-only and is never substituted for task creation.
 8. Deliver the complete host-side PEFT lifecycle—export, data/base-model provenance, train/fine-tune, evaluate, scan, import, activate, inference-runtime reload/canary, and rollback—with crash-safe transactions and exact WorkerLora receipt correlation before AI run control treats it as dependable actuation.
 9. Re-evaluate and promote the 28b1 AI/PEFT use-case rows only from live external-provider, executable-Worker, package, recovery, and evidence records; mock/dry-run playbooks remain workflow templates.
+10. Keep provider strategy, run admission, and PEFT actuation in this milestone,
+    while Milestone 28c1 owns the public OpenAI-compatible wire contract,
+    streaming behavior, provider-neutral inference receipts, and compatibility
+    conformance.
 
 **Non-Goals (Explicit)**
 - No in-VM transformer kernels, sparse-attention implementations, KV-compression implementations, or CUDA/NVML changes.
@@ -11750,6 +12188,11 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 - No active/active multi-queen control for one logical hive.
 - No live AI, PEFT, NeMo, Kubernetes, Docker, systemd, CUDA/NVML, or model-registry mutation from Python, adapters, playbooks, or framework integrations unless it appends a validated host ticket and is executed by `host-ticket-agent` under the generated provider action registry.
 - No generic mutable `/store`, vector database, or prompt blob sink divorced from existing evidence/CAS discipline.
+- No reimplementation of the 28b2 semantic store, extractor registry, object
+  graph, capsule planner, or renderer inside AI orchestration.
+- No public OpenAI-compatible endpoint, SDK compatibility claim, or
+  provider-neutral streaming/usage contract in this milestone; those belong to
+  Milestone 28c1.
 - No new 9P verbs, no console grammar changes, and no hidden RPC behind file names.
 - No claim that Cohesix replaces agent planners/orchestrators; it remains the authority, evidence, and actuation layer beneath them.
 - No opaque prompt transcript as the source of truth for agent state, approvals, retrieval, or tool output.
@@ -11773,6 +12216,8 @@ Implementation requirements:
   - `prefix_group`, `dataset_refs`, `artifact_refs`, `deadline_unix_ms`, `human_owner`
 - Add explicit task-graph and handoff fields:
   - `depends_on`, `handoff_ref`, `instruction_ref`, `retrieval_manifest_ref`
+  - `semantic_snapshot_ref`, `context_capsule_ref`,
+    `context_render_profile_ref`
   - `provider_profile_hash`, `prefix_cache_key`
   - `max_parallel_agents`, `human_attention_budget`
 - Live mutating AI flows inherit Milestone 28b safety requirements: delegated ticket, `id`, `idempotency_key`, and `writer_epoch` where applicable.
@@ -11789,11 +12234,16 @@ As-built leverage:
 Implementation requirements:
 - Record structured checkpoints containing:
   - exact constraints/instructions,
-  - retrieval manifests and span references,
+  - immutable semantic snapshot, Context Capsule, render-profile, retrieval
+    manifest, and selected-span references,
   - approvals/policy receipts,
   - tool receipts/artifact refs,
   - resume cursor and prior-step linkage.
-- Retrieval manifests are first-class artifacts: they record what was admitted into context, the originating refs, and any bounded filtering/truncation decisions.
+- Retrieval manifests remain first-class artifacts, but are inputs to or
+  subrecords of the accepted 28b2 Context Capsule contract rather than a
+  competing context source of truth. They record what was considered or
+  retrieved, while the capsule and render receipt record what was selected and
+  delivered.
 - Large tool outputs and retrieved corpora are offloaded into bounded host-side artifacts with hashes, redacted previews, and exact refs instead of being re-inlined into every prompt.
 - Checkpoints are host-side artifacts and evidence inputs, not a new VM filesystem or opaque prompt cache.
 - Evidence/timeline tooling can reconstruct why a run acted without replaying the entire prompt transcript.
@@ -11814,7 +12264,7 @@ Implementation requirements:
   - `compression-preserve`
   - `needle-sensitive`
 - Prefix groups and hotsets can be warmed, leased, resumed, and evicted through bounded host tickets with TTL/quota enforcement.
-- Prefix reuse eligibility and miss reasons are recorded using bounded evidence fields such as model/provider profile hash, instruction hash/ref, retrieval-manifest hash/ref, tool-schema hash, TTL expiry, and quota eviction cause.
+- Prefix reuse eligibility and miss reasons are recorded using bounded evidence fields such as model/provider profile hash, instruction hash/ref, semantic snapshot hash/ref, Context Capsule hash/ref, render-profile hash/ref, retrieval-manifest hash/ref, tool-schema hash, TTL expiry, and quota eviction cause.
 - GPU lease and provider selection remain host-side and reuse existing lease/publish flows.
 
 As-built leverage:
@@ -11831,6 +12281,8 @@ Implementation requirements:
   - decode tokens/sec,
   - prompt bytes/tokens submitted,
   - prompt bytes/tokens avoided via checkpoint/prefix reuse,
+  - semantic objects selected/omitted and estimated prompt tokens avoided by
+    capsule selection,
   - prefix hit/miss counts,
   - prefix invalidation/miss reasons,
   - retrieval miss rate,
@@ -11850,7 +12302,9 @@ As-built leverage:
 **Purpose:** Make Cohesix usable beneath agent supervisors without inventing another agent framework.
 
 Implementation requirements:
-- Provide Python-side adapters/examples for long-context supervisors to submit delegated host tickets and consume receipts/checkpoints.
+- Provide Python-side adapters/examples for long-context supervisors to submit
+  delegated host tickets and consume receipts/checkpoints plus immutable
+  Context Capsule references and render receipts.
 - Ship at least one reference playbook that coordinates repo-scale analysis or closed-loop AI factory work in dry-run/mock mode before any live actuation.
 - Reference adapters and playbooks must model explicit delegation/handoff chains over the run envelope and checkpoint model; they must not rely on implicit shared transcript state.
 - Export receipts/checkpoints in derived, host-side forms suitable for downstream observability tooling; exports remain non-authoritative.
@@ -11940,6 +12394,10 @@ Implementation requirements:
 - Cohesix must remain more valuable than direct NeMo or direct vLLM use:
   - the same run envelope, delegated ticket model, evidence pack, and policy gates must work against NeMo and at least one alternate provider family,
   - NeMo support must not introduce NeMo-only authoritative state or bypasses that other providers cannot satisfy.
+- NeMo execution in this milestone remains a generated host-ticket provider
+  action. Milestone 28c1 later normalizes it behind the same public
+  compatibility API and provider-neutral inference receipt contract as every
+  other accepted backend.
 - NeMo Agent Toolkit, MCP, or A2A features may be consumed only as downstream host integrations behind existing Cohesix auth and evidence boundaries; they must not become public control surfaces or authoritative coordination channels.
 
 As-built leverage:
@@ -11964,9 +12422,16 @@ As-built leverage:
 **Checks (Definition of Done)**
 - Multi-agent host workflows never require an undifferentiated shared Queen writer.
 - A run can restart from checkpoint/evidence with the same authoritative constraints and receipts, without reconstructing a full prompt transcript.
-- Evidence-only reconstruction preserves task graph ordering, handoff lineage, retrieval-manifest identity, and offloaded tool-artifact references.
+- Evidence-only reconstruction preserves task graph ordering, handoff lineage,
+  semantic snapshot, Context Capsule, render-profile, retrieval-manifest
+  identity, and offloaded tool-artifact references.
+- AI orchestration consumes accepted 28b2 semantic artifacts by immutable
+  reference; it cannot silently rebuild, mutate, or substitute an unreceipted
+  capsule.
 - Prefix/hotset reuse is bounded by TTL/quota, attributable to a caller, and visible in evidence.
-- Prefix cache hits and misses are explainable from bounded eligibility/invalidation fields rather than hidden provider behavior.
+- Prefix cache hits and misses are explainable from bounded
+  semantic-snapshot/capsule/render/provider eligibility and invalidation fields
+  rather than hidden provider behavior.
 - Strategy selection and long-context cost metrics are observable per run/step.
 - High-risk live AI mutations remain policy-gated and ticket-scoped.
 - Worker-role documentation and generated snippets consume the accepted 26e executable contracts and match actual kernel/host implementation boundaries; no AI task depends on undocumented VM Worker behavior or a session-only `ATTACH`.
@@ -11977,11 +12442,23 @@ As-built leverage:
 - Optional NeMo support remains host-side, ticket-scoped, writer-fenced, and evidence-backed; disabling NeMo leaves the baseline 28c substrate intact.
 - The same Cohesix run envelope and evidence model works against NeMo and at least one alternate provider family, proving NeMo support adds governed lifecycle value rather than vendor-specific lock-in.
 - Guardrail and evaluator receipts can gate live promotion or actuation decisions deterministically in dry-run/mock tests before any real provider mutation is allowed.
-- AI run-cost evidence records checkpoint/resume, prefix/hotset reuse, prompt bytes avoided, provider queue-wait simulation, and evidence export overhead for the dry-run/mock playbook; material regressions are classified as host orchestration, provider adapter, evidence-pack, or gateway overhead before 29b depends on the run model.
+- AI run-cost evidence records checkpoint/resume, semantic-object selection,
+  capsule rendering, prefix/hotset reuse, prompt bytes avoided, provider
+  queue-wait simulation, and evidence export overhead for the dry-run/mock
+  playbook; material regressions are classified as semantic selection, host
+  orchestration, provider adapter, evidence-pack, or gateway overhead before
+  28c1 or 29b depends on the run model. Actual provider TTFT, streaming, usage,
+  cache, and completion evidence is accepted only under 28c1.
 - No new in-VM listeners, runtime, or control protocols are introduced.
 
 **Compiler touchpoints**
-- `coh-rtc` emits generated host-tool defaults for AI run envelope limits, task-graph/handoff bounds, context budget ceilings, retrieval-manifest and artifact-ref bounds, prefix/hotset TTLs, metrics bounds, and the phase-journaled PEFT executor/transaction contract under the existing host policy/codegen path.
+- `coh-rtc` emits generated host-tool defaults for AI run envelope limits,
+  task-graph/handoff bounds, context budget ceilings, accepted 28b2 semantic
+  snapshot/Context Capsule/render-profile reference bounds,
+  retrieval-manifest and artifact-ref bounds, prefix/hotset TTLs, metrics
+  bounds, and the phase-journaled PEFT executor/transaction contract under the
+  existing host policy/codegen path. It consumes and references the 28b2
+  schemas; it does not redefine them.
 - Manifest validation rejects AI host-control enablement when Milestone 28b delegated identity or audit/replay requirements are disabled in the target profile.
 - Manifest validation rejects AI host-control enablement when Milestone 28b1 provider registry, read visibility, identity mapping, provider conformance, or use-case evidence requirements are missing for a side-effecting provider action.
 - Live provider mutation tests prove Python adapters, framework adapters, NeMo helpers, PEFT flows, Kubernetes helpers, Docker helpers, and systemd helpers cannot bypass `/host/tickets/spec`, `host-ticket-agent`, generated provider action validation, delegated ticket scope, idempotency, writer epoch, and evidence receipts.
@@ -12003,14 +12480,22 @@ As-built leverage:
 Title/ID: m28c-ai-run-envelopes
 Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-ai-run-envelopes
 Goal: Add typed host-side AI run/task/step envelopes with explicit handoff, dependency, and context-budget contracts.
-Inputs: tools/cohesix-py/cohesix/orchestration.py, tools/cohesix-py/cohesix/playbooks.py, docs/PYTHON_SUPPORT.md, docs/SECURITY.md
+Inputs: accepted Milestone 28b2 semantic snapshot, Context Capsule, and render
+receipt contracts; tools/cohesix-py/cohesix/orchestration.py,
+tools/cohesix-py/cohesix/playbooks.py, docs/PYTHON_SUPPORT.md,
+docs/SECURITY.md
 Changes:
-  - tools/cohesix-py/cohesix/orchestration.py — RunRequest, RunTask, RunStep, HandoffRef, RetrievalManifestRef, and ContextBudget validators for delegated AI ticket flows.
+  - tools/cohesix-py/cohesix/orchestration.py — RunRequest, RunTask, RunStep,
+    HandoffRef, SemanticSnapshotRef, ContextCapsuleRef,
+    ContextRenderProfileRef, RetrievalManifestRef, and ContextBudget validators
+    for delegated AI ticket flows.
   - tools/cohesix-py/cohesix/playbooks.py — `long-context-agent-factory` dry-run/mock playbook with explicit task graph, delegation, and handoff receipts.
   - tools/cohesix-py/cohesix/receipts.py — typed derived receipts for run/task/step/handoff identity.
   - tools/cohesix-py/tests/test_orchestration.py + tools/cohesix-py/tests/test_playbooks.py — budget, idempotency, and dry-run coverage.
 Commands: python -m pytest tools/cohesix-py/tests/test_orchestration.py && python -m pytest tools/cohesix-py/tests/test_playbooks.py
-Checks: Invalid budget/policy combinations fail before writes; dry-run outputs show run/task/step identity, dependencies, handoffs, and budgets deterministically.
+Checks: Invalid budget/policy/reference combinations fail before writes; dry-run
+outputs show run/task/step identity, dependencies, handoffs, capsule/render
+identity, and budgets deterministically.
 Deliverables: Host-side AI runs become explicit, typed, replay-addressable, and suitable for delegated multi-agent coordination without hidden state.
 
 Title/ID: m28c-host-ticket-ai-actions
@@ -12021,7 +12506,9 @@ Changes:
   - apps/host-ticket-agent/src/lib.rs — allowlist and schema validation for `infer.run|resume|abort`, `context.checkpoint|resume|evict`, and `prefix.warm|evict`.
   - apps/host-ticket-agent/src/status.rs — bounded lifecycle/state counters for AI run, checkpoint, and prefix operations.
   - apps/host-ticket-agent/src/executors/infer.rs — host-only provider adapter contract; no VM-side model runtime.
-  - docs/INTERFACES.md — canonical host-ticket AI action envelopes, receipt fields, retrieval-manifest refs, and refusal semantics.
+  - docs/INTERFACES.md — canonical host-ticket AI action envelopes, receipt
+    fields, semantic snapshot/Context Capsule/render/retrieval refs, and refusal
+    semantics.
   - docs/ARCHITECTURE.md — authority flow for delegated AI runs, checkpoints, prefix lifecycle, task handoffs, and evidence correlation.
 Commands: cargo test -p host-ticket-agent && cargo test -p tests --test host_ticket_agent
 Checks: AI host tickets stay idempotent, allowlist-gated, and stale-writer safe; unsupported actions fail deterministically with no side effects; handoff/checkpoint references remain bounded and attributable.
@@ -12032,19 +12519,30 @@ Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Du
 Goal: Extend evidence pack/timeline flows to reconstruct AI runs from checkpoints, receipts, and cost telemetry.
 Inputs: apps/coh/src/evidence.rs, apps/coh/src/evidence_timeline.rs, apps/coh/tests/evidence_pack.rs, apps/coh/tests/evidence_timeline.rs, docs/TEST_PLAN.md
 Changes:
-  - apps/coh/src/evidence.rs — include run envelopes, checkpoint manifests, retrieval manifests, offloaded tool-artifact refs, prefix reuse stats, and provider receipts with redaction.
+  - apps/coh/src/evidence.rs — include run envelopes, checkpoint manifests,
+    immutable semantic snapshot/Context Capsule/render receipts, retrieval
+    manifests, offloaded tool-artifact refs, prefix reuse stats, and provider
+    receipts with redaction.
   - apps/coh/src/evidence_timeline.rs — correlate run/task/step/handoff/checkpoint/prefix events into a deterministic operator timeline.
   - apps/coh/tests/evidence_pack.rs + apps/coh/tests/evidence_timeline.rs — restart/resume reconstruction tests from evidence-only inputs.
 Commands: cargo test -p coh --test evidence_pack && cargo test -p coh --test evidence_timeline
-Checks: Evidence-only reconstruction preserves authoritative constraints, handoff lineage, retrieval identity, and receipts; sensitive keys stay redacted.
+Checks: Evidence-only reconstruction preserves authoritative constraints,
+handoff lineage, semantic snapshot/capsule/render/retrieval identity, and
+receipts; sensitive keys stay redacted.
 Deliverables: Long-context AI runs become auditable and resumable without prompt archaeology or transcript dependence.
 
 Title/ID: m28c-ai-policy-and-metrics
 Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-ai-policy-and-metrics
 Goal: Generate host defaults and bounded metrics for AI context budgets, prefix reuse, and run efficiency.
-Inputs: tools/coh-rtc, configs/root_task.toml, apps/coh/src/telemetry.rs, tools/cohesix-py/cohesix/generated.py, docs/PYTHON_SUPPORT.md, docs/TEST_PLAN.md
+Inputs: accepted Milestone 28b2 bounds and generated schemas; tools/coh-rtc,
+configs/root_task.toml, apps/coh/src/telemetry.rs,
+tools/cohesix-py/cohesix/generated.py, docs/PYTHON_SUPPORT.md,
+docs/TEST_PLAN.md
 Changes:
-  - tools/coh-rtc/src/ir.rs + tools/coh-rtc/src/validate.rs — host AI budget/TTL/metrics bounds, retrieval/offload bounds, task-graph/handoff bounds, and dependency on 28b safety gates.
+  - tools/coh-rtc/src/ir.rs + tools/coh-rtc/src/validate.rs — host AI
+    budget/TTL/metrics bounds, 28b2 semantic snapshot/capsule/render reference
+    use, retrieval/offload bounds, task-graph/handoff bounds, and dependency on
+    28b safety gates without redefining the 28b2 object schemas.
   - apps/coh/src/telemetry.rs — bounded run-efficiency metric export helpers.
   - tools/cohesix-py/cohesix/generated.py — generated defaults consumed by Python orchestration/playbooks.
 Commands:
@@ -12052,19 +12550,31 @@ Commands:
   - cargo test -p coh
   - python -m pytest tools/cohesix-py/tests/test_evidence_receipts.py
   - cohesix-playbook --playbook long-context-agent-factory --dry-run --mock --metrics-out out/bench/m28c-ai-run-cost.json
-Checks: Generated defaults bound AI runs consistently across CLI/Python flows; cache eligibility/invalidation fields and metrics stay bounded and byte-stable; dry-run/mock run-cost evidence reports checkpoint/resume, prefix reuse, prompt bytes avoided, and evidence export overhead without invoking live providers.
+Checks: Generated defaults bind accepted 28b2 references and bound AI runs
+consistently across CLI/Python flows; cache eligibility/invalidation fields and
+metrics stay bounded and byte-stable; dry-run/mock run-cost evidence reports
+semantic selection, capsule rendering, checkpoint/resume, prefix reuse, prompt
+bytes avoided, and evidence export overhead without invoking live providers.
 Deliverables: Context budgets, retrieval/offload bounds, and efficiency metrics are compiler-aligned rather than ad hoc.
 
 Title/ID: m28c-framework-adapters
 Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-framework-adapters
-Goal: Provide host-side reference adapters that let external supervisors coexist with Cohesix through delegated tickets, checkpoints, and evidence exports.
-Inputs: tools/cohesix-py/cohesix/integrations.py, tools/cohesix-py/examples/, docs/PYTHON_SUPPORT.md, docs/HOST_TOOLS.md
+Goal: Provide host-side reference adapters that let external supervisors coexist with Cohesix through delegated tickets, Context Capsules, checkpoints, and evidence exports.
+Inputs: accepted Milestone 28b2 Python helpers and Context Capsule contract;
+tools/cohesix-py/cohesix/integrations.py, tools/cohesix-py/examples/,
+docs/PYTHON_SUPPORT.md, docs/HOST_TOOLS.md
 Changes:
-  - tools/cohesix-py/cohesix/integrations.py — reference supervisor adapter helpers for delegated submission, receipt polling, checkpoint lookup, and evidence export.
+  - tools/cohesix-py/cohesix/integrations.py — reference supervisor adapter
+    helpers for immutable capsule selection/inspection, delegated submission,
+    receipt polling, checkpoint lookup, and evidence export.
   - tools/cohesix-py/examples/ — bounded examples for repo-scale analysis and dry-run delegated handoff flows.
   - docs/PYTHON_SUPPORT.md + docs/HOST_TOOLS.md — integration contract for external supervisors over delegated tickets and evidence receipts.
 Commands: python -m pytest tools/cohesix-py/tests/test_integrations.py && python -m pytest tools/cohesix-py/tests/test_examples_ci_siem.py
-Checks: Reference adapters use delegated tickets, explicit handoff/checkpoint refs, generated provider actions, and evidence exports only; no hidden side-channel state, direct `/queen/ctl` mutation, direct provider API mutation, or direct host executor call is required or accepted.
+Checks: Reference adapters use accepted semantic/capsule refs, delegated
+tickets, explicit handoff/checkpoint refs, generated provider actions, and
+evidence exports only; no hidden side-channel state, direct `/queen/ctl`
+mutation, direct provider API mutation, or direct host executor call is
+required or accepted.
 Deliverables: Cohesix remains the authority/evidence layer beneath supervisor frameworks instead of becoming one.
 
 Title/ID: m28c-worker-boundary-closure
@@ -12137,13 +12647,27 @@ Deliverables: Cohesix can reason about NeMo availability and profile shape befor
 Title/ID: m28c-nemo-provider-family
 Milestone: Milestone 28c — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28c-nemo-provider-family
 Goal: Add NeMo-backed provider adapters under the same delegated ticket, checkpoint, and evidence contract as other AI backends.
-Inputs: apps/host-ticket-agent/src/executors/infer.rs, tools/cohesix-py/cohesix/orchestration.py, docs/ARCHITECTURE.md, docs/INTERFACES.md
+Inputs: accepted Milestone 28b2 Context Capsule contract;
+apps/host-ticket-agent/src/executors/infer.rs,
+tools/cohesix-py/cohesix/orchestration.py, docs/ARCHITECTURE.md,
+docs/INTERFACES.md
 Changes:
-  - apps/host-ticket-agent/src/executors/infer.rs — optional NeMo provider adapters for `nemo.infer`, `nemo.guardrails`, and `nemo.evaluate`, including deterministic refusal mapping and bounded receipt fields.
-  - tools/cohesix-py/cohesix/orchestration.py — provider-family selection hints and provider receipt normalization for NeMo vs alternate backends.
-  - docs/INTERFACES.md + docs/ARCHITECTURE.md — host-ticket NeMo action envelopes, receipt fields, and authority mapping back to delegated tickets and checkpoints.
+  - apps/host-ticket-agent/src/executors/infer.rs — optional NeMo provider
+    adapters for `nemo.infer`, `nemo.guardrails`, and `nemo.evaluate`,
+    including Context Capsule refs, deterministic refusal mapping, and bounded
+    provider-action receipt fields.
+  - tools/cohesix-py/cohesix/orchestration.py — provider-family selection hints
+    and host-ticket provider receipt normalization for NeMo vs alternate
+    backends.
+  - docs/INTERFACES.md + docs/ARCHITECTURE.md — host-ticket NeMo action
+    envelopes, receipt fields, and authority mapping back to delegated tickets,
+    capsules, and checkpoints; reserve public compatibility and
+    provider-neutral inference receipt semantics for Milestone 28c1.
 Commands: cargo test -p host-ticket-agent && cargo test -p tests --test host_ticket_agent -- nemo_provider
-Checks: NeMo-backed actions are idempotent, allowlist-gated, writer-fenced, and produce the same Cohesix-level receipt contract as alternate providers; unsupported NeMo features fail deterministically with no side effects.
+Checks: NeMo-backed actions are idempotent, allowlist-gated, writer-fenced, and
+produce the same internal host-ticket provider receipt contract as alternate
+providers; unsupported NeMo features fail deterministically with no side
+effects; no public API compatibility claim is made before 28c1.
 Deliverables: NeMo becomes an optional provider family beneath Cohesix rather than a special-case control plane.
 
 Title/ID: m28c-nemo-guardrails-and-eval
@@ -12180,31 +12704,520 @@ After Milestone 28c:
 - Attention strategy becomes a schedulable, measurable host-side concern instead of a hidden model-side accident.
 - Delegation, retrieval admission, cache eligibility, and handoff lineage become explicit artifacts rather than implicit prompt behavior.
 - Optional NeMo capabilities can be used where they materially improve guardrails, evaluation, deployment, or retrieval workflows, without becoming a second control plane or displacing Cohesix authority.
+- Milestone 28c1 can expose a provider-neutral, auditable inference boundary over
+  the accepted run, capsule, ticket, and receipt semantics.
 - Milestone 29b can expose stable AI namespace roots based on proven host-side semantics rather than speculation.
+
+## Milestone 28c1 — Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) <a id="28c1"></a>
+[Milestones](#Milestones)
+
+**Why now (inference ecosystem boundary):**
+Milestone 28b2 provides immutable semantic objects and Context Capsules.
+Milestone 28c provides delegated run/task/checkpoint policy, host-ticket AI
+actions, prefix/hotset lifecycle, provider selection hints, and the production
+PEFT transaction. The remaining adoption and audit gap is the model-serving
+boundary itself: existing applications expect familiar inference HTTP APIs,
+streaming, tool-call results, embeddings, provider errors, and SDK behavior,
+while Cohesix needs exact admission, context, cache, provider, output, and
+evidence receipts.
+
+This milestone adds an optional host-only OpenAI-compatible inference boundary
+without making Cohesix a model runtime. Applications can adopt it by changing a
+base URL or using thin SDK middleware; model servers and cloud providers remain
+external executors. The public wire is a compatibility projection over
+generated Cohesix run, Context Capsule, provider, authority, and receipt
+contracts. It does not create a second action plane, and provider credentials
+never become caller authority.
+
+**As-built alignment note:** `hive-gateway` currently exposes bounded
+REST/OpenAPI projections of Cohesix file operations. Milestone 28c plans
+provider-specific `infer.run|resume|abort` host-ticket actions and optional
+NeMo adapters, but neither current code nor that plan defines an
+OpenAI-compatible client endpoint, streaming proxy, provider compatibility
+matrix, canonical inference request/receipt schema, effective-parameter
+evidence, Context Capsule transport extension, or inference-specific OTLP
+mapping. No current `coh run`, GPU breadcrumb, model publication, PEFT reload,
+mock playbook, Python receipt, or provider log may be relabelled as an
+auditable inference gateway.
+
+**Prerequisites**
+- Milestone **28b** completed for delegated caller identity, request
+  authentication, idempotency, writer-epoch fencing, durable execution WAL,
+  audit/replay defaults, and production secret/debug policy.
+- Milestone **28b1** completed for provider/action and integration-surface
+  registries, external-executor conformance, visibility classes, identity
+  mapping, exact host packages, observability exporters, and authoritative
+  evidence rules.
+- Milestone **28b2** completed for accepted semantic snapshots, Context
+  Capsules, render receipts, visibility enforcement, host tools, and semantic
+  conformance/performance evidence.
+- Milestone **28c** completed for delegated AI run/task/step envelopes,
+  `infer.run|resume|abort` host actions, checkpoint and prefix lifecycle,
+  provider policy, production PEFT activation/reload evidence, and optional
+  provider-family parity.
+
+**Goal**
+Provide a frictionless, provider-neutral inference interface that makes
+efficiency and audit evidence first-class without moving models into Cohesix:
+1. Accept a generated, pinned OpenAI-compatible subset for Models discovery,
+   Chat Completions, Responses, streaming, tool-call results, and optional
+   Embeddings.
+2. Preserve compatible SDK behavior while mapping every governed request to an
+   accepted 28c run/task/step and admitted host-ticket action.
+3. Accept an optional Context Capsule reference through a generated,
+   backwards-compatible header or metadata extension; requests without one
+   remain transcript-input calls and cannot claim semantic selection.
+4. Render only admitted capsule views, record the exact rendered-request
+   digest, and never silently expand context or rewrite client messages.
+5. Produce canonical inference receipts binding caller, authority, capsule,
+   render, provider/model, effective parameters, cache decisions, stream/output
+   digests, usage, timing, errors, and downstream verification/action refs.
+6. Preserve token streaming with bounded gateway overhead and explicit
+   cancellation, partial-stream, ambiguous-completion, retry, and backpressure
+   semantics.
+7. Export OpenTelemetry-compatible traces/metrics from receipt data while
+   keeping telemetry read-only, redacted, and non-authoritative.
+8. Ship `coh`, `coh doctor`, Python, package, provider-conformance, and operator
+   tooling so the boundary is installable and diagnosable on supported host
+   profiles.
+
+**Non-Goals (Explicit)**
+- No transformer, embedding, reranking, guardrail, training, CUDA/NVML, KV
+  cache, tokenizer, or model runtime inside the VM or Cohesix TCB.
+- No in-VM inference HTTP listener, `/v1` endpoint, TLS stack, model weights,
+  prompt store, or provider credentials.
+- No claim that the OpenAI API is Cohesix's canonical internal schema. It is a
+  pinned compatibility projection over generated Cohesix records.
+- No direct provider call before Cohesix admission in governed mode.
+  `inference-gateway-host` is a declared host executor and may contact only the
+  provider/profile authorized by the exact admitted request digest.
+- No forwarding of caller API keys, OAuth tokens, capability tickets, or MCP
+  credentials to inference providers. Provider credentials resolve separately
+  from generated secret refs.
+- No arbitrary provider URL, model path, shell command, filesystem path,
+  extension field, generation configuration, or tool executor supplied by the
+  inference request.
+- No execution of model-produced tool calls. Tool calls are untrusted outputs;
+  any real action proceeds later through existing Cohesix tickets and policy.
+- No silent prompt summarization, semantic expansion, provider fallback,
+  model substitution, output reuse, or cache sharing across identity/tenant/
+  ticket boundaries.
+- No promise of deterministic model output from an audit receipt. A receipt can
+  prove the admitted inputs and observed output; reproducibility additionally
+  requires a provider/model/mode that actually guarantees it.
+- No provider, inference, semantic, Worker, PEFT, or use-case promotion from
+  wire compatibility, a successful HTTP status, or client-authored telemetry.
+- No new `cohsh` or `.coh` grammar. Target-visible inference control remains
+  deferred to Milestone 29b and uses existing verbs only.
+
+**Deliverables**
+
+### 1) Generated compatibility and provider contract
+**Purpose:** Prevent client compatibility, provider adapters, Cohesix host
+actions, and receipts from drifting into separate inference APIs.
+
+Implementation requirements:
+- Add versioned generated schemas:
+  - `inference-client-request/v1`
+  - `inference-admission/v1`
+  - `inference-provider-profile/v1`
+  - `inference-receipt/v1`
+  - `inference-stream-receipt/v1`
+  - `inference-cache-decision/v1`.
+- Pin the accepted OpenAI-compatible Models, Chat Completions, Responses, and
+  optional Embeddings paths, fields, streaming event forms, tool-call/result
+  shapes, usage fields, cancellation behavior, error mapping, JSON Schema
+  dialect, and optional provider-extension allowlists in generated policy and
+  compatibility fixtures.
+- Require a generated model alias to resolve to provider id, endpoint secret
+  ref, model identity/digest where available, tokenizer/profile identity,
+  context/output limits, supported modalities/features, effective default
+  policy, extension allowlist, and observed conformance mode.
+- Provider/model profiles separately record or type unknown the runtime
+  build/image/region, accelerator class, model revision/weight digest,
+  quantization, adapter chain, tokenizer/chat-template identity, determinism
+  mode, and supply-chain attestation refs. Provider-reported fields never
+  become Cohesix-observed facts without a verified adapter signal.
+- Canonical request hashing preserves ordered messages, content parts, tools,
+  response formats, and sampling parameters. Canonicalization is for identity
+  and evidence; forwarding must preserve accepted client semantics.
+- Sensitive transcript-input identities use a generated keyed/blinded digest
+  profile so receipt correlation does not create a low-entropy prompt hash
+  oracle. Unkeyed content hashes are emitted only when their visibility and
+  disclosure policy explicitly permits them.
+- Unknown or unsupported fields fail or follow an explicitly generated
+  pass-through rule. A provider-specific extension can never widen authority,
+  choose an undeclared endpoint, or bypass receipt fields.
+
+### 2) Host gateway, admission, streaming, and provider execution
+**Purpose:** Make one base-URL change sufficient while preserving the existing
+host-ticket authority and executor boundary.
+
+Implementation requirements:
+- Add `inference-gateway-host` as an optional host process with loopback-only
+  default, bounded queues/body sizes/concurrency/deadlines, explicit non-loopback
+  exposure policy, and compatible streaming responses.
+- Accept the conventional SDK base URL plus bearer/API-key-shaped gateway
+  authentication configuration so existing clients need no request rewrite;
+  the presented value authenticates only to Cohesix and is never reused as a
+  provider credential.
+- Authenticate the client at the gateway, normalize it through 28b delegated
+  identity mapping, and append or resolve the exact 28c `infer.run` host-ticket
+  record with request id, idempotency key, writer epoch, run/task/step,
+  capsule/render refs, provider profile, model alias, limits, and deadline.
+- The gateway may contact a provider only after `host-ticket-agent` admits the
+  exact request/provider digest and returns the generated execution grant/state.
+  The gateway is the registered streaming executor for that action; it does not
+  decide authority or call a different provider after admission.
+- Stream forwarding is incremental and bounded. Record a digest chain and byte/
+  event counters without retaining full content unless an explicit encrypted
+  content-retention profile authorizes it.
+- Cancellation, client disconnect, provider disconnect, timeout, retryable
+  refusal, partial output, and ambiguous completion reconcile through the
+  execution WAL. No blind replay may duplicate a possibly completed inference.
+- SDK middleware may record a direct-provider call as
+  `client_observation_only`, but that record is non-authoritative and cannot
+  satisfy governed inference, provider, cache, action, or use-case evidence.
+
+### 3) Context compilation and inference efficiency
+**Purpose:** Turn semantic selection into measurable prefill and cache savings
+without making unverified provider behavior authoritative.
+
+Implementation requirements:
+- Compatibility requests without a capsule preserve client messages and record
+  a transcript-input manifest. They receive no semantic-selection or omitted-
+  repository claim.
+- Capsule mode verifies snapshot, audience, TTL, policy, renderer, tool schema,
+  model/tokenizer profile, and run/task/step before rendering.
+- Record prompt bytes/tokens submitted, semantic bytes/tokens considered and
+  avoided, selected/omitted object counts, render latency, provider queue wait,
+  TTFT, decode rate, total latency, and usage source.
+- Prefix/cache keys bind provider/model profile, capsule/render digest,
+  instruction and tool-schema hashes, authority scope, tokenizer identity, and
+  TTL/quota. Cache reuse across callers or tenants is prohibited unless a
+  generated sharing policy proves equivalent authority and data classification.
+- Provider-reported prefix/KV hits, cached-token counts, or effective defaults
+  are evidence only when the adapter can capture and normalize them. Otherwise
+  the receipt records unknown/unverified rather than inferring a hit.
+- Optional exact-result reuse is disabled by default and requires an explicit
+  generated policy, deterministic-compatible provider mode, exact dependency
+  hash, audience equivalence, TTL, and a receipt that clearly marks reuse.
+
+### 4) Inference receipts, evidence, and OpenTelemetry
+**Purpose:** Reconstruct exactly what was admitted, sent, observed, and acted
+upon without requiring raw prompt retention.
+
+Implementation requirements:
+- Each authoritative receipt binds:
+  - receipt/request/run/task/step/attempt ids,
+  - normalized caller and delegated-ticket hash,
+  - admission, idempotency, writer-epoch, and policy decision refs,
+  - capsule and render ids or transcript-input manifest,
+  - provider profile, endpoint identity, model alias and returned model id,
+  - runtime/build/region/accelerator, weight revision/digest, quantization,
+    adapter, tokenizer/template, determinism, batching/speculation, and
+    supply-chain identities with a fact source or explicit unknown state,
+  - accepted and effective parameter/tool/response-format hashes,
+  - prefix/cache eligibility, decision, hit/miss source, and invalidation reason,
+  - request, stream-chain, output, and optional content-retention digests,
+  - token/byte usage and provenance of those counts,
+  - queue, admission, render, TTFT, decode, total, cancellation, and retry timing,
+  - terminal class (`completed`, `partial`, `failed`, `refused`, `cancelled`, or
+    `ambiguous`),
+  - verification, guardrail/evaluation, artifact, and later action refs,
+  - trace/span ids, redaction profile, evidence class, and explicit non-claims.
+- Receipts reuse the accepted 28b1 authoritative receipt signing/verification
+  core and bind schema version, signing key id/attestation ref, predecessor or
+  stream-chain digest, and verification status without inventing an
+  inference-only trust root.
+- Full input/output/tool content is excluded from general logs, metrics, and
+  evidence by default. Hashes, bounded redacted previews, or encrypted retained
+  content require distinct policy.
+- Emit OpenTelemetry-compatible GenAI spans/metrics using bounded normalized
+  attributes plus Cohesix receipt/capsule refs. OTLP is a projection and cannot
+  create or modify a receipt.
+- Evidence packs and timelines can verify request-to-admission-to-provider-to-
+  terminal-output lineage and distinguish gateway observation, provider claims,
+  Cohesix authority, verification, and downstream actions.
+
+### 5) Host tools, SDK compatibility, packaging, and operations
+**Purpose:** Make the new boundary easy to install, inspect, and support without
+turning SDK wrappers into authority.
+
+Implementation requirements:
+- Add host-only `coh inference` commands for:
+  - `providers`
+  - `status`
+  - `receipt show`
+  - `receipt verify`
+  - `request inspect`
+  - `conformance`.
+- Extend `coh doctor` with generated checks for gateway version, bind/exposure
+  posture, client auth, identity-to-ticket mapping, semantic store/capsule
+  availability, host-ticket agent, provider/model profile, secret refs,
+  streaming capability, OTLP delivery, receipt verification, and package drift.
+- Add Python helpers for configuring the compatible base URL, supplying an
+  optional capsule ref, reading the returned receipt id/trace context, polling
+  status, and verifying receipts. Helpers consume generated schemas and never
+  mint authority or authoritative provider results.
+- Add a generated read-only discovery record so `hive-gateway`, later MCP/A2A,
+  `coh doctor`, and packaging can locate the selected inference gateway and
+  receipt surface without duplicating provider/model catalogs.
+- Package `inference-gateway-host`, exact provider adapters, generated
+  compatibility fixtures, launchd/systemd definitions, signed host binaries
+  and/or OCI/Helm artifacts for the selected profile, doctor checks, secret-ref
+  templates, and conformance metadata for supported macOS/Linux/Kubernetes host
+  profiles. No inference component enters VM packages.
+- Update `docs/HOST_API.md`, `docs/API_GUIDELINES.md`, `docs/HOST_TOOLS.md`,
+  `docs/PYTHON_SUPPORT.md`, `docs/ARCHITECTURE.md`, `docs/INTERFACES.md`,
+  `docs/SECURITY.md`, `docs/BENCHMARKS.md`, `docs/TEST_PLAN.md`, and
+  `docs/OPERATOR_WALKTHROUGH.md`.
+- `cohsh` remains unchanged. Later namespace reads may display bounded receipt
+  projections through existing `LS`/`CAT`/`TAIL`; no host inference command is
+  tunneled through new console grammar.
+
+### 6) Provider/client conformance, security, and performance
+**Purpose:** Prove compatibility and bounded overhead without converting a
+protocol smoke test into provider-quality or production-use-case proof.
+
+Implementation requirements:
+- Ship at least one packaged open local reference profile, such as vLLM, for
+  live compatible request, streaming, cancellation, tool-call output, usage,
+  model identity, error, and receipt tests. Other providers remain fixture,
+  dry-run, not-enabled, or separately live-proven according to the generated
+  matrix.
+- Test common official-compatible Python/HTTP client behavior without custom
+  forks. Provider-specific extras require explicit generated fixtures.
+- Conformance covers conventional base-URL/API-key environment configuration,
+  `/v1/models` discovery, non-streaming and streaming calls, cancellation,
+  error shapes, usage, tool-call output, and receipt/trace response metadata.
+- Negative tests cover oversized/malformed bodies, unknown fields, arbitrary
+  endpoints/models, credential/token passthrough, context-scope widening,
+  forged/stale capsules, duplicate ids, stale writer epochs, provider fallback,
+  prompt/tool injection, cross-tenant cache keys, stream truncation, ambiguous
+  completion, receipt tampering, telemetry content leakage, and direct
+  provider-executor bypass.
+- Add performance probes for admission, capsule verification/rendering,
+  streaming proxy overhead, TTFT delta, sustained stream throughput,
+  cancellation, queue/backpressure, prefix/cache evidence, receipt signing/
+  export, and OTLP delivery.
+- Report gateway overhead separately from provider/model compute, semantic
+  extraction, VM runtime, and network topology. A compatible response is not a
+  quality, safety, determinism, cache-hit, or production-use-case claim.
+
+**Commands**
+- `cargo test -p cohesix-inference-core`
+- `cargo test -p inference-gateway-host`
+- `cargo test -p host-ticket-agent`
+- `cargo test -p coh --test inference_receipts`
+- `cargo test -p coh --test inference_doctor`
+- `cargo test -p coh-rtc`
+- `python3 -m pytest -q tools/cohesix-py/tests/test_inference.py`
+- `scripts/ci/inference_conformance_run.sh --matrix configs/inference_conformance.toml --state-dir out/inference/m28c1`
+- `scripts/ci/inference_perf_probe.sh --state-dir out/bench/m28c1-inference`
+- `scripts/check-generated.sh`
+- `scripts/ci/test_plan_run.sh --state-dir out/test-plan/m28c1-inference`
+
+**Checks (Definition of Done)**
+- Compatible clients can change only their base URL/auth configuration and
+  complete admitted non-streaming and streaming reference requests with
+  standards-shaped responses plus a bounded Cohesix receipt reference.
+- Every governed provider call has a prior exact Cohesix admission record and
+  execution grant; provider, model, request, capsule/render, authority, and
+  deadline cannot change after admission.
+- Client credentials and delegated tickets are never passed to providers;
+  provider secrets never enter request bodies, receipts, telemetry, or client
+  responses.
+- Requests without a Context Capsule are not described as semantically selected.
+  Capsule requests fail before provider contact when snapshot, audience, TTL,
+  policy, renderer, tokenizer/model profile, or tool schema is stale or wrong.
+- Model-produced tool calls are returned as untrusted output only and cause no
+  host/VM action without a separate admitted Cohesix ticket.
+- Receipts distinguish admitted facts, provider-reported facts, observed facts,
+  unknown values, partial/ambiguous completion, and non-claims. A successful
+  HTTP status alone cannot produce a terminal authoritative receipt.
+- Full prompt/output/tool content is absent from default logs, OTLP, evidence,
+  and error messages; content retention and redacted previews obey generated
+  policy and negative tests.
+- Prefix/KV/cache hits and effective provider defaults are reported only from
+  verified adapter evidence. No cross-authority cache reuse, silent fallback,
+  or unrecorded output reuse occurs.
+- `coh`, Python, `coh doctor`, gateway discovery, evidence/timeline tools,
+  provider adapters, packages, and future MCP/A2A inputs agree on the generated
+  inference schemas, profiles, bounds, and receipt fixtures.
+- Conformance passes for the packaged open reference runtime and records exact
+  unsupported differences for every other selected provider; no provider is
+  promoted from fixture or protocol-shape success.
+- Performance evidence reports admission/render/proxy/receipt/OTLP overhead and
+  actual prompt-token/TTFT/cache measurements separately. It does not substitute
+  for Pi/QEMU, model-quality, safety, or production workflow evidence.
+- No VM package, root-task code, console/9P grammar, model runtime, provider
+  credential, or second provider/action registry is introduced.
+
+**Compiler touchpoints**
+- `coh-rtc` extends the 28b1 graph with inference client, gateway, provider,
+  model, semantic-capsule, receipt, OTLP, host-tool, package, and conformance
+  surfaces while preserving stable integration/use-case ids.
+- `coh-rtc` emits compatibility paths/fields/events, provider/model profiles,
+  Context Capsule transport extension, request/admission/receipt schemas,
+  client/auth/secret mappings, streaming/body/queue/deadline bounds,
+  cache/prefix policy, content-retention/redaction policy, OTLP fields, Python
+  defaults, `coh` defaults, doctor checks, package manifests, and docs snippets.
+- Validation rejects unregistered endpoints/models/extensions, provider
+  credentials in client inputs, missing 28b/28b1/28b2/28c prerequisites,
+  authority-changing fallback, provider calls without exact admission,
+  cross-scope cache reuse, client-authored authoritative receipts, content
+  leakage, and compatibility claims without conformance evidence.
+- The generated compatibility model is a projection. Canonical authority remains
+  in the existing provider/action graph, host-ticket records, Context Capsules,
+  run/checkpoint state, and evidence receipts.
+
+**Task Breakdown**
+```
+Title/ID: m28c1-inference-ir-and-compatibility-contract
+Milestone: Milestone 28c1 — Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) / inference IR and compatibility contract
+Goal: Define one generated request, provider-profile, admission, stream, cache-decision, and receipt contract plus a pinned OpenAI-compatible projection.
+Inputs: accepted 28b1 provider/integration graph, 28b2 Context Capsule schemas, 28c run/host-ticket/provider contracts, tools/coh-rtc/src/**, docs/HOST_API.md, docs/INTERFACES.md, docs/SECURITY.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs + validation/codegen — Models/Chat
+    Completions/Responses/Embeddings endpoint/field/event schemas,
+    provider/model/runtime/weight/tokenizer profiles, capsule extension,
+    caller/provider auth separation, keyed digest policy, bounds,
+    cache/content policy, receipts, Python/coh/docs outputs.
+  - crates/cohesix-inference-core/src/schema.rs — strict generated or checked host-side request/admission/receipt types.
+  - tests/fixtures/inference/** — model discovery, valid, unsupported,
+    provider-extension, keyed/unkeyed identity, streaming, tool-call, partial,
+    ambiguous, cache, runtime/model fact-source, and tamper fixtures.
+  - docs/HOST_API.md + docs/INTERFACES.md + docs/SECURITY.md — compatibility, authority, provider, receipt, content, and non-claim contract.
+Commands:
+  - cargo test -p coh-rtc
+  - cargo test -p cohesix-inference-core
+  - scripts/check-generated.sh
+Checks: Client compatibility cannot redefine provider actions or receipts; unknown endpoints/models/extensions, credential passthrough, authority widening, or schema drift fail generation and fixtures.
+Deliverables: Compiler-owned inference compatibility and receipt contract shared by gateway, providers, host tools, SDK helpers, OTLP, and later MCP/A2A.
+
+Title/ID: m28c1-gateway-admission-and-streaming
+Milestone: Milestone 28c1 — Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) / host gateway admission and streaming
+Goal: Serve the compatible host API with bounded streaming while every governed provider call remains bound to an exact 28c host-ticket admission and execution grant.
+Inputs: m28c1-inference-ir-and-compatibility-contract, apps/host-ticket-agent, 28c `infer.run|resume|abort` actions, accepted 28b gateway identity/fencing/WAL behavior, provider fixtures.
+Changes:
+  - apps/inference-gateway-host/src/** — compatible Models/request/stream
+    handling, conventional base-URL/bearer configuration, loopback/exposure
+    policy, bounded queues, cancellation, digest chaining, backpressure, and
+    response headers carrying receipt/trace refs.
+  - apps/host-ticket-agent/src/executors/infer.rs — exact request/provider admission, execution grant, WAL reconciliation, idempotency, writer fencing, cancellation, and terminal/ambiguous state.
+  - crates/cohesix-inference-core/src/{canonical,stream,errors}.rs — stable request identity, incremental stream digest, and deterministic client/provider/Cohesix error mapping.
+  - apps/inference-gateway-host/tests/** — non-streaming, streaming, cancellation, disconnect, ambiguous completion, duplicate, stale-writer, and provider-substitution fixtures.
+Commands:
+  - cargo test -p inference-gateway-host
+  - cargo test -p host-ticket-agent
+  - cargo test -p cohesix-inference-core
+Checks: No provider request precedes exact admission; stream state reconciles durably; retries cannot duplicate ambiguous work; client/provider credentials and authority remain separate.
+Deliverables: Drop-in compatible host inference endpoint that preserves Cohesix ticket, fencing, durability, and executor discipline.
+
+Title/ID: m28c1-context-efficiency-and-cache-evidence
+Milestone: Milestone 28c1 — Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) / capsule compilation and cache evidence
+Goal: Compile admitted Context Capsules into exact provider inputs and measure semantic/prefix/cache efficiency without unverified reuse claims.
+Inputs: m28c1-gateway-admission-and-streaming, accepted 28b2 capsule/store/renderer, 28c prefix/hotset policy, provider tokenizer/cache adapters, docs/BENCHMARKS.md.
+Changes:
+  - crates/cohesix-inference-core/src/{context,cache,metrics}.rs — capsule verification, provider rendering, transcript-input manifests, exact cache keys, eligibility/invalidation, usage-source normalization, and bounded metrics.
+  - apps/inference-gateway-host/src/context.rs + provider adapters — capsule/header/metadata handling, message-preserving compatibility mode, verified provider cache/default evidence, and no silent fallback.
+  - scripts/ci/inference_perf_probe.sh — prompt bytes/tokens, objects selected/omitted, render cost, provider queue, TTFT, decode, cache, streaming, and receipt overhead.
+  - docs/BENCHMARKS.md + docs/TEST_PLAN.md — inference efficiency lanes and model-quality/cache non-claims.
+Commands:
+  - cargo test -p cohesix-inference-core --test context_cache
+  - cargo test -p inference-gateway-host --test context
+  - scripts/ci/inference_perf_probe.sh --state-dir out/bench/m28c1-inference
+Checks: Transcript and capsule modes are explicit; capsule inputs cannot widen after admission; cache keys bind all authority/model/context/tool inputs; only verified provider evidence can claim hits/defaults.
+Deliverables: Measured semantic paging and prefix/cache behavior at the actual inference boundary.
+
+Title/ID: m28c1-inference-receipts-otel-and-evidence
+Milestone: Milestone 28c1 — Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) / authoritative inference receipts and telemetry
+Goal: Bind each request, stream, output, provider fact, timing, and downstream verification/action reference into redaction-safe evidence and OTLP projections.
+Inputs: m28c1-gateway-admission-and-streaming, m28c1-context-efficiency-and-cache-evidence, m28b1-authoritative-receipt-and-evidence-core, apps/coh/src/{evidence.rs,evidence_timeline.rs}, OTLP exporter contract.
+Changes:
+  - crates/cohesix-inference-core/src/receipt.rs — authoritative receipt construction/verification, stream-chain digest, fact-source classification, terminal/non-claim states, and content-retention policy.
+  - apps/coh/src/{evidence.rs,evidence_timeline.rs} — request-to-admission-to-provider-to-output-to-verification/action reconstruction.
+  - host OTLP exporter integration — bounded GenAI trace/metric projection with receipt/capsule refs and no default prompt/output content.
+  - apps/coh/tests/inference_receipts.rs + canonical Rust/Python fixtures — tamper, partial, ambiguous, provider-claim, redaction, and telemetry-reconstruction cases.
+Commands:
+  - cargo test -p cohesix-inference-core --test receipts
+  - cargo test -p coh --test inference_receipts
+  - python3 -m pytest -q tools/cohesix-py/tests/test_inference.py -k receipt
+Checks: Receipts distinguish Cohesix, provider, observed, unknown, and client-only facts; default telemetry/evidence contains no raw prompt/output/tool content; OTLP cannot author authority.
+Deliverables: Portable, verifiable inference evidence suitable for audits, MCP/A2A artifacts, and later namespace receipts.
+
+Title/ID: m28c1-host-tools-provider-conformance-and-packaging
+Milestone: Milestone 28c1 — Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) / host tools, conformance, packaging, and operator acceptance
+Goal: Ship and prove the inference boundary through Cohesix host tools, Python helpers, doctor, provider/client matrices, supported deployment profiles, and operator evidence.
+Inputs: all m28c1 tasks, apps/coh/src/{main.rs,doctor.rs}, tools/cohesix-py/cohesix/**, hive-gateway generated metadata, 28b1 package/provider registries, open reference runtime, docs/OPERATOR_WALKTHROUGH.md.
+Changes:
+  - apps/coh/src/inference.rs + CLI wiring — provider/status/receipt/request/conformance inspection and offline receipt verification.
+  - apps/coh/src/doctor.rs + tools/coh-rtc generated checks — gateway/auth/identity/ticket/store/provider/model/secret/stream/OTLP/receipt/package diagnostics.
+  - tools/cohesix-py/cohesix/inference.py + tests/examples — compatible base URL, optional capsule ref, receipt/trace lookup, status, and verification helpers with no authority minting.
+  - apps/hive-gateway metadata + release packaging/service profiles —
+    read-only discovery of the selected inference surface and exact signed
+    binary/OCI/Helm, launchd/systemd, adapter, fixture, and secret-ref contents.
+  - scripts/ci/inference_conformance_run.sh — conventional base-URL/API-key
+    client plus provider/security/receipt matrix with a packaged open live
+    reference profile and explicit modes for every alternate provider.
+  - docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md + docs/API_GUIDELINES.md + docs/OPERATOR_WALKTHROUGH.md + docs/TEST_PLAN.md — installation, one-base-URL adoption, diagnostics, refusal, recovery, evidence, and non-claims.
+Commands:
+  - cargo test -p coh --test inference_doctor
+  - python3 -m pytest -q tools/cohesix-py/tests/test_inference.py
+  - scripts/ci/inference_conformance_run.sh --matrix configs/inference_conformance.toml --state-dir out/inference/m28c1
+  - scripts/ci/test_plan_run.sh --state-dir out/test-plan/m28c1-inference
+  - scripts/check-generated.sh
+Checks: A supported client and live open reference runtime interoperate without a client fork; doctor and packages expose exact prerequisites; alternate providers retain honest modes; `cohsh` and VM packages remain unchanged.
+Deliverables: Installable, diagnosable, provider-conformant host inference boundary ready for MCP/A2A projection.
+```
+
+## Outcome
+After Milestone 28c1:
+- Existing inference applications can adopt Cohesix through a familiar host API
+  while model runtimes and credentials remain outside the VM and Cohesix TCB.
+- Every governed request is bound to delegated identity, an exact host-ticket
+  admission, a provider/model profile, and a durable terminal or ambiguous
+  receipt.
+- Context Capsule selection, rendered inputs, prompt savings, prefix/cache
+  evidence, TTFT, streaming, output digests, and downstream verification/action
+  lineage are measurable without default raw-content retention.
+- `coh`, `coh doctor`, Python helpers, gateway discovery, evidence/timeline
+  tools, OTLP, packages, and provider adapters consume one generated contract.
+- Milestone 28d can expose semantic resources and inference receipts/tools to
+  MCP/A2A clients without defining a second inference protocol or authority
+  path.
 
 ## Milestone 28d — MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later <a id="28d"></a>
 [Milestones](#Milestones)
 
 **Why now (ecosystem boundary):**
-Milestone 28b gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 28b1 provides the generated provider/action and integration-surface graph, read visibility classes, identity mappings, external-executor conformance, package manifests, and use-case evidence rows that gateway protocol projections must consume. Milestone 28c defines the host-side AI/provider model and complete PEFT lifecycle for delegated runs, optional NeMo providers, GPU leases, and evidence receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane or a new VM grammar to satisfy them.
+Milestone 28b gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 28b1 provides the generated provider/action and integration-surface graph, read visibility classes, identity mappings, external-executor conformance, package manifests, and use-case evidence rows that gateway protocol projections must consume. Milestone 28b2 provides immutable semantic objects and Context Capsules. Milestone 28c defines the host-side AI/provider model and complete PEFT lifecycle for delegated runs, optional NeMo providers, GPU leases, and evidence receipts, and Milestone 28c1 provides the OpenAI-compatible inference boundary and provider-neutral inference receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane, inference protocol, semantic store, or VM grammar to satisfy them.
 
-MCP support belongs inside or immediately beside `hive-gateway` because the gateway is already the host-only multiplexer over existing Cohesix file semantics. This milestone makes MCP a client-facing projection over the same `LS`, `CAT`, `TAIL`, and `ECHO` paths, plus the existing `/host/tickets/spec` actuation lane. It is not a new runtime, not an in-VM endpoint, and not an excuse to expose `systemctl`, `docker`, `kubectl`, CUDA, PEFT, or NeMo APIs directly to an agent.
+MCP support belongs inside or immediately beside `hive-gateway` because the gateway is already the host-only multiplexer over existing Cohesix file semantics. This milestone makes MCP a client-facing projection over the same `LS`, `CAT`, `TAIL`, and `ECHO` paths, plus read-only adapters over accepted 28b2 semantic/capsule artifacts and 28c1 inference receipts, and the existing `/host/tickets/spec` actuation lane. It is not a new runtime, not an in-VM endpoint, and not an excuse to expose model providers, `systemctl`, `docker`, `kubectl`, CUDA, PEFT, or NeMo APIs directly to an agent.
 
-A2A belongs in the same gateway milestone only as a companion agent-delegation facade. MCP answers "what tools/resources can this agent host use?"; A2A answers "what task can one external agent delegate to Cohesix and how is progress/artifact state observed?" Cohesix should support that distinction because 28c already defines durable run/task/checkpoint/evidence records, but A2A must project those records rather than introduce an opaque agent bus.
+A2A belongs in the same gateway milestone only as a companion agent-delegation facade. MCP answers "what tools/resources can this agent host use?"; A2A answers "what task can one external agent delegate to Cohesix and how is progress/artifact state observed?" Cohesix should support that distinction because 28b2, 28c, and 28c1 already define durable semantic/capsule, run/checkpoint, and inference-receipt records, but A2A must project those records rather than introduce an opaque agent bus.
 
-**As-built alignment note:** There is no MCP server or A2A facade in `hive-gateway` today. Current gateway behavior is REST/OpenAPI over `LS`/`CAT`/`ECHO`, and the host ecosystem already has bounded providers for CUDA/NVIDIA discovery, GPU leases, PEFT, systemd, Docker, and K8s through Cohesix host tools and `/host/tickets/*`. `coh mount --rest-url` already mounts through `hive-gateway` and is the primary FUSE path for the live Cohesix namespace; Milestone 28d must not rebuild that through MCP or A2A. Milestone 28d adds MCP-compatible and A2A-compatible surfaces only after those existing flows are the implementation substrate. Older prose must not claim MCP or A2A support until the gateway exposes lifecycle/discovery/execution/authorization/conformance evidence for the relevant protocol.
+**As-built alignment note:** There is no MCP server or A2A facade in `hive-gateway` today. Current gateway behavior is REST/OpenAPI over `LS`/`CAT`/`ECHO`, and the host ecosystem already has bounded providers for CUDA/NVIDIA discovery, GPU leases, PEFT, systemd, Docker, and K8s through Cohesix host tools and `/host/tickets/*`. The accepted 28c1 inference endpoint remains a separate host service; 28d discovers and references it but does not proxy, reimplement, or redefine its compatible wire contract. `coh mount --rest-url` already mounts through `hive-gateway` and is the primary FUSE path for the live Cohesix namespace; Milestone 28d must not rebuild that through MCP or A2A. Milestone 28d adds MCP-compatible and A2A-compatible surfaces only after those existing flows are the implementation substrate. Older prose must not claim MCP or A2A support until the gateway exposes lifecycle/discovery/execution/authorization/conformance evidence for the relevant protocol.
 
-**Sequencing note:** Milestone 28d is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded reads, with every resource classified by the Milestone 28b1 visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 28b1 provider/integration graph, 28b delegated authority floor, and 28c run/checkpoint/evidence model are proven. A projected tool/skill is omitted or reports typed unavailable when any required provider, surface, external executor, Worker tier, or package row is not accepted. No mutating MCP/A2A path can be accepted solely because read-only protocol conformance passes, and protocol conformance cannot promote the underlying use case. A path may cite matching 26e evidence for live Worker/driver authority; if it additionally claims production Worker ticket/lease binding, complete driver-inventory projection, or structured quarantine/restart, it must cite the corresponding Milestone 28e evidence. Host-ticket-only and read-only projections must not claim either class by implication.
+**Sequencing note:** Milestone 28d is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded namespace reads, accepted 28b2 semantic/capsule artifacts, and accepted 28c1 inference receipts, with every resource classified by the Milestone 28b1 visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 28b1 provider/integration graph, 28b delegated authority floor, 28b2 artifact model, 28c run/checkpoint/evidence model, and 28c1 inference admission/receipt contract are proven. A projected tool/skill is omitted or reports typed unavailable when any required provider, surface, external executor, Worker tier, package, semantic artifact, or inference profile row is not accepted. No mutating MCP/A2A path can be accepted solely because read-only protocol conformance passes, and protocol conformance cannot promote the underlying use case. A path may cite matching 26e evidence for live Worker/driver authority; if it additionally claims production Worker ticket/lease binding, complete driver-inventory projection, or structured quarantine/restart, it must cite the corresponding Milestone 28e evidence. Host-ticket-only and read-only projections must not claim either class by implication.
 
 **Goal**
 Expose Cohesix to MCP clients through standard MCP server primitives and to A2A peers through task/artifact protocol primitives while preserving Cohesix's existing grammar and authority model:
-1. MCP resources provide bounded read-only context from existing Cohesix paths and evidence artifacts.
+1. MCP resources provide bounded read-only context from existing Cohesix paths,
+   accepted semantic objects/Context Capsules, inference receipts, and evidence
+   artifacts.
 2. MCP tools either read existing files or submit existing host tickets; mutating tools never call host executors directly.
-3. MCP prompts encode safe operational playbooks for CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker workflows without becoming authority.
+3. MCP prompts encode safe semantic/context and inference audits plus
+   operational playbooks for CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker
+   workflows without becoming authority.
 4. All writes inherit Milestone 28b delegated ticket, idempotency, writer-epoch, audit/replay, and request-auth rules.
 5. The shared `cohsh-core` console grammar, NineDoor semantics, and generated manifest bounds remain byte-stable.
 6. `coh mount --rest-url` remains the canonical gateway-backed namespace mount; any MCP-backed mount mode is a read-only MCP resource/catalog view for MCP-admitted context, not a replacement write path.
-7. A2A Agent Cards, messages, tasks, artifacts, and streaming updates are projections of 28c run/checkpoint/evidence records and existing host-ticket receipts, not a separate scheduler or agent memory.
+7. A2A Agent Cards, messages, tasks, artifacts, and streaming updates are
+   projections of accepted 28b2 semantic/capsule records, 28c
+   run/checkpoint/evidence records, 28c1 inference receipts, and existing
+   host-ticket receipts, not a separate scheduler or agent memory.
 8. Read-only MCP/A2A conformance is an ecosystem compatibility claim, not a write-authority claim. Mutating protocol evidence must name delegated-ticket, provider-action, idempotency, writer-epoch, audit/replay, matching 26e live-task evidence where VM execution is claimed, and 28e production-ledger/quarantine evidence only where those stronger claims are made.
 9. Tool/resource/prompt and Agent Card/skill availability derives from the accepted 28b1 integration and use-case rows; MCP/A2A never upgrades a mock, dry-run, integration-pattern, or not-enabled workflow into production support.
 
@@ -12212,6 +13225,13 @@ Expose Cohesix to MCP clients through standard MCP server primitives and to A2A 
 - No in-VM MCP endpoint, MCP listener, MCP filesystem root, or MCP-specific root-task parser.
 - No new console verbs, no new 9P verbs, no ACK/ERR/END grammar changes, and no hidden RPC behind MCP tool names.
 - No direct execution of `systemctl`, `docker`, `kubectl`, CUDA/NVML, PEFT, or NeMo provider APIs from the MCP server. Side effects go through delegated REST and/or `/host/tickets/spec`.
+- No OpenAI-compatible endpoint, inference proxy, provider call, or model-output
+  tool execution inside MCP/A2A. Inference submissions map to accepted 28c
+  `infer.run` admission and the 28c1 gateway; model-produced tool calls remain
+  inert data until separately validated and authorized.
+- No duplicate semantic graph, vector index, capsule planner, prompt archive, or
+  inference receipt schema in `hive-gateway`; 28d consumes accepted 28b2 and
+  28c1 libraries and immutable refs.
 - No MCP tool that bypasses role-scoped tickets, policy approval, writer-epoch fencing, host-ticket allowlists, or evidence exports.
 - No model-controlled prompt or MCP client metadata is trusted as authorization. Tool descriptions, prompts, and annotations are documentation only.
 - No CUDA/NVML, PEFT, NeMo, Kubernetes, systemd, or Docker code enters the VM TCB.
@@ -12243,22 +13263,43 @@ As-built leverage:
 
 ---
 
-### 2) Resource catalog over existing Cohesix paths
-**Purpose:** Give MCP clients context without giving them a new read model.
+### 2) Resource catalog over existing Cohesix paths and accepted host artifacts
+**Purpose:** Give MCP clients context without giving them a new authority or
+storage model.
 
 Implementation requirements:
-- Define `cohesix://` resource URIs that map one-to-one to existing bounded reads:
+- Define namespace-backed `cohesix://namespace/*` resource URIs that map
+  one-to-one to existing bounded reads:
   - `/proc/boot`, `/proc/root/*`, `/proc/9p/*`, `/proc/lease/*`, `/proc/schedule/*`, `/proc/spool/*`, `/proc/attest/*`
   - `/gpu/*`, `/gpu/models/*`, `/gpu/telemetry/schema.json`
   - `/host/tickets/status`, `/host/tickets/deadletter`, and provider status under `/host/systemd/*`, `/host/docker/*`, and `/host/k8s/*`
-  - evidence-pack and timeline summaries when Milestone 28/28b/28c evidence is available
+  - evidence-pack and timeline summaries when Milestone
+    28/28b/28b2/28c/28c1 evidence is available
   - NeMo capability, guardrail, evaluator, and provider receipt summaries only when the 28c optional provider family is enabled.
-- Resource reads must use only `LS`, `CAT`, or `TAIL` through the existing gateway/session machinery and must enforce manifest-derived path, line, byte, and walk-depth bounds.
+- Define host-artifact resource families only when their owner milestones are
+  accepted:
+  - `cohesix://semantic/snapshot/<snapshot-id>/object/<object-id>/<view>` and
+    bounded edge/query summaries backed by the 28b2 read-only semantic core,
+  - `cohesix://context/capsule/<capsule-id>` and its manifest/render receipt
+    backed by the 28b2 capsule verifier/renderer,
+  - `cohesix://inference/receipt/<receipt-id>` and bounded status/timeline views
+    backed by the 28c1 receipt verifier and evidence projection.
+- Namespace-backed resource reads must use only `LS`, `CAT`, or `TAIL` through
+  the existing gateway/session machinery and must enforce manifest-derived
+  path, line, byte, and walk-depth bounds. Host-artifact resources must use
+  only the accepted read-only 28b2/28c1 libraries over immutable ids and must
+  not acquire repository paths, provider credentials, run admission, or write
+  authority.
 - Resource templates may expose common path families, but template expansion must reject `..`, absolute host filesystem paths, overlong components, and undeclared provider roots.
 - Resource contents must be redacted with the same rules as evidence packs: no raw tickets, auth tokens, provider credentials, or secret refs.
+- Resource metadata must expose source milestone, schema version, artifact hash,
+  visibility class, provenance/receipt ref, and freshness without claiming
+  host-artifact data is a kernel-visible 9P object.
 
 As-built leverage:
-- Reuse `coh evidence pack`, `coh evidence timeline`, generated Cohesix path defaults, and the existing `/host` provider status surfaces.
+- Reuse `coh evidence pack`, `coh evidence timeline`, generated Cohesix path
+  defaults, the existing `/host` provider status surfaces, and the accepted
+  `cohesix-semantic-core` and `cohesix-inference-core` read/verify APIs.
 
 ---
 
@@ -12268,18 +13309,31 @@ As-built leverage:
 Implementation requirements:
 - Read-only tools:
   - `cohesix.fs.ls`, `cohesix.fs.cat`, `cohesix.fs.tail`
+  - `cohesix.semantic.inspect` and `cohesix.semantic.query` over an admitted
+    28b2 snapshot id,
+  - `cohesix.context.inspect`, `cohesix.context.render`, and
+    `cohesix.context.verify` over an admitted immutable capsule id,
+  - `cohesix.inference.status` and `cohesix.inference.receipt` over admitted
+    28c1 ids,
   - `cohesix.cuda.inventory` for bounded host CUDA/NVIDIA capability and GPU inventory summaries
   - `cohesix.evidence.timeline` for bounded evidence/timeline summaries.
 - Mutating or side-effect-capable tools must produce existing Cohesix writes only:
   - `cohesix.host_ticket.submit` appends a validated `host-ticket/v1` line to `/host/tickets/spec`.
   - `cohesix.gpu.lease_grant`, `cohesix.gpu.lease_renew`, and `cohesix.gpu.lease_release` map to existing GPU lease actions.
   - `cohesix.peft.export`, `cohesix.peft.import`, `cohesix.peft.activate`, and `cohesix.peft.rollback` map to existing PEFT ticket/action flows and 28c transaction receipts.
+  - `cohesix.inference.submit` maps a fixed, generated request schema and
+    optional accepted Context Capsule ref to the existing 28c `infer.run`
+    host-ticket admission and 28c1 inference gateway. It never calls a provider
+    directly or executes model-produced tool calls.
   - `cohesix.nemo.probe`, `cohesix.nemo.infer`, `cohesix.nemo.guardrails`, and `cohesix.nemo.evaluate` map to 28c optional provider actions or deterministically return unavailable when NeMo is not enabled.
   - `cohesix.k8s.cordon`, `cohesix.k8s.drain`, and `cohesix.k8s.lease_sync` map to existing K8s host-ticket actions.
   - `cohesix.systemd.status_check`, `cohesix.systemd.start`, `cohesix.systemd.stop`, and `cohesix.systemd.restart` map to existing systemd host-ticket actions.
   - `cohesix.docker.status_check`, `cohesix.docker.stop`, and `cohesix.docker.restart` map to existing Docker host-ticket actions.
 - MCP tool schemas and A2A skill schemas must derive from the shared manifest/provider action and integration-surface registry. Provider action names, target selectors, dry-run flags, idempotency keys, receipt fields, Worker tier, external-executor requirement, and availability state must not be hand-maintained separately for the two protocols.
-- Discovery omits or marks typed unavailable any operation whose 28b1/28c dependency row is not accepted in the selected profile. A client cannot select `live` mode to override missing provider/executor evidence.
+- Discovery omits or marks typed unavailable any operation whose
+  28b1/28b2/28c/28c1 dependency row is not accepted in the selected profile. A
+  client cannot select `live` mode to override missing semantic, capsule,
+  provider, executor, inference, or receipt evidence.
 - Every tool schema must be generated or checked against manifest/provider policy:
   - bounded string lengths,
   - explicit enum values for actions and providers,
@@ -12298,6 +13352,8 @@ As-built leverage:
 
 Implementation requirements:
 - Add prompt templates that assemble existing tools/resources for common Cohesix tasks:
+  - semantic impact review from an immutable snapshot and Context Capsule,
+  - inference receipt and context-selection audit without raw prompt retention,
   - CUDA capacity triage before a GPU lease,
   - PEFT export/import/promotion/rollback review,
   - NeMo provider readiness and guardrail/evaluator receipt review,
@@ -12309,7 +13365,9 @@ Implementation requirements:
 - Prompt outputs are guidance only; only existing Cohesix tickets, receipts, and evidence determine state.
 
 As-built leverage:
-- Reuse Milestone 28 operator utilities, 28b audit/replay/fencing, 28c run envelopes/checkpoints, and existing host-ticket provider receipts.
+- Reuse Milestone 28 operator utilities, 28b audit/replay/fencing, 28b2
+  semantic/capsule artifacts, 28c run envelopes/checkpoints, 28c1 inference
+  receipts, and existing host-ticket provider receipts.
 
 ---
 
@@ -12322,14 +13380,36 @@ Implementation requirements:
 - Pin one accepted binding/revision mapping in generated policy. JSON-RPC, HTTP+JSON, and gRPC method or endpoint names must not be mixed across protocol revisions, and fixtures must be regenerated when that mapping changes.
 - Publish an Agent Card from `/.well-known/agent-card.json` when A2A is enabled; alternate generated paths may exist only as additional configured aliases. The card must advertise only enabled Cohesix skills, authentication requirements, endpoint interfaces, and safe capability summaries; it must not expose raw tickets, secrets, host paths, or executor internals.
 - Provide the authenticated extended Agent Card endpoint only when policy enables it, and ensure the extended card obeys stricter access checks than the public discovery card.
-- A2A skills map to the same real-world operational families as MCP tools: CUDA/GPU inventory and leases, PEFT export/import/activate/rollback, optional NeMo probe/infer/guardrail/evaluator actions, K8s cordon/drain/lease sync, systemd status/start/stop/restart, Docker status/stop/restart, and evidence/timeline inspection.
-- A2A `SendMessage` and `SendStreamingMessage` operations (or the exact generated equivalents for the pinned binding/revision) create or resume 28c run/task envelopes only after fixed skill/action/input schema validation. Free-form natural language is never translated directly into host execution.
-- A2A `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`, push-notification configuration, and streaming update operations (or their generated binding equivalents) are projections of existing run/checkpoint/evidence records, host-ticket receipt state, and gateway audit state. Cancellation may append a validated Cohesix cancel/control request when one exists; it must not kill provider executors directly.
-- A2A artifacts are bounded, redacted references to evidence packs, timelines, checkpoint summaries, provider receipts, and MCP/Cohesix resource refs. Large files, secrets, raw ticket material, and provider credentials are never embedded in artifacts.
+- A2A skills map to the same real-world operational families as MCP tools:
+  semantic/capsule inspection, inference submission/status/receipt, CUDA/GPU
+  inventory and leases, PEFT export/import/activate/rollback, optional NeMo
+  probe/infer/guardrail/evaluator actions, K8s cordon/drain/lease sync, systemd
+  status/start/stop/restart, Docker status/stop/restart, and evidence/timeline
+  inspection.
+- A2A `SendMessage` and `SendStreamingMessage` operations (or the exact
+  generated equivalents for the pinned binding/revision) create or resume 28c
+  run/task envelopes only after fixed skill/action/input schema validation.
+  Semantic inputs are immutable 28b2 snapshot/capsule refs; inference actions
+  map to the existing 28c admission and 28c1 gateway. Free-form natural
+  language is never translated directly into host or provider execution.
+- A2A `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`,
+  push-notification configuration, and streaming update operations (or their
+  generated binding equivalents) are projections of existing
+  semantic/capsule refs, run/checkpoint/evidence records, 28c1 inference
+  receipts, host-ticket receipt state, and gateway audit state. Cancellation
+  may append a validated Cohesix cancel/control request when one exists; it
+  must not kill provider executors directly.
+- A2A artifacts are bounded, redacted references to immutable semantic objects,
+  Context Capsules, inference receipts, evidence packs, timelines, checkpoint
+  summaries, provider receipts, and MCP/Cohesix resource refs. Large files,
+  raw prompts/outputs, secrets, raw ticket material, and provider credentials
+  are never embedded in artifacts.
 - A2A push notification configs are disabled by default. If enabled, they require SSRF-safe URL validation, generated allowlists, per-task auth material, bounded retry/backoff, signed or authenticated delivery where configured, and audit evidence for every callback attempt.
 
 As-built leverage:
-- Reuse Milestone 28c run envelopes, checkpoints, provider receipts, evidence exports, `host-ticket-agent` state, gateway request auth, and delegated REST identity.
+- Reuse Milestone 28b2 semantic/capsule artifacts, 28c run envelopes,
+  checkpoints and provider receipts, 28c1 inference receipts,
+  `host-ticket-agent` state, gateway request auth, and delegated REST identity.
 
 ---
 
@@ -12344,12 +13424,20 @@ Implementation requirements:
   - writer_epoch when the target profile enables fencing,
   - policy approval where the underlying Cohesix path already requires it.
 - A2A task-creating or task-mutating calls require the same gateway request auth, delegated scope, id/idempotency key, writer epoch, and policy approval as the underlying Cohesix ticket/control action.
-- Gateway audit lines must record protocol (`mcp` or `a2a`), method, tool/resource/prompt/skill/task name, delegated ticket hash, Cohesix path/action, idempotency key, writer epoch, upstream ACK/ERR, task state, and evidence refs.
+- Gateway audit lines must record protocol (`mcp` or `a2a`), method,
+  tool/resource/prompt/skill/task name, semantic snapshot/Context
+  Capsule/render/inference receipt refs when present, delegated ticket hash,
+  Cohesix path/action, idempotency key, writer epoch, upstream ACK/ERR, task
+  state, and evidence refs.
 - MCP clients cannot supply arbitrary upstream paths for provider-specific mutating tools; provider tools must expand from checked target fields into manifest-allowlisted Cohesix paths/actions.
 - A2A clients cannot supply arbitrary provider targets, host paths, or executor commands through message text or metadata; A2A skill inputs must expand only into manifest-allowlisted Cohesix paths/actions.
 - Tool listing, prompt listing, Agent Cards, and A2A skills are not authorization. Calls fail closed if the current request lacks the required delegated scope.
 - Remote MCP and A2A transports inherit loopback default, non-loopback exposure warning, origin validation, request-auth, rate limits, broker backpressure, and bounded response sizes.
 - MCP and A2A conformance tests must include prompt-injection and confused-deputy negative cases: a resource, prompt, Agent Card, or peer message that asks the model to bypass tickets must not change server-side authorization.
+- Inference results containing apparent MCP/A2A calls, host-ticket lines, paths,
+  or credentials remain untrusted content and cannot initiate a second action
+  without fresh schema validation, delegated scope, policy approval, and a new
+  attributable audit record.
 
 As-built leverage:
 - Reuse REST delegated identity from 28b, host-ticket WAL/replay, evidence redaction, policy rules, and gateway queue/backpressure controls.
@@ -12363,14 +13451,24 @@ Implementation requirements:
 - Add checked examples for:
   - local stdio MCP server config,
   - remote Streamable HTTP MCP endpoint config,
-  - read-only resource browsing,
+  - read-only namespace, semantic object, Context Capsule, and inference
+    receipt browsing,
+  - an inference submission that carries an immutable capsule ref and returns
+    a 28c1 receipt ref without executing returned tool calls,
   - delegated mutating tool calls with explicit ticket/auth configuration,
   - A2A Agent Card discovery,
   - A2A task submission, streaming status, artifact retrieval, and cancellation against mock/dry-run providers.
 - Add checked protocol fixtures/schemas for MCP JSON-RPC messages, A2A HTTP+JSON requests, gateway REST/OpenAPI compatibility, and generated provider action schemas so future client regressions are reviewable as data.
 - Validate with at least one MCP inspector/client conformance path and archive the transcript/output under the milestone evidence directory.
 - Validate with at least one A2A-compatible client/conformance path and archive the transcript/output under the milestone evidence directory.
-- Add a gateway protocol performance probe covering MCP resource reads, MCP tool calls that submit host tickets, A2A task creation/status streaming, and backpressure/refusal paths. Compare against REST read/write behavior from the accepted 28b gateway authority baseline; do not treat this as Pi hardware throughput proof unless the gateway probe exposes an upstream runtime regression.
+- Add a gateway protocol performance probe covering namespace and host-artifact
+  MCP resource reads, MCP tool calls that submit host tickets, A2A task
+  creation/status streaming, and backpressure/refusal paths. Record semantic
+  object/capsule/inference receipt adapter overhead separately from namespace
+  and protocol overhead. Compare authority-bearing paths against REST
+  read/write behavior from the accepted 28b gateway authority baseline; do not
+  treat this as Pi hardware throughput proof unless the gateway probe exposes
+  an upstream runtime regression.
 - Document how MCP clients should treat Cohesix resources, tools, prompts, approval prompts, and errors.
 - Document how A2A peers should treat Cohesix Agent Cards, skills, task status, artifacts, push notification limits, and errors.
 - Expose deterministic error mapping from Cohesix `ERR` lines and REST gateway errors into MCP errors without losing the original Cohesix reason.
@@ -12390,11 +13488,18 @@ Implementation requirements:
   - `coh mount --mcp-url <endpoint> --read-only --at <path>` mounts MCP-admitted context, not the full Cohesix namespace.
   - The mounted tree exposes bounded MCP resources, resource templates, tool schemas, prompt templates, and evidence/resource links as files.
   - Resource file reads call MCP `resources/list`, `resources/templates/list`, and `resources/read`; tool and prompt catalog files are generated from `tools/list`, `prompts/list`, and `prompts/get`.
-  - The tree must make the Cohesix backing path or action explicit for every resource/tool entry so reviewers can trace MCP context back to existing `LS`/`CAT`/`TAIL`/`ECHO` or `/host/tickets/spec` semantics.
+  - The tree must make the backing type explicit for every resource/tool entry:
+    namespace path/action for `LS`/`CAT`/`TAIL`/`ECHO` or
+    `/host/tickets/spec`, or immutable artifact id/schema/hash and owner
+    milestone for 28b2 semantic/capsule and 28c1 inference receipt resources.
 - The MCP mount is read-only by default and in the milestone acceptance path. Writes, renames, chmod, symlink creation, and host filesystem path escapes fail deterministically with no MCP `tools/call`.
 - If a later task proposes write-capable MCP mount nodes, it must be a separate breaking-risk review and may only append a fully validated `host-ticket/v1` line with delegated ticket, idempotency key, writer epoch, policy approval, and local operator confirmation. It must never map arbitrary file writes to arbitrary MCP tools.
 - A2A does not get a FUSE mode in this milestone. A2A task status and artifact links may appear as read-only MCP/evidence files, but task creation remains an A2A HTTP operation or an existing Cohesix ticket/control write.
 - `coh doctor` and mount validation should report whether the REST mount, MCP resource mount, both, or neither are available, and should distinguish FUSE availability from MCP protocol availability.
+- `coh doctor` must also distinguish namespace-resource readiness from
+  semantic store/capsule verifier and inference receipt-verifier readiness; one
+  missing optional artifact family does not make unrelated resources appear
+  healthy or unavailable.
 - MCP resource mount caches must be bounded, TTL-governed, and invalidated on MCP list-change notifications when enabled; stale cache reads must be marked as stale rather than silently presented as live state.
 
 As-built leverage:
@@ -12409,7 +13514,7 @@ Implementation requirements:
 - Audit and update `docs/OPERATOR_WALKTHROUGH.md` so the happy path, prerequisites, command ordering, failure handling, and expected evidence match the as-built gateway/MCP/A2A/mount behavior.
 - Audit and update related canonical docs in the same milestone work:
   - `docs/HOST_API.md` for REST, MCP, and A2A endpoint/auth behavior,
-  - `docs/HOST_TOOLS.md` for `coh mount --rest-url`, optional `coh mount --mcp-url`, `hive-gateway`, A2A Agent Card/task facade, host-ticket-agent, GPU bridge, and sidecar workflows,
+  - `docs/HOST_TOOLS.md` for `coh mount --rest-url`, optional `coh mount --mcp-url`, `hive-gateway`, semantic/capsule and inference receipt resources, A2A Agent Card/task facade, host-ticket-agent, GPU bridge, and sidecar workflows,
   - `docs/API_GUIDELINES.md` for transport choice and MCP-vs-A2A-vs-REST-vs-filesystem guidance,
   - `docs/USERLAND_AND_CLI.md` for operator-visible commands and grammar-stability wording,
   - `docs/INTERFACES.md` for path/action mappings and refusal semantics,
@@ -12428,6 +13533,10 @@ Implementation requirements:
   - REST/gateway proof,
   - gateway-backed `coh mount --rest-url`,
   - optional read-only MCP resource mount,
+  - read-only 28b2 semantic/capsule and 28c1 inference receipt projections
+    versus namespace-backed resources,
+  - the separate 28c1 OpenAI-compatible endpoint versus MCP inference
+    submission/status/receipt tools,
   - MCP tools/prompts that submit Cohesix tickets rather than executing host commands directly,
   - A2A Agent Card discovery, task submission, streaming status, artifact retrieval, and refusal behavior.
 - Generated snippets and derived docs must be refreshed through `coh-rtc` or their owning generator; hand-editing generated blocks is invalid.
@@ -12461,25 +13570,57 @@ As-built leverage:
 - MCP lifecycle, `MCP-Protocol-Version`, optional `Mcp-Session-Id`, cancellation, `tools/list`, `tools/call`, `resources/list`, `resources/templates/list`, `resources/read`, `prompts/list`, and `prompts/get` pass against the accepted protocol revision recorded in the docs.
 - A2A Agent Card discovery, Agent Card `protocolVersion`, optional authenticated extended Agent Card, and the generated `SendMessage`, streaming, task query/list/cancel/subscribe, push-notification, artifact, and update mappings pass against the accepted protocol revision and binding recorded in the docs.
 - `crates/cohsh-core/fixtures/grammar.sha256` and generated `docs/snippets/cohsh_grammar.md` remain unchanged unless a separately approved breaking grammar milestone changes them.
-- Every MCP read maps to existing `LS`, `CAT`, or `TAIL`; every MCP write maps to existing `ECHO` into a documented Cohesix control file or `/host/tickets/spec`.
-- Every A2A task maps to an existing 28c run/checkpoint/evidence record and, when mutating, an existing Cohesix host-ticket/control action. No A2A message text or metadata becomes authorization.
+- Every namespace-backed MCP read maps to existing `LS`, `CAT`, or `TAIL`.
+  Every semantic/capsule or inference-receipt read maps to the accepted
+  read-only 28b2 or 28c1 core over an immutable id. Every MCP write maps to
+  existing `ECHO` into a documented Cohesix control file or
+  `/host/tickets/spec`; no host-artifact adapter mints authority.
+- Every A2A task maps to accepted 28b2 semantic/capsule refs where context is
+  used, an existing 28c run/checkpoint/evidence record, a 28c1 inference
+  receipt where inference is used, and, when mutating, an existing Cohesix
+  host-ticket/control action. No A2A message text or metadata becomes
+  authorization.
 - Read-only MCP acceptance passes before mutating MCP tools or A2A task creation are enabled in the milestone evidence path.
-- Read-only MCP acceptance is not sufficient evidence for mutating tools, A2A task creation, provider action execution, or VM Worker/driver authority. Each mutating acceptance artifact must name its 28b/28b1/28c authority inputs, matching 26e live-task evidence where applicable, and 28e evidence only for production Worker ledger binding, complete driver-inventory projection, or structured quarantine/restart claims.
+- Read-only MCP acceptance is not sufficient evidence for mutating tools, A2A
+  task creation, inference/provider action execution, or VM Worker/driver
+  authority. Each mutating acceptance artifact must name its
+  28b/28b1/28b2/28c/28c1 authority, context, admission, and receipt inputs,
+  matching 26e live-task evidence where applicable, and 28e evidence only for
+  production Worker ledger binding, complete driver-inventory projection, or
+  structured quarantine/restart claims.
 - Read-only MCP and A2A artifact/resource acceptance includes negative tests for public, ticket-scoped, and admin-only read visibility; ticket/provider/evidence/audit reads for the wrong delegated identity fail before payload construction.
-- MCP tool schemas and A2A skill schemas are generated from the same provider/integration graph; parity tests fail if CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, FUSE/read projection, federation, evidence, Worker tier, external-executor requirement, or availability state drifts between protocols.
+- MCP tool schemas and A2A skill schemas are generated from the same
+  provider/integration graph and reference the same accepted semantic/capsule
+  and inference schemas; parity tests fail if semantic/context, inference,
+  CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, FUSE/read projection, federation,
+  evidence, Worker tier, external-executor requirement, or availability state
+  drifts between protocols.
 - MCP/A2A discovery and execution respect the selected use-case row. Missing live dependencies yield omission or typed unavailable/refused results, and protocol success never changes the row's maturity classification.
 - No MCP tool directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
 - No A2A skill directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
-- CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker scenarios have deterministic mock tests and at least one live-safe dry-run/conformance transcript.
+- No MCP tool or A2A skill calls an inference provider directly, reimplements
+  the OpenAI-compatible surface, or executes model-produced tool calls; an
+  inference submission is admitted through 28c and observed through a verified
+  28c1 receipt.
+- Semantic/capsule inspection, inference submission/receipt, CUDA/GPU, PEFT,
+  NeMo, K8s, systemd, and Docker scenarios have deterministic mock tests and at
+  least one live-safe dry-run/conformance transcript appropriate to their claim
+  class.
 - Mutating tools and A2A task actions fail without delegated scope and leave no side effects; duplicate mutating calls with the same id/idempotency key do not duplicate side effects.
 - Remote MCP and A2A endpoints validate `Origin`, enforce auth, respect loopback defaults, and return bounded protocol errors under gateway backpressure.
-- Evidence packs and timelines can reconstruct the MCP call or A2A task, delegated ticket hash, underlying Cohesix path/action, provider receipt, and final state without raw secret leakage.
+- Evidence packs and timelines can reconstruct the MCP call or A2A task,
+  semantic snapshot/capsule/render refs, delegated ticket hash, inference
+  admission/receipt ref, underlying Cohesix path/action, provider receipt, and
+  final state without raw prompt/output or secret leakage.
 - Standard MCP clients can discover resources/tools/prompts and call read-only tools without Cohesix-specific patches.
 - Standard A2A clients can discover the Agent Card, submit a dry-run task, observe status/artifacts, and handle refusals without Cohesix-specific patches.
 - Existing `coh mount --rest-url` semantics remain unchanged, including REST mount exclusivity and append-only write behavior.
 - `coh mount --mcp-url` exposes only MCP-admitted resources/tool schemas/prompt templates/evidence links, is read-only in the acceptance path, and never invokes MCP tools during filesystem metadata or write operations.
 - There is no A2A FUSE mode; A2A task/artifact state appears through gateway protocol responses and read-only evidence/resource projections only.
 - MCP-mounted resource contents match the corresponding MCP `resources/read` output and, for Cohesix namespace-backed resources, the corresponding REST/console read within documented bounds.
+- MCP-mounted semantic/capsule and inference receipt resources verify against
+  the same immutable hashes and schemas as the direct 28b2/28c1 host tools;
+  their presence never claims those artifacts exist in the VM namespace.
 - A2A artifacts and push notification attempts are bounded, redacted, policy-gated, and reconstructable from audit/evidence without raw secret leakage.
 - Gateway protocol performance evidence shows MCP resource/tool and A2A task/artifact paths stay bounded relative to the 28b gateway authority baseline; any full Pi/QEMU benchmark is triggered only by evidence of upstream runtime-path regression.
 - `docs/OPERATOR_WALKTHROUGH.md` and related canonical docs describe the as-built transport, mount, MCP, A2A, host-ticket, provider, and evidence behavior without claiming implemented support before code/tests/generated outputs exist.
@@ -12498,9 +13639,28 @@ As-built leverage:
   - per-tool max input/output bytes,
   - delegated-ticket and writer-epoch requirements,
   - redaction and evidence-export flags.
+- Generated MCP policy references, without redefining:
+  - accepted 28b2 semantic snapshot/object/view/edge, Context Capsule, render,
+    visibility, and immutable-id schemas,
+  - accepted 28c1 inference request/admission/receipt ids, read visibility, and
+    status/submit action mappings.
+- Manifest validation rejects semantic/capsule resources whose schemas,
+  visibility classes, store profiles, or immutable-id bounds do not match
+  accepted 28b2 outputs, and rejects inference resources/tools whose
+  admission, receipt, provider, or content-retention contract does not match
+  accepted 28c/28c1 outputs.
 - Manifest validation rejects MCP enablement when Milestone 28b delegated write identity or required audit/replay/fencing prerequisites are disabled for mutating tools.
 - Manifest validation rejects NeMo MCP tools unless the 28c optional NeMo provider family and parity checks are enabled.
-- `coh-rtc` emits protocol-neutral `gateway.provider_actions.*` and `gateway.integration_surfaces.*` projections derived solely from the Milestone 28b1 graph for every operation exposed through MCP tools or A2A skills, including action ids, target schema refs, dry-run support, idempotency requirements, writer-epoch requirements, receipt schema refs, Worker/executor/package dependencies, observed availability, use-case refs, and evidence-export behavior. They are generated compatibility metadata, not a second registry or authority source.
+- `coh-rtc` emits protocol-neutral `gateway.provider_actions.*` and
+  `gateway.integration_surfaces.*` projections derived from the Milestone 28b1
+  graph for every operation exposed through MCP tools or A2A skills, with
+  referenced owner schemas from 28b2 and 28c1 where semantic/capsule or
+  inference operations are present. They include action ids, target schema
+  refs, dry-run support, idempotency requirements, writer-epoch requirements,
+  receipt schema refs, Worker/executor/package dependencies, observed
+  availability, use-case refs, and evidence-export behavior. They are
+  generated compatibility metadata, not a second registry, semantic store,
+  inference protocol, or authority source.
 - Manifest validation rejects any MCP tool or A2A skill whose provider action mapping is absent from the shared registry or whose schema diverges between the two protocol projections.
 - `coh-rtc` emits `gateway.a2a.*` policy:
   - enabled endpoint/binding,
@@ -12513,7 +13673,11 @@ As-built leverage:
   - per-skill max input/output bytes,
   - delegated-ticket, idempotency, and writer-epoch requirements,
   - redaction, evidence-export, and callback allowlist flags.
-- Manifest validation rejects A2A enablement when Milestone 28b/28c delegated authority, durable run/task state, audit/replay, evidence export, or fencing prerequisites are disabled for task-creating or task-mutating skills.
+- Manifest validation rejects A2A enablement when required Milestone
+  28b/28b2/28c/28c1 delegated authority, immutable context, durable run/task
+  state, inference admission/receipt, audit/replay, evidence export, or fencing
+  prerequisites are disabled for the selected task-creating or task-mutating
+  skills.
 - Manifest validation rejects NeMo A2A skills unless the 28c optional NeMo provider family and parity checks are enabled.
 - Generated docs refresh:
   - `docs/HOST_API.md`
@@ -12531,9 +13695,14 @@ As-built leverage:
 ```
 Title/ID: m28d-mcp-policy-ir
 Goal: Admit MCP gateway policy in compiler IR without changing Cohesix console or NineDoor grammar.
-Inputs: tools/coh-rtc, configs/root_task.toml, docs/HOST_API.md, docs/SECURITY.md.
+Inputs: tools/coh-rtc, configs/root_task.toml, accepted 28b2 semantic/capsule
+schemas, accepted 28c1 inference receipt/action schemas, docs/HOST_API.md,
+docs/SECURITY.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — `gateway.mcp.*` schema for revision, JSON Schema dialect, authorization mode, transports, endpoint, resource roots, tool allowlists, prompt ids, bounds, and prerequisite gates.
+  - tools/coh-rtc/src/ir.rs — `gateway.mcp.*` schema for revision, JSON Schema
+    dialect, authorization mode, transports, endpoint, namespace and
+    host-artifact resource roots, tool allowlists, prompt ids, owner-schema
+    refs, bounds, and prerequisite gates.
   - tools/coh-rtc/src/validate.rs — reject mutating MCP tools without delegated identity, audit/replay, and provider action prerequisites, and reject non-loopback production profiles whose authorization mode does not satisfy the pinned revision.
   - tools/coh-rtc/src/codegen/* — generated gateway MCP defaults and docs snippets.
 Commands: cargo test -p coh-rtc && scripts/check-generated.sh
@@ -12542,10 +13711,16 @@ Deliverables: Generated MCP gateway policy and validation gates.
 
 Title/ID: m28d-a2a-policy-ir
 Goal: Admit A2A gateway policy in compiler IR without changing Cohesix console or NineDoor grammar.
-Inputs: tools/coh-rtc, configs/root_task.toml, docs/HOST_API.md, docs/SECURITY.md, docs/TEST_PLAN.md.
+Inputs: tools/coh-rtc, configs/root_task.toml, accepted 28b2
+semantic/capsule schemas, accepted 28c/28c1 run/inference schemas,
+docs/HOST_API.md, docs/SECURITY.md, docs/TEST_PLAN.md.
 Changes:
   - tools/coh-rtc/src/ir.rs — `gateway.a2a.*` schema for endpoint/binding, accepted revision, binding-specific operation mappings, Agent Card path, skill ids, task/artifact/stream/push bounds, callback allowlists, and prerequisite gates.
-  - tools/coh-rtc/src/validate.rs — reject mixed-revision or mixed-binding operation names and reject A2A task-creating or task-mutating skills without 28b delegated authority, 28c durable run/task state, audit/replay, evidence export, and provider action prerequisites.
+  - tools/coh-rtc/src/validate.rs — reject mixed-revision or mixed-binding
+    operation names and reject A2A task-creating or task-mutating skills without
+    their required 28b delegated authority, 28b2 immutable context, 28c durable
+    run/task state, 28c1 inference admission/receipt, audit/replay, evidence
+    export, and provider action prerequisites.
   - tools/coh-rtc/src/codegen/* — generated A2A gateway defaults, Agent Card metadata, and docs snippets.
 Commands: cargo test -p coh-rtc && scripts/check-generated.sh
 Checks: A2A revision/binding mappings are compiler-owned and internally consistent, profile gates hold, and `cohsh-core` grammar specs and NineDoor semantics remain untouched.
@@ -12553,15 +13728,30 @@ Deliverables: Generated A2A gateway policy, Agent Card metadata, and validation 
 
 Title/ID: m28d-provider-action-registry-projection
 Milestone: Milestone 28d — MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later / m28d-provider-action-registry-projection
-Goal: Consume the Milestone 28b1 provider/integration and use-case graph so MCP tools and A2A skills cannot define independent schemas or availability claims.
-Inputs: tools/coh-rtc, apps/hive-gateway, apps/host-ticket-agent, crates/host-cuda, configs/generated/host_integration_dependency.json, configs/generated/use_case_evidence.json, docs/INTERFACES.md, docs/HOST_API.md.
+Goal: Consume the Milestone 28b1 provider/integration and use-case graph plus
+28b2/28c1 owner schemas so MCP tools and A2A skills cannot define independent
+schemas or availability claims.
+Inputs: tools/coh-rtc, apps/hive-gateway, apps/host-ticket-agent,
+crates/host-cuda, accepted 28b2 semantic/capsule outputs, accepted 28c1
+inference outputs, configs/generated/host_integration_dependency.json,
+configs/generated/use_case_evidence.json, docs/INTERFACES.md, docs/HOST_API.md.
 Changes:
-  - tools/coh-rtc/src/validate.rs — reject MCP/A2A projections that reference undeclared 28b1 actions/surfaces or drift from target, receipt, read-visibility, Worker, executor, package, use-case, or observed-mode records.
+  - tools/coh-rtc/src/validate.rs — reject MCP/A2A projections that reference
+    undeclared 28b1 actions/surfaces, duplicate 28b2/28c1 owner schemas, or
+    drift from target, semantic/capsule/inference receipt, read-visibility,
+    Worker, executor, package, use-case, or observed-mode records.
   - apps/hive-gateway/src/actions/registry.rs — generated 28b1 provider/integration view consumed by MCP tools, A2A skills, evidence mapping, availability reporting, and security checks.
   - apps/hive-gateway/tests/gateway_action_registry.rs — parity fixtures proving MCP and A2A expose the same allowed actions, bounds, dependency availability, receipt refs, and refusal semantics where the same provider operation exists.
 Commands: cargo test -p coh-rtc && cargo test -p hive-gateway --test gateway_action_registry && scripts/check-generated.sh
-Checks: Provider/integration metadata is generated once by 28b1, remains protocol-neutral, omits or types unavailable missing dependencies, and rejects drift between MCP tools, A2A skills, host-ticket lines, read visibility, use-case maturity, and evidence receipts.
-Deliverables: Gateway protocol projection and parity tests for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, federation, FUSE/read surfaces, and evidence operations without a second registry.
+Checks: Provider/integration metadata is generated once by 28b1, owner schemas
+remain owned by 28b2/28c1, projections stay protocol-neutral, missing
+dependencies are omitted or typed unavailable, and drift between MCP tools,
+A2A skills, host-ticket lines, context/receipt refs, read visibility, use-case
+maturity, and evidence receipts is rejected.
+Deliverables: Gateway protocol projection and parity tests for
+semantic/context, inference, CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker,
+federation, FUSE/read surfaces, and evidence operations without a second
+registry.
 
 Title/ID: m28d-gateway-mcp-transport
 Goal: Implement MCP lifecycle and stdio/Streamable HTTP transport in `hive-gateway`.
@@ -12575,20 +13765,35 @@ Checks: Standard lifecycle and discovery requests work over both transports; inv
 Deliverables: MCP-capable gateway process with safe defaults.
 
 Title/ID: m28d-mcp-resource-catalog
-Goal: Expose Cohesix state as MCP resources backed only by bounded existing reads.
-Inputs: apps/hive-gateway, apps/coh/src/evidence.rs, generated path defaults.
+Goal: Expose Cohesix namespace state and accepted semantic/capsule/inference
+artifacts as MCP resources backed only by bounded read-only projections.
+Inputs: apps/hive-gateway, apps/coh/src/evidence.rs,
+crates/cohesix-semantic-core, crates/cohesix-inference-core, generated path and
+visibility defaults, accepted 28b2/28c1 fixtures.
 Changes:
-  - apps/hive-gateway/src/mcp/resources.rs — `cohesix://` URI catalog, templates, path validation, and read dispatch through existing `LS`/`CAT`/`TAIL`.
-  - apps/hive-gateway/tests/mcp_resources.rs — resource list/read fixtures for `/proc`, `/gpu`, `/host`, and evidence summaries.
+  - apps/hive-gateway/src/mcp/resources.rs — typed `cohesix://namespace`,
+    `cohesix://semantic`, `cohesix://context`, and
+    `cohesix://inference/receipt` catalogs, templates, id/path validation,
+    namespace dispatch through existing `LS`/`CAT`/`TAIL`, and host-artifact
+    dispatch through accepted read-only owner libraries.
+  - apps/hive-gateway/tests/mcp_resources.rs — resource list/read fixtures for
+    `/proc`, `/gpu`, `/host`, semantic objects, capsules, inference receipts,
+    visibility refusal, tamper refusal, and evidence summaries.
 Commands: cargo test -p hive-gateway --test mcp_resources
-Checks: Resource reads enforce manifest bounds, reject undeclared paths, redact secrets, and match existing REST/console output for canonical fixtures.
-Deliverables: MCP resource catalog that is a faithful read-only projection of Cohesix state.
+Checks: Resource reads enforce manifest bounds, reject undeclared paths or ids,
+redact secrets/content, match REST/console output for namespace fixtures, and
+verify exact 28b2/28c1 hashes/schemas for host artifacts without claiming a VM
+path.
+Deliverables: MCP resource catalog that faithfully projects Cohesix namespace
+state and accepted immutable host artifacts.
 
 Title/ID: m28d-mcp-prompts
 Goal: Add MCP prompt templates for safe operational workflows over existing Cohesix tools/resources.
 Inputs: apps/hive-gateway/src/mcp, docs/HOST_TOOLS.md, docs/SECURITY.md.
 Changes:
-  - apps/hive-gateway/src/mcp/prompts.rs — prompt templates for CUDA triage, PEFT promotion, NeMo readiness, K8s drain, systemd recovery, and Docker remediation.
+  - apps/hive-gateway/src/mcp/prompts.rs — prompt templates for semantic impact
+    review, inference receipt audit, CUDA triage, PEFT promotion, NeMo
+    readiness, K8s drain, systemd recovery, and Docker remediation.
   - docs/HOST_TOOLS.md — operator guidance for MCP prompt use, approval expectations, and non-authority status.
 Commands: cargo test -p hive-gateway --test mcp_prompts
 Checks: Prompts contain no secrets, name exact Cohesix tools/actions, and require user approval before side-effecting tool calls.
@@ -12598,7 +13803,10 @@ Title/ID: m28d-readonly-mcp-acceptance-gate
 Goal: Prove read-only MCP transport, resources, prompts, and conformance before enabling mutating tools or A2A task creation.
 Inputs: apps/hive-gateway, generated MCP policy, docs/HOST_API.md, docs/TEST_PLAN.md.
 Changes:
-  - apps/hive-gateway/tests/mcp_readonly_acceptance.rs — lifecycle, resources, templates, prompts, redaction, auth, Origin, and oversize negative fixtures with mutating tools disabled.
+  - apps/hive-gateway/tests/mcp_readonly_acceptance.rs — lifecycle, namespace
+    and host-artifact resources, templates, prompts, visibility, hash/schema
+    verification, redaction, auth, Origin, and oversize negative fixtures with
+    mutating tools disabled.
   - docs/TEST_PLAN.md — record read-only MCP acceptance as the first 28d evidence gate.
 Commands: cargo test -p hive-gateway --test mcp_readonly_acceptance && scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28d-qemu-mcp-readonly
 Checks: Standard MCP clients can discover and read admitted context, but mutating tools are unavailable or deterministically refused until provider action registry and delegated-authority gates pass.
@@ -12606,64 +13814,114 @@ Deliverables: Archived read-only MCP conformance evidence that later mutating MC
 
 Title/ID: m28d-mcp-tool-catalog
 Goal: Expose real Cohesix operations as MCP tools without direct host execution.
-Inputs: apps/hive-gateway, apps/host-ticket-agent, apps/coh, crates/host-cuda, docs/INTERFACES.md.
+Inputs: apps/hive-gateway, apps/host-ticket-agent, apps/coh,
+crates/cohesix-semantic-core, crates/cohesix-inference-core, crates/host-cuda,
+accepted 28b2/28c/28c1 schemas, docs/INTERFACES.md.
 Changes:
-  - apps/hive-gateway/src/mcp/tools.rs — schema-defined tools for file reads, CUDA/GPU inventory, host-ticket submission, GPU leases, PEFT, NeMo, K8s, systemd, Docker, and evidence summaries.
+  - apps/hive-gateway/src/mcp/tools.rs — schema-defined tools for file reads,
+    semantic/capsule inspect/query/render/verify, inference
+    submit/status/receipt, CUDA/GPU inventory, host-ticket submission, GPU
+    leases, PEFT, NeMo, K8s, systemd, Docker, and evidence summaries.
   - apps/hive-gateway/src/mcp/tickets.rs — host-ticket line builder with id/idempotency/writer-epoch validation and provider action mapping.
   - apps/hive-gateway/tests/mcp_tools.rs — success and refusal fixtures for read-only, delegated mutating, duplicate, and unauthorized calls.
 Commands: cargo test -p hive-gateway --test mcp_tools && cargo test -p host-ticket-agent
-Checks: Mutating tools append only validated Cohesix ticket/control lines; provider executors are never called directly by the MCP server; read-only MCP acceptance and provider action registry parity evidence already exists.
-Deliverables: Tool catalog covering CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker under existing Cohesix authority.
+Checks: Mutating tools append only validated Cohesix ticket/control lines;
+inference submission uses 28c admission and 28c1 receipts; provider executors
+and model-produced tool calls are never invoked directly by the MCP server;
+read-only MCP acceptance and provider action registry parity evidence already
+exists.
+Deliverables: Tool catalog covering semantic/context, inference, CUDA/GPU,
+PEFT, NeMo, K8s, systemd, and Docker under existing Cohesix authority.
 
 Title/ID: m28d-a2a-agent-facade
-Goal: Implement A2A Agent Card discovery and task/message/artifact projection over existing Cohesix run and ticket state.
-Inputs: apps/hive-gateway, apps/host-ticket-agent, apps/coh/src/evidence.rs, generated provider action registry, docs/HOST_API.md, docs/API_GUIDELINES.md, accepted A2A protocol revision.
+Goal: Implement A2A Agent Card discovery and task/message/artifact projection
+over existing Cohesix semantic/capsule, run, inference receipt, and ticket
+state.
+Inputs: apps/hive-gateway, apps/host-ticket-agent,
+apps/coh/src/evidence.rs, accepted 28b2/28c/28c1 owner schemas, generated
+provider action registry, docs/HOST_API.md, docs/API_GUIDELINES.md, accepted A2A
+protocol revision.
 Changes:
   - apps/hive-gateway/src/a2a/agent_card.rs — generated Agent Card publication with enabled skills, auth requirements, supported interfaces, and no secret/internal executor data.
-  - apps/hive-gateway/src/a2a/tasks.rs — generated `SendMessage`, streaming, task query/list/cancel/subscribe, push-notification, status, idempotency, and refusal mappings for the pinned A2A binding/revision, backed by 28c run/checkpoint/evidence records.
-  - apps/hive-gateway/src/a2a/artifacts.rs — bounded redacted artifact references for evidence packs, timelines, checkpoints, provider receipts, and Cohesix resource refs.
+  - apps/hive-gateway/src/a2a/tasks.rs — generated `SendMessage`, streaming,
+    task query/list/cancel/subscribe, push-notification, status, idempotency,
+    and refusal mappings for the pinned A2A binding/revision, backed by 28b2
+    immutable context refs, 28c run/checkpoint/evidence records, and 28c1
+    inference receipts.
+  - apps/hive-gateway/src/a2a/artifacts.rs — bounded redacted artifact
+    references for semantic objects, Context Capsules, inference receipts,
+    evidence packs, timelines, checkpoints, provider receipts, and Cohesix
+    resource refs.
   - apps/hive-gateway/src/a2a/push.rs — disabled-by-default push notification config with allowlist, SSRF validation, per-task auth material, bounded retry, and audit evidence.
   - apps/hive-gateway/tests/a2a_protocol.rs + apps/hive-gateway/tests/a2a_tasks.rs — Agent Card, message, stream, task, artifact, cancel, push-refusal, duplicate, and unauthorized fixtures.
 Commands: cargo test -p hive-gateway --test a2a_protocol && cargo test -p hive-gateway --test a2a_tasks
-Checks: A2A clients can discover Cohesix skills, submit dry-run tasks, observe status/artifacts, and receive deterministic refusals; no A2A path bypasses Cohesix tickets, run records, gateway auth, or provider allowlists; provider action registry parity and read-only MCP acceptance evidence already exists.
+Checks: A2A clients can discover Cohesix skills, submit dry-run tasks, observe
+semantic/capsule/inference refs and status/artifacts, and receive deterministic
+refusals; no A2A path bypasses Cohesix tickets, context/run records, 28c1
+admission/receipts, gateway auth, or provider allowlists; provider action
+registry parity and read-only MCP acceptance evidence already exists.
 Deliverables: A2A-compatible gateway facade for bounded Cohesix delegation and observation.
 
 Title/ID: m28d-coh-mount-mcp-resource-view
 Goal: Add an optional read-only `coh mount --mcp-url` mode for MCP-admitted resources, schemas, prompts, and evidence links without replacing the existing REST-backed Cohesix namespace mount.
-Inputs: apps/coh/src/mount.rs, apps/coh/src/doctor.rs, apps/hive-gateway/src/mcp/resources.rs, apps/hive-gateway/src/mcp/tools.rs, docs/HOST_TOOLS.md, docs/API_GUIDELINES.md.
+Inputs: apps/coh/src/mount.rs, apps/coh/src/doctor.rs,
+apps/hive-gateway/src/mcp/resources.rs,
+apps/hive-gateway/src/mcp/tools.rs, crates/cohesix-semantic-core,
+crates/cohesix-inference-core, docs/HOST_TOOLS.md,
+docs/API_GUIDELINES.md.
 Changes:
   - apps/coh/src/mount.rs — read-only MCP resource/catalog FUSE adapter with bounded readdir/read, no write-to-tool translation, no symlink/rename/chmod support, and explicit stale-cache markers.
   - apps/coh/src/main.rs — `coh mount --mcp-url <endpoint> --read-only --at <path>` flags that are mutually exclusive with write-capable REST/console mount modes.
-  - apps/coh/src/doctor.rs — report REST mount availability separately from MCP resource-mount protocol/FUSE availability.
+  - apps/coh/src/doctor.rs — report REST mount availability separately from MCP
+    resource-mount protocol/FUSE availability and report namespace,
+    semantic/capsule, and inference-receipt resource readiness independently.
   - apps/coh/tests/mount_mcp.rs — fixtures for resource reads, tool schema files, prompt template files, cache invalidation, write denial, and parity with MCP `resources/read`.
   - docs/HOST_TOOLS.md + docs/API_GUIDELINES.md — document when to use REST mount versus MCP resource mount and why MCP mount is read-only by default.
 Commands: cargo test -p coh --test mount_mcp && cargo test -p hive-gateway --test mcp_resources
-Checks: Existing `coh mount --rest-url` behavior is unchanged; MCP mount reads only MCP-admitted context, refuses all filesystem mutations by default, never calls MCP tools from FUSE operations, and traces every mounted file back to a Cohesix path/action or MCP catalog entry.
+Checks: Existing `coh mount --rest-url` behavior is unchanged; MCP mount reads
+only MCP-admitted context, refuses all filesystem mutations by default, never
+calls MCP tools from FUSE operations, and traces every mounted file back to a
+Cohesix path/action or verified 28b2/28c1 artifact/catalog entry.
 Deliverables: Agent- and filesystem-friendly MCP context mount that adds discovery/schema/prompt value without adding a new Cohesix write path.
 
 Title/ID: m28d-operator-docs-as-built-audit
 Goal: Audit and update the Operator Walkthrough plus related canonical docs so gateway, MCP, A2A, mount, provider, and evidence guidance matches the as-built implementation.
 Inputs: docs/OPERATOR_WALKTHROUGH.md, docs/HOST_API.md, docs/HOST_TOOLS.md, docs/API_GUIDELINES.md, docs/USERLAND_AND_CLI.md, docs/INTERFACES.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/TEST_PLAN.md, resources/openapi/hive-gateway.yaml, apps/hive-gateway/src/**, apps/coh/src/mount.rs, apps/coh/src/doctor.rs, apps/host-ticket-agent/src/executors/**, docs/snippets/**.
 Changes:
-  - docs/OPERATOR_WALKTHROUGH.md — operator sequence for direct TCP, REST/gateway, `coh mount --rest-url`, MCP resources/tools/prompts, A2A Agent Card/task flow, optional read-only MCP resource mount, evidence capture, and deterministic failure handling.
+  - docs/OPERATOR_WALKTHROUGH.md — operator sequence for direct TCP,
+    REST/gateway, the separate OpenAI-compatible inference endpoint,
+    `coh mount --rest-url`, semantic/capsule/inference MCP
+    resources/tools/prompts, A2A Agent Card/task flow, optional read-only MCP
+    resource mount, evidence capture, and deterministic failure handling.
   - docs/HOST_API.md + docs/API_GUIDELINES.md — MCP and A2A endpoint/auth/error semantics and transport-choice guidance aligned with the REST gateway contract.
   - docs/HOST_TOOLS.md + docs/USERLAND_AND_CLI.md — command references and prerequisites for `hive-gateway`, `coh mount`, MCP resource mount, A2A task facade, host-ticket-agent, GPU bridge, sidecar bridge, and grammar-stability constraints.
   - docs/INTERFACES.md + docs/ARCHITECTURE.md + docs/SECURITY.md + docs/TEST_PLAN.md — as-built path/action/task/artifact mappings, VM/host boundary, delegated ticket/security posture, and evidence matrix.
   - resources/openapi/hive-gateway.yaml — keep REST/OpenAPI routes aligned with any gateway endpoint additions and document that MCP/A2A are adjacent protocol surfaces, not REST authority replacements.
 Commands: git diff --check -- docs/OPERATOR_WALKTHROUGH.md docs/HOST_API.md docs/HOST_TOOLS.md docs/API_GUIDELINES.md docs/USERLAND_AND_CLI.md docs/INTERFACES.md docs/ARCHITECTURE.md docs/SECURITY.md docs/TEST_PLAN.md && scripts/check-generated.sh
-Checks: Documentation distinguishes direct TCP proof, REST gateway proof, gateway-backed FUSE mount, optional read-only MCP resource mount, MCP ticket-submission tools, and A2A task/artifact/status behavior; no doc claims MCP, A2A, mount, provider, or host-ticket behavior that lacks code/tests/generated evidence.
+Checks: Documentation distinguishes direct TCP proof, REST gateway proof, 28c1
+inference proof, gateway-backed FUSE mount, optional read-only MCP resource
+mount, namespace versus host-artifact resources, MCP ticket-submission tools,
+and A2A task/artifact/status behavior; no doc claims MCP, A2A, semantic,
+inference, mount, provider, or host-ticket behavior that lacks
+code/tests/generated evidence.
 Deliverables: Operator-facing documentation that is coherent with as-built 28d behavior and usable for live, mock, and dry-run workflows.
 
 Title/ID: m28d-gateway-protocol-performance
 Goal: Prove MCP/A2A gateway protocol projections remain bounded relative to the 28b gateway authority baseline.
 Inputs: apps/hive-gateway, scripts/ci/gateway_perf_probe.sh, docs/BENCHMARKS.md, docs/TEST_PLAN.md, accepted 28b gateway authority artifacts.
 Changes:
-  - scripts/ci/gateway_perf_probe.sh — add MCP resource read, MCP ticket-submitting tool call, A2A task create/status stream, artifact read, and backpressure/refusal scenarios.
+  - scripts/ci/gateway_perf_probe.sh — add namespace, semantic/capsule, and
+    inference-receipt MCP resource reads, MCP ticket-submitting tool call, A2A
+    task create/status stream, artifact read, and backpressure/refusal
+    scenarios.
   - docs/BENCHMARKS.md + docs/TEST_PLAN.md — record protocol-projection performance as gateway evidence, separate from Pi/QEMU runtime throughput proof.
 Commands:
   - scripts/ci/gateway_perf_probe.sh --scenario mcp-a2a-protocols --state-dir out/bench/m28d-gateway-protocols
 Checks:
-  - MCP/A2A protocol paths stay bounded relative to the 28b gateway authority baseline, with queue depth, refusal counts, auth checks, and evidence/audit emission cost recorded.
+  - MCP/A2A protocol paths stay bounded relative to the 28b gateway authority
+    baseline, with 28b2/28c1 host-artifact adapter cost separated from protocol
+    cost and queue depth, refusal counts, auth checks, and evidence/audit
+    emission cost recorded.
   - A full REST/Pi/QEMU benchmark is triggered only if gateway protocol evidence shows an upstream runtime-path regression.
 Deliverables:
   - Gateway protocol performance ledger for MCP/A2A clients and downstream AI namespace work.
@@ -12672,21 +13930,37 @@ Title/ID: m28d-gateway-agent-security-conformance
 Goal: Prove MCP/A2A ecosystem compatibility and preserve Cohesix security boundaries.
 Inputs: apps/hive-gateway, docs/SECURITY.md, docs/TEST_PLAN.md, accepted MCP protocol revision, accepted A2A protocol revision.
 Changes:
-  - apps/hive-gateway/tests/mcp_security.rs — confused-deputy, prompt-injection, auth, Origin, backpressure, duplicate, and redaction negative tests.
-  - apps/hive-gateway/tests/a2a_security.rs — Agent Card disclosure, message injection, task idempotency, artifact redaction, push callback, cancellation, auth, Origin, and backpressure negative tests.
+  - apps/hive-gateway/tests/mcp_security.rs — confused-deputy,
+    prompt-injection, semantic/capsule/inference visibility and tamper, returned
+    tool-call inertness, auth, Origin, backpressure, duplicate, and redaction
+    negative tests.
+  - apps/hive-gateway/tests/a2a_security.rs — Agent Card disclosure, message
+    injection, semantic/capsule/inference ref substitution, returned tool-call
+    inertness, task idempotency, artifact redaction, push callback,
+    cancellation, auth, Origin, and backpressure negative tests.
   - docs/TEST_PLAN.md — MCP/A2A conformance and security evidence stage.
   - docs/HOST_API.md + docs/API_GUIDELINES.md — MCP/A2A endpoint, transport, auth, error, and client configuration guidance.
 Commands: cargo test -p hive-gateway --test mcp_security && cargo test -p hive-gateway --test a2a_security && scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28d-qemu-gateway-agents
-Checks: Standard MCP clients and A2A peers can discover and call allowed read-only/dry-run flows; unauthorized, prompt-injected, forged callback, duplicate, or overbroad calls cannot bypass delegated tickets or Cohesix policy.
+Checks: Standard MCP clients and A2A peers can discover and call allowed
+read-only/dry-run flows; unauthorized, prompt-injected, tampered-artifact,
+provider-direct, model-returned, forged callback, duplicate, or overbroad calls
+cannot bypass delegated tickets, 28c inference admission, or Cohesix policy.
 Deliverables: Archived MCP/A2A conformance and security evidence.
 ```
 
 **Outcome**
 After Milestone 28d:
 - Cohesix can be used from standard MCP-capable agent hosts and A2A-capable peer agents through `hive-gateway`.
-- MCP clients see useful resources, tools, and prompts for CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker operations.
-- A2A peers can discover Cohesix skills, submit bounded dry-run or delegated tasks, observe task status, and retrieve redacted artifacts for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence workflows.
+- MCP clients see useful resources, tools, and prompts for immutable semantic
+  objects, Context Capsules, inference receipts, CUDA/GPU, PEFT, NeMo, K8s,
+  systemd, and Docker operations.
+- A2A peers can discover Cohesix skills, submit bounded dry-run or delegated
+  tasks, observe task status, and retrieve redacted semantic/capsule/inference,
+  CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence artifacts.
 - All side effects still flow through Cohesix tickets, files, policy, audit, and evidence.
+- Inference continues to use the separate accepted 28c1 compatibility boundary;
+  MCP/A2A adds ecosystem projection, not another provider path or inference
+  protocol.
 - The VM grammar, Secure9P semantics, and generated manifest authority remain unchanged.
 
 ## Milestone 28e — Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle <a id="28e"></a>
@@ -12719,7 +13993,7 @@ supply security properties needed by live 26e Worker or driver tasks.
   scheduler architecture.
 - Milestone **26d** seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
 - Milestone **28b** completed, including audit/replay defaults and generated gates that distinguish host authority records from VM cap-backed tickets.
-- Milestone **28b1** completed for the provider/integration dependency graph, external-executor classifications, exact package manifests, and stable use-case rows that will consume production Worker-bundle bindings. A PEFT/AI row additionally requires the applicable Milestone **28c** live pipeline evidence.
+- Milestone **28b1** completed for the provider/integration dependency graph, external-executor classifications, exact package manifests, and stable use-case rows that will consume production Worker-bundle bindings. A PEFT/AI row additionally requires the applicable Milestone **28c** live pipeline evidence; a row claiming semantic context or compatible inference additionally requires the applicable accepted Milestone **28b2** and **28c1** evidence.
 
 **Production authority gate:** Accepted 26e evidence is sufficient to claim the
 matching live Worker/driver cap bundles and basic containment. Milestone 28e is
@@ -12746,6 +14020,9 @@ from a ticket, provider receipt, or UI state.
 
 **Non-Goals (Explicit)**
 - No change to REST delegated identity, host-ticket action semantics, MCP/A2A protocol surfaces, or AI run control.
+- No change to semantic object/Context Capsule or inference contracts, and no
+  inference receipt, capsule ref, provider receipt, or semantic object implies
+  a VM cap-backed Worker binding.
 - No new VM protocol, console grammar, Secure9P verb, or root-owned physical-driver path.
 - No claim that host tickets, REST delegated tickets, provider tickets, or PEFT receipts are seL4 cap-backed unless a generated VM projection explicitly maps them to live caps.
 - No driver ticket or lease material. Host/provider tickets may authorize a
@@ -12787,9 +14064,10 @@ from a ticket, provider receipt, or UI state.
   corresponding 26e component/integration evidence refs. Provider/executor
   results remain separate referenced records.
 - Re-evaluate only the use-case rows that explicitly require
-  `m28e_production_bundle`. A live 28e binding cannot promote a row whose CUDA,
-  PEFT, FUSE, Kubernetes, federation, package, identity, recovery, or other
-  host dependency is missing or non-live.
+  `m28e_production_bundle`. A live 28e binding cannot promote a row whose
+  semantic/capsule, inference, CUDA, PEFT, FUSE, Kubernetes, federation,
+  package, identity, recovery, or other host dependency is missing or
+  non-live.
 
 **Commands**
 - `cargo test -p root-task --tests cap_bundle`
@@ -12818,8 +14096,9 @@ from a ticket, provider receipt, or UI state.
   structured quarantine without the corresponding 28e evidence.
 - Host tools, REST/FUSE/Python/UI/MCP/A2A projections, release manifests, and
   use-case rows consume the same generated 28e bundle-binding record and cannot
-  synthesize production Worker state from tickets, model entries, registry
-  publication, or provider receipts.
+  synthesize production Worker state from tickets, semantic objects, Context
+  Capsules, inference receipts, model entries, registry publication, or
+  provider receipts.
 - Revoked Worker tickets lose their bound endpoint, notification,
   scheduling-context, timeout/fault cap, frame, and shared authority. The
   root-fault-owned Reply lane is not Worker-ticket authority; any association
@@ -12964,6 +14243,11 @@ Deliverables: Python projects the same generated production-binding and quaranti
 - Milestone **28b** is required before enabling any new delegated mutating REST workflow beyond existing console-projected `LS`/`CAT`/`ECHO` semantics. Before 28b, mutating desktop affordances may only render command previews, transcript proof, or existing console-compatible actions already admitted by the active profile.
 - Milestone **28b1** is required for generated integration-surface availability, read visibility, exact package contents, and use-case maturity shown by the workbench. Matching 26e evidence is required to display an executable Worker badge; matching 28e evidence is additionally required for production bundle/quarantine status.
 - `m28b1-authoritative-receipt-and-evidence-core` is required before a native UI lane may display a receipt/evidence-backed live state; frontend fixtures remain non-authoritative.
+- Accepted Milestones **28b2**, **28c1**, and **28d** are conditional
+  prerequisites for semantic object, Context Capsule, inference receipt, and
+  MCP/A2A projection views. If any owner contract is unavailable, those views
+  are omitted or visibly typed unavailable; the base workbench redesign does
+  not infer or simulate them.
 
 **Goal**
 Redesign SwarmUI into a desktop-style operator workbench that uses Spectrum for shell chrome, controls, forms, menus, dialogs, status, and workflow affordances while retaining PixiJS/Live Hive as the primary high-performance visualization surface. The UI must make Secure9P namespaces, evidence packs, replay, tickets, policy gates, and gateway state navigable through familiar desktop patterns without introducing a new authority plane.
@@ -12974,6 +14258,12 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 - No new Cohesix console verbs, Secure9P verbs, in-VM TCP listeners, ad-hoc RPC, or UI-owned control semantics.
 - No replacement of PixiJS Live Hive with DOM, SVG, D3, Spectrum charts, or a generic graph library.
 - No second evidence-pack, replay, trace, or bundle format distinct from the canonical `cohsh-core` trace stack and `coh evidence pack` layout.
+- No UI-owned semantic graph, capsule planner/store, inference protocol,
+  provider call, or receipt format. SwarmUI may inspect accepted immutable
+  artifacts and submit already-admitted actions only through their existing
+  host surfaces.
+- No default display or persistence of raw prompts, model outputs, retrieved
+  source content, credentials, or model-produced tool calls.
 - No hidden background watchers when a desktop view is closed, inactive, or offline.
 - No generalized window manager, plugin host, web browser shell, or arbitrary host filesystem explorer.
 - No CDN dependency, network font dependency, or unbounded Spectrum dependency expansion; all UI assets remain vendored/offline-safe.
@@ -12983,7 +14273,9 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 - **Application frame:** compact desktop top bar with transport mode, role/ticket state, lifecycle, gateway health, pressure, replay/offline status, and active evidence target.
 - **Navigation dock:** Spectrum action buttons or tab rail for `Hive`, `Namespaces`, `Tickets`, `Policy`, `Evidence`, `Replay`, `Console`, and `Settings`.
 - **Workspace:** tabbed or split document area where each selected tool opens as a stable workbench view, not a stacked marketing/dashboard section.
-- **Inspector:** right-side details for the selected worker, namespace path, ticket receipt, evidence pack, replay frame, or policy denial.
+- **Inspector:** right-side details for the selected worker, namespace path,
+  semantic object, Context Capsule, inference receipt, ticket receipt, evidence
+  pack, replay frame, or policy denial.
 - **Transcript drawer:** bottom proof pane showing exact `OK`/`ERR`/`END` lines for every backend action and preserving console parity.
 - **Command palette:** bounded local launcher for existing workbench actions and known paths; it must not execute arbitrary new commands or bypass role/ticket checks.
 
@@ -13026,6 +14318,17 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
   - front-end workflow over existing `coh evidence pack`, `coh evidence timeline`, CI summary, and SIEM NDJSON export;
   - visible pack contents, manifest/policy hashes, trace references, redaction state, and deterministic output path;
   - no second pack schema or UI-owned evidence serializer.
+- Semantic and Inference Inspector, enabled only when its owner milestones are
+  accepted:
+  - browse bounded 28b2 object views/edges/provenance, Context Capsule
+    manifests, selection reasons, render profiles, and render receipts through
+    accepted 28d read-only resources or shared owner libraries;
+  - show 28c1 request/admission/provider/cache/stream/output-digest fact
+    classifications and receipt verification without presenting unknown or
+    client-observed fields as Cohesix facts;
+  - offer copy-ref, open-in-evidence, verify, and separately authorized
+    inference-submit affordances; never call a provider, execute returned tool
+    calls, or retain raw prompt/output content by default.
 - Replay Desk:
   - open trace, Hive CBOR snapshot, and evidence pack artifacts offline;
   - show tamper/replay validation, trace limits, frame/ACK counts, selected timeline event, and Live Hive replay source;
@@ -13078,6 +14381,14 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 - Replay Desk rejects tampered traces and oversized artifacts, disables network access in offline/replay mode, and reconstructs Live Hive state from trace/CBOR/evidence artifacts only.
 - Ticket/Policy Desk shows status and denials without granting new authority; any write-capable affordance is explicitly gated by active profile/milestone state and emits transcript proof.
 - Worker/provider/use-case state comes from the generated 28b1 graph and correlated evidence records. UI ids, labels, tickets, `/gpu/models`, PEFT registry entries, telemetry, or cached snapshots cannot independently create executable, live-provider, production-bundle, or production-use-case status.
+- Semantic objects, Context Capsules, render receipts, and inference receipts
+  are displayed from accepted 28b2/28c1 schemas and immutable ids. UI cache,
+  labels, MCP discovery, or screenshots cannot author or strengthen their
+  provenance, visibility, provider, cache, completion, or authority claims.
+- Any inference submission uses the existing 28c admission and 28c1 endpoint;
+  model-produced tool calls remain inert until a separate generated action is
+  explicitly authorized. Raw prompt/output content is absent from default UI
+  state, logs, screenshots, replay, and evidence.
 - Direct TCP mode clearly warns about single-client console ownership; REST/gateway mode presents gateway health, request-auth state, and backpressure counters before operators tune publish rates.
 - No hidden polling or background watchers run when a workbench view is inactive, stopped, or offline; Live Hive polling remains bounded by generated defaults.
 - Playwright desktop and narrow screenshots are updated intentionally, with checks for nonblank PixiJS canvas, visible legends/status, text fit, no overlapping controls, keyboard/focus behavior, and accessible labels.
@@ -13087,7 +14398,10 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 
 **Compiler touchpoints**
 - `coh-rtc` remains the source for SwarmUI path roots, cache limits, trace limits, Live Hive frame/LOD limits, line caps, ticket scope, and any new desktop-workbench defaults.
-- `coh-rtc` generates SwarmUI views of 28b1 integration/use-case rows and 26e/28e Worker evidence axes; frontend code may format but not reclassify them.
+- `coh-rtc` generates SwarmUI views of 28b1 integration/use-case rows,
+  referenced 28b2 semantic/capsule visibility and schema axes, referenced 28c1
+  inference fact/receipt axes, and 26e/28e Worker evidence axes; frontend code
+  may format but not reclassify them.
 - If additional UI roots, Spectrum component allowlists, evidence-desk defaults, replay-desk defaults, or workbench view limits are needed, add manifest IR and regenerate `apps/swarmui/src/generated.rs`, `docs/snippets/swarmui_defaults.md`, docs snippets, and tests in the same change.
 - Generated docs must be refreshed before implementation patches land; stale embedded snippets in `docs/USERLAND_AND_CLI.md` or other canonical docs block merge.
 
@@ -13184,6 +14498,44 @@ Checks:
 Deliverables:
   - Desktop evidence and replay workflows ready for audit, support, CI, and demos.
 
+Title/ID: m28f-semantic-inference-inspector
+Milestone: Milestone 28f — SwarmUI Desktop Workbench: Spectrum Shell + Live Hive Continuity / m28f-semantic-inference-inspector
+Goal: Add optional read-only semantic, Context Capsule, and inference receipt
+inspection without creating UI-owned truth or a direct provider path.
+Inputs: accepted 28b2 semantic/capsule schemas and fixtures, accepted 28c1
+inference receipt schemas and fixtures, accepted 28d read-only resources,
+crates/cohesix-semantic-core, crates/cohesix-inference-core,
+apps/hive-gateway, apps/swarmui/src/**, apps/swarmui/frontend/**,
+docs/SECURITY.md, docs/TEST_PLAN.md
+Changes:
+  - apps/swarmui/src/** — bounded read/verify adapters for accepted semantic
+    object, capsule, render, and inference receipt refs using shared owner
+    libraries or 28d read-only gateway resources; no duplicate parsers or
+    schemas.
+  - apps/swarmui/frontend/** — optional inspector/workbench views for object
+    views/edges/provenance, capsule selection/render receipts, inference fact
+    sources/status/timing/digests, and copy/open-in-evidence actions.
+  - apps/swarmui/tests/** + tools/swarmui-ui-tests/** — visibility, tamper,
+    stale/missing artifact, unknown/provider/client-only fact, raw-content
+    absence, and model-returned tool-call inertness fixtures.
+  - docs/USERLAND_AND_CLI.md + docs/SECURITY.md + docs/TEST_PLAN.md — document
+    conditional availability, read-only ownership, explicit inference
+    admission, content-retention defaults, and evidence boundaries.
+Commands:
+  - cargo test -p swarmui --test semantic_inference
+  - cargo test -p cohesix-semantic-core
+  - cargo test -p cohesix-inference-core
+  - cd tools/swarmui-ui-tests && npm test -- --grep semantic-inference
+Checks:
+  - Missing owner milestones hide or type the views unavailable.
+  - Every displayed artifact verifies against its owner schema/hash and obeys
+    visibility policy; the UI cannot author, mutate, or strengthen a fact.
+  - No provider call, returned tool execution, or raw prompt/output retention
+    occurs through the inspector.
+Deliverables:
+  - Auditable desktop inspection for semantic context and inference receipts
+    using the same host contracts as CLI, Python, MCP/A2A, and evidence tools.
+
 Title/ID: m28f-live-hive-continuity
 Goal: Preserve PixiJS Live Hive while integrating it into the desktop workbench with Spectrum toolbar and inspector controls.
 Inputs: apps/swarmui/frontend/hive/**, apps/swarmui/frontend/app.js, apps/swarmui/frontend/styles/hive.css, apps/swarmui/tests/replay.rs, tools/swarmui-ui-tests/tests/swarmui.spec.js
@@ -13250,6 +14602,9 @@ After Milestone 28f:
 - SwarmUI is the primary desktop operator workbench for Cohesix, not a dense single-page dashboard.
 - Operators can browse Secure9P namespaces with file-manager familiarity while still seeing exact role/ticket/path bounds.
 - Evidence packs, timelines, traces, snapshots, and Live Hive replay are first-class, deterministic desktop workflows.
+- When accepted by their owner milestones, immutable semantic objects, Context
+  Capsules, and inference receipts are inspectable through the same generated
+  host contracts as CLI, Python, MCP/A2A, and evidence tooling.
 - Spectrum owns the desktop interaction language; PixiJS Live Hive remains the rendering engine for hive state.
 - Cohesix gains usability without increasing the VM TCB, adding protocols, weakening transcript parity, or creating a second evidence/replay format.
 
@@ -13473,46 +14828,77 @@ Deliverables: Repeatable host and Pi 4 validation for `hw-status`.
 [Milestones](#Milestones)
 
 **Why now (positioning):**  
-Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28b1 proves the shared provider/integration/use-case graph, Milestone 28c proves the host-side AI operating model and complete PEFT transaction first, and Milestone 28d proves that standard MCP clients and A2A peers can consume those semantics through `hive-gateway` without a new Cohesix grammar. The next strategic step is to make that proven AI fleet state legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS, creating a second executor, or exposing a namespace path whose external dependencies are missing.
+Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28b1 proves the shared provider/integration/use-case graph, Milestone 28b2 proves immutable semantic objects and Context Capsules, Milestone 28c proves the host-side AI operating model and complete PEFT transaction, Milestone 28c1 proves the compatible inference boundary and auditable receipts, and Milestone 28d proves that standard MCP clients and A2A peers can consume those semantics through `hive-gateway` without a new Cohesix grammar. The next strategic step is to make the bounded control refs and evidence from that proven AI fleet state legible through the same namespace discipline without moving the semantic graph or inference data plane into the VM, creating a second executor, or exposing a namespace path whose external dependencies are missing.
 
 **Goal**  
 Add a manifest-defined, role-scoped AI control namespace that lets operators and automation inspect and drive AI lifecycle state through existing Secure9P semantics. This milestone is limited to **control-plane surfaces only**: no in-VM application runtime, no general UI stack, no mutable POSIX-like filesystem, and no new transport or RPC model.
 
-**As-built alignment note:** There is no `ecosystem.ai.*` manifest IR and no `/jobs`, `/datasets`, `/experiments`, `/infer`, or `/metrics` AI namespace provider in the host or VM NineDoor implementations as of the 26c planning audit. Milestone 29b adds those roots only after 28b, 28b1, 28c, and 28d prove delegated authority, provider action/read-visibility conformance, host-ticket AI actions, checkpoints/evidence semantics, and MCP/A2A gateway projection without grammar drift.
+**As-built alignment note:** There is no `ecosystem.ai.*` manifest IR and no `/jobs`, `/datasets`, `/experiments`, `/infer`, or `/metrics` AI namespace provider in the host or VM NineDoor implementations as of the 26c planning audit. Milestone 29b adds those roots only after 28b, 28b1, 28b2, 28c, 28c1, and 28d prove delegated authority, provider action/read-visibility conformance, semantic/capsule identity, host-ticket AI actions, checkpoints/evidence semantics, inference admission/receipts, and MCP/A2A gateway projection without grammar drift.
 
 ### Prerequisites
 - Milestone **28b** completed (delegated REST identity, idempotent queen intents, writer-epoch fencing, audit/replay baseline).
 - Milestone **28b1** completed (provider/integration graph, external-executor and surface conformance, read visibility, identity mapping, exact packaging, observability, and exhaustive use-case evidence matrix).
+- Milestone **28b2** completed (immutable semantic snapshots/objects/views,
+  Context Capsules, render receipts, visibility/provenance, host tools, and
+  conformance evidence).
 - Milestone **28c** completed (host-side AI run envelopes, checkpoint/evidence model, complete PEFT pipeline transaction, use-case promotion, and `/host/tickets/spec` AI actuation semantics).
+- Milestone **28c1** completed (compatible host inference admission,
+  provider-neutral receipts, cache/stream evidence, content policy, host tools,
+  and provider/client conformance).
 - Milestone **28d** completed (MCP/A2A gateway projection over existing Cohesix grammar, with no new VM protocol, agent bus, or host-executor bypass).
-- Production profiles may claim matching accepted 26e Worker/driver live authority for AI namespace projections. Claims of one-to-one Worker ticket/lease binding, complete driver-inventory ledger projection, or structured quarantine/restart additionally require Milestone **28e** evidence. Read-model-only or host-ticket-only profiles may remain gated by 28b/28b1/28c/28d without either live-task or 28e production-ledger claims.
+- Production profiles may claim matching accepted 26e Worker/driver live authority for AI namespace projections. Claims of one-to-one Worker ticket/lease binding, complete driver-inventory ledger projection, or structured quarantine/restart additionally require Milestone **28e** evidence. Read-model-only or host-ticket-only profiles may remain gated by 28b/28b1/28b2/28c/28c1/28d without either live-task or 28e production-ledger claims.
 
 **Non-Goals**
 - No app runtime, package manager, bundle loader, or process model beyond the existing Queen/worker control model.
 - No in-VM GUI, mutable `/ui` runtime surface, or second operator protocol.
 - No generic `/net` service API, sockets-by-file, or hidden request/response RPC behind file names.
 - No mutable general-purpose `/store`; existing CAS, models, telemetry, and spool semantics remain authoritative and distinct.
+- No in-VM semantic graph, object pack, rebuildable index, extractor, capsule
+  planner/renderer, vector store, raw source tree, prompt archive, model output
+  archive, tokenizer, or provider client. The namespace exposes bounded
+  immutable refs/status/receipts, not the host semantic or inference data
+  plane.
+- No OpenAI-compatible API over NineDoor and no claim that `/infer/*` replaces
+  or proxies the accepted 28c1 host endpoint.
 - No new 9P verbs, no console grammar changes, and no deviation from `ERR = no side effects`.
 - No second host-execution plane parallel to `/host/tickets/spec`; VM-visible AI paths do not bypass delegated host-ticket authority or Milestone 28b fencing/idempotency rules.
 - No create, unlink, rename, chmod, symlink, dynamic prompt/blob tree, arbitrary path component, or general directory mutation semantics. AI namespace writes target fixed generated control files only.
 - No opaque inter-agent mailbox or prompt-transcript tree exposed as a first-class namespace primitive.
 
 **Deliverables**
-- AI namespace roots are the VM-visible control-plane projection of the host-side semantics proven in 28c.
+- AI namespace roots are the VM-visible control-plane projection of the
+  host-side semantics proven in 28b2, 28c, and 28c1.
 - Every enabled root/control file names the stable 28b1 `use_case_id`, required provider/integration rows, minimum Worker tier, and accepted host receipt schema. Generation fails or the path is deterministically absent when required dependencies are unavailable; a namespace projection never promotes their observed mode.
 - Any AI path whose write can cause host-side side effects MUST resolve to documented host-ticket actions and inherit delegated identity, idempotency, writer epoch, and audit/replay guarantees.
-- Read-only AI paths (`/metrics/*` and read views of `/jobs/*`, `/datasets/*`, `/experiments/*`) do not become a second source of truth for execution authority.
+- Read-only AI paths (`/metrics/*` and read views of `/jobs/*`, `/datasets/*`,
+  `/experiments/*`, and `/infer/*`) do not become a second source of truth for
+  semantic provenance, context admission, inference facts, or execution
+  authority.
 - Manifest-gated AI control roots under the Secure9P namespace, with paths aligned to current authority rules:
   - `/jobs/*` for bounded job submission, queue state, completion records, checkpoint refs, and handoff lineage views
   - `/datasets/*` for dataset metadata, lineage pointers, and policy-visible readiness state
-  - `/experiments/*` for append-only run metadata, retrieval-manifest refs, and result summaries
-  - `/infer/*` for bounded inference request/receipt control surfaces where explicitly enabled, including prefix-group read views
-  - `/metrics/*` for read-only fleet and model metrics summaries
+  - `/experiments/*` for append-only run metadata, semantic snapshot refs,
+    Context Capsule/render/retrieval-manifest refs, selection summaries, and
+    result summaries
+  - `/infer/*` for bounded inference request/admission/receipt control
+    surfaces where explicitly enabled, including capsule refs, prefix-group
+    read views, provider-fact classification, and output digests but no raw
+    prompt/output content
+  - `/metrics/*` for read-only fleet, semantic-paging, context-render,
+    inference, cache, and model metrics summaries with fact source and owner
+    receipt refs
 - Queen-only control files remain append-only; worker and observer views remain role-filtered and read-only where appropriate.
-- Host tools (`cohsh`, `coh`, REST projection, SwarmUI read models where relevant) discover and render the new paths without introducing new verbs.
+- Host tools (`cohsh`, `coh`, REST projection, SwarmUI read models where
+  relevant) discover and render the new paths without introducing new verbs.
+  `cohsh` uses only existing `LS`/`CAT`/`TAIL`/`ECHO`; full semantic traversal
+  and compatible inference remain on the accepted host CLI/SDK/gateway
+  surfaces.
 - FUSE, Python, MCP/A2A, and UI views remain projections of the same admitted paths and 28b1 visibility classes; each is independently conformance-tested and cannot synthesize jobs, Workers, models, or successful PEFT/GPU execution from client state.
 - Canonical schemas for all new paths documented in `docs/INTERFACES.md` and emitted from `coh-rtc`.
-- Namespace state remains a projection of 28c run envelopes, checkpoints, retrieval manifests, and receipts; it does not introduce an independent scheduler or executor.
+- Namespace state remains a projection of 28b2 immutable
+  snapshot/capsule/render refs, 28c run envelopes/checkpoints/retrieval
+  manifests, and 28c1 admission/inference receipts; it does not introduce an
+  independent semantic store, inference protocol, scheduler, or executor.
 - Namespace-scale microbenchmark evidence for representative job/run/checkpoint counts proves `ls`, `cat`, `tail`, and fixed-control-file writes remain bounded. This is a namespace/provider microbenchmark, not a full Pi hardware throughput gate, unless high-churn AI namespace paths change the root-task hot runtime path.
 
 **Commands**
@@ -13520,6 +14906,8 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - `cargo test -p nine-door`
 - `cargo test -p root-task`
 - `cargo test -p cohsh`
+- `cargo test -p coh --test ai_namespace`
+- `python3 -m pytest -q tools/cohesix-py/tests/test_ai_namespace.py`
 - `cohsh --script scripts/cohsh/ai_namespace_roundtrip.coh`
 - `cohsh --script scripts/cohsh/ai_namespace_scale.coh`
 
@@ -13529,17 +14917,35 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - Writes remain append-only and auditable; reads stay within declared `msize` and path bounds.
 - Existing ACK/ERR/END grammar, Secure9P transport behavior, and host-tool semantics remain byte-stable unless intentionally versioned in the same change.
 - Missing AI paths are treated as gate state, not client bugs.
-- Enabled AI paths have accepted provider/integration, package, external-executor, Worker-tier, and use-case records for the selected profile; missing dependencies yield generated absence or typed not-enabled status before mutation.
-- Read views expose 28c task/handoff/checkpoint/prefix evidence without becoming a second source of authority.
+- Enabled AI paths have accepted semantic/capsule, inference,
+  provider/integration, package, external-executor, Worker-tier, and use-case
+  records for the selected profile; missing dependencies yield generated
+  absence or typed not-enabled status before mutation.
+- Read views expose verified 28b2
+  snapshot/object-summary/capsule/render refs, 28c
+  task/handoff/checkpoint/prefix evidence, and 28c1
+  admission/provider/cache/stream/output-digest receipt refs without becoming a
+  second source of authority.
+- `/infer/*` writes map to the existing 28c host-ticket admission and 28c1
+  gateway contract; no provider call occurs from NineDoor, and no raw
+  prompt/output or model-produced tool call is stored or executed by the
+  namespace provider.
 - No new in-VM listener, runtime, or hidden RPC behavior is introduced.
 - AI namespace scale evidence shows bounded path walk/list/read/write behavior at representative job/run counts; material regressions are classified as namespace-provider overhead, host-tool projection overhead, or runtime hot-path regression before downstream profiles depend on the new roots.
 
 **Compiler touchpoints**
 - `coh-rtc` admits `ecosystem.ai.*` IR fields for path gating, quotas, and per-surface limits.
-- Each `ecosystem.ai.*` entry references stable 28b1 integration/use-case ids and generated receipt/Worker/executor prerequisites; validation rejects independent availability or maturity declarations.
+- Each `ecosystem.ai.*` entry references stable 28b1 integration/use-case ids,
+  accepted 28b2 semantic/capsule schema refs, accepted 28c run/action refs,
+  accepted 28c1 admission/receipt refs, and generated Worker/executor
+  prerequisites; validation rejects independent schemas, availability, facts,
+  or maturity declarations.
 - `coh-rtc` rejects AI namespace definitions that require dynamic path creation, unconstrained components, directory mutation, prompt/blob-tree storage, or side effects outside generated host-ticket-backed receipt mappings.
 - Generated snippets refresh `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, and `docs/USERLAND_AND_CLI.md` so host tools consume authoritative bounds and namespace roots.
-- Validation and generated docs make the authority mapping explicit: AI namespace writes that trigger external execution are projections over the 28c host-ticket/evidence model, not an independent executor.
+- Validation and generated docs make the authority mapping explicit: AI
+  namespace writes that trigger external execution are projections over the
+  28c host-ticket admission and 28c1 receipt model, not an independent
+  inference endpoint or executor.
 - Validation rejects configurations that overload existing `/updates`, `/models`, telemetry, or spool semantics.
 
 **Task Breakdown**
@@ -13547,15 +14953,23 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 Title/ID: m29b-ai-ir
 Milestone: Milestone 29b — AI-Native Namespace Surfaces (Control-Plane Only) / generated Python AI namespace contract
 Goal: Admit AI namespace surfaces in compiler IR without changing Cohesix transport or runtime boundaries.
-Inputs: tools/coh-rtc, tools/cohesix-py/cohesix/generated.py, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/USERLAND_AND_CLI.md.
+Inputs: accepted 28b2 semantic/capsule schemas, accepted 28c run/action schemas,
+accepted 28c1 inference receipt schemas, tools/coh-rtc,
+tools/cohesix-py/cohesix/generated.py, docs/ARCHITECTURE.md,
+docs/INTERFACES.md, docs/USERLAND_AND_CLI.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — `ecosystem.ai.*` schema, gating, receipt-projection mapping, and bounds validation.
+  - tools/coh-rtc/src/ir.rs — `ecosystem.ai.*` schema, gating,
+    semantic/capsule/run/inference owner-ref mappings, receipt-projection
+    mapping, content-retention policy, and bounds validation.
   - tools/coh-rtc/src/codegen/{docs,rust,cohsh,cohesix_py}.rs — generated AI namespace snippets and Rust, cohsh, and Python client defaults.
 Commands:
   - cargo test -p coh-rtc
   - scripts/check-generated.sh
 Checks:
-  - AI namespace admission is compiler-defined, rejects overlap with existing CAS/model/spool surfaces, and preserves the 28c host-ticket authority mapping for side-effecting flows and read-model projections.
+  - AI namespace admission is compiler-defined, rejects overlap with existing
+    semantic/CAS/model/spool and inference endpoint surfaces, and preserves the
+    28b2 artifact, 28c host-ticket admission, and 28c1 receipt mappings for
+    side-effecting flows and read-model projections.
   - Generated Python roots, fixed control files, gates, and bounds match the selected resolved manifest and cannot be hand-maintained independently.
 Deliverables:
   - Authoritative manifest + docs snippets for AI namespace roots.
@@ -13570,8 +14984,15 @@ Commands:
   - cargo test -p nine-door
   - cargo test -p root-task
 Checks:
-  - Paths enforce append-only/read-only semantics, role filters, deterministic refusals, fixed generated control files, and documented handoff to host-ticket-backed actuation where side effects are involved; checkpoint/handoff/prefix read views remain receipt projections only.
+  - Paths enforce append-only/read-only semantics, role filters, deterministic
+    refusals, fixed generated control files, and documented handoff to
+    host-ticket-backed actuation where side effects are involved;
+    semantic/capsule/checkpoint/handoff/prefix/inference read views remain
+    bounded verified-ref projections only.
   - Dynamic create/unlink/rename/chmod/symlink/path-component expansion and prompt/blob-tree storage are refused before any state mutation.
+  - NineDoor never parses a repository, plans/renders a capsule, speaks a
+    provider API, retains raw prompt/output content, or executes a
+    model-produced tool call.
 Deliverables:
   - AI control-plane namespace available in host and VM implementations with matching semantics.
 
@@ -13580,15 +15001,24 @@ Milestone: Milestone 29b — AI-Native Namespace Surfaces (Control-Plane Only) /
 Goal: Extend host-tool discovery and read models for AI namespace paths without adding verbs.
 Inputs: apps/cohsh, apps/coh, apps/swarmui, tools/cohesix-py/cohesix/{generated.py,backends.py,orchestration.py}, tools/cohesix-py/tests/, coh-rtc-generated enabled/disabled AI namespace profile fixtures and client defaults.
 Changes:
-  - apps/cohsh — list/cat/tail/echo flows for `/jobs`, `/datasets`, `/experiments`, `/infer`, `/metrics`, including checkpoint/handoff/prefix-status read paths.
-  - apps/coh — host-side helpers remain projections of existing file semantics only.
-  - apps/swarmui — optional read-only views backed by existing `/proc` and AI namespace tails.
-  - tools/cohesix-py/cohesix/{backends.py,orchestration.py} + tools/cohesix-py/tests/test_ai_namespace.py — consume the coh-rtc-generated enabled/disabled profile fixtures to discover and access only generated `/jobs`, `/datasets`, `/experiments`, `/infer`, and `/metrics` roots and fixed control files through existing bounded backend operations; prove MockBackend as explicit non-proof `host-model` plus filesystem, TCP, and REST missing/disabled/denied/enabled behavior; preserve the 28c host-ticket/evidence authority mapping without hand-editing `generated.py`.
+  - apps/cohsh — existing list/cat/tail/echo flows for `/jobs`, `/datasets`,
+    `/experiments`, `/infer`, `/metrics`, including immutable
+    semantic/capsule/render, checkpoint/handoff/prefix-status, and inference
+    receipt refs; no new verb.
+  - apps/coh — host-side helpers correlate namespace refs with the existing
+    28b2 semantic and 28c1 inference commands without treating the VM read
+    model as owner truth.
+  - apps/swarmui — optional read-only views backed by existing `/proc` and AI
+    namespace tails, correlated through the accepted 28f semantic/inference
+    inspector when available.
+  - tools/cohesix-py/cohesix/{backends.py,orchestration.py} + tools/cohesix-py/tests/test_ai_namespace.py — consume the coh-rtc-generated enabled/disabled profile fixtures to discover and access only generated `/jobs`, `/datasets`, `/experiments`, `/infer`, and `/metrics` roots and fixed control files through existing bounded backend operations; prove MockBackend as explicit non-proof `host-model` plus filesystem, TCP, and REST missing/disabled/denied/enabled behavior; preserve the 28b2 owner refs, 28c host-ticket admission, and 28c1 receipt mappings without hand-editing `generated.py`.
 Commands:
   - cargo test -p cohsh
   - python3 -m pytest -q tools/cohesix-py/tests/test_ai_namespace.py
 Checks:
-  - Host tools discover AI paths using existing grammar and deterministic error handling, with read models aligned to 28c evidence receipts rather than inferred hidden state.
+  - Host tools discover AI paths using existing grammar and deterministic error
+    handling, with read models aligned to accepted 28b2/28c/28c1 artifacts and
+    receipts rather than inferred hidden state.
   - Python matches coh/cohsh fixtures, cannot create dynamic paths or translate arbitrary data into host execution, and cannot bypass generated dependency, visibility, receipt, or fixed-control-file gates.
 Deliverables:
   - Operator-facing Rust, UI, and Python tooling parity for AI namespace surfaces.
@@ -13597,14 +15027,21 @@ Title/ID: m29b-ai-regressions
 Goal: Add deterministic regression coverage for AI namespace semantics.
 Inputs: scripts/cohsh/, tests/fixtures/, docs/TEST_PLAN.md.
 Changes:
-  - scripts/cohsh/ai_namespace_roundtrip.coh — canonical AI namespace script using existing verbs only.
+  - scripts/cohsh/ai_namespace_roundtrip.coh — canonical AI namespace script
+    using existing verbs only, including semantic snapshot/capsule/render refs
+    and inference admission/receipt refs without raw prompt/output content.
   - scripts/cohsh/ai_namespace_scale.coh — representative namespace-scale listing, read, tail, and fixed-control-file write probe for high-churn job/run roots.
-  - tests/fixtures/transcripts/ — stable transcript fixtures for gated/missing/enabled AI paths.
+  - tests/fixtures/transcripts/ — stable transcript fixtures for
+    gated/missing/enabled AI paths, owner-ref mismatch, wrong visibility,
+    unavailable capsule/inference dependencies, and raw-content refusal.
 Commands:
   - cohsh --script scripts/cohsh/ai_namespace_roundtrip.coh
   - cohsh --script scripts/cohsh/ai_namespace_scale.coh
 Checks:
-  - Missing paths, denied writes, successful reads/writes, and representative high-churn namespace listings all preserve existing grammar, refusal semantics, and bounded runtime behavior.
+  - Missing paths, denied writes, successful reads/writes, semantic/capsule and
+    inference receipt refs, and representative high-churn namespace listings
+    all preserve existing grammar, owner identity, refusal semantics, content
+    policy, and bounded runtime behavior.
 Deliverables:
   - Canonical AI namespace regression pack and test-plan coverage.
 ```

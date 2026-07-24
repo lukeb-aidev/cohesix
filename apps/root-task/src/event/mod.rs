@@ -10996,10 +10996,8 @@ where
             "idle"
         } else if Self::wifi_root_grant_prepared(grant) {
             "prepared-root-continuation"
-        } else if grant.sequence_issued {
-            "issued"
         } else {
-            "retained-preissue"
+            grant.phase_name
         };
         let exact = if Self::wifi_root_grant_prepared(grant) {
             "not-published"
@@ -11007,7 +11005,7 @@ where
             Self::yes_no(grant.exact)
         };
         format_message(format_args!(
-            "wifi: root grant state={} active={} phase={} request={} generation={} issued={} notify_bound={} producer={} shared={} consumed={} exact={}",
+            "wifi: root grant state={} active={} phase={} request={} generation={} sequence_published={} notify_bound={} producer={} shared={} consumed={} exact={}",
             state,
             Self::yes_no(grant.active),
             grant.phase_name,
@@ -12094,6 +12092,9 @@ where
                 crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
             )
         };
+        let association = crate::drivers::driver_task_net::cyw43_association_diagnostic();
+        let association_join_pending =
+            !live_net_supersedes_runtime && association.association_join_pending();
         let root_grant_prepared = crate::hal::driver_task::driver_task_retained_grant_snapshot(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         )
@@ -12130,7 +12131,7 @@ where
             cyw43_runtime_progress.is_some_and(|progress| {
                 Self::wifi_cyw43_runtime_progress_suppresses_sdio_fallback(progress.phase)
             });
-        let driver_task_gate: Option<u8> = if root_grant_prepared {
+        let driver_task_gate: Option<u8> = if association_join_pending || root_grant_prepared {
             Some(8)
         } else if runtime_bootstrap_failed {
             Some(1)
@@ -12225,6 +12226,11 @@ where
                 snapshot.control_plane_exact_error
             }
         });
+        let gate8_exact_error = if association_join_pending {
+            "cyw43-association-join-pending"
+        } else {
+            exact_error
+        };
         let channel_ready = live_net_channel_ready
             || exact_error.is_empty()
             || Self::wifi_exact_error_is_join_security_blocker(exact_error);
@@ -12259,7 +12265,9 @@ where
         );
         let reported_proof_gate =
             Self::wifi_startup_reported_proof_gate(direct_proof_gate, driver_task_gate);
-        let active_blocker = if root_grant_prepared {
+        let active_blocker = if association_join_pending {
+            "cyw43-association-join-pending"
+        } else if root_grant_prepared {
             "cyw43-root-continuation-pre-grant"
         } else if let Some(frontier) = live_net_frontier.as_ref() {
             if Self::wifi_live_net_dhcp_bound(frontier) {
@@ -12284,7 +12292,9 @@ where
         } else {
             Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
         };
-        let next_action = if root_grant_prepared {
+        let next_action = if association_join_pending {
+            "resume-exact-association-join-owner"
+        } else if root_grant_prepared {
             "resume-exact-retained-root-continuation"
         } else if let Some(frontier) = live_net_frontier.as_ref() {
             if Self::wifi_live_net_dhcp_bound(frontier) {
@@ -12568,20 +12578,20 @@ where
                 ),
                 Self::wifi_gate_dependency_label(7, failing_gate),
             ),
-            Self::wifi_startup_gate_name_for_gate(8, exact_error),
+            Self::wifi_startup_gate_name_for_gate(8, gate8_exact_error),
         );
         self.emit_wifi_gate_line(
             8,
-            Self::wifi_startup_gate_name_for_gate(8, exact_error),
+            Self::wifi_startup_gate_name_for_gate(8, gate8_exact_error),
             Self::wifi_startup_gate_status(8, direct_proof_gate, failing_gate),
             format_args!(
                 "exact={} control_stage={} sdhci={} reply_mode={} dependency={}",
-                if exact_error.is_empty() {
+                if gate8_exact_error.is_empty() {
                     "none"
                 } else {
-                    exact_error
+                    gate8_exact_error
                 },
-                Self::wifi_control_stage_for_exact_error(exact_error),
+                Self::wifi_control_stage_for_exact_error(gate8_exact_error),
                 snapshot.map_or("unknown", |snapshot| snapshot.control_plane_sdhci_read_diag),
                 snapshot.map_or("unknown", |snapshot| snapshot.control_plane_reply_mode),
                 Self::wifi_gate_dependency_label(8, failing_gate),
@@ -14223,7 +14233,9 @@ where
             6 => "firmware-upload",
             7 => "function2-ready",
             8 => {
-                if exact_error.is_empty() {
+                if exact_error == "cyw43-association-join-pending" {
+                    "cyw43-association-join-pending"
+                } else if exact_error.is_empty() {
                     "firmware-channel"
                 } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
                     "host-eapol"
@@ -14250,7 +14262,9 @@ where
             6 => "firmware-upload",
             7 => "function2-ready",
             8 => {
-                if exact_error.starts_with("cyw43-control-") {
+                if exact_error == "cyw43-association-join-pending" {
+                    "association-join"
+                } else if exact_error.starts_with("cyw43-control-") {
                     "control-exchange"
                 } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
                     "host-eapol"
@@ -14268,7 +14282,9 @@ where
 
     #[cfg(feature = "kernel")]
     fn wifi_control_stage_for_exact_error(exact_error: &str) -> &str {
-        if exact_error.is_empty() {
+        if exact_error == "cyw43-association-join-pending" {
+            "association-join"
+        } else if exact_error.is_empty() {
             "none"
         } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
             "host-eapol"
@@ -14291,7 +14307,9 @@ where
             6 => "inspect-cyw43-firmware-upload",
             7 => "verify-function2-enable-ready",
             8 => {
-                if exact_error.is_empty() {
+                if exact_error == "cyw43-association-join-pending" {
+                    "resume-exact-association-join-owner"
+                } else if exact_error.is_empty() {
                     "verify-firmware-channel-first-reply"
                 } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
                     "complete-host-eapol-handshake"
@@ -20928,6 +20946,12 @@ mod tests {
             },
         );
         assert!(!grant.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{grant}");
+        assert!(
+            grant.contains(
+                "state=grant-required active=yes phase=grant-required request=4294967295 generation=4294967295 sequence_published=yes"
+            ),
+            "{grant}"
+        );
         assert!(grant.ends_with("consumed=4294967295 exact=yes"), "{grant}");
         let prepared = KernelConsoleTestPump::wifi_diag_root_grant_line(
             crate::hal::driver_task::DriverTaskRetainedGrantSnapshot {
@@ -20948,6 +20972,38 @@ mod tests {
             "{prepared}"
         );
         assert!(prepared.ends_with("exact=not-published"), "{prepared}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_gate8_classification_names_the_retained_association_owner() {
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_blocker_for_gate(
+                8,
+                "cyw43-association-join-pending",
+            ),
+            "cyw43-association-join-pending",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_gate_name_for_gate(
+                8,
+                "cyw43-association-join-pending",
+            ),
+            "association-join",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_control_stage_for_exact_error(
+                "cyw43-association-join-pending",
+            ),
+            "association-join",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_next_action_for_gate(
+                8,
+                "cyw43-association-join-pending",
+            ),
+            "resume-exact-association-join-owner",
+        );
     }
 
     #[cfg(feature = "kernel")]

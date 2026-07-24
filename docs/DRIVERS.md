@@ -622,6 +622,14 @@ This as-built closure is authorized by Milestone 26d task
   CYW43-to-SDIO child bound from those maxima plus its 100-millisecond handoff
   margin. Root applies a 30.56-second per-child lease, preserving a full
   10-second parent margin instead of racing the child's legal completion edge.
+  The CYW43 control-exchange cursor retains Linux's separate 2.5-second
+  protocol deadline, but that deadline counts only parent protocol time. While
+  one exact generation-bound SDIO child is submitted, the control cursor stays
+  pending and cannot time out, poison, replay, or mint another child. Consuming
+  the exact terminal child completion adds that measured virtual-counter wait
+  back to the retained parent deadline. The reply/DPC deadline is armed only
+  after the Function 2 transmit reaches `TX_DONE`, so the shorter protocol
+  deadline can never outrun the ABI-authorized 20.56-second child envelope.
   A lease renews only on a fresh `OWNER_REPLY` edge carrying the exact active
   parent sequence, descriptor fingerprint, generation, and CYW43 aux marker.
   Repeated, stale, wrong-sequence, or unrelated progress cannot renew it, and

@@ -1380,8 +1380,11 @@ const CYW43_CDC_STATUS_SUCCESS: u32 = 0;
 #[cfg(test)]
 const CYW43_BCME_BADARG_STATUS: u32 = 0xffff_fffe;
 // Linux brcmfmac gives both the DPC-owned control transmit and the subsequent
-// DCMD response a 2.5 second deadline. Each retained service turn below takes
-// at most one cursor action; the iteration bound is the timerless host fallback.
+// DCMD response a 2.5 second deadline. In Cohesix this is parent-protocol time:
+// an exact delegated SDIO child has its own Linux-length request watchdog and
+// its retained wait is excluded from this shorter deadline. Each service turn
+// below takes at most one cursor action; the iteration bound is the timerless
+// host fallback.
 const CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS: usize = 20_000;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_MS: u64 = 2_500;
 const CYW43_CONTROL_EXCHANGE_PRE_TX_FRAME_LIMIT: u16 = 64;
@@ -15511,6 +15514,14 @@ fn cyw43_control_exchange_deadline_expired(
     deadline: &mut RuntimeDeadline,
     phase_turns: &mut u32,
 ) -> bool {
+    #[cfg(any(target_os = "none", test))]
+    if cyw43_foreground_exact_child_pending() {
+        // The parent cannot outrun the immutable reciprocal SDIO child. That
+        // child is independently bounded by the ABI-derived 20.56-second
+        // owner envelope. Its exact wait is added back to the retained
+        // parent deadline when the terminal child completion is consumed.
+        return false;
+    }
     *phase_turns = phase_turns.saturating_add(1);
     runtime_deadline_iteration_cap_reached(
         deadline,
@@ -18215,6 +18226,7 @@ struct Cyw43ForegroundTransaction {
     frontier_started_ticks: u64,
     frontier_timeout_cycles: u64,
     frontier_polls: u32,
+    frontier_deadline_count: u8,
     last_replayed_index: u16,
     payload_used: u32,
     payload: [u8; CYW43_FOREGROUND_TRACE_PAYLOAD_BYTES],
@@ -18272,6 +18284,7 @@ impl Cyw43ForegroundTransaction {
             frontier_started_ticks: 0,
             frontier_timeout_cycles: 0,
             frontier_polls: 0,
+            frontier_deadline_count: 0,
             // No entry may be read while `completed_count == 0`, so zero is an
             // invalid initial cursor without a file-backed sentinel byte.
             last_replayed_index: 0,
@@ -18307,6 +18320,7 @@ impl Cyw43ForegroundTransaction {
         self.frontier_started_ticks = 0;
         self.frontier_timeout_cycles = 0;
         self.frontier_polls = 0;
+        self.frontier_deadline_count = 0;
         self.last_replayed_index = CYW43_FOREGROUND_TRACE_INDEX_NONE;
         self.payload_used = 0;
     }
@@ -18327,9 +18341,15 @@ impl Cyw43ForegroundTransaction {
         self.last_replayed_index = CYW43_FOREGROUND_TRACE_INDEX_NONE;
         self.parent_overlay_valid.fill(0);
         self.deadline_replay_index = 0;
-        for entry in self.deadlines[..usize::from(self.deadline_count)].iter_mut() {
-            if let RuntimeDeadline::Iterations { remaining } = &mut entry.deadline {
-                *remaining = remaining.saturating_sub(1);
+        let exact_child_pending = self.frontier_valid && self.frontier_submitted;
+        if !exact_child_pending {
+            // Timerless host tests model elapsed parent turns. A submitted
+            // exact child has its own retained watchdog, so its wait cannot
+            // consume those parent-only fallback iterations either.
+            for entry in self.deadlines[..usize::from(self.deadline_count)].iter_mut() {
+                if let RuntimeDeadline::Iterations { remaining } = &mut entry.deadline {
+                    *remaining = remaining.saturating_sub(1);
+                }
             }
         }
         true
@@ -18460,6 +18480,7 @@ impl Cyw43ForegroundTransaction {
         self.frontier_started_ticks = started_ticks;
         self.frontier_timeout_cycles = timeout_cycles;
         self.frontier_polls = 0;
+        self.frontier_deadline_count = self.deadline_count;
         self.turn.action_consumed = true;
         self.turn.pending = true;
     }
@@ -18495,6 +18516,7 @@ impl Cyw43ForegroundTransaction {
             return false;
         }
         self.entries[index] = self.frontier;
+        self.exclude_delegated_child_wait_from_parent_deadlines(runtime_timer_counter_ticks());
         self.turn.complete_child_poll();
         self.last_replayed_index = index as u16;
         self.frontier = Cyw43ForegroundTraceEntry::empty();
@@ -18506,10 +18528,25 @@ impl Cyw43ForegroundTransaction {
         self.frontier_started_ticks = 0;
         self.frontier_timeout_cycles = 0;
         self.frontier_polls = 0;
+        self.frontier_deadline_count = 0;
         self.prepared_sequence = 0;
         self.prepared_descriptor_valid = false;
         self.prepared_write_len = 0;
         true
+    }
+
+    fn exclude_delegated_child_wait_from_parent_deadlines(&mut self, now_ticks: u64) {
+        if self.frontier_started_ticks == 0 || now_ticks == 0 {
+            return;
+        }
+        let child_wait_cycles = now_ticks.wrapping_sub(self.frontier_started_ticks);
+        // Only deadlines that already existed at submission were concurrent
+        // with this child. Extending that immutable retained prefix prevents a
+        // later reply deadline from inheriting time spent on the earlier TX.
+        for deadline in self.deadlines[..usize::from(self.frontier_deadline_count)].iter_mut() {
+            deadline.deadline =
+                runtime_deadline_extend_cycles(deadline.deadline, child_wait_cycles);
+        }
     }
 }
 
@@ -18598,6 +18635,13 @@ fn cyw43_foreground_action_suspended() -> bool {
     })
 }
 
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_exact_child_pending() -> bool {
+    CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+        transaction.executing && transaction.frontier_valid && transaction.frontier_submitted
+    })
+}
+
 #[cfg(all(not(target_os = "none"), not(test)))]
 const fn cyw43_foreground_action_suspended() -> bool {
     false
@@ -18666,9 +18710,9 @@ fn cyw43_foreground_poll_retained_deadline(deadline: RuntimeDeadline) -> Option<
 
 #[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_restore_baseline() -> bool {
-    if !CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| transaction.baseline_state_valid)
-        || !cyw43_foreground_restore_runtime_state()
-    {
+    let baseline_state_valid =
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| transaction.baseline_state_valid);
+    if !baseline_state_valid || !cyw43_foreground_restore_runtime_state() {
         return false;
     }
     CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
@@ -18684,6 +18728,19 @@ fn cyw43_foreground_restore_baseline() -> bool {
         transaction.restore_parent_input();
         true
     })
+}
+
+const fn runtime_deadline_extend_cycles(
+    deadline: RuntimeDeadline,
+    excluded_cycles: u64,
+) -> RuntimeDeadline {
+    match deadline {
+        RuntimeDeadline::Counter { start, cycles } => RuntimeDeadline::Counter {
+            start,
+            cycles: cycles.saturating_add(excluded_cycles),
+        },
+        RuntimeDeadline::Iterations { remaining } => RuntimeDeadline::Iterations { remaining },
+    }
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -57347,6 +57404,88 @@ mod tests {
         CYW43_RUNTIME_STATE.with_ref(|state| {
             assert!(!state.control_exchange.active());
         });
+    }
+
+    #[test]
+    fn cyw43_control_exchange_deadline_cannot_outrun_exact_sdio_child() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.active = true;
+            transaction.executing = true;
+            transaction.frontier_valid = true;
+            transaction.deadline_count = 1;
+            transaction.deadlines[0] = Cyw43ForegroundDeadline {
+                kind: CYW43_FOREGROUND_DEADLINE_MILLIS,
+                amount: CYW43_CONTROL_EXCHANGE_TIMEOUT_MS,
+                fallback: CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS,
+                deadline: RuntimeDeadline::Counter {
+                    start: 400,
+                    cycles: 2_500,
+                },
+                completed: false,
+            };
+            transaction.retain_frontier_submit(1_000, 100_000);
+            transaction.deadline_count = 2;
+            transaction.deadlines[1] = Cyw43ForegroundDeadline {
+                kind: CYW43_FOREGROUND_DEADLINE_MILLIS,
+                amount: CYW43_CONTROL_EXCHANGE_TIMEOUT_MS,
+                fallback: CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS,
+                deadline: RuntimeDeadline::Counter {
+                    start: 700,
+                    cycles: 2_500,
+                },
+                completed: false,
+            };
+        });
+        let mut deadline = RuntimeDeadline::Iterations { remaining: 0 };
+        let mut phase_turns = 7;
+
+        assert!(
+            !cyw43_control_exchange_deadline_expired(&mut deadline, &mut phase_turns),
+            "the parent protocol deadline must pause behind its exact delegated owner"
+        );
+        assert_eq!(phase_turns, 7);
+
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.exclude_delegated_child_wait_from_parent_deadlines(21_560);
+            transaction.frontier_valid = false;
+        });
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert_eq!(
+                transaction.deadlines[0].deadline,
+                RuntimeDeadline::Counter {
+                    start: 400,
+                    cycles: 23_060,
+                },
+                "the deadline active when the child was submitted excludes its measured wait",
+            );
+            assert_eq!(
+                transaction.deadlines[1].deadline,
+                RuntimeDeadline::Counter {
+                    start: 700,
+                    cycles: 2_500,
+                },
+                "a later reply deadline cannot inherit the earlier TX-child wait",
+            );
+        });
+        assert!(
+            cyw43_control_exchange_deadline_expired(&mut deadline, &mut phase_turns),
+            "the unchanged protocol deadline remains terminal once no child owns the turn"
+        );
+        assert_eq!(phase_turns, 8);
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.frontier_valid = true;
+            transaction.frontier_submitted = true;
+            transaction.deadlines[0].deadline = RuntimeDeadline::Iterations { remaining: 9 };
+            assert!(transaction.begin_turn(DriverTaskCommandRecord::empty(), 2));
+            assert_eq!(
+                transaction.deadlines[0].deadline,
+                RuntimeDeadline::Iterations { remaining: 9 },
+                "the timerless fallback also pauses while the exact child owns the turn",
+            );
+        });
+        CYW43_FOREGROUND_TRANSACTION.with_mut(Cyw43ForegroundTransaction::clear);
     }
 
     #[test]

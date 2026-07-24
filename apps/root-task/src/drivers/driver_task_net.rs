@@ -5947,6 +5947,32 @@ struct Cyw43PendingAssociationJoin {
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43AssociationJoinDiagnostic {
+    generation: u32,
+    request: Option<u32>,
+    issued: bool,
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_ASSOCIATION_JOIN_DIAGNOSTIC: Mutex<Option<Cyw43AssociationJoinDiagnostic>> =
+    Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+fn publish_cyw43_association_join_diagnostic(pending: &Cyw43PendingAssociationJoin) {
+    *CYW43_ASSOCIATION_JOIN_DIAGNOSTIC.lock() = Some(Cyw43AssociationJoinDiagnostic {
+        generation: pending.generation,
+        request: pending.request,
+        issued: pending.issued,
+    });
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_association_join_diagnostic() {
+    *CYW43_ASSOCIATION_JOIN_DIAGNOSTIC.lock() = None;
+}
+
+#[cfg(feature = "kernel")]
 fn latch_cyw43_pending_association_recovery(
     pending: &Cyw43PendingAssociationJoin,
     cause: Cyw43RecoveryCause,
@@ -6032,6 +6058,14 @@ pub(crate) struct Cyw43AssociationDiagnostic {
     pub retained_request: u32,
     pub retained_issued: bool,
     pub retained_accepted: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43AssociationDiagnostic {
+    #[must_use]
+    pub(crate) fn association_join_pending(self) -> bool {
+        self.retained_owner == CYW43_ASSOCIATION_JOIN_STAGE
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -6254,6 +6288,7 @@ fn cyw43_host_eapol_runtime_work_pending() -> bool {
 #[cfg(feature = "kernel")]
 pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
     let prompt = *CYW43_PENDING_PROMPT_POLL.lock();
+    let join = *CYW43_ASSOCIATION_JOIN_DIAGNOSTIC.lock();
     let (progress, session_retained) = {
         let guard = CYW43_HOST_EAPOL_SESSION.lock();
         let progress = guard.as_ref().map(|session| session.progress);
@@ -6283,15 +6318,27 @@ pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
         });
         (progress, retained)
     };
-    let retained = prompt.map_or(session_retained, |pending| {
-        Some((
+    let prompt_retained = prompt.map(|pending| {
+        (
             pending.owner.stage(),
             pending.generation,
             pending.request.unwrap_or(0),
             pending.issued,
             cyw43_child_action_accepted(pending.request, pending.issued),
-        ))
+        )
     });
+    let retained = join
+        .map(|join| {
+            (
+                CYW43_ASSOCIATION_JOIN_STAGE,
+                join.generation,
+                join.request.unwrap_or(0),
+                join.issued,
+                cyw43_child_action_accepted(join.request, join.issued),
+            )
+        })
+        .or(prompt_retained)
+        .or(session_retained);
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     let progress_generation = progress.map_or(0, |progress| progress.connection_epoch);
     Cyw43AssociationDiagnostic {
@@ -7386,6 +7433,7 @@ impl Cyw43AssociationSupervisor {
         generation: u32,
         now_ms: u64,
     ) -> Self {
+        clear_cyw43_association_join_diagnostic();
         let (auth_mode, phase) = match credentials {
             Some(credentials) if enabled && cyw43_retry_credentials_valid(credentials) => {
                 let mode = cyw43_association_auth_mode(credentials);
@@ -7424,6 +7472,9 @@ impl Cyw43AssociationSupervisor {
         now_ms: u64,
     ) {
         if self.generation == generation {
+            if let Cyw43AssociationPhase::Join(pending) = self.phase {
+                publish_cyw43_association_join_diagnostic(&pending);
+            }
             return;
         }
         let invalid_generation = self.generation;
@@ -7431,6 +7482,7 @@ impl Cyw43AssociationSupervisor {
         let Some(credentials) =
             credentials.filter(|credentials| cyw43_retry_credentials_valid(*credentials))
         else {
+            clear_cyw43_association_join_diagnostic();
             self.phase = Cyw43AssociationPhase::Dormant;
             self.retry_level = 0;
             self.auth_mode = None;
@@ -7439,12 +7491,14 @@ impl Cyw43AssociationSupervisor {
         let mode = *self
             .auth_mode
             .get_or_insert_with(|| cyw43_association_auth_mode(credentials));
-        if matches!(self.phase, Cyw43AssociationPhase::Join(_)) {
+        if let Cyw43AssociationPhase::Join(pending) = self.phase {
             // Never orphan an immutable op11 cursor. A logical carrier epoch
             // is drained to terminal; every other mismatch is resolved by the
             // active Join path through a fenced pair restart.
+            publish_cyw43_association_join_diagnostic(&pending);
             return;
         }
+        clear_cyw43_association_join_diagnostic();
         let observation = cyw43_association_observation(mode);
         if observation.rejoin_pending {
             self.schedule_backoff(now_ms, observation.progress_epoch);
@@ -7502,9 +7556,15 @@ impl Cyw43AssociationSupervisor {
         credentials: Option<WifiCredentials>,
         now_ms: u64,
     ) -> Cyw43AssociationServiceOutcome {
+        if let Cyw43AssociationPhase::Join(pending) = self.phase {
+            publish_cyw43_association_join_diagnostic(&pending);
+        } else {
+            clear_cyw43_association_join_diagnostic();
+        }
         let Some(credentials) =
             credentials.filter(|credentials| cyw43_retry_credentials_valid(*credentials))
         else {
+            clear_cyw43_association_join_diagnostic();
             let activity = self.phase != Cyw43AssociationPhase::Dormant;
             self.phase = Cyw43AssociationPhase::Dormant;
             self.retry_level = 0;
@@ -7526,6 +7586,7 @@ impl Cyw43AssociationSupervisor {
             return self.service_join(credentials, now_ms);
         }
         if observation.ready && !matches!(self.phase, Cyw43AssociationPhase::Recovery { .. }) {
+            clear_cyw43_association_join_diagnostic();
             let activity = self.phase != Cyw43AssociationPhase::Connected;
             self.phase = Cyw43AssociationPhase::Connected;
             self.retry_level = 0;
@@ -7687,6 +7748,7 @@ impl Cyw43AssociationSupervisor {
         let Cyw43AssociationPhase::Join(mut pending) = self.phase else {
             return Cyw43AssociationServiceOutcome::default();
         };
+        publish_cyw43_association_join_diagnostic(&pending);
         let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
         if crate::hal::driver_task::cyw43_sdio_pair_restart_required()
             || (!pending.logical_epoch_stale && pending.generation != generation)
@@ -7707,6 +7769,7 @@ impl Cyw43AssociationSupervisor {
         match step {
             Cyw43AssociationJoinStep::Pending { activity } => {
                 self.phase = Cyw43AssociationPhase::Join(pending);
+                publish_cyw43_association_join_diagnostic(&pending);
                 Cyw43AssociationServiceOutcome {
                     activity,
                     claimed_runtime_turn: true,
@@ -7723,6 +7786,7 @@ impl Cyw43AssociationSupervisor {
                     usize::from(credentials.ssid_len),
                     0,
                 );
+                clear_cyw43_association_join_diagnostic();
                 self.phase = Cyw43AssociationPhase::Awaiting {
                     since_ms: now_ms,
                     progress_epoch: CYW43_ASSOCIATION_PROGRESS_EPOCH.load(Ordering::Acquire),
@@ -7809,6 +7873,7 @@ impl Cyw43AssociationSupervisor {
     }
 
     fn schedule_backoff(&mut self, now_ms: u64, progress_epoch: u32) {
+        clear_cyw43_association_join_diagnostic();
         let delay_ms = cyw43_association_backoff_ms(self.retry_level);
         self.retry_level = self
             .retry_level
@@ -7830,6 +7895,7 @@ impl Cyw43AssociationSupervisor {
     }
 
     fn schedule_immediate_join(&mut self, now_ms: u64, progress_epoch: u32) {
+        clear_cyw43_association_join_diagnostic();
         self.phase = Cyw43AssociationPhase::Backoff {
             since_ms: now_ms,
             delay_ms: 0,
@@ -7838,6 +7904,7 @@ impl Cyw43AssociationSupervisor {
     }
 
     fn schedule_recovery(&mut self, now_ms: u64, invalid_generation: u32, delay_ms: u64) {
+        clear_cyw43_association_join_diagnostic();
         self.phase = Cyw43AssociationPhase::Recovery {
             invalid_generation,
             since_ms: now_ms,
@@ -16986,6 +17053,7 @@ fn emit_cyw43_control_split_completion(
 
 #[cfg(feature = "kernel")]
 fn reset_cyw43_control_plane_state(mode: Cyw43ControlPlaneResetMode) {
+    clear_cyw43_association_join_diagnostic();
     CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
     CYW43_ASSOCIATED.store(0, Ordering::Release);
     CYW43_LINK_UP.store(0, Ordering::Release);
@@ -17075,6 +17143,7 @@ fn cyw43_nvram_tail_resume_offset(
 
 #[cfg(feature = "kernel")]
 fn fail_closed_cyw43_generation_recovery() {
+    clear_cyw43_association_join_diagnostic();
     CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
     CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
     CYW43_ASSOCIATED.store(0, Ordering::Release);
@@ -22499,6 +22568,7 @@ mod tests {
         crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
         *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
         *CYW43_DEFERRED_RECOVERY.lock() = None;
+        clear_cyw43_association_join_diagnostic();
         CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
         CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
         CYW43_BOOTSTRAP_ATTEMPTS.store(0, Ordering::Release);
@@ -27953,6 +28023,93 @@ mod tests {
         assert_eq!(stale.retained_request, 0);
         assert!(!stale.retained_issued);
         assert!(!stale.retained_accepted);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn association_diagnostic_prioritizes_join_over_host_eapol_state() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts");
+        session.progress.connection_epoch = 12;
+        *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
+        CYW43_CONNECTION_EPOCH.store(12, Ordering::Release);
+        CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+
+        let mut pending = begin_cyw43_pending_association_join(credentials, 12)
+            .expect("retained association join");
+        pending.request = Some(319);
+        publish_cyw43_association_join_diagnostic(&pending);
+
+        let accepted = cyw43_association_diagnostic();
+        assert_eq!(accepted.retained_owner, CYW43_ASSOCIATION_JOIN_STAGE);
+        assert_eq!(accepted.retained_generation, 12);
+        assert_eq!(accepted.retained_request, 319);
+        assert!(!accepted.retained_issued);
+        assert!(
+            accepted.retained_accepted,
+            "an exact retained request is accepted before issue is proven"
+        );
+
+        pending.issued = true;
+        publish_cyw43_association_join_diagnostic(&pending);
+        let issued = cyw43_association_diagnostic();
+        assert_eq!(issued.retained_owner, CYW43_ASSOCIATION_JOIN_STAGE);
+        assert!(issued.retained_issued);
+        assert!(issued.retained_accepted);
+
+        clear_cyw43_association_join_diagnostic();
+        let cleared = cyw43_association_diagnostic();
+        assert_eq!(cleared.retained_owner, "none");
+        assert!(!cleared.retained_accepted);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn association_supervisor_publishes_and_clears_join_diagnostic() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+        let pending = begin_cyw43_pending_association_join(credentials, 17)
+            .expect("retained association join");
+        let mut supervisor = Cyw43AssociationSupervisor {
+            generation: 17,
+            retry_level: 0,
+            auth_mode: Some(Cyw43AssociationAuthMode::HostEapol),
+            phase: Cyw43AssociationPhase::Join(pending),
+        };
+        CYW43_CONNECTION_EPOCH.store(17, Ordering::Release);
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+        begin_cyw43_outer_event_turn();
+        CYW43_OUTER_EVENT_TURN_CLAIMED.store(1, Ordering::Release);
+
+        let outcome = supervisor.service(Some(credentials), 100);
+        assert!(outcome.claimed_runtime_turn);
+        assert!(!outcome.activity);
+        assert!(matches!(supervisor.phase, Cyw43AssociationPhase::Join(_)));
+        let active = cyw43_association_diagnostic();
+        assert_eq!(active.retained_owner, CYW43_ASSOCIATION_JOIN_STAGE);
+        assert_eq!(active.retained_generation, 17);
+        assert_eq!(active.retained_request, 0);
+        assert!(!active.retained_issued);
+        assert!(!active.retained_accepted);
+
+        supervisor.schedule_backoff(101, 0);
+        let cleared = cyw43_association_diagnostic();
+        assert_eq!(cleared.retained_owner, "none");
+        assert_eq!(cleared.retained_request, 0);
+        assert!(!cleared.retained_issued);
+        assert!(!cleared.retained_accepted);
 
         reset_cyw43_status_flags();
     }
