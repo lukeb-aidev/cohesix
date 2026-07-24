@@ -149,8 +149,15 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_BEGIN,
@@ -9890,6 +9897,12 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED => {
             "cyw43-sdio-pair-restart-required"
         }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED => "sdio-owner-wake-retained",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN => "sdio-owner-grant-wait-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY => "sdio-owner-grant-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED => "sdio-owner-grant-rejected",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED => "sdio-owner-grant-accepted",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED => "sdio-owner-grant-ack-failed",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => "cyw43-card-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN => "cyw43-f1-block-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY => "cyw43-f1-block-ready",
@@ -21513,6 +21526,34 @@ mod tests {
             (
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_WINDOW_HIGH,
                 "cyw43-backplane-window-high",
+            ),
+        ] {
+            assert_eq!(driver_task_ring_progress_phase_label(phase), label);
+        }
+        for (phase, label) in [
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED,
+                "sdio-owner-wake-retained",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN,
+                "sdio-owner-grant-wait-begin",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY,
+                "sdio-owner-grant-ready",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED,
+                "sdio-owner-grant-rejected",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED,
+                "sdio-owner-grant-accepted",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED,
+                "sdio-owner-grant-ack-failed",
             ),
         ] {
             assert_eq!(driver_task_ring_progress_phase_label(phase), label);

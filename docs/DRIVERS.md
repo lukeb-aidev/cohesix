@@ -519,7 +519,24 @@ This as-built closure is authorized by Milestone 26d task
   itself. A failed completion poll plans publication or re-signal, the next
   `Grant` turn performs that one retained grant action and one notification
   signal, and a later `Poll` turn observes the result. Foreground and DPC-owned
-  children use the same `Poll -> Grant -> Poll` separation.
+  children use the same `Poll -> Grant -> Poll` separation. Because seL4
+  notifications coalesce identical badge sends, the idle SDIO receive validates
+  the complete typed badge and retains an observed badge-256 edge across the
+  initial sequence-last command intake. If the initial command and its first
+  grant were both published before SDIO ran, that one saved edge represents the
+  coalesced scheduler work without becoming counted authority. Every delegated
+  `Pending` phase yields to the outer scheduler before another phase can be
+  considered.
+
+  Before a retained delegated receive, SDIO performs exactly one stable read of
+  the grant condition. A saved typed edge plus an exact unconsumed grant may
+  synthesize the already-consumed wake; otherwise SDIO blocks and a later peer
+  notification is retained for the next loop slice. It never performs a second
+  grant read after that receive in the same slice. Empty or rejected grant state
+  cannot form a private retry loop, and acknowledgement failure restores the
+  consumed typed edge while running no physical owner action. This is the
+  Cohesix equivalent of brcmfmac rechecking durable DPC work before a coalescing
+  workqueue item becomes quiescent.
 
   IRQ and completion/DPC notifications remain coalescing service wakes and can
   never advance a retained foreground cursor. The distinct badge-256
@@ -540,7 +557,8 @@ This as-built closure is authorized by Milestone 26d task
   Notification coalescing cannot replay work because the sequence-last ring
   command and exact unused grant remain the only intake and continuation
   authorities. An idle runtime blocks on its combined endpoint/notification
-  receive instead of polling or yielding. The legacy `dpc_owner_rearms` trace
+  receive instead of polling or yielding; if that receive services CARD_INT,
+  it hands off before durable command intake. The legacy `dpc_owner_rearms` trace
   field counts generation-scoped owner-notification signal attempts, not one
   separately delivered wake per count. Actual SDIO owner progress and rearm
   are established by durable ring and owner telemetry such as

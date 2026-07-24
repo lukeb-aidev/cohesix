@@ -649,7 +649,16 @@ spending its continuation quantum. A failed completion poll only plans the
 next grant action; a separate later `Grant` turn publishes or re-signals once,
 and another later `Poll` observes the completion. Foreground and DPC-owned
 children both follow this `Poll -> Grant -> Poll` shape. A notification by
-itself cannot advance either cursor.
+itself cannot advance either cursor. The SDIO idle receive retains a fully
+validated badge-256 edge across initial command intake because identical
+initial-command and first-grant signals may coalesce before the owner runs.
+Every delegated `Pending` phase then yields before SDIO examines the next
+condition. Before sleeping, the owner reads the shared grant exactly once. A
+saved typed edge plus an exact unconsumed grant consumes the already-observed
+wake; otherwise the owner blocks and retains any later peer edge for the next
+slice. There is no second grant read after that receive and no private retry
+loop. Acknowledgement failure restores the typed edge and executes no owner
+action.
 
 The SDIO-to-CYW43 badge-2 completion/DPC notification and badge-159 SDIO IRQ
 remain coalescing service wakes and cannot advance foreground work. CYW43 also
@@ -664,6 +673,9 @@ service consumes a root endpoint rendezvous, another fresh rendezvous is
 required for root foreground work. Scheduler handoffs after service and
 rejected ready wakes prevent a priority-255 private IRQ loop. Idle runtimes
 block on their combined endpoint/notification receive rather than spinning.
+An idle CARD_INT service always hands off before a durable owner command is
+admitted, so a coalesced IRQ and command cannot collapse into one scheduler
+slice.
 Pending-command DPC arbitration performs at most one retained DPC or foreground
 action per released quantum. A reciprocal CYW43-to-SDIO transaction uses one
 turn to submit the immutable child-ring command, one turn for each completion
@@ -674,19 +686,32 @@ that shows multiple foreground phases after one endpoint rendezvous or shared
 grant, or delegated foreground progress caused by badge 256 without a valid
 grant, fails the one-operation-per-turn contract.
 
-The newest exact capture is `pi4-serial-20260724-193452.log`, with the bounded
-live diagnostic sidecar `pi4-serial-20260724-3ad-live-gate8-diag.log` and
-boot-paired `tcpdump-wifi-20260724-193450.pcap` plus
+The newest exact capture is `pi4-serial-20260724-205708.log`, with the bounded
+post-exhaustion sidecar `pi4-serial-20260724-190-postexhaust-diag.log` and
+boot-paired `tcpdump-wifi-20260724-205706.pcap` plus
+`tcpdump-usb-eth-20260724-205706.pcap`. It identifies clean marker commit
+`190ec4f7ffc2` and image id
+`6b5126b00b1cd58e330cd91c71d4295170523fdff6f9d588928454ed14f0742f`.
+The dedicated badge-256 topology is present, but every attempt stops before
+Gate 1 in the first `TRANSPORT_INIT` reciprocal `HOST_CONFIG` child. SDIO
+records initial command intake but no continuation/completion before
+issued-unknown escalation and pair restart. Serial, USB Gate 10, and all six
+runtime TCBs remain live. The paired captures contain no Pi Wi-Fi traffic. This
+is the physical evidence that exposed the idle-consumed, coalesced first-grant
+edge; the condition-before-sleep correction remains hardware-free until the
+next exact image boots.
+
+The immediate predecessor capture is `pi4-serial-20260724-193452.log`, with
+`pi4-serial-20260724-3ad-live-gate8-diag.log` and boot-paired
+`tcpdump-wifi-20260724-193450.pcap` plus
 `tcpdump-usb-eth-20260724-193450.pcap`. It identifies clean marker commit
 `3ad1076404b7` and image id
 `840342e2d12dd16c2847f911a1d667043b2a66c82d8e8d1c9472daefc8d6dd8e`.
-The retained lane repeatedly completes firmware, Function 2, and control-plane
-setup, so direct proof advances through Gate 7. Gate 8 then retains the first
-host-EAPOL control poll (`op=10`, sequence 21) without a terminal child result;
-association/link/EAPOL counters remain zero and recovery begins at the derived
-CYW43-to-SDIO child bound. The Wi-Fi capture contains one Pi-originated LLC XID
-response per inspected generation and no DHCP, ARP, IP, or TCP. That is
-post-firmware RF activity but not host Function-2 event delivery.
+That retained lane repeatedly completed firmware, Function 2, and control-plane
+setup through Gate 7 before the first Gate 8 host-EAPOL control poll stalled.
+Its Wi-Fi capture contains one Pi-originated LLC XID response per inspected
+generation and no DHCP, ARP, IP, or TCP. It remains the strongest current
+upper-path physical frontier, not proof for the corrected next image.
 
 The exact predecessor capture is `pi4-serial-20260722-210743.log`, boot-paired
 with `tcpdump-wifi-20260722-210754.pcap` and

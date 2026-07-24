@@ -12239,30 +12239,47 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     sdio_irq158_events = [
         event
         for event in event_list
-        if event.domain == "wifi"
-        and (
-            (
-                event.fields.get("irq") == "158"
-                and (
-                    "sdio irq bind" in event.raw.lower()
-                    or "sdio irq contract" in event.raw.lower()
+        if (
+            event.domain == "wifi"
+            and (
+                (
+                    event.fields.get("irq") == "158"
+                    and (
+                        "sdio irq bind" in event.raw.lower()
+                        or "sdio irq contract" in event.raw.lower()
+                    )
+                )
+                or (
+                    "[pi4-wifi] hal init" in event.raw.lower()
+                    and event.fields.get("irq_bound") == "true"
                 )
             )
-            or (
-                "[pi4-wifi] hal init" in event.raw.lower()
-                and event.fields.get("irq_bound") == "true"
-            )
+        )
+        or (
+            event.domain == "driver"
+            and event.raw.startswith("DRIVER_TASK_IRQ_TOPOLOGY ")
+            and event.fields.get("contract") == "sdio-host"
+            and event.fields.get("irq") == "158"
         )
     ]
     sdio_irq158_seen = bool(sdio_irq158_events)
     sdio_irq158_bound = any(
         (
-            "sdio irq contract" in event.raw.lower()
+            event.domain == "wifi"
+            and "sdio irq contract" in event.raw.lower()
             and event.fields.get("bound") == "1"
         )
         or (
-            "[pi4-wifi] hal init" in event.raw.lower()
+            event.domain == "wifi"
+            and "[pi4-wifi] hal init" in event.raw.lower()
             and event.fields.get("irq_bound") == "true"
+        )
+        or (
+            event.domain == "driver"
+            and event.raw.startswith("DRIVER_TASK_IRQ_TOPOLOGY ")
+            and event.fields.get("contract") == "sdio-host"
+            and event.fields.get("irq") == "158"
+            and event.fields.get("status") == "bound"
         )
         for event in sdio_irq158_events
     )

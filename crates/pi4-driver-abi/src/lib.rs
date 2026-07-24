@@ -1348,6 +1348,18 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT: u32 = 143;
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY: u32 = 144;
 /// CYW43 exhausted the issued-unknown reap deadline and requires a fenced pair restart.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED: u32 = 446;
+/// SDIO retained a CYW43 owner-notification edge before the delegated command needed it.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED: u32 = 458;
+/// SDIO is blocking because no stable delegated continuation grant is currently published.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN: u32 = 459;
+/// SDIO observed the exact immutable delegated continuation grant before sleeping.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY: u32 = 460;
+/// SDIO rejected a stale, consumed, mutated, or wrong-generation continuation grant.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED: u32 = 461;
+/// SDIO acknowledged the exact delegated continuation grant before the owner quantum.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED: u32 = 462;
+/// SDIO could not commit the exact continuation-grant acknowledgement and ran no owner quantum.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED: u32 = 463;
 /// CYW43 retained backplane attach is issuing its one-shot ALP request.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST: u32 = 447;
 /// CYW43 retained backplane attach is consuming one ALP readback turn.
@@ -4438,6 +4450,18 @@ mod tests {
             DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_PAIR_RESTART_REQUIRED,
             DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
         );
+        let retained_owner_phases = [
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED,
+        ];
+        assert_eq!(retained_owner_phases, [458, 459, 460, 461, 462, 463]);
+        assert!(retained_owner_phases
+            .windows(2)
+            .all(|window| window[0] < window[1]),);
     }
 
     #[test]

@@ -1231,6 +1231,15 @@ preserve the typed owner wake across a scheduler handoff, and release exactly
 one owner quantum only after validating the already-published grant. If
 deferred notification service consumes a root rendezvous, another fresh
 endpoint rendezvous is required for root foreground work.
+The production reciprocal-ring/controller test must also schedule CYW43 far
+enough ahead that the initial command signal and first-grant signal are both
+published before SDIO intake and collapse to one badge-256 wake. The idle
+consumer must retain that typed edge, service a coalesced badge-159 IRQ and hand
+off when present, execute the initial owner quantum, yield, then use one stable
+condition-before-sleep grant read to release at most one later owner quantum.
+Malformed idle badges must not be retained. Empty, stale, consumed, mutated, or
+wrong-generation grants and acknowledgement failure must execute zero owner
+operations and must not produce a private retry loop.
 CARD_INT coverage must also prove that terminal deferred service masks the host
 source before IRQ acknowledgement.
 The real SDIO post-claim priority-failure hook must prove that one episode

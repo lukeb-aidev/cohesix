@@ -5744,6 +5744,28 @@ const fn runtime_idle_service_badge(route: RuntimeNotificationRoute, badge: u32)
 }
 
 #[cfg(any(target_os = "none", test))]
+const fn runtime_idle_notification_requires_handoff(
+    service_badge: Option<u32>,
+    cyw43_cursor_active: bool,
+) -> bool {
+    service_badge.is_some() || cyw43_cursor_active
+}
+
+#[cfg(any(target_os = "none", test))]
+fn retain_runtime_idle_delegated_wake(
+    route: RuntimeNotificationRoute,
+    badge: u32,
+    gate: &mut RuntimePendingCommandGate,
+) -> bool {
+    let admitted_badge = runtime_notification_wake_badge(route, badge);
+    if admitted_badge & DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE == 0 {
+        return false;
+    }
+    gate.restore_deferred_delegated_wake();
+    true
+}
+
+#[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeCommandLoopRoute {
     WaitForRetainedContinuation,
@@ -5840,6 +5862,10 @@ impl RuntimePendingCommandGate {
         pending
     }
 
+    const fn has_deferred_delegated_wake(self) -> bool {
+        self.deferred_delegated_wake
+    }
+
     fn restore_deferred_delegated_wake(&mut self) {
         self.deferred_delegated_wake = true;
     }
@@ -5924,12 +5950,12 @@ impl RuntimePendingCommandGate {
                     & !(DRIVER_RUNTIME_RESERVED_ROOT_BADGE
                         | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE);
                 self.deferred_service_badge |= service_badge;
-                if delegated_wake && self.deferred_service_badge != 0 {
-                    // One seL4 notification object coalesces the lossless
-                    // continuation edge with either a newly coalesced CARD_INT
-                    // or an older deferred service source. Preserve that
-                    // observed edge across the one IRQ-service quantum; the
-                    // next loop slice consumes it without another receive.
+                if delegated_wake {
+                    // A notification is a coalescing scheduler hint, not
+                    // counted authority. Retain every observed owner edge
+                    // until an exact grant is acknowledged. This covers both
+                    // IRQ-first arbitration and a pure peer wake that arrives
+                    // between the one stable grant probe and the receive.
                     self.deferred_delegated_wake = true;
                 }
                 if self.foreground_due_after_service {
@@ -5973,6 +5999,42 @@ impl RuntimePendingCommandGate {
             }
             RuntimeWake::None => RuntimePendingWakeRoute::Rejected,
         }
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeRetainedGrantProbe {
+    Inactive,
+    Empty,
+    Rejected(DriverRuntimeContinuationGrant),
+    Ready(DriverRuntimeContinuationGrant),
+}
+
+/// Inspect the delegated SDIO continuation condition exactly once before a
+/// retained receive.
+///
+/// seL4 notification badges coalesce, just like Linux workqueue scheduling
+/// hints. The immutable shared grant is the durable condition. A saved typed
+/// edge plus `Ready` may therefore resume without another receive; otherwise
+/// the runtime blocks so a pending CARD_INT remains observable and IRQ-first
+/// arbitration is preserved.
+#[cfg(any(target_os = "none", test))]
+fn probe_runtime_retained_continuation_grant(
+    gate: &RuntimePendingCommandGate,
+    retained: Option<RuntimeCommandIntake>,
+    base: usize,
+) -> RuntimeRetainedGrantProbe {
+    let Some(retained) = retained.filter(|_| gate.retained_generation.is_some()) else {
+        return RuntimeRetainedGrantProbe::Inactive;
+    };
+    let Some(grant) = read_runtime_continuation_grant_at(base) else {
+        return RuntimeRetainedGrantProbe::Empty;
+    };
+    if gate.grant_matches(retained, grant) {
+        RuntimeRetainedGrantProbe::Ready(grant)
+    } else {
+        RuntimeRetainedGrantProbe::Rejected(grant)
     }
 }
 
@@ -43590,33 +43652,60 @@ pub fn runtime_main(task_key: usize) -> ! {
             // A retained command has already consumed its one physical
             // quantum. Root work needs the exact endpoint rendezvous.
             // Delegated CYW43->SDIO work needs its sequence-last shared grant
-            // plus a receive wake. Root intentionally deleted its steady
-            // producer cap, leaving CYW43 as the only grant publisher. An IRQ
-            // may service one source quantum first; only the exact immutable
-            // grant can then advance foreground work on a later wake.
-            let synthetic_delegated_wake = pending_command_gate.take_deferred_delegated_wake();
+            // plus a typed scheduler edge. Root intentionally deleted its
+            // steady producer cap, leaving CYW43 as the only grant publisher.
+            //
+            // Probe the durable condition before sleeping. Initial-command and
+            // first-grant badge-256 sends may have coalesced before SDIO ran;
+            // in that case the idle receive retained the one observed edge and
+            // the exact grant resumes it here. With no retained edge, still
+            // receive the real badge so an already-pending CARD_INT wins its
+            // one service quantum. There is exactly one stable grant read in
+            // this loop slice and never a private retry loop.
+            let grant_probe = probe_runtime_retained_continuation_grant(
+                &pending_command_gate,
+                pending_intake,
+                DRIVER_TASK_RING_VADDR,
+            );
+            if let Some(intake) = pending_intake {
+                match grant_probe {
+                    RuntimeRetainedGrantProbe::Empty => publish_runtime_progress(
+                        intake.command.sequence,
+                        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN,
+                        pending_command_gate.last_grant_id,
+                    ),
+                    RuntimeRetainedGrantProbe::Rejected(grant) => publish_runtime_progress(
+                        intake.command.sequence,
+                        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED,
+                        grant.grant_id,
+                    ),
+                    RuntimeRetainedGrantProbe::Ready(grant) => publish_runtime_progress(
+                        intake.command.sequence,
+                        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY,
+                        grant.grant_id,
+                    ),
+                    RuntimeRetainedGrantProbe::Inactive => {}
+                }
+            }
+            let synthetic_delegated_wake =
+                matches!(grant_probe, RuntimeRetainedGrantProbe::Ready(_))
+                    && pending_command_gate.has_deferred_delegated_wake();
+            let continuation_grant = match grant_probe {
+                RuntimeRetainedGrantProbe::Ready(grant) => Some(grant),
+                _ => None,
+            };
             let wake = if synthetic_delegated_wake {
-                // A combined continuation|CARD_INT notification already woke
-                // this runtime and the prior slice serviced exactly one IRQ
-                // quantum. The typed continuation edge remains durable here,
-                // so resume arbitration after the explicit scheduler handoff
-                // without waiting for a notification that was already consumed.
+                let _ = pending_command_gate.take_deferred_delegated_wake();
                 RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE)
             } else {
                 wait_runtime_command_or_notification(last_sequence)
             };
-            // Delegated continuation authority is the durable generation
-            // grant, not the coalescing notification edge. Read that record
-            // once for every wake while SDIO retains delegated work. A
-            // notification without an exact grant still cannot advance it.
-            let continuation_grant = if pending_command_gate.retained_generation.is_some()
-                || matches!(wake, RuntimeWake::Command(_))
-            {
-                read_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR)
-            } else {
-                None
-            };
             let gated_wake = runtime_pending_wake_for_route(notification_route, wake);
+            let observed_delegated_wake = matches!(
+                gated_wake,
+                RuntimeWake::Notification(badge)
+                    if badge & DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE != 0
+            );
             let gate_before_wake = pending_command_gate;
             let previous_grant_id = pending_command_gate.last_grant_id;
             let mut route =
@@ -43638,22 +43727,36 @@ pub fn runtime_main(task_key: usize) -> ! {
                             | RuntimePendingWakeRoute::ServiceNotification(_)
                     )
             });
-            if consumed_grant.is_some_and(|grant| {
+            let grant_ack_failed = consumed_grant.is_some_and(|grant| {
                 !acknowledge_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR, grant.grant_id)
-            }) {
+            });
+            if grant_ack_failed {
                 // A torn acknowledgement cannot spend authority. Restore the
                 // exact pre-wake arbitration state and wait for a stable
                 // producer record instead of risking a duplicate quantum.
                 pending_command_gate = gate_before_wake;
-                if synthetic_delegated_wake {
-                    // The combined notification was already consumed before
-                    // IRQ service. Retain its typed owner edge until the exact
-                    // grant acknowledgement commits; otherwise an
-                    // acknowledgement fault would recreate the lost-wake
-                    // window this topology is designed to close.
+                if synthetic_delegated_wake || observed_delegated_wake {
+                    // The typed edge was consumed either by this receive or by
+                    // an earlier coalesced idle/IRQ wake. Retain it until the
+                    // exact acknowledgement commits; the unconsumed grant can
+                    // then be retried on a later scheduler slice without a
+                    // physical-operation replay.
                     pending_command_gate.restore_deferred_delegated_wake();
                 }
+                if let (Some(intake), Some(grant)) = (pending_intake, consumed_grant) {
+                    publish_runtime_progress(
+                        intake.command.sequence,
+                        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED,
+                        grant.grant_id,
+                    );
+                }
                 route = RuntimePendingWakeRoute::Rejected;
+            } else if let (Some(intake), Some(grant)) = (pending_intake, consumed_grant) {
+                publish_runtime_progress(
+                    intake.command.sequence,
+                    pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED,
+                    grant.grant_id,
+                );
             }
             match route {
                 RuntimePendingWakeRoute::ContinueForeground => {}
@@ -43898,17 +44001,38 @@ pub fn runtime_main(task_key: usize) -> ! {
                     // The reserved root bit without a retained command is
                     // stale and never authorizes work. A coalesced peer/IRQ
                     // badge may still service its own durable source.
-                    if let Some(service_badge) =
-                        runtime_idle_service_badge(notification_route, badge)
-                    {
+                    if retain_runtime_idle_delegated_wake(
+                        notification_route,
+                        badge,
+                        &mut pending_command_gate,
+                    ) {
+                        // The same badge can represent both the initial
+                        // sequence-last command publication and its first
+                        // continuation grant. Preserve that coalesced scheduler
+                        // edge across command intake; the immutable grant still
+                        // provides the only authority to run another quantum.
+                        publish_runtime_progress(
+                            0,
+                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED,
+                            badge,
+                        );
+                    }
+                    let service_badge = runtime_idle_service_badge(notification_route, badge);
+                    if let Some(service_badge) = service_badge {
                         let _ = service_runtime_notification(service_badge);
                     }
-                    if notification_route == RuntimeNotificationRoute::Cyw43Client
+                    let cyw43_cursor_active = notification_route
+                        == RuntimeNotificationRoute::Cyw43Client
                         && CYW43_RUNTIME_STATE
-                            .with_ref(|state| state.dpc_cursor.event_sequence != 0)
-                    {
-                        // Notification service consumed one bounded cursor turn;
-                        // yield before any retained foreground rendezvous.
+                            .with_ref(|state| state.dpc_cursor.event_sequence != 0);
+                    if runtime_idle_notification_requires_handoff(
+                        service_badge,
+                        cyw43_cursor_active,
+                    ) {
+                        // Notification service consumed one bounded device or
+                        // cursor quantum. Yield before durable ring intake so a
+                        // coalesced IRQ and owner command cannot become two
+                        // physical operations in one priority-255 slice.
                         runtime_yield_current_tcb();
                     }
                     continue;
@@ -43979,6 +44103,12 @@ pub fn runtime_main(task_key: usize) -> ! {
             match delegated_generation {
                 RuntimeDelegatedGenerationAdmission::Admitted(generation) => {
                     pending_command_gate.retain_after_pending_generation(generation);
+                    // The durable command/grant backlog may already contain the
+                    // next authorized phase. Move this priority-255 owner behind
+                    // the root/event-pump peer before examining it so two
+                    // physical SDIO actions cannot collapse into one scheduler
+                    // slice merely because badge notifications coalesced.
+                    runtime_yield_current_tcb();
                 }
                 RuntimeDelegatedGenerationAdmission::NotDelegated => {
                     pending_command_gate.retain_after_pending();
@@ -51480,6 +51610,16 @@ mod tests {
                 0,
                 "numeric IRQ badge subsets and unknown coalesced bits fail closed",
             );
+            let mut gate = RuntimePendingCommandGate::new();
+            assert!(
+                !retain_runtime_idle_delegated_wake(
+                    RuntimeNotificationRoute::SdioOwner,
+                    invalid,
+                    &mut gate,
+                ),
+                "a malformed idle badge cannot become a saved owner edge",
+            );
+            assert!(!gate.has_deferred_delegated_wake());
         }
         assert_eq!(
             runtime_notification_service_badge(
@@ -67169,6 +67309,172 @@ mod tests {
             None,
             "consumer arbitration cannot synthesize producer signals",
         );
+        drop(_production_mode);
+    }
+
+    #[test]
+    fn production_owner_consumes_submit_and_first_grant_coalesced_before_intake() {
+        let _guard = test_guard();
+        let generation = 0x4359_f151;
+        let parent = stage_production_firmware_parent(generation, 0x4359_f160);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let child = drive_production_parent_until_first_child(parent);
+        let expected_doorbell = runtime_sdio_owner_doorbell(child.sequence);
+        assert_eq!(test_sdio_owner_doorbell(0), Some(expected_doorbell));
+
+        // Adversarial production ordering: CYW43 gets two outer turns before
+        // SDIO is scheduled. It first observes the missing completion, then
+        // publishes grant 1 and sends the same badge again. seL4 coalesces both
+        // signals into one pending bit.
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        assert_eq!(test_sdio_owner_doorbell(1), None);
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        assert_eq!(test_sdio_owner_doorbell(1), Some(expected_doorbell));
+        assert_eq!(test_sdio_owner_doorbell(2), None);
+        let grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
+            .expect("producer published the exact first continuation grant");
+        assert_eq!(grant.request_sequence, child.sequence);
+        assert_eq!(grant.generation, generation);
+
+        let owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        let durable_child = runtime_ring_read_command_stable(&owner_ring)
+            .expect("sequence-last owner command remains authoritative");
+        assert_eq!(durable_child, child);
+        let descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+            .expect("producer published the stable SDIO descriptor");
+        let intake = RuntimeCommandIntake {
+            command: durable_child,
+            reply_cap_available: false,
+        };
+        let mut retained = intake;
+        let mut gate = RuntimePendingCommandGate::new();
+
+        // The idle receive sees one coalesced badge, retains it, and admits the
+        // durable ring command. If CARD_INT was part of that same receive, its
+        // service badge is selected before command intake while the owner edge
+        // remains saved for the later retained phase.
+        assert!(retain_runtime_idle_delegated_wake(
+            RuntimeNotificationRoute::SdioOwner,
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            &mut gate,
+        ));
+        assert_eq!(
+            runtime_idle_service_badge(
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            ),
+            Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+        );
+        assert!(
+            runtime_idle_notification_requires_handoff(Some(DRIVER_RUNTIME_SDIO_IRQ_BADGE), false,),
+            "the IRQ quantum must hand off before durable command intake",
+        );
+        assert!(gate.has_deferred_delegated_wake());
+
+        let mut io = production_owner_io();
+        configure_production_owner_child(&mut io, descriptor);
+        let issues_before = io.command_issue_count();
+        let polls_before = io.dma_dreq_snapshots;
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(child, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert!(
+            io.command_issue_count().saturating_sub(issues_before)
+                + io.dma_dreq_snapshots.saturating_sub(polls_before)
+                <= 1,
+            "the initial owner intake executes at most one physical quantum",
+        );
+        gate.retain_after_pending_generation(generation);
+
+        assert_eq!(
+            probe_runtime_retained_continuation_grant(
+                &gate,
+                Some(intake),
+                DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            ),
+            RuntimeRetainedGrantProbe::Ready(grant),
+            "the durable grant must be checked before sleeping over the saved edge",
+        );
+        assert!(gate.take_deferred_delegated_wake());
+        let gate_before_wake = gate;
+        assert_eq!(
+            gate.route_wake_with_grant(
+                &mut retained,
+                RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                Some(grant),
+            ),
+            RuntimePendingWakeRoute::ContinueForeground,
+        );
+        let issues_before_ack = io.command_issue_count();
+        let polls_before_ack = io.dma_dreq_snapshots;
+        assert!(
+            !acknowledge_runtime_continuation_grant_at(
+                DRIVER_TASK_SDIO_BUS_RING_VADDR,
+                grant.grant_id.wrapping_add(1),
+            ),
+            "a mismatched acknowledgement must fail closed",
+        );
+        gate = gate_before_wake;
+        gate.restore_deferred_delegated_wake();
+        assert_eq!(io.command_issue_count(), issues_before_ack);
+        assert_eq!(io.dma_dreq_snapshots, polls_before_ack);
+        assert!(
+            gate.take_deferred_delegated_wake(),
+            "ack rollback retains the already-consumed typed edge",
+        );
+        assert_eq!(
+            gate.route_wake_with_grant(
+                &mut retained,
+                RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                Some(grant),
+            ),
+            RuntimePendingWakeRoute::ContinueForeground,
+        );
+        assert!(acknowledge_runtime_continuation_grant_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            grant.grant_id,
+        ));
+
+        let issues_before = io.command_issue_count();
+        let polls_before = io.dma_dreq_snapshots;
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(child, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert!(
+            io.command_issue_count().saturating_sub(issues_before)
+                + io.dma_dreq_snapshots.saturating_sub(polls_before)
+                <= 1,
+            "the saved edge releases exactly one later owner quantum",
+        );
+        gate.retain_after_pending_generation(generation);
+
+        let consumed = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
+            .expect("acknowledged grant remains readable until producer replacement");
+        assert_eq!(consumed.consumed_grant_id, grant.grant_id);
+        assert_eq!(
+            probe_runtime_retained_continuation_grant(
+                &gate,
+                Some(intake),
+                DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            ),
+            RuntimeRetainedGrantProbe::Rejected(consumed),
+        );
+        let issues_before = io.command_issue_count();
+        let polls_before = io.dma_dreq_snapshots;
+        assert_eq!(
+            gate.route_wake_with_grant(
+                &mut retained,
+                RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                Some(consumed),
+            ),
+            RuntimePendingWakeRoute::Rejected,
+            "the coalesced notification cannot replay an acknowledged grant",
+        );
+        assert_eq!(io.command_issue_count(), issues_before);
+        assert_eq!(io.dma_dreq_snapshots, polls_before);
         drop(_production_mode);
     }
 

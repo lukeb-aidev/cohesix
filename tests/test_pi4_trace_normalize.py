@@ -5277,6 +5277,41 @@ def test_gate_summary_tracks_wifi_sdio_irq158_separately_from_timer_irq27() -> N
     assert gates.to_record()["SDIO_IRQ158_BOUND"] == "yes"
 
 
+def test_gate_summary_accepts_canonical_linked_runtime_sdio_irq_topology() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_IRQ_TOPOLOGY contract=sdio-host irq=158 badge=159 "
+            "handler_slot=4 notification_slot=3 trigger=level status=bound "
+            "proof_effect=notification-dpc-ready",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert events[0].domain == "driver"
+    assert gates.sdio_irq158_seen
+    assert gates.sdio_irq158_bound
+    assert gates.sdio_irq158_line == 1
+    assert gates.to_record()["SDIO_IRQ158_SEEN"] == "yes"
+    assert gates.to_record()["SDIO_IRQ158_BOUND"] == "yes"
+    assert gates.to_record()["SDIO_IRQ158_INBAND_PROOF"] == "no"
+
+
+def test_gate_summary_rejects_nonbound_linked_runtime_sdio_irq_topology() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_IRQ_TOPOLOGY contract=sdio-host irq=158 badge=159 "
+            "handler_slot=4 notification_slot=3 trigger=level status=failed",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.sdio_irq158_seen
+    assert not gates.sdio_irq158_bound
+    assert gates.to_record()["SDIO_IRQ158_BOUND"] == "no"
+
+
 def test_gate_summary_reports_arch_counter_timer_backend() -> None:
     events = normalizer.parse_events(
         [
