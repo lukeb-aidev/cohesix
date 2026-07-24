@@ -515,38 +515,45 @@ This as-built closure is authorized by Milestone 26d task
   send-only badge-256 notification cap after root deletes its steady endpoint
   producer cap. First intake requires the sequence-last command from the shared
   ring. Every retained phase additionally requires the exact unused shared
-  grant; the notification is a durable scheduling edge and never authority by
+  grant; the notification is a coalescing scheduler hint and never authority by
   itself. A failed completion poll plans publication or re-signal, the next
   `Grant` turn performs that one retained grant action and one notification
   signal, and a later `Poll` turn observes the result. Foreground and DPC-owned
   children use the same `Poll -> Grant -> Poll` separation. Because seL4
-  notifications coalesce identical badge sends, the idle SDIO receive validates
-  the complete typed badge and retains an observed badge-256 edge across the
-  initial sequence-last command intake. If the initial command and its first
-  grant were both published before SDIO ran, that one saved edge represents the
-  coalesced scheduler work without becoming counted authority. Every delegated
-  `Pending` phase yields to the outer scheduler before another phase can be
-  considered.
+  notifications coalesce identical badge sends, notification history cannot be
+  required to spend a grant. After every delegated `Pending`, the owner yields
+  and enters a retained `CheckWake -> CheckGrant -> Execute` sequence. Each
+  phase consumes a distinct outer turn: `CheckWake` performs one nonblocking
+  combined endpoint/notification poll, `CheckGrant` performs one stable shared
+  grant read, and `Execute` acknowledges the frozen exact grant before running
+  one owner quantum. Empty or rejected grant state enters one blocking `Wait`
+  turn. A peer-only wake schedules a later grant check; it does not carry
+  authority.
 
-  Before a retained delegated receive, SDIO performs exactly one stable read of
-  the grant condition. A saved typed edge plus an exact unconsumed grant may
-  synthesize the already-consumed wake; otherwise SDIO blocks and a later peer
-  notification is retained for the next loop slice. It never performs a second
-  grant read after that receive in the same slice. Empty or rejected grant state
-  cannot form a private retry loop, and acknowledgement failure restores the
-  consumed typed edge while running no physical owner action. This is the
-  Cohesix equivalent of brcmfmac rechecking durable DPC work before a coalescing
-  workqueue item becomes quiescent.
+  CARD_INT pending at `CheckWake` instead schedules one separate `Service`
+  turn, after which grant arbitration resumes. An IRQ arriving after that
+  linearization point remains kernel-latched and may follow at most the one
+  already-admitted owner quantum; every pending owner result returns through
+  `CheckWake`, so neither source can starve. Acknowledgement failure restores
+  the pre-admission gate and schedules a new exact grant read while running no
+  physical action. This is the Cohesix equivalent of brcmfmac rechecking its
+  durable DPC condition before sleeping and mmc-bcm2835 retaining one request,
+  adapted to the strict poll-or-device-operation outer-turn bound.
+  `sdio-owner-command-admitted` is emitted once, only after the high-domain
+  command passes current-generation admission and before its first owner
+  quantum. Retained turns preserve the exact grant frontier instead of
+  overwriting it with another intake marker; generic `command-observed`
+  engine-init history cannot substitute for that diagnostic proof.
 
   IRQ and completion/DPC notifications remain coalescing service wakes and can
   never advance a retained foreground cursor. The distinct badge-256
   client-to-owner notification is a scheduling wake for an already-published
   command or grant, not a service source or foreground authority. A real SDIO
   IRQ may consume one notification-service quantum. If CARD_INT coalesces with
-  badge 256, the runtime services exactly one IRQ quantum, retains the typed
-  owner wake across an explicit scheduler handoff, and only then may consume
-  the exact immutable grant on the next loop slice. A standalone reasserted
-  level wake cannot spend that grant. Explicit scheduler handoffs follow
+  badge 256, the runtime observes it at `CheckWake`, services exactly one IRQ
+  quantum on a later turn, and only then may check and consume the exact
+  immutable grant. A standalone reasserted level wake cannot spend that grant.
+  Explicit scheduler handoffs follow
   service and rejected immediately-ready wakes, so a
   priority-255 runtime cannot form a private IRQ loop. The reserved high
   notification bit is excluded from service badges but is not foreground grant

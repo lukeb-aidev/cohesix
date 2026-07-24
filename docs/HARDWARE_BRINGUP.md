@@ -649,26 +649,27 @@ spending its continuation quantum. A failed completion poll only plans the
 next grant action; a separate later `Grant` turn publishes or re-signals once,
 and another later `Poll` observes the completion. Foreground and DPC-owned
 children both follow this `Poll -> Grant -> Poll` shape. A notification by
-itself cannot advance either cursor. The SDIO idle receive retains a fully
-validated badge-256 edge across initial command intake because identical
-initial-command and first-grant signals may coalesce before the owner runs.
-Every delegated `Pending` phase then yields before SDIO examines the next
-condition. Before sleeping, the owner reads the shared grant exactly once. A
-saved typed edge plus an exact unconsumed grant consumes the already-observed
-wake; otherwise the owner blocks and retains any later peer edge for the next
-slice. There is no second grant read after that receive and no private retry
-loop. Acknowledgement failure restores the typed edge and executes no owner
-action.
+itself cannot advance either cursor, and a coalesced or already-consumed edge
+cannot be required after an exact grant becomes durable. Every delegated
+`Pending` phase yields and enters four explicit outer-turn states:
+`CheckWake`, `CheckGrant`, `Wait` or `Execute`. `CheckWake` performs one
+nonblocking combined poll and schedules CARD_INT service when it is pending.
+`CheckGrant` performs one stable shared-record read and freezes an exact unused
+grant. `Wait` performs one blocking receive only when no usable grant exists.
+`Execute` acknowledges the frozen grant before one owner operation. None of
+those polls can share a turn with device service or owner I/O.
 
 The SDIO-to-CYW43 badge-2 completion/DPC notification and badge-159 SDIO IRQ
 remain coalescing service wakes and cannot advance foreground work. CYW43 also
 holds one send-only badge-256 cap to the SDIO owner's bound notification; it is
-a durable scheduling edge for an already-published command or grant, not a
+a scheduling hint for an already-published command or grant, not a
 service source or foreground authority. The reserved high notification bit is
 excluded from service work. If badge 159 and badge 256 coalesce, SDIO services
-exactly one IRQ quantum, retains the typed owner wake across a scheduler
-handoff, and may spend exactly one matching immutable grant on the next loop
-slice. A standalone reasserted level wake cannot spend that grant. If deferred
+exactly one IRQ quantum on its scheduled `Service` turn and may spend exactly
+one matching immutable grant only after the later `CheckGrant` turn. A
+standalone reasserted level wake cannot spend that grant. CARD_INT pending at
+the `CheckWake` linearization point wins; an interrupt arriving later remains
+latched and is delayed by at most one already-admitted owner quantum. If deferred
 service consumes a root endpoint rendezvous, another fresh rendezvous is
 required for root foreground work. Scheduler handoffs after service and
 rejected ready wakes prevent a priority-255 private IRQ loop. Idle runtimes
@@ -686,20 +687,30 @@ that shows multiple foreground phases after one endpoint rendezvous or shared
 grant, or delegated foreground progress caused by badge 256 without a valid
 grant, fails the one-operation-per-turn contract.
 
-The newest exact capture is `pi4-serial-20260724-205708.log`, with the bounded
-post-exhaustion sidecar `pi4-serial-20260724-190-postexhaust-diag.log` and
-boot-paired `tcpdump-wifi-20260724-205706.pcap` plus
-`tcpdump-usb-eth-20260724-205706.pcap`. It identifies clean marker commit
-`190ec4f7ffc2` and image id
-`6b5126b00b1cd58e330cd91c71d4295170523fdff6f9d588928454ed14f0742f`.
-The dedicated badge-256 topology is present, but every attempt stops before
-Gate 1 in the first `TRANSPORT_INIT` reciprocal `HOST_CONFIG` child. SDIO
-records initial command intake but no continuation/completion before
-issued-unknown escalation and pair restart. Serial, USB Gate 10, and all six
-runtime TCBs remain live. The paired captures contain no Pi Wi-Fi traffic. This
-is the physical evidence that exposed the idle-consumed, coalesced first-grant
-edge; the condition-before-sleep correction remains hardware-free until the
-next exact image boots.
+The newest exact capture is `pi4-serial-20260724-214130.log`, with the bounded
+post-exhaustion sidecar `pi4-serial-20260724-6c6-postexhaust-diag.log` and
+boot-paired `tcpdump-wifi-20260724-214126.pcap` plus
+`tcpdump-usb-eth-20260724-214126.pcap`. It identifies clean marker commit
+`6c6d376768e6` and image id
+`8c62fc9ea9d08a560a1b92a775cc8dbafad98a89d19fc860213b4a13a785dbaf`.
+All five attempts stop before Gate 1 in the first `TRANSPORT_INIT` reciprocal
+`HOST_CONFIG` episode and eventually require pair restart. Serial, USB Gate 10,
+and all six runtime TCBs remain live; both paired captures contain zero
+Pi-originated frames. The cached SDIO `sequence=2`, `command-observed`,
+`aux0=ENGN` marker is root engine-init history, not proof that the current
+high-domain child was observed or missed. Diagnostics therefore report owner
+intake as unknown while preserving the exact pair-restart blocker. A current
+owner intake is proved only by the one-shot `sdio-owner-command-admitted`
+marker with the delegated high-domain sequence and nonzero current generation.
+Later retained turns preserve their exact grant frontier instead of republishing
+that intake marker.
+
+The hardware-free correction treats the immutable grant—not notification
+history—as the durable condition and routes every retained foreground and DPC
+child through the phased wake/grant/service/execute arbiter above. A new
+production-mode host test drives the actual card-init `HOST_CONFIG` builder,
+reciprocal ring, retained owner cursor, exact grant acknowledgement, and replay
+rejection. This remains a software result until the next exact image boots.
 
 The immediate predecessor capture is `pi4-serial-20260724-193452.log`, with
 `pi4-serial-20260724-3ad-live-gate8-diag.log` and boot-paired

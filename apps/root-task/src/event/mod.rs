@@ -12054,10 +12054,9 @@ where
             || sdio_runtime_progress.is_some_and(|progress| {
                 Self::wifi_sdio_runtime_progress_gate(progress.phase) == Some(1)
             });
-        let reciprocal_sdio_owner_intake_blocked = !runtime_bootstrap_failed
-            && crate::drivers::driver_task_net::wifi_reciprocal_sdio_owner_intake_blocked(
+        let cyw43_sdio_pair_restart_blocks_gate_one = !runtime_bootstrap_failed
+            && crate::drivers::driver_task_net::wifi_cyw43_sdio_pair_restart_blocks_gate_one(
                 cyw43_runtime_progress,
-                sdio_runtime_progress,
                 direct_pwrseq_proof,
             );
         let cyw43_fault_gate: Option<u8> = if explicit_join_security {
@@ -12366,9 +12365,9 @@ where
             ));
             self.emit_console_line(prerequisite.as_str());
         }
-        if reciprocal_sdio_owner_intake_blocked {
+        if cyw43_sdio_pair_restart_blocks_gate_one {
             let prerequisite = format_message(format_args!(
-                "wifi: prerequisite name=reciprocal-sdio-owner-intake status=fail cyw43_phase={} sdio_phase={} next=runtime-power-reset",
+                "wifi: prerequisite name=cyw43-sdio-pair-restart status=blocked owner_intake=unknown cyw43_phase={} sdio_last_phase={} next=inspect-prior-cyw43-sdio-owner-frontier-and-restart-cause",
                 cyw43_runtime_progress.map_or("none", |progress| progress.phase_name),
                 sdio_runtime_progress.map_or("none", |progress| progress.phase_name),
             ));
@@ -12377,7 +12376,7 @@ where
         self.emit_wifi_gate_line(
             1,
             "runtime-power-reset",
-            if runtime_bootstrap_failed || reciprocal_sdio_owner_intake_blocked {
+            if runtime_bootstrap_failed || cyw43_sdio_pair_restart_blocks_gate_one {
                 "blocked"
             } else {
                 Self::wifi_startup_gate_status(1, direct_proof_gate, failing_gate)
@@ -12390,8 +12389,8 @@ where
                 sdio_runtime_progress.map_or("none", |progress| progress.phase_name),
                 if runtime_bootstrap_failed {
                     "runtime-resource-admission"
-                } else if reciprocal_sdio_owner_intake_blocked {
-                    "reciprocal-sdio-owner-intake"
+                } else if cyw43_sdio_pair_restart_blocks_gate_one {
+                    "cyw43-sdio-pair-restart"
                 } else {
                     "none"
                 },
@@ -12928,8 +12927,7 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_LOW_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_WIFI_PWRSEQ_HIGH_DONE => Some(1),
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH
@@ -13072,6 +13070,27 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY => "sdio-power-no-reply",
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY => "sdio-clock-no-reply",
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => "sdio-card-select-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED => {
+                "sdio-owner-command-admitted-awaiting-quantum"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED => {
+                "sdio-owner-wake-retained"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN => {
+                "sdio-owner-grant-wait"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY => {
+                "sdio-owner-grant-ready"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED => {
+                "sdio-owner-grant-rejected"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED => {
+                "sdio-owner-grant-accepted-awaiting-quantum"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED => {
+                "sdio-owner-grant-ack-failed"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED => {
                 "sdio-engine-init-failed"
@@ -13183,6 +13202,27 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => {
                 "replay-linked-sdio-card-init-sequence"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED => {
+                "inspect-sdio-owner-first-retained-quantum"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED => {
+                "check-exact-sdio-owner-grant"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN => {
+                "await-cyw43-exact-owner-grant"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY => {
+                "execute-ack-before-sdio-owner-quantum"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED => {
+                "inspect-sdio-owner-grant-identity-and-generation"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED => {
+                "inspect-sdio-owner-quantum-progress"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED => {
+                "retry-stable-sdio-owner-grant-read"
             }
             _ => "inspect-linked-sdio-runtime-progress",
         }
@@ -26166,7 +26206,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn wifi_pair_restart_with_stale_sdio_engine_marker_blocks_gate_one_on_owner_intake() {
+    fn wifi_pair_restart_with_stale_sdio_engine_marker_reports_unknown_owner_intake() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
         let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         let sdio = crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT;
@@ -26207,14 +26247,19 @@ mod tests {
 
         assert!(
             rendered.contains(
-                "wifi: prerequisite name=reciprocal-sdio-owner-intake status=fail cyw43_phase=cyw43-sdio-pair-restart-required sdio_phase=command-observed next=runtime-power-reset"
+                "wifi: prerequisite name=cyw43-sdio-pair-restart status=blocked owner_intake=unknown cyw43_phase=cyw43-sdio-pair-restart-required sdio_last_phase=command-observed next=inspect-prior-cyw43-sdio-owner-frontier-and-restart-cause"
             ),
             "{rendered}"
         );
         assert!(
             rendered.contains(
-                "wifi: gate 1 name=runtime-power-reset status=blocked evidence=power=unknown reset=unknown pwrseq_status=unknown pwrseq_phase=command-observed dependency=reciprocal-sdio-owner-intake"
+                "wifi: gate 1 name=runtime-power-reset status=blocked evidence=power=unknown reset=unknown pwrseq_status=unknown pwrseq_phase=command-observed dependency=cyw43-sdio-pair-restart"
             ),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("name=reciprocal-sdio-owner-intake")
+                && !rendered.contains("owner_intake=failed"),
             "{rendered}"
         );
         assert!(
@@ -26223,6 +26268,60 @@ mod tests {
         );
         assert!(
             rendered.contains("failure_domain=cyw43-sdio-pair-restart-required"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_stale_sdio_command_observed_marker_grants_no_gate_credit() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            2,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            pi4_driver_abi::DRIVER_RUNTIME_ENGINE_INIT_AUX,
+        );
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.emit_wifi_startup_gates_from_evidence(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "linked-runtime-test",
+        );
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
+
+        assert!(
+            rendered.contains(
+                "wifi: sdio last_progress marker_valid=yes sequence=2 phase=1 phase_name=command-observed aux0=0x454e474e gate=0"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 1 name=runtime-power-reset status=fail"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("proof_gate=0 target_gate=10"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("wifi: gate 1 name=runtime-power-reset status=pass")
+                && !rendered.contains("wifi: gate 1 name=runtime-power-reset status=inferred"),
             "{rendered}"
         );
     }
@@ -26272,7 +26371,7 @@ mod tests {
         let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
 
         assert!(
-            !rendered.contains("prerequisite name=reciprocal-sdio-owner-intake"),
+            !rendered.contains("prerequisite name=cyw43-sdio-pair-restart"),
             "{rendered}"
         );
         assert!(
@@ -26635,6 +26734,41 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
             ),
             "inspect-sdhci-clock-disable-write"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_gate(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED,
+            ),
+            None,
+            "reciprocal intake telemetry cannot claim physical Gate 1 proof",
+        );
+        for phase in [
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_WAKE_RETAINED,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED,
+        ] {
+            assert_eq!(
+                KernelConsoleTestPump::wifi_sdio_runtime_progress_gate(phase),
+                None,
+                "scheduler and intake telemetry cannot claim physical gate proof",
+            );
+        }
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_blocker(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED,
+            ),
+            "sdio-owner-command-admitted-awaiting-quantum",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_next_action(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED,
+            ),
+            "inspect-sdio-owner-first-retained-quantum",
         );
     }
 

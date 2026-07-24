@@ -150,6 +150,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY,
@@ -9903,6 +9904,7 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED => "sdio-owner-grant-rejected",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED => "sdio-owner-grant-accepted",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED => "sdio-owner-grant-ack-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED => "sdio-owner-command-admitted",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => "cyw43-card-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN => "cyw43-f1-block-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY => "cyw43-f1-block-ready",
@@ -21554,6 +21556,10 @@ mod tests {
             (
                 DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED,
                 "sdio-owner-grant-ack-failed",
+            ),
+            (
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED,
+                "sdio-owner-command-admitted",
             ),
         ] {
             assert_eq!(driver_task_ring_progress_phase_label(phase), label);

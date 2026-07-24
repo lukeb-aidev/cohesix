@@ -1219,7 +1219,7 @@ endpoint.
 
 Send-only reciprocal caps deliver CYW43-to-SDIO badge 256 and SDIO-to-CYW43
 badge 2, and the SDIO IRQ delivers badge 159. Badge 2 and badge 159 are
-service wakes. Badge 256 is a durable scheduling edge for an already-published
+service wakes. Badge 256 is a coalescing scheduling hint for an already-published
 command or grant, but is not foreground authority by itself. The reserved high
 notification bit is excluded from service work. Tests must prove that one
 pending service source can consume at most one service quantum, that at least
@@ -1227,17 +1227,29 @@ pending service source can consume at most one service quantum, that at least
 no durable source, and that an exact later root endpoint rendezvous or
 delegated grant admits only one foreground phase on its respective path. They
 must also coalesce badge 159 with badge 256, service exactly one IRQ quantum,
-preserve the typed owner wake across a scheduler handoff, and release exactly
-one owner quantum only after validating the already-published grant. If
+preserve the exact grant across a scheduler handoff, and release exactly one
+owner quantum only after validating the already-published grant. If
 deferred notification service consumes a root rendezvous, another fresh
 endpoint rendezvous is required for root foreground work.
 The production reciprocal-ring/controller test must also schedule CYW43 far
 enough ahead that the initial command signal and first-grant signal are both
-published before SDIO intake and collapse to one badge-256 wake. The idle
-consumer must retain that typed edge, service a coalesced badge-159 IRQ and hand
-off when present, execute the initial owner quantum, yield, then use one stable
-condition-before-sleep grant read to release at most one later owner quantum.
-Malformed idle badges must not be retained. Empty, stale, consumed, mutated, or
+published before SDIO intake and collapse to one badge-256 wake—or that the
+only edge is consumed before the grant becomes observable. The delegated owner
+must then show distinct `CheckWake`, `CheckGrant`, `Service` or `Wait`, and
+`Execute` outer turns. A CARD_INT pending at `CheckWake` must receive exactly
+one service turn before grant admission; a later CARD_INT may follow at most
+one already-admitted owner quantum and must be observed at the next
+`CheckWake`. `CheckGrant` may perform one stable grant read but no device
+operation, while `Execute` must perform ACK-before-I/O and at most one owner
+quantum without another poll. The actual card-init `HOST_CONFIG` producer must
+cross the production reciprocal ring and retained owner cursor under this
+ordering. Telemetry must distinguish the post-generation-admission
+one-shot `sdio-owner-command-admitted` marker from generic root engine-init
+`command-observed` history, and retained grant acceptance must not be
+overwritten by another intake marker. The production `HOST_CONFIG` test must
+drive the exact-grant owner to terminal, publish and consume its sequence-last
+completion, and advance the CYW43 card-init parent to CMD0. Malformed idle
+badges must not be retained. Empty, stale, consumed, mutated, or
 wrong-generation grants and acknowledgement failure must execute zero owner
 operations and must not produce a private retry loop.
 CARD_INT coverage must also prove that terminal deferred service masks the host
@@ -1250,8 +1262,9 @@ rejection without a valid restart context remains terminal.
 Autonomous committed-ring polling must preserve root-command initial intake
 when a best-effort endpoint send is lost. Delegated initial intake must use the
 coalescing badge-256 notification and sequence-last ring command. After
-`Pending`, only an exact root rendezvous or delegated shared grant plus its
-typed wake for the retained intake may grant the next foreground quantum; a
+`Pending`, only an exact root rendezvous or delegated shared grant for the
+retained intake may grant the next foreground quantum; the peer wake only
+schedules a later grant check. A
 missed poll can schedule only the matching later wake/grant action and cannot
 recommit the command sequence. Pending-command
 DPC arbitration, reciprocal SDIO child-ring submission, every shared grant, and

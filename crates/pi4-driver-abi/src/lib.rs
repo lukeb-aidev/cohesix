@@ -1360,6 +1360,8 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED: u32 = 461;
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED: u32 = 462;
 /// SDIO could not commit the exact continuation-grant acknowledgement and ran no owner quantum.
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED: u32 = 463;
+/// SDIO admitted a high-domain delegated command in its current owner generation.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED: u32 = 464;
 /// CYW43 retained backplane attach is issuing its one-shot ALP request.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST: u32 = 447;
 /// CYW43 retained backplane attach is consuming one ALP readback turn.
@@ -4457,8 +4459,9 @@ mod tests {
             DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED,
             DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED,
             DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED,
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED,
         ];
-        assert_eq!(retained_owner_phases, [458, 459, 460, 461, 462, 463]);
+        assert_eq!(retained_owner_phases, [458, 459, 460, 461, 462, 463, 464]);
         assert!(retained_owner_phases
             .windows(2)
             .all(|window| window[0] < window[1]),);
