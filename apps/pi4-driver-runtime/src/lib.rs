@@ -3177,6 +3177,7 @@ impl Cyw43DpcChild {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43DpcCursor {
     event_sequence: u32,
+    source_probe_firstread_pending: bool,
     action: Cyw43DpcAction,
     io_kind: Cyw43DpcIoKind,
     io_phase: Cyw43DpcIoPhase,
@@ -3202,6 +3203,7 @@ impl Cyw43DpcCursor {
     const fn empty() -> Self {
         Self {
             event_sequence: 0,
+            source_probe_firstread_pending: false,
             action: Cyw43DpcAction::None,
             io_kind: Cyw43DpcIoKind::None,
             io_phase: Cyw43DpcIoPhase::Idle,
@@ -3986,6 +3988,8 @@ struct Cyw43RuntimeState {
     dpc_shared_epoch: u32,
     dpc_pending_epoch: u32,
     dpc_active_sequence: u32,
+    dpc_last_consumed_epoch: u32,
+    dpc_last_consumed_sequence: u32,
     dpc_events_consumed: u32,
     // Generation-scoped nonblocking endpoint publication attempts. Delivery
     // is inferred only from durable SDIO owner/ring progress telemetry.
@@ -4136,6 +4140,8 @@ impl Cyw43RuntimeState {
             dpc_shared_epoch: 0,
             dpc_pending_epoch: 0,
             dpc_active_sequence: 0,
+            dpc_last_consumed_epoch: 0,
+            dpc_last_consumed_sequence: 0,
             dpc_events_consumed: 0,
             dpc_owner_rearms: 0,
             dpc_epoch_errors: 0,
@@ -4170,6 +4176,8 @@ impl Cyw43RuntimeState {
         self.dpc_link_ready = false;
         self.dpc_pending_epoch = 0;
         self.dpc_active_sequence = 0;
+        self.dpc_last_consumed_epoch = 0;
+        self.dpc_last_consumed_sequence = 0;
         self.dpc_events_consumed = 0;
         self.dpc_owner_rearms = 0;
         self.dpc_cursor.reset();
@@ -6738,6 +6746,8 @@ fn cyw43_complete_generation_reset(
     }
     state.dpc_pending_epoch = requested;
     state.dpc_active_sequence = 0;
+    state.dpc_last_consumed_epoch = 0;
+    state.dpc_last_consumed_sequence = 0;
     // This exact completion was received over the sealed CYW43 -> SDIO child
     // link after the SDIO owner finished the card-reset turn. Treat it as the
     // authoritative proof that the persistent transport link remains usable
@@ -6777,6 +6787,8 @@ fn cyw43_complete_generation_commit(
     state.dpc_shared_epoch = requested;
     state.dpc_pending_epoch = 0;
     state.dpc_active_sequence = 0;
+    state.dpc_last_consumed_epoch = 0;
+    state.dpc_last_consumed_sequence = 0;
     state.dpc_owner_rearms = 0;
     state.recovery_required = false;
     CYW43_SDIO_BUS_LINK_SEQ.store(
@@ -6816,6 +6828,7 @@ const fn cyw43_dpc_rx_start_route(
     pending_intstatus: u32,
     next_frame_len: u16,
     next_frame_from_rframe: bool,
+    source_probe_firstread_pending: bool,
 ) -> Cyw43DpcRxStartRoute {
     if rxskip {
         return Cyw43DpcRxStartRoute::PostStatus;
@@ -6829,9 +6842,11 @@ const fn cyw43_dpc_rx_start_route(
         }
         return Cyw43DpcRxStartRoute::NextFrame(next_frame_len);
     }
-    if pending_intstatus & I_HMB_FRAME_IND != 0 {
+    if pending_intstatus & I_HMB_FRAME_IND != 0 || source_probe_firstread_pending {
         // A latched FRAME_IND authorizes the fixed Function 2 first read even
-        // when the diagnostic RFRAME count is zero.
+        // when the diagnostic RFRAME count is zero. A generation-bound
+        // SOURCE_PENDING event carries the same one-shot authority when the
+        // SDIO owner found no usable status/RFRAME hint after a forced probe.
         Cyw43DpcRxStartRoute::Firstread
     } else {
         Cyw43DpcRxStartRoute::PostStatus
@@ -9414,6 +9429,7 @@ fn cyw43_dpc_start_rframe_or_post(state: &mut Cyw43RuntimeState, cursor: &mut Cy
         state.pending_intstatus,
         state.sdpcm_next_frame_len,
         state.sdpcm_next_frame_from_rframe,
+        cursor.source_probe_firstread_pending,
     );
     if cyw43_dpc_post_route_marks_quiescent(route) {
         state.rx_service_quiescent = true;
@@ -9435,6 +9451,10 @@ fn cyw43_dpc_start_rframe_or_post(state: &mut Cyw43RuntimeState, cursor: &mut Cy
             );
         }
         Cyw43DpcRxStartRoute::Firstread => {
+            // Consume the immutable source-probe authority exactly once. A
+            // confirming all-zero first read terminates cleanly through the
+            // ordinary post-status path; it can never become a private poll.
+            cursor.source_probe_firstread_pending = false;
             if state.sdpcm_next_frame_len != 0 {
                 let _ = cyw43_take_sdpcm_next_frame_len(state);
             }
@@ -10110,14 +10130,32 @@ fn cyw43_capture_foreground_dpc_watermark_through(
         if !ring.valid() || ring.epoch != state.dpc_shared_epoch {
             return None;
         }
-        if !cyw43_dpc_event_sequence_committed(state.dpc_shared_epoch, event_sequence) {
-            return None;
+        if cyw43_dpc_event_sequence_committed(state.dpc_shared_epoch, event_sequence) {
+            return Some(Cyw43ForegroundDpcWatermark::capture(
+                command_sequence,
+                ring.consumer,
+                event_sequence,
+            ));
         }
-        Some(Cyw43ForegroundDpcWatermark::capture(
-            command_sequence,
-            ring.consumer,
-            event_sequence,
-        ))
+        if !state.recovery_required
+            && state.dpc_last_consumed_epoch == state.dpc_shared_epoch
+            && state.dpc_last_consumed_sequence == event_sequence
+            && ring.consumer == event_sequence
+        {
+            // The SDIO owner signals the peer after committing the immutable
+            // source event and publishes the child completion on a later
+            // retained turn. The ordinary DPC may therefore finish that exact
+            // event before the parent replays the completion. Its successful
+            // generation-bound consume record is equivalent authority: the
+            // FIFO result is already queued (or confirmed empty), and no
+            // foreground preflight or replay remains.
+            return Some(Cyw43ForegroundDpcWatermark::capture(
+                command_sequence,
+                ring.consumer,
+                ring.consumer,
+            ));
+        }
+        None
     })
 }
 
@@ -10137,7 +10175,8 @@ fn cyw43_foreground_dpc_watermark_for_command(
         else {
             // Completion acceptance already proved this exact sequence-last
             // front event and its source-bearing flags. It is immutable until
-            // DPC preflight consumes it. Missing, advanced, replaced, or
+            // DPC preflight consumes it. Missing, advanced without the exact
+            // same-generation successful-consume record, replaced, or
             // corrupted state here is therefore a terminal generation
             // invariant fault, not a transient snapshot that fresh root grants
             // can repair.
@@ -10275,6 +10314,8 @@ fn cyw43_runtime_service_dpc_event() -> bool {
             if cursor.event_sequence == 0 {
                 cursor.reset();
                 cursor.event_sequence = event.sequence;
+                cursor.source_probe_firstread_pending =
+                    event.flags & DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING != 0;
                 state.reset_rx_idle_trace();
                 state.rx_service_active = true;
                 state.rx_service_quiescent = false;
@@ -10362,6 +10403,8 @@ fn cyw43_runtime_service_dpc_event() -> bool {
         // rearmed and a future real NAKHANDLED mailbox interrupt can arrive.
         if dpc_event_ring_advance_at(base, state.dpc_shared_epoch, event.sequence) {
             state.dpc_active_sequence = 0;
+            state.dpc_last_consumed_epoch = state.dpc_shared_epoch;
+            state.dpc_last_consumed_sequence = event.sequence;
             state.dpc_events_consumed = state.dpc_events_consumed.saturating_add(1);
             state.dpc_cursor.reset();
             state.rx_service_active = false;
@@ -46508,27 +46551,31 @@ mod tests {
     #[test]
     fn dpc_rx_start_uses_linux_frame_indication_and_next_frame_order() {
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, I_HMB_FRAME_IND, 0, false),
+            cyw43_dpc_rx_start_route(false, I_HMB_FRAME_IND, 0, false, false),
             Cyw43DpcRxStartRoute::Firstread
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, 0, 128, false),
+            cyw43_dpc_rx_start_route(false, 0, 128, false, false),
             Cyw43DpcRxStartRoute::NextFrame(128)
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, I_HMB_FRAME_IND, 128, false),
+            cyw43_dpc_rx_start_route(false, I_HMB_FRAME_IND, 128, false, false),
             Cyw43DpcRxStartRoute::NextFrame(128)
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, 0, 128, true),
+            cyw43_dpc_rx_start_route(false, 0, 128, true, false),
             Cyw43DpcRxStartRoute::Firstread
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, 0, 0, false),
+            cyw43_dpc_rx_start_route(false, 0, 0, false, false),
             Cyw43DpcRxStartRoute::PostStatus
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(true, I_HMB_FRAME_IND, 128, false),
+            cyw43_dpc_rx_start_route(false, 0, 0, false, true),
+            Cyw43DpcRxStartRoute::Firstread
+        );
+        assert_eq!(
+            cyw43_dpc_rx_start_route(true, I_HMB_FRAME_IND, 128, false, true),
             Cyw43DpcRxStartRoute::PostStatus
         );
     }
@@ -56963,7 +57010,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_rx_poll_hintless_firstread_recovers_zero_rframe_data() {
+    fn compatibility_rx_poll_remains_queue_only_without_direct_function2_read() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -57390,7 +57437,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_control_poll_hintless_firstread_recovers_zero_rframe_event() {
+    fn compatibility_control_poll_remains_queue_only_without_direct_function2_read() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -67408,6 +67455,7 @@ mod tests {
         });
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.dpc_link_ready = true;
+            state.irq_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
             state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
             state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
             state.card_irq_masked = false;
@@ -67585,38 +67633,60 @@ mod tests {
             pending_event,
             refreshed,
         ));
-        assert!(
-            cyw43_runtime_service_dpc_event(),
-            "the exact watermarked source event must win one real DPC quantum",
-        );
-
-        let dpc_child = runtime_ring_read_command_stable(&owner_ring)
-            .expect("the DPC quantum publishes its real reciprocal owner child");
-        let dpc_descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
-            .expect("the DPC child descriptor remains stable");
-        assert_ne!(dpc_child.sequence, probe_child.sequence);
-        assert_eq!(dpc_child.aux1, generation);
-        assert_eq!(dpc_descriptor.op, DRIVER_RUNTIME_SDIO_OP_CMD53_READ);
-        assert_eq!(dpc_descriptor.function, 1);
+        let dpc_trace = drive_production_dpc_event_to_fifo(generation, &[0u8; 64], 0, 0);
         assert_eq!(
-            dpc_descriptor.addr,
-            cyw43_backplane_function_addr(CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS),
-        );
-        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
-        assert_eq!(
-            io.command_issue_count(),
-            0,
-            "DPC publication must precede every Function 2 control write",
+            dpc_trace.function2_reads, 1,
+            "a zero-status pre-TX source probe performs one confirming first read",
         );
         CYW43_RUNTIME_STATE.with_ref(|state| {
             assert_eq!(
                 state.control_exchange.phase,
                 Cyw43ControlExchangePhase::PreTxDrain,
             );
+            assert_eq!(state.dpc_events_consumed, 1);
+            assert_eq!(state.dpc_last_consumed_epoch, generation);
+            assert_eq!(state.dpc_last_consumed_sequence, source_event.sequence);
             assert_eq!(state.tx_frames, 0);
             assert_eq!(state.sdpcm_seq, initial_sdpcm_sequence);
-            assert_eq!(state.dpc_cursor.event_sequence, source_event.sequence);
-            assert!(state.dpc_cursor.child.active);
+            assert!(!state.recovery_required);
+        });
+        assert_eq!(
+            service_command_turn(0, parent),
+            RuntimeCommandTurn::Pending,
+            "the confirmed-empty DPC event releases the control exchange to its credit gate",
+        );
+        let previous_owner_sequence =
+            runtime_ring_read_command_stable(&owner_ring).map_or(0, |command| command.sequence);
+        let mut control_tx_child = None;
+        for _ in 0..8 {
+            assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+            control_tx_child = runtime_ring_read_command_stable(&owner_ring).filter(|command| {
+                command.sequence != 0 && command.sequence != previous_owner_sequence
+            });
+            if control_tx_child.is_some() {
+                break;
+            }
+        }
+        let control_tx_child =
+            control_tx_child.expect("post-probe control TX publishes its first bounded child");
+        let control_tx_descriptor =
+            sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+                .expect("post-probe control TX publishes one stable owner descriptor");
+        assert_ne!(control_tx_child.sequence, probe_child.sequence);
+        assert_eq!(control_tx_child.aux1, generation);
+        assert_eq!(control_tx_descriptor.op, DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,);
+        assert_eq!(control_tx_descriptor.function, 1);
+        assert_eq!(
+            control_tx_descriptor.addr, SBSDIO_FUNC1_SBADDRLOW,
+            "the single normal TX lane restarts the Function-2 window sequence",
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(
+                state.control_exchange.phase,
+                Cyw43ControlExchangePhase::WaitCredit,
+            );
+            assert_eq!(state.tx_frames, 0);
+            assert_eq!(state.sdpcm_seq, initial_sdpcm_sequence);
         });
     }
 
@@ -67878,22 +67948,7 @@ mod tests {
                 CYW43_DPC_WATERMARK_REFRESH_EVENT_SEQUENCE.load(Ordering::Acquire),
                 owner_completion.result,
             );
-
-            let refreshed =
-                cyw43_foreground_dpc_watermark_for_command(parent_sequence, original_watermark)
-                    .ready()
-                    .expect("hintless poll widens through its exact source event");
-            assert!(refreshed.includes(owner_completion.result));
-            assert!(cyw43_dpc_command_requires_preflight(
-                true,
-                false,
-                false,
-                false,
-                cyw43_runtime_dpc_event_peek(),
-                refreshed,
-            ));
-            let dpc_trace =
-                drive_production_dpc_event_to_fifo(generation, &wire_frame, 1, I_HMB_FRAME_IND);
+            let dpc_trace = drive_production_dpc_event_to_fifo(generation, &wire_frame, 1, 0);
             assert_eq!(
                 dpc_trace.first_descriptor.op,
                 DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
@@ -67905,13 +67960,35 @@ mod tests {
             );
             assert_eq!(
                 dpc_trace.function2_reads, 2,
-                "the ordinary DPC drains one frame and confirms the level source empty",
+                "a zero-status source probe must perform one authoritative first read and one empty confirmation",
             );
             assert_eq!(
                 test_sdio_cmd53_transfer_count(2, false),
                 0,
                 "neither op8 nor op10 owns a direct Function 2 fallback",
             );
+            CYW43_RUNTIME_STATE.with_ref(|state| {
+                assert_eq!(state.prompt_poll.phase, Cyw43PromptPollPhase::PostProbe);
+                assert_eq!(state.rx_queue_count, 1);
+                assert_eq!(state.dpc_events_consumed, 1);
+                assert_eq!(state.dpc_last_consumed_epoch, generation);
+                assert_eq!(state.dpc_last_consumed_sequence, owner_completion.result,);
+                assert!(!state.recovery_required);
+            });
+
+            let refreshed =
+                cyw43_foreground_dpc_watermark_for_command(parent_sequence, original_watermark)
+                    .ready()
+                    .expect("already-consumed exact source event remains valid");
+            assert!(!refreshed.includes(owner_completion.result));
+            assert!(!cyw43_dpc_command_requires_preflight(
+                true,
+                false,
+                false,
+                false,
+                cyw43_runtime_dpc_event_peek(),
+                refreshed,
+            ));
             CYW43_RUNTIME_STATE.with_ref(|state| {
                 assert_eq!(state.prompt_poll.phase, Cyw43PromptPollPhase::PostProbe);
                 assert_eq!(state.rx_queue_count, 1);
@@ -68293,6 +68370,60 @@ mod tests {
         assert_eq!(runtime_ring_read_command_stable(&owner_ring), owner_command);
         assert_eq!(SDIO_CMD_COUNT.load(Ordering::Acquire), owner_commands);
         assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn production_zero_status_source_probe_firstreads_once_then_rearms() {
+        let _guard = test_guard();
+        let generation = 0x4359_d0f1;
+        initialize_production_foreground_pair(generation);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.transport_ready = true;
+            state.firmware_execution_started = true;
+            state.firmware_released = true;
+            state.dpc_link_ready = true;
+            state.backplane_window = CYW43_SDIO_CORE_BASE & BACKPLANE_WINDOW_MASK;
+            state.backplane_window_valid = true;
+        });
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = true;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+        });
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                generation,
+                0,
+                0,
+                DPC_REASON_SDIO_SOURCE_PENDING,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+            ),
+            DpcRingPublishResult::Published(1),
+        );
+
+        let trace = drive_production_dpc_event_to_fifo(generation, &[0u8; 64], 0, 0);
+        assert_eq!(
+            trace.function2_reads, 1,
+            "a forced zero-status probe gets one Linux-style confirming first read",
+        );
+        assert_eq!(trace.owner_command_issues, trace.owner_children);
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.rx_queue_count, 0);
+            assert_eq!(state.dpc_events_consumed, 1);
+            assert_eq!(state.dpc_last_consumed_epoch, generation);
+            assert_eq!(state.dpc_last_consumed_sequence, 1);
+            assert_eq!(state.dpc_owner_rearms, 1);
+            assert!(state.rx_service_quiescent);
+            assert!(!state.recovery_required);
+        });
     }
 
     #[test]

@@ -912,12 +912,23 @@ This as-built closure is authorized by Milestone 26d task
   when `CARD_INT` is not latched. That hintless event does not acknowledge an
   undelivered host IRQ or fabricate an RFRAME length. Its exact completion
   returns the committed or coalesced event sequence. The CYW43 foreground owner
-  accepts it only while that exact sequence remains committed in the matching
-  generation, then widens only the requesting retained parent's immutable DPC
-  producer watermark through that event, once. The event is therefore serviced
-  before that parent resumes without admitting later unrelated interrupts. Only
-  the ordinary CYW43 DPC cursor may read dongle status and Function 2, so the
-  source probe is a lost-notification recovery turn, not a second receive path.
+  accepts it while that exact sequence remains committed in the matching
+  generation, or after the ordinary DPC has successfully consumed that exact
+  event before the retained parent refreshes its watermark. The consumed-event
+  handoff is valid only when the generation is still healthy, the recorded
+  epoch and sequence match exactly, and the durable ring consumer equals that
+  sequence; a blind ring advance or stale consume record remains a generation
+  fault. A committed event widens only the requesting retained parent's
+  immutable DPC producer watermark through that event, once. An already
+  consumed event resumes at the post-probe FIFO check without replaying DPC or
+  admitting later unrelated interrupts. Only the ordinary CYW43 DPC cursor may
+  read dongle status and Function 2, so the source probe is a lost-notification
+  recovery turn, not a second receive path.
+  A hintless `SOURCE_PENDING` event is itself one-shot authority for the
+  Linux-style fixed Function 2 first read even when the SDIO source-status and
+  RFRAME hints are both zero. The DPC clears that authority before issuing the
+  read; an all-zero result takes the ordinary post-status/quiescence path and
+  cannot create a private polling loop.
   Its immutable ticket and exact generation completion obey the same
   issued-unknown poisoning and stale-completion rejection as all other owner
   work, and it never permits replay of the completed control TX.

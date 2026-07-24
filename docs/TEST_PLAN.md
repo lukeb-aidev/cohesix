@@ -661,7 +661,13 @@ generation, malformed current and issued-unknown completions poison without
 replay, and a non-hintless empty poll remains queue-only. Every child
 submission, grant, completion poll, DPC action, and post-probe read must consume
 a separate outer turn; no foreground Function 1 or Function 2 receive is
-permitted.
+permitted. A zero-status `SOURCE_PENDING` event must authorize exactly one
+fixed Function 2 first read through the ordinary DPC lane and must rearm
+cleanly after an all-zero result. Coverage must also consume that exact event
+after the source-probe completion is cached but before the retained foreground
+watermark refreshes; the same-generation successful-consume record may resume
+the post-probe FIFO check without replay, while a blind ring advance, stale
+generation, mismatched sequence, or recovery state must still fail closed.
 
 Backplane-attach coverage must drive the production retained cursor through
 ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, the Pi
