@@ -617,17 +617,34 @@ After both members reach their steady priorities, retained root-to-runtime work
 uses a request- and generation-bound scheduling lease. Separate ordinary
 EventPump turns prepare an immutable sequence-zero record, boost the reciprocal
 SDIO bus owner when required, boost the primary child, commit the nonzero
-sequence as the issue boundary, publish one best-effort one-way command-endpoint
-doorbell, poll at most once for its matching completion per later turn, then
-restore the primary child before the bus owner and release the lease. The
-sequence-zero prepare cannot be observed by an autonomously polling child; the
-commit can, so the following endpoint `NBSend` is a wake hint and is never an
-issue replay. If the root-issued command returns `Pending`, each later exact
-no-reply endpoint rendezvous admits at most one continuation quantum. Dropped
-sends do not queue, and repeated sends neither republish nor replay the command.
-No completion is exposed until all leased priorities have returned to their
-manifest values. An unresolved lease is cleared only inside fenced pair restart
-after both runtimes are suspended.
+sequence as the issue boundary, schedule the child, poll at most once for its
+matching completion per later turn, then restore the primary child before the
+bus owner and release the lease. The sequence-zero prepare cannot be observed
+by an autonomously polling child; the commit can and is therefore the
+issued-unknown boundary.
+
+Every root-to-CYW43 descriptor, including generation zero, uses the shared
+continuation record and the reserved root badge on CYW43's bound notification.
+Grant publication and notification signalling are separate EventPump turns.
+The exact grant binds the immutable command, request, and logical connection
+generation; CYW43 acknowledges it before one continuation quantum. An
+unconsumed grant may only be re-signalled, and a fresh monotonic id may be
+published only after the prior acknowledgement. The notification can coalesce
+or arrive before intake because it is only a scheduling hint; the durable grant
+is rechecked before quiescence. Endpoint delivery is rejected for this lane.
+Other retained runtimes keep their endpoint rendezvous. No completion is
+exposed until all leased priorities have returned to their manifest values. An
+unresolved lease is cleared only inside fenced pair restart after both runtimes
+are suspended.
+
+HAL creates the reserved-root-badge send cap only for CYW43 and only at the
+final successful runtime-construction boundary. Each retained root cursor
+carries its original logical generation explicitly through every later grant,
+active-request check, and completion poll. Never substitute the currently
+published connection epoch for that field: an association or EAPOL epoch can
+advance while an older exact cursor is still draining, but its ring command
+must keep the old `aux1` and its terminal result must be rejected as stale
+before it can update the replacement session.
 
 Delegated CYW43-to-SDIO work cannot use that endpoint rule. The one-way owner
 handoff deletes and zeros root's SDIO endpoint authority, and CYW43 has only its
@@ -670,8 +687,8 @@ one matching immutable grant only after the later `CheckGrant` turn. A
 standalone reasserted level wake cannot spend that grant. CARD_INT pending at
 the `CheckWake` linearization point wins; an interrupt arriving later remains
 latched and is delayed by at most one already-admitted owner quantum. If deferred
-service consumes a root endpoint rendezvous, another fresh rendezvous is
-required for root foreground work. Scheduler handoffs after service and
+service consumes a root scheduling edge, the same unconsumed exact grant
+remains authoritative for a later CYW43 foreground turn. Scheduler handoffs after service and
 rejected ready wakes prevent a priority-255 private IRQ loop. Idle runtimes
 block on their combined endpoint/notification receive rather than spinning.
 An idle CARD_INT service always hands off before a durable owner command is
@@ -683,9 +700,10 @@ turn to submit the immutable child-ring command, one turn for each completion
 poll, and one intervening acknowledged shared-grant turn for each required
 continuation. DPC and foreground routes have identical grant bounds. Neither
 path may privately yield, resignal, or poll itself into another action. A trace
-that shows multiple foreground phases after one endpoint rendezvous or shared
-grant, or delegated foreground progress caused by badge 256 without a valid
-grant, fails the one-operation-per-turn contract.
+that shows multiple non-CYW43 foreground phases after one endpoint rendezvous,
+multiple root/delegated CYW43 foreground phases after one exact shared grant,
+or foreground progress caused by a scheduling badge without a valid grant,
+fails the one-operation-per-turn contract.
 
 The newest exact capture is `pi4-serial-20260724-214130.log`, with the bounded
 post-exhaustion sidecar `pi4-serial-20260724-6c6-postexhaust-diag.log` and
@@ -878,8 +896,10 @@ bound, which is the expected shape when the owner is servicing or retaining
 work as the one nonblocking continuation send occurs. The July 10 compatibility
 oracle hid this edge by repeatedly sending inside private yield/poll loops.
 
-The single production lane now keeps root endpoint rendezvous only for
-root-to-runtime commands. HAL mints CYW43 one send-only badge-256 cap from the
+The single production lane now keeps endpoint rendezvous only for non-CYW43
+root-to-runtime commands. Root-to-CYW43 continuations use a send-only
+reserved-root-badge cap to CYW43's own bound notification and an exact grant in
+the CYW43 ring. HAL separately mints CYW43 one send-only badge-256 cap from the
 SDIO owner's bound notification. The shared command or exact unused generation
 grant remains the sole authority; the notification is only a lossless
 coalescing scheduling edge. Badge 256 is disjoint from CARD_INT badge 159. When
@@ -1260,8 +1280,9 @@ supervisor, one-child-operation EventPump permit, reciprocal-ring/controller
 failure-cut tests, supervisor-only generation transitions from immutable
 deferred-recovery records after steady-path guards unwind, preservation of an
 unresolved association cursor across logical epoch changes, exact immutable
-endpoint-rendezvous gating after every retained root-command `Pending` quantum,
-acknowledged sequence-last shared grants after every delegated CYW43-to-SDIO
+endpoint-rendezvous gating after every retained non-CYW43 root-command
+`Pending` quantum, acknowledged sequence-last shared grants plus separate
+notification hints after every root-to-CYW43 and delegated CYW43-to-SDIO
 `Pending` quantum, foreground/DPC `Poll -> Grant -> Poll` parity, authoritative
 owner-generation rejection, and the one-pair-restart-per-attempt bound until
 attached address/TCP readiness,
@@ -1277,10 +1298,12 @@ TX-first single-operation linked-serial service, one-turn USB
 keyboard and HDMI attach/service cursors, sole linked-runtime UART ownership,
 terminal-output retention, exact UART wire-idle reboot-ACK fencing followed by
 a later reset-only turn, exact clean image identity, and all repository gates to
-pass. Host tests cover the initial root endpoint-send loss path, non-queued
-repeated endpoint rendezvous, shared-grant publication/acknowledgement/re-signal,
+pass. Host tests cover the initial root CYW43 scheduling-edge loss path,
+non-CYW43 endpoint rendezvous, root and delegated shared-grant
+publication/acknowledgement/re-signal,
 stale/mutated/consumed/wrong-generation grant rejection, grant-id exhaustion,
 real foreground and DPC owner cursors, recurring replay-fault termination,
+pre-issue and issued live-epoch cuts that preserve the old request and `aux1`,
 network-ready streak reset, peer/IRQ coalescing priority, contract-local
 generation isolation, typed serial terminal failure, idle blocking,
 raw-diagnostic routing, stream/prompt saturation, reboot command fencing, and

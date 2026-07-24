@@ -476,21 +476,35 @@ This as-built closure is authorized by Milestone 26d task
   turns. The first turn prepares the immutable ring record with sequence zero,
   so an autonomously polling child cannot observe it. Later turns boost the
   reciprocal SDIO owner when required, boost the primary child, commit the
-  nonzero sequence as the issue boundary, publish one best-effort one-way
-  endpoint doorbell, and poll the matching completion once per turn. After that
-  completion is latched, later turns restore the primary child before the bus
-  owner and release the lease before exposing the completion to its caller.
-  Root-to-runtime retained commands use the runtime's command endpoint. If one
-  of those commands returns `Pending`, the child retains the exact command and
-  blocks on the combined endpoint/notification receive; it does not
-  `seL4_Yield` into another foreground quantum. Each subsequent root-command
-  quantum requires a later EventPump turn to repeat the one-way endpoint
-  rendezvous for the same sequence. The child admits it only when the complete
-  ring record still matches the retained immutable no-reply intake. This wake
-  is not a new issue boundary: it never republishes, mutates, or replays the
-  command. seL4 `NBSend` is delivered only while the child is waiting on the
-  endpoint, so dropped sends do not queue and successful sends cannot
-  accumulate foreground authority.
+  nonzero sequence as the issue boundary, schedule the child, and poll the
+  matching completion once per turn. After that completion is latched, later
+  turns restore the primary child before the bus owner and release the lease
+  before exposing the completion to its caller.
+
+  CYW43 descriptor commands use one durable root-continuation lane in every
+  logical generation, including bootstrap generation zero. After sequence
+  commit, a separate EventPump turn publishes an exact 24-byte continuation
+  grant in the CYW43 command page and another turn signals a send-only cap to
+  the CYW43 runtime's bound notification with the reserved root badge. The
+  badge is only a coalescing scheduling hint. The grant binds request sequence,
+  every immutable action field, logical connection generation, and a fresh
+  monotonic nonzero id; the runtime acknowledges it before exactly one
+  continuation quantum. If the command remains `Pending`, root either
+  re-signals the still-unconsumed exact grant or publishes a new id only after
+  observing the preceding acknowledgement. Endpoint input is rejected for
+  this lane, so a lost `NBSend`, DPC preflight, or generation-zero bootstrap
+  cannot select a fallback transport. Non-CYW43 retained runtime commands keep
+  their exact endpoint rendezvous.
+
+  HAL mints that root scheduling cap only for the exact CYW43 contract and only
+  after all fallible runtime-construction steps have completed. Every retained
+  bootstrap, association, maintenance, key, EAPOL, prompt-poll, and data-TX
+  cursor stores its owner generation when created and supplies that immutable
+  value to every later command and active-state check. A live connection-epoch
+  change cannot rewrite `aux1`, adopt an older cursor, or make its completion
+  current. The compatibility op11 caller recovers an owner generation only
+  from an exact HAL-retained command and rejects a stale terminal result before
+  routing it.
 
   Delegated CYW43-to-SDIO work has a different authority path. Successful
   one-way owner handoff deletes and zeros root's SDIO endpoint authority, and
@@ -573,12 +587,15 @@ This as-built closure is authorized by Milestone 26d task
   Request, full command fingerprint, and pair generation must match throughout;
   an issued-unknown request cannot be recommitted or granted again. Pair restart
   clears an unresolved lease only after both runtimes are suspended and fenced.
-  Root-command phase order is `prepare -> boost bus -> boost primary -> commit
-  -> endpoint wake -> poll -> [endpoint wake -> poll]* -> restore`;
-  delegated-owner phase order is `submit+signal -> poll ->
-  [grant+signal -> poll]*`. Every submission, grant, and poll is a separate
-  child cursor turn. These are scheduling admissions for one immutable
-  operation, not private send/poll loops or legacy driver fallbacks.
+  Non-CYW43 root-command phase order is `prepare -> boost bus -> boost primary
+  -> commit -> endpoint wake -> poll -> [endpoint wake -> poll]* -> restore`.
+  Root-to-CYW43 phase order is `prepare -> boost bus -> boost primary -> commit
+  -> grant -> signal -> poll -> [grant-or-resignal -> signal -> poll]* ->
+  restore`, including generation zero. Delegated-owner phase order is
+  `submit+signal -> poll -> [grant+signal -> poll]*`. Every submission, grant,
+  signal, and poll is a separate child cursor turn. These are scheduling
+  admissions for one immutable operation, not private send/poll loops or
+  legacy driver fallbacks.
 - Clearing a root-to-runtime transport also clears its cached progress magic,
   sequence, phase, and auxiliary word. Progress evidence is scoped to one
   transport generation; a rebound endpoint cannot inherit an earlier issued
@@ -915,9 +932,9 @@ This as-built closure is authorized by Milestone 26d task
   later admitted turns, removing the former two-CMD52 private owner subpath.
   Pending-command DPC arbitration is retained across
   quanta: a peer/IRQ notification admits at most one DPC service action, while
-  one exact root endpoint rendezvous admits at most one foreground child
-  action. Any remaining foreground work blocks for another endpoint
-  rendezvous. Reciprocal CYW43-to-SDIO foreground and DPC work separates
+  one exact root continuation grant admits at most one foreground child
+  action. Any remaining foreground work requires another acknowledged grant.
+  Reciprocal CYW43-to-SDIO foreground and DPC work separates
   child-ring submission, each completion poll, and each acknowledged shared
   grant plus badge-256 notification into retained quanta. Neither path contains
   a private yield/resignal loop. The typed owner wake never grants a foreground
@@ -1312,10 +1329,11 @@ than one child operation in an outer turn, that 256 retained polls consume 256
 turns, that every failure cut resumes or fails deterministically, and that
 reciprocal-ring association/EAPOL/maintenance faults return before supervisor
 recovery. Runtime-loop tests prove that idle and retained-Pending commands use
-blocking receive. For root-to-runtime commands, exactly one immutable one-way
-endpoint rendezvous advances one foreground quantum; dropped `NBSend`
-doorbells do not queue, and repeated doorbells neither republish nor replay the
-retained command. For delegated CYW43-to-SDIO work, the tests drive the real
+blocking receive. For root-to-CYW43 commands, exactly one immutable
+acknowledged root grant advances one foreground quantum; endpoint wakes are
+rejected, notification coalescing cannot lose the durable grant, and repeated
+badges neither republish nor replay the retained command. Non-CYW43 retained
+commands keep their endpoint coverage. For delegated CYW43-to-SDIO work, the tests drive the real
 owner cursor and shared record: sequence-last publication, acknowledgement,
 unacknowledged same-id re-signal, monotonic replacement after acknowledgement,
 authoritative owner-generation validation, and exact `Poll -> Grant -> Poll`
@@ -1324,8 +1342,13 @@ wrong-generation, already-consumed, replayed, aliased, and grant-id-exhausted
 records fail closed. Peer/IRQ notification badges can service only coalesced
 DPC work or wake the owner to inspect an existing exact grant; a badge alone
 cannot advance foreground state. Exact-match, stale, mutated, and reply-cap
-endpoint wakes remain separated explicitly for the root-command path. The
-autonomous intake poll survives a lost initial best-effort root endpoint send.
+endpoint wakes remain separated explicitly for non-CYW43 root commands.
+Root-to-CYW43 tests reject endpoint wakes, preserve an exact grant across
+coalesced peer service, and prove autonomous intake plus grant re-signal
+survives a consumed scheduling edge. Real-ring epoch-cut tests advance the live
+epoch while the cursor is separately `Prepared` and `Issued`, then prove the
+retained request and `aux1` remain bound to the original generation and that
+the replacement generation cannot adopt or replay either cursor.
 Duplicate or stale deferred records cannot replay work or advance a replacement
 generation. Recovery tests also prove that context-replay success cannot reset
 the one-pair-restart-per-attempt bound and that only attached address/TCP

@@ -623,24 +623,27 @@ while both remain at bootstrap priority `255`, prove control-plane readiness,
 then lower SDIO and CYW43 in two separate outer turns. Descriptor or engine
 replay must not lower either child early, and each final lowering must consume a
 separate outer turn. Once both are lowered, a retained one-way request must use
-this exact outer-turn sequence: prepare one immutable sequence-zero record; boost
-the reciprocal bus owner when required; boost the primary child; commit the
-nonzero sequence as the issue boundary; publish exactly one best-effort
-command-endpoint doorbell; poll at most once for its matching completion per later turn;
+this exact outer-turn sequence: prepare one immutable sequence-zero record;
+boost the reciprocal bus owner when required; boost the primary child; commit
+the nonzero sequence as the issue boundary; publish exactly one retained
+authority edge; poll at most once for its matching completion per later turn;
 latch that completion; restore the primary child before the bus owner; and
-release the lease before returning the completion. Tests must bind the lease
-to request, full command fingerprint, and pair generation, reject torn/stale
+release the lease before returning the completion. For non-CYW43 runtimes that
+authority edge is one best-effort command-endpoint rendezvous. For every
+root-to-CYW43 generation, including zero, it is one exact 24-byte continuation
+grant followed on a separate turn by a reserved-root-badge notification
+scheduling hint; endpoint input is rejected. Tests must bind the lease to
+request, full command fingerprint, and pair generation, reject torn/stale
 identities, prove that prepare is invisible to the autonomous runtime, and
-prove neither commit nor endpoint doorbell can repeat after issued-unknown
+prove neither commit nor authority publication can repeat after issued-unknown
 ownership. They must also reject a lease for a nonphysical profile,
 zero/unpublished priority, or an already-bootstrap-priority runtime.
-This endpoint contract applies to root-to-runtime commands only. After the
-one-way owner handoff deletes root's SDIO endpoint, delegated CYW43-to-SDIO
-foreground and DPC commands must instead use the fixed 24-byte continuation
-grant in shared owner-ring bytes 40 through 63. Tests must exercise the real
-shared record and owner cursor: publish magic, request sequence, every-action
-fingerprint, independently authoritative SDIO generation, and a monotonic
-nonzero grant id sequence-last; let the owner publish
+After the one-way owner handoff deletes root's SDIO endpoint, delegated
+CYW43-to-SDIO foreground and DPC commands use the same exact grant authority
+shape and a distinct badge-256 notification scheduling hint. Tests must
+exercise the real shared record and owner cursor: publish magic, request
+sequence, every-action fingerprint, independently authoritative SDIO
+generation, and a monotonic nonzero grant id sequence-last; let the owner publish
 `consumed_grant_id` irrevocably before spending one quantum; re-signal an
 unacknowledged id without replacement; publish a new id only after exact
 acknowledgement; and fail closed on torn, stale, mutated, wrong-generation,
@@ -1194,15 +1197,21 @@ FIFO or bounded terminal reserve admits the transition, it preserves only the
 concise typed `[drivers] WiFi ...` rendering on a later `Display` turn.
 
 CYW43/SDIO runtime foreground coverage must prove the correct authority path,
-not only software state transitions. For root-to-runtime commands, root repeats
-an immutable one-way endpoint `NBSend` carrying the retained sequence; the
-child admits one foreground quantum only if that send rendezvouses while it is
+not only software state transitions. Non-CYW43 root-to-runtime commands use an
+immutable one-way endpoint `NBSend` carrying the retained sequence; the child
+admits one foreground quantum only if that send rendezvouses while it is
 waiting and the complete no-reply ring record still matches the retained
 intake. Tests must prove that a dropped send is not queued, multiple sends
 cannot accumulate authority, and repeated doorbells never republish, mutate,
-or replay the command. Stale-sequence, changed-action, changed-generation,
-changed-flags, and reply-cap endpoint wakes must all remain rejected without
-altering the retained intake.
+or replay the command.
+
+Every root-to-CYW43 generation, including zero, instead advances only through
+the stable acknowledged exact shared grant. Root publishes or re-signals the
+grant and sends the reserved-root-badge notification in separate outer turns;
+the notification is a coalescing scheduling hint and cannot grant authority.
+Tests must reject endpoint input, stale-sequence, changed-action,
+changed-generation, changed-flags, consumed or mutated grants, and prove an
+issued action cannot be replayed.
 
 For delegated CYW43-to-SDIO commands, tests must prove there is no usable
 endpoint after handoff and that only the stable acknowledged shared grant can
@@ -1224,13 +1233,15 @@ command or grant, but is not foreground authority by itself. The reserved high
 notification bit is excluded from service work. Tests must prove that one
 pending service source can consume at most one service quantum, that at least
 4,096 standalone level reassertions produce no second service quantum and lose
-no durable source, and that an exact later root endpoint rendezvous or
-delegated grant admits only one foreground phase on its respective path. They
-must also coalesce badge 159 with badge 256, service exactly one IRQ quantum,
+no durable source, and that an exact later root or delegated grant admits only
+one foreground phase on its respective path. CYW43 root commands use the exact
+root grant plus reserved-root-badge scheduling hint and must reject endpoint
+wakes; non-CYW43 retained commands keep their endpoint coverage. Tests must
+also coalesce badge 159 with badge 256, service exactly one IRQ quantum,
 preserve the exact grant across a scheduler handoff, and release exactly one
 owner quantum only after validating the already-published grant. If
-deferred notification service consumes a root rendezvous, another fresh
-endpoint rendezvous is required for root foreground work.
+deferred notification service consumes a root scheduling edge, the same
+unconsumed exact grant remains eligible only on a later foreground turn.
 The production reciprocal-ring/controller test must also schedule CYW43 far
 enough ahead that the initial command signal and first-grant signal are both
 published before SDIO intake and collapse to one badge-256 wake—or that the
@@ -1259,17 +1270,25 @@ cannot reclaim its sticky cutover, that each failure/restart action consumes one
 outer turn, and that only the exact SDIO-first/CYW43-second pair restart resets
 the latch before a later recovery episode may claim cutover. A precondition
 rejection without a valid restart context remains terminal.
-Autonomous committed-ring polling must preserve root-command initial intake
-when a best-effort endpoint send is lost. Delegated initial intake must use the
-coalescing badge-256 notification and sequence-last ring command. After
-`Pending`, only an exact root rendezvous or delegated shared grant for the
-retained intake may grant the next foreground quantum; the peer wake only
-schedules a later grant check. A
-missed poll can schedule only the matching later wake/grant action and cannot
-recommit the command sequence. Pending-command
+Autonomous committed-ring polling must preserve non-CYW43 root-command intake
+when a best-effort endpoint send is lost. Every CYW43 root generation,
+including zero, must use a reserved-root-badge notification plus an exact
+root grant and must reject endpoint continuation. Delegated initial intake must
+use the coalescing badge-256 notification and sequence-last ring command. After
+`Pending`, only an exact root or delegated shared grant for the retained intake
+may grant the next foreground quantum; the notification only schedules a later
+grant check. A missed poll can schedule only the matching later wake/grant
+action and cannot recommit the command sequence. Pending-command
 DPC arbitration, reciprocal SDIO child-ring submission, every shared grant, and
 every reciprocal completion poll must each consume separately released retained
-quanta, with no private yield/resignal/poll loop. Retained
+quanta, with no private yield/resignal/poll loop. The real root reciprocal-ring
+tests must cut the logical connection epoch once while a CYW43 command is
+`Prepared` and once after it is `Issued`. Every active command, exact grant,
+and completion in both cuts must retain the cursor's original request and
+`aux1`; an active-state check using the replacement generation must fail, a
+stale terminal completion must not update replacement state, and no
+replacement-generation command may be published for the retained payload.
+Stubbed association or WSEC completions cannot satisfy this coverage. Retained
 lease tests must also prove that the CYW43/SDIO pair epoch cannot alias serial,
 USB, HDMI, PCIe, or GENET transport identity, and that non-pair failures stay in
 their contract-local recovery domain. Serial tests must classify RX, staged TX,
@@ -1297,7 +1316,7 @@ catalogued Pi runtime suite covers the atomic DPC
 word-write and Linux-ordered post-F2 production-chain invariants; do not replay
 those tests as name filters.
 
-The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; hardware captures must show `DRIVER_TASK_BOOT ... contract=bcmgenet-v5 ... affinity_core=3` and `DRIVER_TASK_BOOT ... contract=cyw43455 ... affinity_core=3` before claiming fourth-core driver placement. Physical Pi owner-state boots apply `seL4_TCB_SetAffinity` directly to each driver child TCB. That is distinct from the root-authority affinity wrapper used around in-process NineDoor and Worker-model operations; neither NineDoor nor a general Worker has a separate TCB in the current profile. Any `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence and must fail placement proof. Captures may still emit `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`; that keeps notification lifecycle proof red while allowing endpoint-backed command-ring startup to proceed. QEMU virtio compatibility boots may prove isolated VSpace/ASID allocation, runtime-image transport-region mapping, and pointer-free ring transport after virtio networking is online, but that is transport-substrate evidence only. Fresh Pi hardware proof is still required before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest isolated-driver hardware acceptance.
+The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; hardware captures must show `DRIVER_TASK_BOOT ... contract=bcmgenet-v5 ... affinity_core=3` and `DRIVER_TASK_BOOT ... contract=cyw43455 ... affinity_core=3` before claiming fourth-core driver placement. Physical Pi owner-state boots apply `seL4_TCB_SetAffinity` directly to each driver child TCB. That is distinct from the root-authority affinity wrapper used around in-process NineDoor and Worker-model operations; neither NineDoor nor a general Worker has a separate TCB in the current profile. Any `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence and must fail placement proof. Non-CYW43/SDIO runtimes may still emit `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`, which keeps their notification lifecycle proof red while their endpoint-backed command-ring startup proceeds. The generated CYW43 and SDIO peers must instead emit `DRIVER_TASK_NOTIFICATION_BOUND ... source=generated-cyw43-sdio-topology`; a deferred bind for either peer fails Wi-Fi proof because exact root and delegated grants use their bound notifications for scheduling. QEMU virtio compatibility boots may prove isolated VSpace/ASID allocation, runtime-image transport-region mapping, and pointer-free ring transport after virtio networking is online, but that is transport-substrate evidence only. Fresh Pi hardware proof is still required before claiming Wi-Fi/DHCP, GENET/DHCP, USB keyboard, HDMI, or strongest isolated-driver hardware acceptance.
 
 Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CYW43 firmware/NVRAM/SDPCM command records, direct-root-port xHCI keyboard polling, GENET RX/TX descriptor-ring service, and PCIe port read/write/flush helpers now compile in isolated runtime code before any root hardware execution; host coverage must keep proving those ring turns while preserving the fresh-Pi board-proof boundary.
 

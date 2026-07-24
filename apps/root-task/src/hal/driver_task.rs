@@ -23,13 +23,16 @@ use crate::arch::aarch64::timer::{timer_counter_ticks, timer_freq_hz};
 use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
-    DriverRuntimeCounterSnapshot, DriverRuntimeDpcEventRing, DriverRuntimeFramebufferDescriptor,
-    DriverRuntimeInitDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT,
+    driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
+    DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot, DriverRuntimeDpcEventRing,
+    DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES, DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
+    DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET, DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT,
     DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
     DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
@@ -141,6 +144,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING,
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED,
+    DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED,
+    DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
@@ -2421,6 +2429,7 @@ fn driver_task_ring_stage_command_record(
         core::ptr::write_volatile(completion_ptr, completion_reset);
         core::ptr::write_volatile(command_ptr, staged_command);
     }
+    driver_task_ring_clear_continuation_grant(slot, ring_root_ptr);
     driver_task_ring_clean_root_range(
         completion_ptr as usize,
         core::mem::size_of::<DriverTaskCompletionRecord>(),
@@ -2449,6 +2458,150 @@ fn driver_task_ring_commit_command_sequence(
     driver_task_ring_clean_root_range(command_ptr as usize, core::mem::size_of::<u32>());
     driver_task_record_cache_clean(slot, core::mem::size_of::<u32>());
     driver_task_ring_publish_barrier(ring_root_ptr);
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_runtime_continuation_fingerprint(command: DriverTaskCommandRecord) -> u32 {
+    driver_runtime_continuation_action_fingerprint(
+        command.opcode,
+        command.flags,
+        command.arg0,
+        command.arg1,
+        command.aux0,
+        command.aux1,
+        command.budget.max_ops,
+        command.budget.max_frames,
+        command.budget.max_bytes,
+        command.frame.offset,
+        command.frame.len,
+        command.frame.flags,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_clear_continuation_grant(slot: &DriverTaskCommandSlot, ring_root_ptr: usize) {
+    let grant_ptr =
+        (ring_root_ptr + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)) as *mut u32;
+    let words = usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES) / core::mem::size_of::<u32>();
+    let mut index = 0usize;
+    while index < words {
+        // SAFETY: The fixed continuation record lies wholly inside the
+        // HAL-owned shared ring page and contains only primitive u32 fields.
+        unsafe {
+            core::ptr::write_volatile(grant_ptr.add(index), 0);
+        }
+        index = index.saturating_add(1);
+    }
+    driver_task_ring_clean_root_range(
+        grant_ptr as usize,
+        usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES),
+    );
+    driver_task_record_cache_clean(slot, usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES));
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_read_continuation_grant(
+    ring_root_ptr: usize,
+) -> Option<DriverRuntimeContinuationGrant> {
+    let base = ring_root_ptr + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+    driver_task_ring_invalidate_root_range(
+        base,
+        usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES),
+    );
+    let word = |offset: usize| {
+        // SAFETY: Every requested offset is a u32-aligned field of the fixed
+        // primitive-only continuation record inside the admitted ring page.
+        unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
+    };
+    let grant_id_offset = core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id);
+    let first_grant_id = word(grant_id_offset);
+    if first_grant_id == 0 {
+        return None;
+    }
+    driver_task_shared_load_barrier();
+    let grant = DriverRuntimeContinuationGrant {
+        magic: word(core::mem::offset_of!(DriverRuntimeContinuationGrant, magic)),
+        request_sequence: word(core::mem::offset_of!(
+            DriverRuntimeContinuationGrant,
+            request_sequence
+        )),
+        action_fingerprint: word(core::mem::offset_of!(
+            DriverRuntimeContinuationGrant,
+            action_fingerprint
+        )),
+        generation: word(core::mem::offset_of!(
+            DriverRuntimeContinuationGrant,
+            generation
+        )),
+        grant_id: first_grant_id,
+        consumed_grant_id: word(core::mem::offset_of!(
+            DriverRuntimeContinuationGrant,
+            consumed_grant_id
+        )),
+    };
+    driver_task_shared_load_barrier();
+    driver_task_ring_invalidate_root_range(base + grant_id_offset, core::mem::size_of::<u32>());
+    (word(grant_id_offset) == first_grant_id
+        && grant.magic == DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC)
+        .then_some(grant)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_publish_continuation_grant(
+    slot: &DriverTaskCommandSlot,
+    ring_root_ptr: usize,
+    command: DriverTaskCommandRecord,
+    grant_id: u32,
+) -> bool {
+    if command.sequence == 0 || grant_id == 0 {
+        return false;
+    }
+    let grant = DriverRuntimeContinuationGrant::new(
+        command.sequence,
+        driver_task_runtime_continuation_fingerprint(command),
+        command.aux1,
+        grant_id,
+    );
+    let base = ring_root_ptr + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+    let write = |offset: usize, value: u32| {
+        // SAFETY: Every requested offset is a u32-aligned field of the fixed
+        // primitive-only continuation record inside the admitted ring page.
+        unsafe {
+            core::ptr::write_volatile((base + offset) as *mut u32, value);
+        }
+    };
+    let grant_id_offset = core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id);
+    let consumed_offset = core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id);
+    write(grant_id_offset, 0);
+    write(consumed_offset, 0);
+    driver_task_ring_clean_root_range(base + grant_id_offset, core::mem::size_of::<u32>() * 2);
+    driver_task_record_cache_clean(slot, core::mem::size_of::<u32>() * 2);
+    for (offset, value) in [
+        (
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, magic),
+            grant.magic,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, request_sequence),
+            grant.request_sequence,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, action_fingerprint),
+            grant.action_fingerprint,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimeContinuationGrant, generation),
+            grant.generation,
+        ),
+    ] {
+        write(offset, value);
+    }
+    driver_task_ring_clean_root_range(base, grant_id_offset);
+    driver_task_record_cache_clean(slot, grant_id_offset);
+    write(grant_id_offset, grant.grant_id);
+    driver_task_ring_clean_root_range(base + grant_id_offset, core::mem::size_of::<u32>());
+    driver_task_record_cache_clean(slot, core::mem::size_of::<u32>());
+    true
 }
 
 #[cfg(feature = "kernel")]
@@ -2731,7 +2884,9 @@ struct DriverTaskCommandSlot {
     retained_priority_lease_generation: AtomicU32,
     retained_priority_lease_mask: AtomicUsize,
     retained_doorbell_issued: AtomicUsize,
+    retained_grant_id: AtomicU32,
     endpoint: AtomicUsize,
+    root_notification: AtomicUsize,
     ring_root_ptr: AtomicUsize,
     ring_frame_cap: AtomicUsize,
     shared_frame_count: AtomicUsize,
@@ -2790,6 +2945,11 @@ struct DriverTaskCommandSlot {
     ))]
     result: AtomicUsize,
 }
+
+#[cfg(all(test, feature = "kernel"))]
+static TEST_ROOT_GRANT_PUBLICATIONS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(test, feature = "kernel"))]
+static TEST_ROOT_NOTIFICATION_SIGNALS: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(feature = "kernel")]
 struct DriverTaskCounterCells {
@@ -2958,7 +3118,9 @@ impl DriverTaskCommandSlot {
             retained_priority_lease_generation: AtomicU32::new(0),
             retained_priority_lease_mask: AtomicUsize::new(0),
             retained_doorbell_issued: AtomicUsize::new(0),
+            retained_grant_id: AtomicU32::new(0),
             endpoint: AtomicUsize::new(0),
+            root_notification: AtomicUsize::new(0),
             ring_root_ptr: AtomicUsize::new(0),
             ring_frame_cap: AtomicUsize::new(0),
             shared_frame_count: AtomicUsize::new(0),
@@ -3117,6 +3279,22 @@ pub(crate) struct DriverTaskRingProgressSnapshot {
     pub(crate) aux0: u32,
 }
 
+/// Passive root view of one retained CYW43 continuation grant.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DriverTaskRetainedGrantSnapshot {
+    pub(crate) active: bool,
+    pub(crate) phase_name: &'static str,
+    pub(crate) request: u32,
+    pub(crate) generation: u32,
+    pub(crate) sequence_issued: bool,
+    pub(crate) root_notification_bound: bool,
+    pub(crate) producer_grant_id: u32,
+    pub(crate) shared_grant_id: u32,
+    pub(crate) consumed_grant_id: u32,
+    pub(crate) exact: bool,
+}
+
 #[cfg(feature = "kernel")]
 fn record_driver_task_ring_progress(
     slot: &DriverTaskCommandSlot,
@@ -3145,7 +3323,30 @@ fn driver_task_ring_progress_matches_request(
 ) -> bool {
     progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
         && progress.sequence == request
-        && progress.aux0 == aux0
+        && driver_task_ring_progress_route_matches(progress.phase, progress.aux0, aux0)
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_root_grant_phase(phase: u32) -> bool {
+    matches!(
+        phase,
+        DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY
+            | DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED
+            | DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED
+            | DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED
+    )
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_progress_route_matches(
+    phase: u32,
+    observed_aux0: u32,
+    expected_aux0: u32,
+) -> bool {
+    observed_aux0 == expected_aux0
+        || (expected_aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+            && driver_task_ring_root_grant_phase(phase))
 }
 
 #[cfg(feature = "kernel")]
@@ -3323,7 +3524,11 @@ fn cached_driver_task_ring_progress_matches_request(
 ) -> bool {
     slot.last_progress_magic.load(Ordering::Acquire) == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
         && slot.last_progress_sequence.load(Ordering::Acquire) == request
-        && slot.last_progress_aux0.load(Ordering::Acquire) == aux0
+        && driver_task_ring_progress_route_matches(
+            slot.last_progress_phase.load(Ordering::Acquire),
+            slot.last_progress_aux0.load(Ordering::Acquire),
+            aux0,
+        )
 }
 
 #[cfg(feature = "kernel")]
@@ -3367,8 +3572,8 @@ fn driver_task_ring_progress_advanced_for_request(
     }
     slot.last_progress_magic.load(Ordering::Acquire) != DRIVER_RUNTIME_RING_PROGRESS_MAGIC
         || slot.last_progress_sequence.load(Ordering::Acquire) != request
-        || slot.last_progress_aux0.load(Ordering::Acquire) != aux0
         || slot.last_progress_phase.load(Ordering::Acquire) != progress.phase
+        || slot.last_progress_aux0.load(Ordering::Acquire) != progress.aux0
 }
 
 #[cfg(feature = "kernel")]
@@ -4028,7 +4233,9 @@ fn active_driver_task_retained_request_for_slot(
     let issued = command.sequence == request
         && matches!(
             (phase, doorbell_issued),
-            (DriverTaskRetainedLeasePhase::Committed, true)
+            (DriverTaskRetainedLeasePhase::GrantRequired, true)
+                | (DriverTaskRetainedLeasePhase::Granted, true)
+                | (DriverTaskRetainedLeasePhase::Committed, true)
                 | (DriverTaskRetainedLeasePhase::Issued, true)
                 | (DriverTaskRetainedLeasePhase::RestorePrimary, true)
                 | (DriverTaskRetainedLeasePhase::RestoreBus, true)
@@ -4052,6 +4259,41 @@ fn active_driver_task_retained_request_snapshot(
     (command_fingerprint != 0).then_some(DriverTaskRetainedRequestSnapshot {
         state,
         command_fingerprint,
+    })
+}
+
+/// Snapshot the exact root-owned continuation state without advancing it.
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_retained_grant_snapshot(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskRetainedGrantSnapshot> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let phase = DriverTaskRetainedLeasePhase::from_usize(
+        slot.retained_priority_lease_phase.load(Ordering::Acquire),
+    );
+    let state = active_driver_task_retained_request_for_slot(slot);
+    let command = state.and_then(DriverTaskRetainedRequestState::command);
+    let request = u32::try_from(slot.request_seq.load(Ordering::Acquire)).unwrap_or(0);
+    let producer_grant_id = slot.retained_grant_id.load(Ordering::Acquire);
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let grant = (ring_root_ptr != 0)
+        .then(|| driver_task_ring_read_continuation_grant(ring_root_ptr))
+        .flatten();
+    let exact = command.zip(grant).is_some_and(|(command, grant)| {
+        driver_task_continuation_grant_matches(grant, command, producer_grant_id)
+    });
+    Some(DriverTaskRetainedGrantSnapshot {
+        active: slot.active.load(Ordering::Acquire) != 0,
+        phase_name: phase.map_or("invalid", DriverTaskRetainedLeasePhase::as_str),
+        request,
+        generation: command.map_or(0, |command| command.aux1),
+        sequence_issued: slot.retained_doorbell_issued.load(Ordering::Acquire) != 0,
+        root_notification_bound: slot.root_notification.load(Ordering::Acquire) != 0,
+        producer_grant_id,
+        shared_grant_id: grant.map_or(0, |grant| grant.grant_id),
+        consumed_grant_id: grant.map_or(0, |grant| grant.consumed_grant_id),
+        exact,
     })
 }
 
@@ -4682,6 +4924,19 @@ pub fn publish_driver_task_command_endpoint(contract: DriverTaskContract, endpoi
     slot.endpoint.store(endpoint, Ordering::Release);
 }
 
+/// Publish root's send-only, reserved-badge cap for one runtime notification.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_root_notification(contract: DriverTaskContract, notification: usize) {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.root_notification
+        .store(notification, Ordering::Release);
+}
+
 /// Publish the root mapping of the fixed command/completion ring for a driver.
 #[cfg(feature = "kernel")]
 pub fn publish_driver_task_ring(contract: DriverTaskContract, ring_root_ptr: usize) {
@@ -5075,6 +5330,7 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
         return;
     };
     slot.endpoint.store(0, Ordering::Release);
+    slot.root_notification.store(0, Ordering::Release);
     slot.ring_root_ptr.store(0, Ordering::Release);
     slot.ring_frame_cap.store(0, Ordering::Release);
     slot.ring_context.store(0, Ordering::Release);
@@ -5243,6 +5499,8 @@ enum DriverTaskRetainedLeasePhase {
     BoostBus,
     BoostPrimary,
     ReadyToIssue,
+    GrantRequired,
+    Granted,
     Committed,
     Issued,
     RestorePrimary,
@@ -5261,6 +5519,7 @@ enum DriverTaskRetainedLeaseOperation {
     BoostBus,
     BoostPrimary,
     CommitRing,
+    PublishGrant,
     NotifyRing,
     PollRing,
     RestorePrimary,
@@ -5280,12 +5539,14 @@ impl DriverTaskRetainedLeasePhase {
             1 => Some(Self::BoostBus),
             2 => Some(Self::BoostPrimary),
             3 => Some(Self::ReadyToIssue),
-            4 => Some(Self::Committed),
-            5 => Some(Self::Issued),
-            6 => Some(Self::RestorePrimary),
-            7 => Some(Self::RestoreBus),
-            8 => Some(Self::ReadyToComplete),
-            9 => Some(Self::Poisoned),
+            4 => Some(Self::GrantRequired),
+            5 => Some(Self::Granted),
+            6 => Some(Self::Committed),
+            7 => Some(Self::Issued),
+            8 => Some(Self::RestorePrimary),
+            9 => Some(Self::RestoreBus),
+            10 => Some(Self::ReadyToComplete),
+            11 => Some(Self::Poisoned),
             _ => None,
         }
     }
@@ -5296,12 +5557,31 @@ impl DriverTaskRetainedLeasePhase {
             Self::BoostBus => DriverTaskRetainedLeaseOperation::BoostBus,
             Self::BoostPrimary => DriverTaskRetainedLeaseOperation::BoostPrimary,
             Self::ReadyToIssue => DriverTaskRetainedLeaseOperation::CommitRing,
+            Self::GrantRequired => DriverTaskRetainedLeaseOperation::PublishGrant,
+            Self::Granted => DriverTaskRetainedLeaseOperation::NotifyRing,
             Self::Committed => DriverTaskRetainedLeaseOperation::NotifyRing,
             Self::Issued => DriverTaskRetainedLeaseOperation::PollRing,
             Self::RestorePrimary => DriverTaskRetainedLeaseOperation::RestorePrimary,
             Self::RestoreBus => DriverTaskRetainedLeaseOperation::RestoreBus,
             Self::ReadyToComplete => DriverTaskRetainedLeaseOperation::Complete,
             Self::Poisoned => DriverTaskRetainedLeaseOperation::None,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::BoostBus => "boost-bus",
+            Self::BoostPrimary => "boost-primary",
+            Self::ReadyToIssue => "ready-to-issue",
+            Self::GrantRequired => "grant-required",
+            Self::Granted => "granted",
+            Self::Committed => "committed",
+            Self::Issued => "issued",
+            Self::RestorePrimary => "restore-primary",
+            Self::RestoreBus => "restore-bus",
+            Self::ReadyToComplete => "ready-to-complete",
+            Self::Poisoned => "poisoned",
         }
     }
 
@@ -5320,6 +5600,7 @@ impl DriverTaskRetainedLeasePhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DriverTaskRetainedLeaseTurn {
     CommitRing,
+    PublishGrant,
     NotifyRing,
     PollRing,
     Pending,
@@ -5342,6 +5623,7 @@ fn reset_driver_task_retained_priority_lease_slot(slot: &DriverTaskCommandSlot) 
     slot.retained_priority_lease_mask
         .store(0, Ordering::Release);
     slot.retained_doorbell_issued.store(0, Ordering::Release);
+    slot.retained_grant_id.store(0, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -5437,6 +5719,14 @@ fn driver_task_retained_lease_generation(contract: DriverTaskContract) -> u32 {
         // transport identity until their device-local recovery path resets it.
         0
     }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_retained_uses_root_grant(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> bool {
+    contract == CYW43_WIFI_DRIVER_TASK_CONTRACT && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
 }
 
 #[cfg(feature = "kernel")]
@@ -5540,6 +5830,13 @@ fn initialize_driver_task_retained_priority_lease(
     request: usize,
     fingerprint: u32,
 ) -> bool {
+    if driver_task_retained_uses_root_grant(contract, command) {
+        if !driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
+            || slot.root_notification.load(Ordering::Acquire) == 0
+        {
+            return false;
+        }
+    }
     let mask = retained_priority_lease_target_mask(contract, command);
     let Some(task_key) = driver_task_contract_key(contract) else {
         return false;
@@ -5675,7 +5972,9 @@ fn step_driver_task_retained_priority_lease(
         DriverTaskRetainedLeasePhase::BoostBus
         | DriverTaskRetainedLeasePhase::BoostPrimary
         | DriverTaskRetainedLeasePhase::ReadyToIssue => !doorbell_issued,
-        DriverTaskRetainedLeasePhase::Committed
+        DriverTaskRetainedLeasePhase::GrantRequired
+        | DriverTaskRetainedLeasePhase::Granted
+        | DriverTaskRetainedLeasePhase::Committed
         | DriverTaskRetainedLeasePhase::Issued
         | DriverTaskRetainedLeasePhase::RestorePrimary
         | DriverTaskRetainedLeasePhase::RestoreBus
@@ -5720,6 +6019,7 @@ fn step_driver_task_retained_priority_lease(
             DriverTaskRetainedLeaseTurn::Pending
         }
         DriverTaskRetainedLeaseOperation::CommitRing => DriverTaskRetainedLeaseTurn::CommitRing,
+        DriverTaskRetainedLeaseOperation::PublishGrant => DriverTaskRetainedLeaseTurn::PublishGrant,
         DriverTaskRetainedLeaseOperation::NotifyRing => DriverTaskRetainedLeaseTurn::NotifyRing,
         DriverTaskRetainedLeaseOperation::PollRing => DriverTaskRetainedLeaseTurn::PollRing,
         DriverTaskRetainedLeaseOperation::RestorePrimary => {
@@ -5763,11 +6063,19 @@ fn step_driver_task_retained_priority_lease(
 }
 
 #[cfg(feature = "kernel")]
-fn mark_driver_task_retained_priority_lease_committed(slot: &DriverTaskCommandSlot) -> bool {
+fn mark_driver_task_retained_priority_lease_committed(
+    slot: &DriverTaskCommandSlot,
+    root_grant: bool,
+) -> bool {
     slot.retained_priority_lease_phase
         .compare_exchange(
             DriverTaskRetainedLeasePhase::ReadyToIssue.as_usize(),
-            DriverTaskRetainedLeasePhase::Committed.as_usize(),
+            if root_grant {
+                DriverTaskRetainedLeasePhase::GrantRequired
+            } else {
+                DriverTaskRetainedLeasePhase::Committed
+            }
+            .as_usize(),
             Ordering::AcqRel,
             Ordering::Acquire,
         )
@@ -5775,10 +6083,38 @@ fn mark_driver_task_retained_priority_lease_committed(slot: &DriverTaskCommandSl
 }
 
 #[cfg(feature = "kernel")]
-fn mark_driver_task_retained_priority_lease_issued(slot: &DriverTaskCommandSlot) -> bool {
+fn mark_driver_task_retained_priority_lease_granted(slot: &DriverTaskCommandSlot) -> bool {
     slot.retained_priority_lease_phase
         .compare_exchange(
-            DriverTaskRetainedLeasePhase::Committed.as_usize(),
+            DriverTaskRetainedLeasePhase::GrantRequired.as_usize(),
+            DriverTaskRetainedLeasePhase::Granted.as_usize(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok()
+}
+
+#[cfg(feature = "kernel")]
+const fn next_driver_task_retained_grant_id(current: u32) -> Option<u32> {
+    match current.checked_add(1) {
+        Some(next) if next != 0 => Some(next),
+        Some(_) | None => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn mark_driver_task_retained_priority_lease_issued(
+    slot: &DriverTaskCommandSlot,
+    root_grant: bool,
+) -> bool {
+    slot.retained_priority_lease_phase
+        .compare_exchange(
+            if root_grant {
+                DriverTaskRetainedLeasePhase::Granted
+            } else {
+                DriverTaskRetainedLeasePhase::Committed
+            }
+            .as_usize(),
             DriverTaskRetainedLeasePhase::Issued.as_usize(),
             Ordering::AcqRel,
             Ordering::Acquire,
@@ -5786,30 +6122,65 @@ fn mark_driver_task_retained_priority_lease_issued(slot: &DriverTaskCommandSlot)
         .is_ok()
 }
 
-/// Re-arm the immutable endpoint doorbell after a retained poll miss.
-///
-/// Endpoint `NBSend` is deliberately lossy: a runtime may poll the ring just
-/// before sequence publication and block just after the first wake attempt.
-/// Returning the issued lease to `Committed` schedules another wake-only turn
-/// without republishing or replaying the command.
 #[cfg(feature = "kernel")]
-fn arm_driver_task_retained_priority_lease_endpoint_wake_retry(
+fn driver_task_continuation_grant_matches(
+    grant: DriverRuntimeContinuationGrant,
+    command: DriverTaskCommandRecord,
+    grant_id: u32,
+) -> bool {
+    grant.magic == DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC
+        && grant.request_sequence == command.sequence
+        && grant.action_fingerprint == driver_task_runtime_continuation_fingerprint(command)
+        && grant.generation == command.aux1
+        && grant.grant_id == grant_id
+        && grant_id != 0
+        && (grant.consumed_grant_id == 0 || grant.consumed_grant_id == grant_id)
+}
+
+/// Re-arm one immutable retained continuation after a completion poll miss.
+///
+/// Every CYW43 descriptor turn uses a durable exact grant plus the root-badged
+/// notification. A still-pending grant is merely re-signalled; a consumed
+/// grant schedules publication of the next monotonic ticket. Other runtime
+/// contracts retain their endpoint rendezvous.
+#[cfg(feature = "kernel")]
+fn arm_driver_task_retained_priority_lease_wake_retry(
     slot: &DriverTaskCommandSlot,
     contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    ring_root_ptr: usize,
     request: usize,
     fingerprint: u32,
 ) -> bool {
-    driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
-        && slot.retained_doorbell_issued.load(Ordering::Acquire) != 0
-        && slot
-            .retained_priority_lease_phase
-            .compare_exchange(
-                DriverTaskRetainedLeasePhase::Issued.as_usize(),
-                DriverTaskRetainedLeasePhase::Committed.as_usize(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_ok()
+    if !driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
+        || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
+    {
+        return false;
+    }
+    let next = if driver_task_retained_uses_root_grant(contract, command) {
+        let grant_id = slot.retained_grant_id.load(Ordering::Acquire);
+        let Some(grant) = driver_task_ring_read_continuation_grant(ring_root_ptr) else {
+            return false;
+        };
+        if !driver_task_continuation_grant_matches(grant, command, grant_id) {
+            return false;
+        }
+        if grant.consumed_grant_id == grant_id {
+            DriverTaskRetainedLeasePhase::GrantRequired
+        } else {
+            DriverTaskRetainedLeasePhase::Granted
+        }
+    } else {
+        DriverTaskRetainedLeasePhase::Committed
+    };
+    slot.retained_priority_lease_phase
+        .compare_exchange(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            next.as_usize(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok()
 }
 
 /// Quarantine an issued retained request whose wake cursor could not advance.
@@ -9905,6 +10276,11 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED => "sdio-owner-grant-accepted",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED => "sdio-owner-grant-ack-failed",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED => "sdio-owner-command-admitted",
+        DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN => "root-grant-wait-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY => "root-grant-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED => "root-grant-rejected",
+        DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED => "root-grant-accepted",
+        DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED => "root-grant-ack-failed",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => "cyw43-card-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN => "cyw43-f1-block-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY => "cyw43-f1-block-ready",
@@ -11248,6 +11624,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             slot.active_command_fingerprint.store(0, Ordering::Release);
             slot.timeout_resumes.store(0, Ordering::Release);
             slot.retained_doorbell_issued.store(0, Ordering::Release);
+            slot.retained_grant_id.store(0, Ordering::Release);
             emit_driver_task_ring_resource_submit_status(
                 contract,
                 command,
@@ -11266,6 +11643,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             slot.active_command_fingerprint.store(0, Ordering::Release);
             slot.timeout_resumes.store(0, Ordering::Release);
             slot.retained_doorbell_issued.store(0, Ordering::Release);
+            slot.retained_grant_id.store(0, Ordering::Release);
             emit_driver_task_ring_resource_submit_status(
                 contract,
                 command,
@@ -11279,6 +11657,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             .store(command_fingerprint, Ordering::Release);
         slot.timeout_resumes.store(0, Ordering::Release);
         slot.retained_doorbell_issued.store(0, Ordering::Release);
+        slot.retained_grant_id.store(0, Ordering::Release);
         command.sequence = request as u32;
         let completion_reset =
             DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand);
@@ -11322,8 +11701,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         slot.active_command_fingerprint.store(0, Ordering::Release);
         slot.timeout_resumes.store(0, Ordering::Release);
         slot.retained_doorbell_issued.store(0, Ordering::Release);
+        slot.retained_grant_id.store(0, Ordering::Release);
         return None;
     }
+    // Resumed callers rebuild the immutable command with sequence zero. Keep
+    // that local value aligned with the already-published request; no shared
+    // byte is rewritten and the staging fingerprint still fences all fields.
+    command.sequence = request as u32;
     if retained_request_prepared {
         // Preparing the immutable shared record is its own retained outer
         // turn. In particular, do not combine its cache publication with the
@@ -11343,6 +11727,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         );
         match turn {
             DriverTaskRetainedLeaseTurn::CommitRing
+            | DriverTaskRetainedLeaseTurn::PublishGrant
             | DriverTaskRetainedLeaseTurn::NotifyRing
             | DriverTaskRetainedLeaseTurn::PollRing
             | DriverTaskRetainedLeaseTurn::ReadyToComplete => {}
@@ -11361,6 +11746,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         None
     };
     let retained_commit_turn = retained_lease_turn == Some(DriverTaskRetainedLeaseTurn::CommitRing);
+    let retained_publish_grant_turn =
+        retained_lease_turn == Some(DriverTaskRetainedLeaseTurn::PublishGrant);
     let retained_notify_turn = retained_lease_turn == Some(DriverTaskRetainedLeaseTurn::NotifyRing);
     let retained_lease_ready_to_complete =
         retained_lease_turn == Some(DriverTaskRetainedLeaseTurn::ReadyToComplete);
@@ -11377,10 +11764,35 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // replaying work that the child could already have executed.
         slot.retained_doorbell_issued.store(1, Ordering::Release);
         driver_task_ring_commit_command_sequence(slot, ring_root_ptr, command_ptr, request as u32);
-        if !mark_driver_task_retained_priority_lease_committed(slot) {
+        if !mark_driver_task_retained_priority_lease_committed(
+            slot,
+            driver_task_retained_uses_root_grant(contract, command),
+        ) {
             // Sequence publication may already have been observed by the
             // autonomous runtime. The issued latch already poisons this
             // generation so no later turn can recommit or re-prime it.
+            fail_driver_task_retained_priority_lease(slot, contract);
+        }
+        cache_counter_batch.flush(slot);
+        return None;
+    }
+
+    if retained_publish_grant_turn {
+        let current = slot.retained_grant_id.load(Ordering::Acquire);
+        let Some(next) = next_driver_task_retained_grant_id(current) else {
+            fail_driver_task_retained_priority_lease(slot, contract);
+            cache_counter_batch.flush(slot);
+            return None;
+        };
+        if !driver_task_ring_publish_continuation_grant(slot, ring_root_ptr, command, next) {
+            fail_driver_task_retained_priority_lease(slot, contract);
+            cache_counter_batch.flush(slot);
+            return None;
+        }
+        #[cfg(test)]
+        TEST_ROOT_GRANT_PUBLICATIONS.fetch_add(1, Ordering::AcqRel);
+        slot.retained_grant_id.store(next, Ordering::Release);
+        if !mark_driver_task_retained_priority_lease_granted(slot) {
             fail_driver_task_retained_priority_lease(slot, contract);
         }
         cache_counter_batch.flush(slot);
@@ -11396,18 +11808,28 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
 
     let trace_call = driver_task_ring_call_trace_enabled(contract, command, mode);
     if retained_notify_turn {
-        // The command is already immutable and visible. This turn performs
-        // only the one-way wake notification; a runtime that consumed the
-        // sequence by autonomous polling will reject the duplicate sequence.
+        let root_grant = driver_task_retained_uses_root_grant(contract, command);
+        // The command is already immutable and visible. Root-generation
+        // CYW43 descriptor continuations signal the child-bound notification;
+        // unrelated runtime contracts retain their endpoint rendezvous.
         if trace_call {
             emit_driver_task_ring_call_begin(contract, endpoint, request, command);
         }
-        let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
-        // The sequence-commit turn already latched issued-unknown. Any
-        // phase-CAS fault after this best-effort wake remains fenced and cannot
-        // produce a second command publication.
-        crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
-        if !mark_driver_task_retained_priority_lease_issued(slot) {
+        if root_grant {
+            let notification = slot.root_notification.load(Ordering::Acquire);
+            if notification == 0 {
+                fail_driver_task_retained_priority_lease(slot, contract);
+                cache_counter_batch.flush(slot);
+                return None;
+            }
+            crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+            #[cfg(test)]
+            TEST_ROOT_NOTIFICATION_SIGNALS.fetch_add(1, Ordering::AcqRel);
+        } else {
+            let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
+            crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
+        }
+        if !mark_driver_task_retained_priority_lease_issued(slot, root_grant) {
             fail_driver_task_retained_priority_lease(slot, contract);
         }
         driver_task_counter_add(&slot.counters.send_attempts, 1);
@@ -11460,7 +11882,10 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 send_attempts = send_attempts.saturating_add(1);
                 crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
                 if mode == DriverTaskRingCommandMode::RetainedTurn {
-                    mark_driver_task_retained_priority_lease_issued(slot);
+                    mark_driver_task_retained_priority_lease_issued(
+                        slot,
+                        driver_task_retained_uses_root_grant(contract, command),
+                    );
                 }
                 if mode != DriverTaskRingCommandMode::RetainedTurn {
                     yield_count = yield_count.saturating_add(1);
@@ -11631,6 +12056,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                     }
                 }
                 DriverTaskRetainedLeaseTurn::CommitRing
+                | DriverTaskRetainedLeaseTurn::PublishGrant
                 | DriverTaskRetainedLeaseTurn::NotifyRing
                 | DriverTaskRetainedLeaseTurn::PollRing
                 | DriverTaskRetainedLeaseTurn::Failed => {
@@ -11673,9 +12099,11 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     };
     let retained_wake_armed = mode != DriverTaskRingCommandMode::RetainedTurn
         || !keep_active_on_timeout
-        || arm_driver_task_retained_priority_lease_endpoint_wake_retry(
+        || arm_driver_task_retained_priority_lease_wake_retry(
             slot,
             contract,
+            command,
+            ring_root_ptr,
             request,
             command_fingerprint,
         );
@@ -11711,6 +12139,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         slot.active_command_fingerprint.store(0, Ordering::Release);
         slot.timeout_resumes.store(0, Ordering::Release);
         slot.retained_doorbell_issued.store(0, Ordering::Release);
+        slot.retained_grant_id.store(0, Ordering::Release);
         if completion.sequence != request as u32 && timeout_count != 0 {
             driver_task_counter_add(&slot.counters.aborts, 1);
             emit_driver_task_ring_call_abort(
@@ -12609,6 +13038,34 @@ pub(crate) fn test_publish_driver_task_ring_endpoint(contract: DriverTaskContrac
     };
     slot.endpoint.store(1, Ordering::Release);
     true
+}
+
+/// Publish a nonzero root-notification token for CYW43 ring unit tests.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_publish_driver_task_root_notification(contract: DriverTaskContract) -> bool {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.root_notification.store(1, Ordering::Release);
+    true
+}
+
+/// Reset and inspect production root-grant actions in host ring tests.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_reset_root_grant_action_counts() {
+    TEST_ROOT_GRANT_PUBLICATIONS.store(0, Ordering::Release);
+    TEST_ROOT_NOTIFICATION_SIGNALS.store(0, Ordering::Release);
+}
+
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_root_grant_action_counts() -> (usize, usize) {
+    (
+        TEST_ROOT_GRANT_PUBLICATIONS.load(Ordering::Acquire),
+        TEST_ROOT_NOTIFICATION_SIGNALS.load(Ordering::Acquire),
+    )
 }
 
 /// Publish a delayed reciprocal-ring completion without consuming root state.
@@ -16267,6 +16724,10 @@ mod tests {
     #[test]
     fn retained_poll_miss_arms_one_endpoint_rendezvous_or_quarantines_the_request() {
         let slot = DriverTaskCommandSlot::new();
+        let command = DriverTaskCommandRecord::service(
+            0,
+            DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
+        );
         let generation = CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire);
         slot.retained_priority_lease_request
             .store(77, Ordering::Release);
@@ -16280,25 +16741,27 @@ mod tests {
         );
         slot.retained_doorbell_issued.store(1, Ordering::Release);
 
-        assert!(
-            !arm_driver_task_retained_priority_lease_endpoint_wake_retry(
-                &slot,
-                SDIO_HOST_DRIVER_TASK_CONTRACT,
-                78,
-                0x1234_5679,
-            )
-        );
-        assert!(
-            !arm_driver_task_retained_priority_lease_endpoint_wake_retry(
-                &slot,
-                SDIO_HOST_DRIVER_TASK_CONTRACT,
-                77,
-                0xfeed_beef,
-            )
-        );
-        assert!(arm_driver_task_retained_priority_lease_endpoint_wake_retry(
+        assert!(!arm_driver_task_retained_priority_lease_wake_retry(
             &slot,
             SDIO_HOST_DRIVER_TASK_CONTRACT,
+            command,
+            0,
+            78,
+            0x1234_5679,
+        ));
+        assert!(!arm_driver_task_retained_priority_lease_wake_retry(
+            &slot,
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            command,
+            0,
+            77,
+            0xfeed_beef,
+        ));
+        assert!(arm_driver_task_retained_priority_lease_wake_retry(
+            &slot,
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            command,
+            0,
             77,
             0x1234_5679,
         ));
@@ -16309,14 +16772,14 @@ mod tests {
             .map(DriverTaskRetainedLeasePhase::operation),
             Some(DriverTaskRetainedLeaseOperation::NotifyRing),
         );
-        assert!(
-            !arm_driver_task_retained_priority_lease_endpoint_wake_retry(
-                &slot,
-                SDIO_HOST_DRIVER_TASK_CONTRACT,
-                77,
-                0x1234_5679,
-            )
-        );
+        assert!(!arm_driver_task_retained_priority_lease_wake_retry(
+            &slot,
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            command,
+            0,
+            77,
+            0x1234_5679,
+        ));
 
         let usb_slot = DriverTaskCommandSlot::new();
         usb_slot.active.store(1, Ordering::Release);
@@ -16340,9 +16803,11 @@ mod tests {
         usb_slot
             .retained_doorbell_issued
             .store(1, Ordering::Release);
-        assert!(arm_driver_task_retained_priority_lease_endpoint_wake_retry(
+        assert!(arm_driver_task_retained_priority_lease_wake_retry(
             &usb_slot,
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            0,
             81,
             0x7654_3211,
         ));
@@ -16355,14 +16820,14 @@ mod tests {
             .map(DriverTaskRetainedLeasePhase::operation),
             Some(DriverTaskRetainedLeaseOperation::NotifyRing),
         );
-        assert!(
-            !arm_driver_task_retained_priority_lease_endpoint_wake_retry(
-                &usb_slot,
-                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-                81,
-                0x7654_3211,
-            )
-        );
+        assert!(!arm_driver_task_retained_priority_lease_wake_retry(
+            &usb_slot,
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            0,
+            81,
+            0x7654_3211,
+        ));
         poison_driver_task_retained_request(&usb_slot);
         assert_eq!(
             DriverTaskRetainedLeasePhase::from_usize(
@@ -16379,14 +16844,14 @@ mod tests {
             0x7654_3211,
         );
         assert_eq!(usb_slot.retained_doorbell_issued.load(Ordering::Acquire), 1);
-        assert!(
-            !arm_driver_task_retained_priority_lease_endpoint_wake_retry(
-                &usb_slot,
-                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-                81,
-                0x7654_3211,
-            )
-        );
+        assert!(!arm_driver_task_retained_priority_lease_wake_retry(
+            &usb_slot,
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            0,
+            81,
+            0x7654_3211,
+        ));
         assert!(matches!(
             active_driver_task_retained_request_for_slot(&usb_slot),
             Some(DriverTaskRetainedRequestState::Invalid { request: 81 })
@@ -16736,7 +17201,9 @@ mod tests {
             active_driver_task_retained_request_for_slot(&slot),
             Some(DriverTaskRetainedRequestState::Invalid { request: 73 })
         ));
-        assert!(mark_driver_task_retained_priority_lease_committed(&slot));
+        assert!(mark_driver_task_retained_priority_lease_committed(
+            &slot, false
+        ));
         assert!(matches!(
             active_driver_task_retained_request_for_slot(&slot),
             Some(DriverTaskRetainedRequestState::Issued { request: 73, .. })
@@ -16746,6 +17213,117 @@ mod tests {
             phase.operation(),
             DriverTaskRetainedLeaseOperation::NotifyRing
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn root_retained_grant_is_exact_monotonic_and_rearmed_from_consumed_truth() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            73,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        command.flags |= DRIVER_TASK_RING_FLAG_ONE_WAY;
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        command.aux1 = 7;
+
+        assert_eq!(next_driver_task_retained_grant_id(0), Some(1));
+        assert_eq!(next_driver_task_retained_grant_id(1), Some(2));
+        assert_eq!(next_driver_task_retained_grant_id(u32::MAX), None);
+        assert!(driver_task_ring_publish_continuation_grant(
+            &slot,
+            ring_root_ptr,
+            command,
+            1,
+        ));
+        let grant = driver_task_ring_read_continuation_grant(ring_root_ptr)
+            .expect("sequence-last root grant must be readable");
+        assert!(driver_task_continuation_grant_matches(grant, command, 1));
+
+        let lease_fingerprint = 0x1234_5679;
+        slot.retained_priority_lease_request
+            .store(command.sequence as usize, Ordering::Release);
+        slot.retained_priority_lease_fingerprint
+            .store(lease_fingerprint, Ordering::Release);
+        slot.retained_priority_lease_generation.store(
+            driver_task_retained_lease_generation(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Ordering::Release,
+        );
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
+        );
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        slot.retained_grant_id.store(1, Ordering::Release);
+        assert!(arm_driver_task_retained_priority_lease_wake_retry(
+            &slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            command.sequence as usize,
+            lease_fingerprint,
+        ));
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::Granted),
+            "an unconsumed exact grant is re-signalled without republishing authority",
+        );
+
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
+        );
+        let consumed_ptr = (ring_root_ptr
+            + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
+            + core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id))
+            as *mut u32;
+        // SAFETY: `consumed_ptr` addresses the fixed consumed-id field in this
+        // test-owned aligned ring page.
+        unsafe {
+            core::ptr::write_volatile(consumed_ptr, 1);
+        }
+        assert!(arm_driver_task_retained_priority_lease_wake_retry(
+            &slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            command.sequence as usize,
+            lease_fingerprint,
+        ));
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::GrantRequired),
+            "a consumed grant requires a fresh monotonic ticket on a later outer turn",
+        );
+
+        let mut stale_generation = command;
+        stale_generation.aux1 = command.aux1.wrapping_add(1);
+        assert!(!driver_task_continuation_grant_matches(
+            grant,
+            stale_generation,
+            1,
+        ));
+        let mut mutated_action = command;
+        mutated_action.arg0 ^= 1;
+        assert!(!driver_task_continuation_grant_matches(
+            grant,
+            mutated_action,
+            1,
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -20358,6 +20936,54 @@ mod tests {
             advanced_progress,
             request,
             aux0
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_root_grant_progress_matches_request_while_aux_carries_grant_id() {
+        let slot = DriverTaskCommandSlot::new();
+        let request = 73;
+        let ready = DriverTaskRingProgressRecord {
+            magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+            sequence: request,
+            phase: DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY,
+            aux0: 17,
+        };
+        assert!(driver_task_ring_progress_matches_request(
+            ready,
+            request,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        ));
+        assert!(driver_task_ring_progress_advanced_for_request(
+            &slot,
+            ready,
+            request,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        ));
+        record_driver_task_ring_progress(&slot, ready);
+        assert!(cached_driver_task_ring_progress_matches_request(
+            &slot,
+            request,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        ));
+        let accepted = DriverTaskRingProgressRecord {
+            phase: DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED,
+            ..ready
+        };
+        assert!(driver_task_ring_progress_advanced_for_request(
+            &slot,
+            accepted,
+            request,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        ));
+        assert!(!driver_task_ring_progress_matches_request(
+            DriverTaskRingProgressRecord {
+                sequence: request.wrapping_add(1),
+                ..ready
+            },
+            request,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
         ));
     }
 

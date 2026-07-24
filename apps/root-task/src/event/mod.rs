@@ -10989,6 +10989,25 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_root_grant_line(
+        grant: crate::hal::driver_task::DriverTaskRetainedGrantSnapshot,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: root grant active={} phase={} request={} generation={} issued={} notify_bound={} producer={} shared={} consumed={} exact={}",
+            Self::yes_no(grant.active),
+            grant.phase_name,
+            grant.request,
+            grant.generation,
+            Self::yes_no(grant.sequence_issued),
+            Self::yes_no(grant.root_notification_bound),
+            grant.producer_grant_id,
+            grant.shared_grant_id,
+            grant.consumed_grant_id,
+            Self::yes_no(grant.exact),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_driver_task_runtime_snapshot_if_present(
         &mut self,
         command: WifiDebugCommand,
@@ -11125,6 +11144,12 @@ where
             Self::wifi_diag_association_progress_line(association),
             Self::wifi_diag_association_retained_line(association),
         ] {
+            self.emit_console_line(detail.as_str());
+        }
+        if let Some(grant) = crate::hal::driver_task::driver_task_retained_grant_snapshot(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        ) {
+            let detail = Self::wifi_diag_root_grant_line(grant);
             self.emit_console_line(detail.as_str());
         }
         let evidence_source = if live_net_supersedes_runtime {
@@ -12691,6 +12716,42 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_gate_line(
+        gate: u8,
+        name: &'static str,
+        status: &'static str,
+        evidence: fmt::Arguments<'_>,
+        next: &'static str,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let mut suffix = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let _ = write!(suffix, " next={next}");
+        let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        let limit = DEFAULT_LINE_CAPACITY
+            .saturating_sub(suffix.len())
+            .saturating_sub(DIAGNOSTIC_TRUNCATION_MARKER.len())
+            .saturating_sub(1);
+        let truncated = {
+            let mut formatter = DiagnosticFormatter {
+                buf: &mut line,
+                limit,
+                truncated: false,
+            };
+            let _ = write!(
+                formatter,
+                "wifi: gate {} name={} status={} evidence=",
+                gate, name, status,
+            );
+            let _ = FmtWrite::write_fmt(&mut formatter, evidence);
+            formatter.truncated
+        };
+        if truncated {
+            let _ = line.push_str(DIAGNOSTIC_TRUNCATION_MARKER);
+        }
+        let _ = line.push_str(suffix.as_str());
+        line
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_gate_line(
         &mut self,
         gate: u8,
@@ -12699,14 +12760,7 @@ where
         evidence: fmt::Arguments<'_>,
         next: &'static str,
     ) {
-        let mut line = format_message(format_args!(
-            "wifi: gate {} name={} status={} evidence=",
-            gate, name, status
-        ));
-        if FmtWrite::write_fmt(&mut line, evidence).is_err() {
-            let _ = write!(line, "truncated");
-        }
-        let _ = write!(line, " next={next}");
+        let line = Self::wifi_gate_line(gate, name, status, evidence, next);
         self.emit_console_line(line.as_str());
     }
 
@@ -13231,6 +13285,11 @@ where
     #[cfg(feature = "kernel")]
     const fn wifi_cyw43_runtime_progress_gate(phase: u32) -> Option<u8> {
         match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED => None,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
@@ -13333,6 +13392,21 @@ where
     #[cfg(feature = "kernel")]
     const fn wifi_cyw43_runtime_progress_blocker(phase: u32) -> &'static str {
         match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN => {
+                "cyw43-root-grant-not-published"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY => {
+                "cyw43-root-grant-ack-pending"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED => {
+                "cyw43-root-grant-identity-rejected"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED => {
+                "cyw43-root-owner-quantum-pending"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED => {
+                "cyw43-root-grant-ack-failed"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "cyw43-engine-init-no-reply"
             }
@@ -13547,6 +13621,21 @@ where
     #[cfg(feature = "kernel")]
     const fn wifi_cyw43_runtime_progress_next_action(phase: u32) -> &'static str {
         match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN => {
+                "publish-or-resignal-exact-root-grant"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY => {
+                "ack-exact-root-grant-before-owner-quantum"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED => {
+                "inspect-root-request-fingerprint-and-generation"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED => {
+                "inspect-cyw43-owner-quantum-progress"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED => {
+                "retry-stable-root-grant-read"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "inspect-linked-cyw43-runtime-engine-init-dispatch"
             }
@@ -20787,6 +20876,41 @@ mod tests {
         }
         assert!(lines[1].contains("generation=4294967295 current=no"));
         assert!(lines[2].contains("request=4294967295 issued=yes accepted=yes"));
+        let grant = KernelConsoleTestPump::wifi_diag_root_grant_line(
+            crate::hal::driver_task::DriverTaskRetainedGrantSnapshot {
+                active: true,
+                phase_name: "grant-required",
+                request: u32::MAX,
+                generation: u32::MAX,
+                sequence_issued: true,
+                root_notification_bound: true,
+                producer_grant_id: u32::MAX,
+                shared_grant_id: u32::MAX,
+                consumed_grant_id: u32::MAX,
+                exact: true,
+            },
+        );
+        assert!(!grant.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{grant}");
+        assert!(grant.ends_with("consumed=4294967295 exact=yes"), "{grant}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_gate_line_reserves_truncation_marker_and_next_action() {
+        let evidence = "é".repeat(DEFAULT_LINE_CAPACITY);
+        let line = KernelConsoleTestPump::wifi_gate_line(
+            10,
+            "nettest-netstats-cohsh",
+            "blocked",
+            format_args!("{evidence}"),
+            "acceptance-complete",
+        );
+
+        assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
+        assert!(core::str::from_utf8(line.as_bytes()).is_ok());
+        assert!(line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+        assert!(line.ends_with(" next=acceptance-complete"), "{line}");
+        assert!(!line.ends_with("next="), "{line}");
     }
 
     #[cfg(feature = "kernel")]
@@ -26202,6 +26326,23 @@ mod tests {
             KernelConsoleTestPump::wifi_cyw43_runtime_progress_next_action(phase),
             "inspect-prior-cyw43-sdio-owner-frontier-and-restart-cause",
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_root_grant_progress_never_claims_a_physical_gate() {
+        for phase in [
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED,
+        ] {
+            assert_eq!(
+                KernelConsoleTestPump::wifi_cyw43_runtime_progress_gate(phase),
+                None,
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]

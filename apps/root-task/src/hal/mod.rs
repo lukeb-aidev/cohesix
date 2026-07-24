@@ -78,18 +78,19 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
     DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
     DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
-    DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED, DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS,
-    DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
-    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA,
-    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
-    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
-    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST,
-    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_RESERVED_ROOT_BADGE, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+    DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+    DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1437,6 +1438,7 @@ struct KernelDriverTaskHandle {
     cnode: seL4_CPtr,
     command_endpoint: seL4_CPtr,
     notification: seL4_CPtr,
+    root_notification: seL4_CPtr,
     runtime_irq: Option<RuntimeIrqBinding>,
     reciprocal_link_caps: [Option<InstalledChildCap>; 2],
     fault_slot: seL4_CPtr,
@@ -2529,6 +2531,18 @@ const fn driver_runtime_local_notification_receive_rights() -> sel4_sys::seL4_Ca
 }
 
 #[cfg(feature = "kernel")]
+const fn driver_runtime_root_notification_send_rights() -> sel4_sys::seL4_CapRights {
+    // Root may only signal this badged scheduling cap. It cannot receive from
+    // the child-bound object or manufacture an unbadged service wake.
+    sel4_sys::seL4_CapRights::new(0, 0, 0, 1)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_needs_root_notification(contract: DriverTaskContract) -> bool {
+    contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+}
+
+#[cfg(feature = "kernel")]
 const fn driver_runtime_command_endpoint_receive_rights() -> sel4_sys::seL4_CapRights {
     // The child owns the receive side of its command endpoint. Root retains
     // the ordinary send cap (and, for linked-pair recovery, its separately
@@ -3285,13 +3299,14 @@ impl<'a> KernelHal<'a> {
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} code_vaddr=0x{:08x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state={} owner_state_reason={}",
+                            "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} root_notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} code_vaddr=0x{:08x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state={} owner_state_reason={}",
                             handle.contract.name,
                             handle.contract.kind.proof_role(),
                             handle.tcb,
                             handle.cnode,
                             handle.command_endpoint,
                             handle.notification,
+                            handle.root_notification,
                             if handle.started { "yes" } else { "no" },
                             match handle.affinity_core {
                                 Some(core) => core as i32,
@@ -3440,13 +3455,14 @@ impl<'a> KernelHal<'a> {
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} code_vaddr=0x{:08x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} proof={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state=not-proven owner_state_reason={}",
+                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} root_notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} code_vaddr=0x{:08x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} proof={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state=not-proven owner_state_reason={}",
                             handle.contract.name,
                             handle.contract.kind.proof_role(),
                             handle.tcb,
                             handle.cnode,
                             handle.command_endpoint,
                             handle.notification,
+                            handle.root_notification,
                             if handle.started { "yes" } else { "no" },
                             match handle.affinity_core {
                                 Some(core) => core as i32,
@@ -3587,7 +3603,6 @@ impl<'a> KernelHal<'a> {
         if notification_err != seL4_NoError {
             return Err(HalError::Sel4(notification_err));
         }
-
         let guard_bits = sel4::word_bits().saturating_sub(child_depth as seL4_Word);
         let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
         sel4::set_tcb_space(
@@ -3629,6 +3644,27 @@ impl<'a> KernelHal<'a> {
         let affinity_core =
             apply_driver_tcb_affinity_after_bootstrap(contract, tcb, affinity_core)?;
 
+        let root_notification = if driver_runtime_needs_root_notification(contract) {
+            let slot = self.env.allocate_slot();
+            let err = sel4::cnode_mint_depth(
+                root_cnode,
+                slot,
+                root_depth,
+                root_cnode,
+                notification,
+                root_depth,
+                driver_runtime_root_notification_send_rights(),
+                seL4_Word::from(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+            );
+            if err != seL4_NoError {
+                let _ = sel4::cnode_delete(root_cnode, slot, root_depth);
+                return Err(HalError::Sel4(err));
+            }
+            slot
+        } else {
+            0
+        };
+        driver_task::publish_driver_task_root_notification(contract, root_notification as usize);
         Ok(KernelDriverTaskHandle {
             contract,
             role_bit,
@@ -3636,6 +3672,7 @@ impl<'a> KernelHal<'a> {
             cnode: child_cnode,
             command_endpoint,
             notification,
+            root_notification,
             fault_slot: driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
             ipc_frame: ipc_frame.cap(),
             stack_frame: stack_frame.cap(),
@@ -4524,7 +4561,6 @@ impl<'a> KernelHal<'a> {
         if notification_err != seL4_NoError {
             return Err(HalError::Sel4(notification_err));
         }
-
         let mut tracker = VSpaceTableTracker::new();
         let code_rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
         let data_rights = sel4_sys::seL4_CapRights_ReadWrite;
@@ -4941,9 +4977,30 @@ impl<'a> KernelHal<'a> {
             .map(RamFrame::cap)
             .ok_or(HalError::Unsupported("driver-runtime-stack-empty"))?;
 
+        let root_notification = if driver_runtime_needs_root_notification(contract) {
+            let slot = self.env.allocate_slot();
+            let err = sel4::cnode_mint_depth(
+                root_cnode,
+                slot,
+                root_depth,
+                root_cnode,
+                notification,
+                root_depth,
+                driver_runtime_root_notification_send_rights(),
+                seL4_Word::from(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+            );
+            if err != seL4_NoError {
+                let _ = sel4::cnode_delete(root_cnode, slot, root_depth);
+                return Err(HalError::Sel4(err));
+            }
+            slot
+        } else {
+            0
+        };
         let runtime_irq = runtime_irq.commit();
         let reciprocal_link_caps = reciprocal_link_caps.commit();
 
+        driver_task::publish_driver_task_root_notification(contract, root_notification as usize);
         Ok(KernelDriverTaskHandle {
             contract,
             role_bit,
@@ -4951,6 +5008,7 @@ impl<'a> KernelHal<'a> {
             cnode: child_cnode,
             command_endpoint,
             notification,
+            root_notification,
             fault_slot: driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
             ipc_frame: ipc_frame.cap(),
             stack_frame: stack_frame_cap,
@@ -5424,6 +5482,7 @@ mod tests {
             cnode: 0x101,
             command_endpoint: 0x102,
             notification: 0x103,
+            root_notification: 0x106,
             fault_slot: super::driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
             ipc_frame: 0x104,
             stack_frame: 0x105,
@@ -6343,6 +6402,11 @@ mod tests {
             "the child command cap may receive but cannot become a second producer"
         );
         assert_eq!(
+            super::driver_runtime_root_notification_send_rights().raw(),
+            0b0001,
+            "root may signal but cannot receive from the child-bound notification"
+        );
+        assert_eq!(
             cyw43_sdio_peer_notification_badge(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT),
             Some(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE)
         );
@@ -6383,6 +6447,22 @@ mod tests {
             0,
             "completion/DPC and IRQ badges must exclude the reserved root bit"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn only_cyw43_receives_root_continuation_notification_authority() {
+        assert!(super::driver_runtime_needs_root_notification(
+            super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        ));
+        for contract in [
+            super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            super::driver_task::GENET_DRIVER_TASK_CONTRACT,
+        ] {
+            assert!(!super::driver_runtime_needs_root_notification(contract));
+        }
     }
 
     #[cfg(feature = "kernel")]

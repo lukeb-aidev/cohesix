@@ -1362,6 +1362,16 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED: u32 = 462;
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED: u32 = 463;
 /// SDIO admitted a high-domain delegated command in its current owner generation.
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_COMMAND_ADMITTED: u32 = 464;
+/// A root-owned retained command is waiting for an exact continuation grant.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN: u32 = 465;
+/// A root-owned retained command observed its exact continuation grant.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY: u32 = 466;
+/// A root-owned retained command rejected a stale or mutated grant.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED: u32 = 467;
+/// A root-owned retained command acknowledged its exact continuation grant.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED: u32 = 468;
+/// A root-owned retained command could not acknowledge its exact grant.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED: u32 = 469;
 /// CYW43 retained backplane attach is issuing its one-shot ALP request.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_REQUEST: u32 = 447;
 /// CYW43 retained backplane attach is consuming one ALP readback turn.
@@ -1476,11 +1486,12 @@ pub const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u32 = 3;
 pub const DRIVER_RUNTIME_SDIO_IRQ: u32 = 158;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SDIO_IRQ`].
 pub const DRIVER_RUNTIME_SDIO_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_IRQ + 1;
-/// Reserved high notification bit that can never authorize device work.
+/// Reserved high notification bit for root-owned retained-command scheduling.
 ///
 /// Peer and IRQ badges coalesce with bitwise OR. Keeping this bit outside their
-/// mask makes stale authority fail closed. Foreground authority remains the
-/// immutable generation grant; a peer badge only provides a durable wake.
+/// mask makes stale authority fail closed. The badge is only a durable wake:
+/// the immutable request identity and exact generation grant remain the
+/// authority for one root-owned foreground quantum.
 pub const DRIVER_RUNTIME_RESERVED_ROOT_BADGE: u32 = 1 << 31;
 /// Badge delivered to CYW43 when the SDIO owner signals its reciprocal peer cap.
 pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE: u32 = 2;
@@ -1554,6 +1565,27 @@ const fn driver_runtime_continuation_fingerprint_mix(mut hash: u32, value: u32) 
     hash ^= value;
     hash = hash.wrapping_mul(16_777_619);
     hash
+}
+
+/// Fixed network-role bit used by linked runtime command routing.
+pub const DRIVER_RUNTIME_ROLE_NET: u32 = 1 << 3;
+
+/// Return whether primitive command routing selects the root-owned CYW43 lane.
+///
+/// This shared predicate prevents HAL and runtime transport selection from
+/// drifting into different fallback behavior. Sequence numbers and logical
+/// generation values are intentionally excluded: the local CYW43 ring has its
+/// own request namespace, and generation zero is the valid bootstrap epoch.
+/// The immutable continuation grant binds both fields separately.
+#[must_use]
+pub const fn driver_runtime_is_cyw43_root_continuation(
+    hot_path: u32,
+    role: u32,
+    aux0: u32,
+) -> bool {
+    hot_path == HOT_PATH_CYW43_WIFI
+        && role == DRIVER_RUNTIME_ROLE_NET
+        && aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
 }
 
 /// Fingerprint every immutable action field in a fixed runtime command.
@@ -3502,6 +3534,30 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_root_continuation_identity_is_generation_and_sequence_independent() {
+        assert!(driver_runtime_is_cyw43_root_continuation(
+            HOT_PATH_CYW43_WIFI,
+            DRIVER_RUNTIME_ROLE_NET,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        ));
+        assert!(!driver_runtime_is_cyw43_root_continuation(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_ROLE_NET,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        ));
+        assert!(!driver_runtime_is_cyw43_root_continuation(
+            HOT_PATH_CYW43_WIFI,
+            1 << 4,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        ));
+        assert!(!driver_runtime_is_cyw43_root_continuation(
+            HOT_PATH_CYW43_WIFI,
+            DRIVER_RUNTIME_ROLE_NET,
+            DRIVER_RUNTIME_ENGINE_INIT_AUX,
+        ));
+    }
+
+    #[test]
     fn counter_snapshot_is_fixed_layout_and_non_authority_bearing() {
         assert_eq!(core::mem::size_of::<DriverRuntimeCounterSnapshot>(), 256);
         assert_eq!(core::mem::align_of::<DriverRuntimeCounterSnapshot>(), 8);
@@ -4463,6 +4519,17 @@ mod tests {
         ];
         assert_eq!(retained_owner_phases, [458, 459, 460, 461, 462, 463, 464]);
         assert!(retained_owner_phases
+            .windows(2)
+            .all(|window| window[0] < window[1]),);
+        let root_grant_phases = [
+            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY,
+            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED,
+            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED,
+            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED,
+        ];
+        assert_eq!(root_grant_phases, [465, 466, 467, 468, 469]);
+        assert!(root_grant_phases
             .windows(2)
             .all(|window| window[0] < window[1]),);
     }
