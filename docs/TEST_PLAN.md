@@ -436,9 +436,11 @@ handoff deletes/zeros root's SDIO endpoint authority, all later root SDIO
 submission and staging fail before copying bytes, and delegation cannot return
 to root. The handoff test must then prove that a delegated CYW43-to-SDIO
 multi-phase command progresses without an endpoint cap through the exact
-acknowledged shared grant only; granting or reacquiring root endpoint authority
-fails the test. Live Wi-Fi proof must contain the successful one-way handoff
-marker before the first CYW43 transport/firmware command. HAL tests must
+acknowledged shared grant and the generated send-only owner notification; the
+notification alone cannot spend authority, and granting or reacquiring root
+endpoint authority fails the test. Live Wi-Fi proof must contain the successful
+one-way handoff marker before the first CYW43 transport/firmware command. HAL
+tests must
 reproduce the generated 21-bit monotonic device-untyped ordering: admitting
 `0xfe007000` before `0xfe00b000` preserves both pages, while mailbox-first
 allocation makes the lower page unavailable. Wi-Fi selection must admit
@@ -1211,19 +1213,24 @@ consumer acknowledgement is irrevocable, an unacknowledged id may only be
 re-signalled, and the producer may publish the next id only after observing the
 exact acknowledgement. The production foreground and DPC cursors must each
 show one poll, one later grant action, and one later poll, never two operations
-in one turn.
+in one turn. HAL must mint the CYW43 send cap from the SDIO owner's bound
+notification with send-only rights and badge 256; it must not copy the owner
+endpoint.
 
-Send-only reciprocal caps still deliver CYW43-to-SDIO badge 1 and
-SDIO-to-CYW43 badge 2, and the SDIO IRQ delivers badge 159. These coalescing
-notifications are service wakes only; the reserved high notification bit is
-excluded from service work and is not foreground authority by itself. Tests must prove
-that one pending peer/IRQ source can consume at most one service quantum, that
-at least 4,096 standalone level reassertions produce no second service quantum
-and lose no durable source, and that an exact later endpoint rendezvous or
-acknowledged shared grant admits only one foreground phase on its respective
-path. If deferred notification service consumes a root rendezvous, another
-fresh endpoint rendezvous is required for root foreground work; a delegated
-owner wake must still carry the already-published exact grant.
+Send-only reciprocal caps deliver CYW43-to-SDIO badge 256 and SDIO-to-CYW43
+badge 2, and the SDIO IRQ delivers badge 159. Badge 2 and badge 159 are
+service wakes. Badge 256 is a durable scheduling edge for an already-published
+command or grant, but is not foreground authority by itself. The reserved high
+notification bit is excluded from service work. Tests must prove that one
+pending service source can consume at most one service quantum, that at least
+4,096 standalone level reassertions produce no second service quantum and lose
+no durable source, and that an exact later root endpoint rendezvous or
+delegated grant admits only one foreground phase on its respective path. They
+must also coalesce badge 159 with badge 256, service exactly one IRQ quantum,
+preserve the typed owner wake across a scheduler handoff, and release exactly
+one owner quantum only after validating the already-published grant. If
+deferred notification service consumes a root rendezvous, another fresh
+endpoint rendezvous is required for root foreground work.
 CARD_INT coverage must also prove that terminal deferred service masks the host
 source before IRQ acknowledgement.
 The real SDIO post-claim priority-failure hook must prove that one episode
@@ -1231,11 +1238,13 @@ cannot reclaim its sticky cutover, that each failure/restart action consumes one
 outer turn, and that only the exact SDIO-first/CYW43-second pair restart resets
 the latch before a later recovery episode may claim cutover. A precondition
 rejection without a valid restart context remains terminal.
-Autonomous committed-ring polling must preserve
-initial intake when a best-effort endpoint send is lost. After `Pending`, only
-an exact root rendezvous or delegated shared grant for the retained intake may
-grant the next foreground quantum; a missed poll can schedule only the matching
-later wake/grant action and cannot recommit the command sequence. Pending-command
+Autonomous committed-ring polling must preserve root-command initial intake
+when a best-effort endpoint send is lost. Delegated initial intake must use the
+coalescing badge-256 notification and sequence-last ring command. After
+`Pending`, only an exact root rendezvous or delegated shared grant plus its
+typed wake for the retained intake may grant the next foreground quantum; a
+missed poll can schedule only the matching later wake/grant action and cannot
+recommit the command sequence. Pending-command
 DPC arbitration, reciprocal SDIO child-ring submission, every shared grant, and
 every reciprocal completion poll must each consume separately released retained
 quanta, with no private yield/resignal/poll loop. Retained
@@ -1270,7 +1279,7 @@ The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; 
 
 Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CYW43 firmware/NVRAM/SDPCM command records, direct-root-port xHCI keyboard polling, GENET RX/TX descriptor-ring service, and PCIe port read/write/flush helpers now compile in isolated runtime code before any root hardware execution; host coverage must keep proving those ring turns while preserving the fresh-Pi board-proof boundary.
 
-Current Wi-Fi acceptance also requires one exact `CYW43_SDIO_DPC generation=<n> captures=<n> published=<n> consumed=<n> rearms=<n> overruns=<n> epoch_errors=<n> sequence_errors=<n> ack_failures=<n> poisoned=yes|no masked=yes|no` diagnostic in the current boot slice and `WIFI_DPC_PROOF=yes` from `scripts/pi4_trace_normalize.py --gate-summary`. `wifi diag` emits this line only after a stable, valid read of the admitted SDIO owner ring and a same-generation v10 CYW43 client-counter sample. The v10 `rearms` value counts the real owner-notification publications; the older source-asserted-empty episode counter remains separate and cannot satisfy Gate 10. Acceptance fails closed with `WIFI_DPC_REASON=no-activity` unless the current exact proof has both `captures > 0` and `published > 0`; it also fails when the line is missing, poisoned, or masked, any overrun/epoch/sequence/ack failure is nonzero, captured and published totals differ, consumed and published totals differ, or the final IRQ service state is unrearmed. Exploratory summaries and wired-only historical evidence remain readable without this Wi-Fi-only proof.
+Current Wi-Fi acceptance also requires one exact `CYW43_SDIO_DPC generation=<n> captures=<n> published=<n> consumed=<n> rearms=<n> overruns=<n> epoch_errors=<n> sequence_errors=<n> ack_failures=<n> poisoned=yes|no masked=yes|no` diagnostic in the current boot slice and `WIFI_DPC_PROOF=yes` from `scripts/pi4_trace_normalize.py --gate-summary`. `wifi diag` preserves that bounded accounting grammar for normalizer compatibility and immediately follows it with `CYW43_SDIO_DPC_TRUTH generation=<n> ring_poisoned=yes|no client_sample_stale=yes|no ring_consumer=<n> sample_consumer=<n>`. Both lines must remain complete at maximum counter widths. The accounting `poisoned` value is the fail-closed aggregate of a live poisoned ring, a stale client sample, and client epoch errors; the companion line distinguishes those causes without weakening old-capture parsing. `wifi diag` emits the pair only after a stable, valid read of the admitted SDIO owner ring and a same-generation v10 CYW43 client-counter sample. The v10 `rearms` value counts generation-scoped owner-rearm signal attempts, not separately delivered wakes or hardware re-enables; the older source-asserted-empty episode counter remains separate and cannot satisfy Gate 10. Acceptance therefore also requires the stable live ring to report `masked=no`. It fails closed with `WIFI_DPC_REASON=no-activity` unless the current exact proof has both `captures > 0` and `published > 0`; it also fails when the accounting line is missing, poisoned, or masked, any overrun/epoch/sequence/ack failure is nonzero, captured and published totals differ, consumed and published totals differ, or the final IRQ service state is unrearmed. Exploratory summaries and wired-only historical evidence remain readable without this Wi-Fi-only proof.
 
 ### Automated Stage 03 — QEMU or Pi transport regression
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`

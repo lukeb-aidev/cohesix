@@ -4270,11 +4270,15 @@ pub(crate) struct Cyw43SdioDpcDiagnostic {
     pub captures: u32,
     pub published: u32,
     pub consumed: u32,
+    pub sample_consumer: u32,
     pub rearms: u32,
     pub overruns: u32,
     pub epoch_errors: u32,
     pub sequence_errors: u32,
     pub ack_failures: u32,
+    pub ring_poisoned: bool,
+    pub client_sample_stale: bool,
+    /// Compatibility aggregate for existing fail-closed acceptance callers.
     pub poisoned: bool,
     pub masked: bool,
 }
@@ -4437,24 +4441,27 @@ fn cyw43_sdio_dpc_diagnostic_from(
     // mismatch means the completion sample raced the stable ring snapshot and
     // could also omit later client errors, so the proof must be rerun.
     let client_consumer_mismatch = client.consumed != ring.consumer;
+    let ring_poisoned = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED != 0;
     let masked = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0;
     Cyw43SdioDpcDiagnostic {
         generation: ring.epoch,
         captures: ring.producer.saturating_add(ring.overruns),
         published: ring.producer,
         consumed: ring.consumer,
-        // This is the runtime's measured CARD_INT rearm count from the
-        // generation-bound RX-idle trace. Deriving it from the consumer index
-        // made the Gate-10 rearms-vs-captures check tautological and could
-        // conceal a masked level source that was never re-enabled.
+        sample_consumer: client.consumed,
+        // This is the CYW43 runtime's generation-bound owner-rearm signal
+        // attempt count, not proof that SDIO consumed each signal or re-enabled
+        // CARD_INT. Keeping it independent of the consumer index avoids a
+        // tautological Gate-10 comparison; the stable live ring's `masked`
+        // state supplies the separate final-rearm proof.
         rearms: client.rearms,
         overruns: ring.overruns,
         epoch_errors: client.epoch_errors,
         sequence_errors: client.sequence_errors,
         ack_failures: ring.ack_failures,
-        poisoned: client_consumer_mismatch
-            || client.epoch_errors != 0
-            || ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED != 0,
+        ring_poisoned,
+        client_sample_stale: client_consumer_mismatch,
+        poisoned: client_consumer_mismatch || client.epoch_errors != 0 || ring_poisoned,
         masked,
     }
 }
@@ -32918,9 +32925,12 @@ mod tests {
         assert_eq!(diagnostic.captures, 14);
         assert_eq!(diagnostic.published, 12);
         assert_eq!(diagnostic.consumed, 11);
+        assert_eq!(diagnostic.sample_consumer, 11);
         assert_eq!(diagnostic.rearms, 10);
         assert_eq!(diagnostic.epoch_errors, 3);
         assert_eq!(diagnostic.sequence_errors, 4);
+        assert!(!diagnostic.ring_poisoned);
+        assert!(!diagnostic.client_sample_stale);
         assert!(diagnostic.poisoned);
         assert!(diagnostic.masked);
 
@@ -32940,7 +32950,31 @@ mod tests {
                 sequence_errors: 0,
             },
         );
+        assert_eq!(mismatch.sample_consumer, 12);
+        assert!(!mismatch.ring_poisoned);
+        assert!(mismatch.client_sample_stale);
         assert!(mismatch.poisoned, "stale client sample must fail closed");
+
+        let ring_poisoned = cyw43_sdio_dpc_diagnostic_from(
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                epoch: 9,
+                producer: 14,
+                consumer: 14,
+                flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED,
+                overruns: 0,
+                ack_failures: 0,
+            },
+            Cyw43DpcClientCounters {
+                consumed: 14,
+                rearms: 14,
+                epoch_errors: 0,
+                sequence_errors: 0,
+            },
+        );
+        assert_eq!(ring_poisoned.sample_consumer, 14);
+        assert!(ring_poisoned.ring_poisoned);
+        assert!(!ring_poisoned.client_sample_stale);
+        assert!(ring_poisoned.poisoned);
     }
 
     #[cfg(feature = "kernel")]

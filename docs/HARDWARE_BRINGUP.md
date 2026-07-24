@@ -651,19 +651,19 @@ and another later `Poll` observes the completion. Foreground and DPC-owned
 children both follow this `Poll -> Grant -> Poll` shape. A notification by
 itself cannot advance either cursor.
 
-IRQ and linked-peer badges remain coalescing notification-service wakes and
-cannot advance foreground work. Separate send-only peer caps deliver
-CYW43-to-SDIO as badge 1 and SDIO-to-CYW43 as badge 2, while the SDIO IRQ is
-badge 159. The reserved high notification bit is excluded from service work but
-is not foreground authority. The first pending peer/IRQ source receives at
-most one service quantum. Reasserted level wakes remain coalesced and rejected
-until the exact endpoint rendezvous or acknowledged shared grant for that
-authority path arrives. If deferred service consumes a root endpoint
-rendezvous, another fresh rendezvous is required for root foreground work.
-Scheduler handoffs after service and rejected ready wakes prevent a
-priority-255 private IRQ loop. Autonomous committed-ring polling still prevents
-a lost initial root endpoint send from stranding first command intake. Idle runtimes
-block on their command endpoint rather than spinning.
+The SDIO-to-CYW43 badge-2 completion/DPC notification and badge-159 SDIO IRQ
+remain coalescing service wakes and cannot advance foreground work. CYW43 also
+holds one send-only badge-256 cap to the SDIO owner's bound notification; it is
+a durable scheduling edge for an already-published command or grant, not a
+service source or foreground authority. The reserved high notification bit is
+excluded from service work. If badge 159 and badge 256 coalesce, SDIO services
+exactly one IRQ quantum, retains the typed owner wake across a scheduler
+handoff, and may spend exactly one matching immutable grant on the next loop
+slice. A standalone reasserted level wake cannot spend that grant. If deferred
+service consumes a root endpoint rendezvous, another fresh rendezvous is
+required for root foreground work. Scheduler handoffs after service and
+rejected ready wakes prevent a priority-255 private IRQ loop. Idle runtimes
+block on their combined endpoint/notification receive rather than spinning.
 Pending-command DPC arbitration performs at most one retained DPC or foreground
 action per released quantum. A reciprocal CYW43-to-SDIO transaction uses one
 turn to submit the immutable child-ring command, one turn for each completion
@@ -671,24 +671,31 @@ poll, and one intervening acknowledged shared-grant turn for each required
 continuation. DPC and foreground routes have identical grant bounds. Neither
 path may privately yield, resignal, or poll itself into another action. A trace
 that shows multiple foreground phases after one endpoint rendezvous or shared
-grant, or foreground progress caused only by a peer/IRQ badge without a valid
+grant, or delegated foreground progress caused by badge 256 without a valid
 grant, fails the one-operation-per-turn contract.
 
-The newest exact capture is `pi4-serial-20260722-210743.log`, boot-paired with
-`tcpdump-wifi-20260722-210754.pcap` and
+The newest exact capture is `pi4-serial-20260724-193452.log`, with the bounded
+live diagnostic sidecar `pi4-serial-20260724-3ad-live-gate8-diag.log` and
+boot-paired `tcpdump-wifi-20260724-193450.pcap` plus
+`tcpdump-usb-eth-20260724-193450.pcap`. It identifies clean marker commit
+`3ad1076404b7` and image id
+`840342e2d12dd16c2847f911a1d667043b2a66c82d8e8d1c9472daefc8d6dd8e`.
+The retained lane repeatedly completes firmware, Function 2, and control-plane
+setup, so direct proof advances through Gate 7. Gate 8 then retains the first
+host-EAPOL control poll (`op=10`, sequence 21) without a terminal child result;
+association/link/EAPOL counters remain zero and recovery begins at the derived
+CYW43-to-SDIO child bound. The Wi-Fi capture contains one Pi-originated LLC XID
+response per inspected generation and no DHCP, ARP, IP, or TCP. That is
+post-firmware RF activity but not host Function-2 event delivery.
+
+The exact predecessor capture is `pi4-serial-20260722-210743.log`, boot-paired
+with `tcpdump-wifi-20260722-210754.pcap` and
 `tcpdump-usb-eth-20260722-210754.pcap`. It identifies marker commit
 `7328bedd6142` and image id
 `5a9f812c5408998e3292b4c4475bee545a4c8f2d0e5781a238054598ff313001`.
-Early DMA-page admission, both linked-runtime starts, host pinctrl readback, and
-the strict retained Function 1 extra-pull-up clear pass. The first causal
-failure remains Gate 6's first firmware Function 1 CMD53: 2,048 bytes as 32
-64-byte blocks at backplane address `0x00198000`. R5 is clean at `0x1000`, but
-the block count advances only from 32 to 30, `TRANSFER_MODE=0x0022`,
-`PRESENT_STATE=0x01ef0106`, `INT_STATUS=0`, and BCM2835 DMA `CS=0x21` remains
-active with DREQ held. Exactly 128 bytes, or two blocks, transferred before
-`DATA_END` failed to arrive. Neither paired capture contains a Pi Wi-Fi frame.
-This is still a pre-firmware/RF transport boundary; association, EAPOL, DHCP,
-TCP, and `cohsh` remain downstream.
+That older image stopped at Gate 6's first 2,048-byte Function 1 firmware CMD53
+after exactly two 64-byte blocks. It remains transport history, not the current
+Gate 8 frontier.
 
 The preceding exact capture is `pi4-serial-20260721-191137.log`, boot-paired
 with `tcpdump-wifi-20260721-191146.pcap` and
@@ -826,22 +833,28 @@ work for more than seven million outer turns. It is retained as historical
 evidence for the shared continuation-grant correction, not the current first
 failure.
 
-Production-chain inspection found the exact stranded edge. Successful SDIO
-handoff had correctly deleted root's command endpoint, but a delegated
-multi-phase CYW43-to-SDIO command still depended on endpoint-only continuation.
-Its first `Pending` quantum therefore had no authority path for the next owner
-action. Context replay could appear successful and reset recovery accounting,
-then the same stranded command requested another pair restart, producing the
-unbounded attempt-1 loop. The fix keeps root endpoint rendezvous for
-root-to-runtime commands and adds the acknowledged shared grant only for
-delegated owner work, with foreground/DPC parity and authoritative owner
-generation validation. It also limits an outer attempt to one pair restart
-until attached address/TCP readiness proves stability; replay alone cannot
-reset the streak. A pre-issue lease conflict that performed no action and made
-no scheduler change clears locally, while issued or scheduler-mutating
-uncertainty takes the ordered restart. These are host-side fixes until the next
-exact image is rebuilt, read back, and booted; this capture does not prove the
-fixed hardware result.
+Production-chain inspection found the remaining stranded edge. The retained
+shared grant was correct, but CYW43 still announced both first intake and later
+grants with `seL4_NBSend` to the SDIO command endpoint. An endpoint `NBSend` is
+discarded unless SDIO is already receiving. The fresh Gate 8 trace reaches an
+active SDIO child beside CARD_INT and then waits exactly to the derived child
+bound, which is the expected shape when the owner is servicing or retaining
+work as the one nonblocking continuation send occurs. The July 10 compatibility
+oracle hid this edge by repeatedly sending inside private yield/poll loops.
+
+The single production lane now keeps root endpoint rendezvous only for
+root-to-runtime commands. HAL mints CYW43 one send-only badge-256 cap from the
+SDIO owner's bound notification. The shared command or exact unused generation
+grant remains the sole authority; the notification is only a lossless
+coalescing scheduling edge. Badge 256 is disjoint from CARD_INT badge 159. When
+they coalesce, one loop slice services one IRQ quantum, an explicit scheduler
+handoff follows, and the preserved typed wake may release only one exact granted
+owner quantum on the next slice. Stale, malformed, wrong-generation, and
+already-consumed grants still reject without replay. The diagnostic also
+separates live ring poison from a stale client-counter sample, so a mixed
+snapshot no longer misreports an intact ring as physically poisoned. These are
+hardware-free corrections until the next exact image is rebuilt, read back, and
+booted; this capture does not prove the fixed hardware result.
 
 The July 10 W01 capture
 `pi4-serial-20260710-123050-m26d-authoritative-W01-pyserial.log`, paired with

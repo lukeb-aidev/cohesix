@@ -494,60 +494,66 @@ This as-built closure is authorized by Milestone 26d task
 
   Delegated CYW43-to-SDIO work has a different authority path. Successful
   one-way owner handoff deletes and zeros root's SDIO endpoint authority, and
-  CYW43 receives no substitute endpoint cap. A retained multi-phase SDIO child
-  therefore advances through one fixed 24-byte acknowledged continuation grant
+  CYW43 receives no substitute endpoint cap. HAL instead mints one send-only
+  badge-256 cap to the SDIO owner's bound notification. A retained multi-phase
+  SDIO child advances through one fixed 24-byte acknowledged continuation grant
   in reserved bytes 40 through 63 of the shared owner command page. The record
   carries a magic discriminator, request sequence, fingerprint of every action
   field, authoritative SDIO generation, monotonic nonzero grant id, and the
   SDIO consumer's `consumed_grant_id`. CYW43 publishes the immutable body and
-  then the grant id as the sequence-last commit. It never overwrites an
-  unacknowledged grant: a missed acknowledgement re-signals the same id, while
-  a new id is published only after the preceding id is acknowledged. Grant-id
-  exhaustion, malformed state, an already-consumed id, or any identity mismatch
-  fails closed.
+  then the grant id as the sequence-last commit before signalling the owner.
+  It never overwrites an unacknowledged grant: a missed acknowledgement
+  re-signals the same id, while a new id is published only after the preceding
+  id is acknowledged. Grant-id exhaustion, malformed state, an
+  already-consumed id, or any identity mismatch fails closed.
 
   The delegated owner compares the command generation with its independently
   retained SDIO generation before the first physical action, binds that
   generation when the command first returns `Pending`, validates the stable
   grant against that retained intake, and irrevocably acknowledges exactly one
-  grant before spending its one continuation quantum. CYW43 alone holds a
-  send-only copy of the SDIO owner's command endpoint after root deletes its
-  steady producer cap. Its endpoint message carries only the immutable ring
-  sequence: first intake requires the sequence-last command, and every retained
-  phase additionally requires the exact unused shared grant. A failed
-  completion poll plans publication or re-signal, the next `Grant` turn
-  performs that one retained grant action and one endpoint doorbell, and a
-  later `Poll` turn observes the result. Foreground and DPC-owned children use
-  the same `Poll -> Grant -> Poll` separation.
+  grant before spending its one continuation quantum. CYW43 alone holds the
+  send-only badge-256 notification cap after root deletes its steady endpoint
+  producer cap. First intake requires the sequence-last command from the shared
+  ring. Every retained phase additionally requires the exact unused shared
+  grant; the notification is a durable scheduling edge and never authority by
+  itself. A failed completion poll plans publication or re-signal, the next
+  `Grant` turn performs that one retained grant action and one notification
+  signal, and a later `Poll` turn observes the result. Foreground and DPC-owned
+  children use the same `Poll -> Grant -> Poll` separation.
 
   IRQ and completion/DPC notifications remain coalescing service wakes and can
-  never advance a retained foreground cursor. A real SDIO IRQ may consume one
-  notification-service quantum; immediately reasserted level wakes are
-  retained until a later admitted endpoint turn, and that service turn cannot
-  spend an exact foreground grant. Explicit scheduler handoffs follow service
-  and rejected immediately-ready wakes, so a
+  never advance a retained foreground cursor. The distinct badge-256
+  client-to-owner notification is a scheduling wake for an already-published
+  command or grant, not a service source or foreground authority. A real SDIO
+  IRQ may consume one notification-service quantum. If CARD_INT coalesces with
+  badge 256, the runtime services exactly one IRQ quantum, retains the typed
+  owner wake across an explicit scheduler handoff, and only then may consume
+  the exact immutable grant on the next loop slice. A standalone reasserted
+  level wake cannot spend that grant. Explicit scheduler handoffs follow
+  service and rejected immediately-ready wakes, so a
   priority-255 runtime cannot form a private IRQ loop. The reserved high
   notification bit is excluded from service badges but is not foreground grant
   authority. Root keeps the original unbadged notification cap private for TCB
   bind/restart, the child's bound local-notification cap is receive-only, and
-  the generated child-held routes are the CYW43-to-SDIO owner endpoint and the
-  SDIO-to-CYW43 badge-2 notification; the SDIO IRQ carries badge 159. A dropped
-  nonblocking initial endpoint send cannot replay work: the later completion
-  miss publishes or re-signals the same immutable grant and endpoint sequence
-  on separate outer turns. An idle runtime blocks for a new endpoint command
-  instead of polling or yielding. The legacy `dpc_owner_rearms` trace field
-  counts generation-scoped nonblocking owner-endpoint publication attempts,
-  not proven message delivery. Actual SDIO owner progress and rearm are
-  established by durable ring and owner telemetry such as `card_irq_rearms`.
+  the generated child-held routes are the CYW43-to-SDIO badge-256 notification
+  and the SDIO-to-CYW43 badge-2 notification; the SDIO IRQ carries badge 159.
+  Notification coalescing cannot replay work because the sequence-last ring
+  command and exact unused grant remain the only intake and continuation
+  authorities. An idle runtime blocks on its combined endpoint/notification
+  receive instead of polling or yielding. The legacy `dpc_owner_rearms` trace
+  field counts generation-scoped owner-notification signal attempts, not one
+  separately delivered wake per count. Actual SDIO owner progress and rearm
+  are established by durable ring and owner telemetry such as
+  `card_irq_rearms`.
   Request, full command fingerprint, and pair generation must match throughout;
   an issued-unknown request cannot be recommitted or granted again. Pair restart
   clears an unresolved lease only after both runtimes are suspended and fenced.
   Root-command phase order is `prepare -> boost bus -> boost primary -> commit
   -> endpoint wake -> poll -> [endpoint wake -> poll]* -> restore`;
-  delegated-owner phase order is `submit -> poll -> [grant -> poll]*`. Every
-  rendezvous, grant, and poll is a separate root EventPump turn. These are
-  scheduling admissions for one immutable operation, not private send/poll
-  loops or legacy driver fallbacks.
+  delegated-owner phase order is `submit+signal -> poll ->
+  [grant+signal -> poll]*`. Every submission, grant, and poll is a separate
+  child cursor turn. These are scheduling admissions for one immutable
+  operation, not private send/poll loops or legacy driver fallbacks.
 - Clearing a root-to-runtime transport also clears its cached progress magic,
   sequence, phase, and auxiliary word. Progress evidence is scoped to one
   transport generation; a rebound endpoint cannot inherit an earlier issued
@@ -888,14 +894,15 @@ This as-built closure is authorized by Milestone 26d task
   action. Any remaining foreground work blocks for another endpoint
   rendezvous. Reciprocal CYW43-to-SDIO foreground and DPC work separates
   child-ring submission, each completion poll, and each acknowledged shared
-  grant plus endpoint doorbell into retained quanta. Neither path contains a
-  private yield/resignal loop; notifications report only owner completion/DPC
-  or IRQ work and never grant a foreground quantum.
+  grant plus badge-256 notification into retained quanta. Neither path contains
+  a private yield/resignal loop. The typed owner wake never grants a foreground
+  quantum without the exact shared grant; badge-2 completion/DPC and badge-159
+  IRQ notifications remain service-only.
   If the SDIO IRQ arrives while an immutable owner request is active, the
   notification path records only the owed IRQ acknowledgement. It performs no
   SDHCI policy write, event publication, acknowledgement, or rearm beside that
   request. The delivered, unacknowledged IRQ cap is the bounded delivery mask
-  while the exact endpoint/grant cursor continues; `DPC_ACTIVATE` consumes the
+  while the exact notification/grant cursor continues; `DPC_ACTIVATE` consumes the
   latch in its ordered phases, or owner-idle service discharges it after the
   exact command completion. This keeps the interrupt top half and controller
   transaction under one SDIO sequencer, matching Linux's serialized MMC-host
@@ -1297,16 +1304,17 @@ autonomous intake poll survives a lost initial best-effort root endpoint send.
 Duplicate or stale deferred records cannot replay work or advance a replacement
 generation. Recovery tests also prove that context-replay success cannot reset
 the one-pair-restart-per-attempt bound and that only attached address/TCP
-  network-ready proof resets the streak.
+network-ready proof resets the streak.
 Production-chain coverage additionally drives both control and EAPOL TX through
 the exact five children (three window CMD52 writes, fresh IORx CMD52 read, and
 one F2 CMD53 write), drives the 18-child post-F2 release through real DPC
 activation, and lets a real DPC event consume owner-backed status/F2/empty
 confirmation work before a later queue-only foreground poll. The real DPC
 chain routes every retained SDIO phase through the production pending-command
-gate, injects an IRQ between grant publication and endpoint re-signal, proves
-that the interrupt is only latched while the owner cursor is active, and still
-requires the exact sequence-last completion before event advance/rearm. The queue-only
+gate, coalesces an IRQ with the badge-256 signal after grant publication,
+proves that the interrupt receives only one service quantum and the preserved
+typed wake releases only one exact granted owner quantum, and still requires
+the exact sequence-last completion before event advance/rearm. The queue-only
 test performs exactly 256 separately admitted control/RX polls with zero SDIO
 owner operations. Terminal pre-issue, issued-unknown, stale-generation,
 fingerprint-mutation, timeout, and corrupt-grant cuts preserve the immutable

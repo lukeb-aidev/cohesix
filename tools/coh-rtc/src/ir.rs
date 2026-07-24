@@ -2578,7 +2578,7 @@ impl DriverRuntimeImagePolicy {
                 .any(DriverRuntimeBusLinkSpec::is_cyw43_sdio_dpc_link);
             if !has_cyw43_sdio_link {
                 bail!(
-                    "root_task.driver_images.required missing cyw43-sdio endpoint/notification DPC topology"
+                    "root_task.driver_images.required missing cyw43-sdio reciprocal notification/grant DPC topology"
                 );
             }
         }

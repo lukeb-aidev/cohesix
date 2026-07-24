@@ -29,7 +29,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING,
     DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
     DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT,
     DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
     DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
@@ -1548,10 +1548,10 @@ pub const DRIVER_TASK_CHILD_COMMAND_SLOT: sel4_sys::seL4_CPtr = 2;
 #[cfg(feature = "kernel")]
 pub const DRIVER_TASK_CHILD_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr = 3;
 
-/// Child CSpace slot used by CYW43 to call the SDIO bus-owner runtime.
+/// Child CSpace slot used by CYW43 to notify the SDIO bus-owner runtime.
 #[cfg(feature = "kernel")]
-pub const DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
-    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT as sel4_sys::seL4_CPtr;
+pub const DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr =
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr;
 /// Child CSpace slot used by USB to call the PCIe/VL805 bus-owner runtime.
 #[cfg(feature = "kernel")]
 pub const DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
@@ -4510,7 +4510,7 @@ pub fn publish_driver_task_scheduler(
 /// published producer cap, and this retained cap is exposed only while both
 /// linked runtime TCBs are suspended under the pair-restart gate. The original
 /// notification cap remains the TCB-bind authority. Retained foreground
-/// quanta use only exact command-endpoint rendezvous and need no extra cap.
+/// quanta use exact generation grants plus the typed SDIO-owner notification.
 #[cfg(feature = "kernel")]
 pub fn publish_cyw43_sdio_restart_context(
     contract: DriverTaskContract,
@@ -4972,8 +4972,8 @@ const fn sdio_handoff_must_delete_endpoint(endpoint: usize, recovery_endpoint: u
 /// Root may use this ring only for descriptor replay and SDIO engine bootstrap.
 /// The transition succeeds only after those turns are drained and both sealed
 /// peers are admitted. Deleting root's endpoint cap leaves the child receive
-/// cap and CYW43's separately installed send-only copy alive for serialized
-/// owner service while removing root's steady send authority.
+/// cap and CYW43's separately installed send-only notification alive for
+/// serialized owner service while removing root's steady command authority.
 #[cfg(feature = "kernel")]
 pub fn handoff_sdio_command_ring_to_cyw43(
     cyw43_engine_completion: DriverTaskCompletionRecord,
@@ -6575,7 +6575,7 @@ fn generated_cyw43_sdio_runtime_topology_sealed(
         || u32::from(generated_link.owner_notification_slot)
             != DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
         || u32::from(generated_link.client_to_owner_slot)
-            != DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT
+            != DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT
         || u32::from(generated_link.owner_to_client_slot)
             != DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT
         || generated_link.shared_offset != u32::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE)

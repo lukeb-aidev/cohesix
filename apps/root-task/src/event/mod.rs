@@ -11370,11 +11370,10 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn emit_wifi_sdio_dpc_diagnostic(&mut self) {
-        let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() else {
-            return;
-        };
-        let line = format_message(format_args!(
+    fn wifi_sdio_dpc_accounting_line(
+        snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
             "CYW43_SDIO_DPC generation={} captures={} published={} consumed={} rearms={} overruns={} epoch_errors={} sequence_errors={} ack_failures={} poisoned={} masked={}",
             snapshot.generation,
             snapshot.captures,
@@ -11387,8 +11386,36 @@ where
             snapshot.ack_failures,
             if snapshot.poisoned { "yes" } else { "no" },
             if snapshot.masked { "yes" } else { "no" },
-        ));
-        self.emit_console_line(line.as_str());
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_sdio_dpc_truth_line(
+        snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "CYW43_SDIO_DPC_TRUTH generation={} ring_poisoned={} client_sample_stale={} ring_consumer={} sample_consumer={}",
+            snapshot.generation,
+            if snapshot.ring_poisoned { "yes" } else { "no" },
+            if snapshot.client_sample_stale {
+                "yes"
+            } else {
+                "no"
+            },
+            snapshot.consumed,
+            snapshot.sample_consumer,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_sdio_dpc_diagnostic(&mut self) {
+        let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() else {
+            return;
+        };
+        let accounting = Self::wifi_sdio_dpc_accounting_line(snapshot);
+        let truth = Self::wifi_sdio_dpc_truth_line(snapshot);
+        self.emit_console_line(accounting.as_str());
+        self.emit_console_line(truth.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -13565,7 +13592,7 @@ where
                 "verify-linked-sdio-cmd7-select"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN => {
-                "verify-linked-sdio-owner-endpoint-notification"
+                "verify-linked-sdio-owner-grant-notification"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE => {
                 "wait-linked-sdio-owner-completion"
@@ -14234,6 +14261,8 @@ where
             && snapshot.epoch_errors == 0
             && snapshot.sequence_errors == 0
             && snapshot.ack_failures == 0
+            && !snapshot.ring_poisoned
+            && !snapshot.client_sample_stale
             && !snapshot.poisoned
             && !snapshot.masked
     }
@@ -20718,6 +20747,40 @@ mod tests {
         }
         assert!(lines[1].contains("generation=4294967295 current=no"));
         assert!(lines[2].contains("request=4294967295 issued=yes accepted=yes"));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_sdio_dpc_diagnostic_lines_preserve_truth_without_truncation() {
+        let diagnostic = crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic {
+            generation: u32::MAX,
+            captures: u32::MAX,
+            published: u32::MAX,
+            consumed: u32::MAX,
+            sample_consumer: u32::MAX,
+            rearms: u32::MAX,
+            overruns: u32::MAX,
+            epoch_errors: u32::MAX,
+            sequence_errors: u32::MAX,
+            ack_failures: u32::MAX,
+            ring_poisoned: true,
+            client_sample_stale: true,
+            poisoned: true,
+            masked: true,
+        };
+        let accounting = KernelConsoleTestPump::wifi_sdio_dpc_accounting_line(diagnostic);
+        let truth = KernelConsoleTestPump::wifi_sdio_dpc_truth_line(diagnostic);
+
+        for line in [&accounting, &truth] {
+            assert!(
+                !line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+                "DPC telemetry must remain parseable: {line}"
+            );
+            assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
+        }
+        assert!(accounting.ends_with("poisoned=yes masked=yes"));
+        assert!(truth.contains("ring_poisoned=yes client_sample_stale=yes"));
+        assert!(truth.ends_with("ring_consumer=4294967295 sample_consumer=4294967295"));
     }
 
     #[cfg(feature = "kernel")]
@@ -29267,6 +29330,9 @@ mod tests {
                 epoch_errors: 0,
                 sequence_errors: 0,
                 ack_failures: 0,
+                ring_poisoned: false,
+                client_sample_stale: false,
+                sample_consumer: 12,
                 poisoned: false,
                 masked: false,
             },
@@ -29298,8 +29364,15 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(wifi.breadcrumb_suppression_observed);
         let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 poisoned=no masked=no";
+        let dpc_truth = "CYW43_SDIO_DPC_TRUTH generation=9 ring_poisoned=no client_sample_stale=no ring_consumer=12 sample_consumer=12";
         assert!(rendered.contains(dpc_line), "{rendered}");
+        assert!(rendered.contains(dpc_truth), "{rendered}");
         assert_eq!(rendered.matches("CYW43_SDIO_DPC ").count(), 1, "{rendered}");
+        assert_eq!(
+            rendered.matches("CYW43_SDIO_DPC_TRUTH ").count(),
+            1,
+            "{rendered}"
+        );
         assert!(
             rendered
                 .contains("wifi: debug subcommand=diag action=begin profile=bounded mode=one-shot"),
@@ -31648,6 +31721,9 @@ mod tests {
             epoch_errors: 0,
             sequence_errors: 0,
             ack_failures: 0,
+            ring_poisoned: false,
+            client_sample_stale: false,
+            sample_consumer: 4,
             poisoned: false,
             masked: false,
         };
@@ -31659,6 +31735,17 @@ mod tests {
         poisoned.poisoned = true;
         assert!(!KernelConsoleTestPump::wifi_diag_dpc_acceptance_pass_from(
             poisoned
+        ));
+        let mut ring_poisoned = healthy;
+        ring_poisoned.ring_poisoned = true;
+        assert!(!KernelConsoleTestPump::wifi_diag_dpc_acceptance_pass_from(
+            ring_poisoned
+        ));
+        let mut stale_sample = healthy;
+        stale_sample.client_sample_stale = true;
+        stale_sample.sample_consumer = 3;
+        assert!(!KernelConsoleTestPump::wifi_diag_dpc_acceptance_pass_from(
+            stale_sample
         ));
         let mut masked = healthy;
         masked.masked = true;

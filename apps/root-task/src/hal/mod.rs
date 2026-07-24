@@ -69,7 +69,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
     DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
     DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
     DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
     DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING,
     DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
@@ -1811,7 +1812,7 @@ fn generated_cyw43_sdio_topology() -> Result<GeneratedCyw43SdioTopology, HalErro
         && link.owner_hot_path == driver_task::DriverTaskHotPath::SdioHost.as_str()
         && u32::from(link.client_notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
         && u32::from(link.owner_notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
-        && u32::from(link.client_to_owner_slot) == DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT
+        && u32::from(link.client_to_owner_slot) == DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT
         && u32::from(link.owner_to_client_slot) == DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT
         && link.shared_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
         && link.shared_len == driver_task::DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES as u32
@@ -1830,6 +1831,9 @@ fn generated_cyw43_sdio_topology() -> Result<GeneratedCyw43SdioTopology, HalErro
 #[cfg(feature = "kernel")]
 const fn cyw43_sdio_peer_notification_badge(send_slot: u32) -> Option<u32> {
     match send_slot {
+        DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT => {
+            Some(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE)
+        }
         DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT => {
             Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE)
         }
@@ -1844,17 +1848,19 @@ const CYW43_SDIO_BUS_LINK_DIAGNOSTIC_CAPACITY: usize = 384;
 fn format_cyw43_sdio_bus_link_diagnostic(
     contract: DriverTaskContract,
     topology: GeneratedCyw43SdioTopology,
+    client_to_owner_badge: u32,
     owner_to_client_badge: u32,
 ) -> Result<heapless::String<CYW43_SDIO_BUS_LINK_DIAGNOSTIC_CAPACITY>, HalError> {
     let mut line = heapless::String::new();
     fmt::write(
         &mut line,
         format_args!(
-            "DRIVER_TASK_BUS_LINK contract={} owner={} channel={} client_doorbell=endpoint client_send_slot=0x{:04x} owner_doorbell=notification owner_send_slot=0x{:04x} owner_badge={} rights=send-only ring_vaddr=0x{:08x} data_vaddr=0x{:08x} shared_len={} link_epoch={}",
+            "DRIVER_TASK_BUS_LINK contract={} owner={} channel={} client_doorbell=notification client_send_slot=0x{:04x} client_badge={} owner_doorbell=notification owner_send_slot=0x{:04x} owner_badge={} rights=send-only ring_vaddr=0x{:08x} data_vaddr=0x{:08x} shared_len={} link_epoch={}",
             contract.name,
             SDIO_HOST_DRIVER_TASK_CONTRACT.name,
             topology.link.channel,
             topology.link.client_to_owner_slot,
+            client_to_owner_badge,
             topology.link.owner_to_client_slot,
             owner_to_client_badge,
             driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR,
@@ -4224,7 +4230,7 @@ impl<'a> KernelHal<'a> {
             .ok_or(HalError::Unsupported(
                 "driver-runtime-sdio-owner-handle-missing",
             ))?;
-        let (sdio_endpoint, sdio_ring_frame, sdio_shared_frames) =
+        let (_sdio_endpoint, sdio_ring_frame, sdio_shared_frames) =
             driver_task::driver_task_bus_owner_transport_caps_with_shared(
                 SDIO_HOST_DRIVER_TASK_CONTRACT,
                 driver_task::DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY,
@@ -4237,14 +4243,20 @@ impl<'a> KernelHal<'a> {
         let send_only = sel4_sys::seL4_CapRights::new(0, 0, 0, 1);
         let mut installed = ReciprocalLinkCapGuard::empty();
         let client_to_owner_slot = seL4_CPtr::from(topology.link.client_to_owner_slot);
-        let client_to_owner_err = sel4::cnode_copy_depth(
+        let client_to_owner_badge =
+            cyw43_sdio_peer_notification_badge(u32::from(topology.link.client_to_owner_slot))
+                .ok_or(HalError::Unsupported(
+                    "driver-runtime-sdio-owner-notification-badge",
+                ))?;
+        let client_to_owner_err = sel4::cnode_mint_depth(
             child_cnode,
             client_to_owner_slot,
             child_depth,
             root_cnode,
-            sdio_endpoint,
+            owner.notification,
             root_depth,
             send_only,
+            seL4_Word::from(client_to_owner_badge),
         );
         if client_to_owner_err != seL4_NoError {
             return Err(HalError::Sel4(client_to_owner_err));
@@ -4305,8 +4317,12 @@ impl<'a> KernelHal<'a> {
                 )
                 .map_err(HalError::Sel4)?;
         }
-        let line =
-            format_cyw43_sdio_bus_link_diagnostic(contract, topology, owner_to_client_badge)?;
+        let line = format_cyw43_sdio_bus_link_diagnostic(
+            contract,
+            topology,
+            client_to_owner_badge,
+            owner_to_client_badge,
+        )?;
         crate::bootstrap::log::force_uart_line(line.as_str());
         Ok(installed)
     }
@@ -5366,7 +5382,8 @@ mod tests {
         irq_notification_badge, Irq, IrqTrigger, CYW43_SDIO_BUS_LINK_DIAGNOSTIC_CAPACITY,
         DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
         DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
-        DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+        DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+        DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
     };
     #[cfg(feature = "kernel")]
     use pi4_driver_abi::DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
@@ -6326,22 +6343,42 @@ mod tests {
             "the child command cap may receive but cannot become a second producer"
         );
         assert_eq!(
-            cyw43_sdio_peer_notification_badge(DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT),
-            None,
-            "the CYW43-to-SDIO doorbell is an endpoint, not a notification"
+            cyw43_sdio_peer_notification_badge(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT),
+            Some(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE)
         );
         assert_eq!(
             cyw43_sdio_peer_notification_badge(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT),
             Some(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE)
         );
         assert_ne!(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE, 0);
+        assert_ne!(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, 0);
         assert_ne!(
             DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
             DRIVER_RUNTIME_SDIO_IRQ_BADGE
         );
+        assert_ne!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE & DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            0,
+            "the client-to-owner badge must remain bitwise disjoint from the SDIO IRQ"
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
+                & DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
+            0,
+            "the reciprocal peer badges must remain bitwise disjoint"
+        );
         assert_eq!(
             DRIVER_RUNTIME_RESERVED_ROOT_BADGE
                 & (DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE
+                    | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
                     | DRIVER_RUNTIME_SDIO_IRQ_BADGE),
             0,
             "completion/DPC and IRQ badges must exclude the reserved root bit"
@@ -6353,18 +6390,23 @@ mod tests {
     fn cyw43_sdio_bus_link_diagnostic_is_complete_and_bounded() {
         let topology = super::generated_cyw43_sdio_topology()
             .expect("generated Pi 4 CYW43/SDIO topology must remain valid");
+        let client_to_owner_badge =
+            cyw43_sdio_peer_notification_badge(u32::from(topology.link.client_to_owner_slot))
+                .expect("the client continuation notification must retain a generated badge");
         let owner_to_client_badge =
             cyw43_sdio_peer_notification_badge(u32::from(topology.link.owner_to_client_slot))
                 .expect("the owner completion notification must retain a generated badge");
         let line = format_cyw43_sdio_bus_link_diagnostic(
             super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
             topology,
+            client_to_owner_badge,
             owner_to_client_badge,
         )
         .expect("the complete bounded diagnostic must fit");
 
         assert!(line.len() < CYW43_SDIO_BUS_LINK_DIAGNOSTIC_CAPACITY);
-        assert!(line.contains("client_doorbell=endpoint"));
+        assert!(line.contains("client_doorbell=notification"));
+        assert!(line.contains("client_badge=256"));
         assert!(line.contains("owner_doorbell=notification"));
         assert!(line.contains("rights=send-only"));
         let (_, epoch) = line

@@ -180,7 +180,7 @@ impl DocFragments {
         for link in &manifest.root_task.driver_images.bus_links {
             writeln!(
                 schema_md,
-                "- `root_task.driver_images.bus_link.{}`: client=`{}` owner=`{}` local_notifications=`{}:{}` client_to_owner=`endpoint:{}` owner_to_client=`notification:{}` shared=`{}+{}` link_epoch=`{}` dpc_event=`{}+{}` depth=`{}`",
+                "- `root_task.driver_images.bus_link.{}`: client=`{}` owner=`{}` local_notifications=`{}:{}` client_to_owner=`notification:{}` owner_to_client=`notification:{}` shared=`{}+{}` link_epoch=`{}` dpc_event=`{}+{}` depth=`{}`",
                 link.channel,
                 link.client_hot_path,
                 link.owner_hot_path,
