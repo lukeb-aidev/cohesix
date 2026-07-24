@@ -651,6 +651,17 @@ the first admission of that exact sequence. Later grant and completion turns
 must not reapply it: doing so can resurrect `I_HMB_FRAME_IND` after a completed
 F2 read and create an endless same-frame drain. A different sequence while one
 is active must poison the generation rather than merge event identities.
+Production-chain coverage must also drive queue-empty hintless op10
+`CONTROL_POLL` and op8 `RX_POLL` commands through the real reciprocal
+`DPC_ACTIVATE` owner ring, exact source-event watermark, ordinary DPC
+controller seam, and post-probe FIFO read. It must prove an association event
+and a data frame are delivered, an event/probe race coalesces without a second
+acknowledgement, stale work is rejected without mutating the replacement
+generation, malformed current and issued-unknown completions poison without
+replay, and a non-hintless empty poll remains queue-only. Every child
+submission, grant, completion poll, DPC action, and post-probe read must consume
+a separate outer turn; no foreground Function 1 or Function 2 receive is
+permitted.
 
 Backplane-attach coverage must drive the production retained cursor through
 ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, the Pi
@@ -832,8 +843,17 @@ control-preinit case must carry `bus:txglomalign=8` through the real reciprocal
 controller ring and prove that either `BADARG` or `UNSUPPORTED` produces one
 terminal action, no value-4 submission, and deterministic pair recovery.
 Host-EAPOL timing tests must prove the retained PAE multicast refresh keeps
-`allmulti=0` and `promisc=0` beyond every former rescue threshold. Other
-optional-control tests must reject transport-fault phase advancement while
+`allmulti=0` and `promisc=0` beyond every former rescue threshold.
+Association-supervisor tests must hold an exact host-EAPOL prompt poll across
+the absolute join timeout and terminal-event edge, prove the ordinary
+host-EAPOL lane drains it through the real ring service without replacement or
+pair recovery, one child operation on each successive outer turn, and allow
+authentication suspension/backoff only after that retained action is gone.
+Prepared work with no accepted HAL request must be cancelled at the absolute
+deadline without submitting a new action. A real fault or issued-unknown
+prompt poll must retain the existing generation-poisoning proof. Other
+optional-control tests must reject
+transport-fault phase advancement while
 retaining only their Linux-supported semantic `UNSUPPORTED`/`BADARG`
 continuations and visible transport telemetry.
 

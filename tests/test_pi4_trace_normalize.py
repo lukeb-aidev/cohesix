@@ -11679,6 +11679,38 @@ def test_gate_summary_keeps_causal_parent_no_reply_over_secondary_sdio_progress(
     assert gates.wifi_subgate_name == "none"
 
 
+def test_gate_summary_reads_nested_gate_exact_over_later_recovery_progress() -> None:
+    """The Gate 8 evidence field preserves the live association blocker."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 8 name=host-eapol status=fail "
+            "evidence=exact=wifi-host-eapol-pending "
+            "control_stage=host-eapol dependency=ready-for-direct-evidence",
+            "wifi: evidence boundary proof=gate-frontier "
+            "direct_proof_gate=7 inferred_frontier_gate=7 proof_gate=7 "
+            "frontier_gate=7 failing_gate=8 target_gate=10 "
+            "failure_domain=wifi-host-eapol-pending",
+            "wifi: sdio linked_runtime_progress marker_valid=yes sequence=0 "
+            "phase=202 phase_name=runtime-poll-ready aux0=0x00000007 "
+            "gate=0 blocker=sdio-linked-runtime-progress-no-reply "
+            "next_action=inspect-linked-sdio-runtime-progress",
+            "[net-console] deferred failed detail=cyw43-pair-recovery-limit "
+            "driver-task runtime init failed",
+            "CYW43_BOOTSTRAP_SUPERVISOR attempt=5 status=exhausted "
+            "backoff_ms=0 recovery=full",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "wifi-host-eapol-pending"
+    assert gates.wifi_exact == "wifi-host-eapol-pending"
+    assert gates.wifi_phase == "host-eapol"
+    assert gates.wifi_blocker_line == 1
+
+
 def test_gate_summary_keeps_control_tx_no_reply_below_tcp_gate() -> None:
     events = normalizer.parse_events(
         [

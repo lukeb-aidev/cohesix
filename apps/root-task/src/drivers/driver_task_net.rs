@@ -5996,6 +5996,35 @@ pub(crate) struct Cyw43AssociationServiceOutcome {
     pub(crate) host_eapol_allowed: bool,
 }
 
+/// Passive, generation-bound association telemetry for `wifi diag`.
+///
+/// This snapshot reports only retained root/runtime state. It performs no
+/// register access and never submits a driver action, so operator diagnostics
+/// cannot perturb the single CYW43/SDIO owner lane.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43AssociationDiagnostic {
+    pub generation: u32,
+    pub progress_generation: u32,
+    pub progress_current: bool,
+    pub progress_epoch: u32,
+    pub runtime_ready: bool,
+    pub primary_join_ready: bool,
+    pub associated: bool,
+    pub link_up: bool,
+    pub host_eapol_active: bool,
+    pub host_eapol_required: bool,
+    pub host_eapol_secure: bool,
+    pub polls: u32,
+    pub event_rx: u32,
+    pub association_event: &'static str,
+    pub retained_owner: &'static str,
+    pub retained_generation: u32,
+    pub retained_request: u32,
+    pub retained_issued: bool,
+    pub retained_accepted: bool,
+}
+
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43AssociationJoinStep {
@@ -6170,7 +6199,38 @@ fn cyw43_host_eapol_retained_action_pending(session: &Cyw43HostEapolSession) -> 
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_host_eapol_runtime_action_pending() -> bool {
+const fn cyw43_child_action_accepted(request: Option<u32>, issued: bool) -> bool {
+    request.is_some() || issued
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_accepted_action_pending() -> bool {
+    if CYW43_PENDING_PROMPT_POLL
+        .lock()
+        .as_ref()
+        .is_some_and(|pending| {
+            pending.owner.host_eapol()
+                && cyw43_child_action_accepted(pending.request, pending.issued)
+        })
+    {
+        return true;
+    }
+    CYW43_HOST_EAPOL_SESSION
+        .lock()
+        .as_ref()
+        .is_some_and(|session| {
+            session
+                .pending_tx_submit
+                .as_ref()
+                .is_some_and(|pending| cyw43_child_action_accepted(pending.request, pending.issued))
+                || session.pending_key_install.as_ref().is_some_and(|pending| {
+                    cyw43_child_action_accepted(pending.request, pending.issued)
+                })
+        })
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_runtime_work_pending() -> bool {
     cyw43_prompt_poll_owned_by_host_eapol()
         || CYW43_HOST_EAPOL_SESSION
             .lock()
@@ -6183,28 +6243,97 @@ fn cyw43_host_eapol_runtime_action_pending() -> bool {
 }
 
 #[cfg(feature = "kernel")]
+pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
+    let prompt = (*CYW43_PENDING_PROMPT_POLL.lock()).filter(|poll| poll.owner.host_eapol());
+    let (progress, session_retained) = {
+        let guard = CYW43_HOST_EAPOL_SESSION.lock();
+        let progress = guard.as_ref().map(|session| session.progress);
+        let retained = guard.as_ref().and_then(|session| {
+            if let Some(pending) = session.pending_key_install.as_ref() {
+                Some((
+                    pending.stage,
+                    pending.connection_epoch,
+                    pending.request.unwrap_or(0),
+                    pending.issued,
+                    cyw43_child_action_accepted(pending.request, pending.issued),
+                ))
+            } else if let Some(pending) = session.pending_tx_submit.as_ref() {
+                Some((
+                    pending.stage,
+                    pending.connection_epoch,
+                    pending.request.unwrap_or(0),
+                    pending.issued,
+                    cyw43_child_action_accepted(pending.request, pending.issued),
+                ))
+            } else {
+                session
+                    .pending_tx_drain
+                    .as_ref()
+                    .map(|pending| (pending.stage, pending.connection_epoch, 0, false, false))
+            }
+        });
+        (progress, retained)
+    };
+    let retained = prompt.map_or(session_retained, |pending| {
+        Some((
+            pending.owner.stage(),
+            pending.generation,
+            pending.request.unwrap_or(0),
+            pending.issued,
+            cyw43_child_action_accepted(pending.request, pending.issued),
+        ))
+    });
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let progress_generation = progress.map_or(0, |progress| progress.connection_epoch);
+    Cyw43AssociationDiagnostic {
+        generation,
+        progress_generation,
+        progress_current: progress.is_some() && progress_generation == generation,
+        progress_epoch: CYW43_ASSOCIATION_PROGRESS_EPOCH.load(Ordering::Acquire),
+        runtime_ready: runtime_ready(DriverTaskHotPath::Cyw43Wifi),
+        primary_join_ready: CYW43_PRIMARY_BSSCFG_JOIN_READY.load(Ordering::Acquire) != 0,
+        associated: CYW43_ASSOCIATED.load(Ordering::Acquire) != 0,
+        link_up: CYW43_LINK_UP.load(Ordering::Acquire) != 0,
+        host_eapol_active: CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire) != 0,
+        host_eapol_required: CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire) != 0,
+        host_eapol_secure: CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0,
+        polls: progress.map_or(0, |progress| progress.polls),
+        event_rx: progress.map_or(0, |progress| progress.event_rx),
+        association_event: progress
+            .and_then(|progress| progress.association_event)
+            .unwrap_or("none"),
+        retained_owner: retained.map_or("none", |retained| retained.0),
+        retained_generation: retained.map_or(0, |retained| retained.1),
+        retained_request: retained.map_or(0, |retained| retained.2),
+        retained_issued: retained.is_some_and(|retained| retained.3),
+        retained_accepted: retained.is_some_and(|retained| retained.4),
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn fence_cyw43_host_eapol_retained_action_before_teardown() -> bool {
     let session_fenced = {
         let guard = CYW43_HOST_EAPOL_SESSION.lock();
         if let Some(session) = guard.as_ref() {
-            if let Some(pending) = session.pending_key_install.as_ref() {
+            if let Some(pending) = session
+                .pending_key_install
+                .as_ref()
+                .filter(|pending| cyw43_child_action_accepted(pending.request, pending.issued))
+            {
                 latch_cyw43_wsec_key_recovery(
                     pending,
                     Cyw43RecoveryCause::IssuedOwnerUnknown,
                     None,
                 );
                 true
-            } else if let Some(pending) = session.pending_tx_submit.as_ref() {
+            } else if let Some(pending) = session
+                .pending_tx_submit
+                .as_ref()
+                .filter(|pending| cyw43_child_action_accepted(pending.request, pending.issued))
+            {
                 latch_cyw43_host_eapol_tx_recovery(
                     pending,
                     Cyw43RecoveryCause::IssuedOwnerUnknown,
-                    None,
-                );
-                true
-            } else if let Some(pending) = session.pending_tx_drain.as_ref() {
-                latch_cyw43_host_eapol_tx_drain_recovery(
-                    pending,
-                    Cyw43RecoveryCause::AmbiguousCompletion,
                     None,
                 );
                 true
@@ -6219,7 +6348,9 @@ fn fence_cyw43_host_eapol_retained_action_before_teardown() -> bool {
         return true;
     }
     let pending = *CYW43_PENDING_PROMPT_POLL.lock();
-    if let Some(pending) = pending.filter(|poll| poll.owner.host_eapol()) {
+    if let Some(pending) = pending.filter(|poll| {
+        poll.owner.host_eapol() && cyw43_child_action_accepted(poll.request, poll.issued)
+    }) {
         latch_cyw43_prompt_poll_recovery_with_cause(
             &pending,
             Cyw43RecoveryCause::AmbiguousCompletion,
@@ -7421,6 +7552,23 @@ impl Cyw43AssociationSupervisor {
                     };
                 }
                 if observation.host_terminal || observation.terminal_failure {
+                    if observation.mode == Cyw43AssociationAuthMode::HostEapol
+                        && cyw43_host_eapol_accepted_action_pending()
+                    {
+                        // A terminal association observation does not revoke
+                        // an already accepted child-runtime action. Let the
+                        // ordinary host-EAPOL service lane advance that
+                        // immutable ticket by one bounded operation per later
+                        // outer turn until it becomes typed terminal.
+                        // Suspending here would classify the still-live prompt
+                        // poll as ambiguous, poison the generation, and turn
+                        // every normal association timeout into a pair restart.
+                        return Cyw43AssociationServiceOutcome {
+                            activity: true,
+                            host_eapol_allowed: true,
+                            ..Cyw43AssociationServiceOutcome::default()
+                        };
+                    }
                     suspend_cyw43_association_authentication(observation.mode);
                     self.schedule_backoff(now_ms, observation.progress_epoch);
                     return Cyw43AssociationServiceOutcome {
@@ -7441,6 +7589,21 @@ impl Cyw43AssociationSupervisor {
                     };
                 }
                 if cyw43_association_attempt_deadline_expired(observation, since_ms, now_ms) {
+                    if observation.mode == Cyw43AssociationAuthMode::HostEapol
+                        && cyw43_host_eapol_accepted_action_pending()
+                    {
+                        // The absolute attempt deadline is authoritative, but
+                        // teardown follows exact completion ownership. Resume
+                        // the retained host-EAPOL action one bounded operation
+                        // per later outer turn; the supervisor may suspend only
+                        // after that action has completed or faulted through
+                        // its normal generation-bound path.
+                        return Cyw43AssociationServiceOutcome {
+                            activity: true,
+                            host_eapol_allowed: true,
+                            ..Cyw43AssociationServiceOutcome::default()
+                        };
+                    }
                     suspend_cyw43_association_authentication(observation.mode);
                     self.schedule_backoff(now_ms, observation.progress_epoch);
                     return Cyw43AssociationServiceOutcome {
@@ -7829,6 +7992,14 @@ fn suspend_cyw43_association_authentication(mode: Cyw43AssociationAuthMode) {
         CYW43_HOST_EAPOL_ACTIVE.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_REQUIRED.store(1, Ordering::Release);
         if !fence_cyw43_host_eapol_retained_action_before_teardown() {
+            let mut prompt = CYW43_PENDING_PROMPT_POLL.lock();
+            if prompt.as_ref().is_some_and(|pending| {
+                pending.owner.host_eapol()
+                    && !cyw43_child_action_accepted(pending.request, pending.issued)
+            }) {
+                *prompt = None;
+            }
+            drop(prompt);
             *CYW43_HOST_EAPOL_SESSION.lock() = None;
         }
     }
@@ -20275,7 +20446,7 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
     // Host EAPOL owns the prompt poll until its exact retained transaction is
     // terminal. Steady smoltcp RX must not consume that completion or start a
     // competing poll merely because it runs earlier in the device poll order.
-    if cyw43_host_eapol_runtime_action_pending() {
+    if cyw43_host_eapol_runtime_work_pending() {
         return None;
     }
     if service_cyw43_maintenance_turn() {
@@ -27106,6 +27277,287 @@ mod tests {
                 progress_epoch: 0,
             }
         );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn association_supervisor_drains_retained_host_poll_before_timeout_teardown() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+
+        for terminal in [false, true] {
+            reset_cyw43_status_flags();
+            let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+            let ring_guard = test_publish_cyw43_ring(&mut ring_page);
+            assert!(
+                crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                )
+            );
+            assert!(
+                crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                    cyw43_supervisor_ring_test_service,
+                )
+            );
+            CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+            CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
+            CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+            *CYW43_HOST_EAPOL_SESSION.lock() =
+                Some(Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts"));
+            let mut supervisor = Cyw43AssociationSupervisor::new(true, Some(credentials), 0, 0);
+            CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+            begin_cyw43_outer_event_turn();
+            let prepared = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, 0);
+            assert!(prepared.progress.is_some());
+            assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+            let retained = CYW43_PENDING_PROMPT_POLL
+                .lock()
+                .expect("the real host-EAPOL lane retains its accepted control poll");
+            let retained_request = retained
+                .request
+                .expect("HAL accepted the exact retained request");
+            let retained_ticket = retained.ticket_id;
+            let retained_descriptor = retained.descriptor;
+            let now_ms = if terminal {
+                CYW43_HOST_EAPOL_ACTIVE.store(0, Ordering::Release);
+                CYW43_HOST_EAPOL_REQUIRED.store(1, Ordering::Release);
+                17
+            } else {
+                CYW43_HOST_EAPOL_JOIN_TIMEOUT_MS
+            };
+
+            begin_cyw43_outer_event_turn();
+            assert!(supervisor.claims_runtime_turn(Some(credentials), now_ms));
+            let drain = supervisor.service(Some(credentials), now_ms);
+            assert!(drain.activity);
+            assert!(!drain.claimed_runtime_turn);
+            assert!(drain.host_eapol_allowed);
+            assert!(matches!(
+                supervisor.phase,
+                Cyw43AssociationPhase::Awaiting { .. }
+            ));
+            assert!(
+                CYW43_DEFERRED_RECOVERY.lock().is_none(),
+                "an ordinary retained poll is not ambiguous at teardown"
+            );
+            assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+            let submitted_before = crate::hal::driver_task::driver_task_counter_snapshot(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .expect("accepted prompt poll has controller counters")
+            .submitted_turns;
+            let mut reached_backoff = false;
+            for turn in 1..=CYW43_RUNTIME_MIN_RETAINED_TURNS {
+                begin_cyw43_outer_event_turn();
+                let association =
+                    supervisor.service(Some(credentials), now_ms.saturating_add(turn as u64));
+                if !association.host_eapol_allowed {
+                    reached_backoff = true;
+                    break;
+                }
+                let slice = service_cyw43_host_eapol_slice_with_outcome(
+                    credentials,
+                    1,
+                    now_ms.saturating_add(turn as u64),
+                );
+                assert!(slice.progress.is_some());
+                assert!(
+                    cyw43_outer_event_turn_operation_count() <= 1,
+                    "the ordinary host-EAPOL lane may execute at most one ring operation"
+                );
+                assert!(
+                    CYW43_PENDING_PROMPT_POLL
+                        .lock()
+                        .as_ref()
+                        .is_none_or(|pending| {
+                            pending.ticket_id == retained_ticket
+                                && pending.request == Some(retained_request)
+                                && cyw43_retained_descriptor_fingerprint_matches(
+                                    pending.descriptor,
+                                    retained_descriptor,
+                                )
+                        }),
+                    "timeout draining cannot replace the accepted immutable ticket"
+                );
+            }
+            assert!(
+                reached_backoff,
+                "the real controller completion must let timeout teardown become terminal"
+            );
+            assert!(matches!(
+                supervisor.phase,
+                Cyw43AssociationPhase::Backoff { .. }
+            ));
+            assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
+            assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+            assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+            assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+            let submitted_after = crate::hal::driver_task::driver_task_counter_snapshot(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .expect("controller counter remains available")
+            .submitted_turns;
+            assert_eq!(
+                submitted_after, submitted_before,
+                "draining may poll the accepted request but cannot submit a replacement"
+            );
+
+            CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+            drop(ring_guard);
+        }
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn association_supervisor_cancels_prepared_unaccepted_work_at_deadline() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+
+        for prepared_kind in 0..2 {
+            reset_cyw43_status_flags();
+            CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+            CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
+            CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+            let mut session =
+                Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts");
+            if prepared_kind == 0 {
+                *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
+                    ticket_id: 0x7788,
+                    owner: Cyw43PromptPollOwner::HostEapolControl,
+                    generation: 0,
+                    descriptor: DriverRuntimeCyw43CommandDescriptor {
+                        op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+                        flags: DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+                        ..DriverRuntimeCyw43CommandDescriptor::empty()
+                    },
+                    request: None,
+                    issued: false,
+                    deadline: cyw43_poll_deadline_from_millis_or_polls(
+                        cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL),
+                        cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL),
+                    ),
+                    child_reply_latched: false,
+                    child_reply_renewals: 0,
+                });
+            } else {
+                begin_cyw43_host_eapol_tx_submit(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    &mut session,
+                    &[0x01, 0x03, 0x00, 0x05],
+                    "prepared-eapol-tx",
+                    "prepared-eapol-drain",
+                    0,
+                    Cyw43HostEapolTxDrainContinuation::Start,
+                )
+                .expect("local TX preparation succeeds without a child submission");
+            }
+            *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
+            let mut supervisor = Cyw43AssociationSupervisor::new(true, Some(credentials), 0, 0);
+
+            let teardown = supervisor.service(Some(credentials), CYW43_HOST_EAPOL_JOIN_TIMEOUT_MS);
+            assert!(teardown.activity);
+            assert!(!teardown.host_eapol_allowed);
+            assert!(matches!(
+                supervisor.phase,
+                Cyw43AssociationPhase::Backoff { .. }
+            ));
+            assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
+            assert!(CYW43_HOST_EAPOL_SESSION.lock().is_none());
+            assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+            assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+        }
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn association_diagnostic_reports_retained_owner_without_driver_io() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts");
+        session.progress.connection_epoch = 9;
+        session.progress.polls = 23;
+        session.progress.event_rx = 4;
+        session.progress.association_event = Some("set-ssid");
+        *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
+        CYW43_CONNECTION_EPOCH.store(9, Ordering::Release);
+        CYW43_ASSOCIATION_PROGRESS_EPOCH.store(7, Ordering::Release);
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+        *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
+            ticket_id: 0x9192,
+            owner: Cyw43PromptPollOwner::HostEapolData,
+            generation: 9,
+            descriptor: DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+                flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            request: Some(0xa1),
+            issued: true,
+            deadline: cyw43_poll_deadline_from_millis_or_polls(
+                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            ),
+            child_reply_latched: false,
+            child_reply_renewals: 0,
+        });
+
+        let snapshot = cyw43_association_diagnostic();
+        assert_eq!(snapshot.generation, 9);
+        assert_eq!(snapshot.progress_generation, 9);
+        assert!(snapshot.progress_current);
+        assert_eq!(snapshot.progress_epoch, 7);
+        assert!(snapshot.runtime_ready);
+        assert!(snapshot.primary_join_ready);
+        assert_eq!(snapshot.polls, 23);
+        assert_eq!(snapshot.event_rx, 4);
+        assert_eq!(snapshot.association_event, "set-ssid");
+        assert_eq!(snapshot.retained_owner, "cyw43-host-eapol-data-poll");
+        assert_eq!(snapshot.retained_generation, 9);
+        assert_eq!(snapshot.retained_request, 0xa1);
+        assert!(snapshot.retained_issued);
+        assert!(snapshot.retained_accepted);
+
+        *CYW43_PENDING_PROMPT_POLL.lock() = None;
+        {
+            let mut guard = CYW43_HOST_EAPOL_SESSION.lock();
+            let session = guard.as_mut().expect("diagnostic session remains present");
+            session.progress.connection_epoch = 8;
+            begin_cyw43_host_eapol_tx_submit(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                session,
+                &[0x01, 0x03, 0x00, 0x05],
+                "diagnostic-prepared-eapol-tx",
+                "diagnostic-prepared-eapol-drain",
+                23,
+                Cyw43HostEapolTxDrainContinuation::Start,
+            )
+            .expect("diagnostic TX cursor remains local and prepared");
+        }
+        let stale = cyw43_association_diagnostic();
+        assert_eq!(stale.generation, 9);
+        assert_eq!(stale.progress_generation, 8);
+        assert!(!stale.progress_current);
+        assert_eq!(stale.retained_owner, "diagnostic-prepared-eapol-tx");
+        assert_eq!(stale.retained_generation, 8);
+        assert_eq!(stale.retained_request, 0);
+        assert!(!stale.retained_issued);
+        assert!(!stale.retained_accepted);
 
         reset_cyw43_status_flags();
     }

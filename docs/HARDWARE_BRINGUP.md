@@ -397,7 +397,18 @@ The command effects are intentionally distinct. `wifi diag`, `usb diag`,
 `netstats`, and `smp` read retained state and must not submit a device
 operation; `wifi diag` labels cached progress as `last_progress` and
 `superseded=yes` when a terminal fault is newer. On the physical linked-runtime
-profile, that cache is transport-generation scoped: clearing/rebinding the
+profile it also emits bounded passive `wifi: association state`, `progress`,
+and `retained` records. They name the current connection generation, explicitly
+mark whether session progress belongs to it, report primary-join,
+association/link and host-EAPOL state, preserve poll/event counters, and expose
+the retained prompt/TX/key/drain owner, generation, request, issuance, and HAL
+acceptance state without line truncation. Use those records to distinguish an
+accepted join waiting for DPC-delivered events from stale progress, purely
+prepared local work, or a still-owned child request; the command itself never
+probes SDIO. The trace normalizer treats a dependency-aware Gate 8
+`evidence=exact=<association-blocker>` plus its matching evidence boundary as
+authoritative over later generic replay/recovery progress. That cache is
+transport-generation scoped: clearing or rebinding the physical linked-runtime
 transport zeros progress magic, sequence, phase, and auxiliary identity before
 a replacement generation can be admitted. On the physical linked-runtime
 profile, `wifi probe-ht` exposes only cached root-driver state when that debug

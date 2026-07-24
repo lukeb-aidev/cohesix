@@ -7316,6 +7316,9 @@ def summarize_terminal_wifi_diag_failure(
         status = event.fields.get("status", "").lower()
         if status == "fail":
             exact = normalize_wifi_exact(event.fields.get("fault_detail", ""))
+            evidence = event.fields.get("evidence", "")
+            if exact == "none" and evidence.startswith("exact="):
+                exact = normalize_wifi_exact(evidence.removeprefix("exact="))
             if exact == "none":
                 exact = normalize_wifi_blocker(
                     event.fields.get("blocker")

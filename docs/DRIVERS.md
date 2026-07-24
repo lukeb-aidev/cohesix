@@ -921,6 +921,18 @@ This as-built closure is authorized by Milestone 26d task
   Its immutable ticket and exact generation completion obey the same
   issued-unknown poisoning and stale-completion rejection as all other owner
   work, and it never permits replay of the completed control TX.
+  Steady op8 `RX_POLL` and op10 `CONTROL_POLL` use the same owner path when,
+  and only when, root marks an empty poll `RX_HINTLESS_FIRSTREAD`. Their
+  retained `Queue -> SourceProbe -> PostProbe` cursor first consumes an
+  existing DPC-owned FIFO head, otherwise publishes one exact source event,
+  yields while normal pending-command DPC arbitration performs all Function 1
+  and Function 2 work, then checks the FIFO once more. Non-hintless empty polls
+  remain queue-only. A stale source-probe completion is rejected without
+  mutating or poisoning its replacement generation; a malformed current or
+  issued-unknown completion poisons the current generation. Neither poll
+  operation may fall back to a foreground physical read. This is the
+  linked-runtime equivalent of Linux scheduling `brcmf_sdio_dpc` when a
+  control/data waiter needs a lost or coalesced source recheck.
   A DPC event's immutable source/frame-length hint is admitted only when its
   sequence first becomes active. Retained grant and completion turns continue
   from the DPC cursor without reapplying that hint; otherwise a completed F2
@@ -1067,6 +1079,15 @@ This as-built closure is authorized by Milestone 26d task
   prevents recovery from relocking a steady-path session, orphaning a
   possibly-issued join, or creating extra epoch transitions from duplicate
   faults.
+- Association timeout and terminal-event teardown never revoke an accepted
+  host-EAPOL child action. The supervisor first returns that immutable poll,
+  key, or TX cursor to the ordinary host-EAPOL service lane, which advances at
+  most one child operation on each successive outer turn until typed terminal
+  or fault. Only after no accepted action remains may it suspend authentication
+  and enter backoff. Purely local prepared work is cancelled at the absolute
+  deadline and cannot begin a new child request after expiry. A real fault or
+  issued-unknown action still poisons the generation through the normal
+  pair-recovery path.
 - For the shared op11 control lane, only a pre-transmit `NOT_READY` result or a
   decoded firmware reply is known-terminal. Any timeout after the Function 2
   transmit is issued-unknown: association cannot emit Gate 7a, PTK/GTK and

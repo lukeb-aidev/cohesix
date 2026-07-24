@@ -10943,6 +10943,52 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_association_state_line(
+        association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: association state generation={} runtime_ready={} join_ready={} associated={} link={} host_active={} host_required={} host_secure={}",
+            association.generation,
+            Self::yes_no(association.runtime_ready),
+            Self::yes_no(association.primary_join_ready),
+            Self::yes_no(association.associated),
+            Self::yes_no(association.link_up),
+            Self::yes_no(association.host_eapol_active),
+            Self::yes_no(association.host_eapol_required),
+            Self::yes_no(association.host_eapol_secure),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_association_progress_line(
+        association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: association progress generation={} current={} epoch={} polls={} event_rx={} last_event={}",
+            association.progress_generation,
+            Self::yes_no(association.progress_current),
+            association.progress_epoch,
+            association.polls,
+            association.event_rx,
+            association.association_event,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_association_retained_line(
+        association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: association retained owner={} generation={} request={} issued={} accepted={}",
+            association.retained_owner,
+            association.retained_generation,
+            association.retained_request,
+            Self::yes_no(association.retained_issued),
+            Self::yes_no(association.retained_accepted),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_driver_task_runtime_snapshot_if_present(
         &mut self,
         command: WifiDebugCommand,
@@ -11071,6 +11117,14 @@ where
             let detail = format_message(format_args!(
                 "wifi: driver-task replay failure detail=net-state-unavailable source={source}"
             ));
+            self.emit_console_line(detail.as_str());
+        }
+        let association = crate::drivers::driver_task_net::cyw43_association_diagnostic();
+        for detail in [
+            Self::wifi_diag_association_state_line(association),
+            Self::wifi_diag_association_progress_line(association),
+            Self::wifi_diag_association_retained_line(association),
+        ] {
             self.emit_console_line(detail.as_str());
         }
         let evidence_source = if live_net_supersedes_runtime {
@@ -20624,6 +20678,47 @@ mod tests {
     #[cfg(feature = "kernel")]
     type KernelConsoleTestPump =
         EventPump<'static, LoopbackSerial<32>, TestTimer, NullIpc, TicketTable<4>, 32, 32, 32>;
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_association_diagnostic_lines_preserve_terminal_fields_without_truncation() {
+        let diagnostic = crate::drivers::driver_task_net::Cyw43AssociationDiagnostic {
+            generation: u32::MAX,
+            progress_generation: u32::MAX,
+            progress_current: false,
+            progress_epoch: u32::MAX,
+            runtime_ready: true,
+            primary_join_ready: true,
+            associated: true,
+            link_up: true,
+            host_eapol_active: true,
+            host_eapol_required: true,
+            host_eapol_secure: true,
+            polls: u32::MAX,
+            event_rx: u32::MAX,
+            association_event: "set-ssid-authentication-complete",
+            retained_owner: "cyw43-host-eapol-control-poll",
+            retained_generation: u32::MAX,
+            retained_request: u32::MAX,
+            retained_issued: true,
+            retained_accepted: true,
+        };
+        let lines = [
+            KernelConsoleTestPump::wifi_diag_association_state_line(diagnostic),
+            KernelConsoleTestPump::wifi_diag_association_progress_line(diagnostic),
+            KernelConsoleTestPump::wifi_diag_association_retained_line(diagnostic),
+        ];
+
+        for line in &lines {
+            assert!(
+                !line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+                "association telemetry must remain parseable: {line}"
+            );
+            assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
+        }
+        assert!(lines[1].contains("generation=4294967295 current=no"));
+        assert!(lines[2].contains("request=4294967295 issued=yes accepted=yes"));
+    }
 
     #[cfg(feature = "kernel")]
     struct StubIpc {
