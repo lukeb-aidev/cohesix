@@ -12018,7 +12018,55 @@ def test_gate_summary_refines_cyw43_txglomalign_commandless_badarg() -> None:
     assert gates.wifi_phase == "cyw43-control-txglomalign"
 
 
-def test_gate_summary_ignores_resolved_optional_txglomalign_badarg() -> None:
+def test_gate_summary_refines_cyw43_txglomalign_commandless_unsupported() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=begin acceptance=no",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign op=11 flags=0x0008 "
+            "target=0x00000000 payload_off=284 payload_len=36 total_len=36 "
+            "detail=21259 reason=cyw43-control-exchange result=0xffffffe9",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=fail acceptance=no "
+            "code=5 detail=21259 result=0xffffffe9 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-plane status=failed acceptance=no",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-control-txglomalign-unsupported"
+    assert gates.wifi_exact == "cyw43-control-txglomalign-unsupported"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_unrelated_ready_cannot_resolve_cyw43_txglomalign_reject() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=begin acceptance=no",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign op=11 flags=0x0008 "
+            "target=0x00000000 payload_off=0 payload_len=36 total_len=36 "
+            "detail=21259 reason=cyw43-control-exchange result=0xfffffffe",
+            "DRIVER_TASK_RESOURCE_INIT contract=other hot_path=usb-hid "
+            "stage=cyw43-control-txglomalign status=ready acceptance=no",
+        ]
+    )
+
+    assert normalizer.summarize_cyw43_control_txglomalign_reject(events) == (
+        "cyw43-control-txglomalign-badarg",
+        "cyw43-control-txglomalign",
+        2,
+    )
+
+
+def test_gate_summary_rejects_legacy_txglomalign_fallback() -> None:
     events = normalizer.parse_events(
         [
             "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
@@ -12046,9 +12094,35 @@ def test_gate_summary_ignores_resolved_optional_txglomalign_badarg() -> None:
         ]
     )
 
-    assert normalizer.summarize_cyw43_control_txglomalign_reject(events) is None
+    assert normalizer.summarize_cyw43_control_txglomalign_reject(events) == (
+        "cyw43-control-txglomalign-legacy-value4",
+        "cyw43-control-txglomalign-fallback4",
+        7,
+    )
     gates = normalizer.summarize_gates(events)
-    assert gates.wifi_blocker != "cyw43-control-txglomalign-badarg"
+    assert gates.wifi_blocker == "cyw43-control-txglomalign-legacy-value4"
+    assert gates.wifi_exact == "cyw43-control-txglomalign-legacy-value4"
+    assert gates.wifi_phase == "cyw43-control-txglomalign-fallback4"
+
+
+def test_gate_summary_rejects_fallback_only_txglomalign_value4() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign-fallback status=begin acceptance=no",
+            "CYW43_DRIVER_TASK_TXGLOMALIGN contract=cyw43455 "
+            "stage=cyw43-control-txglomalign-fallback action=ready "
+            "value=4 code=2 detail=0 result=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign-fallback status=ready acceptance=no",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_blocker == "cyw43-control-txglomalign-legacy-value4"
+    assert gates.wifi_exact == "cyw43-control-txglomalign-legacy-value4"
+    assert gates.wifi_phase == "cyw43-control-txglomalign-fallback"
 
 
 def test_gate_summary_tracks_hintless_firstread_no_irq_terminal() -> None:

@@ -7664,34 +7664,42 @@ def summarize_cyw43_control_revinfo_badarg(
 def summarize_cyw43_control_txglomalign_reject(
     events: Iterable[TraceEvent],
 ) -> tuple[str, str, int] | None:
-    """Return exact proof when firmware rejects the first txglomalign exchange."""
+    """Return exact proof of a rejected or non-AArch64 txglomalign action."""
 
     latest: tuple[str, str, int] | None = None
+    legacy_value4: tuple[str, str, int] | None = None
     resolved_line = 0
     for event in events:
         raw_lower = event.raw.lower()
-        if "driver_task_resource_init" in raw_lower:
-            stage = event.fields.get("stage", "").lower()
-            status = event.fields.get("status", "").lower()
-            if (
-                stage == "cyw43-control-txglomalign"
-                and status
-                in {
-                    "ready",
-                    "optional-badarg",
-                    "optional-unsupported",
-                    "optional-skip",
-                }
-            ) or (
-                stage == "cyw43-control-txglomalign-fallback4"
-                and status
-                in {
-                    "ready",
-                    "optional-badarg",
-                    "optional-unsupported",
-                }
-            ):
-                resolved_line = max(resolved_line, event.line)
+        fields = event.fields
+        stage = fields.get("stage", "").lower()
+        contract = fields.get("contract", "").lower()
+        hot_path = fields.get("hot_path", "").lower()
+        if resource_init_step(
+            event,
+            contract="cyw43455",
+            hot_path="cyw43-wifi",
+            stages={"cyw43-control-txglomalign"},
+            statuses={"ready"},
+        ):
+            resolved_line = max(resolved_line, event.line)
+        exact_cyw43_source = contract == "cyw43455" and (
+            not hot_path or hot_path == "cyw43-wifi"
+        )
+        legacy_stage = stage.startswith("cyw43-control-txglomalign-fallback")
+        explicit_value4 = (
+            parse_hex_int(fields.get("value")) == 4
+            and "txglomalign" in raw_lower
+        )
+        literal_value4 = "bus:txglomalign=4" in raw_lower
+        if exact_cyw43_source and (
+            legacy_stage or explicit_value4 or literal_value4
+        ):
+            legacy_value4 = (
+                "cyw43-control-txglomalign-legacy-value4",
+                stage or "cyw43-control-txglomalign",
+                event.line,
+            )
         exact = cyw43_control_exchange_status_event_exact(event)
         if exact not in {
             "cyw43-control-txglomalign-badarg",
@@ -7699,6 +7707,8 @@ def summarize_cyw43_control_txglomalign_reject(
         }:
             continue
         latest = (exact, "cyw43-control-txglomalign", event.line)
+    if legacy_value4 is not None:
+        return legacy_value4
     if latest is not None and latest[2] <= resolved_line:
         return None
     return latest
@@ -10984,7 +10994,7 @@ def wifi_function2_ready_step(event: TraceEvent) -> bool:
 
 
 def wifi_control_txglomalign_step(event: TraceEvent) -> bool:
-    """Return true once Linux-shaped txglomalign negotiation is resolved."""
+    """Return true once Linux's sole AArch64 txglomalign action succeeds."""
 
     return (
         resource_init_step(
@@ -10992,19 +11002,7 @@ def wifi_control_txglomalign_step(event: TraceEvent) -> bool:
             contract="cyw43455",
             hot_path="cyw43-wifi",
             stages={"cyw43-control-txglomalign"},
-            statuses={
-                "ready",
-                "optional-badarg",
-                "optional-unsupported",
-                "optional-skip",
-            },
-        )
-        or resource_init_step(
-            event,
-            contract="cyw43455",
-            hot_path="cyw43-wifi",
-            stages={"cyw43-control-txglomalign-fallback4"},
-            statuses={"ready", "optional-badarg", "optional-unsupported"},
+            statuses={"ready"},
         )
         or control_reply_matched_step(event, "cyw43-control-txglomalign")
         or (

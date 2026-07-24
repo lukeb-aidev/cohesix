@@ -1122,6 +1122,15 @@ This as-built closure is authorized by Milestone 26d task
   host-EAPOL sequencer after the linked runtime completes the primary join.
   Firmware-supplicant, wrapper, PMK-launch, and adaptive fallback paths are not
   present. Open profiles retain only their explicit open-network lane.
+- Pi 4 AArch64 control preinitialization submits exactly one immutable
+  `bus:txglomalign=8` action, matching Linux's 64-bit DMA build. A firmware
+  `BADARG` or `UNSUPPORTED` result fails that control generation and enters the
+  owner-first pair-recovery boundary; it never submits the ARM32 value `4` or
+  replays the op11 parent. Host-EAPOL receive admission is likewise one exact
+  station policy: the PAE multicast address is installed with `allmulti=0` and
+  `promisc=0`. A later retained refresh may reassert those same values, but no
+  elapsed-time or EAPOL-Start threshold widens them to all-multicast or
+  promiscuous reception.
 - Association alone is not acceptance. Require DHCP, raw TCP/`cohsh`, clean
   counters, and repeated current-image boots with paired network evidence.
   Gate 7 is likewise an ordered proof, not the latest reported frontier:

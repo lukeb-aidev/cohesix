@@ -798,9 +798,15 @@ fence pair recovery. Real-ring adversarial cases must cover maintenance op11,
 all four prompt-poll owners, association and WSEC payload drift, and an ETH_TX
 child cursor whose parent request was released before a carrier-generation
 change. They must preserve the original descriptor, digest, ticket, and owner
-generation and prove stable `submitted_turns` after the fault. Optional-control
-tests must reject transport-fault phase advancement while retaining semantic
-firmware `UNSUPPORTED`/`BADARG` continuation and visible transport telemetry.
+generation and prove stable `submitted_turns` after the fault. The AArch64
+control-preinit case must carry `bus:txglomalign=8` through the real reciprocal
+controller ring and prove that either `BADARG` or `UNSUPPORTED` produces one
+terminal action, no value-4 submission, and deterministic pair recovery.
+Host-EAPOL timing tests must prove the retained PAE multicast refresh keeps
+`allmulti=0` and `promisc=0` beyond every former rescue threshold. Other
+optional-control tests must reject transport-fault phase advancement while
+retaining only their Linux-supported semantic `UNSUPPORTED`/`BADARG`
+continuations and visible transport telemetry.
 
 The supervisor retry-budget unit test must admit exactly five attempts with
 `1/2/4/8` second delays after failures one through four, return a terminal
