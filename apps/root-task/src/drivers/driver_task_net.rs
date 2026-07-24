@@ -6275,6 +6275,15 @@ fn cyw43_control_tx_pair_recovery_completion(
         // complete pair into recovery without republishing this op11 parent.
         return None;
     }
+    if matches!(
+        completion.detail,
+        CYW43_SDIO_POST_RELEASE_HT_CLOCK_DETAIL | CYW43_SDIO_FUNCTION2_NOT_READY_DETAIL
+    ) {
+        // Both faults invalidate the released dongle generation rather than
+        // proving a terminal control reply. Enter retained owner-first pair
+        // recovery, but never republish this composite op11 parent.
+        return Some(completion);
+    }
     if !cyw43_control_tx_detail_allows_pair_recovery_classification(stage, completion.detail) {
         return None;
     }
@@ -32845,21 +32854,21 @@ mod tests {
                 "cyw43-control-firmware-version",
                 function2_not_ready
             ),
-            None
+            Some(function2_not_ready)
         );
         assert_eq!(
             cyw43_control_tx_pair_recovery_completion(
                 "cyw43-control-txglomalign",
                 post_release_ht_fault
             ),
-            None
+            Some(post_release_ht_fault)
         );
         assert_eq!(
             cyw43_control_tx_pair_recovery_completion(
                 "cyw43-control-firmware-version",
                 post_release_ht_fault
             ),
-            None
+            Some(post_release_ht_fault)
         );
         assert_eq!(
             cyw43_control_tx_pair_recovery_completion(
@@ -35148,6 +35157,97 @@ mod tests {
         assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
         assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn compatibility_control_exchange_routes_generation_invalidators_to_retained_pair_recovery() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        for detail in [
+            CYW43_SDIO_POST_RELEASE_HT_CLOCK_DETAIL,
+            CYW43_SDIO_FUNCTION2_NOT_READY_DETAIL,
+        ] {
+            reset_cyw43_status_flags();
+            let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+            let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+            let ring_guard = test_publish_cyw43_ring(&mut ring_page);
+            let sdio_ring_guard = test_publish_sdio_ring();
+            crate::hal::driver_task::publish_driver_task_shared_frame(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                0,
+                1,
+                shared_page.as_mut_ptr() as usize,
+            );
+            assert!(
+                crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                )
+            );
+            assert!(
+                crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                    cyw43_supervisor_ring_test_service,
+                )
+            );
+            CYW43_SUPERVISOR_FAULT_DETAIL.store(u32::from(detail), Ordering::Release);
+            CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+            CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+            let payload = [0x11, 0x22, 0x33, 0x44];
+            let mut recovery_pending = false;
+            for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+                begin_cyw43_outer_event_turn();
+                let mut progress = cyw43_bootstrap_progress_noop;
+                let outcome = cyw43_submit_runtime_control_exchange(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    &payload,
+                    CYW43_WLC_SET_VAR,
+                    73,
+                    "cyw43-control-retained-recovery-test",
+                    Cyw43ControlHeaderMode::Extended,
+                    false,
+                    0,
+                    "test",
+                    &mut progress,
+                );
+                assert!(cyw43_outer_event_turn_operation_count() <= 1);
+                if matches!(
+                    outcome,
+                    Err(Cyw43CommandSubmitError::Runtime(
+                        DriverTaskNetError::RuntimePending("cyw43-runtime-control-recovery")
+                    ))
+                ) {
+                    recovery_pending = true;
+                    break;
+                }
+                assert!(matches!(
+                    outcome,
+                    Err(Cyw43CommandSubmitError::Runtime(
+                        DriverTaskNetError::RuntimePending("cyw43-control-exchange-pending")
+                    ))
+                ));
+            }
+
+            assert!(
+                recovery_pending,
+                "generation-invalidating detail {detail:#06x} must enter retained recovery"
+            );
+            assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+            assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+            assert_eq!(
+                CYW43_DEFERRED_RECOVERY
+                    .lock()
+                    .expect("the exact owner fault publishes deferred recovery")
+                    .cause,
+                Cyw43RecoveryCause::AmbiguousCompletion
+            );
+
+            CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+            drop(sdio_ring_guard);
+            drop(ring_guard);
+        }
         reset_cyw43_status_flags();
     }
 
