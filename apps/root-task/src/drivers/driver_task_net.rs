@@ -17849,7 +17849,7 @@ fn derive_cyw43_sdio_owner_fault_emission(
         .and_then(|offset| u32::from(descriptor.payload_offset).checked_add(offset as u32));
     let ai_control_primary = cyw43_owner_ai_control_primary(descriptor, snapshot, detail);
     let owner_window = if probe_pmucontrol_primary {
-        "probe-pmucontrol-cmd52-byte-primary"
+        "probe-pmucontrol-cmd53-word-primary"
     } else if ai_control_primary && snapshot.cmd == 52 {
         "ai-control-cmd52-primary"
     } else if ai_control_primary {
@@ -17857,7 +17857,7 @@ fn derive_cyw43_sdio_owner_fault_emission(
     } else {
         cyw43_owner_window_label(descriptor)
     };
-    let retry = if ai_control_primary || probe_pmucontrol_primary {
+    let retry = if ai_control_primary {
         "none"
     } else {
         cyw43_owner_retry_label(snapshot, detail, result)
@@ -18002,7 +18002,7 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         sdio_transfer_failure_r5(result),
         owner_window,
         if probe_pmucontrol_primary {
-            "probe-pmucontrol-cmd52-byte-primary"
+            "probe-pmucontrol-cmd53-word-primary"
         } else if ai_control_primary && snapshot.cmd == 52 {
             "ai-control-cmd52-primary"
         } else if ai_control_primary {
@@ -18240,15 +18240,16 @@ const fn cyw43_owner_probe_pmucontrol_primary_target(
 ) -> Option<u32> {
     if descriptor.op != DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP
         || !matches!(detail, 0x5333 | 0x5334)
-        || snapshot.cmd != 52
+        || snapshot.cmd != 53
         || snapshot.cmd53_function() != 1
-        || snapshot.len != 1
+        || snapshot.cmd53_block_mode()
+        || !snapshot.cmd53_increment()
+        || snapshot.cmd53_addr()
+            != ((CYW43_CHIPCOMMON_PMUCONTROL_ADDR & CYW43_BACKPLANE_ADDRESS_MASK)
+                | CYW43_BACKPLANE_32BIT_FLAG)
+        || snapshot.len != 4
+        || snapshot.cmd53_count() != 4
     {
-        return None;
-    }
-    let base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & CYW43_BACKPLANE_ADDRESS_MASK;
-    let addr = snapshot.cmd53_addr();
-    if addr < base || addr > base + 3 {
         return None;
     }
     if !match detail {
@@ -18258,7 +18259,7 @@ const fn cyw43_owner_probe_pmucontrol_primary_target(
     } {
         return None;
     }
-    Some(CYW43_CHIPCOMMON_PMUCONTROL_ADDR + (addr - base))
+    Some(CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
 }
 
 #[cfg(feature = "kernel")]
@@ -34415,7 +34416,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_owner_primary_lanes_cover_ai_control_and_pmucontrol_bytes() {
+    fn cyw43_owner_primary_lanes_cover_ai_control_and_atomic_pmucontrol_word() {
         let descriptor = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
@@ -34472,45 +34473,32 @@ mod tests {
             op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
-        let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & CYW43_BACKPLANE_ADDRESS_MASK;
-        for offset in 0..4 {
-            for (detail, write) in [(0x5333, false), (0x5334, true)] {
-                let target = CYW43_CHIPCOMMON_PMUCONTROL_ADDR + offset;
-                let arg = (1 << 28) | ((pmu_base + offset) << 9) | if write { 1 << 31 } else { 0 };
-                assert_eq!(
-                    cyw43_owner_probe_pmucontrol_primary_target(
-                        firmware_prep,
-                        SdioFaultTelemetry {
-                            arg,
-                            cmd: 52,
-                            len: 1,
-                            ..snapshot
-                        },
-                        detail,
-                    ),
-                    Some(target),
-                );
-            }
+        let pmu_bus_addr = (CYW43_CHIPCOMMON_PMUCONTROL_ADDR & CYW43_BACKPLANE_ADDRESS_MASK)
+            | CYW43_BACKPLANE_32BIT_FLAG;
+        for (detail, write) in [(0x5333, false), (0x5334, true)] {
+            let arg =
+                (1 << 28) | (1 << 26) | (pmu_bus_addr << 9) | 4 | if write { 1 << 31 } else { 0 };
+            assert_eq!(
+                cyw43_owner_probe_pmucontrol_primary_target(
+                    firmware_prep,
+                    SdioFaultTelemetry {
+                        arg,
+                        cmd: 53,
+                        len: 4,
+                        block_size: 4,
+                        block_count: 1,
+                        ..snapshot
+                    },
+                    detail,
+                ),
+                Some(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
+            );
         }
         assert_eq!(
             cyw43_owner_probe_pmucontrol_primary_target(
                 firmware_prep,
                 SdioFaultTelemetry {
-                    arg: (1 << 31) | (1 << 28) | (pmu_base << 9),
-                    cmd: 52,
-                    len: 1,
-                    ..snapshot
-                },
-                0x5333,
-            ),
-            None,
-            "read detail cannot describe a CMD52 write"
-        );
-        assert_eq!(
-            cyw43_owner_probe_pmucontrol_primary_target(
-                firmware_prep,
-                SdioFaultTelemetry {
-                    arg: (1 << 28) | (pmu_base << 9) | 4,
+                    arg: (1 << 31) | (1 << 28) | (1 << 26) | (pmu_bus_addr << 9) | 4,
                     cmd: 53,
                     len: 4,
                     ..snapshot
@@ -34518,28 +34506,70 @@ mod tests {
                 0x5333,
             ),
             None,
-            "the retired CMD53 word lane cannot satisfy PMUCONTROL proof"
+            "read detail cannot describe a CMD53 write"
         );
         assert_eq!(
             cyw43_owner_probe_pmucontrol_primary_target(
                 firmware_prep,
                 SdioFaultTelemetry {
-                    arg: (1 << 31) | (1 << 28) | ((pmu_base + 4) << 9),
+                    arg: (1 << 28) | (pmu_bus_addr << 9) | 0xa5,
                     cmd: 52,
                     len: 1,
+                    ..snapshot
+                },
+                0x5333,
+            ),
+            None,
+            "the retired CMD52 byte lane cannot satisfy PMUCONTROL proof"
+        );
+        assert_eq!(
+            cyw43_owner_probe_pmucontrol_primary_target(
+                firmware_prep,
+                SdioFaultTelemetry {
+                    arg: (1 << 31) | (1 << 28) | (1 << 26) | ((pmu_bus_addr + 1) << 9) | 4,
+                    cmd: 53,
+                    len: 4,
                     ..snapshot
                 },
                 0x5334,
             ),
             None,
-            "PMUCONTROL byte proof is bounded to Function-1 addresses 0x600..0x603"
+            "PMUCONTROL word proof requires the exact Function-1 address 0x8600"
+        );
+        assert_eq!(
+            cyw43_owner_probe_pmucontrol_primary_target(
+                firmware_prep,
+                SdioFaultTelemetry {
+                    arg: (1 << 31) | (1 << 28) | (pmu_bus_addr << 9) | 4,
+                    cmd: 53,
+                    len: 4,
+                    ..snapshot
+                },
+                0x5334,
+            ),
+            None,
+            "PMUCONTROL word proof requires an incrementing CMD53"
+        );
+        assert_eq!(
+            cyw43_owner_probe_pmucontrol_primary_target(
+                firmware_prep,
+                SdioFaultTelemetry {
+                    arg: (1 << 31) | (1 << 28) | (1 << 26) | (pmu_bus_addr << 9) | 3,
+                    cmd: 53,
+                    len: 4,
+                    ..snapshot
+                },
+                0x5334,
+            ),
+            None,
+            "PMUCONTROL word proof requires a four-byte command count"
         );
 
         let pmu_write_snapshot = SdioFaultTelemetry {
-            arg: (1 << 31) | (1 << 28) | ((pmu_base + 3) << 9) | 0xa5,
-            cmd: 52,
-            len: 1,
-            block_size: 1,
+            arg: (1 << 31) | (1 << 28) | (1 << 26) | (pmu_bus_addr << 9) | 4,
+            cmd: 53,
+            len: 4,
+            block_size: 4,
             block_count: 1,
             failure_result: 0x0500_0800,
             ..snapshot
@@ -34553,24 +34583,56 @@ mod tests {
         );
         assert_eq!(
             emission.status.effective_target,
-            CYW43_CHIPCOMMON_PMUCONTROL_ADDR + 3,
+            CYW43_CHIPCOMMON_PMUCONTROL_ADDR,
         );
         assert_eq!(emission.status.chunk_offset, u32::MAX);
         assert_eq!(emission.status.payload_offset, u32::MAX);
         assert_eq!(
             emission.status.owner_window,
-            "probe-pmucontrol-cmd52-byte-primary",
+            "probe-pmucontrol-cmd53-word-primary",
         );
-        assert_eq!(emission.status.retry, "none");
-        assert_eq!(emission.status.cmd, 52);
-        assert_eq!(emission.status.addr, pmu_base + 3);
-        assert!(!emission.status.increment);
+        assert_eq!(emission.status.retry, "no-replay-issued-unknown");
+        assert_eq!(emission.status.cmd, 53);
+        assert_eq!(emission.status.function, 1);
+        assert_eq!(emission.status.addr, pmu_bus_addr);
+        assert!(emission.status.increment);
         assert!(emission.status.write);
         assert!(!emission.status.block_mode);
-        assert_eq!(emission.status.len, 1);
-        assert_eq!(emission.status.cmd53_count, 0);
+        assert_eq!(emission.status.len, 4);
+        assert_eq!(emission.status.cmd53_count, 4);
         assert_eq!(emission.status.detail, 0x5334);
         assert_eq!(emission.status.r5, 0x0800);
+
+        let pmu_read_snapshot = SdioFaultTelemetry {
+            arg: (1 << 28) | (1 << 26) | (pmu_bus_addr << 9) | 4,
+            failure_result: 0x0500_0800,
+            ..pmu_write_snapshot
+        };
+        let read_emission = derive_cyw43_sdio_owner_fault_emission(
+            "cyw43-firmware-prep",
+            firmware_prep,
+            0x5333,
+            pmu_read_snapshot.failure_result,
+            pmu_read_snapshot,
+        );
+        assert_eq!(
+            read_emission.status.effective_target,
+            CYW43_CHIPCOMMON_PMUCONTROL_ADDR,
+        );
+        assert_eq!(
+            read_emission.status.owner_window,
+            "probe-pmucontrol-cmd53-word-primary",
+        );
+        assert_eq!(read_emission.status.retry, "no-replay-issued-unknown");
+        assert_eq!(read_emission.status.cmd, 53);
+        assert_eq!(read_emission.status.function, 1);
+        assert_eq!(read_emission.status.addr, pmu_bus_addr);
+        assert!(read_emission.status.increment);
+        assert!(!read_emission.status.write);
+        assert!(!read_emission.status.block_mode);
+        assert_eq!(read_emission.status.len, 4);
+        assert_eq!(read_emission.status.cmd53_count, 4);
+        assert_eq!(read_emission.status.detail, 0x5333);
 
         assert_eq!(
             cyw43_owner_probe_pmucontrol_primary_target(

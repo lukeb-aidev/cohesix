@@ -720,25 +720,24 @@ read-modify-writes and verifies CCCR `IF`, and only
 then switches the host to four-bit. Function block sizes and Function 1 enable
 follow that adoption. A recovery adoption is stamped with the pending E+1 epoch
 before the exact commit, so the commit cannot make freshly rebuilt card facts
-stale. The generated SDIO runtime retains SDHCI, firmware
-mailbox, and BCM2835 DMA MMIO plus one mailbox page, one control-block page,
-and two bounce pages. Physical channel 4 uses SDIO DREQ 11, FIFO bus address
-`0x7e300020`, and low-RAM `0xc0000000` aliasing. Every CMD53 uses that external
-engine and a missing or invalid resource fails closed—there is no PIO or
-legacy fallback. Current source expands the compiler-declared SDIO authority
-to ten private DMA pages—one mailbox page, one control-block page, and eight
-bounce pages—and retains one exact 32-KiB backplane aperture
-and applies Linux MMC request shaping: a full window is `511 * 64` plus
-`1 * 64`, while the true final window uses full blocks followed by one bounded
-four-byte-padded byte tail. The external-DMA command is issued once; each later
-owner continuation consumes one SDHCI/DMA snapshot and never acknowledges a
-lone PIO-ready bit. Request-local `DMA_END` is progress only. Success still
-requires independently latched response, DMA terminal state, and SDHCI
-`DATA_END`; failure captures both engines before bounded channel abort/reset
-and generation poisoning. Commit `7328bedd6142` proves only the earlier
-card-lane/count-32 image reached the two-block physical frontier; this wider
-Linux-equivalent request lifecycle remains an offline source-and-image
-candidate until that exact candidate is read back and booted.
+stale. The historical `7328bedd6142` image retained SDHCI, firmware-mailbox,
+and BCM2835 DMA MMIO plus the then-current DMA pages and sent its observed
+CMD53 through physical channel 4, SDIO DREQ 11, FIFO bus address
+`0x7e300020`, and low-RAM `0xc0000000` aliasing. That image proves only that
+the earlier card-lane/count-32 external-DMA request reached the two-block
+physical frontier.
+
+Current source retains one exact 32-KiB backplane aperture and applies the
+Linux/Raspberry Pi `mmc-bcm2835` engine threshold inside the sole retained SDIO
+owner: a normalized host block count of at most two seals PIO into the request
+identity, while more than two seals the external DMA engine. A full window is
+`511 * 64` plus `1 * 64`, so the first child uses external DMA and the second
+uses retained PIO; the true final window uses full blocks followed by one
+bounded four-byte-padded PIO byte tail. This is one request cursor and one
+recovery lane, not selectable launch paths. No request may switch engine,
+fallback, or replay after issue. This Linux-equivalent lifecycle remains an
+offline source-and-image candidate until its exact candidate is read back and
+booted.
 
 The current source candidate advances that same one production lane more
 aggressively toward the pinned Linux lifecycle. Every CMD5, CMD52, and CMD53
@@ -754,26 +753,41 @@ one immutable parent. Power/reset, engine state/health/policy publication, host
 configuration, enumeration, DPC activation, and generation commit are retained
 phase machines; generation commit resets the reciprocal ring before publishing
 state/health and writing the two interrupt-policy registers on separate turns.
-For data CMD53, separate turns inspect/repair/verify block-gap state, admit DMA
-authority and an idle snapshot, stage the full immutable chain, clear status,
-and program timeout, block size/count, argument, and transfer mode. One
-deliberate issue turn then publishes COMMAND and starts the external BCM2835 DMA
-channel, matching `bcm2835_mmc_request()`; no setup or completion poll is folded
-into that issued action. The peripheral DREQ controls movement while each later
-turn consumes one immutable snapshot and joins the fresh response/R5, a
-possibly coalesced `DATA_END`, and terminal DMA proof in any arrival order. A
-command/controller or R5 error is therefore post-issue work: later turns capture
-telemetry, inspect/abort/poll/stop/reset/verify DMA, acknowledge/reset the host,
-restore its clock, and take the final inhibit/snapshot evidence. The generation
-is poisoned and the request is never replayed. The terminal DMA control
-block also carries Linux's `INT_EN`; `SDHCI_TRNS_DMA`
-remains clear because this is the external dmaengine lane. RESET, control-block
-address, and ACTIVE publication is followed by a full store-completion fence
-and same-channel readback. Terminal proof then requires both `CONBLK_AD == 0`
-and this request's `CS.INT`, which is acknowledged with Linux's `INT | ACTIVE`
-W1C value. The
-request interrupt enable is the exact named mask `0x02ff000b`, plus `CARD_INT`
-when armed, while broad terminal error detection remains `0xffff8000`. Before
+For data CMD53, the normalized host block count seals retained PIO for one or
+two blocks and external DMA for more than two. Both shapes use separate turns
+to inspect/repair/verify block-gap state, clear status, and program timeout,
+block size/count, argument, and transfer mode. External DMA retains the
+persistent idle interrupt policy. PIO alone programs a request-local policy
+that adds its direction-correct ready source. Only external DMA admits DMA
+authority and an idle snapshot and stages the full immutable chain. One
+deliberate issue turn publishes COMMAND; for external DMA it then starts the
+BCM2835 channel, matching `bcm2835_mmc_request()`. No setup or completion poll
+is folded into that issued action.
+
+After fresh response/R5 validation, retained PIO requires the
+direction-correct ready edge plus matching `PRESENT_STATE` block ownership and
+moves at most one raw `SDHCI_BUFFER` word per later EventPump turn. An early
+ready edge without present-state ownership cannot authorize a later FIFO access
+without a fresh edge. External DMA lets peripheral DREQ control movement and
+consumes one immutable SDHCI/DMA snapshot per later turn. Both engines join
+response, exact payload movement, possibly coalesced `DATA_END`, and host
+quiescence. External DMA additionally requires terminal `CONBLK_AD == 0`, this
+request's `CS.INT`, and no DMA error; `CS.INT` is acknowledged with Linux's
+`INT | ACTIVE` W1C value. Its terminal control block carries Linux's `INT_EN`;
+`SDHCI_TRNS_DMA` remains clear because this is the external dmaengine path.
+RESET, control-block address, and ACTIVE publication is followed by a full
+store-completion fence and same-channel readback.
+
+Idle and external-DMA interrupt enable use the exact named mask `0x02ff000b`.
+An active PIO request removes DMA-only `DMA_END` and `ADMA_ERROR`, adds only
+its direction-correct ready source, and preserves that source across any
+interleaved CARD_INT policy rewrite without adding it to `SIGNAL_ENABLE`.
+`CARD_INT` is added when armed; broad terminal error detection remains
+`0xffff8000`.
+Command/controller or R5 failure is post-issue work. The common path captures
+telemetry, contains the selected engine as applicable, acknowledges/resets the
+host, restores its clock, takes final inhibit/snapshot evidence, poisons the
+generation, and never switches engine or replays the request. Before
 the first firmware CMD53, retained one-operation EventPump turns re-read the
 Function 1 block size, CCCR capabilities/interface/speed, ALP state, and exact
 RAM window; only a later local commit publishes that complete live contract.
@@ -880,16 +894,19 @@ cores: before the first firmware CMD53, ARMCR4 completes a reset cycle and is
 left reset-deasserted with `CPUHALT|CLK`, making its TCM available for download;
 D11 remains reset asserted for firmware to enable. LOW/MID/HIGH window writes,
 each IOCTRL/RESETCTRL write, each flush/readback, retained settle, KSO action,
-CARDCTRL action, each ordered PMU byte, and Function 2 disable are separate outer
-turns even when the child completes immediately. The zero write is the required `CLK_SDONLY` edge
+CARDCTRL action, the PMU word read, the PMU word write, and Function 2 disable
+are separate outer turns even when the child completes immediately. The zero
+write is the required `CLK_SDONLY` edge
 before the asynchronous firmware-download ALP request. Each zero write, ALP
 request, ALP read, retained five-millisecond virtual-counter settle, and
 one-second absolute-deadline observation consumes its own outer EventPump turn.
 PMUCONTROL preserves Linux's little-endian `readl()`/modify/`writel()` semantics
-through the Pi 4 lane proven by hardware: four ordered Function 1 CMD52 reads,
-then four ordered CMD52 writes at `0x600..0x603`. Each byte is a retained outer
-turn under one generation-owned sequencer. There is no preceding CMD53 attempt,
-alternate address, fallback, or same-generation byte replay.
+with one incrementing four-byte Function 1 CMD53 read followed by one
+incrementing four-byte Function 1 CMD53 write at the backplane-word address
+`0x8600`. Each child is sealed as retained PIO by its normalized one-block
+geometry, and its one raw FIFO word moves on a distinct outer turn under the
+generation-owned sequencer. There is no bytewise CMD52 update, alternate
+address, engine switch, fallback, or same-generation replay.
 The cursor checkpoints after every completed phase, so unavailable ALP cannot
 consume the 1,024-entry foreground trace. Production timing permits about 200
 five-millisecond reads inside the absolute one-second window; a separate

@@ -580,37 +580,51 @@ This as-built closure is authorized by Milestone 26d task
   the shared 1,024-action foreground-trace bound caps all renewals for one
   immutable parent operation.
 
-  For data requests the retained owner first inspects, repairs, and verifies
-  block-gap state on separate turns; admits DMA authority and an idle-channel
-  snapshot; stages the complete immutable control-block chain; and separately
-  clears status and programs timeout, block size, block count, argument, and
-  transfer mode. One deliberate issue turn then writes COMMAND and publishes
-  DMA RESET, control-block address, and ACTIVE in Linux order, exactly as
-  `bcm2835_mmc_request()` hands the issued request to dmaengine without waiting
-  for the response IRQ. Those writes are the single indivisible issued action;
-  no other setup or poll is folded into it. The peripheral DREQ, not a software
-  response-first gate, controls data movement. Each later outer turn takes one
-  immutable SDHCI/DMA snapshot and joins the fresh response and R5, a possibly
-  coalesced `DATA_END`, and the terminal DMA edge in any arrival order. A
-  command/controller or R5 error after COMMAND is issued work: later turns
-  capture immutable telemetry, inspect/abort/poll/stop/reset/verify the DMA
-  channel, acknowledge/reset the host, restore the clock, recheck inhibit, and
-  take a final snapshot. The generation is poisoned and the request is never
-  replayed. The final DMA control block sets Linux's
-  `INT_EN`, while intermediate blocks do not. A full store-completion fence plus
-  same-channel status readback after ACTIVE prevents an immediate join poll
-  from observing a posted start as false completion.
-  Terminal DMA proof requires both `CONBLK_AD == 0` and this request's `CS.INT`;
-  the owner acknowledges that W1C edge with Linux's `INT | ACTIVE` value. The
-  external engine does not set
-  `SDHCI_TRNS_DMA`; that bit belongs to SDHCI's internal DMA mode, not Linux's
-  `dmaengine` path. SDHCI `readl`/`writel` access retains the AArch64
-  device-ordering barriers used by Linux. Request interrupt admission is the
-  exact named Linux mask `0x02ff000b`, plus `CARD_INT` only while that source is
-  armed; terminal detection still observes the broad `INT_STATUS` error mask
-  `0xffff8000`. Request-local policy enables and acknowledges `DMA_END` as
-  progress/status, but `DMA_END` never substitutes for `DATA_END`;
-  asynchronous `CARD_INT` remains outside request-local W1C ownership.
+  For data requests the retained owner seals one engine into the immutable
+  request identity from the normalized SDHCI host block count: one or two host
+  blocks use retained PIO, while more than two use the external BCM2835 DMA
+  engine. This is one request path, owner, cursor, and recovery policy rather
+  than independently selectable lanes. Both engine shapes inspect, repair, and
+  verify block-gap state and separately clear status and program timeout, block
+  size, block count, argument, and transfer mode. External DMA retains the
+  persistent idle interrupt policy. PIO additionally programs a request-local
+  policy that adds only its direction-correct `SPACE_AVAIL` or `DATA_AVAIL`
+  source while the request is active. External DMA also admits DMA authority,
+  proves the channel idle, and stages the complete immutable control-block
+  chain.
+
+  One deliberate issue turn writes COMMAND. For external DMA, that same
+  indivisible issued action then publishes DMA RESET, control-block address, and
+  ACTIVE in Linux order, exactly as `bcm2835_mmc_request()` hands the issued
+  request to dmaengine without waiting for the response IRQ. PIO does not start
+  or inspect DMA; after validating the fresh response and R5, each later outer
+  turn may move at most one raw 32-bit word through `SDHCI_BUFFER`, and only
+  while the direction-correct ready edge and `PRESENT_STATE` prove ownership of
+  the current block. An early ready edge without matching present-state
+  ownership is consumed as a wakeup and cannot authorize later FIFO access
+  without a fresh edge.
+
+  Both engines independently join the exact response, complete payload
+  movement, possibly coalesced `DATA_END`, and host quiescence. PIO then
+  restores the ordinary interrupt policy on a later turn; external DMA never
+  changed that persistent base policy. External DMA additionally requires no
+  DMA error, `CONBLK_AD == 0`, and this request's `CS.INT`; it acknowledges that
+  W1C edge with Linux's `INT | ACTIVE` value. Its final control block sets
+  Linux's `INT_EN`, intermediate blocks do not, and a full store-completion
+  fence plus same-channel status readback after ACTIVE prevents an immediate
+  join poll from observing a posted start as false completion. The external
+  engine does not set `SDHCI_TRNS_DMA`; that bit belongs to SDHCI's internal
+  DMA mode, not Linux's dmaengine path. SDHCI `readl`/`writel` and raw FIFO
+  access retain the required AArch64 device-ordering barriers. Idle and
+  external-DMA interrupt admission use the exact named Linux mask
+  `0x02ff000b`. An active retained-PIO request derives
+  its mask by removing DMA-only `DMA_END` and `ADMA_ERROR`, adding only its
+  direction-correct ready source, and preserving that source across any
+  interleaved CARD_INT policy rewrite; `SIGNAL_ENABLE` never gains a PIO
+  source. `CARD_INT` is added only while that asynchronous source is armed.
+  Terminal detection still observes the broad `INT_STATUS` error mask
+  `0xffff8000`; request-local `DMA_END` is progress only and never substitutes
+  for `DATA_END`.
 - The compiler-declared SDIO owner has exactly three MMIO pages and ten low,
   uncached DMA pages. MMIO page 0 owns SDHCI at `0xfe300000`, page 1 owns the
   firmware mailbox aperture, and page 2 owns the BCM2835 DMA controller at
@@ -625,32 +639,38 @@ This as-built closure is authorized by Milestone 26d task
   page before pre-seeding the higher root mailbox mapping. The retained DMA
   capability is never mapped in root and is removed from HAL's discovery cache
   after its one mapping into the SDIO child. This is resource ordering for the
-  sole external-DMA lane, not a second launch path or fallback.
-- Cohesix intentionally has one production SDIO data lane: external DMA for
-  every CMD53. There is no selectable PIO, byte-lane, root-owned, lower-clock,
-  narrower-bus, or legacy fallback. This is the linked-runtime adaptation of
-  Linux's DMA-capable host behavior: Linux may retain PIO below its configured
-  DMA barrier, while Cohesix fails closed instead because maintaining two
-  physical data engines would create divergent ownership and recovery paths.
+  external-DMA engine selected above the Linux-shaped barrier, not a second
+  launch path or fallback.
+- Cohesix intentionally has one production SDIO request lane with the
+  Linux/Raspberry Pi `mmc-bcm2835` engine threshold embedded in its immutable
+  request identity. A normalized host block count of at most two selects
+  retained PIO; more than two selects external DMA. Byte-mode CMD53 therefore
+  has one normalized host block and uses PIO regardless of byte length. Once
+  admitted, a request cannot switch engine after a ready, response, transport,
+  DMA-resource, timeout, or containment failure. There is no operator-selectable
+  engine, root-owned data path, lower-clock or narrower-bus rescue, legacy
+  fallback, same-generation replay, or second boot lane.
   Function 1 firmware streaming retains one immutable 32-KiB backplane
   aperture, matching brcmfmac's production RAM-write window rather than its
   debug-only 2-KiB `MEMBLOCK` readback unit. MMC-shaped CMD53 partitioning
   drains a full aperture as `511 * 64` bytes followed by `1 * 64` bytes; the
   final aperture uses as many full 64-byte blocks as possible and one bounded
-  byte-mode tail after four-byte transport padding. Each child CMD53 is issued
-  once and retained across later owner turns. Window edges and the true final
-  remainder may shorten a command; they do not select another transfer engine
-  or compatibility boot lane. Block mode is legal only after retained
-  `CAP_SMB` proof.
+  byte-mode tail after four-byte transport padding. Thus the 511-block child
+  uses external DMA while the one-block child and byte-mode tail use retained
+  PIO by the same sealed threshold. Each child CMD53 is issued once and retained
+  across later owner turns. Window edges and the true final remainder affect
+  normalized geometry before admission; they cannot change an admitted
+  request's engine or select a compatibility boot lane. Block mode is legal
+  only after retained `CAP_SMB` proof.
 - Noncontiguous bounce pages produce one immutable control block per physical
   segment. Writes copy the reciprocal-ring payload into the bounce arena before
   the DMA store barrier; reads apply the DMA load barrier before copying back.
-  The SDIO owner retains one exact external-DMA request cursor after command
-  and channel activation. Each later continuation samples one immutable SDHCI
-  plus DMA snapshot, latches response, `DATA_END`, and DMA terminal evidence
-  independently, and returns without a private wait loop. Lone
-  `SPACE_AVAIL`/`DATA_AVAIL` PIO-ready observations are never acknowledged in
-  this external-DMA lane, and block-gap control is required to remain zero.
+  For an external-DMA request, the SDIO owner retains the exact cursor after
+  command and channel activation. Each later continuation samples one immutable
+  SDHCI plus DMA snapshot, latches response, `DATA_END`, and DMA terminal
+  evidence independently, and returns without a private wait loop. Lone
+  `SPACE_AVAIL`/`DATA_AVAIL` observations remain outside this engine's W1C
+  ownership, and block-gap control is required to remain zero.
   Completion requires `CONBLK_AD == 0`, this request's terminal DMA `CS.INT`,
   no DMA `CS.ERROR`, and SDHCI `DATA_END`, with the DMA and SDHCI terminal
   edges accepted in either arrival order. The DMA edge is acknowledged exactly
@@ -660,6 +680,15 @@ This as-built closure is authorized by Milestone 26d task
   and DMA state, clears `NEXTCB`, performs the bounded channel-local
   abort/reset, resets the SDHCI command/data path, and returns an issued-unknown
   result. It never replays that action in the same generation.
+- For a retained PIO request, the same owner cursor never requests DMA
+  authority, constructs a control block, or starts/contains the DMA channel.
+  It validates response/R5 before touching the FIFO, acknowledges only the
+  direction-owned ready source after pairing it with live block ownership, and
+  moves one raw `SDHCI_BUFFER` word per outer EventPump turn. Completion still
+  requires the exact payload length, `DATA_END`, and quiescent SDHCI
+  command/data state. Timeout, controller error, short payload, missing
+  `DATA_END`, or lost ready ownership poisons the generation and enters the
+  common bounded host containment path without engine switching or replay.
 - A failed owner transfer snapshots telemetry version 3 before command/data
   containment clears or resets either engine. Its stable prefix contains
   present state, interrupt status, response, host/power/clock state,
@@ -751,12 +780,13 @@ This as-built closure is authorized by Milestone 26d task
   retained settle, reset read, KSO operation, and probe-attach operation is an
   explicit cursor phase, so even an immediately completed SDIO child cannot
   authorize a second physical operation in that EventPump turn. PMUCONTROL
-  preserves Linux's little-endian `readl()`/modify/`writel()` semantics, adapted
-  to the Pi 4 transport that hardware proved reliable: four ordered Function 1
-  CMD52 reads followed by four ordered CMD52 writes at `0x600..0x603`. The
-  generation-owned cursor is the sole sequencer, and every byte consumes its
-  own outer turn. No PMU CMD53 attempt, alternate address, byte replay, or
-  fallback is permitted.
+  preserves Linux's little-endian `readl()`/modify/`writel()` semantics with
+  one incrementing four-byte Function 1 CMD53 read and one incrementing
+  four-byte Function 1 CMD53 write at the backplane-word address `0x8600`.
+  Each immutable child uses retained PIO under the normalized one-block
+  threshold and moves its one raw word on a distinct outer turn. The
+  generation-owned cursor is the sole sequencer. No bytewise CMD52 update,
+  alternate address, engine switch, byte replay, or fallback is permitted.
 
   After SoCRAM preparation and before the first firmware CMD53, that same
   cursor invalidates every cached firmware-transfer fact and re-proves the live

@@ -539,10 +539,15 @@ the child boundary. Multi-child parent coverage must prove that only a fresh
 same-request `OWNER_REPLY` edge renews a 30.56-second child lease, that a
 repeated reply cannot renew twice, stale/wrong-sequence progress cannot arm a
 renewal, and the shared 1,024-action trace bound ends renewal deterministically.
-Request setup must program exact named
-`INT_ENABLE=0x02ff000b`, adding `CARD_INT` only while armed, while terminal
-classification still recognizes every bit in broad `INT_STATUS` error mask
-`0xffff8000`.
+Idle and external-DMA requests must retain the exact named persistent
+`INT_ENABLE=0x02ff000b` policy without a per-request rewrite. Active retained
+PIO must remove DMA-only `DMA_END` and `ADMA_ERROR`, add only the
+direction-correct `SPACE_AVAIL`/`DATA_AVAIL` source, and preserve that source
+across an interleaved CARD_INT policy rewrite without adding it to
+`SIGNAL_ENABLE`. `CARD_INT` is added only while that asynchronous source is
+armed. A later distinct PIO turn must restore ordinary interrupt policy.
+Terminal classification must still recognize every bit in broad `INT_STATUS`
+error mask `0xffff8000`.
 
 External-DMA lifecycle coverage must prove the exact Linux order: SDHCI
 block-gap inspect/repair/verify, DMA-authority/idle snapshot, full immutable
@@ -550,7 +555,8 @@ control-block staging, status clear, timeout, block size, block count, argument,
 and transfer-mode programming each consume a distinct retained turn. One
 deliberate issue action publishes COMMAND and then one BCM2835 DMA `ACTIVE`
 write before even a delayed request-local response is acknowledged. Stale pre-command
-`SPACE_AVAILABLE` cannot satisfy the fresh response or open a PIO lane.
+`SPACE_AVAILABLE` cannot satisfy the fresh response or switch an immutable
+more-than-two-block request into PIO.
 Command/controller and R5 errors after COMMAND must show one DMA start, one
 descriptor-level containment, and no replay. A coalesced `RESPONSE|DATA_END`
 must survive the join; delayed DREQ must still complete; and the response/R5,
@@ -565,6 +571,26 @@ DREQ schedules. Failure coverage must separately retain telemetry capture, DMA
 inspect/abort/poll/stop/reset/verify, host acknowledgement/reset, clock restore,
 final inhibit, and final snapshot phases; no containment phase may replay the
 issued command.
+
+Retained-PIO lifecycle coverage must prove immutable engine selection from the
+normalized host block count: byte mode and one- or two-block CMD53 select PIO,
+while three or more blocks select external DMA. All cases must pass through the
+same production descriptor owner and retained request cursor; no ABI selector,
+second command lane, post-admission engine switch, or compatibility fallback is
+permitted. PIO must succeed without DMA authority and must perform no DMA MMIO,
+control-block staging, activation, or containment. After the fresh response and
+R5 are validated, only the direction-correct ready interrupt paired with the
+matching `PRESENT_STATE` source may authorize FIFO ownership. A stale or early
+ready edge without present-state ownership must move zero bytes and require a
+fresh edge, the opposite-direction ready source must remain untouched, and an
+R5 error coalesced with a ready edge must produce zero `SDHCI_BUFFER` accesses.
+Each later outer EventPump turn may read or write at most one raw 32-bit FIFO
+word. Completion must join exact payload movement, authoritative `DATA_END`,
+response, and host quiescence in every arrival order before a separate turn
+restores ordinary interrupt policy. Missing ready ownership, short payload,
+missing `DATA_END`, timeout, or controller error must enter common bounded host
+containment, poison the generation, and perform no engine switch or
+same-generation replay.
 
 SDIO service-dispatch coverage must initialize the production runtime, submit
 every former non-descriptor raw/aux command shape, and prove each is rejected
@@ -670,12 +696,15 @@ ownership, and a second same-generation preparation must all perform zero
 replay. Exercise the exact clock-zero, request, and read descriptors through
 the production parent-command plus staged-owner-descriptor/controller seam and
 prove one controller issue per descriptor without a fabricated completion.
-The same real reciprocal seam must prove PMUCONTROL uses four ordered Function 1
-CMD52 reads followed by four ordered CMD52 writes at `0x600..0x603`, with each
-byte consuming a distinct outer turn. No Function 1 CMD53 may target the PMU
-word; failure injected at any of the eight byte operations must terminate with
-`0x5333` or `0x5334`, perform no same-generation replay, and never select
-another transport shape.
+The same real reciprocal seam must prove PMUCONTROL uses one incrementing,
+four-byte Function 1 CMD53 read followed by one incrementing, four-byte
+Function 1 CMD53 write at the backplane-word address `0x8600`. Both operations
+must be sealed as retained PIO by their normalized one-block geometry, validate
+R5 before FIFO access, and move the one raw word on its own outer EventPump
+turn. The write payload must be the little-endian read value with only
+`RES_RELOAD` added. Failure injected at either immutable child operation must
+terminate with `0x5333` or `0x5334`, perform no same-generation replay, and
+never select a bytewise CMD52 shape or another engine.
 
 After SoCRAM preparation, the production cursor must invalidate cached
 firmware-transfer authority and re-prove the live contract before the first
@@ -1039,25 +1068,31 @@ shared plus framebuffer, `genet` 64 DMA/32 shared, `cyw43` 0 DMA/64 shared,
 `sdio` 3 MMIO/10 DMA/32 shared, `pcie` 16 shared, `serial` 4 shared), then
 compile the separate runtime package for host and `aarch64-unknown-none`.
 
-SDIO runtime tests must prove every CMD53 uses the sole external-DMA lane,
-control blocks split only at admitted physical-page boundaries, and COMMAND is
-followed by exactly one DMA activation. The issued request then remains in one
-immutable cursor: each later owner turn consumes one SDHCI/DMA snapshot,
-never W1C-acknowledges a lone PIO-ready bit, requires zero block-gap control,
-and independently latches response/R5, request-local `DMA_END`, authoritative
-`DATA_END`, and terminal DMA evidence. Timeout or either-engine failure must
-perform bounded channel-local containment without post-issue replay; malformed
-resources must fail before command issue with no PIO, root-owned, or
-same-generation fallback. Firmware tests must prove one retained 32-KiB
-aperture drains as Linux MMC-shaped `511 * 64` plus `1 * 64` CMD53 children,
+SDIO runtime tests must prove the sole owner seals its engine from normalized
+host-block geometry: at most two blocks use retained PIO and more than two use
+external DMA. Every issued request remains in one immutable cursor, and each
+later owner continuation performs at most one retained snapshot or one raw
+`SDHCI_BUFFER` word. Common completion requires response/R5, exact payload
+movement, authoritative `DATA_END`, and host quiescence. PIO tests must prove
+direction-correct ready/present-state ownership, zero DMA accesses, and
+one-word-per-turn behavior. External-DMA tests must prove control blocks split
+only at admitted physical-page boundaries, COMMAND is followed by exactly one
+DMA activation, each later turn consumes one SDHCI/DMA snapshot, lone PIO-ready
+bits remain outside its W1C ownership, and request-local `DMA_END` cannot
+replace terminal `CONBLK_AD == 0` plus this request's `CS.INT`. Timeout or
+selected-engine failure must perform bounded containment without engine
+switching or post-issue replay; malformed external-DMA resources must fail
+before command issue without falling back to PIO or root-owned service.
+Firmware tests must prove one retained 32-KiB aperture drains as Linux
+MMC-shaped `511 * 64` external-DMA plus `1 * 64` retained-PIO CMD53 children,
 while the true final aperture uses the maximum full-block request plus one
-bounded four-byte-padded byte tail. The full-aperture proof must begin with the
-production `FIRMWARE_CHUNK` parent, publish and consume the sequence-last
-reciprocal ring plus acknowledged grants, and drive the real retained controller;
-manually fabricated child descriptors or completions do not count. Function 2
-TX coverage must prove IORx readiness, backplane-window selection, and CMD53
-issue consume separate outer turns, and that timeout never toggles IOEx or
-selects another lane in place.
+bounded four-byte-padded PIO byte tail. The full-aperture proof must begin with
+the production `FIRMWARE_CHUNK` parent, publish and consume the sequence-last
+reciprocal ring plus acknowledged grants, and drive the real retained
+controller; manually fabricated child descriptors or completions do not count.
+Function 2 TX coverage must prove IORx readiness, backplane-window selection,
+and CMD53 issue consume separate outer turns, and that timeout never toggles
+IOEx, changes the sealed engine, or selects another lane in place.
 The focused adversarial cases include
 `cyw43_sdio_requests_use_linux_watchdog_and_derived_child_bound`,
 `sdio_owner_clamps_drifted_descriptor_to_linux_request_watchdog`,

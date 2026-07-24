@@ -759,7 +759,6 @@ const SDHCI_ARGUMENT: usize = 0x08;
 const SDHCI_TRANSFER_MODE: usize = 0x0c;
 const SDHCI_COMMAND: usize = 0x0e;
 const SDHCI_RESPONSE: usize = 0x10;
-#[cfg(test)]
 const SDHCI_BUFFER: usize = 0x20;
 const SDHCI_PRESENT_STATE: usize = 0x24;
 const SDHCI_BLOCK_GAP_CONTROL: usize = 0x2a;
@@ -777,9 +776,7 @@ const SDHCI_CMD_DATA: u16 = 0x20;
 const SDHCI_CMD_INHIBIT: u32 = 1 << 0;
 const SDHCI_DATA_INHIBIT: u32 = 1 << 1;
 const SDHCI_DAT_ACTIVE: u32 = 1 << 2;
-#[cfg(test)]
 const SDHCI_SPACE_AVAILABLE: u32 = 1 << 10;
-#[cfg(test)]
 const SDHCI_DATA_AVAILABLE: u32 = 1 << 11;
 const SDHCI_INT_RESPONSE: u32 = 1 << 0;
 const SDHCI_INT_DATA_END: u32 = 1 << 1;
@@ -806,7 +803,6 @@ const SDHCI_INT_DATA_MASK: u32 = SDHCI_INT_DATA_END
     | SDHCI_INT_DATA_TIMEOUT
     | SDHCI_INT_DATA_CRC
     | SDHCI_INT_DATA_END_BIT;
-#[cfg(test)]
 const SDHCI_INT_PIO_READY_MASK: u32 = SDHCI_INT_SPACE_AVAIL | SDHCI_INT_DATA_AVAIL;
 // Linux treats the complete SDHCI error-summary range as terminal, including
 // the upper current-limit, Auto CMD, ADMA, tuning, response, and vendor bits.
@@ -829,6 +825,7 @@ const SDHCI_INT_BCM2835_DMA_ENABLE_MASK: u32 = SDHCI_INT_RESPONSE
     | SDHCI_INT_DATA_END_BIT
     | SDHCI_INT_BUS_POWER
     | SDHCI_INT_ADMA_ERROR;
+const SDHCI_INT_BCM2835_PIO_EXCLUDED_MASK: u32 = SDHCI_INT_DMA_END | SDHCI_INT_ADMA_ERROR;
 const SDHCI_INT_EXTERNAL_DMA_ACK_MASK: u32 =
     SDHCI_INT_BCM2835_DMA_ENABLE_MASK | SDHCI_INT_ALL_ERROR_MASK;
 const SDHCI_INT_WAIT_ACK_MASK: u32 = SDHCI_INT_CMD_MASK
@@ -1280,6 +1277,11 @@ const SDHCI_RESET_DATA: u8 = 0x04;
 const SDHCI_INIT_SPINS: usize = 100_000;
 const BCM2835_SDIO_RESET_TIMEOUT_MS: u64 = 100;
 const BCM2835_SDIO_CLOCK_STABLE_TIMEOUT_MS: u64 = 20;
+// Raspberry Pi's downstream mmc-bcm2835 selects PIO for requests at or below
+// this inclusive block threshold and external dmaengine service above it.
+// Cohesix preserves that one deterministic engine decision inside the sole
+// generation-owning SDIO cursor; it is not a retry or fallback boundary.
+const BCM2835_SDIO_PIO_DMA_BARRIER_BLOCKS: u16 = 2;
 const BCM2835_SDIO_INHIBIT_TIMEOUT_MS: u64 =
     (DRIVER_RUNTIME_SDIO_INHIBIT_TIMEOUT_US / 1_000) as u64;
 const BCM2835_SDIO_RECOVERY_TIMEOUT_MS: u64 =
@@ -2490,8 +2492,10 @@ enum SdioExternalDmaRequestPhase {
     ProgramBlockCount,
     ProgramArgument,
     ProgramTransferMode,
+    ProgramInterruptEnable,
     IssueCommand,
     PollIssued,
+    RestoreInterruptPolicy,
     CaptureFailureTelemetry,
     ContainDmaInspect,
     ContainDmaAbortIssue,
@@ -2594,6 +2598,14 @@ struct SdioExternalDmaRequestIdentity {
     arg: u32,
     payload_digest: u32,
     owner_timeout_us: u32,
+    engine: SdioRequestEngine,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioRequestEngine {
+    CommandOnly,
+    Pio,
+    ExternalDma,
 }
 
 impl SdioExternalDmaRequestIdentity {
@@ -2613,7 +2625,32 @@ impl SdioExternalDmaRequestIdentity {
             arg: 0,
             payload_digest: 0,
             owner_timeout_us: 0,
+            engine: SdioRequestEngine::CommandOnly,
         }
+    }
+}
+
+const fn sdio_request_uses_pio(identity: SdioExternalDmaRequestIdentity) -> bool {
+    matches!(identity.engine, SdioRequestEngine::Pio)
+}
+
+const fn sdio_request_uses_external_dma(identity: SdioExternalDmaRequestIdentity) -> bool {
+    matches!(identity.engine, SdioRequestEngine::ExternalDma)
+}
+
+const fn sdhci_pio_present_ready_mask(write: bool) -> u32 {
+    if write {
+        SDHCI_SPACE_AVAILABLE
+    } else {
+        SDHCI_DATA_AVAILABLE
+    }
+}
+
+const fn sdhci_pio_interrupt_ready_mask(write: bool) -> u32 {
+    if write {
+        SDHCI_INT_SPACE_AVAIL
+    } else {
+        SDHCI_INT_DATA_AVAIL
     }
 }
 
@@ -2628,6 +2665,9 @@ struct SdioExternalDmaRequestCursor {
     data_end_seen: bool,
     dma_terminal_interrupt_seen: bool,
     dma_complete: bool,
+    pio_offset: u16,
+    pio_block_end: u16,
+    pio_ready_interrupt_required: bool,
     issued: bool,
     pre_issue_attempt: u8,
     poll_turns: u32,
@@ -2661,6 +2701,9 @@ impl SdioExternalDmaRequestCursor {
             data_end_seen: false,
             dma_terminal_interrupt_seen: false,
             dma_complete: false,
+            pio_offset: 0,
+            pio_block_end: 0,
+            pio_ready_interrupt_required: true,
             issued: false,
             pre_issue_attempt: 0,
             poll_turns: 0,
@@ -3546,14 +3589,8 @@ enum Cyw43FirmwarePrepPhase {
     ProbePmuWindowLow,
     ProbePmuWindowMid,
     ProbePmuWindowHigh,
-    ProbePmuRead0,
-    ProbePmuRead1,
-    ProbePmuRead2,
-    ProbePmuRead3,
-    ProbePmuWrite0,
-    ProbePmuWrite1,
-    ProbePmuWrite2,
-    ProbePmuWrite3,
+    ProbePmuRead,
+    ProbePmuWrite,
     ProbeF2Read,
     ProbeF2Write,
     ClockSdOnly,
@@ -11181,6 +11218,15 @@ fn sdio_external_dma_request_identity_with<I: SdioTransferIo>(
             0
         },
         owner_timeout_us: sdio_linux_request_timeout_us(descriptor.timeout_us),
+        engine: if data_command {
+            if block_count <= BCM2835_SDIO_PIO_DMA_BARRIER_BLOCKS {
+                SdioRequestEngine::Pio
+            } else {
+                SdioRequestEngine::ExternalDma
+            }
+        } else {
+            SdioRequestEngine::CommandOnly
+        },
     })
 }
 
@@ -11335,7 +11381,11 @@ fn sdio_retained_capture_failure_telemetry_with<I: SdioTransferIo>(
         identity.frame,
         cursor.failure_snapshot,
     );
-    cursor.phase = SdioExternalDmaRequestPhase::ContainDmaInspect;
+    cursor.phase = if sdio_request_uses_pio(identity) {
+        SdioExternalDmaRequestPhase::ContainHostAckBeforeReset
+    } else {
+        SdioExternalDmaRequestPhase::ContainDmaInspect
+    };
     sdio_external_dma_store_cursor(cursor);
     RuntimeCommandTurn::Pending
 }
@@ -11369,6 +11419,9 @@ fn sdio_retained_containment_finish(
                 cursor.data_end_seen = false;
                 cursor.dma_terminal_interrupt_seen = false;
                 cursor.dma_complete = false;
+                cursor.pio_offset = 0;
+                cursor.pio_block_end = 0;
+                cursor.pio_ready_interrupt_required = true;
                 cursor.authority = SdioExternalDmaAuthority::empty();
                 cursor.failure_snapshot_valid = false;
                 cursor.failure_snapshot = SdioExternalDmaRequestSnapshot::empty();
@@ -12233,7 +12286,11 @@ fn sdio_retained_request_preissue_turn_with<I: SdioTransferIo>(
     match cursor.phase {
         SdioExternalDmaRequestPhase::PreflightBlockGapInspect => {
             cursor.phase = if io.read8(SDHCI_BLOCK_GAP_CONTROL) == 0 {
-                SdioExternalDmaRequestPhase::PreflightDmaAuthority
+                if sdio_request_uses_external_dma(identity) {
+                    SdioExternalDmaRequestPhase::PreflightDmaAuthority
+                } else {
+                    SdioExternalDmaRequestPhase::ProgramClearStatus
+                }
             } else {
                 SdioExternalDmaRequestPhase::PreflightBlockGapRepair
             };
@@ -12251,9 +12308,19 @@ fn sdio_retained_request_preissue_turn_with<I: SdioTransferIo>(
                 );
                 return sdio_external_dma_fail_with(cursor, io, failure);
             }
-            cursor.phase = SdioExternalDmaRequestPhase::PreflightDmaAuthority;
+            cursor.phase = if sdio_request_uses_external_dma(identity) {
+                SdioExternalDmaRequestPhase::PreflightDmaAuthority
+            } else {
+                SdioExternalDmaRequestPhase::ProgramClearStatus
+            };
         }
         SdioExternalDmaRequestPhase::PreflightDmaAuthority => {
+            if !sdio_request_uses_external_dma(identity) {
+                return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                    identity.sequence,
+                    FAULT_REJECTED_COMMAND,
+                ));
+            }
             let Some(authority) = io.external_dma_authority() else {
                 let failure =
                     sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, 0);
@@ -12297,7 +12364,7 @@ fn sdio_retained_request_preissue_turn_with<I: SdioTransferIo>(
         SdioExternalDmaRequestPhase::ProgramClearStatus => {
             io.write32(
                 SDHCI_INT_STATUS,
-                if has_data {
+                if sdio_request_uses_external_dma(identity) {
                     SDHCI_INT_EXTERNAL_DMA_ACK_MASK
                 } else {
                     SDHCI_INT_COMMAND_DATA_CLEAR_MASK
@@ -12332,6 +12399,22 @@ fn sdio_retained_request_preissue_turn_with<I: SdioTransferIo>(
                 SDHCI_TRANSFER_MODE,
                 if has_data { identity.transfer_mode } else { 0 },
             );
+            cursor.phase = if sdio_request_uses_pio(identity) {
+                SdioExternalDmaRequestPhase::ProgramInterruptEnable
+            } else {
+                SdioExternalDmaRequestPhase::IssueCommand
+            };
+        }
+        SdioExternalDmaRequestPhase::ProgramInterruptEnable => {
+            let (base, _) = sdio_interrupt_policy_registers(
+                sdio_notification_dpc_ready(),
+                SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
+            );
+            let ready = sdhci_pio_interrupt_ready_mask(identity.write);
+            io.write32(
+                SDHCI_INT_ENABLE,
+                sdio_pio_request_interrupt_enable(base, ready),
+            );
             cursor.phase = SdioExternalDmaRequestPhase::IssueCommand;
         }
         SdioExternalDmaRequestPhase::IssueCommand => {
@@ -12339,7 +12422,7 @@ fn sdio_retained_request_preissue_turn_with<I: SdioTransferIo>(
                 SDHCI_COMMAND,
                 sdio_make_command(identity.cmd, identity.flags, has_data),
             );
-            if has_data {
+            if sdio_request_uses_external_dma(identity) {
                 sdio_external_dma_start_with(io, cursor.authority);
             }
             cursor.phase = SdioExternalDmaRequestPhase::PollIssued;
@@ -12366,17 +12449,37 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     cursor.failure_snapshot = snapshot;
     cursor.failure_snapshot_valid = true;
     cursor.poll_turns = cursor.poll_turns.saturating_add(1);
-    let has_data = cursor.identity.flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0;
+    let identity = cursor.identity;
+    let has_data = identity.flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0;
+    let uses_pio = sdio_request_uses_pio(identity);
+    let uses_external_dma = sdio_request_uses_external_dma(identity);
+    let pio_ready_interrupt = if uses_pio {
+        sdhci_pio_interrupt_ready_mask(identity.write)
+    } else {
+        0
+    };
+    let pre_response_pio_ready = uses_pio
+        && !cursor.response_seen
+        && snapshot.status & SDHCI_INT_RESPONSE == 0
+        && snapshot.status & pio_ready_interrupt != 0;
 
-    let ack = if has_data {
+    let ack = if uses_external_dma {
         sdhci_external_dma_snapshot_ack_bits(snapshot.status)
     } else {
-        sdhci_request_snapshot_ack_bits(snapshot.status)
+        // PIO-ready is a block-ownership edge. Preserve it until this cursor
+        // can pair the direction-correct edge with PRESENT_STATE; command,
+        // DATA_END, and error bits remain owned by this immutable snapshot.
+        (sdhci_request_snapshot_ack_bits(snapshot.status) & !SDHCI_INT_PIO_READY_MASK)
+            | if pre_response_pio_ready {
+                pio_ready_interrupt
+            } else {
+                0
+            }
     };
     if ack != 0 {
         io.write32(SDHCI_INT_STATUS, ack);
     }
-    if has_data && snapshot.dma_cs & BCM2835_DMA_CS_INT != 0 {
+    if uses_external_dma && snapshot.dma_cs & BCM2835_DMA_CS_INT != 0 {
         io.external_dma_write32(
             cursor.authority.channel_vaddr + BCM2835_DMA_CS,
             BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ACTIVE,
@@ -12392,75 +12495,162 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
         let failure = sdio_transfer_failure_result(stage, snapshot.status);
         return sdio_external_dma_fail_with(cursor, io, failure);
     }
-    if has_data && snapshot.dma_cs & BCM2835_DMA_CS_ERR != 0 {
+    if uses_external_dma && snapshot.dma_cs & BCM2835_DMA_CS_ERR != 0 {
         let failure =
             sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, snapshot.dma_cs);
         return sdio_external_dma_fail_with(cursor, io, failure);
     }
     if !cursor.response_seen && snapshot.status & SDHCI_INT_RESPONSE != 0 {
-        let response0 = if cursor.identity.flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE != 0 {
+        let response0 = if identity.flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE != 0 {
             0
         } else {
             snapshot.response0
         };
-        if let Some(r5) = sdio_r5_error(cursor.identity.cmd, response0) {
+        if let Some(r5) = sdio_r5_error(identity.cmd, response0) {
             let failure = sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_RESPONSE, r5);
             return sdio_external_dma_fail_with(cursor, io, failure);
         }
         cursor.response0 = response0;
         cursor.response_seen = true;
     }
+    if pre_response_pio_ready {
+        // A ready indication that precedes this command's validated R5 may
+        // have relatched from stale PRESENT state during the retained
+        // INT_ENABLE-to-COMMAND gap. Consume it without touching BUFFER and
+        // require a fresh direction-owned edge for this host block.
+        cursor.pio_ready_interrupt_required = true;
+    }
     if has_data {
         cursor.data_end_seen |= snapshot.status & SDHCI_INT_DATA_END != 0;
+    }
+    if uses_external_dma {
         cursor.dma_complete |= cursor.dma_terminal_interrupt_seen && snapshot.dma_conblk == 0;
+    }
+
+    if uses_pio && cursor.response_seen {
+        let ready_interrupt = pio_ready_interrupt;
+        let present_ready = sdhci_pio_present_ready_mask(identity.write);
+        let ready_edge = snapshot.status & ready_interrupt != 0;
+        let fifo_owned = snapshot.present & present_ready != 0;
+        let block_active = cursor.pio_offset < cursor.pio_block_end;
+
+        if !block_active
+            && cursor.pio_offset < identity.frame.len
+            && cursor.pio_ready_interrupt_required
+            && ready_edge
+        {
+            // W1C exactly the direction-owned ready edge only after the
+            // R5 response in this snapshot has been validated. CARD_INT
+            // and the opposite-direction ready source remain untouched.
+            io.write32(SDHCI_INT_STATUS, ready_interrupt);
+            if fifo_owned {
+                let remaining = identity.frame.len.saturating_sub(cursor.pio_offset);
+                let block_len = identity.block_size.min(remaining);
+                cursor.pio_block_end = cursor.pio_offset.saturating_add(block_len);
+                cursor.pio_ready_interrupt_required = false;
+            } else {
+                // An early ready edge is only a wakeup. Require a fresh
+                // edge before stale PRESENT state can authorize BUFFER.
+                cursor.pio_ready_interrupt_required = true;
+            }
+        }
+
+        if cursor.pio_offset < cursor.pio_block_end && fifo_owned {
+            let word_len = cursor
+                .pio_block_end
+                .saturating_sub(cursor.pio_offset)
+                .min(4);
+            let payload_offset = identity.frame.offset as usize + usize::from(cursor.pio_offset);
+            if identity.write {
+                let mut word = 0u32;
+                let mut byte_index = 0u16;
+                while byte_index < word_len {
+                    word |=
+                        u32::from(io.read_payload_byte(payload_offset + usize::from(byte_index)))
+                            << (u32::from(byte_index) * 8);
+                    byte_index = byte_index.saturating_add(1);
+                }
+                io.write_buffer32(word);
+            } else {
+                let word = io.read32(SDHCI_BUFFER);
+                let mut byte_index = 0u16;
+                while byte_index < word_len {
+                    io.write_payload_byte(
+                        payload_offset + usize::from(byte_index),
+                        ((word >> (u32::from(byte_index) * 8)) & 0xff) as u8,
+                    );
+                    byte_index = byte_index.saturating_add(1);
+                }
+            }
+            cursor.pio_offset = cursor.pio_offset.saturating_add(word_len);
+            if cursor.pio_offset == cursor.pio_block_end && cursor.pio_offset < identity.frame.len {
+                cursor.pio_ready_interrupt_required = true;
+            }
+        }
     }
 
     let host_quiescent =
         snapshot.present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE) == 0;
-    let dma_quiescent =
-        !has_data || (snapshot.dma_conblk == 0 && snapshot.dma_cs & BCM2835_DMA_CS_ERR == 0);
-    // mmc-bcm2835 finishes reads from the external-DMA callback and writes
-    // from SDHCI DATA_END. Cohesix additionally requires command response and
-    // both owner paths quiescent before returning the shared payload pages.
-    let linux_direction_complete = if !has_data {
-        true
-    } else if cursor.identity.write {
-        cursor.data_end_seen
-    } else {
-        cursor.dma_complete
+    let dma_quiescent = !uses_external_dma
+        || (snapshot.dma_conblk == 0 && snapshot.dma_cs & BCM2835_DMA_CS_ERR == 0);
+    // Every data engine joins the same terminal contract: exact payload
+    // movement, DATA_END, response, and host quiescence. External DMA also
+    // requires this request's terminal CS.INT plus zero CONBLK_AD.
+    let data_complete = match identity.engine {
+        SdioRequestEngine::CommandOnly => true,
+        SdioRequestEngine::Pio => cursor.pio_offset == identity.frame.len && cursor.data_end_seen,
+        SdioRequestEngine::ExternalDma => cursor.dma_complete && cursor.data_end_seen,
     };
-    if cursor.response_seen
-        && linux_direction_complete
-        && (!has_data || cursor.dma_complete)
-        && host_quiescent
-        && dma_quiescent
-    {
-        if has_data
-            && !cursor.identity.write
-            && !sdio_external_dma_copy_read_payload_with(
-                io,
-                cursor.authority,
-                cursor.identity.frame,
-            )
+    if cursor.response_seen && data_complete && host_quiescent && dma_quiescent {
+        if uses_external_dma
+            && !identity.write
+            && !sdio_external_dma_copy_read_payload_with(io, cursor.authority, identity.frame)
         {
             let failure = sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, 0);
             return sdio_external_dma_fail_with(cursor, io, failure);
+        }
+        if uses_pio {
+            cursor.phase = SdioExternalDmaRequestPhase::RestoreInterruptPolicy;
+            sdio_external_dma_store_cursor(cursor);
+            return RuntimeCommandTurn::Pending;
         }
         return sdio_external_dma_success(cursor, io);
     }
     if io.deadline_expired(&mut cursor.deadline) {
         let stage = if !cursor.response_seen {
             SDIO_TRANSFER_FAILURE_STAGE_COMMAND
-        } else if has_data && !cursor.dma_complete {
-            SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
         } else {
-            SDIO_TRANSFER_FAILURE_STAGE_DATA_END
+            match identity.engine {
+                SdioRequestEngine::CommandOnly => SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE,
+                SdioRequestEngine::Pio if cursor.pio_offset != identity.frame.len => {
+                    SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
+                }
+                SdioRequestEngine::ExternalDma if !cursor.dma_complete => {
+                    SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
+                }
+                SdioRequestEngine::Pio | SdioRequestEngine::ExternalDma => {
+                    SDIO_TRANSFER_FAILURE_STAGE_DATA_END
+                }
+            }
         };
         let failure = sdio_transfer_failure_result(stage, snapshot.status);
         return sdio_external_dma_fail_with(cursor, io, failure);
     }
     sdio_external_dma_store_cursor(cursor);
     RuntimeCommandTurn::Pending
+}
+
+#[cfg(any(target_os = "none", test))]
+fn sdio_retained_restore_interrupt_policy_with<I: SdioTransferIo>(
+    cursor: SdioExternalDmaRequestCursor,
+    io: &mut I,
+) -> RuntimeCommandTurn {
+    let (int_enable, _) = sdio_interrupt_policy_registers(
+        sdio_notification_dpc_ready(),
+        SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
+    );
+    io.write32(SDHCI_INT_ENABLE, int_enable);
+    sdio_external_dma_success(cursor, io)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -12604,10 +12794,14 @@ fn service_sdio_external_dma_command_turn_with_io<I: SdioTransferIo>(
         | SdioExternalDmaRequestPhase::ProgramBlockCount
         | SdioExternalDmaRequestPhase::ProgramArgument
         | SdioExternalDmaRequestPhase::ProgramTransferMode
+        | SdioExternalDmaRequestPhase::ProgramInterruptEnable
         | SdioExternalDmaRequestPhase::IssueCommand => {
             sdio_retained_request_preissue_turn_with(cursor, io)
         }
         SdioExternalDmaRequestPhase::PollIssued => sdio_external_dma_poll_issued_with(cursor, io),
+        SdioExternalDmaRequestPhase::RestoreInterruptPolicy => {
+            sdio_retained_restore_interrupt_policy_with(cursor, io)
+        }
         SdioExternalDmaRequestPhase::CaptureFailureTelemetry => {
             sdio_retained_capture_failure_telemetry_with(cursor, io)
         }
@@ -19746,6 +19940,7 @@ trait SdioTransferIo {
     fn write8(&mut self, offset: usize, value: u8);
     fn write16(&mut self, offset: usize, value: u16);
     fn write32(&mut self, offset: usize, value: u32);
+    fn write_buffer32(&mut self, value: u32);
     fn read_payload_byte(&mut self, offset: usize) -> u8;
     fn write_payload_byte(&mut self, offset: usize, value: u8);
     fn external_dma_authority(&mut self) -> Option<SdioExternalDmaAuthority>;
@@ -19788,6 +19983,10 @@ impl SdioTransferIo for SdioMmioTransferIo {
 
     fn write32(&mut self, offset: usize, value: u32) {
         sdio_write32(offset, value);
+    }
+
+    fn write_buffer32(&mut self, value: u32) {
+        sdio_write_buffer32(value);
     }
 
     fn read_payload_byte(&mut self, offset: usize) -> u8 {
@@ -22292,84 +22491,42 @@ fn cyw43_firmware_prep_step(
             }
             state.backplane_window = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_WINDOW_MASK;
             state.backplane_window_valid = true;
-            state.firmware_prep.pmucontrol = 0;
-            state.firmware_prep.phase = Cyw43FirmwarePrepPhase::ProbePmuRead0;
+            state.firmware_prep.phase = Cyw43FirmwarePrepPhase::ProbePmuRead;
             Ok(false)
         }
-        phase @ (Cyw43FirmwarePrepPhase::ProbePmuRead0
-        | Cyw43FirmwarePrepPhase::ProbePmuRead1
-        | Cyw43FirmwarePrepPhase::ProbePmuRead2
-        | Cyw43FirmwarePrepPhase::ProbePmuRead3) => {
-            let (index, next) = match phase {
-                Cyw43FirmwarePrepPhase::ProbePmuRead0 => (0, Cyw43FirmwarePrepPhase::ProbePmuRead1),
-                Cyw43FirmwarePrepPhase::ProbePmuRead1 => (1, Cyw43FirmwarePrepPhase::ProbePmuRead2),
-                Cyw43FirmwarePrepPhase::ProbePmuRead2 => (2, Cyw43FirmwarePrepPhase::ProbePmuRead3),
-                Cyw43FirmwarePrepPhase::ProbePmuRead3 => {
-                    (3, Cyw43FirmwarePrepPhase::ProbePmuWrite0)
-                }
-                _ => {
-                    return Err(cyw43_fail_firmware_prep(
-                        state,
-                        FAULT_CYW43_PROBE_PMUCONTROL_READ,
-                    ));
-                }
-            };
-            let byte_addr = (CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK) + index;
-            let Some(byte) = cyw43_sdio_cmd52_read(1, byte_addr) else {
+        Cyw43FirmwarePrepPhase::ProbePmuRead => {
+            let Some(pmucontrol) = cyw43_backplane_read_u32_cmd53_window_ready(
+                cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
+                true,
+            ) else {
                 cyw43_record_last_fault_with_result(
                     FAULT_CYW43_PROBE_PMUCONTROL_READ,
-                    CYW43_CHIPCOMMON_PMUCONTROL_ADDR + index,
+                    CYW43_CHIPCOMMON_PMUCONTROL_ADDR,
                 );
                 return Err(cyw43_fail_firmware_prep(
                     state,
                     FAULT_CYW43_PROBE_PMUCONTROL_READ,
                 ));
             };
-            let shift = index * 8;
-            state.firmware_prep.pmucontrol =
-                (state.firmware_prep.pmucontrol & !(0xff << shift)) | (u32::from(byte) << shift);
-            if phase == Cyw43FirmwarePrepPhase::ProbePmuRead3 {
-                state.firmware_prep.pmucontrol =
-                    cyw43_linux_probe_pmucontrol_value(state.firmware_prep.pmucontrol);
-            }
-            state.firmware_prep.phase = next;
+            state.firmware_prep.pmucontrol = cyw43_linux_probe_pmucontrol_value(pmucontrol);
+            state.firmware_prep.phase = Cyw43FirmwarePrepPhase::ProbePmuWrite;
             Ok(false)
         }
-        phase @ (Cyw43FirmwarePrepPhase::ProbePmuWrite0
-        | Cyw43FirmwarePrepPhase::ProbePmuWrite1
-        | Cyw43FirmwarePrepPhase::ProbePmuWrite2
-        | Cyw43FirmwarePrepPhase::ProbePmuWrite3) => {
-            let (index, next) = match phase {
-                Cyw43FirmwarePrepPhase::ProbePmuWrite0 => {
-                    (0, Cyw43FirmwarePrepPhase::ProbePmuWrite1)
-                }
-                Cyw43FirmwarePrepPhase::ProbePmuWrite1 => {
-                    (1, Cyw43FirmwarePrepPhase::ProbePmuWrite2)
-                }
-                Cyw43FirmwarePrepPhase::ProbePmuWrite2 => {
-                    (2, Cyw43FirmwarePrepPhase::ProbePmuWrite3)
-                }
-                Cyw43FirmwarePrepPhase::ProbePmuWrite3 => (3, Cyw43FirmwarePrepPhase::ProbeF2Read),
-                _ => {
-                    return Err(cyw43_fail_firmware_prep(
-                        state,
-                        FAULT_CYW43_PROBE_PMUCONTROL_WRITE,
-                    ));
-                }
-            };
-            let byte_addr = (CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK) + index;
-            let byte = state.firmware_prep.pmucontrol.to_le_bytes()[index as usize];
-            if !cyw43_sdio_cmd52_write(1, byte_addr, byte) {
+        Cyw43FirmwarePrepPhase::ProbePmuWrite => {
+            if !cyw43_backplane_write_u32_cmd53_window_ready(
+                CYW43_CHIPCOMMON_PMUCONTROL_ADDR,
+                state.firmware_prep.pmucontrol,
+            ) {
                 cyw43_record_last_fault_with_result(
                     FAULT_CYW43_PROBE_PMUCONTROL_WRITE,
-                    CYW43_CHIPCOMMON_PMUCONTROL_ADDR + index,
+                    CYW43_CHIPCOMMON_PMUCONTROL_ADDR,
                 );
                 return Err(cyw43_fail_firmware_prep(
                     state,
                     FAULT_CYW43_PROBE_PMUCONTROL_WRITE,
                 ));
             }
-            state.firmware_prep.phase = next;
+            state.firmware_prep.phase = Cyw43FirmwarePrepPhase::ProbeF2Read;
             Ok(false)
         }
         Cyw43FirmwarePrepPhase::ProbeF2Read => {
@@ -40982,9 +41139,8 @@ fn sdio_read32(_offset: usize) -> u32 {
 #[cfg(target_os = "none")]
 fn sdio_write32(offset: usize, value: u32) {
     // Raspberry Pi's `mmc-bcm2835` WiFi host integration is 32-bit-only and
-    // delays ordinary register writes by at least two SD clocks. Cohesix has
-    // no SDHCI BUFFER/PIO data path; the separate BCM2835 DMA engine owns all
-    // request payload movement.
+    // delays ordinary register writes by at least two SD clocks. FIFO writes
+    // use the separate raw path below, matching Linux's `mmc_raw_writel()`.
     // SAFETY: The SDIO runtime maps the declared SDHCI MMIO page at
     // `DRIVER_TASK_DEVICE_MMIO_VADDR`; all offsets used by callers are bounded
     // aligned register constants within that page.
@@ -41003,6 +41159,26 @@ fn sdio_write32(offset: usize, value: u32) {
 
 #[cfg(not(target_os = "none"))]
 fn sdio_write32(_offset: usize, _value: u32) {}
+
+#[cfg(target_os = "none")]
+fn sdio_write_buffer32(value: u32) {
+    // Linux writes the bcm2835 SDHCI FIFO without the ordinary two-SD-clock
+    // register delay. The retained owner has already consumed the request's
+    // direction-matched ready edge and PRESENT_STATE ownership before this
+    // exact one-word turn.
+    dma_store_barrier();
+    // SAFETY: HAL admission maps the bounded SDHCI page only into the SDIO
+    // runtime, and SDHCI_BUFFER is an aligned register inside that aperture.
+    unsafe {
+        core::ptr::write_volatile(
+            (DRIVER_TASK_DEVICE_MMIO_VADDR + SDHCI_BUFFER) as *mut u32,
+            value,
+        );
+    }
+}
+
+#[cfg(not(target_os = "none"))]
+fn sdio_write_buffer32(_value: u32) {}
 
 const fn sdio_merge_u16_word(word: u32, offset: usize, value: u16) -> u32 {
     let shift = ((offset & 0x2) * 8) as u32;
@@ -41344,10 +41520,31 @@ const fn sdio_interrupt_policy_registers(dpc_ready: bool, card_irq_masked: bool)
     } else {
         0
     };
-    // External BCM2835 DMA is Cohesix's sole production data lane. Keep the
-    // PIO-ready sources disabled exactly as Linux does while use_dma is true;
-    // command/data completion and error status remain enabled and polled.
+    // This is the idle/DMA policy. A retained short-request PIO cursor adds
+    // only its direction-matched ready source to INT_ENABLE for that immutable
+    // request, leaves SIGNAL_ENABLE unchanged, and restores this base before
+    // publishing completion.
     (SDHCI_INT_BCM2835_DMA_ENABLE_MASK | card_enable, card_enable)
+}
+
+const fn sdio_pio_request_interrupt_enable(base: u32, ready: u32) -> u32 {
+    (base & !SDHCI_INT_BCM2835_PIO_EXCLUDED_MASK) | ready
+}
+
+fn sdio_active_pio_ready_interrupt() -> u32 {
+    SDIO_RUNTIME_STATE.with_ref(|state| {
+        let cursor = state.external_dma_request;
+        if sdio_request_uses_pio(cursor.identity)
+            && matches!(
+                cursor.phase,
+                SdioExternalDmaRequestPhase::IssueCommand | SdioExternalDmaRequestPhase::PollIssued
+            )
+        {
+            sdhci_pio_interrupt_ready_mask(cursor.identity.write)
+        } else {
+            0
+        }
+    })
 }
 
 fn sdio_program_interrupt_policy() {
@@ -41358,7 +41555,13 @@ fn sdio_program_interrupt_policy() {
 fn sdio_program_interrupt_policy_with<I: SdioTransferIo>(io: &mut I) {
     let dpc_ready = sdio_notification_dpc_ready();
     let card_irq_masked = SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked);
-    let (int_enable, signal_enable) = sdio_interrupt_policy_registers(dpc_ready, card_irq_masked);
+    let (base, signal_enable) = sdio_interrupt_policy_registers(dpc_ready, card_irq_masked);
+    let ready = sdio_active_pio_ready_interrupt();
+    let int_enable = if ready == 0 {
+        base
+    } else {
+        sdio_pio_request_interrupt_enable(base, ready)
+    };
     io.write32(SDHCI_INT_ENABLE, int_enable);
     io.write32(SDHCI_SIGNAL_ENABLE, signal_enable);
 }
@@ -43313,6 +43516,17 @@ mod tests {
         fn read32(&mut self, offset: usize) -> u32 {
             if offset == SDHCI_BUFFER {
                 self.sdhci_buffer_accesses = self.sdhci_buffer_accesses.saturating_add(1);
+                let mut word = 0u32;
+                for byte_index in 0..4 {
+                    let fifo_index = self.fifo_read_offset + byte_index;
+                    if fifo_index < self.fifo_len {
+                        word |= u32::from(self.fifo[fifo_index]) << (byte_index * 8);
+                    }
+                }
+                self.fifo_read_offset = self.fifo_read_offset.saturating_add(4);
+                self.fifo_words = self.fifo_words.saturating_add(1);
+                self.complete_data_if_due();
+                return word;
             }
             if offset == SDHCI_INT_STATUS {
                 self.advance_external_dma_dreq_snapshot();
@@ -43386,6 +43600,18 @@ mod tests {
             } else {
                 self.set_register(offset, value);
             }
+        }
+
+        fn write_buffer32(&mut self, value: u32) {
+            self.sdhci_buffer_accesses = self.sdhci_buffer_accesses.saturating_add(1);
+            self.record_write(SDHCI_BUFFER, value);
+            assert!(self.fifo_len + 4 <= self.fifo.len());
+            for byte_index in 0..4 {
+                self.fifo[self.fifo_len + byte_index] = ((value >> (byte_index * 8)) & 0xff) as u8;
+            }
+            self.fifo_len += 4;
+            self.fifo_words = self.fifo_words.saturating_add(1);
+            self.complete_data_if_due();
         }
 
         fn read_payload_byte(&mut self, offset: usize) -> u8 {
@@ -43623,23 +43849,26 @@ mod tests {
         } else {
             let len = usize::from(frame.len);
             io.fifo_len = len;
-            for index in 0..len {
-                io.fifo[index] = read_runtime_payload_byte(frame.offset as usize + index);
+            let pmu_word = TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.load(Ordering::Acquire);
+            if record.cmd == SDIO_CMD53
+                && function == 1
+                && addr == cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR)
+                && len == 4
+                && pmu_word != u32::MAX
+            {
+                io.fifo[..4].copy_from_slice(&pmu_word.to_le_bytes());
+            } else {
+                for index in 0..len {
+                    io.fifo[index] = read_runtime_payload_byte(frame.offset as usize + index);
+                }
             }
             io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_DATA_AVAIL;
             io.command_present_set = SDHCI_DATA_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
             io.data_end_after_words = len.div_ceil(4);
         }
         if record.cmd == SDIO_CMD52 && !write {
-            let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
-            let pmu_word = TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.load(Ordering::Acquire);
             io.command_response =
-                if function == 1 && addr >= pmu_base && addr < pmu_base + 4 && pmu_word != u32::MAX
-                {
-                    (pmu_word >> ((addr - pmu_base) * 8)) & 0xff
-                } else {
-                    u32::from(test_sdio_cmd52_read_response(function, addr).unwrap_or_default())
-                };
+                u32::from(test_sdio_cmd52_read_response(function, addr).unwrap_or_default());
         }
         if TEST_REAL_SDIO_CONTROLLER_FAIL_ARG
             .compare_exchange(record.arg, u32::MAX, Ordering::AcqRel, Ordering::Acquire)
@@ -43648,19 +43877,6 @@ mod tests {
             io.command_response = TEST_REAL_SDIO_CONTROLLER_FAIL_R5.swap(0, Ordering::AcqRel);
         }
         let completion = service_sdio_descriptor_command_with_io(command, &mut io);
-        if record.cmd == SDIO_CMD52 && write && completion.code == COMPLETION_PROGRESS {
-            let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
-            if function == 1 && addr >= pmu_base && addr < pmu_base + 4 {
-                let shift = (addr - pmu_base) * 8;
-                let value = record.arg & 0xff;
-                let current = TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.load(Ordering::Acquire);
-                let current = if current == u32::MAX { 0 } else { current };
-                TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.store(
-                    (current & !(0xff << shift)) | (value << shift),
-                    Ordering::Release,
-                );
-            }
-        }
         if let Some(parent_descriptor) = parent_descriptor {
             stage_cyw43_descriptor(parent_descriptor);
         }
@@ -50544,30 +50760,27 @@ mod tests {
                 "probe action arg=0x{arg:08x} must execute exactly once"
             );
         }
-        let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
         let pmu_function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
-        for index in 0..4 {
-            assert_eq!(
-                test_sdio_transfer_count(|record| {
-                    record.cmd == SDIO_CMD52
-                        && record.arg == sdio_cmd52_arg(false, 1, pmu_base + index, 0)
-                }),
-                1,
-            );
-            assert_eq!(
-                test_sdio_transfer_count(|record| {
-                    record.cmd == SDIO_CMD52
-                        && sdio_cmd53_arg_function(record.arg) == 1
-                        && sdio_cmd53_arg_addr(record.arg) == pmu_base + index
-                        && record.arg & (1 << 31) != 0
-                }),
-                1,
-            );
-        }
+        let pmu_read_arg = sdio_cmd53_arg(false, 1, pmu_function_addr, true, 0, 4);
+        let pmu_write_arg = sdio_cmd53_arg(true, 1, pmu_function_addr, true, 0, 4);
+        assert_eq!(
+            test_sdio_transfer_count(|record| {
+                record.cmd == SDIO_CMD53 && record.arg == pmu_read_arg
+            }),
+            1,
+        );
+        assert_eq!(
+            test_sdio_transfer_count(|record| {
+                record.cmd == SDIO_CMD53 && record.arg == pmu_write_arg
+            }),
+            1,
+        );
+        let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
         assert!(!test_sdio_transfer_seen(|record| {
-            record.cmd == SDIO_CMD53
-                && sdio_cmd53_arg_function(record.arg) == 1
-                && sdio_cmd53_arg_addr(record.arg) == pmu_function_addr
+            record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                let addr = sdio_cmd53_arg_addr(record.arg);
+                addr >= pmu_base && addr < pmu_base + 4
+            }
         }));
     }
 
@@ -59559,46 +59772,27 @@ mod tests {
             .expect("CARDCTRL write");
             let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
             let pmu_function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
-            let requested = cyw43_linux_probe_pmucontrol_value(0);
+            let pmu_read_arg = sdio_cmd53_arg(false, 1, pmu_function_addr, true, 0, 4);
+            let pmu_write_arg = sdio_cmd53_arg(true, 1, pmu_function_addr, true, 0, 4);
             let pmu_read_index = test_sdio_first_transfer_index(|record| {
-                record.cmd == SDIO_CMD52 && record.arg == sdio_cmd52_arg(false, 1, pmu_base, 0)
+                record.cmd == SDIO_CMD53 && record.arg == pmu_read_arg
             })
-            .expect("PMUCONTROL first CMD52 read");
-            let pmu_last_read_index = test_sdio_first_transfer_index(|record| {
-                record.cmd == SDIO_CMD52 && record.arg == sdio_cmd52_arg(false, 1, pmu_base + 3, 0)
-            })
-            .expect("PMUCONTROL last CMD52 read");
+            .expect("PMUCONTROL atomic CMD53 read");
             let pmu_write_index = test_sdio_first_transfer_index(|record| {
-                record.cmd == SDIO_CMD52
-                    && record.arg == sdio_cmd52_arg(true, 1, pmu_base, requested.to_le_bytes()[0])
+                record.cmd == SDIO_CMD53 && record.arg == pmu_write_arg
             })
-            .expect("PMUCONTROL first CMD52 write");
-            let pmu_last_write_index = test_sdio_first_transfer_index(|record| {
-                record.cmd == SDIO_CMD52
-                    && record.arg
-                        == sdio_cmd52_arg(true, 1, pmu_base + 3, requested.to_le_bytes()[3])
-            })
-            .expect("PMUCONTROL last CMD52 write");
-            for (index, byte) in requested.to_le_bytes().into_iter().enumerate() {
+            .expect("PMUCONTROL atomic CMD53 write");
+            for arg in [pmu_read_arg, pmu_write_arg] {
                 assert_eq!(
-                    test_sdio_transfer_count(|record| {
-                        record.cmd == SDIO_CMD52
-                            && record.arg == sdio_cmd52_arg(false, 1, pmu_base + index as u32, 0)
-                    }),
-                    1,
-                );
-                assert_eq!(
-                    test_sdio_transfer_count(|record| {
-                        record.cmd == SDIO_CMD52
-                            && record.arg == sdio_cmd52_arg(true, 1, pmu_base + index as u32, byte)
-                    }),
+                    test_sdio_transfer_count(|record| record.cmd == SDIO_CMD53 && record.arg == arg),
                     1,
                 );
             }
             assert!(!test_sdio_transfer_seen(|record| {
-                record.cmd == SDIO_CMD53
-                    && sdio_cmd53_arg_function(record.arg) == 1
-                    && sdio_cmd53_arg_addr(record.arg) == pmu_function_addr
+                record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                    let addr = sdio_cmd53_arg_addr(record.arg);
+                    addr >= pmu_base && addr < pmu_base + 4
+                }
             }));
             let f2_read_index = test_sdio_first_transfer_index(|record| {
                 record.cmd == SDIO_CMD52
@@ -59630,10 +59824,8 @@ mod tests {
             assert!(write_index < cardctrl_read_index);
             assert!(cardctrl_read_index < cardctrl_write_index);
             assert!(cardctrl_write_index < pmu_read_index);
-            assert!(pmu_read_index < pmu_last_read_index);
-            assert!(pmu_last_read_index < pmu_write_index);
-            assert!(pmu_write_index < pmu_last_write_index);
-            assert!(pmu_last_write_index < f2_read_index);
+            assert!(pmu_read_index < pmu_write_index);
+            assert!(pmu_write_index < f2_read_index);
             assert!(f2_read_index < f2_write_index);
             assert!(f2_write_index < sdonly_index);
             assert!(sdonly_index < alp_index);
@@ -59792,23 +59984,27 @@ mod tests {
                 }
                 FAULT_CYW43_PROBE_PMUCONTROL_READ => {
                     test_sdio_transfer_fail_next_arg(
-                        SDIO_CMD52,
-                        sdio_cmd52_arg(
+                        SDIO_CMD53,
+                        sdio_cmd53_arg(
                             false,
                             1,
-                            CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK,
+                            cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
+                            true,
                             0,
+                            4,
                         ),
                     );
                 }
                 FAULT_CYW43_PROBE_PMUCONTROL_WRITE => {
                     test_sdio_transfer_fail_next_arg(
-                        SDIO_CMD52,
-                        sdio_cmd52_arg(
+                        SDIO_CMD53,
+                        sdio_cmd53_arg(
                             true,
                             1,
-                            CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK,
-                            cyw43_linux_probe_pmucontrol_value(0).to_le_bytes()[0],
+                            cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
+                            true,
+                            0,
+                            4,
                         ),
                     );
                 }
@@ -59843,11 +60039,12 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_probe_pmucontrol_uses_four_ordered_cmd52_bytes_without_cmd53() {
+    fn cyw43_probe_pmucontrol_uses_one_atomic_cmd53_word_without_cmd52() {
         let _guard = test_guard();
         let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
         let pmu_function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
-        let requested = cyw43_linux_probe_pmucontrol_value(0);
+        let read_arg = sdio_cmd53_arg(false, 1, pmu_function_addr, true, 0, 4);
+        let write_arg = sdio_cmd53_arg(true, 1, pmu_function_addr, true, 0, 4);
 
         reset_runtime_for_test();
         test_sdio_cmd52_read_cardctrl_response(0xa0);
@@ -59861,79 +60058,45 @@ mod tests {
         state.sdio_transport_enumerated = true;
 
         assert_eq!(cyw43_prepare_firmware_upload_transport(&mut state), Ok(()));
-        for (index, byte) in requested.to_le_bytes().into_iter().enumerate() {
+        for arg in [read_arg, write_arg] {
             assert_eq!(
-                test_sdio_transfer_count(|record| {
-                    record.cmd == SDIO_CMD52
-                        && record.arg == sdio_cmd52_arg(false, 1, pmu_base + index as u32, 0)
-                }),
+                test_sdio_transfer_count(|record| record.cmd == SDIO_CMD53 && record.arg == arg),
                 1,
-                "PMU byte {index} must be read exactly once",
-            );
-            assert_eq!(
-                test_sdio_transfer_count(|record| {
-                    record.cmd == SDIO_CMD52
-                        && record.arg == sdio_cmd52_arg(true, 1, pmu_base + index as u32, byte)
-                }),
-                1,
-                "PMU byte {index} must be written exactly once",
             );
         }
         assert!(!test_sdio_transfer_seen(|record| {
-            record.cmd == SDIO_CMD53
-                && sdio_cmd53_arg_function(record.arg) == 1
-                && sdio_cmd53_arg_addr(record.arg) == pmu_function_addr
+            record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                let addr = sdio_cmd53_arg_addr(record.arg);
+                addr >= pmu_base && addr < pmu_base + 4
+            }
         }));
 
-        for index in 0..4u32 {
+        for (arg, expected) in [
+            (read_arg, FAULT_CYW43_PROBE_PMUCONTROL_READ),
+            (write_arg, FAULT_CYW43_PROBE_PMUCONTROL_WRITE),
+        ] {
             reset_runtime_for_test();
             test_sdio_cmd52_read_cardctrl_response(0xa0);
             test_sdio_cmd52_read_ioex_response(0xa6);
             test_sdio_cmd52_read_chipclkcsr_response(SBSDIO_ALP_AVAIL_REQ | SBSDIO_ALP_AVAIL);
-            let arg = sdio_cmd52_arg(false, 1, pmu_base + index, 0);
-            test_sdio_transfer_fail_next_arg(SDIO_CMD52, arg);
+            test_sdio_transfer_fail_next_arg(SDIO_CMD53, arg);
             let mut state = Cyw43RuntimeState::new();
             state.transport_ready = true;
             state.sdio_transport_enumerated = true;
 
             assert_eq!(
                 cyw43_prepare_firmware_upload_transport(&mut state),
-                Err(FAULT_CYW43_PROBE_PMUCONTROL_READ)
+                Err(expected)
             );
             assert_eq!(
-                test_sdio_transfer_count(|record| record.cmd == SDIO_CMD52 && record.arg == arg),
+                test_sdio_transfer_count(|record| record.cmd == SDIO_CMD53 && record.arg == arg),
                 1,
             );
             assert!(!test_sdio_transfer_seen(|record| {
-                record.cmd == SDIO_CMD53
-                    && sdio_cmd53_arg_function(record.arg) == 1
-                    && sdio_cmd53_arg_addr(record.arg) == pmu_function_addr
-            }));
-        }
-
-        for (index, byte) in requested.to_le_bytes().into_iter().enumerate() {
-            reset_runtime_for_test();
-            test_sdio_cmd52_read_cardctrl_response(0xa0);
-            test_sdio_cmd52_read_ioex_response(0xa6);
-            test_sdio_cmd52_read_chipclkcsr_response(SBSDIO_ALP_AVAIL_REQ | SBSDIO_ALP_AVAIL);
-            let arg = sdio_cmd52_arg(true, 1, pmu_base + index as u32, byte);
-            test_sdio_transfer_fail_next_arg(SDIO_CMD52, arg);
-            let mut state = Cyw43RuntimeState::new();
-            state.transport_ready = true;
-            state.sdio_transport_enumerated = true;
-
-            assert_eq!(
-                cyw43_prepare_firmware_upload_transport(&mut state),
-                Err(FAULT_CYW43_PROBE_PMUCONTROL_WRITE)
-            );
-            assert_eq!(
-                test_sdio_transfer_count(|record| record.cmd == SDIO_CMD52 && record.arg == arg),
-                1,
-            );
-            assert!(!test_sdio_transfer_seen(|record| {
-                record.cmd == SDIO_CMD53
-                    && sdio_cmd53_arg_function(record.arg) == 1
-                    && sdio_cmd53_arg_addr(record.arg) == pmu_function_addr
+                record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                    let addr = sdio_cmd53_arg_addr(record.arg);
+                    addr >= pmu_base && addr < pmu_base + 4
+                }
             }));
         }
     }
@@ -59949,6 +60112,8 @@ mod tests {
         let generation = 0x61f1;
         let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
         let pmu_function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
+        let pmu_read_arg = sdio_cmd53_arg(false, 1, pmu_function_addr, true, 0, 4);
+        let pmu_write_arg = sdio_cmd53_arg(true, 1, pmu_function_addr, true, 0, 4);
         let observed_pmucontrol = 0x0177_0181;
         stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
@@ -59991,73 +60156,48 @@ mod tests {
             "the retained probe-attach phases must complete through the real controller seam",
         );
         let requested = cyw43_linux_probe_pmucontrol_value(observed_pmucontrol);
-        for (index, byte) in requested.to_le_bytes().into_iter().enumerate() {
+        for arg in [pmu_read_arg, pmu_write_arg] {
             assert_eq!(
-                test_sdio_transfer_count(|record| {
-                    record.cmd == SDIO_CMD52
-                        && record.arg == sdio_cmd52_arg(false, 1, pmu_base + index as u32, 0)
-                }),
-                1,
-            );
-            assert_eq!(
-                test_sdio_transfer_count(|record| {
-                    record.cmd == SDIO_CMD52
-                        && record.arg == sdio_cmd52_arg(true, 1, pmu_base + index as u32, byte)
-                }),
+                test_sdio_transfer_count(|record| record.cmd == SDIO_CMD53 && record.arg == arg),
                 1,
             );
         }
         assert!(!test_sdio_transfer_seen(|record| {
-            record.cmd == SDIO_CMD53
-                && sdio_cmd53_arg_function(record.arg) == 1
-                && sdio_cmd53_arg_addr(record.arg) == pmu_function_addr
+            record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                let addr = sdio_cmd53_arg_addr(record.arg);
+                addr >= pmu_base && addr < pmu_base + 4
+            }
         }));
         assert_eq!(
             TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire),
-            15,
-            "probe attach must issue three window bytes, CARDCTRL, eight PMU bytes, and IOEx once",
+            9,
+            "probe attach must issue three window bytes, CARDCTRL, two PMU words, and IOEx once",
         );
         assert_eq!(
             TEST_REAL_SDIO_CONTROLLER_CMD53_ISSUES.load(Ordering::Acquire),
-            0,
-            "the hardware-proven PMU lane must never submit CMD53",
+            2,
+            "PMUCONTROL must cross the controller exactly once per direction",
         );
         assert_eq!(
             TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.load(Ordering::Acquire),
             requested,
-            "the ordered byte writes must preserve the observed PMU value and add RES_RELOAD",
+            "the atomic word write must preserve the observed PMU value and add RES_RELOAD",
         );
     }
 
     #[test]
-    fn probe_attach_pmu_cmd52_byte_failures_are_terminal_at_real_controller_seam() {
+    fn probe_attach_pmu_cmd53_failures_are_terminal_at_real_controller_seam() {
         let _guard = test_guard();
         let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
         let observed = 0x0177_0181;
-        let requested = cyw43_linux_probe_pmucontrol_value(observed);
+        let function_addr = cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
+        let read_arg = sdio_cmd53_arg(false, 1, function_addr, true, 0, 4);
+        let write_arg = sdio_cmd53_arg(true, 1, function_addr, true, 0, 4);
 
-        for (write, index) in [
-            (false, 0u32),
-            (false, 1),
-            (false, 2),
-            (false, 3),
-            (true, 0),
-            (true, 1),
-            (true, 2),
-            (true, 3),
+        for (failed_arg, expected_detail, expected_issues, expected_cmd53_issues) in [
+            (read_arg, FAULT_CYW43_PROBE_PMUCONTROL_READ, 6, 1),
+            (write_arg, FAULT_CYW43_PROBE_PMUCONTROL_WRITE, 7, 2),
         ] {
-            let value = if write {
-                requested.to_le_bytes()[index as usize]
-            } else {
-                0
-            };
-            let failed_arg = sdio_cmd52_arg(write, 1, pmu_base + index, value);
-            let expected_detail = if write {
-                FAULT_CYW43_PROBE_PMUCONTROL_WRITE
-            } else {
-                FAULT_CYW43_PROBE_PMUCONTROL_READ
-            };
-            let expected_issues = if write { 10 + index } else { 6 + index };
             reset_sdio_descriptor_seam_for_test();
             init_cyw43_engine_for_test();
             reset_test_sdio_transfer_log();
@@ -60084,7 +60224,7 @@ mod tests {
             fail_real_sdio_controller_next_arg_with_r5(failed_arg, SDIO_R5_ERROR);
 
             let mut completion = None;
-            for _ in 0..20 {
+            for _ in 0..64 {
                 let before = TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire);
                 match service_command_turn(0, command) {
                     RuntimeCommandTurn::Complete(value) => {
@@ -60101,9 +60241,9 @@ mod tests {
                 }
             }
             let completion =
-                completion.expect("a controller-rejected PMU byte must fail the parent command");
+                completion.expect("a controller-rejected PMU word must fail the parent command");
             assert_eq!(completion.detail, expected_detail);
-            assert_eq!(completion.result, CYW43_CHIPCOMMON_PMUCONTROL_ADDR + index);
+            assert_eq!(completion.result, CYW43_CHIPCOMMON_PMUCONTROL_ADDR);
             assert_eq!(
                 sdio_last_transfer_failure(),
                 sdio_transfer_failure_result(
@@ -60114,29 +60254,27 @@ mod tests {
             );
             assert_eq!(
                 TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire),
-                expected_issues as usize,
+                expected_issues,
             );
             assert_eq!(
                 TEST_REAL_SDIO_CONTROLLER_CMD53_ISSUES.load(Ordering::Acquire),
-                0,
+                expected_cmd53_issues,
             );
             assert_eq!(
                 test_sdio_transfer_count(
-                    |record| record.cmd == SDIO_CMD52 && record.arg == failed_arg
+                    |record| record.cmd == SDIO_CMD53 && record.arg == failed_arg
                 ),
                 1,
-                "the issued PMU action must not replay",
+                "the issued PMU word must not replay",
             );
-            if !write {
-                assert!(!test_sdio_transfer_seen(|record| {
-                    record.cmd == SDIO_CMD52
-                        && record.arg & (1 << 31) != 0
-                        && ((record.arg >> 28) & 0x7) == 1
-                        && {
-                            let addr = (record.arg >> 9) & 0x1ffff;
-                            addr >= pmu_base && addr < pmu_base + 4
-                        }
-                }));
+            if failed_arg == read_arg {
+                assert_eq!(
+                    test_sdio_transfer_count(
+                        |record| record.cmd == SDIO_CMD53 && record.arg == write_arg
+                    ),
+                    0,
+                    "a rejected read cannot expose the PMU write",
+                );
             }
             assert_eq!(
                 test_sdio_transfer_count(|record| {
@@ -60147,6 +60285,12 @@ mod tests {
                 0,
                 "probe attach must stop before Function 2 policy",
             );
+            assert!(!test_sdio_transfer_seen(|record| {
+                record.cmd == SDIO_CMD52 && sdio_cmd53_arg_function(record.arg) == 1 && {
+                    let addr = sdio_cmd53_arg_addr(record.arg);
+                    addr >= pmu_base && addr < pmu_base + 4
+                }
+            }));
 
             let issues_before_replay = TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire);
             let replay = match service_command_turn(0, command) {
@@ -60166,85 +60310,452 @@ mod tests {
     }
 
     #[test]
-    fn probe_attach_pmu_cmd52_owner_operations_require_distinct_turns() {
+    fn probe_attach_pmu_cmd53_owner_words_use_retained_short_pio_turns() {
         let _guard = test_guard();
-        reset_sdio_descriptor_seam_for_test();
-        init_cyw43_engine_for_test();
-        reset_test_sdio_transfer_log();
-        let bridge = enable_real_sdio_controller_bridge();
-        let sequence = 0x8000_5333;
         let generation = 0x4359_5334;
         let pmu_base = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_ADDRESS_MASK;
         let observed = 0x0177_0181;
         let requested = cyw43_linux_probe_pmucontrol_value(observed);
-        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
-            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
-            ..DriverRuntimeCyw43CommandDescriptor::empty()
-        });
-        let command = cyw43_descriptor_command(sequence);
-        CYW43_RUNTIME_STATE.with_mut(|state| {
-            state.transport_ready = true;
-            state.dpc_shared_epoch = generation;
-            state.firmware_prep.parent_sequence = sequence;
-            state.firmware_prep.generation = generation;
-            state.firmware_prep.phase = Cyw43FirmwarePrepPhase::ProbePmuRead0;
-            state.firmware_prep.pmucontrol = 0;
-            state.backplane_window = CYW43_CHIPCOMMON_PMUCONTROL_ADDR & BACKPLANE_WINDOW_MASK;
-            state.backplane_window_valid = true;
-        });
-        TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.store(observed, Ordering::Release);
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
 
-        let phases = [
-            Cyw43FirmwarePrepPhase::ProbePmuRead1,
-            Cyw43FirmwarePrepPhase::ProbePmuRead2,
-            Cyw43FirmwarePrepPhase::ProbePmuRead3,
-            Cyw43FirmwarePrepPhase::ProbePmuWrite0,
-            Cyw43FirmwarePrepPhase::ProbePmuWrite1,
-            Cyw43FirmwarePrepPhase::ProbePmuWrite2,
-            Cyw43FirmwarePrepPhase::ProbePmuWrite3,
-            Cyw43FirmwarePrepPhase::ProbeF2Read,
-        ];
-        for (turn, expected_phase) in phases.into_iter().enumerate() {
-            let before = TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire);
+        for (ordinal, write, word) in [(0u32, false, observed), (1, true, requested)] {
+            reset_sdio_descriptor_seam_for_test();
+            SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = generation);
+            if write {
+                stage_bytes(data_offset, &word.to_le_bytes());
+            }
+            let descriptor = DriverRuntimeSdioCommandDescriptor {
+                op: if write {
+                    DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+                } else {
+                    DRIVER_RUNTIME_SDIO_OP_CMD53_READ
+                },
+                function: 1,
+                response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+                addr: pmu_base,
+                data_offset: data_offset as u16,
+                len: core::mem::size_of::<u32>() as u16,
+                block_size: 0,
+                block_count: 0,
+                flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+                reserved: 0,
+                timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            };
+            let sequence = 0x8000_5333 + ordinal;
+            let command = stage_sdio_descriptor_service_command(sequence, descriptor);
+            let mut io = TestSdioHostIo::new();
+            io.use_runtime_payload = true;
+            io.command_status = SDHCI_INT_RESPONSE
+                | if write {
+                    SDHCI_INT_SPACE_AVAIL
+                } else {
+                    SDHCI_INT_DATA_AVAIL
+                };
+            io.command_present_set = SDHCI_DATA_INHIBIT
+                | SDHCI_DAT_ACTIVE
+                | if write {
+                    SDHCI_SPACE_AVAILABLE
+                } else {
+                    SDHCI_DATA_AVAILABLE
+                };
+            io.data_end_after_words = 1;
+            io.dma_authority_available = false;
+            if !write {
+                io.fifo[..core::mem::size_of::<u32>()].copy_from_slice(&observed.to_le_bytes());
+                io.fifo_len = core::mem::size_of::<u32>();
+            }
+
+            let identity = sdio_external_dma_request_identity_with(command, descriptor, &mut io)
+                .expect("the atomic PMU word is a valid linked-runtime request");
+            assert_eq!(identity.engine, SdioRequestEngine::Pio);
             assert_eq!(
-                service_command_turn(0, command),
+                identity.arg,
+                sdio_cmd53_arg(
+                    write,
+                    1,
+                    pmu_base,
+                    true,
+                    0,
+                    core::mem::size_of::<u32>() as u16,
+                ),
+            );
+
+            let completion = {
+                let mut result = None;
+                for outer_turn in 0..64 {
+                    let buffer_before = io.sdhci_buffer_accesses;
+                    match service_sdio_external_dma_command_turn_with_io(
+                        command, descriptor, &mut io,
+                    ) {
+                        RuntimeCommandTurn::Pending => {}
+                        RuntimeCommandTurn::Complete(completion) => {
+                            result = Some(completion);
+                        }
+                    }
+                    assert!(
+                        io.sdhci_buffer_accesses.saturating_sub(buffer_before) <= 1,
+                        "PMU {ordinal} outer turn {outer_turn} moved more than one FIFO word",
+                    );
+                    if result.is_some() {
+                        break;
+                    }
+                }
+                result.expect("the retained PMU word must complete within its outer-turn bound")
+            };
+
+            assert_eq!(io.command_issue_count(), 1);
+            assert_eq!(io.dma_started, 0);
+            assert_eq!(io.sdhci_buffer_accesses, 1);
+            if write {
+                assert_eq!(
+                    completion,
+                    DriverTaskCompletionRecord::progress(
+                        sequence,
+                        core::mem::size_of::<u32>() as u32,
+                    ),
+                );
+                assert_eq!(&io.fifo[..core::mem::size_of::<u32>()], &word.to_le_bytes());
+            } else {
+                assert_eq!(
+                    completion,
+                    DriverTaskCompletionRecord::frame_ready_at(
+                        sequence,
+                        data_offset as u32,
+                        core::mem::size_of::<u32>() as u16,
+                    ),
+                );
+                assert_eq!(
+                    [
+                        read_runtime_payload_byte(data_offset),
+                        read_runtime_payload_byte(data_offset + 1),
+                        read_runtime_payload_byte(data_offset + 2),
+                        read_runtime_payload_byte(data_offset + 3),
+                    ],
+                    observed.to_le_bytes(),
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sdio_retained_pio_requires_current_response_and_fresh_ready_per_block() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_5340;
+        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = generation);
+        const BLOCK_SIZE: u16 = 8;
+        const BLOCKS: u16 = BCM2835_SDIO_PIO_DMA_BARRIER_BLOCKS;
+        const LEN: usize = BLOCK_SIZE as usize * BLOCKS as usize;
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        for index in 0..LEN {
+            write_runtime_payload_byte(data_offset + index, 0x31 ^ index as u8);
+        }
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: 0,
+            data_offset: data_offset as u16,
+            len: LEN as u16,
+            block_size: BLOCK_SIZE,
+            block_count: BLOCKS,
+            flags: 0,
+            reserved: 0,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+        };
+        let sequence = 0x8000_5340;
+        let command = stage_sdio_descriptor_service_command(sequence, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.dma_authority_available = false;
+        io.command_status = SDHCI_INT_SPACE_AVAIL;
+        io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+        io.data_end_after_words = LEN.div_ceil(core::mem::size_of::<u32>());
+
+        let identity = sdio_external_dma_request_identity_with(command, descriptor, &mut io)
+            .expect("the exact two-block request is admitted");
+        assert_eq!(identity.engine, SdioRequestEngine::Pio);
+
+        for outer_turn in 0..32 {
+            let buffer_before = io.sdhci_buffer_accesses;
+            assert_eq!(
+                service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
                 RuntimeCommandTurn::Pending,
             );
-            let after = TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire);
             assert_eq!(
-                after.saturating_sub(before),
-                1,
-                "PMU turn {turn} must issue exactly one child/controller operation",
+                io.sdhci_buffer_accesses, buffer_before,
+                "preissue turn {outer_turn} cannot touch BUFFER",
             );
-            CYW43_RUNTIME_STATE.with_ref(|state| {
-                assert_eq!(state.firmware_prep.phase, expected_phase);
-            });
-            let index = turn % 4;
-            let write = turn >= 4;
-            let value = if write {
-                requested.to_le_bytes()[index]
-            } else {
-                0
-            };
-            let expected_arg = sdio_cmd52_arg(write, 1, pmu_base + index as u32, value);
-            assert_eq!(
-                test_sdio_transfer_count(|record| {
-                    record.cmd == SDIO_CMD52 && record.arg == expected_arg
-                }),
-                1,
-                "PMU turn {turn} must retain one immutable action",
-            );
+            if io.command_issue_count() == 1 {
+                break;
+            }
         }
-        assert_eq!(TEST_REAL_SDIO_CONTROLLER_ISSUES.load(Ordering::Acquire), 8,);
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(io.dma_started, 0);
         assert_eq!(
-            TEST_REAL_SDIO_CONTROLLER_CMD53_ISSUES.load(Ordering::Acquire),
+            io.register(SDHCI_INT_ENABLE) & SDHCI_INT_PIO_READY_MASK,
+            SDHCI_INT_SPACE_AVAIL,
+        );
+        assert_eq!(
+            io.register(SDHCI_INT_ENABLE) & SDHCI_INT_BCM2835_PIO_EXCLUDED_MASK,
             0,
         );
+
+        sdio_program_interrupt_policy_with(&mut io);
         assert_eq!(
-            TEST_REAL_SDIO_CONTROLLER_PMU_WRITE_WORD.load(Ordering::Acquire),
-            requested,
+            io.register(SDHCI_INT_ENABLE) & SDHCI_INT_PIO_READY_MASK,
+            SDHCI_INT_SPACE_AVAIL,
+            "notification policy rewrites must preserve the active immutable PIO source",
         );
-        drop(bridge);
+        assert_eq!(
+            io.register(SDHCI_SIGNAL_ENABLE) & SDHCI_INT_PIO_READY_MASK,
+            0,
+            "the retained owner polls PIO and never delegates it to a second IRQ lane",
+        );
+
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert_eq!(
+            io.sdhci_buffer_accesses, 0,
+            "a ready edge before the current R5 response cannot authorize BUFFER",
+        );
+
+        io.set_register(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE);
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert_eq!(
+            io.sdhci_buffer_accesses, 0,
+            "the later response cannot reuse the discarded early ready edge",
+        );
+
+        io.set_register(SDHCI_INT_STATUS, SDHCI_INT_SPACE_AVAIL);
+        for expected_words in 1..=2 {
+            let before = io.sdhci_buffer_accesses;
+            assert_eq!(
+                service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+                RuntimeCommandTurn::Pending,
+            );
+            assert_eq!(io.sdhci_buffer_accesses, before + 1);
+            assert_eq!(io.sdhci_buffer_accesses, expected_words);
+        }
+
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert_eq!(
+            io.sdhci_buffer_accesses, 2,
+            "block two requires a distinct direction-ready episode",
+        );
+
+        io.set_register(
+            SDHCI_PRESENT_STATE,
+            io.register(SDHCI_PRESENT_STATE) & !SDHCI_SPACE_AVAILABLE,
+        );
+        io.set_register(SDHCI_INT_STATUS, SDHCI_INT_SPACE_AVAIL);
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert_eq!(
+            io.sdhci_buffer_accesses, 2,
+            "a ready edge without direction-matched PRESENT ownership is only a wakeup",
+        );
+        io.set_register(
+            SDHCI_PRESENT_STATE,
+            io.register(SDHCI_PRESENT_STATE) | SDHCI_SPACE_AVAILABLE,
+        );
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert_eq!(
+            io.sdhci_buffer_accesses, 2,
+            "stale PRESENT cannot reuse the consumed early edge",
+        );
+
+        io.set_register(SDHCI_INT_STATUS, SDHCI_INT_SPACE_AVAIL);
+        for expected_words in 3..=4 {
+            let before = io.sdhci_buffer_accesses;
+            assert_eq!(
+                service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+                RuntimeCommandTurn::Pending,
+            );
+            assert_eq!(io.sdhci_buffer_accesses, before + 1);
+            assert_eq!(io.sdhci_buffer_accesses, expected_words);
+        }
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+            "DATA_END and quiescence are joined before interrupt restoration",
+        );
+        let completion =
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io);
+        assert_eq!(
+            completion,
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(
+                sequence, LEN as u32,
+            )),
+        );
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(io.dma_started, 0);
+        assert_eq!(
+            io.register(SDHCI_INT_ENABLE) & SDHCI_INT_PIO_READY_MASK,
+            0,
+            "terminal completion restores the idle interrupt policy",
+        );
+        assert_eq!(
+            &io.fifo[..LEN],
+            &core::array::from_fn::<_, LEN, _>(|index| { 0x31 ^ index as u8 })
+        );
+    }
+
+    #[test]
+    fn sdio_retained_pio_bad_r5_never_touches_buffer_or_reissues() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = 0x4359_5341);
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        stage_bytes(data_offset, &[1, 2, 3, 4]);
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 1,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
+            data_offset: data_offset as u16,
+            len: 4,
+            block_size: 0,
+            block_count: 0,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+            reserved: 0,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+        };
+        let sequence = 0x8000_5341;
+        let command = stage_sdio_descriptor_service_command(sequence, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.dma_authority_available = false;
+        io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
+        io.command_response = SDIO_R5_ERROR;
+        io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
+
+        for _ in 0..32 {
+            assert_eq!(
+                service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+                RuntimeCommandTurn::Pending,
+            );
+            if io.command_issue_count() == 1 {
+                break;
+            }
+        }
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+            "the coalesced bad R5 begins retained containment",
+        );
+        assert_eq!(io.sdhci_buffer_accesses, 0);
+        assert_eq!(io.dma_started, 0);
+
+        let fault = {
+            let mut result = None;
+            for _ in 0..100_000 {
+                match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
+                    RuntimeCommandTurn::Pending => {}
+                    RuntimeCommandTurn::Complete(completion) => {
+                        result = Some(completion);
+                        break;
+                    }
+                }
+                assert_eq!(io.command_issue_count(), 1);
+                assert_eq!(io.sdhci_buffer_accesses, 0);
+                assert_eq!(io.dma_started, 0);
+            }
+            result.expect("bad-R5 retained PIO containment must terminate")
+        };
+        assert_eq!(fault.code, COMPLETION_FAULT);
+        assert_eq!(fault.detail, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED);
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(io.sdhci_buffer_accesses, 0);
+        assert_eq!(io.dma_started, 0);
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Complete(fault),
+            "same-generation failure replay is typed state only",
+        );
+        assert_eq!(io.command_issue_count(), 1);
+    }
+
+    #[test]
+    fn sdio_retained_engine_cutoff_is_normalized_and_immutable() {
+        let _guard = test_guard();
+        for (ordinal, block_size, block_count, len, expected_engine) in [
+            (0u32, 0u16, 0u16, 4u16, SdioRequestEngine::Pio),
+            (1, 64, 1, 64, SdioRequestEngine::Pio),
+            (2, 64, 2, 128, SdioRequestEngine::Pio),
+            (3, 64, 3, 192, SdioRequestEngine::ExternalDma),
+        ] {
+            reset_sdio_descriptor_seam_for_test();
+            SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = 0x4359_5350 + ordinal);
+            let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+            for index in 0..usize::from(len) {
+                write_runtime_payload_byte(data_offset + index, ordinal as u8 ^ index as u8);
+            }
+            let descriptor = DriverRuntimeSdioCommandDescriptor {
+                op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+                function: 1,
+                response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+                addr: 0x8000,
+                data_offset: data_offset as u16,
+                len,
+                block_size,
+                block_count,
+                flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+                reserved: 0,
+                timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            };
+            let command = stage_sdio_descriptor_service_command(0x8000_5350 + ordinal, descriptor);
+            let mut io = TestSdioHostIo::new();
+            io.use_runtime_payload = true;
+            let identity = sdio_external_dma_request_identity_with(command, descriptor, &mut io)
+                .expect("cutoff case must admit");
+            assert_eq!(identity.block_count, block_count.max(1));
+            assert_eq!(identity.engine, expected_engine);
+
+            assert_eq!(
+                service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+                RuntimeCommandTurn::Pending,
+            );
+            let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.identity);
+            assert_eq!(retained.engine, expected_engine);
+            let mut mutated = descriptor;
+            mutated.block_count = if block_count <= BCM2835_SDIO_PIO_DMA_BARRIER_BLOCKS {
+                BCM2835_SDIO_PIO_DMA_BARRIER_BLOCKS + 1
+            } else {
+                1
+            };
+            mutated.block_size = if mutated.block_count == 0 {
+                0
+            } else {
+                len / mutated.block_count
+            };
+            assert_eq!(
+                service_sdio_external_dma_command_turn_with_io(command, mutated, &mut io),
+                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+                    command.sequence,
+                    FAULT_REJECTED_COMMAND,
+                )),
+            );
+            assert_eq!(
+                SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.identity.engine),
+                expected_engine,
+                "descriptor mutation cannot switch the retained engine",
+            );
+        }
     }
 
     #[test]
@@ -64060,6 +64571,7 @@ mod tests {
                     assert_eq!(frontier.ticket.ordinal as usize, child_count);
                     assert_eq!(frontier.ticket.issued_turn_id, turn_id_after);
                 });
+                configure_production_owner_child(&mut io, descriptor);
                 if child_count != 0 {
                     assert!(first_completion_consumed_turn != 0);
                     assert!(turn_id_after > first_completion_consumed_turn);
@@ -64112,6 +64624,7 @@ mod tests {
 
                 let issues_before = io.command_issue_count();
                 let snapshots_before = io.dma_dreq_snapshots;
+                let buffer_before = io.sdhci_buffer_accesses;
                 owner_turns = owner_turns.saturating_add(1);
                 let owner_turn = service_sdio_external_dma_command_turn_with_io(
                     command,
@@ -64128,6 +64641,10 @@ mod tests {
                 assert!(
                     issue_delta + snapshot_delta <= 1,
                     "one owner turn cannot both issue and poll",
+                );
+                assert!(
+                    io.sdhci_buffer_accesses.saturating_sub(buffer_before) <= 1,
+                    "one owner turn may move at most one retained-PIO word",
                 );
                 match owner_turn {
                     RuntimeCommandTurn::Pending => {
@@ -64169,19 +64686,16 @@ mod tests {
         assert_eq!(owner_turns, pending_owner_turns + CHILDREN.len());
         assert!(parent_turns > owner_turns);
         assert_eq!(io.command_issue_count(), CHILDREN.len());
-        assert_eq!(io.dma_started, CHILDREN.len());
-        assert_eq!(
-            io.dma_dreq_snapshots,
-            CHILDREN
-                .iter()
-                .map(|(_, len, _)| len.div_ceil(128))
-                .sum::<usize>(),
-        );
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(io.dma_dreq_snapshots, CHILDREN[0].1.div_ceil(128),);
         assert_eq!(io.fifo_len, FIRMWARE_BYTES);
         for index in 0..FIRMWARE_BYTES {
             assert_eq!(io.fifo[index], (index as u8).wrapping_mul(41));
         }
-        assert_eq!(io.sdhci_buffer_accesses, 0);
+        assert_eq!(
+            io.sdhci_buffer_accesses,
+            CHILDREN[1].1.div_ceil(core::mem::size_of::<u32>()),
+        );
         assert_eq!(
             SDIO_CMD_COUNT.load(Ordering::Acquire),
             CHILDREN.len() as u32
@@ -64431,6 +64945,22 @@ mod tests {
             | DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE
             | DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND => SDHCI_INT_RESPONSE,
             _ => 0,
+        };
+        let effective_block_count = if descriptor.block_count == 0 {
+            u16::from(matches!(
+                descriptor.op,
+                DRIVER_RUNTIME_SDIO_OP_CMD53_READ | DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+            ))
+        } else {
+            descriptor.block_count
+        };
+        io.fifo_words = 0;
+        io.data_end_after_words = if effective_block_count != 0
+            && effective_block_count <= BCM2835_SDIO_PIO_DMA_BARRIER_BLOCKS
+        {
+            usize::from(descriptor.len).div_ceil(core::mem::size_of::<u32>())
+        } else {
+            0
         };
     }
 
@@ -65219,7 +65749,10 @@ mod tests {
         assert!(unknown.issued_unknown);
         assert!(unknown.completion.is_none());
         assert_eq!(unknown_io.command_issue_count(), 2);
-        assert_eq!(unknown_io.dma_started, 2);
+        assert_eq!(
+            unknown_io.dma_started, 1,
+            "the one-block tail uses the immutable retained-PIO engine",
+        );
         assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
         assert!(CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire));
         assert_eq!(
@@ -66007,12 +66540,20 @@ mod tests {
             let owner_command = runtime_ring_read_command_stable(&ring)
                 .expect("sequence-last reciprocal child must be owner-visible");
             assert_eq!(owner_command, command);
+            let pio = block_count <= BCM2835_SDIO_PIO_DMA_BARRIER_BLOCKS;
+            io.fifo_words = 0;
+            io.data_end_after_words = if pio {
+                transfer_len.div_ceil(core::mem::size_of::<u32>())
+            } else {
+                0
+            };
 
             clear_runtime_continuation_grant_at(grant_base);
             let mut child_grant_id = 0u32;
             let completion = loop {
                 let issues_before = io.command_issue_count();
                 let snapshots_before = io.dma_dreq_snapshots;
+                let buffer_before = io.sdhci_buffer_accesses;
                 owner_turns = owner_turns.saturating_add(1);
                 let owner_turn = service_sdio_external_dma_command_turn_with_io(
                     owner_command,
@@ -66026,6 +66567,10 @@ mod tests {
                 assert!(
                     issue_delta + snapshot_delta <= 1,
                     "one owner turn cannot both issue and poll",
+                );
+                assert!(
+                    io.sdhci_buffer_accesses.saturating_sub(buffer_before) <= 1,
+                    "one owner turn may move at most one retained-PIO word",
                 );
                 match owner_turn {
                     RuntimeCommandTurn::Complete(completion) => break completion,
@@ -66174,19 +66719,16 @@ mod tests {
             "every owner continuation requires one parent poll and one fresh grant",
         );
         assert_eq!(io.command_issue_count(), COMMANDS.len());
-        assert_eq!(io.dma_started, COMMANDS.len());
-        assert_eq!(
-            io.dma_dreq_snapshots,
-            COMMANDS
-                .iter()
-                .map(|(_, len, _)| len.div_ceil(128))
-                .sum::<usize>(),
-        );
+        assert_eq!(io.dma_started, 1);
+        assert_eq!(io.dma_dreq_snapshots, COMMANDS[0].1.div_ceil(128),);
         assert_eq!(io.fifo_len, FIRMWARE_BYTES);
         for index in 0..FIRMWARE_BYTES {
             assert_eq!(io.fifo[index], (index as u8).wrapping_mul(41));
         }
-        assert_eq!(io.sdhci_buffer_accesses, 0);
+        assert_eq!(
+            io.sdhci_buffer_accesses,
+            COMMANDS[1].1.div_ceil(core::mem::size_of::<u32>()),
+        );
         assert_eq!(
             SDIO_CMD_COUNT.load(Ordering::Acquire),
             COMMANDS.len() as u32
@@ -66607,7 +67149,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_retained_external_dma_moves_full_aperture_as_511_plus_one_blocks() {
+    fn sdio_retained_owner_moves_full_aperture_as_dma_511_plus_pio_one() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
         SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = 0x4359_5301);
@@ -66662,6 +67204,13 @@ mod tests {
             let sequence = 0x5306_8000 + ordinal as u32;
             let command = stage_sdio_descriptor_service_command(sequence, descriptor);
             let snapshots_before = io.dma_dreq_snapshots;
+            let pio = block_count <= BCM2835_SDIO_PIO_DMA_BARRIER_BLOCKS;
+            io.fifo_words = 0;
+            io.data_end_after_words = if pio {
+                len.div_ceil(core::mem::size_of::<u32>())
+            } else {
+                0
+            };
 
             let mut child_preissue_turns = 0usize;
             while io.command_issue_count() == ordinal {
@@ -66675,15 +67224,24 @@ mod tests {
                 assert!(child_preissue_turns < 32, "child {ordinal} preissue bound");
             }
             assert_eq!(
-                child_preissue_turns, 12,
+                child_preissue_turns,
+                if pio { 10 } else { 12 },
                 "child {ordinal} Linux issue phases"
             );
+            let buffer_accesses_before = io.sdhci_buffer_accesses;
             let completion = loop {
                 outer_turns += 1;
+                let accesses_before_turn = io.sdhci_buffer_accesses;
                 match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
                     RuntimeCommandTurn::Pending => {}
                     RuntimeCommandTurn::Complete(completion) => break completion,
                 }
+                assert!(
+                    io.sdhci_buffer_accesses
+                        .saturating_sub(accesses_before_turn)
+                        <= 1,
+                    "child {ordinal} moved more than one PIO word per outer turn",
+                );
             };
             assert_eq!(
                 completion,
@@ -66691,32 +67249,38 @@ mod tests {
             );
             assert_eq!(
                 io.dma_dreq_snapshots - snapshots_before,
-                len.div_ceil(FIFO_QUANTUM),
-                "child {ordinal} must consume one finite FIFO quantum per outer poll turn"
+                if pio { 0 } else { len.div_ceil(FIFO_QUANTUM) },
+                "child {ordinal} must use only its immutable request engine",
+            );
+            assert_eq!(
+                io.sdhci_buffer_accesses - buffer_accesses_before,
+                if pio {
+                    len.div_ceil(core::mem::size_of::<u32>())
+                } else {
+                    0
+                },
             );
             assert_eq!(io.command_issue_count(), ordinal + 1);
         }
 
         assert_eq!(
             outer_turns,
-            12 * CHILDREN.len()
-                + CHILDREN
-                    .iter()
-                    .map(|(_, len, _)| len.div_ceil(FIFO_QUANTUM))
-                    .sum::<usize>()
+            12 + CHILDREN[0].1.div_ceil(FIFO_QUANTUM)
+                + 10
+                + CHILDREN[1].1.div_ceil(core::mem::size_of::<u32>())
+                + 2,
         );
         assert_eq!(io.command_issue_count(), 2);
-        assert_eq!(io.dma_started, 2);
+        assert_eq!(io.dma_started, 1);
         assert_eq!(io.fifo_len, CYW43_FIRMWARE_STAGE_BYTES);
         for index in 0..CYW43_FIRMWARE_STAGE_BYTES {
             assert_eq!(io.fifo[index], (index as u8).wrapping_mul(37));
         }
-        assert!(io.writes[..io.write_count]
-            .iter()
-            .filter(|write| write.offset == SDHCI_INT_STATUS)
-            .all(|write| write.value & SDHCI_INT_PIO_READY_MASK == 0));
-        assert_eq!(io.dma_terminal_interrupt_acks, 2);
-        assert_eq!(io.sdhci_buffer_accesses, 0);
+        assert_eq!(io.dma_terminal_interrupt_acks, 1);
+        assert_eq!(
+            io.sdhci_buffer_accesses,
+            CHILDREN[1].1.div_ceil(core::mem::size_of::<u32>()),
+        );
     }
 
     #[test]
@@ -66724,7 +67288,9 @@ mod tests {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
         SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = 0x4359_5301);
-        const LEN: usize = 64;
+        const BLOCK_SIZE: u16 = 64;
+        const BLOCKS: u16 = BCM2835_SDIO_PIO_DMA_BARRIER_BLOCKS + 1;
+        const LEN: usize = BLOCK_SIZE as usize * BLOCKS as usize;
         let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
         for index in 0..LEN {
             write_runtime_payload_byte(data_offset + index, 0xa5 ^ index as u8);
@@ -66736,8 +67302,8 @@ mod tests {
             addr: cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
             data_offset: data_offset as u16,
             len: LEN as u16,
-            block_size: LEN as u16,
-            block_count: 1,
+            block_size: BLOCK_SIZE,
+            block_count: BLOCKS,
             flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
             reserved: 0,
             timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,

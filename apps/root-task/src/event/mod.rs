@@ -13448,7 +13448,7 @@ where
             0x5327 => "verify-linked-sdio-cmd3-rca",
             0x5328 => "verify-linked-sdio-cmd7-select",
             0x532a => "inspect-linux-post-release-power-ht-transition",
-            0x5333 | 0x5334 => "inspect-probe-pmucontrol-cmd52-byte-primary",
+            0x5333 | 0x5334 => "inspect-probe-pmucontrol-cmd53-word-primary",
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
             0x5331..=0x5336 => "inspect-linux-probe-attach-state",
             0x5337 => "inspect-probe-sdonly-clock-before-firmware-alp",
@@ -25822,7 +25822,7 @@ mod tests {
             assert_eq!(
                 KernelConsoleTestPump::wifi_cyw43_fault_next_action(detail),
                 if matches!(detail, 0x5333 | 0x5334) {
-                    "inspect-probe-pmucontrol-cmd52-byte-primary"
+                    "inspect-probe-pmucontrol-cmd53-word-primary"
                 } else if detail == 0x5337 {
                     "inspect-probe-sdonly-clock-before-firmware-alp"
                 } else {
