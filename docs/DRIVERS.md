@@ -924,11 +924,13 @@ This as-built closure is authorized by Milestone 26d task
   admitting later unrelated interrupts. Only the ordinary CYW43 DPC cursor may
   read dongle status and Function 2, so the source probe is a lost-notification
   recovery turn, not a second receive path.
-  A hintless `SOURCE_PENDING` event is itself one-shot authority for the
-  Linux-style fixed Function 2 first read even when the SDIO source-status and
-  RFRAME hints are both zero. The DPC clears that authority before issuing the
-  read; an all-zero result takes the ordinary post-status/quiescence path and
-  cannot create a private polling loop.
+  A hintless `SOURCE_PENDING` event is authority to inspect the firmware
+  interrupt status through the ordinary DPC cursor, not authority to read the
+  Function 2 FIFO. Matching Raspberry Pi Linux brcmfmac, only a real
+  `I_HMB_FRAME_IND` status bit or a validated retained frame hint authorizes the
+  fixed Function 2 first read. Zero status plus zero RFRAME is quiescent: the
+  event is consumed and the sole SDIO owner is rearmed without touching stale
+  bytes in the shared RX aperture.
   Its immutable ticket and exact generation completion obey the same
   issued-unknown poisoning and stale-completion rejection as all other owner
   work, and it never permits replay of the completed control TX.

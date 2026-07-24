@@ -3177,7 +3177,6 @@ impl Cyw43DpcChild {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43DpcCursor {
     event_sequence: u32,
-    source_probe_firstread_pending: bool,
     action: Cyw43DpcAction,
     io_kind: Cyw43DpcIoKind,
     io_phase: Cyw43DpcIoPhase,
@@ -3203,7 +3202,6 @@ impl Cyw43DpcCursor {
     const fn empty() -> Self {
         Self {
             event_sequence: 0,
-            source_probe_firstread_pending: false,
             action: Cyw43DpcAction::None,
             io_kind: Cyw43DpcIoKind::None,
             io_phase: Cyw43DpcIoPhase::Idle,
@@ -6828,7 +6826,6 @@ const fn cyw43_dpc_rx_start_route(
     pending_intstatus: u32,
     next_frame_len: u16,
     next_frame_from_rframe: bool,
-    source_probe_firstread_pending: bool,
 ) -> Cyw43DpcRxStartRoute {
     if rxskip {
         return Cyw43DpcRxStartRoute::PostStatus;
@@ -6842,11 +6839,11 @@ const fn cyw43_dpc_rx_start_route(
         }
         return Cyw43DpcRxStartRoute::NextFrame(next_frame_len);
     }
-    if pending_intstatus & I_HMB_FRAME_IND != 0 || source_probe_firstread_pending {
+    if pending_intstatus & I_HMB_FRAME_IND != 0 {
         // A latched FRAME_IND authorizes the fixed Function 2 first read even
-        // when the diagnostic RFRAME count is zero. A generation-bound
-        // SOURCE_PENDING event carries the same one-shot authority when the
-        // SDIO owner found no usable status/RFRAME hint after a forced probe.
+        // when the diagnostic RFRAME count is zero. Match Linux brcmfmac:
+        // a source wake with zero firmware status is spurious/quiescent and
+        // does not by itself authorize a Function 2 FIFO transfer.
         Cyw43DpcRxStartRoute::Firstread
     } else {
         Cyw43DpcRxStartRoute::PostStatus
@@ -7193,7 +7190,8 @@ fn dpc_event_ring_set_owner_health(
     // failures remain visible through cumulative overrun/ack counters when a
     // clean post-re-enumeration generation replaces a poisoned ring.
     ring.flags &= !(DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED
-        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING);
+        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING
+        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED);
     if card_irq_masked {
         ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED;
     }
@@ -9429,7 +9427,6 @@ fn cyw43_dpc_start_rframe_or_post(state: &mut Cyw43RuntimeState, cursor: &mut Cy
         state.pending_intstatus,
         state.sdpcm_next_frame_len,
         state.sdpcm_next_frame_from_rframe,
-        cursor.source_probe_firstread_pending,
     );
     if cyw43_dpc_post_route_marks_quiescent(route) {
         state.rx_service_quiescent = true;
@@ -9451,10 +9448,6 @@ fn cyw43_dpc_start_rframe_or_post(state: &mut Cyw43RuntimeState, cursor: &mut Cy
             );
         }
         Cyw43DpcRxStartRoute::Firstread => {
-            // Consume the immutable source-probe authority exactly once. A
-            // confirming all-zero first read terminates cleanly through the
-            // ordinary post-status path; it can never become a private poll.
-            cursor.source_probe_firstread_pending = false;
             if state.sdpcm_next_frame_len != 0 {
                 let _ = cyw43_take_sdpcm_next_frame_len(state);
             }
@@ -10314,8 +10307,6 @@ fn cyw43_runtime_service_dpc_event() -> bool {
             if cursor.event_sequence == 0 {
                 cursor.reset();
                 cursor.event_sequence = event.sequence;
-                cursor.source_probe_firstread_pending =
-                    event.flags & DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING != 0;
                 state.reset_rx_idle_trace();
                 state.rx_service_active = true;
                 state.rx_service_quiescent = false;
@@ -45434,7 +45425,7 @@ mod tests {
     }
 
     #[test]
-    fn dpc_owner_health_latches_ack_failure_and_poison_without_layout_growth() {
+    fn dpc_owner_health_reports_current_poison_and_preserves_failure_count() {
         let mut ring = DriverRuntimeDpcEventRing::empty(0x4359_5301);
         dpc_event_ring_set_owner_health(&mut ring, true, true, false, true);
         assert!(ring.valid());
@@ -45458,10 +45449,8 @@ mod tests {
         assert_eq!(ring.ack_failures, 1);
 
         dpc_event_ring_set_owner_health(&mut ring, false, false, false, false);
-        assert_eq!(
-            ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED,
-            DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED
-        );
+        assert_eq!(ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED, 0,);
+        assert_eq!(ring.ack_failures, 1);
     }
 
     #[test]
@@ -46551,31 +46540,27 @@ mod tests {
     #[test]
     fn dpc_rx_start_uses_linux_frame_indication_and_next_frame_order() {
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, I_HMB_FRAME_IND, 0, false, false),
+            cyw43_dpc_rx_start_route(false, I_HMB_FRAME_IND, 0, false),
             Cyw43DpcRxStartRoute::Firstread
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, 0, 128, false, false),
+            cyw43_dpc_rx_start_route(false, 0, 128, false),
             Cyw43DpcRxStartRoute::NextFrame(128)
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, I_HMB_FRAME_IND, 128, false, false),
+            cyw43_dpc_rx_start_route(false, I_HMB_FRAME_IND, 128, false),
             Cyw43DpcRxStartRoute::NextFrame(128)
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, 0, 128, true, false),
+            cyw43_dpc_rx_start_route(false, 0, 128, true),
             Cyw43DpcRxStartRoute::Firstread
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, 0, 0, false, false),
+            cyw43_dpc_rx_start_route(false, 0, 0, false),
             Cyw43DpcRxStartRoute::PostStatus
         );
         assert_eq!(
-            cyw43_dpc_rx_start_route(false, 0, 0, false, true),
-            Cyw43DpcRxStartRoute::Firstread
-        );
-        assert_eq!(
-            cyw43_dpc_rx_start_route(true, I_HMB_FRAME_IND, 128, false, true),
+            cyw43_dpc_rx_start_route(true, I_HMB_FRAME_IND, 128, false),
             Cyw43DpcRxStartRoute::PostStatus
         );
     }
@@ -66602,9 +66587,10 @@ mod tests {
         );
         assert!(dpc_turns > owner_children);
         assert!(owner_turns > owner_children);
+        let minimum_children = if function2_reads == 0 { 2 } else { 3 };
         assert!(
-            owner_children >= 3,
-            "status, F2 frame, and post-status are physical children",
+            owner_children >= minimum_children,
+            "capture-status and post-status are physical children; FRAME_IND adds Function 2",
         );
         assert_eq!(io.command_issue_count(), owner_children);
         assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
@@ -67635,8 +67621,8 @@ mod tests {
         ));
         let dpc_trace = drive_production_dpc_event_to_fifo(generation, &[0u8; 64], 0, 0);
         assert_eq!(
-            dpc_trace.function2_reads, 1,
-            "a zero-status pre-TX source probe performs one confirming first read",
+            dpc_trace.function2_reads, 0,
+            "a zero-status pre-TX source probe is consumed without a blind FIFO read",
         );
         CYW43_RUNTIME_STATE.with_ref(|state| {
             assert_eq!(
@@ -67948,7 +67934,8 @@ mod tests {
                 CYW43_DPC_WATERMARK_REFRESH_EVENT_SEQUENCE.load(Ordering::Acquire),
                 owner_completion.result,
             );
-            let dpc_trace = drive_production_dpc_event_to_fifo(generation, &wire_frame, 1, 0);
+            let dpc_trace =
+                drive_production_dpc_event_to_fifo(generation, &wire_frame, 1, I_HMB_FRAME_IND);
             assert_eq!(
                 dpc_trace.first_descriptor.op,
                 DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
@@ -67960,7 +67947,7 @@ mod tests {
             );
             assert_eq!(
                 dpc_trace.function2_reads, 2,
-                "a zero-status source probe must perform one authoritative first read and one empty confirmation",
+                "a real FRAME_IND must perform one authoritative first read and one empty confirmation",
             );
             assert_eq!(
                 test_sdio_cmd53_transfer_count(2, false),
@@ -68373,7 +68360,7 @@ mod tests {
     }
 
     #[test]
-    fn production_zero_status_source_probe_firstreads_once_then_rearms() {
+    fn production_zero_status_source_probe_is_quiescent_and_rearms_without_fifo_read() {
         let _guard = test_guard();
         let generation = 0x4359_d0f1;
         initialize_production_foreground_pair(generation);
@@ -68409,10 +68396,17 @@ mod tests {
             DpcRingPublishResult::Published(1),
         );
 
+        // Deliberately leave an invalid nonzero prefix in the shared RX
+        // aperture. A zero-status source wake has no Function 2 read
+        // authority, so stale aperture bytes cannot be mistaken for a frame.
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            &[0x34, 0x12, 0xcb, 0xed, 0xaa, 0x55, 0xaa, 0x55],
+        );
         let trace = drive_production_dpc_event_to_fifo(generation, &[0u8; 64], 0, 0);
         assert_eq!(
-            trace.function2_reads, 1,
-            "a forced zero-status probe gets one Linux-style confirming first read",
+            trace.function2_reads, 0,
+            "zero firmware status must not authorize a blind Function 2 read",
         );
         assert_eq!(trace.owner_command_issues, trace.owner_children);
         CYW43_RUNTIME_STATE.with_ref(|state| {
