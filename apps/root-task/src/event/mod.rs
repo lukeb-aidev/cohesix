@@ -5116,7 +5116,9 @@ where
         self.emit_console_line("  help  - Show this help");
         self.emit_console_line("  bi    - Show bootinfo summary");
         self.emit_console_line("  caps  - Show capability slots");
-        self.emit_console_line("  smp [activity] - Show SMP scheduler info or userspace activity");
+        self.emit_console_line(
+            "  smp [activity|dump] - Show activity; dump raw debug scheduler state",
+        );
         self.emit_console_line("  mem   - Show untyped summary");
         self.emit_console_line("  ping  - Respond with pong");
         self.emit_console_line("  test  - Self-test (host-only; use cohsh)");
@@ -5134,7 +5136,9 @@ where
         self.emit_serial_line("  help  - Show this help");
         self.emit_serial_line("  bi    - Show bootinfo summary");
         self.emit_serial_line("  caps  - Show capability slots");
-        self.emit_serial_line("  smp [activity] - Show SMP scheduler info or userspace activity");
+        self.emit_serial_line(
+            "  smp [activity|dump] - Show activity; dump raw debug scheduler state",
+        );
         self.emit_serial_line("  mem   - Show untyped summary");
         self.emit_serial_line("  ping  - Respond with pong");
         self.emit_serial_line("  test  - Self-test (host-only; use cohsh)");
@@ -5153,7 +5157,7 @@ where
         self.emit_serial_line_atomic("  bi    - Show bootinfo summary");
         self.emit_serial_line_atomic("  caps  - Show capability slots");
         self.emit_serial_line_atomic(
-            "  smp [activity] - Show SMP scheduler info or userspace activity",
+            "  smp [activity|dump] - Show activity; dump raw debug scheduler state",
         );
         self.emit_serial_line_atomic("  mem   - Show untyped summary");
         self.emit_serial_line_atomic("  ping  - Respond with pong");
@@ -5340,7 +5344,7 @@ where
     fn emit_smp_snapshot(&mut self) -> Option<&'static str> {
         if crate::serial::serial_linked_runtime_transport_active() {
             self.emit_console_line(
-                "[smp] scheduler dump unavailable after linked UART cutover use=smp-activity",
+                "[smp] scheduler dump unavailable after linked UART cutover use=smp",
             );
             return None;
         }
@@ -20907,7 +20911,7 @@ mod tests {
     }
 
     #[test]
-    fn smp_activity_emits_userspace_diagnostics_and_hdmi_mirror() {
+    fn smp_defaults_to_activity_and_emits_hdmi_mirror() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -20926,7 +20930,7 @@ mod tests {
         local_seat.mark_root_console_ready();
         let mut pump =
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
-        pump.serial_mut().driver_mut().push_rx(b"smp activity\n");
+        pump.serial_mut().driver_mut().push_rx(b"smp\n");
 
         pump.poll();
 
@@ -20990,7 +20994,7 @@ mod tests {
 
     #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
     #[test]
-    fn smp_snapshot_stays_distinct_from_activity_on_non_debug_builds() {
+    fn smp_dump_stays_distinct_from_activity_on_non_debug_builds() {
         let driver = LoopbackSerial::<2048>::new();
         let serial = SerialPort::<_, 512, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -21001,7 +21005,7 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
-        pump.serial_mut().driver_mut().push_rx(b"smp\n");
+        pump.serial_mut().driver_mut().push_rx(b"smp dump\n");
 
         pump.poll();
 
@@ -21075,7 +21079,7 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
-        pump.serial_mut().driver_mut().push_rx(b"smp\n");
+        pump.serial_mut().driver_mut().push_rx(b"smp dump\n");
 
         pump.poll();
 

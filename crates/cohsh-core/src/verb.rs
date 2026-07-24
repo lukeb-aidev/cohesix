@@ -14,7 +14,7 @@ pub enum ConsoleVerb {
     BootInfo,
     /// `caps`
     Caps,
-    /// `smp [activity]`
+    /// `smp [activity|dump]`
     Smp,
     /// `mem`
     Mem,
@@ -107,8 +107,8 @@ pub const VERB_SPECS: [VerbSpec; VERB_SPEC_COUNT] = [
     },
     VerbSpec {
         verb: ConsoleVerb::Smp,
-        usage: "smp [activity]",
-        example: "smp activity",
+        usage: "smp [activity|dump]",
+        example: "smp",
     },
     VerbSpec {
         verb: ConsoleVerb::Mem,

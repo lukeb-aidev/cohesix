@@ -58,8 +58,9 @@ the most precise description of that boot.
 | `help` | Print commands available in the selected profile. |
 | `bi` | Print the bounded seL4 bootinfo summary. |
 | `caps` | Print key capability slots. |
-| `smp` | Request the kernel scheduler/CPU snapshot; unsupported in builds without the required debug-kernel support. |
-| `smp activity` | Print bounded userspace activity and assignment diagnostics without claiming kernel CPU utilization. |
+| `smp` | Print bounded userspace activity and assignment diagnostics without claiming kernel CPU utilization. This is the preferred spelling. |
+| `smp activity` | Compatibility spelling for `smp`; it produces the same bounded userspace activity report. |
+| `smp dump` | Request the raw kernel scheduler snapshot. This debug-only path is unavailable after linked-UART cutover. |
 | `mem` | Print the RAM/device untyped summary. |
 | `ping` | Return the liveness response. |
 | `cachelog [n]` | Dump a bounded number of recent cache operations. |
@@ -67,6 +68,13 @@ the most precise description of that boot.
 | `netstats` | Print bounded network state and counters. |
 | `reboot` | Schedule a platform reboot only when Queen authorization and a reboot backend are both available. |
 | `quit` | In the event-pump console, end the session and request network disconnect when applicable. The earlier bootstrap `RootConsole` phase reports `quit` as unsupported. |
+
+Use `smp` for normal QEMU and Pi 4 diagnostics. The activity report follows the
+linked serial owner and may be mirrored through the local-seat path. Use
+`smp dump` only when investigating kernel scheduler state on a compatible debug
+profile before linked-UART cutover; the raw kernel text is UART-only. The
+explicit `smp activity` spelling remains accepted for scripts and older
+runbooks.
 
 `test` is present in the shared parser but the target root console directs the
 operator to the host-side `cohsh` implementation. Pi 4 profiles may add `usb`
@@ -404,7 +412,7 @@ _Generated from `configs/root_task.toml` (sha256: `0c716655fb26b840529d581b247fd
 - `help`
 - `bi`
 - `caps`
-- `smp [activity]`
+- `smp [activity|dump]`
 - `mem`
 - `ping`
 - `test`

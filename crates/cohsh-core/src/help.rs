@@ -10,7 +10,7 @@ pub const ROOT_CONSOLE_HELP_LINES: &[&str] = &[
     "  help  - Show this help",
     "  bi    - Show bootinfo summary",
     "  caps  - Show capability slots",
-    "  smp [activity] - Show SMP scheduler info or userspace activity",
+    "  smp [activity|dump] - Show activity; dump raw debug scheduler state",
     "  mem   - Show untyped summary",
     "  ping  - Respond with pong",
     "  test  - Self-test (host-only; use cohsh)",

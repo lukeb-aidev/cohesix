@@ -376,7 +376,7 @@ wifi diag
 wifi probe-ht
 usb diag
 usb probe-kbd
-smp activity
+smp
 ```
 
 `usb diag` returns the compact cached ten-gate report; use `usb status` only
@@ -394,7 +394,7 @@ each later `LocalSeat` turn and restores the prior polling policy at its finite
 terminal bound.
 
 The command effects are intentionally distinct. `wifi diag`, `usb diag`,
-`netstats`, and `smp activity` read retained state and must not submit a device
+`netstats`, and `smp` read retained state and must not submit a device
 operation; `wifi diag` labels cached progress as `last_progress` and
 `superseded=yes` when a terminal fault is newer. On the physical linked-runtime
 profile, that cache is transport-generation scoped: clearing/rebinding the
@@ -1033,7 +1033,7 @@ failure, including missing ready-generation proof, must emit one permanent
 terminal status, apply the same network quarantine, and enter the same ordinary
 operator mode rather than repeating bootstrap-only turns. Paced serial and local-seat commands remain
 dispatchable: `netstats`, `nettest`, `wifi diag`,
-`wifi probe-ht`, `usb diag`, `usb probe-kbd`, `smp activity`, authentication,
+`wifi probe-ht`, `usb diag`, `usb probe-kbd`, `smp`, authentication,
 and `reboot` must return their documented result or a typed unavailable/fenced
 error rather than being swallowed by the failed bootstrap. Only end-to-end
 network-ready proof resets the inner restart streak and the finite recovery

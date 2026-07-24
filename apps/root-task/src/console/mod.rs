@@ -158,7 +158,7 @@ impl CohesixConsole {
     }
 
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-    fn print_smp(&mut self) {
+    fn print_smp_dump(&mut self) {
         self.emit_line("[smp] debug scheduler dump begin");
         self.console.flush();
         let policy = affinity::policy();
@@ -172,7 +172,7 @@ impl CohesixConsole {
     }
 
     #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
-    fn print_smp(&mut self) {
+    fn print_smp_dump(&mut self) {
         self.emit_line("ERR reason=unsupported");
     }
 
@@ -209,7 +209,7 @@ impl CohesixConsole {
             Command::Caps => self.print_caps(),
             Command::Smp {
                 mode: SmpMode::Snapshot,
-            } => self.print_smp(),
+            } => self.print_smp_dump(),
             Command::Smp {
                 mode: SmpMode::Activity,
             } => self.print_smp_activity(),

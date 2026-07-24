@@ -29,10 +29,10 @@ pub const MAX_ECHO_LEN: usize = 224;
 /// Maximum line count accepted by the `tail <path> [lines]` command.
 pub const MAX_TAIL_LINES: u16 = 256;
 
-/// Diagnostic mode selected for the `smp` console command.
+/// Diagnostic mode selected for the `smp [activity|dump]` console command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SmpMode {
-    /// Kernel debug scheduler/CPU snapshot, available only in debug-kernel builds.
+    /// Raw kernel debug scheduler snapshot, available only in safe debug contexts.
     Snapshot,
     /// Userspace activity snapshot sourced from bounded root-task telemetry.
     Activity,
@@ -443,13 +443,15 @@ fn parse_line_inner(line: &str) -> Result<Command, ConsoleError> {
 fn parse_smp_mode(remainder: &str) -> Result<SmpMode, ConsoleError> {
     let mut tokens = remainder.split_whitespace();
     let Some(mode) = tokens.next() else {
-        return Ok(SmpMode::Snapshot);
+        return Ok(SmpMode::Activity);
     };
     if tokens.next().is_some() {
         return Err(ConsoleError::InvalidValue("smp"));
     }
     if mode.eq_ignore_ascii_case("activity") {
         Ok(SmpMode::Activity)
+    } else if mode.eq_ignore_ascii_case("dump") {
+        Ok(SmpMode::Snapshot)
     } else {
         Err(ConsoleError::InvalidValue("smp"))
     }
@@ -489,7 +491,7 @@ mod tests {
             Command::BootInfo,
             Command::Caps,
             Command::Smp {
-                mode: SmpMode::Snapshot,
+                mode: SmpMode::Activity,
             },
             Command::Mem,
             Command::Ping,
@@ -536,11 +538,11 @@ mod tests {
     }
 
     #[test]
-    fn smp_defaults_to_snapshot_mode() {
+    fn smp_defaults_to_activity_mode() {
         assert_eq!(
             parse("smp\n").unwrap(),
             Command::Smp {
-                mode: SmpMode::Snapshot
+                mode: SmpMode::Activity
             }
         );
     }
@@ -562,13 +564,33 @@ mod tests {
     }
 
     #[test]
-    fn smp_rejects_profile_or_extra_arguments() {
+    fn smp_dump_mode_parses() {
+        assert_eq!(
+            parse("smp dump\n").unwrap(),
+            Command::Smp {
+                mode: SmpMode::Snapshot
+            }
+        );
+        assert_eq!(
+            parse("smp DUMP\n").unwrap(),
+            Command::Smp {
+                mode: SmpMode::Snapshot
+            }
+        );
+    }
+
+    #[test]
+    fn smp_rejects_unknown_or_extra_arguments() {
         assert_eq!(
             parse("smp profile\n").unwrap_err(),
             ConsoleError::InvalidValue("smp")
         );
         assert_eq!(
             parse("smp activity extra\n").unwrap_err(),
+            ConsoleError::InvalidValue("smp")
+        );
+        assert_eq!(
+            parse("smp dump extra\n").unwrap_err(),
             ConsoleError::InvalidValue("smp")
         );
     }

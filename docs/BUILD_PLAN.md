@@ -4790,8 +4790,8 @@ If the authority task cannot accept work:
 - Back-pressure is explicit and observable.
 - No new threads, runtimes, or hidden queues introduced.
 - `scripts/cohsh/REST_regression_batch.sh` passes unchanged with `hive-gateway` as the sole console client (concurrent REST runs).
-- `cohsh test --mode smp` completes without unexpected errors while the root console `smp` command reports activity (or deterministic `ERR reason=unsupported` on non-debug builds).
-- Root console `smp` command emits per-core scheduler/CPU metrics (or deterministic `ERR reason=unsupported` when debug syscalls are unavailable).
+- `cohsh test --mode smp` completes without unexpected errors while the root console `smp` command reports bounded userspace activity.
+- Root console `smp dump` emits the raw scheduler snapshot only in a compatible debug context, or returns a deterministic unsupported result.
 - Documentation clearly explains the SMP model and its constraints.
 
 ## Task Breakdown
@@ -4907,23 +4907,23 @@ Commands:
   - cargo test -p cohsh
 Checks:
   - `cohsh test --mode smp` completes without unexpected errors.
-  - Root console `smp` shows activity (or deterministic `ERR reason=unsupported` on non-debug builds).
+  - Root console `smp` shows bounded userspace activity.
 Deliverables:
   - SMP selftest script and cohsh mode support.
 
 Title/ID: m25-smp-console-metrics
-Goal: Add a root console verb to emit per-core SMP metrics for seL4.
+Goal: Add a root console path to emit the raw seL4 scheduler snapshot.
 Inputs: root console parser, seL4 debug syscall docs, docs/USERLAND_AND_CLI.md.
 Changes:
-  - apps/root-task/src/console.rs — add `smp` command (adjacent to `bi`/`caps`) that invokes seL4 debug scheduler/CPU dump APIs (`seL4_DebugDumpScheduler`, `seL4_DebugDumpCPUInfo`) when enabled; bounded output, no shared-memory access.
-  - docs/USERLAND_AND_CLI.md — document `smp` root console output and debug-build gating.
+  - apps/root-task/src/console.rs — invoke seL4 debug scheduler/CPU dump APIs (`seL4_DebugDumpScheduler`, `seL4_DebugDumpCPUInfo`) when enabled; bounded output, no shared-memory access. The later `m26d-smp-command-post-cutover-usability` correction makes this explicit as `smp dump`.
+  - docs/USERLAND_AND_CLI.md — document the raw scheduler output and debug-build gating.
 Commands:
-  - QEMU serial console: `smp`
+  - QEMU diagnostic serial console: `smp dump`
 Checks:
   - Debug builds emit per-core scheduler/CPU metrics (core id, runnable/idle summary) with bounded output.
   - Non-debug builds return deterministic `ERR reason=unsupported` with no side effects.
 Deliverables:
-  - Root console SMP metrics command with seL4-aligned semantics.
+  - Explicit raw SMP scheduler diagnostic with seL4-aligned semantics.
 
 Title/ID: m25-smp-rest-regression-batch
 Goal: Stress SMP using concurrent cohsh regression scripts via the REST multiplexer.
@@ -6454,26 +6454,26 @@ Deliverables:
   - HAL scheduling-contract ratchet for current compatibility drivers and future dedicated seL4 driver tasks.
 
 Title/ID: m26a-smp-activity-diagnostic
-Goal: Add `smp activity` as a bounded root-console diagnostic for cross-core activity evidence without enabling seL4 kernel benchmark builds.
+Goal: Add bounded root-console activity diagnostics for cross-core evidence without enabling seL4 kernel benchmark builds.
 Inputs: crates/cohsh-core/src/command.rs, crates/cohsh-core/src/verb.rs, apps/root-task/src/event/mod.rs, apps/root-task/src/console/mod.rs, apps/root-task/src/local_seat.rs, apps/root-task/src/net/mod.rs, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/affinity.rs, docs/USERLAND_AND_CLI.md.
 Changes:
-  - crates/cohsh-core/src/command.rs + crates/cohsh-core/src/verb.rs — extend the canonical grammar from `smp` to `smp [activity]`, reject unknown pseudo-profile arguments, and keep plain `smp` mapped to the existing debug-kernel scheduler snapshot.
-  - apps/root-task/src/affinity.rs + apps/root-task/src/event/mod.rs — implement `smp activity` from bounded userspace telemetry: event-pump command/timer counters, serial backpressure, local-seat keyboard/HDMI mirror counters, network status/counters when present, HAL driver-task contracts, driver-task runtime proof masks, manifest affinity assignments, and repeated-sample per-core counter-delta rows; keep the original plain `smp` debug path on the same multi-assignment core bucket formatter.
+  - crates/cohsh-core/src/command.rs + crates/cohsh-core/src/verb.rs — expose the canonical grammar as `smp [activity|dump]`, reject unknown pseudo-profile arguments, map bare `smp` and explicit `smp activity` to bounded userspace telemetry, and retain the raw debug-kernel scheduler snapshot only as explicit `smp dump`.
+  - apps/root-task/src/affinity.rs + apps/root-task/src/event/mod.rs — implement the default `smp` activity view from bounded userspace telemetry: event-pump command/timer counters, serial backpressure, local-seat keyboard/HDMI mirror counters, network status/counters when present, HAL driver-task contracts, driver-task runtime proof masks, manifest affinity assignments, and repeated-sample per-core counter-delta rows; keep `smp dump` on the same multi-assignment core bucket formatter.
   - apps/root-task/src/console/mod.rs — keep early-console behavior explicit when the event-pump telemetry source is unavailable.
-  - docs/USERLAND_AND_CLI.md + docs/snippets/cohsh_grammar.md — document that `smp activity` is not a cycle-accurate profiler, does not require kernel benchmark builds, and is mirrored to HDMI through the local-seat path while raw seL4 debug dump text remains UART-only.
+  - docs/USERLAND_AND_CLI.md + docs/snippets/cohsh_grammar.md — document that default `smp` activity output is not a cycle-accurate profiler, does not require kernel benchmark builds, and is mirrored to HDMI through the local-seat path while explicit raw `smp dump` text remains UART-only.
 Commands:
   - cargo test -p cohsh-core smp
   - cargo test -p root-task smp_activity
   - cargo test -p root-task --features net-console smp_activity
 Checks:
-  - `smp activity` never depends on `CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES`, debug-kernel benchmark syscalls, PMU counters, or unbounded sampling.
+  - `smp` and `smp activity` never depend on `CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES`, debug-kernel benchmark syscalls, PMU counters, or unbounded sampling.
   - Output is line-bounded and useful for Pi 4 diagnostics: it distinguishes parser/event-loop progress, serial pressure, HDMI/local-seat mirroring, attached network progress, driver-task compatibility vs dedicated proof, and configured role/driver affinity.
   - The htop-ish core rows are assignment buckets, not exclusive CPU owners: when multiple roles/drivers map to the same core, `tasks=` lists all of them and the rate fields aggregate only safe userspace counter deltas for that bucket while keeping `cpu_pct=unavailable`.
-  - Plain debug-kernel `smp` also treats core rows as assignment buckets: before each UART-only seL4 scheduler/CPU dump, the probe line includes every role/driver allocated to that core instead of dropping secondary assignments.
-  - HDMI display receives the same event-pump `smp activity` lines when local-seat mirroring is active; raw kernel debug output from plain `smp` remains serial-only.
-  - Unknown arguments such as `smp profile` fail grammar validation instead of silently aliasing to plain `smp`.
+  - Explicit debug-kernel `smp dump` also treats core rows as assignment buckets: before each UART-only seL4 scheduler/CPU dump, the probe line includes every role/driver allocated to that core instead of dropping secondary assignments.
+  - HDMI display receives the same event-pump activity lines when local-seat mirroring is active; raw kernel debug output from `smp dump` remains serial-only and unavailable after linked-UART cutover.
+  - Unknown arguments such as `smp profile` fail grammar validation instead of silently aliasing to default `smp`.
 Deliverables:
-  - Root-console `smp activity` diagnostic with parser, event-pump, HDMI mirror, and feature-scoped network test coverage.
+  - Root-console `smp` activity diagnostic, compatibility spelling, explicit raw dump path, event-pump/HDMI mirroring, and feature-scoped network test coverage.
 
 Title/ID: m26a-driver-task-kernel-substrate
 Goal: Add root-owned seL4 task/capability substrate for hardware driver tasks without changing authority semantics.
@@ -8006,12 +8006,12 @@ owns the bounded security and truth repairs below; it does not use those repairs
 to imply new product behavior or completed Pi 4 Wi-Fi evidence.
 
 **Non-negotiable constraints:**
-- No further system-model change beyond the reopened 26a/26b driver-task baseline, except the explicitly named W^X enforcement, canonical profile, and generated/docs-as-built Worker truth repairs in this milestone. Cohesix remains an upstream seL4, pure-Rust root-task authority system with hardware driver tasks; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26d.
+- No further system-model change beyond the reopened 26a/26b driver-task baseline, except the explicitly named W^X enforcement, canonical profile, generated/docs-as-built Worker truth repairs, and `m26d-smp-command-post-cutover-usability` compatibility correction in this milestone. Cohesix remains an upstream seL4, pure-Rust root-task authority system with hardware driver tasks; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26d.
 - CAmkES 3.13.0 is recorded only as the upstream component-framework release
   paired with seL4 16.0.0. A separate host smoke build may test that upstream
   pairing, but CAmkES, capDL component generation, and their Haskell/Python
   dependency closure must not enter Cohesix profiles, target artifacts, or TCB.
-- No new operator-visible protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a kernel-refresh label.
+- No new operator-visible protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a kernel-refresh label except the named `m26d-smp-command-post-cutover-usability` correction, which changes only command routing and preserves the existing activity and raw-dump payloads.
 - Concurrent CYW43/SDIO reliability, exact-image identity, operator-liveness, and Pi evidence files remain owned by their active 26b/26d closure lane. Capability work must not rewrite driver timing/state-machine logic, evidence classification, image packaging, or hardware claims, and offline capability PASS results must not be counted as Wi-Fi or exact-image proof.
 - `rust-sel4` adoption is out of scope. Cohesix may audit upstream Rust support for compatibility reference, but 26d must preserve the current Cohesix-owned `sel4-sys` / `sel4-runtime` / root-task bootstrap stack unless a separate milestone authorizes replacement.
 - Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
@@ -8316,6 +8316,30 @@ Commands:
   - cargo test -p root-task --lib
 Checks: no audit entry confuses API availability with Cohesix use; no live Worker or MCS claim lacks target evidence; root-owned services are named rather than implied isolated; every deferred capability has an explicit milestone route or rationale.
 Deliverables: capability matrix and accepted MCS/root-TCB boundary decisions tied to as-built evidence.
+```
+
+```
+Title/ID: m26d-smp-command-post-cutover-usability
+Milestone: Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment / linked-UART SMP diagnostic defect correction
+Goal: Make bare `smp` useful after linked-UART cutover by routing it to the existing bounded activity report while preserving the raw scheduler snapshot as explicit debug-only `smp dump`.
+Inputs: crates/cohsh-core/src/{command.rs,verb.rs,help.rs}, apps/root-task/src/{console/mod.rs,event/mod.rs,affinity.rs}, docs/USERLAND_AND_CLI.md, docs/HARDWARE_BRINGUP.md, docs/snippets/cohsh_grammar.md, current seL4 16 QEMU/Pi diagnostic profiles, and linked-UART Pi evidence.
+Changes:
+  - crates/cohsh-core/src/command.rs + crates/cohsh-core/src/verb.rs + crates/cohsh-core/src/help.rs — map bare `smp` and compatibility spelling `smp activity` to `SmpMode::Activity`, retain raw `SmpMode::Snapshot` only behind explicit `smp dump`, reject unknown/extra arguments, and align shared help/grammar.
+  - apps/root-task/src/console/mod.rs + apps/root-task/src/event/mod.rs — route both activity spellings through the existing bounded userspace report; keep the raw scheduler helper available only for explicit debug dumps and reject it after linked-UART cutover without reclaiming UART ownership.
+  - docs/USERLAND_AND_CLI.md + docs/HARDWARE_BRINGUP.md + generated grammar snippets — make bare `smp` the normal operator instruction, retain `smp activity` for compatibility, and describe the narrow pre-cutover/QEMU diagnostic use and UART restriction of `smp dump`.
+Commands:
+  - cargo test -p cohsh-core smp
+  - cargo test -p cohsh-core --test doc_snippets
+  - cargo test -p root-task smp_
+  - cargo test -p root-task --features net-console smp_
+  - cargo fmt --all -- --check
+  - scripts/check-generated.sh
+Checks:
+  - `smp` and `smp activity` emit the same bounded userspace activity records and terminate with `OK SMP mode=activity`.
+  - `smp dump` is the only operator route to the existing raw scheduler snapshot; non-debug builds and post-cutover linked-UART profiles reject it deterministically without touching UART MMIO.
+  - The correction adds no telemetry fields, authority path, namespace, manifest field, kernel benchmark dependency, or root-owned steady-state UART fallback.
+  - Shared help, generated grammar, canonical operator docs, parser tests, root-task tests, and generated-artifact drift checks agree.
+Deliverables: One safe default SMP diagnostic, one explicit debug-only raw snapshot spelling, and aligned tests/operator instructions.
 ```
 
 ```

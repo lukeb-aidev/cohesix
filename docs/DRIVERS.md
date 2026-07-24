@@ -351,7 +351,7 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   `LocalSeat` turn and restores the prior polling policy when it terminates.
 - `wifi diag` is likewise a single cached read: it never performs the old
   dump/probe/dump sequence, and retained progress is explicitly labelled as
-  historical when a newer terminal fault exists. `netstats` and `smp activity`
+  historical when a newer terminal fault exists. `netstats` and `smp`
   are passive retained-counter reports. In contrast, `nettest` starts the
   bounded network self-test and `usb probe-kbd` advances one retained
   enumeration attempt, so operators must wait for each command's terminal
