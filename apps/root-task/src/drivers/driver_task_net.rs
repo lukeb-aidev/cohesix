@@ -696,6 +696,143 @@ pub enum Cyw43BootstrapTurnOutcome {
     Failed(DriverTaskNetError),
 }
 
+/// Concise operator-facing frontier for a retained Wi-Fi bootstrap turn.
+///
+/// This deliberately groups the much finer internal action stages. HDMI needs
+/// enough information to show that a long bootstrap is advancing, but must not
+/// expose child-runtime implementation jargon or emit one line per action.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43BootstrapDisplayFrontier {
+    LinkedRuntimes,
+    SdioHost,
+    Cyw43Runtime,
+    CardPath,
+    FirmwareUpload,
+    FirmwareStart,
+    Function2Ready,
+    ControlChannel,
+    RadioPolicy,
+    SecurityPolicy,
+    ControlReady,
+    PairRecovery,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43BootstrapDisplayFrontier {
+    /// Stable, concise HDMI text following the `[drivers] WiFi` prefix.
+    #[must_use]
+    pub(crate) const fn display_text(self) -> &'static str {
+        match self {
+            Self::LinkedRuntimes => "preparing linked driver runtimes",
+            Self::SdioHost => "initializing the SDIO host",
+            Self::Cyw43Runtime => "starting the CYW43/SDIO service",
+            Self::CardPath => "gates 1-5 of 10: checking power, SDIO card, clock, and backplane",
+            Self::FirmwareUpload => "gate 6/10: uploading WiFi firmware",
+            Self::FirmwareStart => "gates 6-7 of 10: starting firmware and enabling Function 2",
+            Self::Function2Ready => "gate 7/10: firmware running and Function 2 ready",
+            Self::ControlChannel => "gate 8/10: configuring the firmware control channel",
+            Self::RadioPolicy => "gate 8/10: applying radio and association policy",
+            Self::SecurityPolicy => "gate 8/10: applying WiFi security policy",
+            Self::ControlReady => "gate 8/10: finalizing linked-runtime ownership",
+            Self::PairRecovery => "recovering the CYW43/SDIO driver pair",
+        }
+    }
+}
+
+/// Map an internal retained-turn stage to a material HDMI bootstrap frontier.
+///
+/// Multiple child stages intentionally collapse to one frontier. The EventPump
+/// applies the virtual-time cadence and heartbeat policy; this mapping only
+/// owns driver/gate semantics.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_bootstrap_display_frontier(
+    stage: &str,
+) -> Option<Cyw43BootstrapDisplayFrontier> {
+    use Cyw43BootstrapDisplayFrontier as Frontier;
+
+    if stage == "cyw43-outer-event-turn-claimed" {
+        return None;
+    }
+    if stage.contains("pair-restart")
+        || stage.contains("context-replay")
+        || stage.contains("generation-poisoned")
+        || stage.contains("recovery")
+        || matches!(
+            stage,
+            "sdio-priority-cutover-failed"
+                | "sdio-priority-cutover-invalidated"
+                | "sdio-priority-split-invalidated"
+                | "cyw43-priority-cutover-failed"
+                | "cyw43-priority-cutover-invalidated"
+                | "cyw43-priority-split-invalidated"
+        )
+    {
+        return Some(Frontier::PairRecovery);
+    }
+    if matches!(
+        stage,
+        "cyw43-control-plane-ready" | "sdio-priority-cutover" | "cyw43-priority-cutover"
+    ) {
+        return Some(Frontier::ControlReady);
+    }
+    if matches!(
+        stage,
+        "sdio-ring-service-register"
+            | "sdio-descriptor-replay"
+            | "cyw43-ring-service-register"
+            | "cyw43-descriptor-replay"
+    ) {
+        return Some(Frontier::LinkedRuntimes);
+    }
+    if stage.starts_with("sdio-") {
+        return Some(Frontier::SdioHost);
+    }
+    if matches!(
+        stage,
+        "cyw43-engine-init"
+            | "cyw43-engine-init-not-issued-retry"
+            | "cyw43-sdio-producer-handoff"
+            | "cyw43-firmware-bundle"
+    ) {
+        return Some(Frontier::Cyw43Runtime);
+    }
+    if stage == "cyw43-transport-init" {
+        return Some(Frontier::CardPath);
+    }
+    if matches!(
+        stage,
+        "cyw43-firmware-prep" | "cyw43-firmware-chunk" | "cyw43-nvram-chunk" | "cyw43-nvram-tail"
+    ) {
+        return Some(Frontier::FirmwareUpload);
+    }
+    if stage == "cyw43-firmware-release" {
+        return Some(Frontier::FirmwareStart);
+    }
+    if matches!(stage, "cyw43-firmware-ready" | "cyw43-owner-state") {
+        return Some(Frontier::Function2Ready);
+    }
+    if stage.starts_with("cyw43-host-eapol")
+        || (stage.starts_with("cyw43-control-")
+            && (stage.contains("wpa")
+                || stage.contains("auth")
+                || stage.contains("security")
+                || stage.contains("rsn")))
+    {
+        return Some(Frontier::SecurityPolicy);
+    }
+    if stage.starts_with("cyw43-control-post-up")
+        || stage.starts_with("cyw43-control-connect-")
+        || matches!(stage, "cyw43-control-up" | "cyw43-control-infra")
+    {
+        return Some(Frontier::RadioPolicy);
+    }
+    if stage.starts_with("cyw43-control-") {
+        return Some(Frontier::ControlChannel);
+    }
+    None
+}
+
 #[cfg(feature = "kernel")]
 // Keep the retained normalized NVRAM arena at its pre-aperture bound. The
 // Linux-shaped 32-KiB firmware window must not silently add 24 KiB to the root
@@ -2210,11 +2347,12 @@ impl Cyw43BootstrapSupervisor {
                 self.control_phase = Cyw43ControlPhase::TxGlom;
                 Ok(())
             }
-            Cyw43ControlPhase::TxGlom => self.install_iovar_u32(
+            Cyw43ControlPhase::TxGlom => self.install_iovar_set(
                 "bus:txglomalign",
-                CYW43_TXGLOMALIGN_AARCH64_ALIGN,
+                &CYW43_TXGLOMALIGN_AARCH64_ALIGN.to_le_bytes(),
                 "cyw43-control-txglomalign",
                 Cyw43ControlHeaderMode::Plain,
+                CYW43_TXGLOMALIGN_PRE_TX_DRAIN,
             ),
             Cyw43ControlPhase::UlpSdioCtrl => self.install_iovar_get(
                 "ulp_sdioctrl",
@@ -27294,7 +27432,114 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_bootstrap_display_frontiers_group_internal_stages_by_gate() {
+        use Cyw43BootstrapDisplayFrontier as Frontier;
+
+        for stage in [
+            "sdio-ring-service-register",
+            "sdio-descriptor-replay",
+            "cyw43-ring-service-register",
+            "cyw43-descriptor-replay",
+        ] {
+            assert_eq!(
+                cyw43_bootstrap_display_frontier(stage),
+                Some(Frontier::LinkedRuntimes)
+            );
+        }
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("sdio-engine-init"),
+            Some(Frontier::SdioHost)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-transport-init"),
+            Some(Frontier::CardPath)
+        );
+        for stage in [
+            "cyw43-firmware-prep",
+            "cyw43-firmware-chunk",
+            "cyw43-nvram-chunk",
+            "cyw43-nvram-tail",
+        ] {
+            assert_eq!(
+                cyw43_bootstrap_display_frontier(stage),
+                Some(Frontier::FirmwareUpload)
+            );
+        }
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-firmware-release"),
+            Some(Frontier::FirmwareStart)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-firmware-ready"),
+            Some(Frontier::Function2Ready)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-control-txglomalign"),
+            Some(Frontier::ControlChannel)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-control-post-up-event-drain"),
+            Some(Frontier::RadioPolicy)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-control-security-wpa2-psk"),
+            Some(Frontier::SecurityPolicy)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-control-plane-ready"),
+            Some(Frontier::ControlReady)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("sdio-priority-cutover"),
+            Some(Frontier::ControlReady)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("sdio-priority-cutover-invalidated"),
+            Some(Frontier::PairRecovery)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-priority-split-invalidated"),
+            Some(Frontier::PairRecovery)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-pair-context-replay-begin"),
+            Some(Frontier::PairRecovery)
+        );
+        assert_eq!(
+            cyw43_bootstrap_display_frontier("cyw43-outer-event-turn-claimed"),
+            None
+        );
+        assert!(Frontier::FirmwareUpload
+            .display_text()
+            .starts_with("gate 6/10:"));
+        assert!(!Frontier::ControlChannel
+            .display_text()
+            .contains("CONTROL_EXCHANGE"));
+    }
+
+    #[test]
     fn cyw43_txglomalign_uses_retained_control_exchange_with_pre_tx_drain() {
+        let credentials =
+            WifiCredentials::new("cohesix", "passphrase").expect("valid WiFi credentials");
+        let mut config = ConsoleNetConfig::default();
+        config.wifi_credentials = Some(credentials);
+        let mut supervisor = Cyw43BootstrapSupervisor::new(config);
+        supervisor.phase = Cyw43BootstrapPhase::Control;
+        supervisor.control_phase = Cyw43ControlPhase::TxGlom;
+        supervisor
+            .prepare_control_action()
+            .expect("the production txglomalign action installs");
+        let production = supervisor
+            .pending
+            .as_ref()
+            .expect("the production txglomalign action remains retained");
+        assert_eq!(
+            production.ticket.descriptor.flags,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+        );
+        assert_eq!(production.ticket.stage, "cyw43-control-txglomalign");
+        assert_eq!(production.control_iovar, "bus:txglomalign");
+
         let ioctl_id = 0x1234;
         let mut iovar = [0u8; 20];
         iovar[..15].copy_from_slice(b"bus:txglomalign");

@@ -1448,6 +1448,49 @@ def test_gate_summary_tracks_smp_activity_net_state() -> None:
     assert record["NETTEST_PROOF"] == "no"
 
 
+def test_gate_summary_accepts_compact_smp_operator_liveness_snapshot() -> None:
+    """Current SMP snapshots close stale USB startup and serial-cleanliness state."""
+
+    events = normalizer.parse_events(
+        [
+            "cohesix> [local-seat] hdmi prompt pending "
+            "reason=keyboard-command-pending action=wait-for-prompt-ready "
+            "console_seq=126 telemetry_sinks=serial prompt_refresh=no",
+            "[local-seat] keyboard unavailable detail=backend-unavailable",
+            "cohesix> wifi: debug subcommand=probe-ht action=begin "
+            "profile=bounded mode=one-shot",
+            "cohesix> [smp] activity begin source=userspace benchmark=off "
+            "hdmi=high-impact-only",
+            "[smp] activity pump now_ms=336580 input=local-seat lines=3 ok=1 "
+            "denied=1 ticks=66748 serial_rx_drop=0 serial_tx_drop=0 "
+            "utf8_drop=0 serial_budget_overruns=0 "
+            "serial_rx_backpressure=0 serial_tx_backpressure=0 "
+            "serial_pressure_source=uart-output",
+            "[smp] activity local-seat runtime=present attached=yes "
+            "keyboard_device=usb-kbd0 display=hdmi0 backend_poll=yes "
+            "keyboard_ready=yes command_ready=yes first_report=yes "
+            "first_byte=yes",
+            "[smp] activity local-seat-input backend_polls=329652 "
+            "backend_bytes=47 queued=0 arming=0 accepted=47 drained=47 "
+            "echoed=47 drop=0 no_reply=0 cooldown=0 cooldown_skips=0 "
+            "hdmi_drop=0",
+            "cohesix> [smp] scheduler dump unavailable after linked UART "
+            "cutover use=smp-activity",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["SERIAL_CLEAN"] == "yes"
+    assert record["SERIAL_RESPONSIVE_PROOF"] == "yes"
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+    assert record["USB_COMMAND_READY"] == "yes"
+    assert record["USB_FIRST_REPORT_READY"] == "yes"
+    assert record["USB_FIRST_BYTE_READY"] == "yes"
+
+
 def test_gate_summary_tracks_netstatus_tcp_ready_proof() -> None:
     events = normalizer.parse_events(
         [
@@ -11543,6 +11586,35 @@ def test_gate_summary_refines_cyw43_control_exchange_timeout_result() -> None:
     assert gates.wifi_phase == "cyw43-control-txglomalign"
 
 
+def test_gate_summary_keeps_terminal_passive_no_rframe_over_stale_progress() -> None:
+    """The retained op11 result identifies the failing Gate 8 edge."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 8 name=firmware-channel status=fail "
+            "evidence=exact=none dependency=ready-for-direct-evidence",
+            "wifi: evidence cyw43 detail=0x530b "
+            "reason=cyw43-control-exchange result=0x43030000 "
+            "stage=cyw43-control-txglomalign op=11",
+            "wifi: sdio progress_action sequence=2 "
+            "blocker=sdio-linked-runtime-progress-no-reply "
+            "next_action=inspect-linked-sdio-runtime-progress",
+            "wifi: evidence cyw43 detail=0x530b "
+            "reason=cyw43-control-exchange result=0x43030000 "
+            "stage=cyw43-control-txglomalign op=11",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    # WIFI_GATE is the last proven gate; this exact timeout fails Gate 8.
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_exact == "cyw43-control-rx-no-rframe"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+    assert gates.wifi_blocker_line == 4
+
+
 def test_gate_summary_refines_cyw43_control_exchange_no_reply_progress() -> None:
     events = normalizer.parse_events(
         [
@@ -14124,6 +14196,45 @@ def test_bootstrap_supervisor_preflight_does_not_consume_an_attempt() -> None:
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+
+
+def test_bootstrap_supervisor_accepts_ready_preflight_immediate_reset() -> None:
+    """Serial cutover may reset its scheduled time before attempt one begins."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(
+                0, "preflight", 250, 250, 1, serial="blocked"
+            ),
+            bootstrap_supervisor_line(
+                0, "preflight", 0, 0, 2, serial="ready"
+            ),
+            bootstrap_supervisor_line(1, "begin", 0, 1_850, 3),
+            bootstrap_supervisor_line(1, "backoff", 1_000, 29_135, 4),
+            bootstrap_supervisor_line(2, "begin", 0, 29_135, 5),
+            bootstrap_supervisor_line(2, "backoff", 2_000, 86_565, 6),
+            bootstrap_supervisor_line(3, "begin", 0, 86_565, 7),
+            bootstrap_supervisor_line(3, "backoff", 4_000, 151_895, 8),
+            bootstrap_supervisor_line(4, "begin", 0, 151_895, 9),
+            bootstrap_supervisor_line(4, "backoff", 8_000, 221_205, 10),
+            bootstrap_supervisor_line(5, "begin", 0, 221_205, 11),
+            bootstrap_supervisor_line(
+                5,
+                "exhausted",
+                0,
+                normalizer.CYW43_BOOTSTRAP_NO_ATTEMPT_MS,
+                12,
+            ),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 5
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 4
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "exhausted"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "retry-exhausted"
 
 
 def test_bootstrap_supervisor_blocked_preflight_remains_acceptance_red() -> None:

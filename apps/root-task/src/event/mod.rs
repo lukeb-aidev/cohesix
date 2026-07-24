@@ -335,6 +335,14 @@ const LOCAL_SEAT_HDMI_MAX_SERIAL_DEFERRALS: u8 = 4;
 /// allocation without permitting a delayed display to overwrite a milestone.
 #[cfg(feature = "kernel")]
 const CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY: usize = 12;
+/// Material frontier changes wait at least five seconds after the preceding
+/// HDMI progress line; an unchanged frontier emits one liveness heartbeat at
+/// most every ten seconds. Both durations are measured by the ordinary event
+/// timer, never by CPU loops or retained-turn counts.
+#[cfg(feature = "kernel")]
+const CYW43_BOOTSTRAP_HDMI_PROGRESS_MIN_INTERVAL_MS: u64 = 5_000;
+#[cfg(feature = "kernel")]
+const CYW43_BOOTSTRAP_HDMI_PROGRESS_HEARTBEAT_MS: u64 = 10_000;
 /// Serial retains the complete five-attempt lifecycle: two preflight records,
 /// attempt begin/recovery, each typed failure, four backoffs, and one terminal
 /// result. This queue is a saturation fallback; ordinary turns drain records
@@ -1933,6 +1941,34 @@ fn cyw43_bootstrap_serial_milestone(line: &str) -> bool {
             .starts_with(b"[net-console] deferred failed detail=")
 }
 
+#[cfg(feature = "kernel")]
+fn cyw43_bootstrap_turn_attempt_and_stage(line: &str) -> Option<(u32, &str)> {
+    if !line.as_bytes().starts_with(b"CYW43_BOOTSTRAP_TURN ") {
+        return None;
+    }
+    let mut attempt = None;
+    let mut stage = None;
+    for field in line.split_ascii_whitespace().skip(1) {
+        if let Some(value) = field.strip_prefix("attempt=") {
+            attempt = value.parse::<u32>().ok().filter(|value| *value != 0);
+        } else if let Some(value) = field.strip_prefix("stage=") {
+            stage = (!value.is_empty()).then_some(value);
+        }
+    }
+    Some((attempt?, stage?))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_bootstrap_status_resets_hdmi_progress(
+    hdmi_line: &str,
+    releases_console_ready: bool,
+) -> bool {
+    releases_console_ready
+        || hdmi_line.contains(" bootstrap attempt ")
+        || hdmi_line.contains(" recovery attempt ")
+        || hdmi_line.contains(" paused; retry ")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConsoleErrorKey {
     LineTooLong,
@@ -1984,6 +2020,76 @@ impl PendingConsoleOutput {
 struct PendingCyw43BootstrapHdmiMilestone {
     text: HeaplessString<DEFAULT_LINE_CAPACITY>,
     releases_console_ready: bool,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43BootstrapHdmiProgressCadence {
+    attempt: u32,
+    current: Option<crate::drivers::driver_task_net::Cyw43BootstrapDisplayFrontier>,
+    emitted: Option<crate::drivers::driver_task_net::Cyw43BootstrapDisplayFrontier>,
+    last_emitted_ms: u64,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43BootstrapHdmiProgressCadence {
+    const fn new() -> Self {
+        Self {
+            attempt: 0,
+            current: None,
+            emitted: None,
+            last_emitted_ms: 0,
+        }
+    }
+
+    fn clear(&mut self, now_ms: u64) {
+        self.attempt = 0;
+        self.current = None;
+        self.emitted = None;
+        self.last_emitted_ms = now_ms;
+    }
+
+    fn observe(
+        &mut self,
+        attempt: u32,
+        frontier: crate::drivers::driver_task_net::Cyw43BootstrapDisplayFrontier,
+        now_ms: u64,
+    ) {
+        if attempt == 0 {
+            return;
+        }
+        if self.attempt != attempt {
+            self.attempt = attempt;
+            self.emitted = None;
+            self.last_emitted_ms = now_ms;
+        }
+        self.current = Some(frontier);
+    }
+
+    fn due(
+        self,
+        now_ms: u64,
+    ) -> Option<(
+        crate::drivers::driver_task_net::Cyw43BootstrapDisplayFrontier,
+        bool,
+    )> {
+        let current = self.current?;
+        let elapsed_ms = now_ms.saturating_sub(self.last_emitted_ms);
+        if self.emitted != Some(current) {
+            return (elapsed_ms >= CYW43_BOOTSTRAP_HDMI_PROGRESS_MIN_INTERVAL_MS)
+                .then_some((current, false));
+        }
+        (elapsed_ms >= CYW43_BOOTSTRAP_HDMI_PROGRESS_HEARTBEAT_MS).then_some((current, true))
+    }
+
+    fn record_emitted(
+        &mut self,
+        frontier: crate::drivers::driver_task_net::Cyw43BootstrapDisplayFrontier,
+        now_ms: u64,
+    ) {
+        self.emitted = Some(frontier);
+        self.last_emitted_ms = now_ms;
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -2131,7 +2237,11 @@ where
     pending_cyw43_bootstrap_hdmi_milestones:
         HeaplessDeque<PendingCyw43BootstrapHdmiMilestone, CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY>,
     #[cfg(feature = "kernel")]
+    pending_cyw43_bootstrap_hdmi_progress_milestone: Option<PendingCyw43BootstrapHdmiMilestone>,
+    #[cfg(feature = "kernel")]
     pending_cyw43_bootstrap_hdmi_terminal_milestone: Option<PendingCyw43BootstrapHdmiMilestone>,
+    #[cfg(feature = "kernel")]
+    cyw43_bootstrap_hdmi_progress: Cyw43BootstrapHdmiProgressCadence,
     #[cfg(feature = "kernel")]
     pending_cyw43_bootstrap_serial_milestones: HeaplessDeque<
         HeaplessString<DEFAULT_LINE_CAPACITY>,
@@ -2299,7 +2409,11 @@ where
             #[cfg(feature = "kernel")]
             pending_cyw43_bootstrap_hdmi_milestones: HeaplessDeque::new(),
             #[cfg(feature = "kernel")]
+            pending_cyw43_bootstrap_hdmi_progress_milestone: None,
+            #[cfg(feature = "kernel")]
             pending_cyw43_bootstrap_hdmi_terminal_milestone: None,
+            #[cfg(feature = "kernel")]
+            cyw43_bootstrap_hdmi_progress: Cyw43BootstrapHdmiProgressCadence::new(),
             #[cfg(feature = "kernel")]
             pending_cyw43_bootstrap_serial_milestones: HeaplessDeque::new(),
             #[cfg(feature = "kernel")]
@@ -2826,6 +2940,7 @@ where
         self.cyw43_bootstrap_operator_turn_active = true;
         self.reconcile_physical_response_barrier();
         self.queue_stream_prompt_tail_if_ready();
+        self.queue_due_cyw43_bootstrap_hdmi_progress();
         if self.reboot_pending && self.reboot_ack_drain_observed {
             self.service_pending_reboot();
             self.cyw43_bootstrap_operator_turn_active = false;
@@ -2861,6 +2976,44 @@ where
         self.cyw43_bootstrap_operator_turn_active = false;
     }
 
+    /// Promote one due gate frontier into the dedicated coalescing HDMI slot.
+    ///
+    /// The cadence consumes only the EventPump's virtual-time-derived
+    /// `now_ms`. A pending line is replaced by the latest material frontier,
+    /// so delayed display service cannot create an unbounded progress queue.
+    #[cfg(feature = "kernel")]
+    fn queue_due_cyw43_bootstrap_hdmi_progress(&mut self) {
+        if self.local_seat.is_none() || self.reboot_pending {
+            return;
+        }
+        let Some((frontier, heartbeat)) = self.cyw43_bootstrap_hdmi_progress.due(self.now_ms)
+        else {
+            return;
+        };
+        let mut text = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        if write!(
+            text,
+            "[drivers] WiFi {}{}",
+            frontier.display_text(),
+            if heartbeat { " (still working)" } else { "" },
+        )
+        .is_err()
+        {
+            self.cyw43_bootstrap_hdmi_progress
+                .record_emitted(frontier, self.now_ms);
+            return;
+        }
+        crate::log_buffer::append_log_line(text.as_str());
+        self.pending_cyw43_bootstrap_hdmi_progress_milestone =
+            Some(PendingCyw43BootstrapHdmiMilestone {
+                text,
+                releases_console_ready: false,
+            });
+        self.cyw43_bootstrap_hdmi_pending = true;
+        self.cyw43_bootstrap_hdmi_progress
+            .record_emitted(frontier, self.now_ms);
+    }
+
     /// Queue one bootstrap/recovery diagnostic without touching the root UART.
     ///
     /// The linked serial turn that follows performs the actual flush. Keeping
@@ -2869,6 +3022,14 @@ where
     #[cfg(feature = "kernel")]
     pub fn queue_cyw43_bootstrap_operator_line(&mut self, line: &str) -> bool {
         let serial_milestone = cyw43_bootstrap_serial_milestone(line);
+        if let Some((attempt, stage)) = cyw43_bootstrap_turn_attempt_and_stage(line) {
+            if let Some(frontier) =
+                crate::drivers::driver_task_net::cyw43_bootstrap_display_frontier(stage)
+            {
+                self.cyw43_bootstrap_hdmi_progress
+                    .observe(attempt, frontier, self.now_ms);
+            }
+        }
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && !crate::serial::serial_linked_runtime_transport_active()
         {
@@ -2933,6 +3094,10 @@ where
         hdmi_line: &str,
         releases_console_ready: bool,
     ) -> bool {
+        if cyw43_bootstrap_status_resets_hdmi_progress(hdmi_line, releases_console_ready) {
+            self.cyw43_bootstrap_hdmi_progress.clear(self.now_ms);
+            self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
+        }
         if self.local_seat.is_some() {
             let mut milestone = HeaplessString::new();
             if milestone.push_str(hdmi_line).is_err() {
@@ -2989,6 +3154,9 @@ where
         }
         let milestone_pending = !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty()
             || self
+                .pending_cyw43_bootstrap_hdmi_progress_milestone
+                .is_some()
+            || self
                 .pending_cyw43_bootstrap_hdmi_terminal_milestone
                 .is_some();
         if !milestone_pending && !self.cyw43_bootstrap_hdmi_pending {
@@ -2996,6 +3164,7 @@ where
         }
         let Some(runtime) = self.local_seat.as_mut() else {
             self.pending_cyw43_bootstrap_hdmi_milestones.clear();
+            self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
             self.pending_cyw43_bootstrap_hdmi_terminal_milestone = None;
             self.cyw43_bootstrap_hdmi_pending = false;
             return false;
@@ -3003,6 +3172,7 @@ where
         let milestone = self
             .pending_cyw43_bootstrap_hdmi_milestones
             .pop_front()
+            .or_else(|| self.pending_cyw43_bootstrap_hdmi_progress_milestone.take())
             .or_else(|| self.pending_cyw43_bootstrap_hdmi_terminal_milestone.take());
         if let Some(milestone) = milestone {
             runtime.mirror_high_impact_line(milestone.text.as_str());
@@ -3017,6 +3187,9 @@ where
         }
         self.cyw43_bootstrap_hdmi_pending =
             !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty()
+                || self
+                    .pending_cyw43_bootstrap_hdmi_progress_milestone
+                    .is_some()
                 || self
                     .pending_cyw43_bootstrap_hdmi_terminal_milestone
                     .is_some()
@@ -10572,7 +10745,7 @@ where
             "wifi: cyw43 control"
         };
         format_message(format_args!(
-            "{} op={} cmd={} cmd_hex=0x{:08x} id={} header_mode={} response_len={}",
+            "{} op={} cmd={} cmd_hex=0x{:08x} id={} header_mode={} response_len={} pre_tx_drain={} timeout_reason={} timeout_value={} tx_state={}",
             prefix,
             fault.op,
             fault.control_cmd,
@@ -10580,7 +10753,51 @@ where
             fault.control_id,
             fault.control_header_mode,
             fault.control_response_len,
+            Self::yes_no(
+                fault.flags & pi4_driver_abi::DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN != 0
+            ),
+            Self::wifi_control_exchange_timeout_reason(fault.result),
+            fault.result & 0xffff,
+            Self::wifi_control_exchange_timeout_tx_state(fault.result),
         ))
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_control_exchange_timeout_reason(result: u32) -> &'static str {
+        if result & 0xff00_0000 != 0x4300_0000 {
+            return "none";
+        }
+        match (result >> 16) & 0xff {
+            1 => "not-ready",
+            2 => "rframe-read-failed",
+            3 => "no-rframe",
+            4 => "invalid-rframe-len",
+            5 => "rx-request-too-large",
+            6 => "f2-read-failed",
+            7 => "sdpcm-decode-miss",
+            8 => "nonmatching-reply",
+            9 => "firstread-failed",
+            10 => "firstread-empty",
+            11 => "firstread-invalid-sdpcm",
+            12 => "firstread-remainder-failed",
+            13 => "firstread-remainder-too-large",
+            14 => "firstread-source-asserted-empty",
+            15 => "next-frame-readahead-retry",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_control_exchange_timeout_tx_state(result: u32) -> &'static str {
+        if result & 0xff00_0000 != 0x4300_0000 {
+            "not-timeout"
+        } else if ((result >> 16) & 0xff) == 1 {
+            "not-submitted"
+        } else {
+            // Every other typed timeout is constructed from WaitReply, which
+            // is entered only after the Function-2 SDPCM write completes.
+            "submitted"
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -11792,9 +12009,11 @@ where
                 })
         };
         let live_net_channel_ready = live_net_supersedes_runtime;
+        let firmware_ready = fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_ready);
         let firmware_prep_complete =
             fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_prep_complete);
         let power_ready = live_net_channel_ready
+            || firmware_ready
             || snapshot.is_some_and(|snapshot| {
                 matches!(snapshot.power_state, WifiPowerState::On)
                     && matches!(snapshot.reset_state, WifiResetState::Deasserted)
@@ -11816,6 +12035,7 @@ where
                     && trace.cccr_io_ready.is_some_and(|value| (value & 0x02) != 0)
             });
         let ht_ready = live_net_channel_ready
+            || firmware_ready
             || snapshot.is_some_and(Self::wifi_snapshot_ht_avail)
             || firmware_trace.is_some_and(|trace| trace.sr_kso_clock_ready);
         let backplane_ready = live_net_channel_ready
@@ -11833,16 +12053,19 @@ where
         let release_fault_after_upload =
             fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_uploaded);
         let firmware_uploaded = live_net_channel_ready
+            || firmware_ready
             || release_fault_after_upload
             || firmware_trace
                 .and_then(|trace| trace.proof)
                 .is_some_and(|proof| proof.upload_state == "uploaded" || proof.verified);
         let firmware_verified = live_net_channel_ready
+            || firmware_ready
             || firmware_trace.is_some_and(|trace| trace.firmware_download_verified)
             || firmware_trace
                 .and_then(|trace| trace.proof)
                 .is_some_and(|proof| proof.verified);
         let f2_enabled = live_net_channel_ready
+            || firmware_ready
             || snapshot.is_some_and(|snapshot| {
                 snapshot.io_enable.is_some_and(|value| (value & 0x04) != 0)
             })
@@ -11852,6 +12075,7 @@ where
                     .is_some_and(|value| (value & 0x04) != 0)
             });
         let f2_ready = live_net_channel_ready
+            || firmware_ready
             || snapshot
                 .is_some_and(|snapshot| snapshot.io_ready.is_some_and(|value| (value & 0x04) != 0))
             || control_trace
@@ -11947,14 +12171,18 @@ where
         };
         let gate1_power = if let Some(snapshot) = snapshot {
             Self::wifi_power_label(snapshot.power_state)
-        } else if fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready) {
+        } else if firmware_ready
+            || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready)
+        {
             "on"
         } else {
             "unknown"
         };
         let gate1_reset = if let Some(snapshot) = snapshot {
             Self::wifi_reset_label(snapshot.reset_state)
-        } else if fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready) {
+        } else if firmware_ready
+            || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready)
+        {
             "deasserted"
         } else {
             "unknown"
@@ -12135,7 +12363,9 @@ where
                 } else {
                     "none"
                 },
-                if firmware_prep_complete {
+                if firmware_ready {
+                    "post-release-ht-ready"
+                } else if firmware_prep_complete {
                     "not-attempted-pre-release"
                 } else {
                     "none"
@@ -12186,7 +12416,14 @@ where
                 "f2_enabled={} f2_ready={} f2_state={} dependency={}",
                 Self::yes_no(f2_enabled),
                 Self::yes_no(f2_ready),
-                snapshot.map_or("unknown", |snapshot| snapshot.control_plane_f2_state),
+                snapshot.map_or(
+                    if firmware_ready {
+                        "post-release-ready"
+                    } else {
+                        "unknown"
+                    },
+                    |snapshot| snapshot.control_plane_f2_state,
+                ),
                 Self::wifi_gate_dependency_label(7, failing_gate),
             ),
             Self::wifi_startup_gate_name_for_gate(8, exact_error),
@@ -12311,6 +12548,18 @@ where
                     fault.op, fault.stage, fault.detail,
                 ));
                 self.emit_console_line(operation.as_str());
+            } else if fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE {
+                let exchange = format_message(format_args!(
+                    "wifi: evidence control_exchange edge=post-function2-tx timeout_reason={} timeout_value={} pre_tx_drain={} child_cmd53=completed-before-reply-wait source=retained-runtime-terminal",
+                    Self::wifi_control_exchange_timeout_reason(fault.result),
+                    fault.result & 0xffff,
+                    Self::yes_no(
+                        fault.flags
+                            & pi4_driver_abi::DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+                            != 0
+                    ),
+                ));
+                self.emit_console_line(exchange.as_str());
             } else if !Self::wifi_runtime_fault_is_sdio_card_select(fault) {
                 let cmd53 = format_message(format_args!(
                     "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} len={} increment={} block_mode={} op={} descriptor_status={} transfer_stage={} transfer_status=0x{:06x} r5=0x{:04x} source=cyw43-descriptor",
@@ -13545,6 +13794,24 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn wifi_runtime_fault_implies_firmware_ready(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> bool {
+        // The runtime admits these operations only after firmware release,
+        // Function 2 readiness, generation commit, and DPC activation. A later
+        // terminal fault therefore preserves exact proof through Gate 7 even
+        // after pair recovery has reset the live register snapshot.
+        matches!(
+            fault.op,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_ETH_TX
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RX_POLL
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+        )
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_firmware_prep_fault_edge(
         fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
     ) -> &'static str {
@@ -13581,6 +13848,7 @@ where
             || Self::wifi_runtime_fault_is_firmware_prep(fault)
             || Self::wifi_runtime_fault_is_firmware_stream(fault)
             || fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
+            || Self::wifi_runtime_fault_implies_firmware_ready(fault)
     }
 
     #[cfg(feature = "kernel")]
@@ -13592,6 +13860,7 @@ where
         // a release fault carries register/fault evidence (for example 0x50 at
         // the post-release HT wait), not a runtime progress-phase identifier.
         fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RELEASE
+            || Self::wifi_runtime_fault_implies_firmware_ready(fault)
     }
 
     #[cfg(feature = "kernel")]
@@ -17752,6 +18021,58 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn wifi_diag_preserves_post_release_gate_proof_and_decodes_no_rframe() {
+        type TestPump<'a> = EventPump<
+            'a,
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >;
+
+        let fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-control-txglomalign",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 36,
+            total_len: 36,
+            control_cmd: 263,
+            control_id: 1,
+            control_header_mode: "plain",
+            control_response_len: 0,
+            detail: 0x530b,
+            reason: "cyw43-control-exchange",
+            result: 0x4303_0000,
+        };
+
+        assert_eq!(TestPump::wifi_runtime_fault_gate(fault), 8);
+        assert!(TestPump::wifi_runtime_fault_implies_firmware_ready(fault));
+        assert!(TestPump::wifi_runtime_fault_implies_firmware_uploaded(
+            fault
+        ));
+        assert!(TestPump::wifi_runtime_fault_implies_hal_power_ready(fault));
+        assert_eq!(
+            TestPump::wifi_control_exchange_timeout_reason(fault.result),
+            "no-rframe"
+        );
+        assert_eq!(
+            TestPump::wifi_control_exchange_timeout_tx_state(fault.result),
+            "submitted"
+        );
+        let rendered = TestPump::wifi_diag_cyw43_fault_control(fault, true);
+        assert!(rendered.contains("pre_tx_drain=no"), "{rendered}");
+        assert!(rendered.contains("timeout_reason=no-rframe"), "{rendered}");
+        assert!(rendered.contains("timeout_value=0"), "{rendered}");
+        assert!(rendered.contains("tx_state=submitted"), "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_ht_fault_reports_linux_post_release_power_ht_frontier() {
         type TestPump<'a> = EventPump<
             'a,
@@ -18948,6 +19269,158 @@ mod tests {
             .mirrored_lines_snapshot()
             .iter()
             .any(|line| line.as_str() == CONSOLE_PROMPT));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_hdmi_progress_cadence_uses_virtual_milliseconds_and_material_frontiers() {
+        use crate::drivers::driver_task_net::Cyw43BootstrapDisplayFrontier as Frontier;
+
+        let mut cadence = Cyw43BootstrapHdmiProgressCadence::new();
+        cadence.observe(1, Frontier::LinkedRuntimes, 1_000);
+        assert_eq!(cadence.due(5_999), None);
+        assert_eq!(cadence.due(6_000), Some((Frontier::LinkedRuntimes, false)));
+        cadence.record_emitted(Frontier::LinkedRuntimes, 6_000);
+
+        cadence.observe(1, Frontier::FirmwareUpload, 6_001);
+        assert_eq!(cadence.due(10_999), None);
+        assert_eq!(cadence.due(11_000), Some((Frontier::FirmwareUpload, false)));
+        cadence.record_emitted(Frontier::FirmwareUpload, 11_000);
+        assert_eq!(cadence.due(20_999), None);
+        assert_eq!(cadence.due(21_000), Some((Frontier::FirmwareUpload, true)));
+
+        cadence.observe(2, Frontier::CardPath, 30_000);
+        assert_eq!(cadence.due(34_999), None);
+        assert_eq!(cadence.due(35_000), Some((Frontier::CardPath, false)));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_turn_status_parser_rejects_malformed_or_zero_attempts() {
+        assert_eq!(
+            cyw43_bootstrap_turn_attempt_and_stage(
+                "CYW43_BOOTSTRAP_TURN attempt=3 turn=42 stage=cyw43-firmware-chunk operation=true repeat=8"
+            ),
+            Some((3, "cyw43-firmware-chunk"))
+        );
+        assert_eq!(
+            cyw43_bootstrap_turn_attempt_and_stage(
+                "CYW43_BOOTSTRAP_TURN attempt=0 stage=cyw43-firmware-chunk"
+            ),
+            None
+        );
+        assert_eq!(
+            cyw43_bootstrap_turn_attempt_and_stage("CYW43_BOOTSTRAP_TURN attempt=1 stage="),
+            None
+        );
+        assert_eq!(
+            cyw43_bootstrap_turn_attempt_and_stage(
+                "unrelated attempt=1 stage=cyw43-firmware-chunk"
+            ),
+            None
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_hdmi_progress_is_gate_aware_coalesced_and_cleared_by_terminal_status() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 128,
+            buffer_lines: 16,
+        });
+        local_seat.mark_root_console_ready();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat);
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status(
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin",
+                "[drivers] WiFi bootstrap attempt 1/5 starting",
+            ));
+            assert!(pump.queue_cyw43_bootstrap_operator_line(
+                "CYW43_BOOTSTRAP_TURN attempt=1 turn=1 stage=cyw43-firmware-chunk operation=true repeat=1"
+            ));
+
+            // The start milestone is displayed first. Progress cannot appear
+            // until five virtual seconds have elapsed.
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            pump.now_ms = CYW43_BOOTSTRAP_HDMI_PROGRESS_MIN_INTERVAL_MS - 1;
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(pump
+                .pending_cyw43_bootstrap_hdmi_progress_milestone
+                .is_none());
+
+            pump.now_ms = CYW43_BOOTSTRAP_HDMI_PROGRESS_MIN_INTERVAL_MS;
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| line == "[drivers] WiFi gate 6/10: uploading WiFi firmware"));
+
+            // A changed internal stage in the same material frontier does not
+            // create another line before the ten-second heartbeat.
+            assert!(pump.queue_cyw43_bootstrap_operator_line(
+                "CYW43_BOOTSTRAP_TURN attempt=1 turn=2 stage=cyw43-nvram-chunk operation=true repeat=1"
+            ));
+            pump.now_ms = CYW43_BOOTSTRAP_HDMI_PROGRESS_MIN_INTERVAL_MS
+                + CYW43_BOOTSTRAP_HDMI_PROGRESS_HEARTBEAT_MS
+                - 1;
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(pump
+                .pending_cyw43_bootstrap_hdmi_progress_milestone
+                .is_none());
+            pump.now_ms = CYW43_BOOTSTRAP_HDMI_PROGRESS_MIN_INTERVAL_MS
+                + CYW43_BOOTSTRAP_HDMI_PROGRESS_HEARTBEAT_MS;
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| {
+                    line == "[drivers] WiFi gate 6/10: uploading WiFi firmware (still working)"
+                }));
+
+            assert!(pump.queue_cyw43_bootstrap_operator_line(
+                "CYW43_BOOTSTRAP_TURN attempt=1 turn=3 stage=cyw43-control-security-wpa2-psk operation=true repeat=1"
+            ));
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready",
+                "[drivers] WiFi driver ready; association and DHCP continuing",
+                true,
+            ));
+            assert_eq!(pump.cyw43_bootstrap_hdmi_progress.attempt, 0);
+            assert_eq!(pump.cyw43_bootstrap_hdmi_progress.current, None);
+            assert_eq!(pump.cyw43_bootstrap_hdmi_progress.emitted, None);
+            assert!(pump
+                .pending_cyw43_bootstrap_hdmi_progress_milestone
+                .is_none());
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -29163,6 +29636,69 @@ mod tests {
                 "wifi: evidence firmware_prep status=complete proof=later-operation-admitted armcr4_clear_write=issued postreset_cpuhalt_clock_flush=pass armcr4_resetctrl_read=advisory d11_reset_assert_write=issued d11_inreset_flush=pass d11_resetctrl_read=advisory"
             ),
             "{stream_rendered}"
+        );
+
+        let control_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-control-txglomalign",
+            op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 36,
+            total_len: 36,
+            control_cmd: 263,
+            control_id: 1,
+            control_header_mode: "plain",
+            control_response_len: 0,
+            detail: 0x530b,
+            reason: "cyw43-control-exchange",
+            result: 0x4303_0000,
+        };
+        crate::drivers::driver_task_net::test_record_cyw43_runtime_command_fault_status(
+            control_fault,
+        );
+        let control_rendered = render();
+        for gate in 1..=7 {
+            let gate_prefix = format!("wifi: gate {gate} name=");
+            let gate_line = control_rendered
+                .lines()
+                .find(|line| line.contains(&gate_prefix))
+                .expect("each completed startup gate must be rendered");
+            assert!(gate_line.contains("status=pass"), "{gate_line}");
+        }
+        assert!(
+            control_rendered.contains(
+                "wifi: gate 6 name=firmware-upload status=pass evidence=uploaded=yes verified=yes"
+            ),
+            "{control_rendered}"
+        );
+        assert!(
+            control_rendered.contains(
+                "wifi: gate 7 name=function2-ready status=pass evidence=f2_enabled=yes f2_ready=yes f2_state=post-release-ready"
+            ),
+            "{control_rendered}"
+        );
+        assert!(
+            control_rendered.contains("wifi: gate 8 name=firmware-channel status=fail"),
+            "{control_rendered}"
+        );
+        assert!(
+            control_rendered.contains(
+                "wifi: evidence cyw43_control op=11 cmd=263 cmd_hex=0x00000107 id=1 header_mode=plain response_len=0 pre_tx_drain=no timeout_reason=no-rframe timeout_value=0 tx_state=submitted"
+            ),
+            "{control_rendered}"
+        );
+        assert!(
+            control_rendered.contains(
+                "wifi: evidence control_exchange edge=post-function2-tx timeout_reason=no-rframe timeout_value=0 pre_tx_drain=no child_cmd53=completed-before-reply-wait"
+            ),
+            "{control_rendered}"
+        );
+        assert!(
+            control_rendered.contains(
+                "direct_proof_gate=7 inferred_frontier_gate=7 proof_gate=7 frontier_gate=7 failing_gate=8"
+            ),
+            "{control_rendered}"
         );
         crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
     }

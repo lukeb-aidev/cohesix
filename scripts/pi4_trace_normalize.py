@@ -1230,6 +1230,19 @@ def prompt_trace_interleaving_reason(line: str) -> str | None:
     payload = clean.removeprefix("cohesix> ").strip()
     if not payload:
         return None
+    if (
+        payload.startswith("wifi: debug subcommand=")
+        or payload.startswith("[smp] activity begin ")
+        or payload.startswith("[smp] scheduler dump unavailable ")
+        or (
+            payload.startswith("[local-seat] hdmi prompt pending ")
+            and "telemetry_sinks=serial" in payload
+            and "prompt_refresh=no" in payload
+        )
+    ):
+        # These are synchronous console-command/status responses emitted after
+        # the already-rendered prompt, not independently interleaved producers.
+        return None
     match = TRACE_SEGMENT_RE.match(payload)
     if match is None or match.start() != 0:
         return None
@@ -1508,6 +1521,7 @@ def classify_domain(line: str) -> str | None:
         or line.startswith("USB_BURST")
         or line.startswith("HDMI_RESPONSIVE")
         or line.startswith("HDMI_FRAME_")
+        or line.startswith("[smp] activity pump")
         or line.startswith("[smp] activity local-seat")
         or line.startswith("[smp] activity local-seat-display")
         or "serial echo" in lower
@@ -3206,9 +3220,15 @@ def cyw43_control_exchange_timeout_event_exact(event: TraceEvent) -> str | None:
     """Return the exact linked-runtime CYW43 control-exchange timeout reason."""
 
     fields = event.fields
-    if "cyw43_driver_task_command_fault" not in event.raw.lower():
+    raw = event.raw.lower()
+    command_fault = "cyw43_driver_task_command_fault" in raw
+    passive_evidence = (
+        raw.startswith("wifi: evidence cyw43 ")
+        and fields.get("reason", "").lower() == "cyw43-control-exchange"
+    )
+    if not command_fault and not passive_evidence:
         return None
-    if fields.get("contract", "").lower() != "cyw43455":
+    if command_fault and fields.get("contract", "").lower() != "cyw43455":
         return None
     if parse_hex_int(fields.get("op")) != CYW43_CONTROL_EXCHANGE_OP:
         return None
@@ -3218,6 +3238,28 @@ def cyw43_control_exchange_timeout_event_exact(event: TraceEvent) -> str | None:
     ):
         return None
     return cyw43_control_exchange_timeout_exact(parse_hex_int(fields.get("result")))
+
+
+def summarize_terminal_cyw43_control_exchange_timeout(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, int] | None:
+    """Return the retained op11 timeout until txglomalign later succeeds."""
+
+    terminal: tuple[str, str, int] | None = None
+    for event in events:
+        exact = cyw43_control_exchange_timeout_event_exact(event)
+        if exact is not None:
+            terminal = (
+                exact,
+                event.fields.get("stage")
+                or event.stage
+                or "cyw43-control-exchange",
+                event.line,
+            )
+            continue
+        if terminal is not None and wifi_control_txglomalign_step(event):
+            terminal = None
+    return terminal
 
 
 def cyw43_control_exchange_status_event_exact(event: TraceEvent) -> str | None:
@@ -9704,6 +9746,19 @@ def summarize_driver_task_proofs(
 def line_has_serial_responsiveness(raw: str, fields: dict[str, str]) -> bool:
     """Return whether a line proves serial echo/display responsiveness."""
 
+    if raw.startswith("[smp] activity pump "):
+        health_fields = (
+            "serial_rx_drop",
+            "serial_tx_drop",
+            "utf8_drop",
+            "serial_budget_overruns",
+            "serial_rx_backpressure",
+            "serial_tx_backpressure",
+        )
+        return (
+            fields.get("serial_pressure_source", "").lower() == "uart-output"
+            and all(parse_hex_int(fields.get(key)) == 0 for key in health_fields)
+        )
     return (
         raw.startswith("serial_echo")
         or "serial echo" in raw
@@ -10641,9 +10696,24 @@ def usb_interrupt_in_step(event: TraceEvent) -> bool:
     ))
 
 
+def usb_smp_local_seat_ready(event: TraceEvent) -> bool:
+    """Return true for the compact linked-USB local-seat readiness snapshot."""
+
+    return (
+        event.raw.lower().startswith("[smp] activity local-seat ")
+        and field_lower(event, "runtime") == "present"
+        and field_lower(event, "attached") == "yes"
+        and field_lower(event, "backend_poll") == "yes"
+        and field_lower(event, "keyboard_ready") == "yes"
+        and field_lower(event, "keyboard_device").startswith("usb-")
+    )
+
+
 def usb_first_report_step(event: TraceEvent) -> bool:
     """Return true for a non-pending HID first-report proof."""
 
+    if usb_smp_local_seat_ready(event):
+        return field_lower(event, "first_report") == "yes"
     if resource_init_step(
         event,
         contract="usb-local-seat",
@@ -10666,6 +10736,8 @@ def usb_first_report_step(event: TraceEvent) -> bool:
 def usb_first_byte_step(event: TraceEvent) -> bool:
     """Return true when the runtime decodes a keyboard byte."""
 
+    if usb_smp_local_seat_ready(event):
+        return field_lower(event, "first_byte") == "yes"
     if event.domain != "usb":
         return False
     return "runtime keyboard first-byte" in event.raw.lower() and usb_linked_hid_source(event)
@@ -10675,6 +10747,11 @@ def usb_command_ready_step(event: TraceEvent) -> bool:
     """Return true when the linked USB keyboard is ready for command input."""
 
     raw = event.raw.lower()
+    if usb_smp_local_seat_ready(event):
+        return (
+            field_lower(event, "command_ready") == "yes"
+            and field_lower(event, "first_report") == "yes"
+        )
     if "[local-seat] usb keyboard command-ready" in raw:
         clean_polls = parse_hex_int(event.fields.get("clean_polls")) or 0
         return (
@@ -11899,12 +11976,18 @@ def summarize_cyw43_bootstrap_supervisor(
                     or next_attempt_ms < CYW43_BOOTSTRAP_SERIAL_RETRY_MS
                 ):
                     mark_blocker("malformed-preflight-timing")
-                if (
-                    last_preflight_next_attempt_ms is not None
-                    and next_attempt_ms < last_preflight_next_attempt_ms
-                ):
-                    mark_blocker("malformed-preflight-timing")
-                last_preflight_next_attempt_ms = next_attempt_ms
+                if preflight_serial_ready:
+                    # Successful linked-UART cutover cancels the blocked
+                    # preflight timer; the retained attempt lane may publish
+                    # its immediate-ready sentinel at zero.
+                    last_preflight_next_attempt_ms = None
+                else:
+                    if (
+                        last_preflight_next_attempt_ms is not None
+                        and next_attempt_ms < last_preflight_next_attempt_ms
+                    ):
+                        mark_blocker("malformed-preflight-timing")
+                    last_preflight_next_attempt_ms = next_attempt_ms
             continue
 
         if attempt == 0:
@@ -12696,6 +12779,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             terminal_diag_failure
         )
         wifi_exact = wifi_blocker
+    terminal_control_timeout = summarize_terminal_cyw43_control_exchange_timeout(
+        event_list
+    )
+    if terminal_control_timeout is not None and wifi_gate <= 7:
+        # The retained op11 result is the causal Gate-8 failure. Passive
+        # progress snapshots can be emitted afterward, but cannot replace its
+        # precise NO_RFRAME outcome unless txglomalign subsequently succeeds.
+        wifi_gate = 7
+        wifi_blocker = "control-plane-reply-idle-loop"
+        wifi_exact, wifi_phase, wifi_blocker_line = terminal_control_timeout
     if wifi_gate >= 10 and not cohsh_tcp_auth_proof:
         wifi_gate = 9
         wifi_blocker = "tcp-auth-proof-missing"

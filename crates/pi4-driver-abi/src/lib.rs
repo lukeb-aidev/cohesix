@@ -2115,6 +2115,9 @@ impl DriverRuntimeSdioCommandDescriptor {
     pub const FLAG_HOST_BUS_WIDTH_4BIT: u16 = 1 << 1;
     /// Host-config command requests SDHCI high-speed mode.
     pub const FLAG_HOST_HIGH_SPEED: u16 = 1 << 2;
+    /// DPC activation must publish one generation-bound source-probe event
+    /// even when the host `CARD_INT` latch is not currently asserted.
+    pub const FLAG_DPC_FORCE_SOURCE_PROBE: u16 = 1 << 3;
 
     /// Empty descriptor.
     #[must_use]
@@ -2238,7 +2241,7 @@ impl DriverRuntimeSdioCommandDescriptor {
                     && self.len == 0
                     && self.block_size == 0
                     && self.block_count == 0
-                    && self.flags == 0
+                    && (self.flags == 0 || self.flags == Self::FLAG_DPC_FORCE_SOURCE_PROBE)
                     && self.reserved == 0))
             && (!cmd52 || (self.len == 1 && self.block_count == 0 && self.block_size == 0))
             && (!cmd53
@@ -4222,6 +4225,10 @@ mod tests {
         descriptor.len = 1;
         assert!(!descriptor.valid());
         descriptor.len = 0;
+        descriptor.flags = DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE;
+        assert!(descriptor.valid());
+        descriptor.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
+        assert!(!descriptor.valid());
         descriptor.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
         assert!(!descriptor.valid());
     }

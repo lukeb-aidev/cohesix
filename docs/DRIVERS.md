@@ -891,6 +891,27 @@ This as-built closure is authorized by Milestone 26d task
   grant plus endpoint doorbell into retained quanta. Neither path contains a
   private yield/resignal loop; notifications report only owner completion/DPC
   or IRQ work and never grant a foreground quantum.
+  A control exchange carrying `CONTROL_PRE_TX_DRAIN` first issues one immutable,
+  generation-bound `DPC_ACTIVATE` source probe through that same reciprocal
+  owner ring, then lets the ordinary CYW43 DPC cursor inspect and drain any
+  function-side source before Function 2 TX. After the one exact TX completes,
+  an empty software reply FIFO yields the foreground cursor and issues the same
+  bounded source probe before the next reply-deadline observation. The SDIO
+  owner checks the durable event ring before publication. It preserves and
+  re-signals an already-committed event without publishing or acknowledging it
+  again; only an empty ring may receive a new hintless `SOURCE_PENDING` event
+  when `CARD_INT` is not latched. That hintless event does not acknowledge an
+  undelivered host IRQ or fabricate an RFRAME length. Its exact completion
+  returns the committed or coalesced event sequence. The CYW43 foreground owner
+  accepts it only while that exact sequence remains committed in the matching
+  generation, then widens only the requesting retained parent's immutable DPC
+  producer watermark through that event, once. The event is therefore serviced
+  before that parent resumes without admitting later unrelated interrupts. Only
+  the ordinary CYW43 DPC cursor may read dongle status and Function 2, so the
+  source probe is a lost-notification recovery turn, not a second receive path.
+  Its immutable ticket and exact generation completion obey the same
+  issued-unknown poisoning and stale-completion rejection as all other owner
+  work, and it never permits replay of the completed control TX.
   A DPC event's immutable source/frame-length hint is admitted only when its
   sequence first becomes active. Retained grant and completion turns continue
   from the DPC cursor without reapplying that hint; otherwise a completed F2
@@ -977,6 +998,14 @@ This as-built closure is authorized by Milestone 26d task
   only after the Wi-Fi HAL scope is released. The serial and bounded queen-log
   records remain authoritative, while a fixed twelve-entry, episode-sized HDMI
   FIFO preserves every start/backoff/terminal milestone during display delay.
+  Between those milestones, sparse retained-turn records are collapsed into
+  concise `[drivers] WiFi ...` gate frontiers. A material frontier may be
+  queued no sooner than five virtual-time seconds after the preceding progress
+  line; an unchanged frontier emits a `still working` heartbeat after ten
+  seconds. One coalescing slot retains only the latest progress frontier, and
+  only a later ordinary `Display` EventPump turn may submit it, so bootstrap
+  telemetry cannot create an unbounded HDMI queue or combine display service
+  with a CYW43/SDIO child operation.
   The wire suffix `recovery=full telemetry_sinks=serial+qlog+hdmi` declares the
   configured fail-closed full-pair recovery policy and three routing targets;
   `qlog` denotes `/log/queen.log`. It proves neither that a restart already ran
