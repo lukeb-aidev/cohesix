@@ -10850,21 +10850,75 @@ fn sdio_publish_card_interrupt_event(_host_int_status: u32, _badge: u32) -> bool
     acked && !matches!(published, DpcRingPublishResult::BadEpoch)
 }
 
+#[cfg(any(target_os = "none", test))]
+fn sdio_durable_owner_command_header_valid(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.opcode == OPCODE_SERVICE
+        && command.arg0 == HOT_PATH_SDIO_HOST
+        && command.arg1 == ROLE_SDIO
+        && command.frame.len as usize == core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()
+        && command.frame.in_ring_payload()
+}
+
+#[cfg(any(target_os = "none", test))]
+fn sdio_durable_owner_command_pending() -> bool {
+    #[cfg(target_os = "none")]
+    {
+        driver_task_shared_invalidate_range(
+            DRIVER_TASK_RING_VADDR,
+            core::mem::size_of::<DriverTaskCommandRecord>(),
+        );
+        driver_task_shared_invalidate_range(
+            DRIVER_TASK_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
+            core::mem::size_of::<DriverTaskCompletionRecord>(),
+        );
+    }
+    #[cfg(all(not(target_os = "none"), test))]
+    let window = if TEST_CYW43_FOREGROUND_PRODUCTION_CHAIN_ENABLED.load(Ordering::Acquire) {
+        let Some(window) = RuntimeRingWindow::sdio_owner() else {
+            return false;
+        };
+        window
+    } else {
+        RuntimeRingWindow::local()
+    };
+    #[cfg(target_os = "none")]
+    let window = RuntimeRingWindow::local();
+
+    let Some(command) = runtime_ring_read_command_stable(&window) else {
+        return false;
+    };
+    if !sdio_durable_owner_command_header_valid(command) {
+        return false;
+    }
+    !runtime_ring_read_completion_stable(&window)
+        .is_some_and(|(first, second)| first == second && second.sequence == command.sequence)
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+const fn sdio_durable_owner_command_pending() -> bool {
+    false
+}
+
 fn sdio_runtime_service_notification(badge: u32) -> bool {
     if !sdio_notification_dpc_ready() {
         return false;
     }
     let (irq_badge, owner_request_active) =
         SDIO_RUNTIME_STATE.with_ref(|state| (state.irq_badge, state.external_dma_request.active()));
-    if owner_request_active && badge == irq_badge && irq_badge != 0 {
+    let real_irq = badge == irq_badge && irq_badge != 0;
+    if real_irq && (owner_request_active || sdio_durable_owner_command_pending()) {
         // The delivered IRQ cap is itself the bounded mask until it is
         // acknowledged. Never let the notification path change SDHCI policy,
         // publish a second event, or acknowledge/rearm beside an immutable
-        // retained owner request. Latch the owed acknowledgement; DPC_ACTIVATE
-        // consumes it in-order when that is the active request, otherwise the
-        // ordinary owner-idle service handles it after exact command
-        // completion. This is Linux's single host-thread ordering adapted to
-        // the linked-runtime endpoint/grant boundary.
+        // retained owner request. The durable reciprocal-ring command reserves
+        // that owner before the SDIO cursor's first admission turn, closing the
+        // publication-to-admission interval in which notification dispatch
+        // could otherwise become a second SDHCI sequencer. Latch the owed
+        // acknowledgement; DPC_ACTIVATE consumes it in-order when that is the
+        // active request, otherwise the ordinary owner-idle service handles it
+        // after exact command completion. This is Linux's single host-thread
+        // ordering adapted to the linked-runtime endpoint/grant boundary.
         SDIO_RUNTIME_STATE.with_mut(|state| state.irq_ack_pending = true);
         return true;
     }
@@ -68917,6 +68971,125 @@ mod tests {
             assert_eq!(dpc_event_ring_read_at(dpc_base), ring_before);
             drop(_production_mode);
         }
+    }
+
+    #[test]
+    fn sdio_real_irq_after_owner_publication_waits_for_exact_cursor_admission() {
+        let _guard = test_guard();
+        let epoch = 0x4359_d114;
+        initialize_production_foreground_pair(epoch);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = false;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+        });
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: epoch,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut command = stage_sdio_descriptor_service_command(
+            CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN | 0xd114,
+            descriptor,
+        );
+        command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        command.aux1 = epoch;
+        assert!(sdio_bus_link_write_descriptor_physical(
+            CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET,
+            descriptor,
+        ));
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND),
+        ));
+        assert!(runtime_ring_write_command_staged(
+            &mut owner_ring,
+            cyw43_sdio_bus_link_staged_command(command),
+        ));
+        assert!(runtime_ring_commit_command_sequence(
+            &mut owner_ring,
+            command.sequence,
+        ));
+        assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active()));
+
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let acks_before = TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire);
+        let ring_before =
+            runtime_ring_read_command_stable(&owner_ring).expect("durable owner command");
+        assert_eq!(ring_before, command);
+
+        assert!(sdio_runtime_service_notification(
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+        ));
+        assert_eq!(
+            TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            acks_before,
+            "publication reserves the host before the retained cursor is admitted",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.irq_ack_pending);
+            assert_eq!(state.card_irq_rearms, 0);
+            assert_eq!(state.dpc_events_published, 0);
+            assert!(!state.external_dma_request.active());
+        });
+        assert_eq!(
+            runtime_ring_read_command_stable(&owner_ring),
+            Some(command),
+            "notification arbitration may not mutate the durable owner ticket",
+        );
+
+        let adopted = runtime_ring_read_command_stable(&owner_ring).expect("owner command");
+        let adopted_descriptor =
+            sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+                .expect("owner descriptor");
+        let mut io = TestSdioHostIo::new();
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(adopted, adopted_descriptor, &mut io,),
+            RuntimeCommandTurn::Pending,
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.external_dma_request.active());
+            assert_eq!(
+                state.external_dma_request.identity.sequence,
+                command.sequence
+            );
+            assert!(state.irq_ack_pending);
+        });
+        let mut turns = 1usize;
+        let completion = loop {
+            turns = turns.saturating_add(1);
+            match service_sdio_external_dma_command_turn_with_io(
+                adopted,
+                adopted_descriptor,
+                &mut io,
+            ) {
+                RuntimeCommandTurn::Pending => {
+                    assert!(turns < 64, "retained DPC admission must remain bounded");
+                }
+                RuntimeCommandTurn::Complete(completion) => break completion,
+            }
+        };
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::progress(command.sequence, 1),
+        );
+        assert_eq!(
+            TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            acks_before + 1,
+            "the admitted owner consumes the exact latched IRQ once",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.external_dma_request.active());
+            assert!(!state.irq_ack_pending);
+        });
     }
 
     #[test]

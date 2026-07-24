@@ -3967,6 +3967,13 @@ impl DriverTaskRetainedRequestState {
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DriverTaskRetainedRequestSnapshot {
+    state: DriverTaskRetainedRequestState,
+    command_fingerprint: u32,
+}
+
+#[cfg(feature = "kernel")]
 pub(crate) fn active_driver_task_retained_request(
     contract: DriverTaskContract,
 ) -> Option<DriverTaskRetainedRequestState> {
@@ -4024,6 +4031,20 @@ fn active_driver_task_retained_request_for_slot(
     } else {
         Some(DriverTaskRetainedRequestState::Invalid { request })
     }
+}
+
+#[cfg(feature = "kernel")]
+fn active_driver_task_retained_request_snapshot(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskRetainedRequestSnapshot> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let state = active_driver_task_retained_request_for_slot(slot)?;
+    let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
+    (command_fingerprint != 0).then_some(DriverTaskRetainedRequestSnapshot {
+        state,
+        command_fingerprint,
+    })
 }
 
 #[cfg(feature = "kernel")]
@@ -11860,22 +11881,31 @@ pub enum DriverTaskRetainedServiceTurn {
 #[cfg(feature = "kernel")]
 fn classify_driver_task_retained_service_turn(
     completion: Option<DriverTaskCompletionRecord>,
-    active: Option<DriverTaskRetainedRequestState>,
+    active: Option<DriverTaskRetainedRequestSnapshot>,
     mut requested: DriverTaskCommandRecord,
+    expected_command_fingerprint: u32,
 ) -> DriverTaskRetainedServiceTurn {
     let Some(active) = active else {
         return DriverTaskRetainedServiceTurn::Failed;
     };
-    let Some(mut retained) = active.command() else {
+    if expected_command_fingerprint == 0
+        || active.command_fingerprint != expected_command_fingerprint
+    {
+        return DriverTaskRetainedServiceTurn::Failed;
+    }
+    let Some(mut retained) = active.state.command() else {
         return DriverTaskRetainedServiceTurn::Failed;
     };
-    requested.sequence = active.request();
+    requested.sequence = active.state.request();
     requested.flags =
         driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, requested.flags);
-    retained.sequence = active.request();
+    retained.sequence = active.state.request();
     let identity_matches = retained == requested;
     if let Some(completion) = completion {
-        if active.issued() && identity_matches && completion.sequence == active.request() {
+        if active.state.issued()
+            && identity_matches
+            && completion.sequence == active.state.request()
+        {
             DriverTaskRetainedServiceTurn::Complete(completion)
         } else {
             DriverTaskRetainedServiceTurn::Failed
@@ -11897,14 +11927,25 @@ pub fn run_driver_task_ring_service_retained_service_turn(
     // Successful completion clears the production slot, so retain the exact
     // pre-turn identity independently for terminal validation. Pending instead
     // validates the post-turn state created or advanced by this outer turn.
-    let active_before = active_driver_task_retained_request(contract);
+    let mut fingerprint_command = command;
+    fingerprint_command.flags = driver_task_ring_flags_for_mode(
+        DriverTaskRingCommandMode::RetainedTurn,
+        fingerprint_command.flags,
+    );
+    let expected_command_fingerprint = driver_task_ring_command_fingerprint(fingerprint_command, 0);
+    let active_before = active_driver_task_retained_request_snapshot(contract);
     let completion = run_driver_task_ring_service_retained_turn(contract, command);
     let active = if completion.is_some() {
         active_before
     } else {
-        active_driver_task_retained_request(contract)
+        active_driver_task_retained_request_snapshot(contract)
     };
-    classify_driver_task_retained_service_turn(completion, active, command)
+    classify_driver_task_retained_service_turn(
+        completion,
+        active,
+        command,
+        expected_command_fingerprint,
+    )
 }
 
 /// Execute one retained service turn with atomic staged-byte publication.
@@ -11934,15 +11975,29 @@ pub fn run_driver_task_ring_service_retained_service_turn_staged(
     command: DriverTaskCommandRecord,
     staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> DriverTaskRetainedServiceTurn {
-    let active_before = active_driver_task_retained_request(contract);
+    let mut fingerprint_command = command;
+    fingerprint_command.flags = driver_task_ring_flags_for_mode(
+        DriverTaskRingCommandMode::RetainedTurn,
+        fingerprint_command.flags,
+    );
+    let expected_command_fingerprint = driver_task_ring_command_fingerprint(
+        fingerprint_command,
+        driver_task_staging_segments_fingerprint(staging_segments),
+    );
+    let active_before = active_driver_task_retained_request_snapshot(contract);
     let completion =
         run_driver_task_ring_service_retained_turn_staged(contract, command, staging_segments);
     let active = if completion.is_some() {
         active_before
     } else {
-        active_driver_task_retained_request(contract)
+        active_driver_task_retained_request_snapshot(contract)
     };
-    classify_driver_task_retained_service_turn(completion, active, command)
+    classify_driver_task_retained_service_turn(
+        completion,
+        active,
+        command,
+        expected_command_fingerprint,
+    )
 }
 
 /// Emit a non-acceptance resource-initialization breadcrumb for one hot path.
@@ -16446,25 +16501,34 @@ mod tests {
             DriverTaskRingCommandMode::RetainedTurn,
             retained.flags,
         );
+        let command_fingerprint = driver_task_ring_command_fingerprint(retained, 0);
+        let snapshot = |state| {
+            Some(DriverTaskRetainedRequestSnapshot {
+                state,
+                command_fingerprint,
+            })
+        };
         assert_eq!(
             classify_driver_task_retained_service_turn(
                 None,
-                Some(DriverTaskRetainedRequestState::Prepared {
+                snapshot(DriverTaskRetainedRequestState::Prepared {
                     request: 19,
                     command: retained,
                 }),
                 requested,
+                command_fingerprint,
             ),
             DriverTaskRetainedServiceTurn::Pending,
         );
         assert_eq!(
             classify_driver_task_retained_service_turn(
                 None,
-                Some(DriverTaskRetainedRequestState::Issued {
+                snapshot(DriverTaskRetainedRequestState::Issued {
                     request: 19,
                     command: retained,
                 }),
                 requested,
+                command_fingerprint,
             ),
             DriverTaskRetainedServiceTurn::Pending,
         );
@@ -16473,11 +16537,12 @@ mod tests {
         assert_eq!(
             classify_driver_task_retained_service_turn(
                 Some(exact_completion),
-                Some(DriverTaskRetainedRequestState::Issued {
+                snapshot(DriverTaskRetainedRequestState::Issued {
                     request: 19,
                     command: retained,
                 }),
                 requested,
+                command_fingerprint,
             ),
             DriverTaskRetainedServiceTurn::Complete(exact_completion),
         );
@@ -16485,22 +16550,24 @@ mod tests {
         assert_eq!(
             classify_driver_task_retained_service_turn(
                 Some(stale_completion),
-                Some(DriverTaskRetainedRequestState::Issued {
+                snapshot(DriverTaskRetainedRequestState::Issued {
                     request: 19,
                     command: retained,
                 }),
                 requested,
+                command_fingerprint,
             ),
             DriverTaskRetainedServiceTurn::Failed,
         );
         assert_eq!(
             classify_driver_task_retained_service_turn(
                 Some(exact_completion),
-                Some(DriverTaskRetainedRequestState::Prepared {
+                snapshot(DriverTaskRetainedRequestState::Prepared {
                     request: 19,
                     command: retained,
                 }),
                 requested,
+                command_fingerprint,
             ),
             DriverTaskRetainedServiceTurn::Failed,
         );
@@ -16510,35 +16577,53 @@ mod tests {
         assert_eq!(
             classify_driver_task_retained_service_turn(
                 None,
-                Some(DriverTaskRetainedRequestState::Issued {
+                snapshot(DriverTaskRetainedRequestState::Issued {
                     request: 19,
                     command: aliased,
                 }),
                 requested,
+                command_fingerprint,
             ),
             DriverTaskRetainedServiceTurn::Failed,
         );
         assert_eq!(
             classify_driver_task_retained_service_turn(
                 Some(exact_completion),
-                Some(DriverTaskRetainedRequestState::Issued {
+                snapshot(DriverTaskRetainedRequestState::Issued {
                     request: 19,
                     command: aliased,
                 }),
                 requested,
+                command_fingerprint,
             ),
             DriverTaskRetainedServiceTurn::Failed,
         );
         assert_eq!(
             classify_driver_task_retained_service_turn(
                 None,
-                Some(DriverTaskRetainedRequestState::Invalid { request: 19 }),
+                snapshot(DriverTaskRetainedRequestState::Invalid { request: 19 }),
                 requested,
+                command_fingerprint,
             ),
             DriverTaskRetainedServiceTurn::Failed,
         );
         assert_eq!(
-            classify_driver_task_retained_service_turn(None, None, requested),
+            classify_driver_task_retained_service_turn(
+                None,
+                Some(DriverTaskRetainedRequestSnapshot {
+                    state: DriverTaskRetainedRequestState::Issued {
+                        request: 19,
+                        command: retained,
+                    },
+                    command_fingerprint: command_fingerprint ^ 1,
+                }),
+                requested,
+                command_fingerprint,
+            ),
+            DriverTaskRetainedServiceTurn::Failed,
+        );
+        assert_eq!(
+            classify_driver_task_retained_service_turn(None, None, requested, command_fingerprint,),
             DriverTaskRetainedServiceTurn::Failed,
         );
     }

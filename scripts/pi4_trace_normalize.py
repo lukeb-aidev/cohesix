@@ -2714,6 +2714,8 @@ def summarize_wifi_gate7_subgate_detail(
         "cyw43-control-tx-no-reply",
         "cyw43-control-tx-retry-no-reply",
         "cyw43-control-tx-not-submitted",
+        "cyw43-runtime-command-no-reply",
+        "sdio-linked-runtime-progress-no-reply",
     }:
         return WifiGate7Subgate("none", "none", reason=wifi_blocker)
     if wifi_blocker in {
@@ -3351,6 +3353,8 @@ def cyw43_command_no_reply_event_exact(event: TraceEvent) -> str | None:
         return None
     exact = normalize_wifi_exact(fields.get("reason", ""))
     if exact == "cyw43-runtime-command-no-reply":
+        if parse_hex_int(fields.get("op")) == CYW43_CONTROL_EXCHANGE_OP:
+            return exact
         progress_exact = normalize_wifi_exact(fields.get("progress_phase_name", ""))
         progress_sequence = parse_hex_int(fields.get("progress_sequence"))
         request = parse_hex_int(fields.get("request"))
@@ -7279,7 +7283,21 @@ def summarize_terminal_wifi_diag_failure(
                     and boundary_exact == terminal[1]
                 )
                 continue
-            if terminal is not None and raw.startswith("wifi: cyw43 fault"):
+            if terminal is not None and raw.startswith("wifi: evidence cyw43 "):
+                exact = normalize_wifi_exact(event.fields.get("reason", ""))
+                if (
+                    parse_hex_int(event.fields.get("op"))
+                    == CYW43_CONTROL_EXCHANGE_OP
+                    and exact != "none"
+                ):
+                    terminal = (
+                        terminal[0],
+                        exact,
+                        event.fields.get("stage") or terminal[2],
+                        event.line,
+                    )
+                    boundary_proves_terminal = False
+            elif terminal is not None and raw.startswith("wifi: cyw43 fault"):
                 exact = normalize_wifi_exact(event.fields.get("detail", ""))
                 if exact == terminal[1]:
                     terminal = (
@@ -7791,10 +7809,17 @@ def summarize_cyw43_control_tx_no_reply(
             latest = None
             continue
         exact, phase = wifi_failure_detail_from_fields(event)
+        if (
+            exact == "cyw43-runtime-command-no-reply"
+            and parse_hex_int(event.fields.get("op"))
+            != CYW43_CONTROL_EXCHANGE_OP
+        ):
+            continue
         if exact in {
             "cyw43-control-tx-no-reply",
             "cyw43-control-tx-retry-no-reply",
             "cyw43-control-tx-not-submitted",
+            "cyw43-runtime-command-no-reply",
         }:
             if latest is None or (
                 latest[1] in {"none", "cyw43-control-tx"}

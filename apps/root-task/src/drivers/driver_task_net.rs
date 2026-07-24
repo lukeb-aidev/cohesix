@@ -26,8 +26,6 @@ use crate::drivers::cyw43_host_eapol::{
     HostEapolState, ETHER_ADDR_LEN, ETH_HEADER_LEN, ETH_P_EAPOL, WPA2_PSK_CCMP_RSN_IE,
     WSEC_KEY_PAYLOAD_LEN,
 };
-#[cfg(feature = "kernel")]
-use crate::hal::driver_task::DriverTaskRingProgressSnapshot;
 use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
     DriverTaskCompletionCode, DriverTaskCompletionRecord, DriverTaskContract, DriverTaskFaultCode,
@@ -35,6 +33,8 @@ use crate::hal::driver_task::{
     DRIVER_TASK_RING_FLAG_ONE_WAY, DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH,
     GENET_DRIVER_TASK_CONTRACT, MAX_DRIVER_TASK_FRAME_BYTES, SDIO_HOST_DRIVER_TASK_CONTRACT,
 };
+#[cfg(feature = "kernel")]
+use crate::hal::driver_task::{DriverTaskRetainedServiceTurn, DriverTaskRingProgressSnapshot};
 use crate::hal::{HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetInterfacePolicy, NetStage,
@@ -1786,20 +1786,12 @@ impl Cyw43BootstrapSupervisor {
         if request == 0 || pending.ticket.generation != self.generation {
             return None;
         }
-        let state = crate::hal::driver_task::active_driver_task_retained_request(
+        let (active_request, issued) = cyw43_retained_descriptor_active_state(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            pending.ticket.descriptor,
+            Some(request),
         )?;
-        if state.request() != request {
-            return None;
-        }
-        let command = state.command()?;
-        let active = cyw43_runtime_descriptor_from_active_command(
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            command,
-            request,
-        )?;
-        cyw43_retained_descriptor_fingerprint_matches(pending.ticket.descriptor, active)
-            .then_some(state.issued())
+        (active_request == request).then_some(issued)
     }
 
     fn active_ticket_matches(&self, pending: &Cyw43PendingAction, request: u32) -> bool {
@@ -1872,6 +1864,16 @@ impl Cyw43BootstrapSupervisor {
             Err(DriverTaskNetError::RuntimePending("cyw43-outer-event-turn-claimed")) => {
                 pending.deadline = deadline_before_turn;
                 return self.keep_pending_action(pending, Cyw43RetainedActionOutcome::Pending);
+            }
+            Err(DriverTaskNetError::RuntimeInit("cyw43-retained-service-failed")) => {
+                self.retry_requires_pair_restart = true;
+                record_cyw43_runtime_command_no_reply(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    pending.ticket.stage,
+                    pending.ticket.descriptor,
+                    usize::from(pending.child_reply_renewals),
+                );
+                return Cyw43RetainedActionOutcome::Poisoned("cyw43-retained-service-failed");
             }
             Err(err) => return Cyw43RetainedActionOutcome::Failed(err),
         };
@@ -6582,8 +6584,8 @@ fn run_driver_task_net_service_retained_turn_staged(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
     staging_segments: &[DriverTaskStagingSegment<'_>],
-) -> Option<DriverTaskCompletionRecord> {
-    crate::hal::driver_task::run_driver_task_ring_service_retained_turn_staged(
+) -> DriverTaskRetainedServiceTurn {
+    crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn_staged(
         contract,
         command,
         staging_segments,
@@ -7922,11 +7924,25 @@ fn cyw43_retained_descriptor_active_state(
     if request == 0 || expected_request.is_some_and(|expected| expected != request) {
         return None;
     }
-    let active_descriptor = active.command().and_then(|command| {
-        cyw43_runtime_descriptor_from_active_command(contract, command, request)
-    })?;
+    let command = active.command()?;
+    if !cyw43_retained_command_identity_matches(contract, descriptor, command, request) {
+        return None;
+    }
+    if active.issued() {
+        // Once issued, the descriptor region is runtime-owned response
+        // storage. In particular, FrameReady writes the returned SDPCM/BCDC
+        // frame at the same ABI offset used to stage the parent descriptor.
+        // Re-decoding those bytes would mistake a legitimate terminal result
+        // for ticket drift while HAL is still restoring the retained priority
+        // lease. The immutable HAL command identity, exact request sequence,
+        // generation-bound root ticket, and HAL's pre-issue staging
+        // fingerprint remain the sole continuation authority after issue.
+        return Some((request, true));
+    }
+    let active_descriptor =
+        cyw43_runtime_descriptor_from_active_command(contract, command, request)?;
     cyw43_retained_descriptor_fingerprint_matches(descriptor, active_descriptor)
-        .then_some((request, active.issued()))
+        .then_some((request, false))
 }
 
 #[cfg(feature = "kernel")]
@@ -9633,34 +9649,17 @@ pub(crate) fn service_cyw43_maintenance_turn() -> bool {
         return true;
     }
     if let Some(request) = action.request {
-        let active = crate::hal::driver_task::active_driver_task_retained_request(
+        let Some((_, issued)) = cyw43_retained_descriptor_active_state(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
-        );
-        let Some(active) = active.filter(|active| active.request() == request) else {
+            action.descriptor,
+            Some(request),
+        ) else {
             snapshot.action = None;
             *CYW43_MAINTENANCE_CURSOR.lock() = snapshot;
             latch_cyw43_maintenance_recovery(&action, None);
             return true;
         };
-        let descriptor_matches = active
-            .command()
-            .and_then(|command| {
-                cyw43_runtime_descriptor_from_active_command(
-                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                    command,
-                    request,
-                )
-            })
-            .is_some_and(|descriptor| {
-                cyw43_retained_descriptor_fingerprint_matches(action.descriptor, descriptor)
-            });
-        if !descriptor_matches {
-            snapshot.action = None;
-            *CYW43_MAINTENANCE_CURSOR.lock() = snapshot;
-            latch_cyw43_maintenance_recovery(&action, None);
-            return true;
-        }
-        action.issued |= active.issued();
+        action.issued |= issued;
         if action.issued {
             let _ = cyw43_linked_action_observe_child_progress(
                 &mut action.deadline,
@@ -9699,8 +9698,9 @@ pub(crate) fn service_cyw43_maintenance_turn() -> bool {
             return true;
         }
         Err(_) => {
-            snapshot.action = Some(action);
+            snapshot.action = None;
             *CYW43_MAINTENANCE_CURSOR.lock() = snapshot;
+            latch_cyw43_maintenance_recovery(&action, None);
             return true;
         }
     };
@@ -9712,39 +9712,21 @@ pub(crate) fn service_cyw43_maintenance_turn() -> bool {
             *CYW43_MAINTENANCE_CURSOR.lock() = snapshot;
             return true;
         }
-        let active = crate::hal::driver_task::active_driver_task_retained_request(
+        let Some((request, issued)) = cyw43_retained_descriptor_active_state(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
-        );
-        let Some(active) = active else {
+            action.descriptor,
+            action.request,
+        ) else {
             snapshot.action = None;
             *CYW43_MAINTENANCE_CURSOR.lock() = snapshot;
             latch_cyw43_maintenance_recovery(&action, None);
             return true;
         };
-        let request = active.request();
-        let descriptor_matches = active
-            .command()
-            .and_then(|command| {
-                cyw43_runtime_descriptor_from_active_command(
-                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                    command,
-                    request,
-                )
-            })
-            .is_some_and(|descriptor| {
-                cyw43_retained_descriptor_fingerprint_matches(action.descriptor, descriptor)
-            });
-        if action.request.is_some_and(|expected| expected != request) || !descriptor_matches {
-            snapshot.action = None;
-            *CYW43_MAINTENANCE_CURSOR.lock() = snapshot;
-            latch_cyw43_maintenance_recovery(&action, None);
-            return true;
-        }
         if action.request != Some(request) {
             action.child_reply_latched = false;
         }
         action.request = Some(request);
-        action.issued |= active.issued();
+        action.issued |= issued;
         snapshot.action = Some(action);
         *CYW43_MAINTENANCE_CURSOR.lock() = snapshot;
         record_cyw43_active_prompt_poll(
@@ -19290,20 +19272,12 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
     }
     let descriptor = cyw43_data_tx_descriptor(frame_len);
     if let Some(request) = pending.request {
-        let active = crate::hal::driver_task::active_driver_task_retained_request(contract)
-            .filter(|active| active.request() == request);
-        let fingerprint_matches = active
-            .and_then(|active| active.command())
-            .and_then(|command| {
-                cyw43_runtime_descriptor_from_active_command(contract, command, request)
-            })
-            .is_some_and(|active| {
-                cyw43_retained_descriptor_fingerprint_matches(descriptor, active)
-            });
-        if !fingerprint_matches {
+        let Some((_, issued)) =
+            cyw43_retained_descriptor_active_state(contract, descriptor, Some(request))
+        else {
             return fail_cyw43_pending_data_tx(&pending, contract, "issued-owner-unknown", true);
-        }
-        if active.is_some_and(|active| active.issued()) {
+        };
+        if issued {
             pending.child_cursor_started = true;
             let _ = cyw43_linked_action_observe_child_progress(
                 &mut pending.deadline,
@@ -19355,17 +19329,8 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
             pending.turns = pending.turns.saturating_sub(1);
             return retain_cyw43_pending_data_tx(pending);
         }
-        let active = crate::hal::driver_task::active_driver_task_retained_request(contract);
-        let retained = active.and_then(|active| {
-            let request = active.request();
-            let command = active.command()?;
-            let descriptor_matches =
-                cyw43_runtime_descriptor_from_active_command(contract, command, request)
-                    .is_some_and(|active_descriptor| {
-                        cyw43_retained_descriptor_fingerprint_matches(descriptor, active_descriptor)
-                    });
-            descriptor_matches.then_some((request, active.issued()))
-        });
+        let retained =
+            cyw43_retained_descriptor_active_state(contract, descriptor, pending.request);
         let Some((request, issued)) = retained else {
             return fail_cyw43_pending_data_tx(&pending, contract, "issued-owner-unknown", true);
         };
@@ -20020,6 +19985,38 @@ fn cyw43_retained_descriptor_fingerprint_matches(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_retained_command_identity_matches(
+    contract: DriverTaskContract,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    command: DriverTaskCommandRecord,
+    request: u32,
+) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT || request == 0 {
+        return false;
+    }
+    let Ok(frame_len) = u16::try_from(core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>())
+    else {
+        return false;
+    };
+    let mut expected = DriverTaskCommandRecord::pi4_hot_path(
+        request,
+        DriverTaskHotPath::Cyw43Wifi,
+        DriverTaskBudgetGrant::from_contract(contract),
+        DriverFrameDescriptor {
+            offset: crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len: frame_len,
+            flags: 0,
+        },
+    );
+    expected.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+    expected.flags |= DRIVER_TASK_RING_FLAG_ONE_WAY;
+    if cyw43_runtime_descriptor_quiet_hot_path(descriptor.op) {
+        expected.flags |= DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH;
+    }
+    command == expected
+}
+
+#[cfg(feature = "kernel")]
 fn run_cyw43_runtime_descriptor_turn_raw(
     contract: DriverTaskContract,
     mut descriptor: DriverRuntimeCyw43CommandDescriptor,
@@ -20107,7 +20104,7 @@ fn run_cyw43_runtime_descriptor_turn_raw(
     // control payload is neither retransmitted nor assigned a new BCDC ID.
     #[cfg(test)]
     CYW43_TEST_PROGRESS_OPERATION_COUNT.fetch_add(1, Ordering::AcqRel);
-    let completion = {
+    let service = {
         if payload_staged && use_shared_payload {
             let staging_segments = [
                 DriverTaskStagingSegment::shared(payload, 0),
@@ -20136,6 +20133,24 @@ fn run_cyw43_runtime_descriptor_turn_raw(
                 0,
             )];
             run_driver_task_net_service_retained_turn_staged(contract, command, &staging_segments)
+        }
+    };
+    let completion = match service {
+        DriverTaskRetainedServiceTurn::Complete(completion) => Some(completion),
+        DriverTaskRetainedServiceTurn::Pending => None,
+        DriverTaskRetainedServiceTurn::Failed => {
+            if crate::hal::driver_task::active_driver_task_retained_request(contract).is_some() {
+                // A Prepared lease may already have changed one or both
+                // linked-runtime priorities. Without an exact typed Pending or
+                // Complete result there is no cancellation proof, so every
+                // surviving retained slot (Prepared, Issued, or Invalid) must
+                // be scrubbed by the deterministic pair restart before a
+                // caller can publish another action.
+                crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+            }
+            return Err(DriverTaskNetError::RuntimeInit(
+                "cyw43-retained-service-failed",
+            ));
         }
     };
     Ok(Cyw43RawDescriptorTurn {
@@ -22933,6 +22948,116 @@ mod tests {
         );
         assert!(cyw43_outer_event_turn_operation_count() <= 1);
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+        assert!(supervisor.pending.is_none());
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_issued_ticket_survives_runtime_output_alias_during_hal_restore() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                cyw43_supervisor_ring_test_service,
+            )
+        );
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor
+            .install_empty_action(
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+                    flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+                    arg0: CYW43_WLC_SET_VAR,
+                    arg1: 1,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                "cyw43-control-txglomalign-alias-test",
+            )
+            .expect("retained Gate 8 action installs");
+        let ticket = supervisor.pending.as_ref().expect("ticket retained").ticket;
+        let mut output_aliased = false;
+        let mut outcome = Cyw43RetainedActionOutcome::Pending;
+
+        for _ in 0..(CYW43_RUNTIME_MIN_RETAINED_TURNS * 2) {
+            begin_cyw43_outer_event_turn();
+            outcome = supervisor.service_pending_action();
+            assert!(cyw43_outer_event_turn_operation_count() <= 1);
+            if !output_aliased && CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire) == 1 {
+                let pending = supervisor
+                    .pending
+                    .as_ref()
+                    .expect("issued action remains retained during HAL restore");
+                let request = match pending.issuance {
+                    Cyw43ActionIssuance::AwaitingCompletion { request } => request,
+                    Cyw43ActionIssuance::Prepared => {
+                        panic!("runtime execution must mark the exact ticket issued")
+                    }
+                };
+                let offset = crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET;
+                let len = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
+                ring_guard._page.0[offset..offset + len].fill(0xa5);
+                let live = crate::hal::driver_task::driver_task_ring_frame_bytes(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    DriverFrameDescriptor {
+                        offset: offset as u32,
+                        len: len as u16,
+                        flags: 0,
+                    },
+                )
+                .and_then(decode_cyw43_descriptor)
+                .expect("aliased runtime output remains readable");
+                assert!(!cyw43_retained_descriptor_fingerprint_matches(
+                    ticket.descriptor,
+                    live,
+                ));
+                assert_eq!(
+                    supervisor.active_ticket_issuance(pending, request),
+                    Some(true),
+                    "post-issue ownership comes from the immutable HAL ticket, not output bytes",
+                );
+                output_aliased = true;
+            }
+            if matches!(outcome, Cyw43RetainedActionOutcome::Complete(_)) {
+                break;
+            }
+            assert_eq!(outcome, Cyw43RetainedActionOutcome::Pending);
+            assert_eq!(
+                supervisor
+                    .pending
+                    .as_ref()
+                    .expect("same action remains retained")
+                    .ticket,
+                ticket,
+            );
+        }
+
+        assert!(
+            output_aliased,
+            "test must cross the issued restore interval"
+        );
+        assert!(
+            matches!(
+                outcome,
+                Cyw43RetainedActionOutcome::Complete(completion)
+                    if completion.code == DriverTaskCompletionCode::Idle.as_u16()
+            ),
+            "{outcome:?}",
+        );
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
         assert!(supervisor.pending.is_none());
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);

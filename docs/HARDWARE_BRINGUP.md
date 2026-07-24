@@ -961,6 +961,26 @@ re-entry without controller reissue. These changes remain source and
 hardware-free evidence until a newly built, read-back image reaches them on a
 fresh Pi boot.
 
+The reciprocal SDIO command owns the host as soon as its sequence-last ring
+publication is durable, not only after the SDIO runtime constructs its retained
+cursor. A real IRQ in that publication-to-admission interval may only latch the
+owed acknowledgement. It cannot acknowledge or rearm the IRQ, change SDHCI
+interrupt policy, or publish a DPC event beside the pending command. The exact
+retained owner admits that command and consumes the latch in order. This is the
+linked-runtime equivalent of Linux serializing request, threaded IRQ, and DMA
+work through one MMC host sequencer.
+
+The CYW43 parent descriptor and returned runtime frame intentionally share the
+fixed ring frame window. Descriptor bytes are immutable and fingerprinted
+through preparation, but become runtime-owned output storage after issue.
+During HAL priority restoration, root therefore validates continuation from the
+generation-bound root ticket, exact request/command identity, and HAL's stored
+fingerprint of the original staged bytes; it must not re-decode returned
+SDPCM/BCDC bytes as the old descriptor. A typed retained `Pending` or
+`Complete` result proves that complete identity. A typed failure with any
+surviving retained lease requires ordered pair restart and cannot become a
+same-generation replay.
+
 The retry decision is made at the retained parent boundary, not inferred from
 one nested child in isolation. Only a stage-1 `0x5103` entry inhibit on a
 single-action firmware/NVRAM word or chunk, control/data frame, or poll may
@@ -989,6 +1009,13 @@ completion may advance. Any issued-unknown,
 `OWNER_PATH_POISONED`, stale, failed, or malformed result poisons the generation
 and requests the ordered pair restart; host quiescence is not permission to
 continue or retry in place.
+For an op11 control exchange, diagnostics may claim
+`edge=post-function2-tx` and
+`child_cmd53=completed-before-reply-wait` only from a typed WaitReply result.
+An untyped parent no-reply reports `edge=completion-unknown`,
+`function2_tx=not-proven`, and `child_cmd53=not-proven`; agreement between a
+stale progress breadcrumb and the parent request is not exact child-completion
+proof.
 Card selection uses CMD7 with the SDIO R1b short-busy response. Only the entry
 inhibit wait before `SDHCI_COMMAND` is written is retryable; a busy timeout after
 issue is retained as post-issue quiescence and cannot be replayed in-generation.

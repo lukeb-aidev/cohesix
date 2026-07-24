@@ -12549,16 +12549,32 @@ where
                 ));
                 self.emit_console_line(operation.as_str());
             } else if fault.op == pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE {
-                let exchange = format_message(format_args!(
-                    "wifi: evidence control_exchange edge=post-function2-tx timeout_reason={} timeout_value={} pre_tx_drain={} child_cmd53=completed-before-reply-wait source=retained-runtime-terminal",
-                    Self::wifi_control_exchange_timeout_reason(fault.result),
-                    fault.result & 0xffff,
-                    Self::yes_no(
-                        fault.flags
-                            & pi4_driver_abi::DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
-                            != 0
-                    ),
-                ));
+                let typed_timeout = fault.result & 0xff00_0000 == 0x4300_0000;
+                let typed_reason = (fault.result >> 16) & 0xff;
+                let pre_tx_drain = Self::yes_no(
+                    fault.flags & pi4_driver_abi::DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+                        != 0,
+                );
+                let exchange = if !typed_timeout {
+                    format_message(format_args!(
+                        "wifi: evidence control_exchange edge=completion-unknown timeout_reason=none timeout_value=0 pre_tx_drain={} function2_tx=not-proven child_cmd53=not-proven terminal=parent-no-reply source=retained-runtime-terminal",
+                        pre_tx_drain,
+                    ))
+                } else if typed_reason == 1 {
+                    format_message(format_args!(
+                        "wifi: evidence control_exchange edge=pre-function2-tx timeout_reason={} timeout_value={} pre_tx_drain={} function2_tx=not-submitted child_cmd53=not-submitted source=retained-runtime-terminal",
+                        Self::wifi_control_exchange_timeout_reason(fault.result),
+                        fault.result & 0xffff,
+                        pre_tx_drain,
+                    ))
+                } else {
+                    format_message(format_args!(
+                        "wifi: evidence control_exchange edge=post-function2-tx timeout_reason={} timeout_value={} pre_tx_drain={} child_cmd53=completed-before-reply-wait source=retained-runtime-terminal",
+                        Self::wifi_control_exchange_timeout_reason(fault.result),
+                        fault.result & 0xffff,
+                        pre_tx_drain,
+                    ))
+                };
                 self.emit_console_line(exchange.as_str());
             } else if !Self::wifi_runtime_fault_is_sdio_card_select(fault) {
                 let cmd53 = format_message(format_args!(
@@ -29699,6 +29715,31 @@ mod tests {
                 "direct_proof_gate=7 inferred_frontier_gate=7 proof_gate=7 frontier_gate=7 failing_gate=8"
             ),
             "{control_rendered}"
+        );
+        crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
+        crate::drivers::driver_task_net::test_record_cyw43_runtime_command_fault_status(
+            crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+                flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+                detail: 0,
+                reason: "cyw43-runtime-command-no-reply",
+                result: 0,
+                ..control_fault
+            },
+        );
+        let no_reply_rendered = render();
+        assert!(
+            no_reply_rendered.contains(
+                "wifi: evidence control_exchange edge=completion-unknown timeout_reason=none timeout_value=0 pre_tx_drain=yes function2_tx=not-proven child_cmd53=not-proven terminal=parent-no-reply"
+            ),
+            "{no_reply_rendered}"
+        );
+        assert!(
+            !no_reply_rendered.contains(
+                "edge=post-function2-tx timeout_reason=none"
+            ) && !no_reply_rendered.contains(
+                "timeout_reason=none timeout_value=0 pre_tx_drain=yes child_cmd53=completed-before-reply-wait"
+            ),
+            "{no_reply_rendered}"
         );
         crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
     }

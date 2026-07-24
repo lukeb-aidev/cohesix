@@ -11636,9 +11636,47 @@ def test_gate_summary_refines_cyw43_control_exchange_no_reply_progress() -> None
     gates = normalizer.summarize_gates(events)
 
     assert gates.wifi_gate == 7
-    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
-    assert gates.wifi_exact == "cyw43-sdio-owner-reply"
-    assert gates.wifi_phase == "cyw43-sdio-owner-reply"
+    assert gates.wifi_blocker == "cyw43-runtime-command-no-reply"
+    assert gates.wifi_exact == "cyw43-runtime-command-no-reply"
+    assert gates.wifi_phase == "cyw43-control-exchange"
+    assert gates.wifi_subgate == "none"
+    assert gates.wifi_subgate_name == "none"
+
+
+def test_gate_summary_keeps_causal_parent_no_reply_over_secondary_sdio_progress() -> None:
+    """The explicit Gate 8 boundary outranks superseded recovery telemetry."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 8 name=firmware-channel status=fail "
+            "evidence=exact=none dependency=ready-for-direct-evidence",
+            "wifi: evidence cyw43 detail=0x0000 "
+            "reason=cyw43-runtime-command-no-reply result=0x00000000 "
+            "stage=cyw43-control-txglomalign op=11",
+            "wifi: evidence boundary "
+            "failure_domain=cyw43-runtime-command-no-reply "
+            "direct_proof_gate=7 proof_gate=7 frontier_gate=7 "
+            "failing_gate=8 target_gate=10",
+            "wifi: cyw43 last_progress marker_valid=yes sequence=180 "
+            "phase=144 phase_name=cyw43-sdio-owner-reply "
+            "aux0=0x43595734 superseded=yes",
+            "wifi: sdio progress_action sequence=180 "
+            "blocker=sdio-linked-runtime-progress-no-reply "
+            "next_action=inspect-linked-sdio-runtime-progress",
+            "wifi: recovery fault detail=network-quarantined "
+            "causal_preserved=yes",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-runtime-command-no-reply"
+    assert gates.wifi_exact == "cyw43-runtime-command-no-reply"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+    assert gates.wifi_blocker_line == 2
+    assert gates.wifi_subgate == "none"
+    assert gates.wifi_subgate_name == "none"
 
 
 def test_gate_summary_keeps_control_tx_no_reply_below_tcp_gate() -> None:
