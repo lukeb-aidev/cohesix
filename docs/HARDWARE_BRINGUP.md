@@ -405,7 +405,10 @@ the retained prompt/TX/key/drain owner, generation, request, issuance, and HAL
 acceptance state without line truncation. Use those records to distinguish an
 accepted join waiting for DPC-delivered events from stale progress, purely
 prepared local work, or a still-owned child request; the command itself never
-probes SDIO. The trace normalizer treats a dependency-aware Gate 8
+probes SDIO. A child-invisible retained request is reported as
+`state=prepared-root-continuation ... exact=not-published`; while that state is
+current, the causal next action is to resume the exact root continuation before
+CommitRing rather than inspect EAPOL RX. The trace normalizer treats a dependency-aware Gate 8
 `evidence=exact=<association-blocker>` plus its matching evidence boundary as
 authoritative over later generic replay/recovery progress. That cache is
 transport-generation scoped: clearing or rebinding the physical linked-runtime

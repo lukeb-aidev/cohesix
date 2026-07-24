@@ -10992,8 +10992,23 @@ where
     fn wifi_diag_root_grant_line(
         grant: crate::hal::driver_task::DriverTaskRetainedGrantSnapshot,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let state = if !grant.active {
+            "idle"
+        } else if Self::wifi_root_grant_prepared(grant) {
+            "prepared-root-continuation"
+        } else if grant.sequence_issued {
+            "issued"
+        } else {
+            "retained-preissue"
+        };
+        let exact = if Self::wifi_root_grant_prepared(grant) {
+            "not-published"
+        } else {
+            Self::yes_no(grant.exact)
+        };
         format_message(format_args!(
-            "wifi: root grant active={} phase={} request={} generation={} issued={} notify_bound={} producer={} shared={} consumed={} exact={}",
+            "wifi: root grant state={} active={} phase={} request={} generation={} issued={} notify_bound={} producer={} shared={} consumed={} exact={}",
+            state,
             Self::yes_no(grant.active),
             grant.phase_name,
             grant.request,
@@ -11003,8 +11018,20 @@ where
             grant.producer_grant_id,
             grant.shared_grant_id,
             grant.consumed_grant_id,
-            Self::yes_no(grant.exact),
+            exact,
         ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_root_grant_prepared(
+        grant: crate::hal::driver_task::DriverTaskRetainedGrantSnapshot,
+    ) -> bool {
+        grant.active
+            && !grant.sequence_issued
+            && grant.phase_name == "inactive"
+            && grant.producer_grant_id == 0
+            && grant.shared_grant_id == 0
+            && grant.consumed_grant_id == 0
     }
 
     #[cfg(feature = "kernel")]
@@ -12067,6 +12094,10 @@ where
                 crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
             )
         };
+        let root_grant_prepared = crate::hal::driver_task::driver_task_retained_grant_snapshot(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .is_some_and(Self::wifi_root_grant_prepared);
         let sdio_progress_gate = sdio_runtime_progress
             .and_then(|progress| Self::wifi_sdio_runtime_progress_gate(progress.phase));
         let cyw43_progress_gate = cyw43_runtime_progress
@@ -12099,7 +12130,9 @@ where
             cyw43_runtime_progress.is_some_and(|progress| {
                 Self::wifi_cyw43_runtime_progress_suppresses_sdio_fallback(progress.phase)
             });
-        let driver_task_gate: Option<u8> = if runtime_bootstrap_failed {
+        let driver_task_gate: Option<u8> = if root_grant_prepared {
+            Some(8)
+        } else if runtime_bootstrap_failed {
             Some(1)
         } else if explicit_join_security {
             Some(8)
@@ -12226,7 +12259,9 @@ where
         );
         let reported_proof_gate =
             Self::wifi_startup_reported_proof_gate(direct_proof_gate, driver_task_gate);
-        let active_blocker = if let Some(frontier) = live_net_frontier.as_ref() {
+        let active_blocker = if root_grant_prepared {
+            "cyw43-root-continuation-pre-grant"
+        } else if let Some(frontier) = live_net_frontier.as_ref() {
             if Self::wifi_live_net_dhcp_bound(frontier) {
                 Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
             } else {
@@ -12249,7 +12284,9 @@ where
         } else {
             Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
         };
-        let next_action = if let Some(frontier) = live_net_frontier.as_ref() {
+        let next_action = if root_grant_prepared {
+            "resume-exact-retained-root-continuation"
+        } else if let Some(frontier) = live_net_frontier.as_ref() {
             if Self::wifi_live_net_dhcp_bound(frontier) {
                 Self::wifi_startup_next_action_for_gate(failing_gate, exact_error)
             } else {
@@ -20892,6 +20929,25 @@ mod tests {
         );
         assert!(!grant.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{grant}");
         assert!(grant.ends_with("consumed=4294967295 exact=yes"), "{grant}");
+        let prepared = KernelConsoleTestPump::wifi_diag_root_grant_line(
+            crate::hal::driver_task::DriverTaskRetainedGrantSnapshot {
+                active: true,
+                phase_name: "inactive",
+                request: 320,
+                generation: 1,
+                sequence_issued: false,
+                root_notification_bound: true,
+                producer_grant_id: 0,
+                shared_grant_id: 0,
+                consumed_grant_id: 0,
+                exact: false,
+            },
+        );
+        assert!(
+            prepared.contains("state=prepared-root-continuation active=yes phase=inactive"),
+            "{prepared}"
+        );
+        assert!(prepared.ends_with("exact=not-published"), "{prepared}");
     }
 
     #[cfg(feature = "kernel")]

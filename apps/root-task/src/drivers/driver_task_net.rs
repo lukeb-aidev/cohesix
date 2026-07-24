@@ -6253,7 +6253,7 @@ fn cyw43_host_eapol_runtime_work_pending() -> bool {
 
 #[cfg(feature = "kernel")]
 pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
-    let prompt = (*CYW43_PENDING_PROMPT_POLL.lock()).filter(|poll| poll.owner.host_eapol());
+    let prompt = *CYW43_PENDING_PROMPT_POLL.lock();
     let (progress, session_retained) = {
         let guard = CYW43_HOST_EAPOL_SESSION.lock();
         let progress = guard.as_ref().map(|session| session.progress);
@@ -17404,7 +17404,31 @@ const fn cyw43_runtime_descriptor_blocks_net_pre_poll(op: u16) -> bool {
 
 #[cfg(feature = "kernel")]
 pub(crate) fn driver_task_runtime_pre_poll_allowed(contract: DriverTaskContract) -> bool {
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        if let Some(pending) = *CYW43_PENDING_PROMPT_POLL.lock() {
+            // The root-side prompt cursor is the sole continuation authority
+            // while the retained HAL record is deliberately ABI-invisible
+            // (sequence zero). NetData must be allowed to finish its exact
+            // ticket; every other owner must keep the generic device pre-poll
+            // out until its own lane reaches a typed terminal.
+            return pending.owner == Cyw43PromptPollOwner::NetData;
+        }
+    }
     !cyw43_active_descriptor_blocks_fresh_net_poll(contract)
+}
+
+/// Return whether the generic network-data lane owns a retained CYW43 poll.
+///
+/// This distinguishes an exact continuation from permission to start a fresh
+/// pre-poll. The EventPump must finish this ticket before association or
+/// host-EAPOL policy can retire or replace the current connection generation.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_net_data_pre_poll_continuation_pending(contract: DriverTaskContract) -> bool {
+    contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && CYW43_PENDING_PROMPT_POLL
+            .lock()
+            .as_ref()
+            .is_some_and(|pending| pending.owner == Cyw43PromptPollOwner::NetData)
 }
 
 #[cfg(feature = "kernel")]
@@ -17489,7 +17513,15 @@ fn cyw43_active_runtime_descriptor_for_request(
     contract: DriverTaskContract,
     active_request: u32,
 ) -> Option<DriverRuntimeCyw43CommandDescriptor> {
-    let command = crate::hal::driver_task::active_driver_task_ring_command(contract)?;
+    let active = crate::hal::driver_task::active_driver_task_retained_request(contract)?;
+    if active.request() != active_request {
+        return None;
+    }
+    // HAL normalizes the child-invisible prepared sequence to the immutable
+    // root request identity after validating the retained lease phase. Reading
+    // the shared command directly would reject every legitimate sequence-zero
+    // preparation and strand its sole continuation before CommitRing.
+    let command = active.command()?;
     cyw43_runtime_descriptor_from_active_command(contract, command, active_request)
 }
 
@@ -27884,6 +27916,18 @@ mod tests {
         assert!(snapshot.retained_issued);
         assert!(snapshot.retained_accepted);
 
+        CYW43_PENDING_PROMPT_POLL
+            .lock()
+            .as_mut()
+            .expect("diagnostic prompt remains present")
+            .owner = Cyw43PromptPollOwner::NetData;
+        let net_data = cyw43_association_diagnostic();
+        assert_eq!(net_data.retained_owner, "cyw43-net-data-poll");
+        assert_eq!(net_data.retained_generation, 9);
+        assert_eq!(net_data.retained_request, 0xa1);
+        assert!(net_data.retained_issued);
+        assert!(net_data.retained_accepted);
+
         *CYW43_PENDING_PROMPT_POLL.lock() = None;
         {
             let mut guard = CYW43_HOST_EAPOL_SESSION.lock();
@@ -30924,6 +30968,91 @@ mod tests {
             .expect("same owner retains the poll after one resume");
         assert_eq!(resumed.ticket_id, retained.ticket_id);
         assert_eq!(resumed.request, Some(request));
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn prepared_net_data_ticket_remains_runnable_before_child_publication() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            run_cyw43_owned_prompt_poll(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                Cyw43PromptPollOwner::NetData,
+                descriptor,
+            ),
+            None
+        );
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        let retained = CYW43_PENDING_PROMPT_POLL
+            .lock()
+            .expect("the first outer turn retains the NetData ticket");
+        let request = retained
+            .request
+            .expect("HAL assigns one immutable root request");
+        assert_eq!(retained.owner, Cyw43PromptPollOwner::NetData);
+        match crate::hal::driver_task::active_driver_task_retained_request(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        ) {
+            Some(crate::hal::driver_task::DriverTaskRetainedRequestState::Prepared {
+                request: active_request,
+                ..
+            }) => assert_eq!(active_request, request),
+            state => panic!("expected a child-invisible prepared request, got {state:?}"),
+        }
+        assert_eq!(
+            cyw43_active_runtime_descriptor_for_request(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                request,
+            ),
+            Some(descriptor),
+            "the root decoder must use HAL's normalized retained identity while the child sequence is zero",
+        );
+        assert!(cyw43_net_data_pre_poll_continuation_pending(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert!(driver_task_runtime_pre_poll_allowed(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            run_cyw43_owned_prompt_poll(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                Cyw43PromptPollOwner::NetData,
+                descriptor,
+            ),
+            None
+        );
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        let grant = crate::hal::driver_task::driver_task_retained_grant_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .expect("the retained grant phase remains inspectable");
+        assert_ne!(
+            grant.phase_name, "inactive",
+            "the next EventPump turn must advance the exact prepared request"
+        );
+        assert_eq!(grant.request, request);
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         reset_cyw43_status_flags();

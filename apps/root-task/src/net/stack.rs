@@ -296,8 +296,17 @@ fn wifi_host_eapol_blocks_data_path(bringup_status: Option<&'static str>) -> boo
 }
 
 fn wifi_host_eapol_blocks_driver_task_pre_poll(bringup_status: Option<&'static str>) -> bool {
-    let _ = bringup_status;
-    false
+    wifi_host_eapol_blocks_data_path(bringup_status)
+}
+
+fn wifi_driver_task_pre_poll_due(
+    bringup_status: Option<&'static str>,
+    retained_net_data_continuation: bool,
+    runtime_pre_poll_allowed: bool,
+) -> bool {
+    retained_net_data_continuation
+        || (runtime_pre_poll_allowed
+            && !wifi_host_eapol_blocks_driver_task_pre_poll(bringup_status))
 }
 
 fn wifi_host_eapol_stack_service_polls(bringup_status: Option<&'static str>) -> usize {
@@ -7377,16 +7386,22 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         hot_path.as_u32() as usize,
                         crate::drivers::driver_task_net::runtime_ring_service,
                     );
+                    if crate::drivers::driver_task_net::cyw43_net_data_pre_poll_continuation_pending(
+                        contract,
+                    ) {
+                        let ring_progress =
+                            service_driver_task_pre_poll_burst(contract, hot_path, 0);
+                        return self.poll_with_time(now_ms) || ring_progress;
+                    }
                     if self.wifi_association_claims_runtime_turn(now_ms) {
                         return self.poll_with_time(now_ms);
                     }
-                    if wifi_host_eapol_blocks_driver_task_pre_poll(
+                    if !wifi_driver_task_pre_poll_due(
                         self.device.bringup_status_label(),
-                    ) {
-                        return self.poll_with_time(now_ms);
-                    }
-                    if !crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(
-                        contract,
+                        false,
+                        crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(
+                            contract,
+                        ),
                     ) {
                         return self.poll_with_time(now_ms);
                     }
@@ -7436,16 +7451,28 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         hot_path.as_u32() as usize,
                         crate::drivers::driver_task_net::runtime_ring_service,
                     );
+                    if crate::drivers::driver_task_net::cyw43_net_data_pre_poll_continuation_pending(
+                        contract,
+                    ) {
+                        let ring_progress = service_driver_task_pre_poll_burst_budgeted(
+                            contract,
+                            hot_path,
+                            NET_RING_FLAG_BUDGETED,
+                            budget,
+                        );
+                        return self
+                            .poll_budgeted_with_time(now_ms, budget)
+                            .map(|root_progress| root_progress || ring_progress);
+                    }
                     if self.wifi_association_claims_runtime_turn(now_ms) {
                         return self.poll_budgeted_with_time(now_ms, budget);
                     }
-                    if wifi_host_eapol_blocks_driver_task_pre_poll(
+                    if !wifi_driver_task_pre_poll_due(
                         self.device.bringup_status_label(),
-                    ) {
-                        return self.poll_budgeted_with_time(now_ms, budget);
-                    }
-                    if !crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(
-                        contract,
+                        false,
+                        crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(
+                            contract,
+                        ),
                     ) {
                         return self.poll_budgeted_with_time(now_ms, budget);
                     }
@@ -8617,17 +8644,43 @@ mod tests {
     }
 
     #[test]
-    fn host_eapol_pending_and_required_do_not_block_driver_task_pre_poll() {
-        assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(Some(
+    fn host_eapol_pending_and_required_block_fresh_driver_task_pre_poll() {
+        assert!(wifi_host_eapol_blocks_driver_task_pre_poll(Some(
             "wifi-host-eapol-pending"
         )));
-        assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(Some(
+        assert!(wifi_host_eapol_blocks_driver_task_pre_poll(Some(
             "wifi-host-eapol-required"
         )));
         assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(Some(
             "dhcp-pending"
         )));
         assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(None));
+    }
+
+    #[test]
+    fn retained_net_data_finishes_before_host_eapol_takes_a_fresh_turn() {
+        assert!(wifi_driver_task_pre_poll_due(
+            Some("wifi-host-eapol-pending"),
+            true,
+            true,
+        ));
+        assert!(wifi_driver_task_pre_poll_due(
+            Some("wifi-host-eapol-required"),
+            true,
+            true,
+        ));
+        assert!(!wifi_driver_task_pre_poll_due(
+            Some("wifi-host-eapol-pending"),
+            false,
+            true,
+        ));
+        assert!(!wifi_driver_task_pre_poll_due(
+            Some("wifi-host-eapol-required"),
+            false,
+            true,
+        ));
+        assert!(wifi_driver_task_pre_poll_due(None, false, true));
+        assert!(!wifi_driver_task_pre_poll_due(None, false, false));
     }
 
     #[test]

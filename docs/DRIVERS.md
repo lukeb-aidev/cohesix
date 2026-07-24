@@ -1164,6 +1164,14 @@ This as-built closure is authorized by Milestone 26d task
   manufacture private Wi-Fi poll, tail-ingest, TCP-flush, or EAPOL bursts. In
   particular, the post-up 256-frame drain requires 256 separately admitted
   outer turns.
+- Steady Gate 8 polling uses one retained-owner arbitration rule. An existing
+  `NetData` prompt poll remains first until its immutable request reaches a
+  typed terminal, including while its prepared ring sequence is deliberately
+  zero and invisible to the child. A pending or required host-EAPOL session
+  then owns the next fresh control/data poll; generic NetData pre-poll cannot
+  continually start ahead of it. Association, host-EAPOL, and NetData therefore
+  defer to the exact current ticket rather than adopting, replacing, or
+  poisoning it at the bootstrap-to-steady handoff.
 - Between retained operations, live serial service is admitted only through
   the independent linked-runtime route. Physical-Pi cutover requires a matching
   linked-runtime service completion (`Idle`, `Progress`, or `FrameReady`) after

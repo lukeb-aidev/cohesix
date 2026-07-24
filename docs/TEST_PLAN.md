@@ -841,7 +841,11 @@ completions, forbid same-generation replay after issued-unknown ownership, and
 resume or fail deterministically at every retained action. EventPump/NetStack
 tests must prove Wi-Fi urgency is retained across later turns rather than
 implemented as private pre-root, EAPOL, tail-ingest, TCP-flush, hot-dispatch, or
-smoltcp device bursts.
+smoltcp device bursts. They must also stage a child-invisible sequence-zero
+NetData request at the Gate 8 handoff, prove the next outer turn decodes it
+through HAL's immutable retained identity and advances it beyond `Inactive`,
+then prove host-EAPOL receives the next fresh prompt-poll turn without a pair
+recovery latch.
 
 Parent-replay coverage must table every CYW43 operation against transfer
 stages 1 through 6. Only stage-1 `0x5103` on the seven single-action parents may
