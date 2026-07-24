@@ -891,6 +891,15 @@ This as-built closure is authorized by Milestone 26d task
   grant plus endpoint doorbell into retained quanta. Neither path contains a
   private yield/resignal loop; notifications report only owner completion/DPC
   or IRQ work and never grant a foreground quantum.
+  If the SDIO IRQ arrives while an immutable owner request is active, the
+  notification path records only the owed IRQ acknowledgement. It performs no
+  SDHCI policy write, event publication, acknowledgement, or rearm beside that
+  request. The delivered, unacknowledged IRQ cap is the bounded delivery mask
+  while the exact endpoint/grant cursor continues; `DPC_ACTIVATE` consumes the
+  latch in its ordered phases, or owner-idle service discharges it after the
+  exact command completion. This keeps the interrupt top half and controller
+  transaction under one SDIO sequencer, matching Linux's serialized MMC-host
+  service model without adding a fallback path.
   A control exchange carrying `CONTROL_PRE_TX_DRAIN` first issues one immutable,
   generation-bound `DPC_ACTIVATE` source probe through that same reciprocal
   owner ring, then lets the ordinary CYW43 DPC cursor inspect and drain any
@@ -1259,7 +1268,11 @@ Production-chain coverage additionally drives both control and EAPOL TX through
 the exact five children (three window CMD52 writes, fresh IORx CMD52 read, and
 one F2 CMD53 write), drives the 18-child post-F2 release through real DPC
 activation, and lets a real DPC event consume owner-backed status/F2/empty
-confirmation work before a later queue-only foreground poll. The queue-only
+confirmation work before a later queue-only foreground poll. The real DPC
+chain routes every retained SDIO phase through the production pending-command
+gate, injects an IRQ between grant publication and endpoint re-signal, proves
+that the interrupt is only latched while the owner cursor is active, and still
+requires the exact sequence-last completion before event advance/rearm. The queue-only
 test performs exactly 256 separately admitted control/RX polls with zero SDIO
 owner operations. Terminal pre-issue, issued-unknown, stale-generation,
 fingerprint-mutation, timeout, and corrupt-grant cuts preserve the immutable

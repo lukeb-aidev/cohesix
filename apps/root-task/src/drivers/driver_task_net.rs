@@ -1265,6 +1265,7 @@ impl Cyw43BootstrapSupervisor {
     /// restart; it cannot re-enter bootstrap in the live generation that
     /// observed the failure.
     pub fn reset_for_attempt(&mut self, config: ConsoleNetConfig) {
+        begin_cyw43_bootstrap_causal_fault_capture();
         let pair_restart_required = self.retry_requires_pair_restart
             || cyw43_recovery_required()
             || crate::hal::driver_task::cyw43_sdio_pair_restart_context_available();
@@ -1829,6 +1830,12 @@ impl Cyw43BootstrapSupervisor {
         }
         if let Cyw43ActionIssuance::AwaitingCompletion { request } = pending.issuance {
             if self.active_ticket_issuance(&pending, request) != Some(true) {
+                record_cyw43_runtime_command_no_reply(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    pending.ticket.stage,
+                    pending.ticket.descriptor,
+                    usize::from(pending.child_reply_renewals),
+                );
                 return Cyw43RetainedActionOutcome::Poisoned("cyw43-active-ticket-fingerprint");
             }
             let _ = cyw43_linked_action_observe_child_progress(
@@ -1892,6 +1899,12 @@ impl Cyw43BootstrapSupervisor {
             }
             let Some(issued) = self.active_ticket_issuance(&pending, active_request) else {
                 self.retry_requires_pair_restart = true;
+                record_cyw43_runtime_command_no_reply(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    pending.ticket.stage,
+                    pending.ticket.descriptor,
+                    usize::from(pending.child_reply_renewals),
+                );
                 return Cyw43RetainedActionOutcome::Poisoned("cyw43-active-ticket-fingerprint");
             };
             self.retry_requires_pair_restart |= issued;
@@ -3340,6 +3353,7 @@ impl Cyw43BootstrapSupervisor {
                 self.pending_outcome("cyw43-pair-context-replay-finish", true)
             }
             Cyw43RecoveryPhase::Complete => {
+                finish_cyw43_bootstrap_causal_fault_capture();
                 self.phase = Cyw43BootstrapPhase::Complete;
                 Cyw43BootstrapTurnOutcome::Complete
             }
@@ -3598,6 +3612,7 @@ impl Cyw43BootstrapSupervisor {
                     self.arm_generation_recovery("cyw43-ready-publication-invalidated");
                     return self.pending_outcome("cyw43-ready-publication-invalidated", true);
                 }
+                finish_cyw43_bootstrap_causal_fault_capture();
                 self.phase = Cyw43BootstrapPhase::Complete;
                 self.pending_outcome("cyw43-priority-cutover", true)
             }
@@ -3688,7 +3703,6 @@ impl Cyw43BootstrapSupervisor {
                 ) {
                     return self.fail(DriverTaskNetError::RuntimeInit("cyw43-owner-state"));
                 }
-                finish_cyw43_bootstrap_causal_fault_capture();
                 self.control_phase = Cyw43ControlPhase::Reset;
                 self.phase = Cyw43BootstrapPhase::Control;
                 self.pending_outcome("cyw43-owner-state", true)
@@ -22302,6 +22316,43 @@ mod tests {
             Cyw43RetainedActionOutcome::Poisoned("cyw43-stale-action-generation")
         );
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_supervisor_ticket_loss_preserves_the_gate_eight_causal_record() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        begin_cyw43_bootstrap_causal_fault_capture();
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+            total_len: 12,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor
+            .install_empty_action(descriptor, "cyw43-control-txglomalign")
+            .expect("Gate 8 action installs");
+        supervisor
+            .pending
+            .as_mut()
+            .expect("Gate 8 action remains retained")
+            .issuance = Cyw43ActionIssuance::AwaitingCompletion {
+            request: 0x8000_1001,
+        };
+
+        assert_eq!(
+            supervisor.service_pending_action(),
+            Cyw43RetainedActionOutcome::Poisoned("cyw43-active-ticket-fingerprint"),
+        );
+        let causal = bootstrap_causal_cyw43_runtime_command_fault_status()
+            .expect("terminal ticket loss remains visible after recovery");
+        assert_eq!(causal.stage, "cyw43-control-txglomalign");
+        assert_eq!(causal.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+        assert_eq!(causal.reason, "cyw43-runtime-command-no-reply");
+
         reset_cyw43_status_flags();
     }
 

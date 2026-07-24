@@ -10854,6 +10854,20 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
     if !sdio_notification_dpc_ready() {
         return false;
     }
+    let (irq_badge, owner_request_active) =
+        SDIO_RUNTIME_STATE.with_ref(|state| (state.irq_badge, state.external_dma_request.active()));
+    if owner_request_active && badge == irq_badge && irq_badge != 0 {
+        // The delivered IRQ cap is itself the bounded mask until it is
+        // acknowledged. Never let the notification path change SDHCI policy,
+        // publish a second event, or acknowledge/rearm beside an immutable
+        // retained owner request. Latch the owed acknowledgement; DPC_ACTIVATE
+        // consumes it in-order when that is the active request, otherwise the
+        // ordinary owner-idle service handles it after exact command
+        // completion. This is Linux's single host-thread ordering adapted to
+        // the linked-runtime endpoint/grant boundary.
+        SDIO_RUNTIME_STATE.with_mut(|state| state.irq_ack_pending = true);
+        return true;
+    }
     let mut pending_ack_serviced = false;
     let (ack_pending, poisoned, handler_slot) = SDIO_RUNTIME_STATE.with_ref(|state| {
         (
@@ -10884,8 +10898,7 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
         return true;
     }
 
-    let (irq_badge, card_irq_masked) =
-        SDIO_RUNTIME_STATE.with_ref(|state| (state.irq_badge, state.card_irq_masked));
+    let card_irq_masked = SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked);
     if badge == irq_badge && irq_badge != 0 && card_irq_masked {
         // A real kernel IRQ notification outranks the empty-ring consumer
         // rearm hint. In particular, a forced DPC source probe deliberately
@@ -66997,6 +67010,15 @@ mod tests {
             state.backplane_window = CYW43_SDIO_CORE_BASE & BACKPLANE_WINDOW_MASK;
             state.backplane_window_valid = true;
         });
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = true;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+        });
         let dpc_base =
             DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
         assert_eq!(
@@ -67020,6 +67042,8 @@ mod tests {
         let mut active_child = None;
         let mut active_descriptor = DriverRuntimeSdioCommandDescriptor::empty();
         let mut owner_completion_published = false;
+        let mut owner_gate = RuntimePendingCommandGate::new();
+        let mut notification_injected_for_phase = false;
         let mut owner_children = 0usize;
         let mut function2_reads = 0usize;
         let mut dpc_turns = 0usize;
@@ -67032,6 +67056,14 @@ mod tests {
                 assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
                 active_child = None;
                 owner_completion_published = false;
+                owner_gate.complete();
+                if SDIO_RUNTIME_STATE.with_ref(|state| state.irq_ack_pending) {
+                    assert!(
+                        sdio_runtime_service_notification(0),
+                        "owner-idle service must discharge the IRQ latched beside the child",
+                    );
+                    assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.irq_ack_pending));
+                }
             }
             let ring = dpc_event_ring_read_at(dpc_base);
             let terminal = CYW43_RUNTIME_STATE.with_ref(|state| {
@@ -67071,33 +67103,83 @@ mod tests {
                 last_grant_id = 0;
                 active_child = Some(observed_command);
                 active_descriptor = descriptor;
+                owner_gate.complete();
+                notification_injected_for_phase = false;
             }
 
             let owner_active =
                 SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active());
-            let owner_admitted = active_child.filter(|command| {
-                !owner_active
-                    || read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
-                        .is_some_and(|grant| {
-                            grant.grant_id != 0
-                                && grant.grant_id != last_grant_id
-                                && grant.consumed_grant_id != grant.grant_id
-                                && grant.request_sequence == command.sequence
-                                && grant.action_fingerprint
-                                    == runtime_continuation_action_fingerprint(*command)
-                                && grant.generation == generation
-                        })
-            });
-            if let Some(command) = owner_admitted {
-                if owner_active {
-                    let grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
-                        .expect("DPC owner continuation has an exact fresh grant");
+            let mut owner_admitted = active_child.filter(|_| !owner_active);
+            if let Some(command) = active_child.filter(|_| owner_active) {
+                assert!(
+                    owner_gate.continuation_required(),
+                    "every retained owner phase requires a fresh exact wake",
+                );
+                let mut intake = RuntimeCommandIntake {
+                    command,
+                    reply_cap_available: false,
+                };
+                if !notification_injected_for_phase {
+                    assert_eq!(
+                        owner_gate.route_wake_with_grant(
+                            &mut intake,
+                            runtime_pending_wake_for_route(
+                                RuntimeNotificationRoute::SdioOwner,
+                                RuntimeWake::Notification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+                            ),
+                            None,
+                        ),
+                        RuntimePendingWakeRoute::ServiceNotification(DRIVER_RUNTIME_SDIO_IRQ_BADGE,),
+                    );
+                    let cursor_before =
+                        SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+                    let acks_before = TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire);
+                    assert!(sdio_runtime_service_notification(
+                        DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+                    ));
+                    assert_eq!(
+                        TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+                        acks_before,
+                        "IRQ service may only latch beside a retained owner phase",
+                    );
+                    SDIO_RUNTIME_STATE.with_ref(|state| {
+                        assert_eq!(state.external_dma_request, cursor_before);
+                        assert!(state.irq_ack_pending);
+                    });
+                    notification_injected_for_phase = true;
+                    continue;
+                }
+
+                if let Some(grant) = read_runtime_continuation_grant_at(
+                    DRIVER_TASK_SDIO_BUS_RING_VADDR,
+                )
+                .filter(|grant| {
+                    grant.grant_id != 0
+                        && grant.grant_id != last_grant_id
+                        && grant.consumed_grant_id != grant.grant_id
+                        && grant.request_sequence == command.sequence
+                        && grant.action_fingerprint
+                            == runtime_continuation_action_fingerprint(command)
+                        && grant.generation == generation
+                }) {
+                    let candidate = intake;
+                    assert_eq!(
+                        owner_gate.route_wake_with_grant(
+                            &mut intake,
+                            RuntimeWake::Command(candidate),
+                            Some(grant),
+                        ),
+                        RuntimePendingWakeRoute::ContinueForeground,
+                    );
                     assert!(acknowledge_runtime_continuation_grant_at(
                         DRIVER_TASK_SDIO_BUS_RING_VADDR,
                         grant.grant_id,
                     ));
                     last_grant_id = grant.grant_id;
+                    owner_admitted = Some(command);
                 }
+            }
+            if let Some(command) = owner_admitted {
                 let issues_before = io.command_issue_count();
                 let snapshots_before = io.dma_dreq_snapshots;
                 let turn = service_sdio_external_dma_command_turn_with_io(
@@ -67109,17 +67191,24 @@ mod tests {
                 let issue_delta = io.command_issue_count() - issues_before;
                 let snapshot_delta = io.dma_dreq_snapshots - snapshots_before;
                 assert!(issue_delta + snapshot_delta <= 1);
-                if let RuntimeCommandTurn::Complete(completion) = turn {
-                    assert_eq!(completion.sequence, command.sequence);
-                    assert!(runtime_ring_write_completion_staged(
-                        &mut owner_ring,
-                        runtime_staged_completion(completion),
-                    ));
-                    assert!(runtime_ring_commit_completion_sequence(
-                        &mut owner_ring,
-                        completion.sequence,
-                    ));
-                    owner_completion_published = true;
+                match turn {
+                    RuntimeCommandTurn::Pending => {
+                        owner_gate.retain_after_pending_generation(generation);
+                        notification_injected_for_phase = false;
+                    }
+                    RuntimeCommandTurn::Complete(completion) => {
+                        owner_gate.complete();
+                        assert_eq!(completion.sequence, command.sequence);
+                        assert!(runtime_ring_write_completion_staged(
+                            &mut owner_ring,
+                            runtime_staged_completion(completion),
+                        ));
+                        assert!(runtime_ring_commit_completion_sequence(
+                            &mut owner_ring,
+                            completion.sequence,
+                        ));
+                        owner_completion_published = true;
+                    }
                 }
             }
         }
@@ -68753,7 +68842,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_real_irq_during_forced_probe_acks_without_rearming_or_mutating_cursor() {
+    fn sdio_real_irq_during_forced_probe_latches_for_the_retained_owner_cursor() {
         let _guard = test_guard();
         for target_phase in [
             SdioExternalDmaRequestPhase::DpcActivateStatusRead,
@@ -68815,11 +68904,12 @@ mod tests {
             ));
             assert_eq!(
                 TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
-                acks_before + 1,
+                acks_before,
+                "the notification may not acknowledge beside the active owner cursor",
             );
             SDIO_RUNTIME_STATE.with_ref(|state| {
                 assert!(state.card_irq_masked);
-                assert!(!state.irq_ack_pending);
+                assert!(state.irq_ack_pending);
                 assert_eq!(state.card_irq_rearms, 0);
                 assert_eq!(state.dpc_events_published, 0);
                 assert_eq!(state.external_dma_request, cursor_before);
