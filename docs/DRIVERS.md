@@ -721,6 +721,15 @@ This as-built closure is authorized by Milestone 26d task
   SDIO request or manufacturing a rejected-command terminal. This is the
   linked-runtime equivalent of Linux retaining request-private `mmc_request`
   state until its single host-thread completion.
+  The same rule begins at the CYW43 endpoint intake, not at the first physical
+  child. The runtime seals a root CYW43 descriptor and its payload immediately
+  after the sequence-last command record and endpoint rendezvous agree, before
+  draining any watermarked CARD_INT/DPC work. Purely private op11 phase
+  transitions retain that seal until terminal completion. DPC may therefore
+  reuse reciprocal descriptor scratch before op11's first SDIO child without
+  misrouting the root control exchange as an op10 poll. This is the isolated
+  runtime equivalent of Linux attaching BCDC state to the already admitted
+  request before scheduling its SDIO DPC.
   Function 1 firmware streaming retains one immutable 32-KiB backplane
   aperture, matching brcmfmac's production RAM-write window rather than its
   debug-only 2-KiB `MEMBLOCK` readback unit. MMC-shaped CMD53 partitioning

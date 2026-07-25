@@ -5628,6 +5628,15 @@ fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> Ru
     #[cfg(any(target_os = "none", test))]
     let cyw43_transaction = cyw43_command_foreground_enabled(command);
 
+    #[cfg(all(not(target_os = "none"), test))]
+    if cyw43_transaction && !cyw43_foreground_pre_admit(command) {
+        return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+            command.sequence,
+            FAULT_CYW43_TRANSPORT_BUS_LINK,
+            command.sequence,
+        ));
+    }
+
     #[cfg(any(target_os = "none", test))]
     if cyw43_transaction && !cyw43_foreground_begin_turn(command) {
         return cyw43_foreground_finish_turn(
@@ -6355,6 +6364,7 @@ fn poll_runtime_command(
     match runtime_command_admission(command, last_sequence) {
         RuntimeCommandAdmission::None => return None,
         RuntimeCommandAdmission::OneWay => {
+            let _ = cyw43_foreground_pre_admit(command);
             return Some(RuntimeCommandIntake {
                 command,
                 reply_cap_available: false,
@@ -6411,6 +6421,7 @@ fn poll_runtime_command(
         );
         return None;
     }
+    let _ = cyw43_foreground_pre_admit(command);
     Some(RuntimeCommandIntake {
         command,
         reply_cap_available: expects_reply,
@@ -6444,6 +6455,7 @@ fn runtime_wake_from_received_tag(
         return RuntimeWake::None;
     }
     let reply_cap_available = command_expects_reply(command);
+    let _ = cyw43_foreground_pre_admit(command);
     RuntimeWake::Command(RuntimeCommandIntake {
         command,
         reply_cap_available,
@@ -18803,6 +18815,7 @@ struct Cyw43ForegroundTransaction {
     issued_unknown: bool,
     poisoned: bool,
     parent: DriverTaskCommandRecord,
+    parent_input_sealed: bool,
     parent_descriptor: DriverRuntimeCyw43CommandDescriptor,
     parent_descriptor_valid: bool,
     parent_payload_offset: u16,
@@ -18854,6 +18867,7 @@ impl Cyw43ForegroundTransaction {
             issued_unknown: false,
             poisoned: false,
             parent: Cyw43ForegroundTraceEntry::empty().command,
+            parent_input_sealed: false,
             parent_descriptor: DriverRuntimeCyw43CommandDescriptor::empty(),
             parent_descriptor_valid: false,
             parent_payload_offset: 0,
@@ -18911,9 +18925,36 @@ impl Cyw43ForegroundTransaction {
         self.issued_unknown = false;
         self.poisoned = false;
         self.parent.sequence = 0;
+        self.parent_input_sealed = false;
         self.parent_descriptor_valid = false;
         self.parent_payload_offset = 0;
         self.parent_payload_len = 0;
+        self.parent_overlay_valid.fill(0);
+        self.baseline_state_valid = false;
+        self.deadline_replay_index = 0;
+        self.deadline_count = 0;
+        self.prepared_sequence = 0;
+        self.prepared_descriptor_valid = false;
+        self.prepared_write_len = 0;
+        self.frontier = Cyw43ForegroundTraceEntry::empty();
+        self.frontier_valid = false;
+        self.frontier_submitted = false;
+        self.frontier_continuation_grant_required = false;
+        self.frontier_continuation_grant_publish = false;
+        self.frontier_grant_id = 0;
+        self.frontier_started_ticks = 0;
+        self.frontier_timeout_cycles = 0;
+        self.frontier_polls = 0;
+        self.last_replayed_index = CYW43_FOREGROUND_TRACE_INDEX_NONE;
+        self.payload_used = 0;
+    }
+
+    fn clear_turn_keep_parent_input(&mut self) {
+        self.active = false;
+        self.executing = false;
+        self.turn.clear();
+        self.issued_unknown = false;
+        self.poisoned = false;
         self.parent_overlay_valid.fill(0);
         self.baseline_state_valid = false;
         self.deadline_replay_index = 0;
@@ -19038,6 +19079,7 @@ impl Cyw43ForegroundTransaction {
         shared_payload_bytes: usize,
     ) {
         self.parent = command;
+        self.parent_input_sealed = true;
         self.parent_descriptor_valid = descriptor.is_some();
         self.parent_descriptor = descriptor.unwrap_or(DriverRuntimeCyw43CommandDescriptor::empty());
         self.parent_payload_offset = 0;
@@ -19252,6 +19294,45 @@ fn cyw43_foreground_transaction_executing() -> bool {
 }
 
 #[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_pre_admit(command: DriverTaskCommandRecord) -> bool {
+    if !cyw43_command_uses_foreground_transaction(command) {
+        return true;
+    }
+    let (occupied, same_parent) = CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+        (
+            transaction.active || transaction.executing || transaction.parent_input_sealed,
+            transaction.parent == command,
+        )
+    });
+    if occupied {
+        if !same_parent {
+            CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| transaction.poisoned = true);
+        }
+        return same_parent;
+    }
+
+    // Seal the complete parent input at endpoint/ring intake, before the
+    // retained-command arbiter may drain a watermarked CARD_INT event. The
+    // descriptor and its payload aperture are reciprocal scratch; DPC and
+    // child SDIO work may legitimately reuse both before the first foreground
+    // service quantum. Linux closes the equivalent interval by retaining the
+    // request-private mmc_request/brcmf_proto_bcdc state before scheduling DPC.
+    let descriptor = read_cyw43_command_descriptor_physical(command.frame);
+    let shared_payload_bytes = RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
+    CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+        if transaction.active || transaction.executing || transaction.parent_input_sealed {
+            if transaction.parent != command {
+                transaction.poisoned = true;
+                return false;
+            }
+            return true;
+        }
+        transaction.snapshot_parent_input(command, descriptor, shared_payload_bytes);
+        true
+    })
+}
+
+#[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_action_suspended() -> bool {
     CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
         transaction.executing
@@ -19407,8 +19488,15 @@ fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
         return false;
     }
     if !active {
-        let descriptor = read_cyw43_command_descriptor_physical(command.frame);
-        let shared_payload_bytes = RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
+        let parent_input_sealed = CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            transaction.parent_input_sealed && transaction.parent == command
+        });
+        if !parent_input_sealed {
+            // Production seals at command intake, before DPC arbitration.
+            // Re-reading reciprocal scratch here would reopen the exact
+            // publication-to-first-service race that the seal closes.
+            return false;
+        }
         let generation = cyw43_foreground_snapshot_runtime_state();
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             transaction.baseline_state_valid = true;
@@ -19423,7 +19511,6 @@ fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
             transaction.baseline_fault_frame_meta =
                 CYW43_LAST_FAULT_FRAME_META.load(Ordering::Acquire);
             transaction.baseline_release_phase = CYW43_LAST_RELEASE_PHASE.load(Ordering::Acquire);
-            transaction.snapshot_parent_input(command, descriptor, shared_payload_bytes);
         });
     } else if !cyw43_foreground_restore_baseline() {
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| transaction.poisoned = true);
@@ -19539,6 +19626,16 @@ fn cyw43_foreground_finish_turn(
                 result,
             ));
         }
+        return RuntimeCommandTurn::Pending;
+    }
+    if matches!(turn, RuntimeCommandTurn::Pending) {
+        // Explicit CYW43 cursors can advance one purely private phase before
+        // their first reciprocal SDIO child. Keep the intake-sealed parent
+        // across that retained-command handoff even though the straight-line
+        // child trace has no pending frontier. DPC may reuse the shared
+        // descriptor/payload aperture before root grants the next phase.
+        CYW43_FOREGROUND_TRANSACTION
+            .with_mut(Cyw43ForegroundTransaction::clear_turn_keep_parent_input);
         return RuntimeCommandTurn::Pending;
     }
     CYW43_FOREGROUND_TRANSACTION.with_mut(Cyw43ForegroundTransaction::clear);
@@ -58010,6 +58107,72 @@ mod tests {
         ));
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         CYW43_RUNTIME_STATE.with_ref(|state| assert!(!state.control_exchange.active()));
+    }
+
+    #[test]
+    fn cyw43_control_exchange_seals_parent_before_first_dpc_arbitration() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        arm_cyw43_control_exchange_for_test(11);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let cmd = 0x17;
+        let id = 38;
+        let body = *b"bssid-refresh";
+        let descriptor = stage_cyw43_control_exchange_request(cmd, id, 0, &body);
+        let mut parent = cyw43_descriptor_command(418);
+        parent.aux1 = 1;
+
+        assert!(cyw43_foreground_pre_admit(parent));
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(transaction.parent_input_sealed);
+            assert_eq!(transaction.parent, parent);
+            assert_eq!(transaction.parent_descriptor, descriptor);
+        });
+
+        // Reproduce the physical Gate-8 interval: root's sequence-last op11
+        // record is retained, then a watermarked DPC quantum reuses the
+        // reciprocal descriptor aperture with op10 before the first
+        // foreground service quantum.
+        let prompt_scratch = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert!(prompt_scratch.valid());
+        stage_cyw43_descriptor(prompt_scratch);
+        assert_eq!(
+            read_cyw43_command_descriptor_physical(parent.frame),
+            Some(prompt_scratch),
+        );
+
+        assert_eq!(
+            service_command_turn(0, parent),
+            RuntimeCommandTurn::Pending,
+            "the intake-sealed op11 parent cannot be misrouted as DPC op10 scratch",
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.control_exchange.active());
+            assert_eq!(state.control_exchange.owner_generation, 1);
+            assert_eq!(state.control_exchange.expected_cmd, cmd);
+            assert_eq!(state.control_exchange.expected_id, id);
+        });
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(!transaction.active);
+            assert!(transaction.parent_input_sealed);
+            assert_eq!(transaction.parent_descriptor, descriptor);
+        });
+
+        stage_cyw43_descriptor(prompt_scratch);
+        assert_eq!(
+            service_command_turn(0, parent),
+            RuntimeCommandTurn::Pending,
+            "the same seal survives a private op11 phase before its first SDIO child",
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.control_exchange.active());
+            assert_eq!(state.control_exchange.expected_id, id);
+        });
     }
 
     #[test]
