@@ -1311,11 +1311,15 @@ This as-built closure is authorized by Milestone 26d task
 - Steady Gate 8 polling uses one retained-owner arbitration rule. An existing
   `NetData` prompt poll remains first until its immutable request reaches a
   typed terminal, including while its prepared ring sequence is deliberately
-  zero and invisible to the child. A pending or required host-EAPOL session
-  then owns the next fresh control/data poll; generic NetData pre-poll cannot
-  continually start ahead of it. Association, host-EAPOL, and NetData therefore
-  defer to the exact current ticket rather than adopting, replacing, or
-  poisoning it at the bootstrap-to-steady handoff.
+  zero and invisible to the child. Once admitted, the runtime-private op8/op10
+  prompt cursor is authoritative for its descriptor; reciprocal SDIO and DPC
+  work may reuse the shared descriptor aperture and cannot mutate, reroute, or
+  reject that retained request. Runtime dispatch checks this private cursor
+  before reparsing scratch for a fresh op11 exchange. A pending or required
+  host-EAPOL session then owns the next fresh control/data poll; generic NetData
+  pre-poll cannot continually start ahead of it. Association, host-EAPOL, and
+  NetData therefore defer to the exact current ticket rather than adopting,
+  replacing, or poisoning it at the bootstrap-to-steady handoff.
 - Between retained operations, live serial service is admitted only through
   the independent linked-runtime route. Physical-Pi cutover requires a matching
   linked-runtime service completion (`Idle`, `Progress`, or `FrameReady`) after

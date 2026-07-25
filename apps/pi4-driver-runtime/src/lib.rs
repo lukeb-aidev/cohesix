@@ -3518,12 +3518,8 @@ impl Cyw43PromptPollCursor {
         !matches!(self.phase, Cyw43PromptPollPhase::Idle)
     }
 
-    fn identity_matches(
-        self,
-        sequence: u32,
-        descriptor: DriverRuntimeCyw43CommandDescriptor,
-    ) -> bool {
-        self.parent_sequence == sequence && self.descriptor == descriptor
+    const fn parent_matches(self, sequence: u32) -> bool {
+        self.parent_sequence == sequence
     }
 
     fn reset(&mut self) {
@@ -5654,9 +5650,9 @@ fn service_command_turn(task_key: usize, command: DriverTaskCommandRecord) -> Ru
         turn
     } else if let Some(turn) = service_cyw43_release_command_turn(command) {
         turn
-    } else if let Some(turn) = service_cyw43_control_exchange_command_turn(command) {
-        turn
     } else if let Some(turn) = service_cyw43_prompt_poll_command_turn(command) {
+        turn
+    } else if let Some(turn) = service_cyw43_control_exchange_command_turn(command) {
         turn
     } else if let Some(turn) = service_cyw43_linked_tx_command_turn(command) {
         turn
@@ -15783,7 +15779,17 @@ fn service_cyw43_prompt_poll_command_turn(
     if !cyw43_command_uses_foreground_transaction(command) {
         return None;
     }
-    let desc = read_cyw43_command_descriptor(command.frame)?;
+    let retained = CYW43_RUNTIME_STATE.with_ref(|state| state.prompt_poll);
+    let desc = if retained.active() {
+        // The DPC and reciprocal SDIO child reuse the shared descriptor
+        // aperture between retained parent turns. The accepted prompt cursor
+        // is therefore the immutable authority after the first turn, just as
+        // the Linux request owns its private state until completion. Reparse
+        // shared bytes only for fresh admission.
+        retained.descriptor
+    } else {
+        read_cyw43_command_descriptor(command.frame)?
+    };
     if !matches!(
         desc.op,
         DRIVER_RUNTIME_CYW43_OP_RX_POLL | DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
@@ -16564,7 +16570,15 @@ fn cyw43_prompt_poll_poison_generation(
     sequence: u32,
     result: u32,
 ) -> RuntimeCommandTurn {
-    let terminal = cyw43_dpc_terminal_completion(state.dpc_terminal_cause, sequence, result);
+    let terminal = if state.dpc_terminal_cause.active() {
+        cyw43_dpc_terminal_completion(state.dpc_terminal_cause, sequence, result)
+    } else {
+        DriverTaskCompletionRecord::fault_with_result(
+            sequence,
+            FAULT_CYW43_TRANSPORT_BUS_LINK,
+            result,
+        )
+    };
     state.prompt_poll.reset();
     state.recovery_required = true;
     state.initialized = false;
@@ -16660,7 +16674,7 @@ fn cyw43_prompt_poll_command_turn(
 ) -> RuntimeCommandTurn {
     let mut cursor = state.prompt_poll;
     if cursor.active() {
-        if !cursor.identity_matches(command.sequence, desc) {
+        if !cursor.parent_matches(command.sequence) {
             return cyw43_prompt_poll_poison_generation(state, command.sequence, command.sequence);
         }
         if cursor.generation != state.dpc_shared_epoch {
@@ -70947,6 +70961,12 @@ mod tests {
                 assert!(!state.recovery_required);
             });
 
+            stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+                flags: u16::MAX,
+                reserved: u32::MAX,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            });
             let RuntimeCommandTurn::Complete(completion) = service_command_turn(0, parent) else {
                 panic!("post-probe op{op} must consume the DPC-owned FIFO head");
             };
@@ -71317,7 +71337,7 @@ mod tests {
     }
 
     #[test]
-    fn production_hintless_poll_rejects_mutation_and_stale_generation_without_replay() {
+    fn production_hintless_poll_ignores_scratch_mutation_and_rejects_stale_generation() {
         let _guard = test_guard();
         let generation = 0x4359_d401;
         let parent_sequence = 0x4359_d410;
@@ -71347,15 +71367,22 @@ mod tests {
             flags: DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         });
-        let RuntimeCommandTurn::Complete(mutated) = service_command_turn(0, parent) else {
-            panic!("mutated retained prompt-poll identity must fail terminally");
-        };
-        assert_eq!(mutated.sequence, parent_sequence);
-        assert_eq!(mutated.code, COMPLETION_FAULT);
-        assert_eq!(mutated.detail, FAULT_CYW43_TRANSPORT_BUS_LINK);
-        assert!(CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
-        assert_eq!(runtime_ring_read_command_stable(&owner_ring), owner_before);
-        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert_eq!(
+            service_command_turn(0, parent),
+            RuntimeCommandTurn::Pending,
+            "the retained prompt cursor, not DPC-reused scratch, owns continuation identity",
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.prompt_poll.parent_sequence, parent_sequence);
+            assert_eq!(
+                state.prompt_poll.descriptor.op,
+                DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+            );
+            assert!(!state.recovery_required);
+        });
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        assert_ne!(runtime_ring_read_command_stable(&owner_ring), owner_before);
+        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
         drop(production_mode);
 
         let old_generation = 0x4359_d501;
