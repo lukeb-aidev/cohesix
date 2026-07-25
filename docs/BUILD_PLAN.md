@@ -10798,6 +10798,89 @@ Checks: Representative artifact sizes stay within declared parse/read bounds; fa
 Deliverables: Read-only operator utility latency evidence that later field and UI tools can cite without rerunning full hardware benchmarks.
 ```
 
+### Cross-Cutting Governance Value Contract for Milestones 28a-28h
+
+Milestones 28a-28h may add many host-facing integrations, but they form one
+governance product rather than a collection of substitute platforms. Cohesix
+owns bounded decisions, delegated authority, and evidence. Existing model
+servers, agent frameworks, Kubernetes/systemd, GPU runtimes, observability,
+FinOps, identity, and domain systems continue to own their native execution and
+data planes.
+
+Every task and public integration in Milestones 28a-28h, and every later
+consumer of those milestones, must preserve this common lifecycle:
+
+```text
+observe -> preflight -> admit -> grant -> execute externally
+        -> observe result -> verify -> receipt -> review/replay
+```
+
+The stages may collapse for a read-only operation, but no mutating projection
+may skip admission, call an executor directly, or manufacture a terminal result.
+Host APIs, OpenAI-compatible endpoints, MCP/A2A, Python, FUSE, exporters, and
+SwarmUI are replaceable projections over this lifecycle, not independent
+authority planes.
+
+Before a new provider, alias, protocol projection, optimizer, semantic view,
+agent feature, exporter, or workbench action is authorized, its owning task and
+generated 28b integration/use-case row must answer:
+
+1. **Governed decision:** What consequential decision, resource, data boundary,
+   or external action is being governed? Presentation or transport convenience
+   alone is not a security or governance capability.
+2. **Authority custody and bypass:** Which credential, capability, lease,
+   actuator, or provider permission performs the action, who holds it, and what
+   prevents the requesting application from bypassing Cohesix? A path that
+   remains bypassable may ship as observation or recommendation, but it cannot
+   claim non-bypassable enforcement.
+3. **One authority spine:** Which existing generated ticket, policy,
+   provider/action, idempotency, writer-epoch, and receipt contracts does the
+   feature consume? A feature-specific authorization or executor shortcut is
+   prohibited.
+4. **Named external owner:** Which host executor or external data plane performs
+   the work, and which conformance lane proves its observed terminal behavior?
+5. **Bounds and failure posture:** What are the request, queue, cost, token,
+   time, retry, retention, and evidence bounds, and does unavailability cause a
+   deterministic refusal, an explicitly approved fixed route, a separately
+   authorized and receipted human action, or read-only degradation? Silent
+   fail-open, provider substitution, authority widening, and unrecorded fallback
+   are prohibited.
+6. **Fact and evidence boundary:** Which records are Cohesix authority or
+   observation, provider/executor reports, client-only observations, inferred,
+   unknown, or explicit non-claims? The shared 28b receipt/evidence vocabulary
+   is reused; each feature must not invent a stronger local truth class.
+7. **Coexistence value:** Why is this better than a hardened host-only adapter
+   for the named use case, and what existing platform remains in place? If the
+   answer is only feature breadth, keep the capability outside the Cohesix core
+   or defer it.
+
+Any provider, routing, AI-run, or agent-protocol feature that can influence
+external execution must expose generated governance modes distinct from its
+mock/dry-run/live evidence state:
+
+- `observe` records only policy-permitted bounded inputs/metadata and the
+  decision that would have been made without changing routing or execution;
+- `recommend` emits a non-authoritative, reviewable recommendation and reasons
+  while the existing execution choice remains in control;
+- `enforce` may alter selection or submit an action only through accepted
+  delegated authority and the generated provider/action path.
+
+Promotion to `enforce` requires a declared evaluation window, representative
+shadow evidence, compatibility and refusal results, policy-violation findings,
+and workload-relevant cost/latency/quality or verification measures. Shadow
+evidence is advisory and cannot satisfy external-execution, Worker, hardware,
+or production-use-case proof by itself.
+
+The seL4 target must remain outside token streams, bulk artifacts, hot telemetry,
+and provider-native data planes. Milestone 28e first proves exact per-request
+admission and durable reconciliation. A later optimization may introduce a
+short-lived multi-request routing or budget grant only through a separately
+versioned compiler-owned contract with one spender, exact policy/identity/
+provider bounds, expiry and revocation, monotonic accounting, overspend
+prevention, crash reconciliation, mandatory receipts, and measured need. A
+generic host-local authority envelope or an optimization that weakens exact
+admission is not authorized by Milestone 28e.
+
 ## Milestone 28a — Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents <a id="28a"></a>
 [Milestones](#Milestones)
 
@@ -11271,6 +11354,11 @@ Define and prove the production coexistence contract:
 Implementation requirements:
 - Extend `coh-rtc` with `providers.*` IR for:
   - provider id, version, enablement profile, action names, target selectors, dry-run/live mode, idempotency requirements, writer-epoch requirements, policy approval requirements, receipt schema, redaction rules, and evidence refs.
+  - supported and selected `observe|recommend|enforce` governance modes,
+    authority/credential custodian, bypass posture, failure/fallback posture,
+    shadow-evidence requirement, and the exact generated decision/grant/receipt
+    contracts used by each mode. Evidence mode and governance mode remain
+    orthogonal: a live observer is not an enforcing authority.
   - initial families: `systemd`, `launchd`, `docker`, `k8s`, `nvidia`, `cuda`, `nvml`, `mig`, `apple_ml`, `jetson`, `network`, `gpu.lease`, `gpu.workload`, `peft`, `model_registry`, `mac_release`, `endpoint_compliance`, `siem`, `prometheus`, `otel`, `modbus`, `dnp3`, `can`, `iec104`, `dicom`, and `ccsds`.
   - optional future families, including semantic extractors/stores and inference
     gateways/providers, may be reserved but must generate unavailable status
@@ -11438,7 +11526,7 @@ Implementation requirements:
 - Generate stable `use_case_id` rows and check every public claim source, including `README.md`, `docs/USE_CASES.md`, `docs/HOST_TOOLS.md`, `docs/GPU_NODES.md`, `docs/PYTHON_SUPPORT.md`, `docs/HOST_API.md`, `docs/INTERFACES.md`, `docs/API_GUIDELINES.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/TEST_PLAN.md`, every post-Milestone-24 activity/runbook in this plan, release documentation, OpenAPI examples, and all built-in Python playbooks.
 - The initial inventory must include the six AI Hive scenarios; all nine built-in playbooks (`mac-release-factory`, `mac-private-peft-grid`, `mac-endpoint-compliance`, `jetson-traffic-safety`, `jetson-manufacturing-safety`, `jetson-critical-infra`, `mixed-closed-loop-ai-factory`, `mixed-medical-edge-ai`, and `mixed-logistics-digital-twin`); the Security Evidence, Operator-First, LeJEPA, and Jetson Gesture Language activities; and Milestone 18 industrial patterns.
 - Classify each row as exactly one of `current_primitive`, `integration_pattern`, `workflow_template`, `mock_only`, `read_only`, `not_enabled`, `planned`, or `production_proven`. A playbook that runs against a mock backend remains `workflow_template` or `mock_only`, never `production_proven`.
-- Each row records milestone prerequisites; target/profile; Worker tier (`model_or_session`, `m26e_executable`, or `m28g_production_bundle`); topology/transport; required host tools and exact package artifacts; provider actions and read surfaces; external executor/data-plane owner; authority/identity/secret refs; durability/retention owner; rollback/recovery/fail-safe behavior; observability/evidence; and proof class.
+- Each row records milestone prerequisites; target/profile; Worker tier (`model_or_session`, `m26e_executable`, or `m28g_production_bundle`); topology/transport; required host tools and exact package artifacts; provider actions and read surfaces; external executor/data-plane owner; authority/identity/secret refs; authority/credential custodian and bypass posture; supported and selected governance mode; shadow-evidence/promotion refs where selection or actuation is automated; durability/retention owner; rollback/recovery/fail-safe behavior; observability/evidence; and proof class.
 - Conditional validation is fail-closed: a row claiming an executable Worker requires accepted 26e target evidence; restart-persistent VM state requires Milestone 27; a production ticket/lease bound to a deployed Worker requires Milestone 28g; a semantic-context claim requires accepted Milestone 28c snapshot/capsule evidence; a PEFT training-to-runtime claim requires the Milestone 28d transaction; and an auditable compatible-inference claim requires accepted Milestone 28e provider/receipt evidence.
 - Each production-proven row must link to:
   - provider registry action(s),
@@ -11505,9 +11593,9 @@ Implementation requirements:
 - `docs/USE_CASES.md`, `docs/HOST_TOOLS.md`, `docs/API_GUIDELINES.md`, `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and `docs/TEST_PLAN.md` describe support levels exactly as proven.
 
 **Compiler touchpoints**
-- `coh-rtc` extends `host-integration-dependency/v1` and emits provider registry artifacts, integration-surface records, external-executor contracts, stable use-case rows, provider availability snippets, provider action schemas, read visibility classes, identity-mapping bounds, conformance matrix defaults, exporter schema bounds, and exact package profile metadata.
+- `coh-rtc` extends `host-integration-dependency/v1` and emits provider registry artifacts, integration-surface records, external-executor contracts, stable use-case rows, provider availability snippets, provider action schemas, supported/selected governance modes, authority-custody and bypass posture, failure/fallback posture, shadow-promotion requirements, read visibility classes, identity-mapping bounds, conformance matrix defaults, exporter schema bounds, and exact package profile metadata.
 - `coh-rtc` also emits native discovery-source/TTL contracts, GPU physical/MIG topology and workload-action bounds, authoritative receipt/evidence correlation schemas, exporter delivery/redaction policy, and generated playbook DAG/topology/recovery records; clients may format these records but cannot define parallel truth.
-- Manifest validation rejects enabled provider actions without target grammar, authority scope, idempotency policy, receipt schema, redaction policy, and evidence mapping.
+- Manifest validation rejects enabled provider actions without target grammar, authority scope, idempotency policy, receipt schema, redaction policy, and evidence mapping. Enforced selection or actuation additionally fails generation without an authority custodian, bypass and failure posture, accepted provider/executor conformance, and the required shadow-promotion reference.
 - Generated docs distinguish current primitives, integration patterns, workflow templates, mock-only, read-only, not-enabled, planned, and production-proven integrations without conflating executable Workers with external execution.
 
 ## Task Breakdown
@@ -11517,13 +11605,16 @@ Milestone: Milestone 28b — Host Integration Registry + Provider/Executor + Use
 Goal: Extend the 26e integration dependency graph with the compiler-owned provider/action registry used by host tickets, REST/OpenAPI docs, Python, host tools, and later MCP/A2A schemas.
 Inputs: configs/generated/host_integration_dependency.json, tools/coh-rtc, apps/host-ticket-agent, apps/coh, apps/cohsh, tools/cohesix-py, docs/INTERFACES.md, docs/HOST_API.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — `providers.*` schema for action names, targets, modes, authority, receipts, redaction, and evidence refs.
+  - tools/coh-rtc/src/ir.rs — `providers.*` schema for action names, targets,
+    evidence modes, supported/selected governance modes, authority and
+    credential custodian, bypass and failure/fallback posture,
+    shadow-promotion requirements, receipts, redaction, and evidence refs.
   - tools/coh-rtc/src/codegen/{docs,rust,cohesix_py}.rs — generated provider registry artifacts, Python defaults, and snippets.
   - apps/host-ticket-agent/src/registry.rs — consume generated provider/action metadata before executor dispatch.
   - apps/coh/src/provider.rs + apps/cohsh/src/provider.rs — display generated provider action availability without hand-maintained lists.
   - tools/cohesix-py/cohesix/integrations.py + tools/cohesix-py/tests/test_integrations.py — consume the coh-rtc-generated Python provider output for action ids, target schemas, modes, bounds, receipt refs, and typed unavailable state; reject any handwritten Python provider-action catalogue, direct edit of `generated.py`, or client-selected promotion to `live`.
 Commands: cargo test -p coh-rtc && cargo test -p host-ticket-agent && cargo test -p coh && cargo test -p cohsh && python3 -m pytest -q tools/cohesix-py/tests/test_integrations.py -k provider_registry
-Checks: Provider action schemas cannot drift between executor validation, Rust/Python host tools, docs, and future gateway protocol schema inputs; Python exposes the same generated availability and refusals.
+Checks: Provider action schemas cannot drift between executor validation, Rust/Python host tools, docs, and future gateway protocol schema inputs; Python exposes the same generated availability, governance mode, bypass/failure posture, promotion state, and refusals; no client can promote itself from observe/recommend to enforce.
 Deliverables: Single source of truth for host-side ecosystem action semantics across Rust and Python consumers.
 
 Title/ID: m28b-integration-surface-registry
@@ -11724,13 +11815,13 @@ Milestone: Milestone 28b — Host Integration Registry + Provider/Executor + Use
 Goal: Prevent public use-case claims from exceeding implementation and evidence.
 Inputs: m28b-public-surface-live-mode-gate, m28b-live-reference-workflows, m28b-authoritative-receipt-and-evidence-core, README.md, docs/USE_CASES.md, docs/HOST_TOOLS.md, docs/GPU_NODES.md, docs/PYTHON_SUPPORT.md, docs/HOST_API.md, docs/INTERFACES.md, docs/API_GUIDELINES.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/BUILD_PLAN.md post-M24 activities, tools/cohesix-py/cohesix/playbooks.py, resources/openapi/hive-gateway.yaml, packaging, scripts/release_bundle.sh, provider/integration registries, executable Worker evidence, external-executor evidence, evidence packs.
 Changes:
-  - tools/coh-rtc/src/ir.rs + generated docs — stable use-case rows with proof class, Worker tier, topology, host tools, provider/surface dependencies, external executor/data plane, authority/secrets, durability/recovery, package, and evidence obligations.
+  - tools/coh-rtc/src/ir.rs + generated docs — stable use-case rows with proof class, Worker tier, topology, host tools, provider/surface dependencies, external executor/data plane, authority/secrets, authority custodian and bypass posture, supported/selected governance mode, shadow-promotion refs, durability/recovery, package, and evidence obligations.
   - docs/USE_CASES.md — checked support-level matrix covering all six scenarios, all nine built-in playbooks, Milestone 18 patterns, and all post-M24 demo/runbook activities.
   - scripts/ci/use_case_gate.sh — inventory every public claim source, validate conditional 26e/27/28c/28d/28e/28g dependencies, scan examples/manifests for argv or embedded secrets, and require exact integration/evidence/package links.
   - generated playbook records — consume the accepted `m28b-live-reference-workflows` DAG/evidence records and reject missing stages, controller/target topology, provider/data-plane ownership, recovery, or authoritative terminal correlation.
   - apps/coh/src/evidence.rs — include provider registry and conformance snapshots in evidence packs.
 Commands: scripts/ci/use_case_gate.sh --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28b && cargo test -p coh --test evidence_pack
-Checks: No scenario, playbook, demo, runbook, example, OpenAPI description, or release document can claim production coexistence without the exact Worker tier, provider/surface modes, external executor, node topology, generated policy, tests, deployment profile, authority/recovery posture, and evidence reconstruction; generic control-write or probe success cannot skip workflow stages.
+Checks: No scenario, playbook, demo, runbook, example, OpenAPI description, or release document can claim production coexistence without the exact Worker tier, provider/surface and governance modes, external executor, node topology, generated policy, authority custodian/bypass posture, required shadow-promotion evidence, tests, deployment profile, authority/recovery posture, and evidence reconstruction; generic control-write or probe success cannot skip workflow stages.
 Deliverables: Cohesix adoption claims stay honest and auditable.
 
 Title/ID: m28b-provider-exporter-performance
@@ -12809,6 +12900,9 @@ efficiency and audit evidence first-class without moving models into Cohesix:
 8. Ship `coh`, `coh doctor`, Python, package, provider-conformance, and operator
    tooling so the boundary is installable and diagnosable on supported host
    profiles.
+9. Preserve explicit model requests as fixed-selection compatibility calls,
+   and stage policy-selected aliases through generated `observe`, `recommend`,
+   and `enforce` modes with measurable promotion evidence.
 
 **Non-Goals (Explicit)**
 - No transformer, embedding, reranking, guardrail, training, CUDA/NVML, KV
@@ -12820,6 +12914,11 @@ efficiency and audit evidence first-class without moving models into Cohesix:
 - No direct provider call before Cohesix admission in governed mode.
   `inference-gateway-host` is a declared host executor and may contact only the
   provider/profile authorized by the exact admitted request digest.
+- No generic or host-local multi-request routing grant in the initial
+  Milestone 28e acceptance path. Exact per-request admission remains mandatory;
+  a later grant optimization requires the separately versioned, single-spender,
+  bounded-accounting contract and measured justification defined by the
+  cross-cutting Milestone 28 governance value contract.
 - No forwarding of caller API keys, OAuth tokens, capability tickets, or MCP
   credentials to inference providers. Provider credentials resolve separately
   from generated secret refs.
@@ -12849,6 +12948,7 @@ Implementation requirements:
 - Add versioned generated schemas:
   - `inference-client-request/v1`
   - `inference-admission/v1`
+  - `inference-routing-decision/v1`
   - `inference-provider-profile/v1`
   - `inference-receipt/v1`
   - `inference-stream-receipt/v1`
@@ -12858,10 +12958,15 @@ Implementation requirements:
   shapes, usage fields, cancellation behavior, error mapping, JSON Schema
   dialect, and optional provider-extension allowlists in generated policy and
   compatibility fixtures.
-- Require a generated model alias to resolve to provider id, endpoint secret
-  ref, model identity/digest where available, tokenizer/profile identity,
-  context/output limits, supported modalities/features, effective default
-  policy, extension allowlist, and observed conformance mode.
+- Preserve an explicit client model identifier as a fixed-selection request:
+  it may resolve only to a conforming deployment of that model unless the
+  request names a generated policy alias. Require each generated policy alias
+  to resolve through a versioned policy id/hash, supported governance modes,
+  candidate provider/model classes, data-handling and cost/resource bounds,
+  compatibility requirements, fallback/refusal posture, endpoint secret refs,
+  tokenizer/profile identity, context/output limits, supported
+  modalities/features, extension allowlist, and observed conformance mode.
+  Alias spelling is not authority and cannot select an undeclared provider.
 - Provider/model profiles separately record or type unknown the runtime
   build/image/region, accelerator class, model revision/weight digest,
   quantization, adapter chain, tokenizer/chat-template identity, determinism
@@ -12890,6 +12995,17 @@ Implementation requirements:
   authentication configuration so existing clients need no request rewrite;
   the presented value authenticates only to Cohesix and is never reused as a
   provider credential.
+- Implement generated routing governance modes:
+  - `observe` preserves the existing explicit provider/model route and records
+    the policy-selected candidate plus reasons, compatibility, predicted bounds,
+    and uncertainty without provider substitution;
+  - `recommend` returns or records the same non-authoritative recommendation
+    through a bounded opt-in surface while the caller's existing selection
+    remains in control;
+  - `enforce` permits a generated policy alias to select only a conforming
+    provider/model candidate after exact admission.
+- An explicit model request and a policy-alias request remain distinguishable
+  in request identity, admission, receipt, metrics, errors, and evidence.
 - Authenticate the client at the gateway, normalize it through 28a delegated
   identity mapping, and append or resolve the exact 28d `infer.run` host-ticket
   record with request id, idempotency key, writer epoch, run/task/step,
@@ -12943,6 +13059,9 @@ Implementation requirements:
   - admission, idempotency, writer-epoch, and policy decision refs,
   - capsule and render ids or transcript-input manifest,
   - provider profile, endpoint identity, model alias and returned model id,
+  - routing governance mode, requested fixed model or policy id/hash,
+    considered candidate set digest, selected/recommended provider/model,
+    selection reasons, shadow comparison refs, and fallback/refusal outcome,
   - runtime/build/region/accelerator, weight revision/digest, quantization,
     adapter, tokenizer/template, determinism, batching/speculation, and
     supply-chain identities with a fact source or explicit unknown state,
@@ -13020,6 +13139,12 @@ Implementation requirements:
 - Conformance covers conventional base-URL/API-key environment configuration,
   `/v1/models` discovery, non-streaming and streaming calls, cancellation,
   error shapes, usage, tool-call output, and receipt/trace response metadata.
+- Adoption conformance covers fixed-selection compatibility plus policy-alias
+  `observe`, `recommend`, and `enforce` modes. Promotion evidence compares the
+  recommendation with the unchanged actual route over a declared representative
+  window and reports compatibility mismatches, false refusals, policy findings,
+  latency/cost deltas, and workload-specific quality or verification outcomes
+  without treating estimates as observed facts.
 - Negative tests cover oversized/malformed bodies, unknown fields, arbitrary
   endpoints/models, credential/token passthrough, context-scope widening,
   forged/stale capsules, duplicate ids, stale writer epochs, provider fallback,
@@ -13054,6 +13179,13 @@ Implementation requirements:
 - Every governed provider call has a prior exact Cohesix admission record and
   execution grant; provider, model, request, capsule/render, authority, and
   deadline cannot change after admission.
+- Observe/recommend modes cannot change provider execution, mint authority, or
+  satisfy governed-execution proof. Enforce mode is unavailable until its
+  generated alias/policy, provider conformance, bypass posture, failure posture,
+  and representative shadow-promotion evidence are accepted.
+- Explicit model requests cannot be silently converted into policy-selected
+  routing; policy aliases record the exact policy and considered/selected
+  candidate identities.
 - Client credentials and delegated tickets are never passed to providers;
   provider secrets never enter request bodies, receipts, telemetry, or client
   responses.
@@ -13110,9 +13242,11 @@ Inputs: accepted 28b provider/integration graph, 28c Context Capsule schemas, 28
 Changes:
   - tools/coh-rtc/src/ir.rs + validation/codegen — Models/Chat
     Completions/Responses/Embeddings endpoint/field/event schemas,
+    fixed-selection and policy-alias routing modes, versioned routing decisions,
     provider/model/runtime/weight/tokenizer profiles, capsule extension,
     caller/provider auth separation, keyed digest policy, bounds,
-    cache/content policy, receipts, Python/coh/docs outputs.
+    cache/content policy, shadow-promotion evidence, receipts,
+    Python/coh/docs outputs.
   - crates/cohesix-inference-core/src/schema.rs — strict generated or checked host-side request/admission/receipt types.
   - tests/fixtures/inference/** — model discovery, valid, unsupported,
     provider-extension, keyed/unkeyed identity, streaming, tool-call, partial,
@@ -13131,9 +13265,10 @@ Goal: Serve the compatible host API with bounded streaming while every governed 
 Inputs: m28e-inference-ir-and-compatibility-contract, apps/host-ticket-agent, 28d `infer.run|resume|abort` actions, accepted 28a gateway identity/fencing/WAL behavior, provider fixtures.
 Changes:
   - apps/inference-gateway-host/src/** — compatible Models/request/stream
-    handling, conventional base-URL/bearer configuration, loopback/exposure
-    policy, bounded queues, cancellation, digest chaining, backpressure, and
-    response headers carrying receipt/trace refs.
+    handling, conventional base-URL/bearer configuration, explicit fixed-model
+    versus policy-alias requests, generated observe/recommend/enforce behavior,
+    loopback/exposure policy, bounded queues, cancellation, digest chaining,
+    backpressure, and response headers carrying receipt/trace refs.
   - apps/host-ticket-agent/src/executors/infer.rs — exact request/provider admission, execution grant, WAL reconciliation, idempotency, writer fencing, cancellation, and terminal/ambiguous state.
   - crates/cohesix-inference-core/src/{canonical,stream,errors}.rs — stable request identity, incremental stream digest, and deterministic client/provider/Cohesix error mapping.
   - apps/inference-gateway-host/tests/** — non-streaming, streaming, cancellation, disconnect, ambiguous completion, duplicate, stale-writer, and provider-substitution fixtures.
@@ -13141,7 +13276,7 @@ Commands:
   - cargo test -p inference-gateway-host
   - cargo test -p host-ticket-agent
   - cargo test -p cohesix-inference-core
-Checks: No provider request precedes exact admission; stream state reconciles durably; retries cannot duplicate ambiguous work; client/provider credentials and authority remain separate.
+Checks: No provider request precedes exact admission; observe/recommend cannot change the existing route; enforce requires an accepted generated alias and shadow-promotion evidence; explicit model requests are never silently substituted; stream state reconciles durably; retries cannot duplicate ambiguous work; client/provider credentials and authority remain separate.
 Deliverables: Drop-in compatible host inference endpoint that preserves Cohesix ticket, fencing, durability, and executor discipline.
 
 Title/ID: m28e-context-efficiency-and-cache-evidence
@@ -13189,7 +13324,9 @@ Changes:
     binary/OCI/Helm, launchd/systemd, adapter, fixture, and secret-ref contents.
   - scripts/ci/inference_conformance_run.sh — conventional base-URL/API-key
     client plus provider/security/receipt matrix with a packaged open live
-    reference profile and explicit modes for every alternate provider.
+    reference profile, fixed-selection and alias-routing
+    observe/recommend/enforce lanes, shadow-promotion evidence, and explicit
+    evidence modes for every alternate provider.
   - docs/HOST_TOOLS.md + docs/PYTHON_SUPPORT.md + docs/API_GUIDELINES.md + docs/OPERATOR_WALKTHROUGH.md + docs/TEST_PLAN.md — installation, one-base-URL adoption, diagnostics, refusal, recovery, evidence, and non-claims.
 Commands:
   - cargo test -p coh --test inference_doctor
@@ -13197,7 +13334,7 @@ Commands:
   - scripts/ci/inference_conformance_run.sh --matrix configs/inference_conformance.toml --state-dir out/inference/m28e
   - scripts/ci/test_plan_run.sh --state-dir out/test-plan/m28e-inference
   - scripts/check-generated.sh
-Checks: A supported client and live open reference runtime interoperate without a client fork; doctor and packages expose exact prerequisites; alternate providers retain honest modes; `cohsh` and VM packages remain unchanged.
+Checks: A supported client and live open reference runtime interoperate without a client fork; fixed model requests retain their route; observe/recommend produce bounded non-authoritative comparisons; enforce remains unavailable until its promotion gate passes; doctor and packages expose exact prerequisites; alternate providers retain honest modes; `cohsh` and VM packages remain unchanged.
 Deliverables: Installable, diagnosable, provider-conformant host inference boundary ready for MCP/A2A projection.
 ```
 
@@ -13208,6 +13345,9 @@ After Milestone 28e:
 - Every governed request is bound to delegated identity, an exact host-ticket
   admission, a provider/model profile, and a durable terminal or ambiguous
   receipt.
+- Existing fixed-model clients can adopt the compatible boundary without
+  accepting automatic routing; policy aliases progress from observe to
+  recommend to enforce only through generated promotion evidence.
 - Context Capsule selection, rendered inputs, prompt savings, prefix/cache
   evidence, TTFT, streaming, output digests, and downstream verification/action
   lineage are measurable without default raw-content retention.
