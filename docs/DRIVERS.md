@@ -1262,10 +1262,15 @@ This as-built closure is authorized by Milestone 26d task
   An interleaved event/data `FrameReady` completion releases only that physical
   request; it cannot release the logical lease or admit association, WSEC,
   maintenance, or bootstrap under a different command, BCDC id, descriptor, or
-  payload fingerprint. Matching work resumes the lease. Nonmatching lanes
-  retain their immutable cursors and yield without consuming the CYW43
-  operation permit, so the matching owner can run later in the same outer
-  EventPump turn.
+  payload fingerprint. Matching work resumes the lease. The runtime snapshots
+  the accepted BCDC request into private state and treats the reciprocal shared
+  payload aperture as mutable scratch between physical requests; DPC-delivered
+  event/data frames may reuse that aperture, so a continuation validates the
+  immutable command, BCDC id, flags, offset, and length and restores the private
+  request snapshot before transmit instead of rereading scratch bytes as
+  ownership. Nonmatching lanes retain their immutable cursors and yield without
+  consuming the CYW43 operation permit, so the matching owner can run later in
+  the same outer EventPump turn.
 
   An exact terminal drain may bypass normal logical admission only to finish
   the already-issued, pair-fenced physical ticket. It cannot publish fresh

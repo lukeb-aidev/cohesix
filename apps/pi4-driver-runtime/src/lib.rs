@@ -3346,7 +3346,6 @@ struct Cyw43ControlExchangeCursor {
     descriptor_flags: u16,
     payload_offset: u16,
     payload_len: u16,
-    payload_digest: u32,
     tx_sdpcm_seq: u8,
     pre_tx_frames: u16,
     phase_turns: u32,
@@ -3392,23 +3391,6 @@ impl Cyw43ControlRequestSlot {
             request.len = len;
         });
         true
-    }
-
-    fn matches(&self, desc: DriverRuntimeCyw43CommandDescriptor) -> bool {
-        let base = usize::from(desc.payload_offset);
-        self.request.with_ref(|request| {
-            if request.len != usize::from(desc.payload_len) {
-                return false;
-            }
-            let mut index = 0usize;
-            while index < request.len {
-                if request.bytes[index] != read_runtime_payload_byte(base + index) {
-                    return false;
-                }
-                index = index.saturating_add(1);
-            }
-            true
-        })
     }
 
     fn restore(&self, offset: u16, len: u16) -> bool {
@@ -3477,7 +3459,6 @@ impl Cyw43ControlExchangeCursor {
             descriptor_flags: 0,
             payload_offset: 0,
             payload_len: 0,
-            payload_digest: 0,
             tx_sdpcm_seq: 0,
             pre_tx_frames: 0,
             phase_turns: 0,
@@ -15923,22 +15904,6 @@ fn cyw43_runtime_payload_u32(offset: usize) -> Option<u32> {
     )
 }
 
-fn cyw43_control_exchange_payload_digest(desc: DriverRuntimeCyw43CommandDescriptor) -> u32 {
-    // FNV-1a covers every immutable request byte. The command/id/length/flags
-    // are also compared independently so an endpoint sequence change can never
-    // become authority to publish a second SDPCM request.
-    let mut hash = 0x811c_9dc5u32;
-    let mut index = 0usize;
-    while index < usize::from(desc.payload_len) {
-        hash ^= u32::from(read_runtime_payload_byte(
-            usize::from(desc.payload_offset) + index,
-        ));
-        hash = hash.wrapping_mul(0x0100_0193);
-        index = index.saturating_add(1);
-    }
-    hash
-}
-
 fn cyw43_control_exchange_identity_matches(
     cursor: Cyw43ControlExchangeCursor,
     desc: DriverRuntimeCyw43CommandDescriptor,
@@ -15948,8 +15913,6 @@ fn cyw43_control_exchange_identity_matches(
         && cursor.descriptor_flags == desc.flags
         && cursor.payload_offset == desc.payload_offset
         && cursor.payload_len == desc.payload_len
-        && cursor.payload_digest == cyw43_control_exchange_payload_digest(desc)
-        && CYW43_CONTROL_REQUEST.matches(desc)
 }
 
 fn cyw43_control_exchange_begin(
@@ -15975,7 +15938,6 @@ fn cyw43_control_exchange_begin(
         descriptor_flags: desc.flags,
         payload_offset: desc.payload_offset,
         payload_len: desc.payload_len,
-        payload_digest: cyw43_control_exchange_payload_digest(desc),
         tx_sdpcm_seq: 0,
         pre_tx_frames: 0,
         phase_turns: 0,
@@ -57815,12 +57777,22 @@ mod tests {
         );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
 
-        for (sequence, changed_id, changed_flags, changed_body) in [
-            (411, id, flags, b"changed!".as_slice()),
-            (412, id, 0, body.as_slice()),
-            (413, id + 1, flags, body.as_slice()),
-        ] {
-            stage_cyw43_control_exchange_request(cmd, changed_id, changed_flags, changed_body);
+        // The reciprocal SDIO/DPC path may reuse the shared aperture after
+        // the request has been privately snapshotted. That mutable storage is
+        // not continuation identity; the root logical lease already binds the
+        // complete payload and the runtime restores its private copy before
+        // any pending transmit.
+        stage_cyw43_control_exchange_request(cmd, id, flags, b"changed!");
+        assert_eq!(
+            service_command_turn(0, cyw43_descriptor_command(411)),
+            RuntimeCommandTurn::Pending
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.control_exchange.active());
+        });
+
+        for (sequence, changed_id, changed_flags) in [(412, id, 0), (413, id + 1, flags)] {
+            stage_cyw43_control_exchange_request(cmd, changed_id, changed_flags, &body);
             assert_eq!(
                 service_command_turn(0, cyw43_descriptor_command(sequence)),
                 RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
@@ -57916,7 +57888,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_control_exchange_requires_exact_retained_request_bytes() {
+    fn cyw43_control_exchange_survives_shared_aperture_reuse() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let descriptor = stage_cyw43_control_exchange_request(0x107, 41, 0, b"exact-byte-identity");
@@ -57926,15 +57898,20 @@ mod tests {
         assert_eq!(CYW43_CONTROL_REQUEST.retained_byte(0), original);
 
         write_runtime_payload_byte(usize::from(descriptor.payload_offset), original ^ 0x80);
-        // Simulate a digest collision by making the diagnostic digest agree
-        // with the mutated shared bytes. Exact retained bytes remain authority.
-        let mut cursor = state.control_exchange;
-        cursor.payload_digest = cyw43_control_exchange_payload_digest(descriptor);
-        assert!(!cyw43_control_exchange_identity_matches(cursor, descriptor));
+        assert!(
+            cyw43_control_exchange_identity_matches(state.control_exchange, descriptor),
+            "the mutable reciprocal aperture is not persistent op11 identity"
+        );
         assert_eq!(CYW43_CONTROL_REQUEST.retained_byte(0), original);
         assert_eq!(
             CYW43_CONTROL_REQUEST.retained_len(),
             usize::from(descriptor.payload_len)
+        );
+        assert!(CYW43_CONTROL_REQUEST.restore(descriptor.payload_offset, descriptor.payload_len));
+        assert_eq!(
+            read_runtime_payload_byte(usize::from(descriptor.payload_offset)),
+            original,
+            "the runtime-owned snapshot restores the exact request before transmit"
         );
 
         state.reset_control_exchange();
