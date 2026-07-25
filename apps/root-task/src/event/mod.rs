@@ -10993,8 +10993,11 @@ where
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: deferred_recovery first=yes mutation=no cause={} subphase={} gate={}",
-            recovery.cause, recovery.subphase, recovery.gate,
+            "wifi: deferred_recovery retained=yes refinement=exact-owner terminal_observed={} cause={} subphase={} gate={}",
+            Self::yes_no(recovery.terminal_observed),
+            recovery.cause,
+            recovery.subphase,
+            recovery.gate,
         ))
     }
 
@@ -11003,11 +11006,12 @@ where
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: deferred_recovery identity generation={} owner_generation={} ticket={} completion_detail=0x{:04x} completion_sequence={} turn={}",
+            "wifi: deferred_recovery identity generation={} owner_generation={} ticket={} completion_detail=0x{:04x} completion_result=0x{:08x} completion_sequence={} turn={}",
             recovery.generation,
             recovery.owner_generation,
             recovery.ticket_id,
             recovery.completion_detail,
+            recovery.completion_result,
             recovery.completion_sequence,
             recovery.turn_id,
         ))
@@ -21050,7 +21054,9 @@ mod tests {
             descriptor_arg1: u32::MAX,
             ticket_id: u64::MAX,
             completion_detail: u16::MAX,
+            completion_result: u32::MAX,
             completion_sequence: u32::MAX,
+            terminal_observed: true,
             turn_id: u64::MAX,
             gate: 8,
         };
@@ -21072,9 +21078,12 @@ mod tests {
         }
         assert!(lines[1].contains("generation=4294967295 current=no"));
         assert!(lines[2].contains("request=4294967295 issued=yes accepted=yes"));
+        assert!(lines[3]
+            .contains("refinement=exact-owner terminal_observed=yes cause=issued-owner-unknown"));
         assert!(lines[3].contains("subphase=cyw43-host-eapol-control-poll gate=8"));
         assert!(lines[4].contains("ticket=18446744073709551615"));
         assert!(lines[4].contains("completion_detail=0xffff"));
+        assert!(lines[4].contains("completion_result=0xffffffff"));
         assert!(lines[4].contains("turn=18446744073709551615"));
         assert!(lines[5].contains("descriptor op=0xffff flags=0xffff"));
         assert_eq!(
@@ -26645,7 +26654,9 @@ mod tests {
                 descriptor_arg1: 0,
                 ticket_id: 0x1122_3344_5566_7788,
                 completion_detail: 0x5310,
+                completion_result: 0x4359_0008,
                 completion_sequence: 1_345,
+                terminal_observed: true,
                 turn_id: 701,
                 gate: 8,
             },
@@ -26673,13 +26684,13 @@ mod tests {
 
         assert!(
             rendered.contains(
-                "wifi: deferred_recovery first=yes mutation=no cause=issued-owner-unknown subphase=cyw43-host-eapol-control-poll gate=8"
+                "wifi: deferred_recovery retained=yes refinement=exact-owner terminal_observed=yes cause=issued-owner-unknown subphase=cyw43-host-eapol-control-poll gate=8"
             ),
             "{rendered}"
         );
         assert!(
             rendered.contains(
-                "wifi: deferred_recovery identity generation=17 owner_generation=16 ticket=1234605616436508552 completion_detail=0x5310 completion_sequence=1345 turn=701"
+                "wifi: deferred_recovery identity generation=17 owner_generation=16 ticket=1234605616436508552 completion_detail=0x5310 completion_result=0x43590008 completion_sequence=1345 turn=701"
             ),
             "{rendered}"
         );

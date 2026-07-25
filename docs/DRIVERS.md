@@ -502,9 +502,9 @@ This as-built closure is authorized by Milestone 26d task
   cursor stores its owner generation when created and supplies that immutable
   value to every later command and active-state check. A live connection-epoch
   change cannot rewrite `aux1`, adopt an older cursor, or make its completion
-  current. The compatibility op11 caller recovers an owner generation only
-  from an exact HAL-retained command and rejects a stale terminal result before
-  routing it.
+  current. The retained op11 owner recovers its generation only from its exact
+  HAL-retained command and rejects a stale terminal result before routing it;
+  no private compatibility caller remains.
 
   Delegated CYW43-to-SDIO work has a different authority path. Successful
   one-way owner handoff deletes and zeros root's SDIO endpoint authority, and
@@ -964,6 +964,17 @@ This as-built closure is authorized by Milestone 26d task
   exact command completion. This keeps the interrupt top half and controller
   transaction under one SDIO sequencer, matching Linux's serialized MMC-host
   service model without adding a fallback path.
+  Each delivered IRQ acknowledgement has a nonzero wrapping epoch. The
+  retained SDIO cursor freezes that epoch, inspects host status and the durable
+  event ring, publishes or coalesces the exact event, and only then
+  acknowledges the kernel IRQ cap. Within that retained DPC cursor, an
+  acknowledgement failure leaves the source masked and that exact epoch
+  pending; any event already published or coalesced remains unchanged. A later
+  retained turn retries only the acknowledgement, at most three times.
+  Completion of an older acknowledgement cannot clear a newer delivered epoch.
+  Fault telemetry occupies a dedicated frame outside the complete root payload
+  aperture and before the Function 2 TX region, so terminal DPC capture cannot
+  overwrite an accepted control or data payload.
   A control exchange carrying `CONTROL_PRE_TX_DRAIN` first issues one immutable,
   generation-bound `DPC_ACTIVATE` source probe through that same reciprocal
   owner ring, then lets the ordinary CYW43 DPC cursor inspect and drain any
@@ -1154,25 +1165,68 @@ This as-built closure is authorized by Milestone 26d task
   handoff margin. An expired issued request poisons its generation and cannot
   be replaced in that generation; a non-issued gate fails with a typed stage
   error instead of remaining pending forever.
-- Steady association, EAPOL, maintenance, data, and pair-signal paths may only
-  publish the first immutable deferred-recovery record for the current
-  generation. That record separately binds the current recovery generation and
-  the generation that owned the immutable action, plus the cause, descriptor,
-  payload digest, ticket, completion detail and sequence, and outer turn ID.
+- Steady association, EAPOL, maintenance, data, and pair-signal paths retain
+  one deferred-recovery record for the current generation. That record
+  separately binds the current recovery generation and the generation that
+  owned the immutable action, plus the cause, descriptor, payload digest,
+  ticket, completion detail, result, sequence, terminal-observed state, and
+  outer turn ID.
   Publication performs only lock-free admission fencing; it cannot clear
   mutex-owned sessions or poison the generation. After the originating
   EventPump turn releases every service guard, the retained supervisor adopts
   any quiescent association/carrier epoch, consumes the current-generation
   record, rejects stale ownership, and is the sole recovery authority that
-  poisons the generation exactly once before the ordered pair restart. The
-  first current-generation record wins; a retained stale record cannot mask a
-  later current fault. If association policy advances the logical epoch while
-  an op11 join cursor is still unresolved, the recovery record uses the new
-  epoch as its recovery generation while retaining the join cursor's original
-  owner generation, descriptor, payload digest, and ticket. This separation
-  prevents recovery from relocking a steady-path session, orphaning a
-  possibly-issued join, or creating extra epoch transitions from duplicate
-  faults.
+  poisons the generation exactly once before the ordered pair restart. A fully
+  generic, nonterminal `PairSignal` placeholder may be refined in exactly two
+  ways: to nonterminal `IssuedOwnerUnknown` only after a fresh exact HAL
+  revalidation proves that the same immutable current-generation owner is
+  `Issued`, or to the exact matching terminal completion. A merely `Prepared`
+  owner is not child-visible and cannot perform the first refinement. Once a
+  typed nonterminal or terminal record is retained it is immutable; a stale or
+  mismatched record cannot replace it or mask a later current fault. If
+  association policy advances the logical epoch while an op11 join cursor is
+  still unresolved, the recovery record uses the new epoch as its recovery
+  generation while retaining the join cursor's original owner generation,
+  descriptor, payload digest, and ticket. This separation prevents recovery
+  from relocking a steady-path session, orphaning a possibly-issued join, or
+  creating extra epoch transitions from duplicate faults.
+- A runtime-origin pair signal cannot immediately bypass the bounded exact-owner
+  drain attempt for an already-issued CYW43 parent. Root first fences every
+  fresh CYW43 admission, then uses one no-allocation escrow cursor for the current
+  generation's immutable deferred descriptor replay, engine init,
+  bootstrap/firmware/control action, prompt poll, association op11, WSEC op11,
+  host-EAPOL TX, data TX, or maintenance owner. A request-bearing cursor can
+  still be `Prepared`: root owns a retained HAL transport lease, but the child
+  cannot have observed its zero-sequence command. `Prepared` never becomes
+  `IssuedOwnerUnknown` and receives no terminal-drain authority. If a
+  `Prepared` or otherwise invalid retained HAL lease survives parent teardown,
+  root pair-fences it solely so the scheduler boosts and lease unwind
+  deterministically before the local owner is discarded. Root publishes
+  terminal-drain authority only after a fresh active-state check proves the
+  exact request is `Issued`. The retained root escrow and current-generation
+  check prove the separate logical generation; HAL proves the active issued
+  request, immutable command and `aux1`, and fingerprint.
+  Keeping command `aux1` independent is required for engine-init and
+  deferred-descriptor commands, whose ABI value remains zero while their root
+  owner still carries the logical generation.
+  HAL then permits that exact fingerprint to finish its already-issued grant,
+  poll, restore, and completion phases while rejecting prepared, fresh,
+  replayed, stale, or differently fingerprinted work. Each drain step consumes
+  at most one ordinary EventPump operation. Only a completion carrying the
+  exact request sequence can refine the recovery record; foreign or stale
+  completions cannot contribute detail, result, or identity. When the exact
+  matching terminal is available, its result, primitive detail, completion
+  sequence, and owner identity are latched before pair restart begins on a
+  later outer turn. A one-second virtual-counter deadline, with a 2,048-turn
+  hardware-free fallback, ends an undrainable owner in ordered pair recovery
+  while preserving the strongest existing record, without issuing prepared
+  work or replaying an issued action in the same generation.
+- The private CYW43 BCDC/control compatibility issuer and wrapper tree has been
+  deleted, including its former test-only issuing body. Production and tests
+  both exercise the retained descriptor-replay, engine, bootstrap/control,
+  association, WSEC, maintenance, prompt, host-EAPOL, and data owners through
+  the same HAL-retained ring lane. No dormant issuer, compatibility choke
+  point, test-only physical issuing body, or alternate launch path remains.
 - Association timeout and terminal-event teardown never revoke an accepted
   host-EAPOL child action. The supervisor first returns that immutable poll,
   key, or TX cursor to the ordinary host-EAPOL service lane, which advances at

@@ -1637,7 +1637,12 @@ const SDIO_FAULT_TELEMETRY_DMA_DEBUG_OFFSET: usize = 112;
 const SDIO_FAULT_TELEMETRY_DMA_UNAVAILABLE: u32 = u32::MAX;
 const SDIO_FAULT_TELEMETRY_BYTES_EXTENDED: u16 = 116;
 const SDIO_FAULT_TELEMETRY_BYTES: u16 = SDIO_FAULT_TELEMETRY_BYTES_EXTENDED;
-const SDIO_FAULT_TELEMETRY_FRAME_OFFSET: usize = DRIVER_TASK_RING_FRAME_OFFSET + 512;
+// Keep terminal owner telemetry outside root's complete ring-local descriptor
+// and payload window. A DPC fault may be copied while an admitted CYW43 parent
+// still owns bytes 256..1792; aliasing that parent would turn diagnostic
+// publication into command mutation. The fixed scratch interval ends before
+// the private SDPCM TX area at 2048.
+const SDIO_FAULT_TELEMETRY_FRAME_OFFSET: usize = CYW43_BACKPLANE_WORD_SCRATCH_OFFSET + 4;
 const DMA_CACHE_LINE_BYTES: usize = 64;
 const SDIO_DMA_MMIO_PAGE_INDEX: usize = 2;
 const SDIO_DMA_PWRSEQ_PAGE_INDEX: usize = 0;
@@ -2699,6 +2704,7 @@ struct SdioExternalDmaRequestCursor {
     dpc_disposition: SdioDpcCaptureDisposition,
     dpc_publish_result: DpcRingPublishResult,
     dpc_publish_coalesced: bool,
+    dpc_irq_ack_epoch: u32,
     dpc_irq_acked: bool,
 }
 
@@ -2736,6 +2742,7 @@ impl SdioExternalDmaRequestCursor {
             dpc_disposition: SdioDpcCaptureDisposition::Fault,
             dpc_publish_result: DpcRingPublishResult::BadEpoch,
             dpc_publish_coalesced: false,
+            dpc_irq_ack_epoch: 0,
             dpc_irq_acked: false,
         }
     }
@@ -2763,6 +2770,7 @@ struct SdioRuntimeState {
     card_irq_masked: bool,
     dpc_activation_allowed: bool,
     irq_ack_pending: bool,
+    irq_ack_epoch: u32,
     dpc_poisoned: bool,
     card_irq_captures: u32,
     dpc_events_published: u32,
@@ -2789,6 +2797,7 @@ impl SdioRuntimeState {
             card_irq_masked: false,
             dpc_activation_allowed: false,
             irq_ack_pending: false,
+            irq_ack_epoch: 0,
             dpc_poisoned: false,
             card_irq_captures: 0,
             dpc_events_published: 0,
@@ -6743,6 +6752,7 @@ fn reset_sdio_register_shadows() {
     {
         TEST_SDIO_HOST_INT_STATUS_RESPONSE.store(0, Ordering::Release);
         TEST_RUNTIME_IRQ_ACK_CALLS.store(0, Ordering::Release);
+        TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING.store(0, Ordering::Release);
     }
 }
 
@@ -6990,6 +7000,7 @@ enum RuntimeNotificationRoute {
 
 const DPC_REASON_SDIO_CARD_INTERRUPT: u16 = 1;
 const DPC_REASON_SDIO_SOURCE_PENDING: u16 = 2;
+const SDIO_DPC_IRQ_ACK_ATTEMPTS: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DpcRingPublishResult {
@@ -8233,7 +8244,7 @@ fn dpc_event_ring_advance_at(base: usize, epoch: u32, sequence: u32) -> bool {
     true
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 fn dpc_event_ring_set_owner_health_at(
     base: usize,
     card_irq_masked: bool,
@@ -11572,7 +11583,17 @@ fn sdio_record_dpc_health(ack_failed: bool) {
         poisoned,
         ack_failed,
     );
-    #[cfg(not(target_os = "none"))]
+    #[cfg(all(not(target_os = "none"), test))]
+    if TEST_CYW43_FOREGROUND_PRODUCTION_CHAIN_ENABLED.load(Ordering::Acquire) {
+        let _ = dpc_event_ring_set_owner_health_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+            card_irq_masked,
+            ack_pending,
+            poisoned,
+            ack_failed,
+        );
+    }
+    #[cfg(all(not(target_os = "none"), not(test)))]
     let _ = (card_irq_masked, ack_pending, poisoned, ack_failed);
 }
 
@@ -11583,7 +11604,51 @@ fn sdio_record_irq_ack_result(acked: bool) {
     sdio_record_dpc_health(!acked);
 }
 
-fn sdio_publish_card_interrupt_event(_host_int_status: u32, _badge: u32) -> bool {
+fn sdio_latch_irq_ack() -> u32 {
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.irq_ack_epoch = state.irq_ack_epoch.wrapping_add(1);
+        if state.irq_ack_epoch == 0 {
+            state.irq_ack_epoch = 1;
+        }
+        state.irq_ack_pending = true;
+        state.irq_ack_epoch
+    })
+}
+
+fn sdio_pending_irq_ack_epoch() -> Option<u32> {
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        if !state.irq_ack_pending {
+            return None;
+        }
+        if state.irq_ack_epoch == 0 {
+            // Tests and generation-init paths may seed the legacy boolean.
+            // Give that owed acknowledgement a real identity before a retained
+            // cursor can carry it across scheduler turns.
+            state.irq_ack_epoch = 1;
+        }
+        Some(state.irq_ack_epoch)
+    })
+}
+
+fn sdio_record_irq_ack_result_for_epoch(epoch: u32, acked: bool) {
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        if !acked {
+            state.irq_ack_pending = true;
+        } else if state.irq_ack_epoch == epoch {
+            state.irq_ack_pending = false;
+        }
+        // A newer notification may have latched while the retained ACK call
+        // was in flight. Its higher epoch remains pending and cannot be erased
+        // by completion of the older acknowledgement.
+    });
+    sdio_record_dpc_health(!acked);
+}
+
+fn sdio_publish_card_interrupt_event(
+    _host_int_status: u32,
+    _badge: u32,
+    irq_ack_epoch: Option<u32>,
+) -> bool {
     let (_epoch, handler_slot, peer_slot) = SDIO_RUNTIME_STATE.with_ref(|state| {
         (
             state.shared_epoch,
@@ -11628,8 +11693,11 @@ fn sdio_publish_card_interrupt_event(_host_int_status: u32, _badge: u32) -> bool
     // The device-side source is masked before re-enabling the kernel IRQ cap.
     // A full ring is still acknowledged and the consumer is signalled; the
     // dongle source remains level-asserted and will be recaptured on rearm.
-    let acked = runtime_irq_handler_ack(handler_slot);
-    sdio_record_irq_ack_result(acked);
+    let acked = irq_ack_epoch.is_none_or(|epoch| {
+        let acked = runtime_irq_handler_ack(handler_slot);
+        sdio_record_irq_ack_result_for_epoch(epoch, acked);
+        acked
+    });
     if !matches!(published, DpcRingPublishResult::BadEpoch) {
         runtime_signal_notification(peer_slot);
     }
@@ -11693,7 +11761,12 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
     let (irq_badge, owner_request_active) =
         SDIO_RUNTIME_STATE.with_ref(|state| (state.irq_badge, state.external_dma_request.active()));
     let real_irq = badge == irq_badge && irq_badge != 0;
-    if real_irq && (owner_request_active || sdio_durable_owner_command_pending()) {
+    let irq_ack_epoch = if real_irq {
+        Some(sdio_latch_irq_ack())
+    } else {
+        sdio_pending_irq_ack_epoch()
+    };
+    if irq_ack_epoch.is_some() && (owner_request_active || sdio_durable_owner_command_pending()) {
         // The delivered IRQ cap is itself the bounded mask until it is
         // acknowledged. Never let the notification path change SDHCI policy,
         // publish a second event, or acknowledge/rearm beside an immutable
@@ -11705,28 +11778,13 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
         // active request, otherwise the ordinary owner-idle service handles it
         // after exact command completion. This is Linux's single host-thread
         // ordering adapted to the linked-runtime endpoint/grant boundary.
-        SDIO_RUNTIME_STATE.with_mut(|state| state.irq_ack_pending = true);
         return true;
     }
-    let mut pending_ack_serviced = false;
-    let (ack_pending, poisoned, handler_slot) = SDIO_RUNTIME_STATE.with_ref(|state| {
-        (
-            state.irq_ack_pending,
-            state.dpc_poisoned,
-            state.irq_handler_slot,
-        )
-    });
+    let (poisoned, handler_slot) =
+        SDIO_RUNTIME_STATE.with_ref(|state| (state.dpc_poisoned, state.irq_handler_slot));
     if poisoned {
         sdio_record_dpc_health(false);
         return false;
-    }
-    if ack_pending {
-        let acked = runtime_irq_handler_ack(handler_slot);
-        sdio_record_irq_ack_result(acked);
-        if !acked {
-            return false;
-        }
-        pending_ack_serviced = true;
     }
     if !SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_activation_allowed) {
         // Initial attach, recovery reload, ordinary child doorbells, and idle
@@ -11734,33 +11792,16 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
         // generation-bound DPC_ACTIVATE owner command opens this lifetime.
         SDIO_RUNTIME_STATE.with_mut(|state| state.card_irq_masked = true);
         sdio_program_interrupt_policy();
-        sdio_record_dpc_health(false);
-        return true;
-    }
-
-    let card_irq_masked = SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked);
-    if badge == irq_badge && irq_badge != 0 && card_irq_masked {
-        // A real kernel IRQ notification outranks the empty-ring consumer
-        // rearm hint. In particular, a forced DPC source probe deliberately
-        // keeps CARD_INT masked while its retained StatusRead/Publish cursor
-        // owns the source snapshot. A notification in that interval must only
-        // discharge the kernel IRQ cap (or the already-pending retry above);
-        // unmasking here would race ahead of the probe's source publication
-        // and IRQ-ack disposition.
-        let acked = if pending_ack_serviced {
-            true
+        let acked = irq_ack_epoch.is_none_or(|_| runtime_irq_handler_ack(handler_slot));
+        if let Some(epoch) = irq_ack_epoch {
+            sdio_record_irq_ack_result_for_epoch(epoch, acked);
         } else {
-            runtime_irq_handler_ack(handler_slot)
-        };
-        if !pending_ack_serviced {
-            sdio_record_irq_ack_result(acked);
+            sdio_record_dpc_health(false);
         }
-        SDIO_RUNTIME_STATE.with_mut(|state| state.card_irq_masked = true);
-        sdio_program_interrupt_policy();
-        sdio_record_dpc_health(!acked);
         return acked;
     }
 
+    let card_irq_masked = SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked);
     #[cfg(target_os = "none")]
     let ring = dpc_event_ring_read_at(
         DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
@@ -11771,23 +11812,32 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
     let epoch = SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch);
     match sdio_dpc_capture_disposition(&ring, epoch) {
         SdioDpcCaptureDisposition::HoldPending => {
+            // The event is durable before the delivered IRQ is acknowledged.
             // Linux keeps the level source masked until the current DPC has
-            // consumed the retained event. Runtime idle polls and coalesced
-            // child doorbells must not publish the same CARD_INT again.
+            // consumed it and cleared the dongle-side source.
             SDIO_RUNTIME_STATE.with_mut(|state| state.card_irq_masked = true);
             sdio_program_interrupt_policy();
-            sdio_record_dpc_health(false);
-            return true;
+            let acked = irq_ack_epoch.is_none_or(|_| runtime_irq_handler_ack(handler_slot));
+            if let Some(ack_epoch) = irq_ack_epoch {
+                sdio_record_irq_ack_result_for_epoch(ack_epoch, acked);
+            } else {
+                sdio_record_dpc_health(false);
+            }
+            return acked;
         }
         SdioDpcCaptureDisposition::InspectSource => {}
         SdioDpcCaptureDisposition::Fault => {
             SDIO_RUNTIME_STATE.with_mut(|state| state.dpc_poisoned = true);
             sdio_record_dpc_health(false);
+            if let Some(ack_epoch) = irq_ack_epoch {
+                let acked = runtime_irq_handler_ack(handler_slot);
+                sdio_record_irq_ack_result_for_epoch(ack_epoch, acked);
+            }
             return false;
         }
     }
 
-    if SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked) {
+    if card_irq_masked && irq_ack_epoch.is_none() {
         // The consumer has advanced the retained event and signalled the
         // owner after clearing the dongle-side source. Match Linux's
         // `ack_sdio_irq`: re-enable CARD_INT in both host registers without
@@ -11804,20 +11854,14 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
 
     let host_int_status = sdio_read32(SDHCI_INT_STATUS);
     if host_int_status & SDHCI_INT_CARD_INT != 0 {
-        return sdio_publish_card_interrupt_event(host_int_status, badge);
+        return sdio_publish_card_interrupt_event(host_int_status, badge, irq_ack_epoch);
     }
-    if badge == irq_badge && irq_badge != 0 {
+    if let Some(ack_epoch) = irq_ack_epoch {
         SDIO_RUNTIME_STATE.with_mut(|state| state.card_irq_masked = true);
         sdio_program_interrupt_policy();
         sdio_record_dpc_health(false);
-        let acked = if pending_ack_serviced {
-            true
-        } else {
-            runtime_irq_handler_ack(handler_slot)
-        };
-        if !pending_ack_serviced {
-            sdio_record_irq_ack_result(acked);
-        }
+        let acked = runtime_irq_handler_ack(handler_slot);
+        sdio_record_irq_ack_result_for_epoch(ack_epoch, acked);
         if !acked {
             return false;
         }
@@ -13044,37 +13088,27 @@ fn sdio_retained_dpc_activate_turn_with<I: SdioTransferIo>(
             cursor.phase = SdioExternalDmaRequestPhase::DpcActivatePendingAckInspect;
         }
         SdioExternalDmaRequestPhase::DpcActivatePendingAckInspect => {
-            cursor.phase = if SDIO_RUNTIME_STATE.with_ref(|state| state.irq_ack_pending) {
-                SdioExternalDmaRequestPhase::DpcActivatePendingAckIssue
-            } else {
-                SdioExternalDmaRequestPhase::DpcActivateStatusRead
-            };
+            // Freeze the identity of the delivered notification, but do not
+            // acknowledge it yet. The Linux ordering is mask -> inspect ->
+            // durable publish/coalesce -> ACK -> signal; carrying the epoch in
+            // this cursor prevents a later notification from being cleared by
+            // completion of an older ACK.
+            cursor.dpc_irq_ack_epoch = sdio_pending_irq_ack_epoch().unwrap_or(0);
+            cursor.phase = SdioExternalDmaRequestPhase::DpcActivateStatusRead;
         }
         SdioExternalDmaRequestPhase::DpcActivatePendingAckIssue => {
-            let handler_slot = SDIO_RUNTIME_STATE.with_ref(|state| state.irq_handler_slot);
-            cursor.dpc_irq_acked = runtime_irq_handler_ack(handler_slot);
-            cursor.phase = SdioExternalDmaRequestPhase::DpcActivatePendingAckState;
+            // This legacy phase is retained only so a pre-upgrade cursor fails
+            // closed after an image handoff. New requests never enter it.
+            cursor.config_control = 1;
+            cursor.phase = SdioExternalDmaRequestPhase::DpcActivatePolicyEnableAfterDisposition;
         }
         SdioExternalDmaRequestPhase::DpcActivatePendingAckState => {
-            SDIO_RUNTIME_STATE.with_mut(|state| {
-                state.irq_ack_pending = !cursor.dpc_irq_acked;
-                if !cursor.dpc_irq_acked {
-                    state.dpc_activation_allowed = false;
-                    state.card_irq_masked = true;
-                }
-            });
-            if !cursor.dpc_irq_acked {
-                cursor.config_control = 1;
-            }
-            cursor.phase = SdioExternalDmaRequestPhase::DpcActivatePendingAckHealth;
+            cursor.config_control = 1;
+            cursor.phase = SdioExternalDmaRequestPhase::DpcActivatePolicyEnableAfterDisposition;
         }
         SdioExternalDmaRequestPhase::DpcActivatePendingAckHealth => {
-            sdio_record_dpc_health(!cursor.dpc_irq_acked);
-            cursor.phase = if cursor.dpc_irq_acked {
-                SdioExternalDmaRequestPhase::DpcActivateStatusRead
-            } else {
-                SdioExternalDmaRequestPhase::DpcActivatePolicyEnableAfterDisposition
-            };
+            cursor.config_control = 1;
+            cursor.phase = SdioExternalDmaRequestPhase::DpcActivatePolicyEnableAfterDisposition;
         }
         SdioExternalDmaRequestPhase::DpcActivateStatusRead => {
             cursor.response0 = io.read32(SDHCI_INT_STATUS);
@@ -13121,14 +13155,24 @@ fn sdio_retained_dpc_activate_turn_with<I: SdioTransferIo>(
             match cursor.dpc_disposition {
                 SdioDpcCaptureDisposition::HoldPending => {
                     SDIO_RUNTIME_STATE.with_mut(|state| state.card_irq_masked = true);
-                    // Preserve and re-signal the exact committed event. It owns
-                    // the level source and any host IRQ acknowledgement; this
-                    // activation must not publish or acknowledge it again.
-                    cursor.phase = SdioExternalDmaRequestPhase::DpcActivateSignal;
+                    // Preserve and re-signal the exact committed event without
+                    // publishing it again. A newly delivered IRQ epoch is
+                    // distinct from the durable event identity and must still
+                    // be acknowledged after this inspection.
+                    cursor.phase = if cursor.dpc_irq_ack_epoch == 0 {
+                        SdioExternalDmaRequestPhase::DpcActivateSignal
+                    } else {
+                        SdioExternalDmaRequestPhase::DpcActivateIrqAck
+                    };
                 }
                 SdioDpcCaptureDisposition::InspectSource => {
                     if cursor.response0 & SDHCI_INT_CARD_INT != 0 || force_source_probe {
                         cursor.phase = SdioExternalDmaRequestPhase::DpcActivateCaptureState;
+                    } else if cursor.dpc_irq_ack_epoch != 0 {
+                        // The delivered cap still needs one exact ACK even
+                        // when the retained status sample proves no CARD_INT.
+                        // Rearm follows that ACK on a later retained turn.
+                        cursor.phase = SdioExternalDmaRequestPhase::DpcActivateIrqAck;
                     } else {
                         SDIO_RUNTIME_STATE.with_mut(|state| {
                             if state.card_irq_masked {
@@ -13147,8 +13191,11 @@ fn sdio_retained_dpc_activate_turn_with<I: SdioTransferIo>(
                         state.card_irq_masked = true;
                     });
                     cursor.config_control = 1;
-                    cursor.phase =
-                        SdioExternalDmaRequestPhase::DpcActivatePolicyEnableAfterDisposition;
+                    cursor.phase = if cursor.dpc_irq_ack_epoch == 0 {
+                        SdioExternalDmaRequestPhase::DpcActivatePolicyEnableAfterDisposition
+                    } else {
+                        SdioExternalDmaRequestPhase::DpcActivateIrqAck
+                    };
                 }
             }
         }
@@ -13260,15 +13307,10 @@ fn sdio_retained_dpc_activate_turn_with<I: SdioTransferIo>(
             if matches!(cursor.dpc_publish_result, DpcRingPublishResult::BadEpoch) {
                 cursor.config_control = 1;
             }
-            cursor.phase = if cursor.dpc_publish_coalesced {
-                // The pre-existing event owns the level source and any host
-                // acknowledgement. Re-signal it without a second ACK.
-                SdioExternalDmaRequestPhase::DpcActivateSignal
-            } else if force_source_probe && cursor.response0 & SDHCI_INT_CARD_INT == 0 {
-                // A watchdog source probe did not consume a delivered host
-                // interrupt, so there is no IRQ-handler acknowledgement to
-                // issue. The published event remains the sole authority for
-                // the CYW43 DPC to inspect and clear the function-side source.
+            cursor.phase = if cursor.dpc_irq_ack_epoch == 0 {
+                // A watchdog probe without a delivered notification still
+                // publishes authoritative source work, but it must not ACK an
+                // IRQ-handler cap that does not owe an acknowledgement.
                 SdioExternalDmaRequestPhase::DpcActivateSignal
             } else {
                 SdioExternalDmaRequestPhase::DpcActivateIrqAck
@@ -13276,25 +13318,49 @@ fn sdio_retained_dpc_activate_turn_with<I: SdioTransferIo>(
         }
         SdioExternalDmaRequestPhase::DpcActivateIrqAck => {
             let handler_slot = SDIO_RUNTIME_STATE.with_ref(|state| state.irq_handler_slot);
+            cursor.pre_issue_attempt = cursor.pre_issue_attempt.saturating_add(1);
             cursor.dpc_irq_acked = runtime_irq_handler_ack(handler_slot);
             cursor.phase = SdioExternalDmaRequestPhase::DpcActivateAckState;
         }
         SdioExternalDmaRequestPhase::DpcActivateAckState => {
+            let retries_exhausted =
+                !cursor.dpc_irq_acked && cursor.pre_issue_attempt >= SDIO_DPC_IRQ_ACK_ATTEMPTS;
             SDIO_RUNTIME_STATE.with_mut(|state| {
-                state.irq_ack_pending = !cursor.dpc_irq_acked;
-                if !cursor.dpc_irq_acked {
+                if retries_exhausted {
                     state.dpc_activation_allowed = false;
                     state.card_irq_masked = true;
                 }
             });
-            if !cursor.dpc_irq_acked {
+            sdio_record_irq_ack_result_for_epoch(cursor.dpc_irq_ack_epoch, cursor.dpc_irq_acked);
+            if retries_exhausted {
                 cursor.config_control = 1;
             }
             cursor.phase = SdioExternalDmaRequestPhase::DpcActivateAckHealth;
         }
         SdioExternalDmaRequestPhase::DpcActivateAckHealth => {
-            sdio_record_dpc_health(!cursor.dpc_irq_acked);
-            cursor.phase = SdioExternalDmaRequestPhase::DpcActivateSignal;
+            cursor.phase =
+                if !cursor.dpc_irq_acked && cursor.pre_issue_attempt < SDIO_DPC_IRQ_ACK_ATTEMPTS {
+                    // The event is already durable and CARD_INT remains masked.
+                    // Retry only the exact kernel acknowledgement on a separately
+                    // granted owner turn; never re-read, republish, or replay the
+                    // device-side operation.
+                    SdioExternalDmaRequestPhase::DpcActivateIrqAck
+                } else if cursor.config_control != 0 {
+                    SdioExternalDmaRequestPhase::DpcActivatePolicyEnableAfterDisposition
+                } else if cursor.dpc_disposition == SdioDpcCaptureDisposition::InspectSource
+                    && cursor.response0 & SDHCI_INT_CARD_INT == 0
+                    && !force_source_probe
+                {
+                    SDIO_RUNTIME_STATE.with_mut(|state| {
+                        if state.card_irq_masked {
+                            state.card_irq_masked = false;
+                            state.card_irq_rearms = state.card_irq_rearms.saturating_add(1);
+                        }
+                    });
+                    SdioExternalDmaRequestPhase::DpcActivatePolicyEnableAfterDisposition
+                } else {
+                    SdioExternalDmaRequestPhase::DpcActivateSignal
+                };
         }
         SdioExternalDmaRequestPhase::DpcActivateSignal => {
             if !matches!(cursor.dpc_publish_result, DpcRingPublishResult::BadEpoch) {
@@ -14925,7 +14991,7 @@ fn service_sdio_dpc_activate(sequence: u32, requested: u32) -> DriverTaskComplet
     sdio_record_dpc_health(false);
     let host_int_status = sdio_read32(SDHCI_INT_STATUS);
     let activation_serviced = if host_int_status & SDHCI_INT_CARD_INT != 0 {
-        sdio_publish_card_interrupt_event(host_int_status, 0)
+        sdio_publish_card_interrupt_event(host_int_status, 0, None)
     } else {
         sdio_runtime_service_notification(0)
     };
@@ -34761,6 +34827,9 @@ static TEST_SDIO_HOST_INT_STATUS_RESPONSE: AtomicU32 = AtomicU32::new(0);
 static TEST_RUNTIME_IRQ_ACK_CALLS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(all(not(target_os = "none"), test))]
+static TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
 static TEST_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -43352,8 +43421,18 @@ fn runtime_irq_handler_ack(handler_slot: u32) -> bool {
 #[cfg(not(target_os = "none"))]
 fn runtime_irq_handler_ack(_handler_slot: u32) -> bool {
     #[cfg(test)]
-    TEST_RUNTIME_IRQ_ACK_CALLS.fetch_add(1, Ordering::AcqRel);
-    true
+    {
+        TEST_RUNTIME_IRQ_ACK_CALLS.fetch_add(1, Ordering::AcqRel);
+        return TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_err();
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
 }
 
 fn sdio_arm_card_interrupt_after_init() -> bool {
@@ -46669,9 +46748,11 @@ mod tests {
             state.dpc_activation_allowed = true;
         });
 
+        let ack_epoch = sdio_latch_irq_ack();
         assert!(sdio_publish_card_interrupt_event(
             SDHCI_INT_CARD_INT,
             DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            Some(ack_epoch),
         ));
         SDIO_RUNTIME_STATE.with_ref(|state| {
             assert!(state.card_irq_masked);
@@ -73399,6 +73480,18 @@ mod tests {
                 assert_eq!(state.external_dma_request, cursor_before);
             });
             assert_eq!(dpc_event_ring_read_at(dpc_base), ring_before);
+            assert!(sdio_runtime_service_notification(
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE ^ 1,
+            ));
+            assert_eq!(
+                TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+                acks_before,
+                "an unrelated doorbell may not discharge the latched IRQ beside the owner cursor",
+            );
+            SDIO_RUNTIME_STATE.with_ref(|state| {
+                assert!(state.irq_ack_pending);
+                assert_eq!(state.external_dma_request, cursor_before);
+            });
             drop(_production_mode);
         }
     }
@@ -73523,6 +73616,120 @@ mod tests {
     }
 
     #[test]
+    fn sdio_retained_card_irq_publishes_before_retrying_only_the_exact_ack() {
+        let _guard = test_guard();
+        let epoch = 0x4359_d115;
+        initialize_production_foreground_pair(epoch);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = false;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+        });
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: epoch,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let command = stage_sdio_descriptor_service_command(0x5306_d115, descriptor);
+        let ack_epoch = sdio_latch_irq_ack();
+        assert_ne!(ack_epoch, 0);
+        TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING.store(1, Ordering::Release);
+        let acks_before = TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.set_register(SDHCI_INT_STATUS, SDHCI_INT_CARD_INT);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let mut phases = Vec::new();
+        let mut durable_before_first_ack = None;
+        let completion = loop {
+            let phase = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase);
+            if phase == SdioExternalDmaRequestPhase::DpcActivateIrqAck {
+                let ring = dpc_event_ring_read_at(dpc_base);
+                assert_ne!(
+                    ring.producer, ring.consumer,
+                    "CARD_INT must be durable before the kernel IRQ acknowledgement",
+                );
+                durable_before_first_ack.get_or_insert(ring);
+            }
+            match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
+                RuntimeCommandTurn::Pending => {
+                    phases.push(
+                        SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase),
+                    );
+                    assert!(phases.len() < 64, "retained CARD_INT ACK bound");
+                }
+                RuntimeCommandTurn::Complete(completion) => break completion,
+            }
+        };
+        drop(_production_mode);
+
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::progress(command.sequence, 1),
+            "phases={phases:?}",
+        );
+        assert_eq!(
+            phases
+                .iter()
+                .filter(|phase| { **phase == SdioExternalDmaRequestPhase::DpcActivateIrqAck })
+                .count(),
+            2,
+            "one failed ACK retries only the retained ACK phase",
+        );
+        assert_eq!(
+            TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            acks_before + 2,
+        );
+        let durable_before_first_ack =
+            durable_before_first_ack.expect("the retained cursor must reach IRQ ACK");
+        let final_ring = dpc_event_ring_read_at(dpc_base);
+        assert_eq!(
+            final_ring.ack_failures,
+            durable_before_first_ack.ack_failures + 1,
+            "one failed IRQ syscall must publish exactly one health failure",
+        );
+        assert_eq!(final_ring.producer, durable_before_first_ack.producer);
+        assert_eq!(final_ring.consumer, durable_before_first_ack.consumer);
+        assert_eq!(final_ring.entries, durable_before_first_ack.entries);
+        let event = match dpc_event_ring_peek_at(dpc_base, epoch) {
+            DpcRingConsumeResult::Event(event) => event,
+            other => panic!("CARD_INT event must remain durable after ACK retry: {other:?}"),
+        };
+        assert_eq!(event.host_int_status, SDHCI_INT_CARD_INT);
+        assert_eq!(event.reason, DPC_REASON_SDIO_CARD_INTERRUPT);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.card_irq_masked);
+            assert!(state.dpc_activation_allowed);
+            assert!(!state.irq_ack_pending);
+            assert_eq!(state.dpc_events_published, 1);
+            assert_eq!(state.card_irq_captures, 1);
+        });
+    }
+
+    #[test]
+    fn sdio_older_ack_completion_cannot_clear_a_newer_irq_epoch() {
+        let _guard = test_guard();
+        let older = sdio_latch_irq_ack();
+        let newer = sdio_latch_irq_ack();
+        assert_ne!(older, newer);
+
+        sdio_record_irq_ack_result_for_epoch(older, true);
+
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.irq_ack_pending);
+            assert_eq!(state.irq_ack_epoch, newer);
+        });
+    }
+
+    #[test]
     fn sdio_pending_irq_ack_retry_is_not_acked_twice_before_rearm() {
         let _guard = test_guard();
         let epoch = 0x4359_d113;
@@ -73559,25 +73766,37 @@ mod tests {
     #[test]
     fn sdio_retained_dpc_source_probe_coalesces_existing_events_without_second_ack() {
         let _guard = test_guard();
-        for (case, host_status, reason, event_flags) in [
+        for (case, host_status, reason, event_flags, owed_ack) in [
             (
                 "hintless",
                 0,
                 DPC_REASON_SDIO_SOURCE_PENDING,
                 DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+                false,
             ),
             (
                 "latched-card-int",
                 SDHCI_INT_CARD_INT,
                 DPC_REASON_SDIO_CARD_INTERRUPT,
                 DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+                false,
+            ),
+            (
+                "hintless-new-irq-epoch",
+                0,
+                DPC_REASON_SDIO_SOURCE_PENDING,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+                true,
+            ),
+            (
+                "latched-card-int-new-irq-epoch",
+                SDHCI_INT_CARD_INT,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+                true,
             ),
         ] {
-            let epoch = if host_status == 0 {
-                0x4359_d201
-            } else {
-                0x4359_d202
-            };
+            let epoch = 0x4359_d201 + u32::from(host_status != 0) + if owed_ack { 2 } else { 0 };
             initialize_production_foreground_pair(epoch);
             SDIO_RUNTIME_STATE.with_mut(|state| {
                 state.dpc_link_ready = true;
@@ -73618,6 +73837,10 @@ mod tests {
             io.set_register(SDHCI_INT_STATUS, host_status);
             let mut phases = Vec::new();
             let _production_mode = ProductionForegroundModeGuard::enter();
+            if owed_ack {
+                assert_ne!(sdio_latch_irq_ack(), 0);
+            }
+            let acks_before = TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire);
             let completion = loop {
                 match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
                     RuntimeCommandTurn::Pending => {
@@ -73656,8 +73879,13 @@ mod tests {
                 "{case}: a retained event must not be published twice",
             );
             assert!(
-                !phases.contains(&SdioExternalDmaRequestPhase::DpcActivateIrqAck),
-                "{case}: the existing event owns any IRQ acknowledgement",
+                phases.contains(&SdioExternalDmaRequestPhase::DpcActivateIrqAck) == owed_ack,
+                "{case}: only a newly delivered epoch owns an IRQ acknowledgement",
+            );
+            assert_eq!(
+                TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+                acks_before + u32::from(owed_ack),
+                "{case}: the newly delivered epoch is acknowledged exactly once",
             );
             SDIO_RUNTIME_STATE.with_ref(|state| {
                 assert_eq!(state.dpc_events_published, 0, "{case}");
@@ -73667,6 +73895,122 @@ mod tests {
                 assert!(!state.irq_ack_pending, "{case}");
             });
         }
+    }
+
+    #[test]
+    fn sdio_retained_dpc_ack_epoch_is_consumed_before_no_source_rearm() {
+        let _guard = test_guard();
+        let epoch = 0x4359_d205;
+        initialize_production_foreground_pair(epoch);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = true;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+        });
+        assert_ne!(sdio_latch_irq_ack(), 0);
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: epoch,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let command = stage_sdio_descriptor_service_command(0x5306_d205, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.set_register(SDHCI_INT_STATUS, 0);
+        let acks_before = TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire);
+        let mut phases = Vec::new();
+        let completion = loop {
+            match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
+                RuntimeCommandTurn::Pending => {
+                    phases.push(
+                        SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase),
+                    );
+                    assert!(phases.len() < 64, "no-source ACK/rearm retained bound");
+                }
+                RuntimeCommandTurn::Complete(completion) => break completion,
+            }
+        };
+
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::progress(command.sequence, epoch),
+            "phases={phases:?}",
+        );
+        assert!(phases.contains(&SdioExternalDmaRequestPhase::DpcActivateIrqAck));
+        assert_eq!(
+            TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            acks_before + 1,
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.irq_ack_pending);
+            assert!(!state.card_irq_masked);
+            assert_eq!(state.card_irq_rearms, 1);
+        });
+    }
+
+    #[test]
+    fn sdio_retained_dpc_bad_ring_acknowledges_exact_epoch_before_failing_closed() {
+        let _guard = test_guard();
+        let epoch = 0x4359_d206;
+        initialize_production_foreground_pair(epoch);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = true;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+        });
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        let mut ring = dpc_event_ring_read_at(dpc_base);
+        ring.epoch = epoch.wrapping_add(1);
+        assert!(dpc_event_ring_encode(
+            RuntimeRingWindow::dpc_at(dpc_base).expect("generated DPC ring window"),
+            ring,
+        ));
+        assert_ne!(sdio_latch_irq_ack(), 0);
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: epoch,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let command = stage_sdio_descriptor_service_command(0x5306_d206, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let acks_before = TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire);
+        let mut phases = Vec::new();
+        let completion = loop {
+            match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
+                RuntimeCommandTurn::Pending => {
+                    phases.push(
+                        SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase),
+                    );
+                    assert!(phases.len() < 64, "bad-ring ACK/fault retained bound");
+                }
+                RuntimeCommandTurn::Complete(completion) => break completion,
+            }
+        };
+        drop(_production_mode);
+
+        assert_eq!(completion.code, COMPLETION_FAULT, "phases={phases:?}");
+        assert!(phases.contains(&SdioExternalDmaRequestPhase::DpcActivateIrqAck));
+        assert_eq!(
+            TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            acks_before + 1,
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.irq_ack_pending);
+            assert!(state.card_irq_masked);
+            assert!(state.dpc_poisoned);
+            assert!(!state.dpc_activation_allowed);
+        });
     }
 
     #[test]

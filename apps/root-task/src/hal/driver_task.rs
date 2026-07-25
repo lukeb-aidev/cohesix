@@ -3488,14 +3488,23 @@ pub(crate) fn reset_cyw43_sdio_pair_recovery_for_test() {
     CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
     CYW43_SDIO_PAIR_RESTART_PENDING.store(0, Ordering::Release);
     CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
+    clear_cyw43_pair_terminal_drain();
     DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE.store(0, Ordering::Release);
     DRIVER_TASK_TEST_STEADY_PRIORITY_CUTOVER_FAILURE_TCB.store(0, Ordering::Release);
+    DRIVER_TASK_TEST_FORCE_DEFERRED_RUNTIME_INIT_REPLAY.store(0, Ordering::Release);
 }
 
 /// Publish recovery-context availability without fabricating runtime commands.
 #[cfg(all(feature = "kernel", test))]
 pub(crate) fn test_publish_cyw43_sdio_pair_restart_context_available() {
     DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE.store(1, Ordering::Release);
+}
+
+/// Exercise physical-profile deferred descriptor replay in host tests.
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_force_deferred_runtime_init_replay(enabled: bool) {
+    DRIVER_TASK_TEST_FORCE_DEFERRED_RUNTIME_INIT_REPLAY
+        .store(usize::from(enabled), Ordering::Release);
 }
 
 /// Enter the post-restart context-replay ownership state for supervisor tests.
@@ -3909,10 +3918,20 @@ static CYW43_SDIO_PAIR_RESTART_PENDING: AtomicU32 = AtomicU32::new(0);
 // 2=the explicit driver_task_net recovery scope owns that replay.
 #[cfg(feature = "kernel")]
 static CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_PAIR_TERMINAL_DRAIN_REQUEST: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_PAIR_TERMINAL_DRAIN_GENERATION: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(feature = "kernel", test))]
 static DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(feature = "kernel", test))]
 static DRIVER_TASK_TEST_STEADY_PRIORITY_CUTOVER_FAILURE_TCB: AtomicUsize = AtomicUsize::new(0);
+#[cfg(all(feature = "kernel", test))]
+static DRIVER_TASK_TEST_FORCE_DEFERRED_RUNTIME_INIT_REPLAY: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_OBSERVED_US_SERIAL: AtomicU32 = AtomicU32::new(0);
@@ -4260,6 +4279,70 @@ fn active_driver_task_retained_request_snapshot(
         state,
         command_fingerprint,
     })
+}
+
+/// Open the sole pair-fenced continuation lane for one already-issued CYW43
+/// request.
+///
+/// The authority is valid only while the same immutable request, generation,
+/// and command fingerprint remain active. It cannot admit prepared or fresh
+/// work and is cleared before pair teardown.
+#[cfg(feature = "kernel")]
+pub(crate) fn begin_cyw43_pair_terminal_drain(generation: u32, request: u32) -> bool {
+    if request == 0 {
+        return false;
+    }
+    let Some(snapshot) =
+        active_driver_task_retained_request_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+    else {
+        return false;
+    };
+    let DriverTaskRetainedRequestState::Issued {
+        request: active_request,
+        command,
+    } = snapshot.state
+    else {
+        return false;
+    };
+    if active_request != request || snapshot.command_fingerprint == 0 {
+        return false;
+    }
+    let current = CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire);
+    if current != 0 && current != request {
+        return false;
+    }
+    CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(generation, Ordering::Relaxed);
+    // Engine-init commands intentionally keep ABI aux1 at zero, while normal
+    // CYW43 descriptor commands carry the root generation there. Preserve
+    // both independent identities: the root-owned generation controls
+    // revocation, and the exact immutable command aux1 participates in the
+    // retained-slot fingerprint fence.
+    CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(command.aux1, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.store(snapshot.command_fingerprint, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_REQUEST.store(request, Ordering::Release);
+    true
+}
+
+/// Close one exact pair-fenced terminal continuation authority.
+#[cfg(feature = "kernel")]
+pub(crate) fn finish_cyw43_pair_terminal_drain(generation: u32, request: u32) {
+    if CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire) == request
+        && CYW43_PAIR_TERMINAL_DRAIN_GENERATION.load(Ordering::Acquire) == generation
+    {
+        CYW43_PAIR_TERMINAL_DRAIN_REQUEST.store(0, Ordering::Release);
+        CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(0, Ordering::Relaxed);
+        CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(0, Ordering::Relaxed);
+        CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.store(0, Ordering::Relaxed);
+    }
+}
+
+/// Revoke any terminal-drain exception before deterministic pair teardown.
+#[cfg(feature = "kernel")]
+pub(crate) fn clear_cyw43_pair_terminal_drain() {
+    CYW43_PAIR_TERMINAL_DRAIN_REQUEST.store(0, Ordering::Release);
+    CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(0, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(0, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.store(0, Ordering::Relaxed);
 }
 
 /// Snapshot the exact root-owned continuation state without advancing it.
@@ -5606,6 +5689,42 @@ enum DriverTaskRetainedLeaseTurn {
     Pending,
     ReadyToComplete,
     Failed,
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pair_fence_allows_exact_terminal_retained_turn(
+    slot: &DriverTaskCommandSlot,
+    mode: DriverTaskRingCommandMode,
+    command: DriverTaskCommandRecord,
+    command_fingerprint: u32,
+) -> bool {
+    let authorized_request = CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire);
+    if authorized_request == 0
+        || mode != DriverTaskRingCommandMode::RetainedTurn
+        || command_fingerprint == 0
+        || slot.active.load(Ordering::Acquire) == 0
+        || slot.request_seq.load(Ordering::Acquire) != authorized_request as usize
+        || CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.load(Ordering::Acquire) != command.aux1
+        || CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.load(Ordering::Acquire) != command_fingerprint
+        || slot.active_command_fingerprint.load(Ordering::Acquire) != command_fingerprint
+        || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
+    {
+        return false;
+    }
+    matches!(
+        DriverTaskRetainedLeasePhase::from_usize(
+            slot.retained_priority_lease_phase.load(Ordering::Acquire)
+        ),
+        Some(
+            DriverTaskRetainedLeasePhase::GrantRequired
+                | DriverTaskRetainedLeasePhase::Granted
+                | DriverTaskRetainedLeasePhase::Committed
+                | DriverTaskRetainedLeasePhase::Issued
+                | DriverTaskRetainedLeasePhase::RestorePrimary
+                | DriverTaskRetainedLeasePhase::RestoreBus
+                | DriverTaskRetainedLeasePhase::ReadyToComplete
+        )
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -9125,6 +9244,7 @@ fn step_cyw43_sdio_pair_restart_with<E: Cyw43SdioPairRestartExecutor>(
 #[cfg(feature = "kernel")]
 pub fn begin_cyw43_sdio_pair_restart(
 ) -> Result<Cyw43SdioPairRestartCursor, Cyw43SdioPairRestartFailure> {
+    clear_cyw43_pair_terminal_drain();
     if CYW43_SDIO_PAIR_RESTART_IN_PROGRESS
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -9241,7 +9361,8 @@ pub fn ensure_deferred_runtime_init_descriptor(
             contract,
             hot_path,
             DriverTaskDescriptorReplayMode::Bounded,
-        ),
+        )
+        .0,
         DriverTaskDescriptorReplayTurn::Complete
     )
 }
@@ -9260,6 +9381,24 @@ pub fn step_deferred_runtime_init_descriptor(
         hot_path,
         DriverTaskDescriptorReplayMode::RetainedTurn,
     )
+    .0
+}
+
+/// Execute one retained descriptor-replay turn and preserve any exact terminal
+/// completion consumed by that turn.
+#[cfg(feature = "kernel")]
+pub(crate) fn step_deferred_runtime_init_descriptor_with_completion(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+) -> (
+    DriverTaskDescriptorReplayTurn,
+    Option<DriverTaskCompletionRecord>,
+) {
+    service_deferred_runtime_init_descriptor_turn(
+        contract,
+        hot_path,
+        DriverTaskDescriptorReplayMode::RetainedTurn,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -9267,9 +9406,16 @@ fn service_deferred_runtime_init_descriptor_turn(
     contract: DriverTaskContract,
     hot_path: DriverTaskHotPath,
     mode: DriverTaskDescriptorReplayMode,
-) -> DriverTaskDescriptorReplayTurn {
-    if !physical_pi_driver_task_only_owner_state_active() {
-        return DriverTaskDescriptorReplayTurn::Complete;
+) -> (
+    DriverTaskDescriptorReplayTurn,
+    Option<DriverTaskCompletionRecord>,
+) {
+    let replay_required = physical_pi_driver_task_only_owner_state_active();
+    #[cfg(test)]
+    let replay_required = replay_required
+        || DRIVER_TASK_TEST_FORCE_DEFERRED_RUNTIME_INIT_REPLAY.load(Ordering::Acquire) != 0;
+    if !replay_required {
+        return (DriverTaskDescriptorReplayTurn::Complete, None);
     }
     if hot_path.contract() != contract {
         emit_driver_task_resource_init_status(
@@ -9279,14 +9425,17 @@ fn service_deferred_runtime_init_descriptor_turn(
             "wrong-contract",
             None,
         );
-        return DriverTaskDescriptorReplayTurn::Failed("wrong-contract");
+        return (
+            DriverTaskDescriptorReplayTurn::Failed("wrong-contract"),
+            None,
+        );
     }
     let slot = deferred_runtime_init_slot(hot_path);
     if slot.initialized.load(Ordering::Acquire) != 0 {
-        return DriverTaskDescriptorReplayTurn::Complete;
+        return (DriverTaskDescriptorReplayTurn::Complete, None);
     }
     if slot.pending.load(Ordering::Acquire) == 0 {
-        return DriverTaskDescriptorReplayTurn::Complete;
+        return (DriverTaskDescriptorReplayTurn::Complete, None);
     }
     let descriptor = slot.load();
     let Some(task_key) = driver_task_contract_key(contract) else {
@@ -9298,7 +9447,10 @@ fn service_deferred_runtime_init_descriptor_turn(
             None,
         );
         emit_deferred_runtime_init_status(contract, hot_path, "invalid-contract");
-        return DriverTaskDescriptorReplayTurn::Failed("invalid-contract");
+        return (
+            DriverTaskDescriptorReplayTurn::Failed("invalid-contract"),
+            None,
+        );
     };
     if descriptor.hot_path != hot_path.as_u32()
         || descriptor.role_bit != hot_path.role_bit() as u32
@@ -9313,7 +9465,10 @@ fn service_deferred_runtime_init_descriptor_turn(
             None,
         );
         emit_deferred_runtime_init_status(contract, hot_path, "invalid-descriptor");
-        return DriverTaskDescriptorReplayTurn::Failed("invalid-descriptor");
+        return (
+            DriverTaskDescriptorReplayTurn::Failed("invalid-descriptor"),
+            None,
+        );
     }
     let Some(frame) = describe_driver_runtime_init_descriptor(&descriptor) else {
         emit_driver_task_resource_init_status(
@@ -9324,7 +9479,7 @@ fn service_deferred_runtime_init_descriptor_turn(
             None,
         );
         emit_deferred_runtime_init_status(contract, hot_path, "stage-failed");
-        return DriverTaskDescriptorReplayTurn::Failed("stage-failed");
+        return (DriverTaskDescriptorReplayTurn::Failed("stage-failed"), None);
     };
     let Some(descriptor_bytes) = driver_runtime_init_descriptor_bytes(&descriptor) else {
         emit_driver_task_resource_init_status(
@@ -9335,7 +9490,7 @@ fn service_deferred_runtime_init_descriptor_turn(
             None,
         );
         emit_deferred_runtime_init_status(contract, hot_path, "stage-failed");
-        return DriverTaskDescriptorReplayTurn::Failed("stage-failed");
+        return (DriverTaskDescriptorReplayTurn::Failed("stage-failed"), None);
     };
     let staging_segments = [DriverTaskStagingSegment::ring_frame(descriptor_bytes, 0)];
     let command = runtime_init_command(
@@ -9377,18 +9532,24 @@ fn service_deferred_runtime_init_descriptor_turn(
     if complete {
         if !record_driver_runtime_descriptor_seal(contract, hot_path, &descriptor) {
             emit_deferred_runtime_init_status(contract, hot_path, "seal-failed");
-            return DriverTaskDescriptorReplayTurn::Failed("seal-failed");
+            return (
+                DriverTaskDescriptorReplayTurn::Failed("seal-failed"),
+                completion,
+            );
         }
         slot.initialized.store(1, Ordering::Release);
         slot.pending.store(0, Ordering::Release);
         emit_deferred_runtime_init_status(contract, hot_path, "resumed");
-        DriverTaskDescriptorReplayTurn::Complete
+        (DriverTaskDescriptorReplayTurn::Complete, completion)
     } else if completion.is_some() {
         emit_deferred_runtime_init_status(contract, hot_path, "unexpected-completion");
-        DriverTaskDescriptorReplayTurn::Failed("unexpected-completion")
+        (
+            DriverTaskDescriptorReplayTurn::Failed("unexpected-completion"),
+            completion,
+        )
     } else {
         emit_deferred_runtime_init_status(contract, hot_path, "pending");
-        DriverTaskDescriptorReplayTurn::Pending
+        (DriverTaskDescriptorReplayTurn::Pending, None)
     }
 }
 
@@ -11491,21 +11652,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     if !driver_task_ring_deadline_allows_attempt(recovery_deadline.as_deref_mut()) {
         return None;
     }
-    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-        && cyw43_sdio_pair_submission_blocked(
-            CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire),
-            CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire),
-            CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire),
-        )
-    {
-        emit_driver_task_ring_resource_submit_status(
-            contract,
-            command,
-            "runtime-ring-submit",
-            "pair-context-recovery-required",
-        );
-        return None;
-    }
     let Some(task_key) = driver_task_contract_key(contract) else {
         emit_driver_task_ring_resource_submit_status(
             contract,
@@ -11566,6 +11712,27 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
     let staging_fingerprint = driver_task_staging_segments_fingerprint(staging_segments);
     let command_fingerprint = driver_task_ring_command_fingerprint(command, staging_fingerprint);
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && cyw43_sdio_pair_submission_blocked(
+            CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire),
+            CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire),
+            CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire),
+        )
+        && !cyw43_pair_fence_allows_exact_terminal_retained_turn(
+            slot,
+            mode,
+            command,
+            command_fingerprint,
+        )
+    {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "pair-context-recovery-required",
+        );
+        return None;
+    }
     let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
     let completion_ptr =
         (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
@@ -16529,6 +16696,71 @@ mod tests {
         assert!(!cyw43_sdio_pair_context_replay_entry_allowed(0, 0, 2));
         assert!(sdio_handoff_must_delete_endpoint(11, 12));
         assert!(!sdio_handoff_must_delete_endpoint(12, 12));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pair_fence_exact_retained_turn_requires_explicit_terminal_drain_authority() {
+        clear_cyw43_pair_terminal_drain();
+        let slot = DriverTaskCommandSlot::new();
+        let mut command = DriverTaskCommandRecord::service(
+            41,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+        );
+        command.aux1 = 7;
+        let fingerprint = 0x4359_d817;
+        slot.active.store(1, Ordering::Release);
+        slot.request_seq.store(41, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
+        );
+
+        assert!(
+            !cyw43_pair_fence_allows_exact_terminal_retained_turn(
+                &slot,
+                DriverTaskRingCommandMode::RetainedTurn,
+                command,
+                fingerprint,
+            ),
+            "an exact issued slot is still fenced without supervisor drain authority",
+        );
+
+        CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(command.aux1, Ordering::Relaxed);
+        CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(command.aux1, Ordering::Relaxed);
+        CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.store(fingerprint, Ordering::Relaxed);
+        CYW43_PAIR_TERMINAL_DRAIN_REQUEST.store(command.sequence, Ordering::Release);
+        assert!(cyw43_pair_fence_allows_exact_terminal_retained_turn(
+            &slot,
+            DriverTaskRingCommandMode::RetainedTurn,
+            command,
+            fingerprint,
+        ));
+
+        command.aux1 = command.aux1.wrapping_add(1);
+        assert!(!cyw43_pair_fence_allows_exact_terminal_retained_turn(
+            &slot,
+            DriverTaskRingCommandMode::RetainedTurn,
+            command,
+            fingerprint,
+        ));
+
+        command.aux1 = 0;
+        CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(9, Ordering::Relaxed);
+        CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(0, Ordering::Relaxed);
+        assert!(
+            cyw43_pair_fence_allows_exact_terminal_retained_turn(
+                &slot,
+                DriverTaskRingCommandMode::RetainedTurn,
+                command,
+                fingerprint,
+            ),
+            "engine-init aux1 remains zero while root retains an independent generation",
+        );
+        clear_cyw43_pair_terminal_drain();
     }
 
     #[cfg(feature = "kernel")]
