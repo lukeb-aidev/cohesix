@@ -11114,6 +11114,7 @@ where
                     0x5344_0001 => "sdio-intake-seal-busy",
                     0x5344_0002 => "sdio-intake-seal-missing",
                     0x5344_0003 => "linked-runtime-generation-rejected",
+                    0x5344_0004 => "cyw43-control-owner-mismatch",
                     _ => crate::drivers::driver_task_net::cyw43_runtime_fault_reason(
                         terminal.completion_detail,
                     ),
@@ -18693,6 +18694,44 @@ mod tests {
         assert!(rendered.contains("timeout_reason=no-rframe"), "{rendered}");
         assert!(rendered.contains("timeout_value=0"), "{rendered}");
         assert!(rendered.contains("tx_state=submitted"), "{rendered}");
+
+        let nonmatching = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            result: 0x4308_0001,
+            ..fault
+        };
+        assert_eq!(
+            TestPump::wifi_control_exchange_timeout_reason(nonmatching.result),
+            "nonmatching-reply"
+        );
+        assert_eq!(
+            TestPump::wifi_control_exchange_timeout_tx_state(nonmatching.result),
+            "submitted"
+        );
+        let nonmatching_rendered = TestPump::wifi_diag_cyw43_fault_control(nonmatching, true);
+        assert!(
+            nonmatching_rendered.contains("timeout_reason=nonmatching-reply"),
+            "{nonmatching_rendered}"
+        );
+        assert!(
+            nonmatching_rendered.contains("timeout_value=1"),
+            "{nonmatching_rendered}"
+        );
+        assert!(
+            nonmatching_rendered.contains("tx_state=submitted"),
+            "{nonmatching_rendered}"
+        );
+
+        let owner_mismatch = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            detail: crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand.as_u16(),
+            reason: "cyw43-control-owner-mismatch",
+            result: 0x5344_0004,
+            ..fault
+        };
+        let owner_mismatch_summary = TestPump::wifi_diag_cyw43_fault_summary(owner_mismatch, true);
+        assert!(
+            owner_mismatch_summary.contains("reason=cyw43-control-owner-mismatch"),
+            "{owner_mismatch_summary}"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -21360,6 +21399,7 @@ mod tests {
             (0x5344_0001, "sdio-intake-seal-busy"),
             (0x5344_0002, "sdio-intake-seal-missing"),
             (0x5344_0003, "linked-runtime-generation-rejected"),
+            (0x5344_0004, "cyw43-control-owner-mismatch"),
         ] {
             let site_line = KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(
                 crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {

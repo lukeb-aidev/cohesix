@@ -245,6 +245,7 @@ const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_REASON_SHIFT: u32 = 16;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_REASON_MASK: u32 = 0xff;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NOT_READY: u32 = 1;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NONMATCHING_REPLY: u32 = 8;
+const CYW43_CONTROL_OWNER_MISMATCH_RESULT: u32 = 0x5344_0004;
 const CYW43_HOST_EAPOL_PRE_ASSOC_POLLS: usize = 8_192;
 const CYW43_HOST_EAPOL_POST_ASSOC_POLLS: usize = 16_384;
 const CYW43_HOST_EAPOL_JOIN_POLLS: usize =
@@ -19657,7 +19658,12 @@ fn cyw43_runtime_fault_reason_for_descriptor(
     descriptor: DriverRuntimeCyw43CommandDescriptor,
     completion: DriverTaskCompletionRecord,
 ) -> &'static str {
-    if descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+    if descriptor.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+        && completion.detail == DriverTaskFaultCode::RejectedCommand.as_u16()
+        && completion.result == CYW43_CONTROL_OWNER_MISMATCH_RESULT
+    {
+        "cyw43-control-owner-mismatch"
+    } else if descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
         && completion.detail == DriverTaskFaultCode::RejectedCommand.as_u16()
     {
         "cyw43-transport-command-admission"
@@ -36895,6 +36901,51 @@ mod tests {
         assert_eq!(
             cyw43_runtime_fault_reason_for_descriptor(descriptor, completion),
             "cyw43-transport-command-admission"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_control_owner_mismatch_reason_uses_exact_typed_result() {
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        let completion = DriverTaskCompletionRecord {
+            sequence: 4,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: DriverTaskFaultCode::RejectedCommand.as_u16(),
+            result: CYW43_CONTROL_OWNER_MISMATCH_RESULT,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+
+        assert_eq!(
+            cyw43_runtime_fault_reason_for_descriptor(descriptor, completion),
+            "cyw43-control-owner-mismatch"
+        );
+        assert_eq!(
+            cyw43_runtime_fault_reason_for_descriptor(
+                descriptor,
+                DriverTaskCompletionRecord {
+                    result: 0,
+                    ..completion
+                },
+            ),
+            "rejected-command"
+        );
+        assert_eq!(
+            cyw43_runtime_fault_reason_for_descriptor(
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+                    ..descriptor
+                },
+                completion,
+            ),
+            "rejected-command"
         );
     }
 

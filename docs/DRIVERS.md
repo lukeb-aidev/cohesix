@@ -1319,27 +1319,57 @@ This as-built closure is authorized by Milestone 26d task
   payload fingerprint. Matching work resumes the lease. The runtime snapshots
   the accepted BCDC request into private state and treats the reciprocal shared
   payload aperture as mutable scratch between physical requests; DPC-delivered
-  event/data frames may reuse that aperture and its staged descriptor. Root's
-  logical lease remains the sole authority for the immutable stage, command,
-  BCDC id, descriptor, and full payload fingerprint. The runtime binds the
-  private request snapshot to root's immutable owner-generation token and
-  restores that snapshot before transmit instead of reparsing staged scratch as
-  continuation identity. If root advances to a new logical generation while
-  the runtime still retains the preceding private cursor, the runtime does not
-  reject, replace, or replay either request. It terminally drains only the
-  preceding cursor; EVENT/DATA completions remain routable, a matching old
-  CONTROL reply is suppressed as the predecessor's terminal barrier, and only
-  then is the already-admitted new descriptor and payload privately
-  snapshotted. A failed or malformed predecessor poisons the pair instead of
-  authorizing the new request. Pending turns restore the exact retained parent
-  input after reciprocal aperture reuse without issuing hardware work. While
-  the lease is active, every other
-  root-originated CYW43 descriptor—including generic op10 prompt/control polls
-  and data TX—retains its cursor and yields without consuming the CYW43
-  operation permit or reaching HAL. The linked-runtime DPC remains the sole
-  wire-order RX producer and may continue to queue CONTROL/EVENT/DATA for the
-  active exchange. This prevents a second root control consumer from racing
-  the pending BCDC transaction.
+  event/data frames may reuse that aperture and its staged descriptor.
+
+  Root's logical lease remains the sole authority for the immutable stage,
+  command, BCDC id, descriptor, and full payload fingerprint. The runtime binds
+  its active cursor to the exact intake-sealed logical request: owner
+  generation, operation, flags, target, payload and total lengths, command,
+  BCDC id, reserved value, and every payload byte must match the retained
+  private request. Physical root-request sequence and payload offset are
+  intentionally excluded because an interleaved completion may release one
+  physical request and restage the same logical continuation at another
+  sequence or bounded scratch location. The runtime still restores its private
+  snapshot before the one transmit instead of treating mutable reciprocal
+  scratch as continuation authority.
+
+  A competing identity cannot advance, drain, retire, replace, or retransmit
+  the retained cursor. The runtime preserves the cursor and private request,
+  latches recovery, pair-restart-required, and DPC-deferred, publishes the
+  pair-restart edge, and returns non-terminal `RejectedCommand` result
+  `0x53440004`. Root therefore retains the original logical lease through the
+  canonical pair fence; there is no cross-owner predecessor drain or
+  same-generation handoff lane.
+
+  After the exact Function 2 transmit, any non-exact CDC reply with `id = 0`
+  and nonzero `status` is unbound evidence, irrespective of its `cmd` field.
+  It is never terminal evidence and never authority to retry, retransmit, or
+  allocate a fresh BCDC id. The runtime consumes and records that frame once,
+  keeps the same exact cursor and logical owner, and admits exactly four
+  subsequent normal DPC/RX continuation turns. Additional unbound frames do
+  not refresh the bound. EVENT/DATA frames remain visible in wire order, and
+  an exact command/id reply may still win during the grace; an exact reply with
+  nonzero status remains an immediate terminal firmware fault. After the fourth
+  turn, the runtime freezes the current FIFO depth exactly once and drains only
+  that already-arrived bounded prefix in wire order. This lets an EVENT followed
+  by the exact CONTROL reply delivered by the final permitted probe complete the
+  request, while later arrivals cannot extend the grace or authorize another
+  probe. An empty frozen prefix, or exhaustion of that prefix without the exact
+  reply, requests recovery and the ordered pair restart and reports
+  `FAULT_CYW43_CONTROL_EXCHANGE` with the existing encoded
+  `NONMATCHING_REPLY` reason 8 and mismatch count (`0x43080001` for one unbound
+  frame). It resets the runtime cursor only after latching that recovery; root's
+  non-terminal logical lease remains fenced until pair scrub. No grace path
+  retransmits or mints a fresh id.
+
+  Pending turns restore the exact retained parent input after reciprocal
+  aperture reuse without issuing hardware work. While the lease is active,
+  every other root-originated CYW43 descriptor—including generic op10
+  prompt/control polls and data TX—retains its cursor and yields without
+  consuming the CYW43 operation permit or reaching HAL. The linked-runtime DPC
+  remains the sole wire-order RX producer and may continue to queue
+  CONTROL/EVENT/DATA for the active exchange. This prevents a second root
+  control consumer from racing the pending BCDC transaction.
 
   An exact terminal drain may bypass normal logical admission only to finish
   the already-issued, pair-fenced physical ticket. It cannot publish fresh
