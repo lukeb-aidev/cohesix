@@ -17567,6 +17567,22 @@ fn cyw43_logical_control_owner_active() -> bool {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_logical_control_owner_blocks_nonowner_descriptor(
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+) -> bool {
+    if descriptor.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE {
+        return false;
+    }
+    let mut slot = CYW43_LOGICAL_CONTROL_OWNER.lock();
+    let Some(mut owner) = *slot else {
+        return false;
+    };
+    owner.blocked_turns = owner.blocked_turns.saturating_add(1);
+    *slot = Some(owner);
+    true
+}
+
+#[cfg(feature = "kernel")]
 pub(crate) fn cyw43_logical_control_owner_diagnostic() -> Option<Cyw43LogicalControlOwnerDiagnostic>
 {
     CYW43_LOGICAL_CONTROL_OWNER
@@ -21064,6 +21080,19 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
             "cyw43-logical-control-owner-busy",
         ));
     }
+    if admission_mode == Cyw43LogicalControlAdmissionMode::Normal
+        && cyw43_logical_control_owner_blocks_nonowner_descriptor(descriptor)
+    {
+        // Linux services one pending BCDC transaction while its DPC continues
+        // to drain wire-order CONTROL/EVENT/DATA. Cohesix preserves that
+        // invariant across seL4 contexts by keeping every root-originated
+        // prompt poll, data TX, and other foreground descriptor behind the
+        // logical op11 lease. The linked runtime's DPC remains the sole RX
+        // producer, so this local yield performs no child or HAL operation.
+        return Err(DriverTaskNetError::RuntimePending(
+            "cyw43-logical-control-owner-busy",
+        ));
+    }
     #[cfg(test)]
     if !cyw43_outer_event_turn_operation_claimed()
         && crate::hal::driver_task::active_driver_task_retained_request(contract)
@@ -23582,6 +23611,29 @@ mod tests {
         assert_eq!(acquired_owner.stage, owner_stage);
         assert_eq!(acquired_owner.expected_id, owner_id);
 
+        begin_cyw43_outer_event_turn();
+        let operations_before_poll = cyw43_outer_event_turn_operation_count();
+        assert!(matches!(
+            run_cyw43_runtime_descriptor_turn_raw(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                1,
+                "cyw43-host-eapol-control-poll",
+                DriverRuntimeCyw43CommandDescriptor {
+                    op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                &[],
+            ),
+            Err(DriverTaskNetError::RuntimePending(
+                "cyw43-logical-control-owner-busy"
+            ))
+        ));
+        assert_eq!(
+            cyw43_outer_event_turn_operation_count(),
+            operations_before_poll,
+            "a generic op10 poll cannot consume the active op11 owner's turn",
+        );
+
         let pending = begin_cyw43_pending_association_join(credentials, 0)
             .expect("association competitor retains its immutable ticket");
         let association_deadline = pending.deadline;
@@ -23622,7 +23674,7 @@ mod tests {
             cyw43_logical_control_owner_diagnostic().expect("logical owner remains active");
         assert_eq!(owner_after_resume.stage, owner_stage);
         assert_eq!(owner_after_resume.expected_id, owner_id);
-        assert_eq!(owner_after_resume.blocked_turns, 2);
+        assert_eq!(owner_after_resume.blocked_turns, 3);
         assert_eq!(
             CYW43_TEST_PROGRESS_OPERATION_COUNT
                 .load(Ordering::Acquire)

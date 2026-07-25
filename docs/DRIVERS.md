@@ -1265,12 +1265,18 @@ This as-built closure is authorized by Milestone 26d task
   payload fingerprint. Matching work resumes the lease. The runtime snapshots
   the accepted BCDC request into private state and treats the reciprocal shared
   payload aperture as mutable scratch between physical requests; DPC-delivered
-  event/data frames may reuse that aperture, so a continuation validates the
-  immutable command, BCDC id, flags, offset, and length and restores the private
-  request snapshot before transmit instead of rereading scratch bytes as
-  ownership. Nonmatching lanes retain their immutable cursors and yield without
-  consuming the CYW43 operation permit, so the matching owner can run later in
-  the same outer EventPump turn.
+  event/data frames may reuse that aperture and its staged descriptor. Root's
+  logical lease remains the sole authority for the immutable stage, command,
+  BCDC id, descriptor, and full payload fingerprint. The runtime binds the
+  private request snapshot to root's immutable owner-generation token and
+  restores that snapshot before transmit instead of reparsing staged scratch as
+  continuation identity. While the lease is active, every other
+  root-originated CYW43 descriptor—including generic op10 prompt/control polls
+  and data TX—retains its cursor and yields without consuming the CYW43
+  operation permit or reaching HAL. The linked-runtime DPC remains the sole
+  wire-order RX producer and may continue to queue CONTROL/EVENT/DATA for the
+  active exchange. This prevents a second root control consumer from racing
+  the pending BCDC transaction.
 
   An exact terminal drain may bypass normal logical admission only to finish
   the already-issued, pair-fenced physical ticket. It cannot publish fresh

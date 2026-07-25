@@ -3341,6 +3341,7 @@ enum Cyw43ControlExchangePhase {
 struct Cyw43ControlExchangeCursor {
     phase: Cyw43ControlExchangePhase,
     generation: u32,
+    owner_generation: u32,
     expected_cmd: u32,
     expected_id: u16,
     descriptor_flags: u16,
@@ -3454,6 +3455,7 @@ impl Cyw43ControlExchangeCursor {
         Self {
             phase: Cyw43ControlExchangePhase::Idle,
             generation: 0,
+            owner_generation: 0,
             expected_cmd: 0,
             expected_id: 0,
             descriptor_flags: 0,
@@ -15743,7 +15745,7 @@ fn service_cyw43_control_exchange_command_turn(
         command.aux0,
     );
     publish_service_dispatch_progress(command);
-    if !desc.valid() || !cyw43_control_exchange_descriptor_strict(desc) {
+    if !desc.valid() {
         return Some(RuntimeCommandTurn::Complete(
             DriverTaskCompletionRecord::fault_with_result(
                 command.sequence,
@@ -15754,8 +15756,9 @@ fn service_cyw43_control_exchange_command_turn(
     }
     let previous_parent_sequence =
         CYW43_ACTIVE_PARENT_SEQUENCE.swap(command.sequence, Ordering::AcqRel);
-    let turn = CYW43_RUNTIME_STATE
-        .with_mut(|state| cyw43_control_exchange_command_turn(state, desc, command.sequence));
+    let turn = CYW43_RUNTIME_STATE.with_mut(|state| {
+        cyw43_control_exchange_command_turn(state, desc, command.sequence, command.aux1)
+    });
     CYW43_ACTIVE_PARENT_SEQUENCE.store(previous_parent_sequence, Ordering::Release);
     Some(turn)
 }
@@ -15904,20 +15907,17 @@ fn cyw43_runtime_payload_u32(offset: usize) -> Option<u32> {
     )
 }
 
-fn cyw43_control_exchange_identity_matches(
+fn cyw43_control_exchange_owner_matches(
     cursor: Cyw43ControlExchangeCursor,
-    desc: DriverRuntimeCyw43CommandDescriptor,
+    owner_generation: u32,
 ) -> bool {
-    cursor.expected_cmd == desc.arg0
-        && cursor.expected_id == desc.arg1 as u16
-        && cursor.descriptor_flags == desc.flags
-        && cursor.payload_offset == desc.payload_offset
-        && cursor.payload_len == desc.payload_len
+    cursor.owner_generation == owner_generation
 }
 
 fn cyw43_control_exchange_begin(
     state: &mut Cyw43RuntimeState,
     desc: DriverRuntimeCyw43CommandDescriptor,
+    owner_generation: u32,
 ) -> bool {
     // A retained exchange owns its fault/result telemetry until terminal.
     // Clear any prior operation's frame before a possible issued-unknown TX
@@ -15933,6 +15933,7 @@ fn cyw43_control_exchange_begin(
             Cyw43ControlExchangePhase::WaitCredit
         },
         generation: state.dpc_shared_epoch,
+        owner_generation,
         expected_cmd: desc.arg0,
         expected_id: desc.arg1 as u16,
         descriptor_flags: desc.flags,
@@ -16229,6 +16230,7 @@ fn cyw43_control_exchange_command_turn(
     state: &mut Cyw43RuntimeState,
     desc: DriverRuntimeCyw43CommandDescriptor,
     sequence: u32,
+    owner_generation: u32,
 ) -> RuntimeCommandTurn {
     let mut cursor = state.control_exchange;
     if cursor.active() {
@@ -16240,13 +16242,21 @@ fn cyw43_control_exchange_command_turn(
                 cursor.generation,
             ));
         }
-        if !cyw43_control_exchange_identity_matches(cursor, desc) {
-            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
+        if !cyw43_control_exchange_owner_matches(cursor, owner_generation) {
+            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
                 sequence,
                 FAULT_REJECTED_COMMAND,
+                cursor.owner_generation,
             ));
         }
     } else {
+        if !cyw43_control_exchange_descriptor_strict(desc) {
+            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+                sequence,
+                FAULT_CYW43_DESCRIPTOR_INVALID,
+                cyw43_descriptor_invalid_result(desc) | CYW43_DESCRIPTOR_INVALID_PAYLOAD,
+            ));
+        }
         if !state.initialized
             || !state.transport_ready
             || !state.firmware_released
@@ -16261,7 +16271,7 @@ fn cyw43_control_exchange_command_turn(
                 CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NOT_READY,
             ));
         }
-        if cyw43_control_exchange_begin(state, desc) {
+        if cyw43_control_exchange_begin(state, desc, owner_generation) {
             return RuntimeCommandTurn::Pending;
         }
         return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
@@ -47479,7 +47489,7 @@ mod tests {
             state.dpc_shared_epoch = 0x4359_5301;
             state.dpc_cursor.event_sequence = 91;
             state.dpc_cursor.action = Cyw43DpcAction::CaptureStatus;
-            assert!(cyw43_control_exchange_begin(state, request));
+            assert!(cyw43_control_exchange_begin(state, request, 0));
         });
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.initialized = true;
@@ -57755,7 +57765,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_control_exchange_rejects_identity_changes_without_losing_cursor() {
+    fn cyw43_control_exchange_uses_owner_generation_not_restaged_descriptor() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -57764,7 +57774,7 @@ mod tests {
         let id = 9;
         let flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER;
         let body = *b"original";
-        stage_cyw43_control_exchange_request(cmd, id, flags, &body);
+        let descriptor = stage_cyw43_control_exchange_request(cmd, id, flags, &body);
         reset_test_sdio_transfer_log();
 
         assert_eq!(
@@ -57782,10 +57792,12 @@ mod tests {
         // not continuation identity; the root logical lease already binds the
         // complete payload and the runtime restores its private copy before
         // any pending transmit.
-        stage_cyw43_control_exchange_request(cmd, id, flags, b"changed!");
+        write_runtime_payload_byte(usize::from(descriptor.payload_offset) + 4, 0xff);
+        stage_cyw43_descriptor(descriptor);
         assert_eq!(
             service_command_turn(0, cyw43_descriptor_command(411)),
-            RuntimeCommandTurn::Pending
+            RuntimeCommandTurn::Pending,
+            "active continuation does not reparse a DPC-reused payload aperture",
         );
         CYW43_RUNTIME_STATE.with_ref(|state| {
             assert!(state.control_exchange.active());
@@ -57795,10 +57807,8 @@ mod tests {
             stage_cyw43_control_exchange_request(cmd, changed_id, changed_flags, &body);
             assert_eq!(
                 service_command_turn(0, cyw43_descriptor_command(sequence)),
-                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
-                    sequence,
-                    FAULT_REJECTED_COMMAND,
-                ))
+                RuntimeCommandTurn::Pending,
+                "the runtime-private request remains authoritative while the root owner generation is unchanged",
             );
             CYW43_RUNTIME_STATE.with_ref(|state| {
                 assert!(state.control_exchange.active());
@@ -57811,14 +57821,26 @@ mod tests {
             assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         }
 
+        let mut wrong_owner = cyw43_descriptor_command(414);
+        wrong_owner.aux1 = 1;
+        assert_eq!(
+            service_command_turn(0, wrong_owner),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+                414,
+                FAULT_REJECTED_COMMAND,
+                0,
+            )),
+            "a different immutable root owner generation cannot resume the cursor",
+        );
+
         stage_cyw43_control_exchange_request(cmd, id, flags, &body);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             queue_cyw43_control_reply(state, cmd, id, CYW43_CDC_STATUS_SUCCESS, &[]);
         });
         assert_eq!(
-            service_command_turn(0, cyw43_descriptor_command(414)),
+            service_command_turn(0, cyw43_descriptor_command(415)),
             RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::frame_ready_with_descriptor(
-                414,
+                415,
                 DriverFrameDescriptor {
                     offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_CDC_HEADER_BYTES) as u32,
                     len: 0,
@@ -57833,7 +57855,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_control_exchange_strict_invalid_request_preserves_active_cursor() {
+    fn cyw43_control_exchange_ignores_restaged_descriptor_after_admission() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -57857,13 +57879,11 @@ mod tests {
         let mut invalid = descriptor;
         invalid.reserved = 1;
         stage_cyw43_descriptor(invalid);
-        let RuntimeCommandTurn::Complete(fault) =
-            service_command_turn(0, cyw43_descriptor_command(416))
-        else {
-            panic!("strict-invalid request must fault without consuming the owner");
-        };
-        assert_eq!(fault.code, COMPLETION_FAULT);
-        assert_eq!(fault.detail, FAULT_CYW43_DESCRIPTOR_INVALID);
+        assert_eq!(
+            service_command_turn(0, cyw43_descriptor_command(416)),
+            RuntimeCommandTurn::Pending,
+            "post-admission staged descriptor bytes are reciprocal scratch",
+        );
         CYW43_RUNTIME_STATE.with_ref(|state| {
             assert!(state.control_exchange.active());
             assert!(matches!(
@@ -57894,13 +57914,13 @@ mod tests {
         let descriptor = stage_cyw43_control_exchange_request(0x107, 41, 0, b"exact-byte-identity");
         let original = read_runtime_payload_byte(usize::from(descriptor.payload_offset));
         let mut state = Cyw43RuntimeState::new();
-        assert!(cyw43_control_exchange_begin(&mut state, descriptor));
+        assert!(cyw43_control_exchange_begin(&mut state, descriptor, 73));
         assert_eq!(CYW43_CONTROL_REQUEST.retained_byte(0), original);
 
         write_runtime_payload_byte(usize::from(descriptor.payload_offset), original ^ 0x80);
         assert!(
-            cyw43_control_exchange_identity_matches(state.control_exchange, descriptor),
-            "the mutable reciprocal aperture is not persistent op11 identity"
+            cyw43_control_exchange_owner_matches(state.control_exchange, 73),
+            "the immutable root owner generation is persistent op11 identity"
         );
         assert_eq!(CYW43_CONTROL_REQUEST.retained_byte(0), original);
         assert_eq!(
@@ -58305,7 +58325,7 @@ mod tests {
         reset_runtime_for_test();
         let descriptor = stage_cyw43_control_exchange_request(0x107, 41, 0, b"terminal-scrub");
         let mut state = Cyw43RuntimeState::new();
-        assert!(cyw43_control_exchange_begin(&mut state, descriptor));
+        assert!(cyw43_control_exchange_begin(&mut state, descriptor, 0));
         assert_ne!(CYW43_CONTROL_REQUEST.retained_len(), 0);
         state.reset_firmware_upload_state();
         assert_eq!(state.control_exchange, Cyw43ControlExchangeCursor::idle());
@@ -58314,7 +58334,11 @@ mod tests {
 
         let restart_descriptor =
             stage_cyw43_control_exchange_request(0x107, 42, 0, b"restart-scrub");
-        assert!(cyw43_control_exchange_begin(&mut state, restart_descriptor));
+        assert!(cyw43_control_exchange_begin(
+            &mut state,
+            restart_descriptor,
+            0,
+        ));
         state.reset();
         assert_eq!(state.control_exchange, Cyw43ControlExchangeCursor::idle());
         assert_eq!(CYW43_CONTROL_REQUEST.retained_len(), 0);
