@@ -1257,6 +1257,28 @@ This as-built closure is authorized by Milestone 26d task
   transmit is issued-unknown: association cannot emit Gate 7a, PTK/GTK and
   SCB/filter/BSSID cursors cannot advance, and bootstrap/maintenance callers
   must leave through the ordered pair restart without same-generation replay.
+  Root additionally retains one generation-scoped logical op11 lease across
+  every physical HAL request emitted by the runtime's persistent BCDC cursor.
+  An interleaved event/data `FrameReady` completion releases only that physical
+  request; it cannot release the logical lease or admit association, WSEC,
+  maintenance, or bootstrap under a different command, BCDC id, descriptor, or
+  payload fingerprint. Matching work resumes the lease. Nonmatching lanes
+  retain their immutable cursors and yield without consuming the CYW43
+  operation permit, so the matching owner can run later in the same outer
+  EventPump turn.
+
+  An exact terminal drain may bypass normal logical admission only to finish
+  the already-issued, pair-fenced physical ticket. It cannot publish fresh
+  work, replace the logical owner, or interpret a rejected competing identity
+  as the older exchange's terminal. The logical lease survives generation
+  poisoning and every pending pair-restart action; it is released only by a
+  decoded matching control reply, a proven pre-transmit terminal, or successful
+  completion of the deterministic pair scrub. That completion also advances a
+  root-only scrub epoch captured by each association Join. A Join
+  from the preceding epoch is retired locally without replay or a second
+  restart request, even when the exact physical drain was not a logical
+  association terminal. This is the linked-runtime translation of brcmfmac's
+  single pending BCDC transaction.
 - One central CYW43 operation permit is opened for each ordinary EventPump
   turn. At most one reciprocal CYW43/SDIO runtime or HAL operation may claim
   it. Descriptor replay, firmware/NVRAM streaming, core release, control and

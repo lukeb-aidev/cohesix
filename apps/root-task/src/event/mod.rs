@@ -10993,7 +10993,7 @@ where
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: deferred_recovery retained=yes refinement=exact-owner terminal_observed={} cause={} subphase={} gate={}",
+            "wifi: deferred_recovery retained=yes refinement=exact-owner logical_terminal_observed={} cause={} subphase={} gate={}",
             Self::yes_no(recovery.terminal_observed),
             recovery.cause,
             recovery.subphase,
@@ -11066,6 +11066,121 @@ where
             recovery.descriptor_arg0,
             recovery.descriptor_arg1,
         ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_logical_control_owner_line(
+        owner: Option<crate::drivers::driver_task_net::Cyw43LogicalControlOwnerDiagnostic>,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let Some(owner) = owner else {
+            return format_message(format_args!("wifi: logical_control_owner active=no"));
+        };
+        format_message(format_args!(
+            "wifi: logical_control_owner active=yes generation={} stage={} cmd=0x{:08x} id={} flags=0x{:04x} payload_len={} payload_fingerprint=0x{:016x} acquired_turn={} blocked_turns={}",
+            owner.generation,
+            owner.stage,
+            owner.expected_cmd,
+            owner.expected_id,
+            owner.descriptor_flags,
+            owner.payload_len,
+            owner.payload_fingerprint,
+            owner.acquired_turn_id,
+            owner.blocked_turns,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_completion_code_name(code: u16) -> &'static str {
+        match code {
+            1 => "progress",
+            2 => "frame-ready",
+            3 => "idle",
+            4 => "budget-exhausted",
+            5 => "fault",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_terminal_drain_detail_name(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> &'static str {
+        if terminal.completion_detail == 0 {
+            return "none";
+        }
+        if terminal.completion_code == 5 {
+            return crate::drivers::driver_task_net::cyw43_runtime_fault_reason(
+                terminal.completion_detail,
+            );
+        }
+        if terminal.completion_code == 2 && terminal.completion_detail == 0x5802 {
+            return "cyw43-control-interleaved-frame";
+        }
+        "unknown"
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_terminal_drain_physical_line(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence terminal_drain physical generation={} stage={} request={} op=0x{:04x} cmd=0x{:08x} id={} code={} code_name={} detail=0x{:04x} detail_name={} result=0x{:08x}",
+            terminal.generation,
+            terminal.stage,
+            terminal.request,
+            terminal.descriptor_op,
+            terminal.descriptor_arg0,
+            terminal.descriptor_arg1 as u16,
+            terminal.completion_code,
+            Self::wifi_completion_code_name(terminal.completion_code),
+            terminal.completion_detail,
+            Self::wifi_terminal_drain_detail_name(terminal),
+            terminal.completion_result,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_terminal_drain_frame_line(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence terminal_drain frame offset={} len={} flags=0x{:04x}",
+            terminal.completion_frame_offset,
+            terminal.completion_frame_len,
+            terminal.completion_frame_flags,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_terminal_drain_logical_line(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence terminal_drain logical terminal={} owner_conflict={} owner_generation={} owner_stage={} owner_cmd=0x{:08x} owner_id={} owner_payload_fingerprint=0x{:016x}",
+            Self::yes_no(terminal.logical_terminal),
+            Self::yes_no(terminal.logical_owner_conflict),
+            terminal.logical_owner_generation,
+            terminal.logical_owner_stage,
+            terminal.logical_owner_cmd,
+            terminal.logical_owner_id,
+            terminal.logical_owner_payload_fingerprint,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_logical_control_diagnostics(&mut self) {
+        let owner = crate::drivers::driver_task_net::cyw43_logical_control_owner_diagnostic();
+        let owner_line = Self::wifi_diag_logical_control_owner_line(owner);
+        self.emit_console_line(owner_line.as_str());
+        if let Some(terminal) = crate::drivers::driver_task_net::cyw43_terminal_drain_diagnostic() {
+            for detail in [
+                Self::wifi_diag_terminal_drain_physical_line(terminal),
+                Self::wifi_diag_terminal_drain_frame_line(terminal),
+                Self::wifi_diag_terminal_drain_logical_line(terminal),
+            ] {
+                self.emit_console_line(detail.as_str());
+            }
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -11280,6 +11395,7 @@ where
                 self.emit_console_line(detail.as_str());
             }
         }
+        self.emit_wifi_logical_control_diagnostics();
         if let Some(grant) = crate::hal::driver_task::driver_task_retained_grant_snapshot(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         ) {
@@ -11534,7 +11650,7 @@ where
         snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "CYW43_SDIO_DPC generation={} captures={} published={} consumed={} rearms={} overruns={} epoch_errors={} sequence_errors={} ack_failures={} poisoned={} masked={}",
+            "CYW43_SDIO_DPC generation={} captures={} published={} consumed={} rearms={} overruns={} epoch_errors={} sequence_errors={} ack_failures={} acceptance_bad={} masked={}",
             snapshot.generation,
             snapshot.captures,
             snapshot.published,
@@ -12127,6 +12243,7 @@ where
                 self.emit_console_line(detail.as_str());
             }
         }
+        self.emit_wifi_logical_control_diagnostics();
         self.emit_console_line("wifi: diag recorder=startup-blackbox mode=passive source=cached");
         self.emit_wifi_startup_gates_from_evidence(
             Some(snapshot),
@@ -21096,6 +21213,38 @@ mod tests {
             turn_id: u64::MAX,
             gate: 8,
         };
+        let owner = crate::drivers::driver_task_net::Cyw43LogicalControlOwnerDiagnostic {
+            generation: 1,
+            stage: "cyw43-association-join",
+            expected_cmd: 0x0000_001a,
+            expected_id: 37,
+            descriptor_flags: 0x0003,
+            payload_len: 89,
+            payload_fingerprint: 0x1122_3344_5566_7788,
+            acquired_turn_id: 387_137,
+            blocked_turns: 1,
+        };
+        let terminal = crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
+            generation: 1,
+            stage: "cyw43-host-eapol-bssid-refresh",
+            request: 3_907,
+            descriptor_op: 11,
+            descriptor_arg0: 0x17,
+            descriptor_arg1: 38,
+            completion_code: 5,
+            completion_detail: 1,
+            completion_result: 0,
+            completion_frame_offset: 0,
+            completion_frame_len: 0,
+            completion_frame_flags: 0,
+            logical_terminal: false,
+            logical_owner_conflict: true,
+            logical_owner_generation: 1,
+            logical_owner_stage: "cyw43-association-join",
+            logical_owner_cmd: 0x1a,
+            logical_owner_id: 37,
+            logical_owner_payload_fingerprint: 0x1122_3344_5566_7788,
+        };
         let lines = [
             KernelConsoleTestPump::wifi_diag_association_state_line(diagnostic),
             KernelConsoleTestPump::wifi_diag_association_progress_line(diagnostic),
@@ -21104,6 +21253,10 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_identity_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
+            KernelConsoleTestPump::wifi_diag_logical_control_owner_line(Some(owner)),
+            KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(terminal),
+            KernelConsoleTestPump::wifi_diag_terminal_drain_frame_line(terminal),
+            KernelConsoleTestPump::wifi_diag_terminal_drain_logical_line(terminal),
         ];
 
         for line in &lines {
@@ -21115,8 +21268,9 @@ mod tests {
         }
         assert!(lines[1].contains("generation=4294967295 current=no"));
         assert!(lines[2].contains("request=4294967295 issued=yes accepted=yes"));
-        assert!(lines[3]
-            .contains("refinement=exact-owner terminal_observed=yes cause=issued-owner-unknown"));
+        assert!(lines[3].contains(
+            "refinement=exact-owner logical_terminal_observed=yes cause=issued-owner-unknown",
+        ));
         assert!(lines[3].contains("subphase=cyw43-host-eapol-control-poll gate=8"));
         assert!(lines[4].contains("ticket=18446744073709551615"));
         assert!(lines[4].contains("completion_detail=0xffff"));
@@ -21132,6 +21286,27 @@ mod tests {
             "dpc-recovery-drain-exhausted",
         );
         assert!(lines[6].contains("descriptor op=0xffff flags=0xffff"));
+        assert!(lines[7].contains("active=yes generation=1"));
+        assert!(lines[7].contains("cmd=0x0000001a id=37"));
+        assert!(lines[8].contains("code=5 code_name=fault"));
+        assert!(lines[8].contains("detail=0x0001 detail_name=rejected-command"));
+        let control_fault_line = KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(
+            crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
+                completion_detail: 0x530b,
+                ..terminal
+            },
+        );
+        assert!(
+            control_fault_line.contains("detail=0x530b detail_name=cyw43-control-exchange"),
+            "{control_fault_line}",
+        );
+        assert!(lines[9].contains("offset=0 len=0"));
+        assert!(lines[10].contains("terminal=no owner_conflict=yes"));
+        assert!(lines[10].contains("owner_cmd=0x0000001a owner_id=37"));
+        assert_eq!(
+            KernelConsoleTestPump::wifi_diag_logical_control_owner_line(None).as_str(),
+            "wifi: logical_control_owner active=no",
+        );
         assert_eq!(
             KernelConsoleTestPump::wifi_deferred_recovery_next_action(recovery),
             "recover-exact-host-eapol-owner"
@@ -21270,7 +21445,7 @@ mod tests {
             );
             assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
         }
-        assert!(accounting.ends_with("poisoned=yes masked=yes"));
+        assert!(accounting.ends_with("acceptance_bad=yes masked=yes"));
         assert!(truth.contains("ring_poisoned=yes client_sample_stale=yes"));
         assert!(truth.ends_with("ring_consumer=4294967295 sample_consumer=4294967295"));
     }
@@ -26730,7 +26905,7 @@ mod tests {
 
         assert!(
             rendered.contains(
-                "wifi: deferred_recovery retained=yes refinement=exact-owner terminal_observed=yes cause=issued-owner-unknown subphase=cyw43-host-eapol-control-poll gate=8"
+                "wifi: deferred_recovery retained=yes refinement=exact-owner logical_terminal_observed=yes cause=issued-owner-unknown subphase=cyw43-host-eapol-control-poll gate=8"
             ),
             "{rendered}"
         );
@@ -30070,7 +30245,7 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(wifi.breadcrumb_suppression_observed);
-        let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 poisoned=no masked=no";
+        let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 acceptance_bad=no masked=no";
         let dpc_truth = "CYW43_SDIO_DPC_TRUTH generation=9 ring_poisoned=no client_sample_stale=no ring_consumer=12 sample_consumer=12";
         assert!(rendered.contains(dpc_line), "{rendered}");
         assert!(rendered.contains(dpc_truth), "{rendered}");
