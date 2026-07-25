@@ -908,12 +908,39 @@ grant remains the sole authority; the notification is only a lossless
 coalescing scheduling edge. Badge 256 is disjoint from CARD_INT badge 159. When
 they coalesce, one loop slice services one IRQ quantum, an explicit scheduler
 handoff follows, and the preserved typed wake may release only one exact granted
-owner quantum on the next slice. Stale, malformed, wrong-generation, and
-already-consumed grants still reject without replay. The diagnostic also
-separates live ring poison from a stale client-counter sample, so a mixed
-snapshot no longer misreports an intact ring as physically poisoned. These are
-hardware-free corrections until the next exact image is rebuilt, read back, and
-booted; this capture does not prove the fixed hardware result.
+owner quantum on the next slice. The exact acknowledged predecessor is a
+non-authorizing wait until the producer publishes its replacement; stale,
+malformed, wrong-generation, mismatched-consumed, and replayed grants still
+reject. The diagnostic also separates live ring poison from a stale
+client-counter sample, so a mixed snapshot no longer misreports an intact ring
+as physically poisoned. These are hardware-free corrections until the next
+exact image is rebuilt, read back, and booted; this capture does not prove the
+fixed hardware result.
+
+The exact `f78208ce709a` boot reached `cyw43-control-plane-ready` in all six
+generations, then fenced each generation 4.46 to 4.72 seconds later. The
+post-exhaustion diagnostic reported op10 detail `0x5310` and result `0x32`.
+`0x32` is DPC event sequence 50, not a CYW43 generation. Runtime arbitration
+prevents the ordinary DPC from consuming a source event while its foreground
+source-probe transaction is active, and a production-ring zero-status
+regression reaches typed `Idle(NoRframe)` without a restart. The earlier
+completion-race explanation was therefore disproved.
+
+The actual software defect was loss of the primitive DPC cause. Exact SDIO
+child faults recorded useful detail, result, and frame, while several structural
+DPC faults recorded only counters; the later prompt quarantine could overwrite
+either class with generic bus-link detail plus event sequence 50. The f782
+capture therefore cannot identify which primitive branch fired. The corrected
+runtime retains the first terminal DPC detail, result, fault frame, event
+sequence, action, and I/O phase. It permits one fresh child ticket only for an
+exact, telemetry-bound, contained entry-inhibit result, which proves the SDHCI
+command was not issued. Every second inhibit failure, malformed ring/cursor
+state, missing or inconsistent telemetry, command-or-later failure, owner-path
+poison, timeout, or issued-unknown outcome requests the deterministic pair
+restart without same-generation replay. Passive `wifi diag` also retains the
+first immutable association/host-EAPOL root owner before recovery teardown, so
+later root-grant progress cannot rewrite a Gate 8 failure as Gate 2. This
+correction remains hardware-free until a new exact image is booted.
 
 The July 10 W01 capture
 `pi4-serial-20260710-123050-m26d-authoritative-W01-pyserial.log`, paired with
@@ -1303,8 +1330,9 @@ terminal-output retention, exact UART wire-idle reboot-ACK fencing followed by
 a later reset-only turn, exact clean image identity, and all repository gates to
 pass. Host tests cover the initial root CYW43 scheduling-edge loss path,
 non-CYW43 endpoint rendezvous, root and delegated shared-grant
-publication/acknowledgement/re-signal,
-stale/mutated/consumed/wrong-generation grant rejection, grant-id exhaustion,
+publication/acknowledgement/re-signal, exact-consumed predecessor waiting
+without re-execution, stale/mutated/mismatched-consumed/wrong-generation grant
+rejection, grant-id exhaustion,
 real foreground and DPC owner cursors, recurring replay-fault termination,
 pre-issue and issued live-epoch cuts that preserve the old request and `aux1`,
 network-ready streak reset, peer/IRQ coalescing priority, contract-local

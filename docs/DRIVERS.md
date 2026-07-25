@@ -518,8 +518,11 @@ This as-built closure is authorized by Milestone 26d task
   then the grant id as the sequence-last commit before signalling the owner.
   It never overwrites an unacknowledged grant: a missed acknowledgement
   re-signals the same id, while a new id is published only after the preceding
-  id is acknowledged. Grant-id exhaustion, malformed state, an
-  already-consumed id, or any identity mismatch fails closed.
+  id is acknowledged. The exact acknowledged prior id is a non-authorizing
+  wait state while the producer publishes the next grant; it cannot execute a
+  second quantum and is not an identity rejection. Grant-id exhaustion,
+  malformed state, a consumed id that is not that exact retained predecessor,
+  or any identity mismatch fails closed.
 
   The delegated owner compares the command generation with its independently
   retained SDIO generation before the first physical action, binds that
@@ -620,16 +623,20 @@ This as-built closure is authorized by Milestone 26d task
   command was issued. Any later failure is issued or issued-unknown and cannot
   replay in the same generation. The shared ABI derives a 20.56-second
   CYW43-to-SDIO child bound from those maxima plus its 100-millisecond handoff
-  margin. Root applies a 30.56-second per-child lease, preserving a full
-  10-second parent margin instead of racing the child's legal completion edge.
-  The CYW43 control-exchange cursor retains Linux's separate 2.5-second
-  protocol deadline, but that deadline counts only parent protocol time. While
-  one exact generation-bound SDIO child is submitted, the control cursor stays
-  pending and cannot time out, poison, replay, or mint another child. Consuming
-  the exact terminal child completion adds that measured virtual-counter wait
-  back to the retained parent deadline. The reply/DPC deadline is armed only
-  after the Function 2 transmit reaches `TX_DONE`, so the shorter protocol
-  deadline can never outrun the ABI-authorized 20.56-second child envelope.
+  margin. Root applies a separate 30.56-second per-child containment lease so
+  root cannot abandon the child's legal completion edge.
+  The CYW43 control-exchange cursor retains Linux's two separate absolute
+  2.5-second protocol deadlines: one for control TX completion and one armed
+  after the exact Function 2 TX for the DCMD reply. An immutable delegated
+  child remains owned until its exact terminal completion and must be applied
+  before the parent evaluates an already-expired deadline; the parent cannot
+  abandon it, mint a replacement, or report replayable pre-issue `NOT_READY`.
+  This ordering serializes completion and timeout without pausing or extending
+  either protocol clock. If the exact Function 2 TX completes after the TX
+  deadline, the result is a post-TX timeout that poisons the pair; it is never
+  same-generation retry authority. The independent 20.56-second child and
+  30.56-second root lease bounds contain ownership loss but do not inflate the
+  Linux protocol windows.
   A lease renews only on a fresh `OWNER_REPLY` edge carrying the exact active
   parent sequence, descriptor fingerprint, generation, and CYW43 aux marker.
   Repeated, stale, wrong-sequence, or unrelated progress cannot renew it, and
@@ -981,6 +988,23 @@ This as-built closure is authorized by Milestone 26d task
   admitting later unrelated interrupts. Only the ordinary CYW43 DPC cursor may
   read dongle status and Function 2, so the source probe is a lost-notification
   recovery turn, not a second receive path.
+  Completion validation and foreground watermark refresh use the same durable
+  present-or-exact-consumed predicate. Production arbitration keeps the
+  ordinary DPC deferred while a foreground source-probe transaction owns the
+  reciprocal child. After the exact owner completion is replayed, the next
+  scheduler iteration refreshes the parent watermark before DPC admission;
+  only then may the ordinary DPC consume the event. A same-generation exact
+  consumed receipt covers a later verified observation of that completed DPC,
+  not permission for a competing receive path. Zero, stale, wrong-generation,
+  mismatched-consumer, and recovery-poisoned receipts still fail closed.
+  The first terminal DPC cause is retained with its SDIO detail, result, fault
+  frame, event sequence, action, and I/O phase so a later prompt poll or pair
+  fence cannot relabel it as a generic bus-link failure. An exact contained
+  entry-inhibit completion proves that SDHCI never wrote the command and may
+  receive one fresh cursor-local child ticket; any second inhibit failure,
+  missing or inconsistent telemetry, command-or-later failure,
+  owner-path poison, timeout, or issued-unknown result fences the generation
+  without replay.
   A hintless `SOURCE_PENDING` event is authority to inspect the firmware
   interrupt status through the ordinary DPC cursor, not authority to read the
   Function 2 FIFO. Matching Raspberry Pi Linux brcmfmac, only a real

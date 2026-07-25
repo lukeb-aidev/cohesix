@@ -10989,6 +10989,63 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: deferred_recovery first=yes mutation=no cause={} subphase={} gate={}",
+            recovery.cause, recovery.subphase, recovery.gate,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_identity_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: deferred_recovery identity generation={} owner_generation={} ticket={} completion_detail=0x{:04x} completion_sequence={} turn={}",
+            recovery.generation,
+            recovery.owner_generation,
+            recovery.ticket_id,
+            recovery.completion_detail,
+            recovery.completion_sequence,
+            recovery.turn_id,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_descriptor_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: deferred_recovery descriptor op=0x{:04x} flags=0x{:04x} target=0x{:08x} payload_offset={} payload_len={} total_len={} arg0=0x{:08x} arg1=0x{:08x}",
+            recovery.descriptor_op,
+            recovery.descriptor_flags,
+            recovery.descriptor_target_addr,
+            recovery.descriptor_payload_offset,
+            recovery.descriptor_payload_len,
+            recovery.descriptor_total_len,
+            recovery.descriptor_arg0,
+            recovery.descriptor_arg1,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_deferred_recovery_next_action(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> &'static str {
+        if recovery.cause == "pair-signal" && recovery.subphase.starts_with("cyw43-association-") {
+            "recover-pair-signal-with-retained-association-parent"
+        } else if recovery.subphase.starts_with("cyw43-association-") {
+            "recover-exact-association-join-owner"
+        } else if recovery.cause == "pair-signal" {
+            "recover-pair-signal-with-retained-host-eapol-parent"
+        } else {
+            "recover-exact-host-eapol-owner"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_root_grant_line(
         grant: crate::hal::driver_task::DriverTaskRetainedGrantSnapshot,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
@@ -11078,6 +11135,8 @@ where
             Self::wifi_diag_cyw43_recovery_command_fault_status(fault)
         };
         let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
+        let deferred_recovery =
+            crate::drivers::driver_task_net::cyw43_deferred_recovery_diagnostic();
         let progress_present = Self::wifi_driver_task_runtime_progress_present();
         let pinctrl = crate::hal::pi4_wifi::wifi_sdio_pinctrl_snapshot();
         if source == "debug-handle-unavailable"
@@ -11086,6 +11145,7 @@ where
             && bootstrap_failure.is_none()
             && fault.is_none()
             && sdio_status.is_none()
+            && deferred_recovery.is_none()
             && !progress_present
             && !pinctrl.attempted
             && !live_net_supersedes_runtime
@@ -11097,6 +11157,7 @@ where
             && bootstrap_failure.is_none()
             && fault.is_none()
             && sdio_status.is_none()
+            && deferred_recovery.is_none()
             && !progress_present
             && !pinctrl.attempted
             && !live_net_supersedes_runtime
@@ -11171,6 +11232,15 @@ where
         ] {
             self.emit_console_line(detail.as_str());
         }
+        if let Some(recovery) = deferred_recovery {
+            for detail in [
+                Self::wifi_diag_deferred_recovery_line(recovery),
+                Self::wifi_diag_deferred_recovery_identity_line(recovery),
+                Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
+            ] {
+                self.emit_console_line(detail.as_str());
+            }
+        }
         if let Some(grant) = crate::hal::driver_task::driver_task_retained_grant_snapshot(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         ) {
@@ -11186,6 +11256,7 @@ where
             fault,
             bootstrap_exact.or(host_eapol_exact),
             bootstrap_failure,
+            deferred_recovery,
             evidence_source,
         );
         // The blackbox record above already emits the causal fault, immutable
@@ -12005,6 +12076,17 @@ where
         control_trace: Option<WifiControlPlaneTrace>,
     ) {
         let fault = Self::wifi_diag_cyw43_runtime_command_fault_status();
+        let deferred_recovery =
+            crate::drivers::driver_task_net::cyw43_deferred_recovery_diagnostic();
+        if let Some(recovery) = deferred_recovery {
+            for detail in [
+                Self::wifi_diag_deferred_recovery_line(recovery),
+                Self::wifi_diag_deferred_recovery_identity_line(recovery),
+                Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
+            ] {
+                self.emit_console_line(detail.as_str());
+            }
+        }
         self.emit_console_line("wifi: diag recorder=startup-blackbox mode=passive source=cached");
         self.emit_wifi_startup_gates_from_evidence(
             Some(snapshot),
@@ -12014,6 +12096,7 @@ where
             None,
             None,
             None,
+            deferred_recovery,
             "snapshot",
         );
     }
@@ -12024,6 +12107,7 @@ where
         fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
         explicit_exact_error: Option<&str>,
         bootstrap_failure: Option<crate::hal::driver_task::DriverTaskBootstrapFailure>,
+        deferred_recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
         source: &str,
     ) {
         let recorder = format_message(format_args!(
@@ -12040,6 +12124,7 @@ where
             sdio_runtime_status,
             explicit_exact_error,
             bootstrap_failure,
+            deferred_recovery,
             source,
         );
     }
@@ -12054,10 +12139,17 @@ where
         sdio_runtime_status: Option<crate::drivers::driver_task_net::SdioRuntimeReplayStatus>,
         explicit_exact_error: Option<&str>,
         bootstrap_failure: Option<crate::hal::driver_task::DriverTaskBootstrapFailure>,
+        deferred_recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
         source: &str,
     ) {
         let live_net_frontier = self.wifi_live_net_frontier();
         let live_net_supersedes_runtime = live_net_frontier.is_some();
+        let deferred_recovery = if live_net_supersedes_runtime {
+            None
+        } else {
+            deferred_recovery
+        };
+        let deferred_gate8 = deferred_recovery.filter(|recovery| recovery.gate == 8);
         let explicit_exact_error = if live_net_supersedes_runtime {
             ""
         } else {
@@ -12112,6 +12204,7 @@ where
                 Self::wifi_sdio_runtime_progress_gate(progress.phase) == Some(1)
             });
         let cyw43_sdio_pair_restart_blocks_gate_one = !runtime_bootstrap_failed
+            && deferred_gate8.is_none()
             && crate::drivers::driver_task_net::wifi_cyw43_sdio_pair_restart_blocks_gate_one(
                 cyw43_runtime_progress,
                 direct_pwrseq_proof,
@@ -12131,22 +12224,23 @@ where
             cyw43_runtime_progress.is_some_and(|progress| {
                 Self::wifi_cyw43_runtime_progress_suppresses_sdio_fallback(progress.phase)
             });
-        let driver_task_gate: Option<u8> = if association_join_pending || root_grant_prepared {
-            Some(8)
-        } else if runtime_bootstrap_failed {
-            Some(1)
-        } else if explicit_join_security {
-            Some(8)
-        } else {
-            cyw43_fault_gate
-                .or(sdio_replay_gate)
-                .or(cyw43_progress_gate)
-                .or(if cyw43_progress_suppresses_sdio_fallback {
-                    None
-                } else {
-                    sdio_progress_gate
-                })
-        };
+        let driver_task_gate: Option<u8> =
+            if association_join_pending || deferred_gate8.is_some() || root_grant_prepared {
+                Some(8)
+            } else if runtime_bootstrap_failed {
+                Some(1)
+            } else if explicit_join_security {
+                Some(8)
+            } else {
+                cyw43_fault_gate
+                    .or(sdio_replay_gate)
+                    .or(cyw43_progress_gate)
+                    .or(if cyw43_progress_suppresses_sdio_fallback {
+                        None
+                    } else {
+                        sdio_progress_gate
+                    })
+            };
         let live_net_channel_ready = live_net_supersedes_runtime;
         let firmware_ready = fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_ready);
         let firmware_prep_complete =
@@ -12228,6 +12322,8 @@ where
         });
         let gate8_exact_error = if association_join_pending {
             "cyw43-association-join-pending"
+        } else if let Some(recovery) = deferred_gate8 {
+            recovery.subphase
         } else {
             exact_error
         };
@@ -12267,6 +12363,8 @@ where
             Self::wifi_startup_reported_proof_gate(direct_proof_gate, driver_task_gate);
         let active_blocker = if association_join_pending {
             "cyw43-association-join-pending"
+        } else if let Some(recovery) = deferred_gate8 {
+            recovery.subphase
         } else if root_grant_prepared {
             "cyw43-root-continuation-pre-grant"
         } else if let Some(frontier) = live_net_frontier.as_ref() {
@@ -12294,6 +12392,8 @@ where
         };
         let next_action = if association_join_pending {
             "resume-exact-association-join-owner"
+        } else if let Some(recovery) = deferred_gate8 {
+            Self::wifi_deferred_recovery_next_action(recovery)
         } else if root_grant_prepared {
             "resume-exact-retained-root-continuation"
         } else if let Some(frontier) = live_net_frontier.as_ref() {
@@ -12386,8 +12486,10 @@ where
         } else {
             format_message(format_args!("card=unknown rca=0x0000 ocr=0x00000000"))
         };
-        let runtime_progress_superseded =
-            fault.is_some() || sdio_replay_gate.is_some() || !explicit_exact_error.is_empty();
+        let runtime_progress_superseded = deferred_recovery.is_some()
+            || fault.is_some()
+            || sdio_replay_gate.is_some()
+            || !explicit_exact_error.is_empty();
         if let Some(progress) = cyw43_runtime_progress {
             let progress_line = format_message(format_args!(
                 "wifi: cyw43 last_progress marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} gate={} superseded={}",
@@ -14233,8 +14335,12 @@ where
             6 => "firmware-upload",
             7 => "function2-ready",
             8 => {
-                if exact_error == "cyw43-association-join-pending" {
+                if exact_error == "cyw43-association-join-pending"
+                    || exact_error.starts_with("cyw43-association-")
+                {
                     "cyw43-association-join-pending"
+                } else if exact_error.starts_with("cyw43-host-eapol-") {
+                    "host-eapol"
                 } else if exact_error.is_empty() {
                     "firmware-channel"
                 } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
@@ -14262,8 +14368,12 @@ where
             6 => "firmware-upload",
             7 => "function2-ready",
             8 => {
-                if exact_error == "cyw43-association-join-pending" {
+                if exact_error == "cyw43-association-join-pending"
+                    || exact_error.starts_with("cyw43-association-")
+                {
                     "association-join"
+                } else if exact_error.starts_with("cyw43-host-eapol-") {
+                    "host-eapol"
                 } else if exact_error.starts_with("cyw43-control-") {
                     "control-exchange"
                 } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
@@ -14282,8 +14392,12 @@ where
 
     #[cfg(feature = "kernel")]
     fn wifi_control_stage_for_exact_error(exact_error: &str) -> &str {
-        if exact_error == "cyw43-association-join-pending" {
+        if exact_error == "cyw43-association-join-pending"
+            || exact_error.starts_with("cyw43-association-")
+        {
             "association-join"
+        } else if exact_error.starts_with("cyw43-host-eapol-") {
+            "host-eapol"
         } else if exact_error.is_empty() {
             "none"
         } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
@@ -14307,8 +14421,12 @@ where
             6 => "inspect-cyw43-firmware-upload",
             7 => "verify-function2-enable-ready",
             8 => {
-                if exact_error == "cyw43-association-join-pending" {
+                if exact_error == "cyw43-association-join-pending"
+                    || exact_error.starts_with("cyw43-association-")
+                {
                     "resume-exact-association-join-owner"
+                } else if exact_error.starts_with("cyw43-host-eapol-") {
+                    "complete-host-eapol-handshake"
                 } else if exact_error.is_empty() {
                     "verify-firmware-channel-first-reply"
                 } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
@@ -18442,6 +18560,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             "linked-runtime-test",
         );
         let transcript = pump.serial_mut().driver_mut().drain_tx();
@@ -20916,10 +21035,32 @@ mod tests {
             retained_issued: true,
             retained_accepted: true,
         };
+        let recovery = crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic {
+            cause: "issued-owner-unknown",
+            subphase: "cyw43-host-eapol-control-poll",
+            generation: u32::MAX,
+            owner_generation: u32::MAX,
+            descriptor_op: u16::MAX,
+            descriptor_flags: u16::MAX,
+            descriptor_target_addr: u32::MAX,
+            descriptor_payload_offset: u16::MAX,
+            descriptor_payload_len: u16::MAX,
+            descriptor_total_len: u32::MAX,
+            descriptor_arg0: u32::MAX,
+            descriptor_arg1: u32::MAX,
+            ticket_id: u64::MAX,
+            completion_detail: u16::MAX,
+            completion_sequence: u32::MAX,
+            turn_id: u64::MAX,
+            gate: 8,
+        };
         let lines = [
             KernelConsoleTestPump::wifi_diag_association_state_line(diagnostic),
             KernelConsoleTestPump::wifi_diag_association_progress_line(diagnostic),
             KernelConsoleTestPump::wifi_diag_association_retained_line(diagnostic),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_identity_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
         ];
 
         for line in &lines {
@@ -20931,6 +21072,26 @@ mod tests {
         }
         assert!(lines[1].contains("generation=4294967295 current=no"));
         assert!(lines[2].contains("request=4294967295 issued=yes accepted=yes"));
+        assert!(lines[3].contains("subphase=cyw43-host-eapol-control-poll gate=8"));
+        assert!(lines[4].contains("ticket=18446744073709551615"));
+        assert!(lines[4].contains("completion_detail=0xffff"));
+        assert!(lines[4].contains("turn=18446744073709551615"));
+        assert!(lines[5].contains("descriptor op=0xffff flags=0xffff"));
+        assert_eq!(
+            KernelConsoleTestPump::wifi_deferred_recovery_next_action(recovery),
+            "recover-exact-host-eapol-owner"
+        );
+        let mut pair_signal = recovery;
+        pair_signal.cause = "pair-signal";
+        assert_eq!(
+            KernelConsoleTestPump::wifi_deferred_recovery_next_action(pair_signal),
+            "recover-pair-signal-with-retained-host-eapol-parent"
+        );
+        pair_signal.subphase = "cyw43-association-join";
+        assert_eq!(
+            KernelConsoleTestPump::wifi_deferred_recovery_next_action(pair_signal),
+            "recover-pair-signal-with-retained-association-parent"
+        );
         let grant = KernelConsoleTestPump::wifi_diag_root_grant_line(
             crate::hal::driver_task::DriverTaskRetainedGrantSnapshot {
                 active: true,
@@ -26459,6 +26620,105 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn wifi_deferred_host_eapol_recovery_preserves_gate_eight_over_later_progress() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            cyw43,
+            1_345,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        crate::drivers::driver_task_net::test_record_cyw43_deferred_recovery_diagnostic(
+            crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic {
+                cause: "issued-owner-unknown",
+                subphase: "cyw43-host-eapol-control-poll",
+                generation: 17,
+                owner_generation: 16,
+                descriptor_op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+                descriptor_flags: 0x0003,
+                descriptor_target_addr: 0,
+                descriptor_payload_offset: 0,
+                descriptor_payload_len: 0,
+                descriptor_total_len: 0,
+                descriptor_arg0: 0,
+                descriptor_arg1: 0,
+                ticket_id: 0x1122_3344_5566_7788,
+                completion_detail: 0x5310,
+                completion_sequence: 1_345,
+                turn_id: 701,
+                gate: 8,
+            },
+        );
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        let mut transcript = Vec::new();
+        for _ in 0..256 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        }
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+
+        assert!(
+            rendered.contains(
+                "wifi: deferred_recovery first=yes mutation=no cause=issued-owner-unknown subphase=cyw43-host-eapol-control-poll gate=8"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: deferred_recovery identity generation=17 owner_generation=16 ticket=1234605616436508552 completion_detail=0x5310 completion_sequence=1345 turn=701"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: deferred_recovery descriptor op=0x000a flags=0x0003 target=0x00000000"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: cyw43 last_progress marker_valid=yes sequence=1345 phase=467 phase_name=root-grant-rejected"
+            ) && rendered.contains("gate=0 superseded=yes"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 2 name=sdio-card-select status=inferred"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 8 name=host-eapol status=fail")
+                && rendered
+                    .contains("exact=cyw43-host-eapol-control-poll control_stage=host-eapol"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: next_action=recover-exact-host-eapol-owner blocker=cyw43-host-eapol-control-poll proof_gate=7 target_gate=10"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=diag"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_pair_restart_with_stale_sdio_engine_marker_reports_unknown_owner_intake() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
         let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
@@ -26486,6 +26746,7 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
 
         pump.emit_wifi_startup_gates_from_evidence(
+            None,
             None,
             None,
             None,
@@ -26546,6 +26807,7 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
 
         pump.emit_wifi_startup_gates_from_evidence(
+            None,
             None,
             None,
             None,
@@ -26616,6 +26878,7 @@ mod tests {
                 stage: "engine-init",
                 status: "wifi-pwrseq-failed",
             }),
+            None,
             None,
             None,
             "linked-runtime-test",

@@ -646,11 +646,13 @@ sequence, every-action fingerprint, independently authoritative SDIO
 generation, and a monotonic nonzero grant id sequence-last; let the owner publish
 `consumed_grant_id` irrevocably before spending one quantum; re-signal an
 unacknowledged id without replacement; publish a new id only after exact
-acknowledgement; and fail closed on torn, stale, mutated, wrong-generation,
-already-consumed, replayed, aliased, or exhausted-id state. The notification is
-only a wake hint. Both foreground and DPC paths must alternate separately
-admitted `Poll -> Grant -> Poll` turns, with no acknowledgement poll or second
-child/service/HAL operation composed into the grant turn.
+acknowledgement; classify the exact acknowledged predecessor as a
+non-authorizing wait while its replacement is unpublished; and fail closed on
+torn, stale, mutated, wrong-generation, mismatched-consumed, replayed, aliased,
+or exhausted-id state. The notification is only a wake hint. Both foreground
+and DPC paths must alternate separately admitted `Poll -> Grant -> Poll` turns,
+with no acknowledgement poll or second child/service/HAL operation composed
+into the grant turn.
 An event's source/frame-length hint must be copied into the DPC cursor only on
 the first admission of that exact sequence. Later grant and completion turns
 must not reapply it: doing so can resurrect `I_HMB_FRAME_IND` after a completed
@@ -670,11 +672,27 @@ permitted. A zero-status `SOURCE_PENDING` event must inspect status through the
 ordinary DPC lane, perform zero Function 2 reads, ignore stale shared-aperture
 bytes, consume the event, and rearm the sole SDIO owner. A real
 `I_HMB_FRAME_IND` or validated retained frame hint remains mandatory for the
-fixed first read. Coverage must also consume that exact event after the
-source-probe completion is cached but before the retained foreground watermark
-refreshes; the same-generation successful-consume record may resume the
-post-probe FIFO check without replay, while a blind ring advance, stale
-generation, mismatched sequence, or recovery state must still fail closed.
+fixed first read. The durable present-or-exact-consumed predicate must also be
+tested directly against a later verified same-generation consume observation:
+that receipt may satisfy a subsequent retained observation without replay,
+while a blind ring advance, stale generation, mismatched sequence, or recovery
+state must still fail closed. This direct state cut is not a permitted
+production interleaving between cached foreground completion and watermark
+refresh.
+The adversarial production chain must exercise the real scheduler seam: a
+foreground source probe commits its event and exact owner completion; ordinary
+DPC service must remain deferred while foreground ownership is active; cached
+completion replay ends that ownership; the next scheduler iteration must
+refresh the watermark before admitting DPC; only then may the DPC consume and
+rearm the event. The final op8/op10 turn must reach `PostProbe` without a second
+activation, poison, or replay. Zero result, wrong sequence or generation,
+mismatched ring consumer, and recovery-poisoned state must all reject.
+An injected DPC child fault must retain its primitive detail, result, frame,
+event sequence, action, and I/O phase through the later prompt quarantine.
+Exactly one fresh child ticket is allowed only for a telemetry-bound
+`CONTAINED` entry-inhibit fault that proves no command issue; the second such
+failure and every command-or-later, owner-poisoned, malformed, timed-out, or
+issued-unknown cut must fence the pair without advancing the event.
 
 Backplane-attach coverage must drive the production retained cursor through
 ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, the Pi
@@ -1129,7 +1147,14 @@ reciprocal ring plus acknowledged grants, and drive the real retained
 controller; manually fabricated child descriptors or completions do not count.
 Function 2 TX coverage must prove IORx readiness, backplane-window selection,
 and CMD53 issue consume separate outer turns, and that timeout never toggles
-IOEx, changes the sealed engine, or selects another lane in place.
+IOEx, changes the sealed engine, or selects another lane in place. Control
+exchange coverage must retain Linux's separate absolute 2.5-second TX and
+reply windows. It must hold an exact Function 2 child through terminal
+completion without abandoning or reissuing it, apply that completion before
+the timeout decision, and prove the original deadline is unchanged. A child
+that finishes after the TX deadline must produce a post-TX fault and ordered
+pair fence, never replayable `NOT_READY`; the later reply window starts only
+after an on-time exact TX completion and is not inflated by any child wait.
 The focused adversarial cases include
 `cyw43_sdio_requests_use_linux_watchdog_and_derived_child_bound`,
 `sdio_owner_clamps_drifted_descriptor_to_linux_request_watchdog`,

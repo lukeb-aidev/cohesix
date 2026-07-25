@@ -552,6 +552,8 @@ static CYW43_LINK_UP: AtomicU32 = AtomicU32::new(0);
 static CYW43_CONNECTION_EPOCH: AtomicU32 = AtomicU32::new(0);
 static CYW43_GENERATION_RECOVERY_ACTIVE: AtomicU32 = AtomicU32::new(0);
 static CYW43_DEFERRED_RECOVERY: Mutex<Option<Cyw43DeferredRecovery>> = Mutex::new(None);
+static CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC: Mutex<Option<Cyw43DeferredRecoveryDiagnostic>> =
+    Mutex::new(None);
 
 /// Open one ordinary EventPump turn for CYW43 child-runtime service.
 ///
@@ -1087,6 +1089,33 @@ enum Cyw43RecoveryCause {
     UnrouteableControlFrame,
 }
 
+#[cfg(feature = "kernel")]
+impl Cyw43RecoveryCause {
+    const fn diagnostic_label(self) -> &'static str {
+        match self {
+            Self::AmbiguousCompletion => "ambiguous-completion",
+            Self::Association => "association",
+            Self::DataTx => "data-tx",
+            Self::IssuedOwnerUnknown => "issued-owner-unknown",
+            Self::Maintenance => "maintenance",
+            Self::PairSignal => "pair-signal",
+            Self::UnrouteableControlFrame => "unrouteable-control-frame",
+        }
+    }
+
+    const fn diagnostic_subphase(self) -> &'static str {
+        match self {
+            Self::Association => CYW43_ASSOCIATION_JOIN_STAGE,
+            Self::DataTx => "cyw43-net-data-tx",
+            Self::Maintenance => "cyw43-maintenance",
+            Self::PairSignal => "cyw43-pair-signal",
+            Self::AmbiguousCompletion
+            | Self::IssuedOwnerUnknown
+            | Self::UnrouteableControlFrame => "cyw43-owner-unknown",
+        }
+    }
+}
+
 /// Immutable handoff from a steady CYW43 path to the retained pair supervisor.
 ///
 /// The first record for a generation wins. Publishing this record may fence
@@ -1106,6 +1135,34 @@ struct Cyw43DeferredRecovery {
     detail: u16,
     sequence: u32,
     turn_id: u64,
+}
+
+/// Passive first-cause record retained after the recovery owner consumes its ticket.
+///
+/// The record contains only immutable command identity and terminal metadata;
+/// it deliberately excludes payload bytes and payload digests. `wifi diag`
+/// reads one copy without taking the live recovery ticket or touching either
+/// linked runtime.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43DeferredRecoveryDiagnostic {
+    pub cause: &'static str,
+    pub subphase: &'static str,
+    pub generation: u32,
+    pub owner_generation: u32,
+    pub descriptor_op: u16,
+    pub descriptor_flags: u16,
+    pub descriptor_target_addr: u32,
+    pub descriptor_payload_offset: u16,
+    pub descriptor_payload_len: u16,
+    pub descriptor_total_len: u32,
+    pub descriptor_arg0: u32,
+    pub descriptor_arg1: u32,
+    pub ticket_id: u64,
+    pub completion_detail: u16,
+    pub completion_sequence: u32,
+    pub turn_id: u64,
+    pub gate: u8,
 }
 
 #[cfg(feature = "kernel")]
@@ -1343,6 +1400,7 @@ impl Cyw43BootstrapSupervisor {
         }
         self.stable_generation = Some(ready_generation);
         self.pair_restarts = 0;
+        *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
         true
     }
 
@@ -2034,7 +2092,7 @@ impl Cyw43BootstrapSupervisor {
         Cyw43RetainedActionOutcome::Complete(completion)
     }
 
-    fn arm_generation_recovery(&mut self, _reason: &'static str) {
+    fn arm_generation_recovery(&mut self, reason: &'static str) {
         self.retry_requires_pair_restart = true;
         let current_generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
         if self.phase == Cyw43BootstrapPhase::Complete {
@@ -2053,15 +2111,25 @@ impl Cyw43BootstrapSupervisor {
             crate::hal::driver_task::finish_cyw43_sdio_pair_context_replay(false);
             self.context_replay_owned = false;
         }
+        // A runtime-originated pair signal can arrive before root receives a
+        // terminal child completion. Preserve the immutable root-side Join or
+        // host-EAPOL parent identity before recovery teardown clears it.
+        retain_active_cyw43_recovery_owner_diagnostic(current_generation);
         let deferred_recovery =
             take_cyw43_deferred_recovery().filter(|ticket| ticket.generation == current_generation);
         if !self
             .recovery_ticket
             .is_some_and(|ticket| ticket.generation == current_generation)
         {
-            self.recovery_ticket = Some(deferred_recovery.unwrap_or_else(|| {
-                Cyw43DeferredRecovery::pair_signal(current_generation, cyw43_outer_event_turn_id())
-            }));
+            let recovery = deferred_recovery.unwrap_or_else(|| {
+                let recovery = Cyw43DeferredRecovery::pair_signal(
+                    current_generation,
+                    cyw43_outer_event_turn_id(),
+                );
+                retain_first_cyw43_deferred_recovery_diagnostic(recovery, reason);
+                recovery
+            });
+            self.recovery_ticket = Some(recovery);
         }
         self.pending = None;
         self.wait = None;
@@ -5363,10 +5431,11 @@ fn latch_cyw43_deferred_recovery(
     detail: u16,
     sequence: u32,
 ) -> Option<Cyw43DeferredRecovery> {
-    latch_cyw43_deferred_recovery_for_owner(
+    latch_cyw43_deferred_recovery_for_owner_subphase(
         generation,
         generation,
         cause,
+        cause.diagnostic_subphase(),
         descriptor,
         payload_digest,
         ticket_id,
@@ -5376,11 +5445,219 @@ fn latch_cyw43_deferred_recovery(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_deferred_recovery_diagnostic_gate(
+    cause: Cyw43RecoveryCause,
+    subphase: &'static str,
+) -> u8 {
+    if cause == Cyw43RecoveryCause::Association
+        || subphase.starts_with("cyw43-association-")
+        || subphase.starts_with("cyw43-host-eapol-")
+    {
+        8
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn retain_first_cyw43_deferred_recovery_diagnostic(
+    recovery: Cyw43DeferredRecovery,
+    subphase: &'static str,
+) {
+    let mut slot = CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock();
+    if slot.is_some() {
+        return;
+    }
+    let descriptor = recovery.descriptor;
+    *slot = Some(Cyw43DeferredRecoveryDiagnostic {
+        cause: recovery.cause.diagnostic_label(),
+        subphase,
+        generation: recovery.generation,
+        owner_generation: recovery.owner_generation,
+        descriptor_op: descriptor.op,
+        descriptor_flags: descriptor.flags,
+        descriptor_target_addr: descriptor.target_addr,
+        descriptor_payload_offset: descriptor.payload_offset,
+        descriptor_payload_len: descriptor.payload_len,
+        descriptor_total_len: descriptor.total_len,
+        descriptor_arg0: descriptor.arg0,
+        descriptor_arg1: descriptor.arg1,
+        ticket_id: recovery.ticket_id,
+        completion_detail: recovery.detail,
+        completion_sequence: recovery.sequence,
+        turn_id: recovery.turn_id,
+        gate: cyw43_deferred_recovery_diagnostic_gate(recovery.cause, subphase),
+    });
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_active_parent_recovery_cause(
+    request: Option<u32>,
+    issued: bool,
+) -> Cyw43RecoveryCause {
+    if cyw43_child_action_accepted(request, issued) {
+        Cyw43RecoveryCause::IssuedOwnerUnknown
+    } else {
+        Cyw43RecoveryCause::PairSignal
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn retain_active_cyw43_recovery_owner_diagnostic(current_generation: u32) {
+    if CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock().is_some() {
+        return;
+    }
+    if let Some(join) = (*CYW43_ASSOCIATION_JOIN_DIAGNOSTIC.lock())
+        .filter(|join| join.generation == current_generation)
+    {
+        retain_first_cyw43_deferred_recovery_diagnostic(
+            Cyw43DeferredRecovery {
+                generation: current_generation,
+                owner_generation: join.generation,
+                // This branch observes Join parent context after a
+                // runtime-origin pair signal. A Join-owned failure uses the
+                // ordinary deferred-ticket path; without that ticket the
+                // causal label must remain PairSignal.
+                cause: Cyw43RecoveryCause::PairSignal,
+                descriptor: join.descriptor,
+                payload_digest: Cyw43PayloadDigest {
+                    first: 0,
+                    last: 0,
+                    xor: 0,
+                    sum: 0,
+                },
+                ticket_id: join.ticket_id,
+                detail: join.completion_detail,
+                sequence: if join.completion_sequence != 0 {
+                    join.completion_sequence
+                } else {
+                    join.request.unwrap_or_default()
+                },
+                turn_id: cyw43_outer_event_turn_id(),
+            },
+            CYW43_ASSOCIATION_JOIN_STAGE,
+        );
+        return;
+    }
+    if let Some(pending) = (*CYW43_PENDING_PROMPT_POLL.lock())
+        .filter(|pending| pending.generation == current_generation)
+    {
+        // The parent cursor existed when the runtime signalled pair recovery,
+        // but only the accepted-child predicate may upgrade its cause to
+        // issued-owner-unknown.
+        let cause = cyw43_active_parent_recovery_cause(pending.request, pending.issued);
+        retain_first_cyw43_deferred_recovery_diagnostic(
+            Cyw43DeferredRecovery {
+                generation: current_generation,
+                owner_generation: pending.generation,
+                cause,
+                descriptor: pending.descriptor,
+                payload_digest: Cyw43PayloadDigest {
+                    first: 0,
+                    last: 0,
+                    xor: 0,
+                    sum: 0,
+                },
+                ticket_id: pending.ticket_id,
+                detail: 0,
+                sequence: pending.request.unwrap_or_default(),
+                turn_id: cyw43_outer_event_turn_id(),
+            },
+            pending.owner.stage(),
+        );
+        return;
+    }
+    let session_owner = {
+        let session = CYW43_HOST_EAPOL_SESSION.lock();
+        session.as_ref().and_then(|session| {
+            if let Some(pending) = session
+                .pending_key_install
+                .as_ref()
+                .filter(|pending| pending.connection_epoch == current_generation)
+            {
+                let (detail, sequence) = pending.last_completion.map_or((0, 0), |completion| {
+                    (completion.detail, completion.sequence)
+                });
+                Some((
+                    pending.stage,
+                    pending.connection_epoch,
+                    cyw43_active_parent_recovery_cause(pending.request, pending.issued),
+                    pending.tx_descriptor,
+                    u64::from(pending.id),
+                    detail,
+                    if sequence != 0 {
+                        sequence
+                    } else {
+                        pending.request.unwrap_or_default()
+                    },
+                ))
+            } else if let Some(pending) = session
+                .pending_tx_submit
+                .as_ref()
+                .filter(|pending| pending.connection_epoch == current_generation)
+            {
+                Some((
+                    pending.stage,
+                    pending.connection_epoch,
+                    cyw43_active_parent_recovery_cause(pending.request, pending.issued),
+                    cyw43_data_tx_descriptor(usize::from(pending.len)),
+                    pending.ticket_id,
+                    0,
+                    pending.request.unwrap_or_default(),
+                ))
+            } else {
+                session.pending_tx_drain.as_ref().and_then(|pending| {
+                    (pending.connection_epoch == current_generation).then_some((
+                        pending.stage,
+                        pending.connection_epoch,
+                        // A TX-drain cursor has not issued its next child poll;
+                        // it is parent context observed at the pair signal.
+                        Cyw43RecoveryCause::PairSignal,
+                        DriverRuntimeCyw43CommandDescriptor {
+                            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+                            flags: cyw43_control_split_poll_flags(pending.polls.saturating_add(1)),
+                            ..DriverRuntimeCyw43CommandDescriptor::empty()
+                        },
+                        pending.ticket_id,
+                        0,
+                        0,
+                    ))
+                })
+            }
+        })
+    };
+    if let Some((subphase, owner_generation, cause, descriptor, ticket_id, detail, sequence)) =
+        session_owner
+    {
+        retain_first_cyw43_deferred_recovery_diagnostic(
+            Cyw43DeferredRecovery {
+                generation: current_generation,
+                owner_generation,
+                cause,
+                descriptor,
+                payload_digest: Cyw43PayloadDigest {
+                    first: 0,
+                    last: 0,
+                    xor: 0,
+                    sum: 0,
+                },
+                ticket_id,
+                detail,
+                sequence,
+                turn_id: cyw43_outer_event_turn_id(),
+            },
+            subphase,
+        );
+    }
+}
+
+#[cfg(feature = "kernel")]
 #[allow(clippy::too_many_arguments)]
-fn latch_cyw43_deferred_recovery_for_owner(
+fn latch_cyw43_deferred_recovery_for_owner_subphase(
     generation: u32,
     owner_generation: u32,
     cause: Cyw43RecoveryCause,
+    subphase: &'static str,
     descriptor: DriverRuntimeCyw43CommandDescriptor,
     payload_digest: Cyw43PayloadDigest,
     ticket_id: u64,
@@ -5416,9 +5693,21 @@ fn latch_cyw43_deferred_recovery_for_owner(
             proposed
         }
     };
+    if retained == proposed {
+        retain_first_cyw43_deferred_recovery_diagnostic(retained, subphase);
+    }
     fence_cyw43_root_admission_for_recovery();
     crate::hal::driver_task::request_cyw43_sdio_pair_restart();
     Some(retained)
+}
+
+/// Return one passive copy of the first deferred recovery identity.
+///
+/// Reading this snapshot never consumes the authoritative recovery ticket and
+/// never performs linked-runtime, HAL, or register work.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_deferred_recovery_diagnostic() -> Option<Cyw43DeferredRecoveryDiagnostic> {
+    *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock()
 }
 
 #[cfg(feature = "kernel")]
@@ -5952,6 +6241,10 @@ struct Cyw43AssociationJoinDiagnostic {
     generation: u32,
     request: Option<u32>,
     issued: bool,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    ticket_id: u64,
+    completion_detail: u16,
+    completion_sequence: u32,
 }
 
 #[cfg(feature = "kernel")]
@@ -5960,10 +6253,18 @@ static CYW43_ASSOCIATION_JOIN_DIAGNOSTIC: Mutex<Option<Cyw43AssociationJoinDiagn
 
 #[cfg(feature = "kernel")]
 fn publish_cyw43_association_join_diagnostic(pending: &Cyw43PendingAssociationJoin) {
+    let (completion_detail, completion_sequence) =
+        pending.last_completion.map_or((0, 0), |completion| {
+            (completion.detail, completion.sequence)
+        });
     *CYW43_ASSOCIATION_JOIN_DIAGNOSTIC.lock() = Some(Cyw43AssociationJoinDiagnostic {
         generation: pending.generation,
         request: pending.request,
         issued: pending.issued,
+        descriptor: pending.tx_descriptor,
+        ticket_id: u64::from(pending.id),
+        completion_detail,
+        completion_sequence,
     });
 }
 
@@ -5980,10 +6281,11 @@ fn latch_cyw43_pending_association_recovery(
     let (detail, sequence) = pending.last_completion.map_or((0, 0), |completion| {
         (completion.detail, completion.sequence)
     });
-    latch_cyw43_deferred_recovery_for_owner(
+    latch_cyw43_deferred_recovery_for_owner_subphase(
         CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
         pending.generation,
         cause,
+        CYW43_ASSOCIATION_JOIN_STAGE,
         pending.tx_descriptor,
         pending.payload_digest,
         u64::from(pending.id),
@@ -6495,7 +6797,15 @@ fn record_cyw43_sdio_owner_fault_status(status: Cyw43SdioOwnerFaultStatus) {
 pub(crate) fn test_clear_cyw43_runtime_replay_status() {
     finish_cyw43_bootstrap_causal_fault_capture();
     clear_cyw43_runtime_command_fault_status();
+    *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
     *SDIO_LAST_RUNTIME_REPLAY_STATUS.lock() = None;
+}
+
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_record_cyw43_deferred_recovery_diagnostic(
+    diagnostic: Cyw43DeferredRecoveryDiagnostic,
+) {
+    *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = Some(diagnostic);
 }
 
 #[cfg(all(test, feature = "kernel"))]
@@ -8035,10 +8345,11 @@ fn fence_cyw43_retained_action_before_association_generation() -> bool {
         return true;
     }
     if let Some(pending) = CYW43_PENDING_DATA_TX.lock().as_ref().cloned() {
-        let _ = latch_cyw43_deferred_recovery_for_owner(
+        let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
             CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
             pending.generation,
             Cyw43RecoveryCause::DataTx,
+            "cyw43-net-data-tx",
             cyw43_data_tx_descriptor(usize::from(pending.len)),
             pending.payload_digest,
             pending.ticket_id,
@@ -8265,10 +8576,11 @@ fn recover_cyw43_unrouteable_control_exchange_frame(
     payload_digest: Cyw43PayloadDigest,
     ticket_id: u64,
 ) {
-    let _ = latch_cyw43_deferred_recovery_for_owner(
+    let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
         CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
         generation,
         Cyw43RecoveryCause::UnrouteableControlFrame,
+        stage,
         descriptor,
         payload_digest,
         ticket_id,
@@ -8518,10 +8830,11 @@ fn advance_cyw43_pending_association_join(
     if step == Cyw43AssociationJoinStep::RecoveryRequired
         && (requires_pair_restart || cyw43_fault_invalidates_root_generation(completion.detail))
     {
-        let _ = latch_cyw43_deferred_recovery_for_owner(
+        let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
             CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
             pending.generation,
             Cyw43RecoveryCause::AmbiguousCompletion,
+            CYW43_ASSOCIATION_JOIN_STAGE,
             pending.tx_descriptor,
             pending.payload_digest,
             u64::from(pending.id),
@@ -9876,10 +10189,11 @@ fn latch_cyw43_maintenance_recovery(
     action: &Cyw43PendingMaintenanceAction,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
-    let _ = latch_cyw43_deferred_recovery_for_owner(
+    let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
         CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
         action.generation,
         Cyw43RecoveryCause::Maintenance,
+        action.kind.stage(),
         action.descriptor,
         action.digest,
         u64::from(action.request.unwrap_or_default()),
@@ -10462,10 +10776,11 @@ fn latch_cyw43_wsec_key_recovery(
     cause: Cyw43RecoveryCause,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
-    let _ = latch_cyw43_deferred_recovery_for_owner(
+    let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
         CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
         pending.connection_epoch,
         cause,
+        pending.stage,
         pending.tx_descriptor,
         pending.payload_digest,
         u64::from(pending.id),
@@ -14998,10 +15313,11 @@ fn latch_cyw43_host_eapol_tx_recovery(
     cause: Cyw43RecoveryCause,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
-    let _ = latch_cyw43_deferred_recovery_for_owner(
+    let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
         CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
         pending.connection_epoch,
         cause,
+        pending.stage,
         cyw43_data_tx_descriptor(usize::from(pending.len)),
         pending.payload_digest,
         pending.ticket_id,
@@ -15400,10 +15716,11 @@ fn latch_cyw43_host_eapol_tx_drain_recovery(
         flags: cyw43_control_split_poll_flags(pending.polls.saturating_add(1)),
         ..DriverRuntimeCyw43CommandDescriptor::empty()
     };
-    let _ = latch_cyw43_deferred_recovery_for_owner(
+    let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
         CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
         pending.connection_epoch,
         cause,
+        pending.stage,
         descriptor,
         cyw43_payload_digest(&[]),
         pending.ticket_id,
@@ -16072,10 +16389,11 @@ fn cyw43_submit_runtime_control_exchange(
         .unwrap_or_else(|| CYW43_CONNECTION_EPOCH.load(Ordering::Acquire));
     let latch_recovery = |cause: Cyw43RecoveryCause,
                           completion: Option<DriverTaskCompletionRecord>| {
-        let _ = latch_cyw43_deferred_recovery_for_owner(
+        let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
             CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
             owner_generation,
             cause,
+            stage,
             descriptor,
             cyw43_payload_digest(payload),
             u64::from(id),
@@ -17739,10 +18057,11 @@ fn latch_cyw43_prompt_poll_recovery_with_cause(
     cause: Cyw43RecoveryCause,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
-    let _ = latch_cyw43_deferred_recovery_for_owner(
+    let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
         CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
         pending.generation,
         cause,
+        pending.owner.stage(),
         pending.descriptor,
         cyw43_payload_digest(&[]),
         pending.ticket_id,
@@ -19577,10 +19896,11 @@ fn fail_cyw43_pending_data_tx(
     poison_current_generation: bool,
 ) -> Cyw43DataTxTurnOutcome {
     if poison_current_generation {
-        let _ = latch_cyw43_deferred_recovery_for_owner(
+        let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
             CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
             pending.generation,
             Cyw43RecoveryCause::DataTx,
+            "cyw43-net-data-tx",
             cyw43_data_tx_descriptor(usize::from(pending.len)),
             pending.payload_digest,
             pending.ticket_id,
@@ -22568,6 +22888,7 @@ mod tests {
         crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
         *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
         *CYW43_DEFERRED_RECOVERY.lock() = None;
+        *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
         clear_cyw43_association_join_diagnostic();
         CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
         CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
@@ -25558,6 +25879,20 @@ mod tests {
         assert_eq!(first_ticket.payload_digest, expected_digest);
         assert_eq!(first_ticket.ticket_id, u64::from(first_ticket.sequence));
         assert_eq!(first_ticket.detail, CYW43_CONTROL_EXCHANGE_FAULT_DETAIL);
+        let causal = cyw43_deferred_recovery_diagnostic()
+            .expect("association recovery preserves its passive first-cause identity");
+        assert_eq!(causal.cause, "ambiguous-completion");
+        assert_eq!(causal.subphase, CYW43_ASSOCIATION_JOIN_STAGE);
+        assert_eq!(causal.generation, 0);
+        assert_eq!(causal.owner_generation, 0);
+        assert_eq!(
+            causal.descriptor_op,
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+        );
+        assert_eq!(causal.ticket_id, first_ticket.ticket_id);
+        assert_eq!(causal.completion_detail, first_ticket.detail);
+        assert_eq!(causal.completion_sequence, first_ticket.sequence);
+        assert_eq!(causal.gate, 8);
 
         let duplicate = latch_cyw43_deferred_recovery(
             0,
@@ -25588,6 +25923,11 @@ mod tests {
         ));
         assert_eq!(cyw43_connection_generation(), 0);
         assert_eq!(bootstrap.recovery_ticket, Some(first_ticket));
+        assert_eq!(
+            cyw43_deferred_recovery_diagnostic(),
+            Some(causal),
+            "consuming the authoritative ticket must not erase passive evidence"
+        );
 
         begin_cyw43_outer_event_turn();
         assert!(matches!(
@@ -25667,6 +26007,15 @@ mod tests {
         assert_eq!(ticket.owner_generation, 0);
         assert_eq!(ticket.cause, Cyw43RecoveryCause::AmbiguousCompletion);
         assert_eq!(ticket.detail, CYW43_CONTROL_FRAME_DETAIL);
+        let causal = cyw43_deferred_recovery_diagnostic()
+            .expect("host-EAPOL recovery preserves its passive first-cause identity");
+        assert_eq!(causal.cause, "ambiguous-completion");
+        assert_eq!(causal.subphase, "cyw43-host-eapol-control-poll");
+        assert_eq!(causal.descriptor_op, DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL);
+        assert_eq!(causal.ticket_id, ticket.ticket_id);
+        assert_eq!(causal.completion_detail, ticket.detail);
+        assert_eq!(causal.completion_sequence, ticket.sequence);
+        assert_eq!(causal.gate, 8);
 
         begin_cyw43_outer_event_turn();
         assert!(matches!(
@@ -25679,6 +26028,11 @@ mod tests {
         ));
         assert!(CYW43_HOST_EAPOL_SESSION.lock().is_none());
         assert_eq!(cyw43_connection_generation(), 0);
+        assert_eq!(
+            cyw43_deferred_recovery_diagnostic(),
+            Some(causal),
+            "tearing down the EAPOL session must not erase first-cause evidence"
+        );
 
         begin_cyw43_outer_event_turn();
         let _ = bootstrap.service_turn(&mut hal);
@@ -25686,6 +26040,124 @@ mod tests {
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_pair_signal_retains_host_eapol_parent_before_recovery_teardown() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        assert_eq!(
+            cyw43_active_parent_recovery_cause(None, false),
+            Cyw43RecoveryCause::PairSignal
+        );
+        assert_eq!(
+            cyw43_active_parent_recovery_cause(Some(1), false),
+            Cyw43RecoveryCause::IssuedOwnerUnknown
+        );
+        assert_eq!(
+            cyw43_active_parent_recovery_cause(None, true),
+            Cyw43RecoveryCause::IssuedOwnerUnknown
+        );
+        for (request, issued, expected_cause, expected_sequence) in [
+            (Some(1_345), true, "issued-owner-unknown", 1_345),
+            (None, false, "pair-signal", 0),
+        ] {
+            reset_cyw43_status_flags();
+            let descriptor = DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+                flags: cyw43_control_split_poll_flags(1),
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            };
+            *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
+                ticket_id: 0x7788,
+                owner: Cyw43PromptPollOwner::HostEapolControl,
+                generation: 0,
+                descriptor,
+                request,
+                issued,
+                deadline: cyw43_poll_deadline_from_millis_or_polls(1_000, 8),
+                child_reply_latched: false,
+                child_reply_renewals: 0,
+            });
+            let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+            supervisor.phase = Cyw43BootstrapPhase::Complete;
+            supervisor.ready_generation = Some(0);
+
+            supervisor.arm_generation_recovery("cyw43-pair-recovery-signalled");
+
+            assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
+            assert_eq!(
+                supervisor
+                    .recovery_ticket
+                    .expect("runtime-only pair signal remains authoritative")
+                    .cause,
+                Cyw43RecoveryCause::PairSignal
+            );
+            let causal = cyw43_deferred_recovery_diagnostic()
+                .expect("recovery teardown preserves the active EAPOL parent identity");
+            assert_eq!(causal.cause, expected_cause);
+            assert_eq!(causal.subphase, "cyw43-host-eapol-control-poll");
+            assert_eq!(causal.generation, 0);
+            assert_eq!(causal.owner_generation, 0);
+            assert_eq!(causal.descriptor_op, DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL);
+            assert_eq!(causal.ticket_id, 0x7788);
+            assert_eq!(causal.completion_detail, 0);
+            assert_eq!(causal.completion_sequence, expected_sequence);
+            assert_eq!(causal.gate, 8);
+        }
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_pair_signal_retains_join_parent_without_inventing_join_cause() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        for (request, issued, expected_sequence) in [(Some(2_346), true, 2_346), (None, false, 0)] {
+            reset_cyw43_status_flags();
+            let descriptor = DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+                flags: cyw43_control_split_poll_flags(1),
+                arg0: CYW43_WLC_SET_VAR,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            };
+            *CYW43_ASSOCIATION_JOIN_DIAGNOSTIC.lock() = Some(Cyw43AssociationJoinDiagnostic {
+                generation: 0,
+                request,
+                issued,
+                descriptor,
+                ticket_id: 0x8899,
+                completion_detail: 0,
+                completion_sequence: 0,
+            });
+            let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+            supervisor.phase = Cyw43BootstrapPhase::Complete;
+            supervisor.ready_generation = Some(0);
+
+            supervisor.arm_generation_recovery("cyw43-pair-recovery-signalled");
+
+            assert_eq!(
+                supervisor
+                    .recovery_ticket
+                    .expect("runtime-only pair signal remains authoritative")
+                    .cause,
+                Cyw43RecoveryCause::PairSignal
+            );
+            let causal = cyw43_deferred_recovery_diagnostic()
+                .expect("recovery teardown preserves the active Join parent identity");
+            assert_eq!(causal.cause, "pair-signal");
+            assert_eq!(causal.subphase, CYW43_ASSOCIATION_JOIN_STAGE);
+            assert_eq!(causal.generation, 0);
+            assert_eq!(causal.owner_generation, 0);
+            assert_eq!(
+                causal.descriptor_op,
+                DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+            );
+            assert_eq!(causal.ticket_id, 0x8899);
+            assert_eq!(causal.completion_detail, 0);
+            assert_eq!(causal.completion_sequence, expected_sequence);
+            assert_eq!(causal.gate, 8);
+        }
         reset_cyw43_status_flags();
     }
 
@@ -35445,8 +35917,13 @@ mod tests {
         supervisor.phase = Cyw43BootstrapPhase::Complete;
         supervisor.ready_generation = Some(23);
         supervisor.pair_restarts = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
+        retain_first_cyw43_deferred_recovery_diagnostic(
+            Cyw43DeferredRecovery::pair_signal(23, 99),
+            "cyw43-host-eapol-control-poll",
+        );
 
         assert!(!supervisor.mark_ready_generation_stable(false));
+        assert!(cyw43_deferred_recovery_diagnostic().is_some());
         assert_eq!(
             supervisor.pair_restarts,
             CYW43_SUPERVISOR_PAIR_RESTART_LIMIT,
@@ -35454,6 +35931,11 @@ mod tests {
         assert!(supervisor.mark_ready_generation_stable(true));
         assert_eq!(supervisor.pair_restarts, 0);
         assert_eq!(supervisor.stable_generation, Some(23));
+        assert_eq!(
+            cyw43_deferred_recovery_diagnostic(),
+            None,
+            "real network readiness retires an earlier recovery diagnostic"
+        );
         assert!(!supervisor.mark_ready_generation_stable(true));
 
         supervisor.arm_generation_recovery("post-stability-independent-fault");
