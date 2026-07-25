@@ -11002,6 +11002,29 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_deferred_recovery_completion_cause(result: u32) -> &'static str {
+        match result {
+            0x4450_0001 => "dpc-frame-prefix",
+            0x4450_0002 => "dpc-nested-control",
+            0x4450_0003 => "dpc-zero-mask-delivery-invariant",
+            0x4450_0004 => "dpc-recovery-drain-exhausted",
+            0x4450_0005 => "dpc-recovery-deadline",
+            0x4450_0010 => "dpc-bad-epoch",
+            0x4450_0011 => "dpc-bad-sequence",
+            0x4450_0012 => "dpc-missing-source",
+            0x4450_0013 => "dpc-invalid-frame-hint",
+            0x4450_0014 => "dpc-active-sequence",
+            0x4450_0015 => "dpc-cursor-sequence",
+            0x4450_0016 => "dpc-child-grant",
+            0x4450_0017 => "dpc-child-completion",
+            0x4450_0018 => "dpc-child-submit",
+            0x4450_0019 => "dpc-consumer-wake",
+            0x4450_001a => "dpc-event-advance",
+            _ => "runtime-terminal",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_deferred_recovery_identity_line(
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
@@ -11014,6 +11037,17 @@ where
             recovery.completion_result,
             recovery.completion_sequence,
             recovery.turn_id,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_completion_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: deferred_recovery completion result=0x{:08x} cause={}",
+            recovery.completion_result,
+            Self::wifi_deferred_recovery_completion_cause(recovery.completion_result),
         ))
     }
 
@@ -11240,6 +11274,7 @@ where
             for detail in [
                 Self::wifi_diag_deferred_recovery_line(recovery),
                 Self::wifi_diag_deferred_recovery_identity_line(recovery),
+                Self::wifi_diag_deferred_recovery_completion_line(recovery),
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
@@ -12086,6 +12121,7 @@ where
             for detail in [
                 Self::wifi_diag_deferred_recovery_line(recovery),
                 Self::wifi_diag_deferred_recovery_identity_line(recovery),
+                Self::wifi_diag_deferred_recovery_completion_line(recovery),
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
@@ -21066,6 +21102,7 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_association_retained_line(diagnostic),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_identity_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
         ];
 
@@ -21085,7 +21122,16 @@ mod tests {
         assert!(lines[4].contains("completion_detail=0xffff"));
         assert!(lines[4].contains("completion_result=0xffffffff"));
         assert!(lines[4].contains("turn=18446744073709551615"));
-        assert!(lines[5].contains("descriptor op=0xffff flags=0xffff"));
+        assert!(lines[5].contains("result=0xffffffff cause=runtime-terminal"));
+        assert_eq!(
+            KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x4450_0003),
+            "dpc-zero-mask-delivery-invariant",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x4450_0004),
+            "dpc-recovery-drain-exhausted",
+        );
+        assert!(lines[6].contains("descriptor op=0xffff flags=0xffff"));
         assert_eq!(
             KernelConsoleTestPump::wifi_deferred_recovery_next_action(recovery),
             "recover-exact-host-eapol-owner"

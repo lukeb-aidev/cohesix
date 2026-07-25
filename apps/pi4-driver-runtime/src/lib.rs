@@ -1439,6 +1439,7 @@ const CYW43_SERVICE_PROGRESS_QUEUE_OVERFLOW: u32 = 1 << 5;
 const CYW43_SERVICE_PROGRESS_IRQ_PENDING: u32 = 1 << 6;
 const CYW43_SERVICE_PROGRESS_RX_PENDING: u32 = 1 << 7;
 const CYW43_SERVICE_PROGRESS_RX_SKIP: u32 = 1 << 8;
+const CYW43_SERVICE_PROGRESS_LOCAL_DECODE_DROP: u32 = 1 << 9;
 const CYW43_SDPCM_DATA_TX_RESERVED_CONTROL_CREDITS: u8 = 1;
 const CYW43_TX_CREDIT_WAIT_LOOPS: usize = 2_000;
 const CYW43_RX_FRAME_FLAG_MASK_DATA: u16 = 1 << CYW43_SDPCM_CHANNEL_DATA;
@@ -3250,6 +3251,8 @@ struct Cyw43DpcCursor {
     mailbox_data: u32,
     rframe_low: u8,
     actual_frame_len: u16,
+    frame_from_nextlen: bool,
+    recovery_retransmit: bool,
     recovery_drain_polls: usize,
     recovery_deadline: RuntimeDeadline,
     recovery_settle_start_ticks: u64,
@@ -3278,6 +3281,8 @@ impl Cyw43DpcCursor {
             mailbox_data: 0,
             rframe_low: 0,
             actual_frame_len: 0,
+            frame_from_nextlen: false,
+            recovery_retransmit: false,
             recovery_drain_polls: 0,
             recovery_deadline: RuntimeDeadline::Iterations { remaining: 0 },
             recovery_settle_start_ticks: 0,
@@ -3307,8 +3312,6 @@ const fn cyw43_dpc_turn_route(cursor: &Cyw43DpcCursor) -> Cyw43DpcTurnRoute {
     }
 }
 
-const CYW43_DPC_TERMINAL_RESULT_FRAME_PREFIX: u32 = 0x4450_0001;
-const CYW43_DPC_TERMINAL_RESULT_NESTED_CONTROL: u32 = 0x4450_0002;
 const CYW43_DPC_TERMINAL_RESULT_FRAME_DECODE: u32 = 0x4450_0003;
 const CYW43_DPC_TERMINAL_RESULT_RECOVERY_DRAIN: u32 = 0x4450_0004;
 const CYW43_DPC_TERMINAL_RESULT_RECOVERY_DEADLINE: u32 = 0x4450_0005;
@@ -9861,18 +9864,41 @@ fn cyw43_dpc_start_capture(state: &Cyw43RuntimeState, cursor: &mut Cyw43DpcCurso
 }
 
 #[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_start_rx_failure_recovery(
+    cursor: &mut Cyw43DpcCursor,
+    abort_function2: bool,
+    request_retransmit: bool,
+) {
+    cursor.actual_frame_len = 0;
+    cursor.frame_from_nextlen = false;
+    cursor.recovery_retransmit = request_retransmit;
+    if abort_function2 {
+        cyw43_dpc_prepare_cmd52_write(
+            cursor,
+            Cyw43DpcAction::AbortFunction2,
+            0,
+            SDIO_CCCR_ABORT,
+            SDIO_FUNCTION_NUMBER_2,
+        );
+    } else {
+        cyw43_dpc_prepare_cmd52_write(
+            cursor,
+            Cyw43DpcAction::TerminateReadFrame,
+            1,
+            SBSDIO_FUNC1_FRAMECTRL,
+            SFC_RF_TERM,
+        );
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
 fn cyw43_dpc_start_rejected_firstread_recovery(cursor: &mut Cyw43DpcCursor) {
-    cyw43_dpc_prepare_cmd52_write(
-        cursor,
-        Cyw43DpcAction::AbortFunction2,
-        0,
-        SDIO_CCCR_ABORT,
-        SDIO_FUNCTION_NUMBER_2,
-    );
+    cyw43_dpc_start_rx_failure_recovery(cursor, true, true);
 }
 
 #[cfg(any(target_os = "none", test))]
 fn cyw43_dpc_start_rframe_or_post(state: &mut Cyw43RuntimeState, cursor: &mut Cyw43DpcCursor) {
+    let frame_from_nextlen = state.sdpcm_next_frame_len != 0 && !state.sdpcm_next_frame_from_rframe;
     let route = cyw43_dpc_rx_start_route(
         state.rxskip,
         state.pending_intstatus,
@@ -9903,6 +9929,7 @@ fn cyw43_dpc_start_rframe_or_post(state: &mut Cyw43RuntimeState, cursor: &mut Cy
                 let _ = cyw43_take_sdpcm_next_frame_len(state);
             }
             cursor.actual_frame_len = 0;
+            cursor.frame_from_nextlen = false;
             cyw43_dpc_prepare_backplane_io(
                 state,
                 cursor,
@@ -9915,6 +9942,7 @@ fn cyw43_dpc_start_rframe_or_post(state: &mut Cyw43RuntimeState, cursor: &mut Cy
         Cyw43DpcRxStartRoute::NextFrame(frame_len) => {
             let _ = cyw43_take_sdpcm_next_frame_len(state);
             cursor.actual_frame_len = frame_len as u16;
+            cursor.frame_from_nextlen = frame_from_nextlen;
             cyw43_dpc_prepare_backplane_io(
                 state,
                 cursor,
@@ -10229,57 +10257,85 @@ fn cyw43_dpc_contained_preissue_retry_exact(completion: DriverTaskCompletionReco
 #[cfg(any(target_os = "none", test))]
 fn cyw43_dpc_complete_frame(state: &mut Cyw43RuntimeState, cursor: &mut Cyw43DpcCursor) -> bool {
     let actual_frame_len = usize::from(cursor.actual_frame_len);
-    if cyw43_runtime_reject_nested_control_payload(
-        state,
-        match cyw43_rx_sdpcm_header_prefix_at(
-            CYW43_RUNTIME_RX_BUFFER_OFFSET,
-            actual_frame_len,
-            CYW43_RUNTIME_RX_BUFFER_BYTES,
-        ) {
-            Some(header) => header,
-            None => {
-                cyw43_dpc_quarantine_transport_for_cursor(
-                    state,
-                    *cursor,
-                    cursor.event_sequence,
-                    CYW43_DPC_TERMINAL_RESULT_FRAME_PREFIX,
-                );
-                return false;
-            }
-        },
-    )
-    .is_some()
+    let Some(header) = cyw43_rx_sdpcm_header_prefix_at(
+        CYW43_RUNTIME_RX_BUFFER_OFFSET,
+        actual_frame_len,
+        CYW43_RUNTIME_RX_BUFFER_BYTES,
+    ) else {
+        // Linux brcmfmac treats a malformed SDPCM first read as a recoverable
+        // FIFO-framing failure. Keep that recovery in this retained DPC cursor;
+        // only a bounded RF_TERM drain failure may poison the generation.
+        state.sdpcm_next_frame_len = 0;
+        state.sdpcm_next_frame_from_rframe = false;
+        cyw43_dpc_start_rx_failure_recovery(cursor, true, true);
+        return true;
+    };
+    if cursor.frame_from_nextlen
+        && (cyw43_sdpcm_readahead_len(header.packet_len) != Some(actual_frame_len)
+            || header.channel == CYW43_SDPCM_CHANNEL_CONTROL)
     {
-        cyw43_dpc_quarantine_transport_for_cursor(
-            state,
-            *cursor,
-            cursor.event_sequence,
-            CYW43_DPC_TERMINAL_RESULT_NESTED_CONTROL,
-        );
-        return false;
+        // A nextlen read is speculative. Linux terminates and NAKs either a
+        // mismatched length or a control packet so firmware resends it through
+        // the authoritative header-first path. Do not abort Function 2 after
+        // the speculative transfer itself completed successfully.
+        state.sdpcm_next_frame_len = 0;
+        state.sdpcm_next_frame_from_rframe = false;
+        cyw43_dpc_start_rx_failure_recovery(cursor, false, true);
+        return true;
+    }
+    if cyw43_nested_control_payload_len(header).is_some() {
+        state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_NESTED_SDPCM_CONTROL;
+        state.sdpcm_next_frame_len = 0;
+        state.sdpcm_next_frame_from_rframe = false;
+        cyw43_dpc_start_rx_failure_recovery(cursor, true, true);
+        return true;
     }
     cyw43_runtime_clear_rx_irq_source_after_frame_drain(state);
+    let expected_glom_superframe = header.channel == CYW43_SDPCM_CHANNEL_GLOM
+        && !header.glom_descriptor
+        && state.glom_subframe_count != 0;
     let decoded = cyw43_runtime_decode_rx_frame_detailed_for(
         state,
         CYW43_RUNTIME_RX_BUFFER_OFFSET,
         actual_frame_len,
         0,
     );
-    if cyw43_dpc_decode_requires_recovery(decoded) {
-        cyw43_dpc_quarantine_transport_for_cursor(
-            state,
-            *cursor,
-            cursor.event_sequence,
-            CYW43_DPC_TERMINAL_RESULT_FRAME_DECODE,
-        );
-        return false;
-    }
     match decoded {
         Cyw43RxDecodeResult::QueuedOrConsumed | Cyw43RxDecodeResult::ValidNotAdmitted => {
             state.rx_retransmit_pending = false;
             cyw43_record_rx_drain_turn(state, 1);
         }
-        Cyw43RxDecodeResult::Frame(_) | Cyw43RxDecodeResult::DecodeMiss => return false,
+        Cyw43RxDecodeResult::DecodeMiss if expected_glom_superframe => {
+            // Linux aborts and terminates a malformed/read-failed glom
+            // superframe, but does not NAK it. A bounded retained drain failure
+            // remains terminal; the malformed aggregate itself does not poison
+            // the CYW43/SDIO generation.
+            state.sdpcm_next_frame_len = 0;
+            state.sdpcm_next_frame_from_rframe = false;
+            cyw43_dpc_start_rx_failure_recovery(cursor, true, false);
+            return true;
+        }
+        Cyw43RxDecodeResult::DecodeMiss => {
+            // The SDPCM header and Function 2 transfer are already proven.
+            // Unsupported channels, malformed BDC, an orphan glom descriptor,
+            // and other upper-payload decode misses are Linux-style local
+            // drops—not ambiguous bus state and not pair-restart authority.
+            cyw43_dpc_record_local_decode_drop(state, header);
+            state.rx_retransmit_pending = false;
+            cyw43_record_rx_drain_turn(state, 1);
+        }
+        Cyw43RxDecodeResult::Frame(_) => {
+            // DPC owns a zero wanted-mask and must queue every valid service
+            // frame. Direct delivery here is an internal ownership invariant,
+            // unlike an ordinary upper-payload decode miss.
+            cyw43_dpc_quarantine_transport_for_cursor(
+                state,
+                *cursor,
+                cursor.event_sequence,
+                CYW43_DPC_TERMINAL_RESULT_FRAME_DECODE,
+            );
+            return false;
+        }
     }
     cyw43_dpc_start_rframe_or_post(state, cursor);
     true
@@ -10520,14 +10576,30 @@ fn cyw43_dpc_finish_action(
                 deadline_expired,
             ) {
                 Cyw43DpcRecoveryDrainRoute::PostNak => {
-                    cyw43_dpc_prepare_backplane_io(
-                        state,
-                        cursor,
-                        Cyw43DpcAction::RetransmitNak,
-                        Cyw43DpcIoKind::BackplaneWrite32,
-                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX,
-                        SMB_NAK,
-                    );
+                    if cursor.recovery_retransmit {
+                        cyw43_dpc_prepare_backplane_io(
+                            state,
+                            cursor,
+                            Cyw43DpcAction::RetransmitNak,
+                            Cyw43DpcIoKind::BackplaneWrite32,
+                            CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX,
+                            SMB_NAK,
+                        );
+                    } else {
+                        state.rx_retransmit_pending = false;
+                        state.rxskip = false;
+                        state.pending_intstatus &= !I_HMB_FRAME_IND;
+                        state.rxpending = false;
+                        state.rx_service_quiescent = true;
+                        cyw43_dpc_prepare_backplane_io(
+                            state,
+                            cursor,
+                            Cyw43DpcAction::PostStatus,
+                            Cyw43DpcIoKind::BackplaneRead32,
+                            CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS,
+                            0,
+                        );
+                    }
                 }
                 Cyw43DpcRecoveryDrainRoute::Retry => {
                     cursor.action = Cyw43DpcAction::RecoverySettle;
@@ -30308,11 +30380,9 @@ enum Cyw43RxDecodeResult {
     DecodeMiss,
 }
 
+#[cfg(test)]
 const fn cyw43_dpc_decode_requires_recovery(result: Cyw43RxDecodeResult) -> bool {
-    matches!(
-        result,
-        Cyw43RxDecodeResult::Frame(_) | Cyw43RxDecodeResult::DecodeMiss
-    )
+    matches!(result, Cyw43RxDecodeResult::Frame(_))
 }
 
 #[cfg(test)]
@@ -30460,16 +30530,20 @@ fn cyw43_sdpcm_claimed_len_prefix_at(base: usize, available_len: usize) -> Optio
     (cyw43_sdpcm_frame_len_valid(len) && len_inv == !(len as u16)).then_some(len)
 }
 
-fn cyw43_runtime_reject_nested_control_payload(
-    state: &mut Cyw43RuntimeState,
-    header: Cyw43RxSdpcmHeader,
-) -> Option<Cyw43RxIdleReason> {
+fn cyw43_nested_control_payload_len(header: Cyw43RxSdpcmHeader) -> Option<usize> {
     if header.channel != CYW43_SDPCM_CHANNEL_CONTROL {
         return None;
     }
     let payload_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET.checked_add(header.payload_start)?;
     let payload_len = header.packet_len.checked_sub(header.payload_start)?;
-    let nested_len = cyw43_sdpcm_claimed_len_prefix_at(payload_offset, payload_len)?;
+    cyw43_sdpcm_claimed_len_prefix_at(payload_offset, payload_len)
+}
+
+fn cyw43_runtime_reject_nested_control_payload(
+    state: &mut Cyw43RuntimeState,
+    header: Cyw43RxSdpcmHeader,
+) -> Option<Cyw43RxIdleReason> {
+    let nested_len = cyw43_nested_control_payload_len(header)?;
     // A control payload exported through the driver-task ABI must begin with
     // BCDC, never another SDPCM envelope. Linux treats control readahead as
     // lost framing and retries it header-first. Apply the same rule before
@@ -30480,6 +30554,16 @@ fn cyw43_runtime_reject_nested_control_payload(
     state.sdpcm_next_frame_from_rframe = false;
     cyw43_runtime_recover_rejected_firstread(state, Cyw43AssertedEmptyPolicy::RequestRetransmit);
     Some(Cyw43RxIdleReason::NextFrameReadaheadRetry(nested_len))
+}
+
+fn cyw43_dpc_record_local_decode_drop(state: &mut Cyw43RuntimeState, header: Cyw43RxSdpcmHeader) {
+    state.service_trace_op = 0;
+    state.service_trace_reason = CYW43_SERVICE_REASON_BACKGROUND_RX;
+    state.service_trace_progress |= CYW43_SERVICE_PROGRESS_LOCAL_DECODE_DROP;
+    state.service_trace_seq_window =
+        u16::from(state.sdpcm_seq) | (u16::from(state.sdpcm_seq_max) << 8);
+    state.service_trace_channel = u16::from(header.channel);
+    state.service_trace_credit_observations = state.sdpcm_credit_observations;
 }
 
 const fn cyw43_sdpcm_next_frame_len(next_frame_units: u8) -> usize {
@@ -30782,7 +30866,7 @@ fn cyw43_process_glom_superframe(
         } else {
             false
         };
-        match cyw43_decode_data_subframe(
+        match cyw43_decode_glom_subframe(
             state,
             cursor,
             end - cursor,
@@ -30816,7 +30900,7 @@ fn cyw43_process_glom_superframe(
     }
 }
 
-fn cyw43_decode_data_subframe(
+fn cyw43_decode_glom_subframe(
     state: &mut Cyw43RuntimeState,
     base: usize,
     frame_len: usize,
@@ -30826,12 +30910,16 @@ fn cyw43_decode_data_subframe(
     let Some(header) = cyw43_rx_sdpcm_header_at(base, frame_len) else {
         return Cyw43RxDecodeResult::DecodeMiss;
     };
-    if header.channel != CYW43_SDPCM_CHANNEL_DATA {
+    if !matches!(
+        header.channel,
+        CYW43_SDPCM_CHANNEL_DATA | CYW43_SDPCM_CHANNEL_EVENT
+    ) {
         return Cyw43RxDecodeResult::DecodeMiss;
     }
     // The glom superframe header owns flow-control and TX-window state. Linux
-    // still accounts each embedded SDPCM sequence, but embedded headers must
-    // not overwrite the ordered top-level XOFF mask or credit boundary.
+    // still accounts each embedded DATA or EVENT SDPCM sequence, but embedded
+    // headers must not overwrite the ordered top-level XOFF mask or credit
+    // boundary.
     cyw43_update_sdpcm_rx_sequence(state, header.sequence);
     let Some(payload_offset) = base.checked_add(header.payload_start) else {
         return Cyw43RxDecodeResult::DecodeMiss;
@@ -30839,12 +30927,19 @@ fn cyw43_decode_data_subframe(
     let Some(payload_len) = header.packet_len.checked_sub(header.payload_start) else {
         return Cyw43RxDecodeResult::DecodeMiss;
     };
-    let Some((packet_offset, packet_len)) = cyw43_bdc_payload_bounds(payload_offset, payload_len)
-    else {
-        return Cyw43RxDecodeResult::DecodeMiss;
+    if payload_len == 0 {
+        return Cyw43RxDecodeResult::QueuedOrConsumed;
+    }
+    let (packet_offset, packet_len) = if header.channel == CYW43_SDPCM_CHANNEL_DATA {
+        let Some(bounds) = cyw43_bdc_payload_bounds(payload_offset, payload_len) else {
+            return Cyw43RxDecodeResult::DecodeMiss;
+        };
+        bounds
+    } else {
+        (payload_offset, payload_len)
     };
+    let flags = cyw43_frame_flags_for_header(header);
     if queue {
-        let flags = cyw43_frame_flags_for_header(header);
         let valid_for_queue = packet_len != 0
             && packet_len <= MAX_DRIVER_TASK_FRAME_BYTES
             && cyw43_rx_queue_flags_valid(flags);
@@ -30856,13 +30951,7 @@ fn cyw43_decode_data_subframe(
             Cyw43RxDecodeResult::DecodeMiss
         }
     } else {
-        cyw43_stage_or_queue_plain_payload(
-            state,
-            packet_offset,
-            packet_len,
-            cyw43_frame_flags_for_header(header),
-            wanted_mask,
-        )
+        cyw43_stage_or_queue_plain_payload(state, packet_offset, packet_len, flags, wanted_mask)
     }
 }
 
@@ -50838,6 +50927,14 @@ mod tests {
         packet_len
     }
 
+    fn snapshot_runtime_wire<const N: usize>(offset: usize) -> [u8; N] {
+        let mut bytes = [0u8; N];
+        for (index, byte) in bytes.iter_mut().enumerate() {
+            *byte = read_runtime_payload_byte(offset + index);
+        }
+        bytes
+    }
+
     fn stage_cyw43_descriptor(desc: DriverRuntimeCyw43CommandDescriptor) {
         let offset = DRIVER_TASK_RING_FRAME_OFFSET;
         stage_u16(offset, desc.op);
@@ -60939,6 +61036,85 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_glom_rx_accepts_event_only_subframe() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        let event = *b"association-event";
+        let subframe_len = CYW43_SDPCM_HEADER_BYTES + event.len();
+        let descriptor_len = CYW43_SDPCM_HEADER_BYTES + core::mem::size_of::<u16>();
+        stage_sdpcm_rx_header(
+            DRIVER_TASK_RING_FRAME_OFFSET,
+            descriptor_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_GLOM,
+            4,
+            true,
+        );
+        stage_u16(
+            DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            (subframe_len + CYW43_SDPCM_HEADER_BYTES) as u16,
+        );
+        assert_eq!(
+            cyw43_runtime_decode_rx_frame_detailed_for(
+                &mut state,
+                DRIVER_TASK_RING_FRAME_OFFSET,
+                descriptor_len,
+                0,
+            ),
+            Cyw43RxDecodeResult::QueuedOrConsumed,
+        );
+
+        reset_test_ring();
+        let superframe_len = CYW43_SDPCM_HEADER_BYTES + subframe_len;
+        stage_sdpcm_rx_header(
+            DRIVER_TASK_RING_FRAME_OFFSET,
+            superframe_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_GLOM,
+            5,
+            false,
+        );
+        let subframe_offset = DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_HEADER_BYTES;
+        stage_sdpcm_rx_header(
+            subframe_offset,
+            subframe_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_EVENT,
+            6,
+            false,
+        );
+        stage_bytes(subframe_offset + CYW43_SDPCM_HEADER_BYTES, &event);
+
+        assert_eq!(
+            cyw43_runtime_decode_rx_frame_detailed_for(
+                &mut state,
+                DRIVER_TASK_RING_FRAME_OFFSET,
+                superframe_len,
+                0,
+            ),
+            Cyw43RxDecodeResult::QueuedOrConsumed,
+        );
+        assert_eq!(state.rx_queue_count, 1);
+        assert_eq!(
+            cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT),
+            Some(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: event.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 6),
+            }),
+        );
+        assert_eq!(
+            read_frame_prefix::<17>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: event.len() as u16,
+                flags: 0,
+            }),
+            event,
+        );
+    }
+
+    #[test]
     fn cyw43_control_and_event_rx_are_preserved_for_control_poll() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -61530,7 +61706,7 @@ mod tests {
         assert_eq!(usize::from(state.rx_queue_count), CYW43_RX_QUEUE_CAP);
         assert_eq!(state.rx_queue_overflows, 1);
 
-        assert!(cyw43_dpc_decode_requires_recovery(
+        assert!(!cyw43_dpc_decode_requires_recovery(
             Cyw43RxDecodeResult::DecodeMiss
         ));
         assert!(cyw43_dpc_decode_requires_recovery(
@@ -68187,6 +68363,9 @@ mod tests {
         first_descriptor: DriverRuntimeSdioCommandDescriptor,
         owner_children: usize,
         function2_reads: usize,
+        function2_aborts: usize,
+        read_frame_terminations: usize,
+        retransmit_naks: usize,
         dpc_turns: usize,
         owner_turns: usize,
         owner_command_issues: usize,
@@ -68376,6 +68555,20 @@ mod tests {
         expected_rx_queue_count: u8,
         initial_int_status: u32,
     ) -> ProductionDpcDrainTrace {
+        drive_production_dpc_event_frames_to_fifo(
+            generation,
+            &[wire_frame],
+            expected_rx_queue_count,
+            initial_int_status,
+        )
+    }
+
+    fn drive_production_dpc_event_frames_to_fifo(
+        generation: u32,
+        wire_frames: &[&[u8]],
+        expected_rx_queue_count: u8,
+        initial_int_status: u32,
+    ) -> ProductionDpcDrainTrace {
         let resumed_cursor =
             CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.event_sequence != 0);
         let mut owner_ring =
@@ -68396,6 +68589,10 @@ mod tests {
         let mut descriptors = Vec::new();
         let mut owner_children = 0usize;
         let mut function2_reads = 0usize;
+        let mut staged_function2_reads = 0usize;
+        let mut function2_aborts = 0usize;
+        let mut read_frame_terminations = 0usize;
+        let mut retransmit_naks = 0usize;
         let mut int_status_reads = 0usize;
         let mut dpc_turns = 0usize;
         let mut owner_turns = 0usize;
@@ -68441,6 +68638,34 @@ mod tests {
                     first_descriptor = descriptor;
                 }
                 descriptors.push(descriptor);
+                if descriptor.op == DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE
+                    && descriptor.function == 0
+                    && descriptor.addr == SDIO_CCCR_ABORT
+                {
+                    function2_aborts = function2_aborts.saturating_add(1);
+                }
+                if descriptor.op == DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE
+                    && descriptor.function == 1
+                    && descriptor.addr == SBSDIO_FUNC1_FRAMECTRL
+                {
+                    read_frame_terminations = read_frame_terminations.saturating_add(1);
+                }
+                if descriptor.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+                    && descriptor.function == 1
+                    && descriptor.addr
+                        == cyw43_backplane_function_addr(
+                            CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX,
+                        )
+                {
+                    let mut payload = [0u8; core::mem::size_of::<u32>()];
+                    for (index, byte) in payload.iter_mut().enumerate() {
+                        *byte = read_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET + index)
+                            .expect("DPC mailbox write payload stays in the reciprocal window");
+                    }
+                    if u32::from_le_bytes(payload) == SMB_NAK {
+                        retransmit_naks = retransmit_naks.saturating_add(1);
+                    }
+                }
                 if descriptor.op == DRIVER_RUNTIME_SDIO_OP_CMD53_READ {
                     let transfer_len = usize::from(descriptor.len);
                     let mut bytes = [0u8; 128];
@@ -68451,15 +68676,16 @@ mod tests {
                     io.fifo_read_offset = 0;
                     if descriptor.function == 2 {
                         function2_reads = function2_reads.saturating_add(1);
-                        if function2_reads == 1 {
+                        if let Some(wire_frame) = wire_frames.get(staged_function2_reads) {
                             assert!(
                                 transfer_len <= wire_frame.len(),
-                                "staged DPC wire frame must cover the first Function 2 read",
+                                "staged DPC wire frame must cover its Function 2 read",
                             );
                             bytes[..transfer_len].copy_from_slice(&wire_frame[..transfer_len]);
                         } else {
                             assert!(transfer_len <= 128);
                         }
+                        staged_function2_reads = staged_function2_reads.saturating_add(1);
                     } else if descriptor.function == 1 {
                         assert_eq!(transfer_len, core::mem::size_of::<u32>());
                         let int_status_addr =
@@ -68646,6 +68872,9 @@ mod tests {
             first_descriptor,
             owner_children,
             function2_reads,
+            function2_aborts,
+            read_frame_terminations,
+            retransmit_naks,
             dpc_turns,
             owner_turns,
             owner_command_issues: io.command_issue_count(),
@@ -71827,6 +72056,309 @@ mod tests {
             SDIO_CMD_COUNT.load(Ordering::Acquire),
             owner_commands_before
         );
+    }
+
+    #[test]
+    fn production_dpc_event_only_glom_reaches_control_queue_without_pair_poison() {
+        let _guard = test_guard();
+        let generation = 0x4359_d102;
+        let _ = initialize_production_dpc_source_event(generation, 0);
+        let event_payload = *b"association-event";
+        let event_subframe_len = CYW43_SDPCM_HEADER_BYTES + event_payload.len();
+        let superframe_len = CYW43_SDPCM_HEADER_BYTES + event_subframe_len;
+        let superframe_read_len =
+            cyw43_sdpcm_readahead_len(superframe_len).expect("glom length rounds");
+        let descriptor_len = CYW43_SDPCM_HEADER_BYTES + core::mem::size_of::<u16>();
+
+        stage_sdpcm_rx_header_with_next(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            descriptor_len,
+            superframe_read_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_GLOM,
+            7,
+            true,
+        );
+        stage_u16(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            (event_subframe_len + CYW43_SDPCM_HEADER_BYTES) as u16,
+        );
+        let descriptor_wire = snapshot_runtime_wire::<128>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            superframe_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_GLOM,
+            8,
+            false,
+        );
+        let event_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES;
+        stage_sdpcm_rx_header(
+            event_offset,
+            event_subframe_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_EVENT,
+            9,
+            false,
+        );
+        stage_bytes(event_offset + CYW43_SDPCM_HEADER_BYTES, &event_payload);
+        let superframe_wire = snapshot_runtime_wire::<128>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+
+        let trace = drive_production_dpc_event_frames_to_fifo(
+            generation,
+            &[&descriptor_wire, &superframe_wire],
+            1,
+            I_HMB_FRAME_IND,
+        );
+
+        assert_eq!(trace.function2_reads, 3);
+        assert_eq!(trace.function2_aborts, 0);
+        assert_eq!(trace.read_frame_terminations, 0);
+        assert_eq!(trace.retransmit_naks, 0);
+        assert_eq!(trace.owner_command_issues, trace.owner_children);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert!(!state.recovery_required);
+            assert!(!state.rxskip);
+            assert_eq!(state.dpc_events_consumed, 1);
+            assert_eq!(
+                cyw43_rx_queue_pop_matching(state, CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT),
+                Some(DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: event_payload.len() as u16,
+                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 9),
+                }),
+            );
+        });
+        assert_eq!(
+            read_frame_prefix::<17>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: event_payload.len() as u16,
+                flags: 0,
+            }),
+            event_payload,
+        );
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn production_dpc_malformed_bdc_drop_preserves_following_event_and_generation() {
+        let _guard = test_guard();
+        let generation = 0x4359_d103;
+        let _ = initialize_production_dpc_source_event(generation, 0);
+        let event_payload = *b"join-progress";
+        let event_frame_len = CYW43_SDPCM_HEADER_BYTES + event_payload.len();
+        let event_read_len =
+            cyw43_sdpcm_readahead_len(event_frame_len).expect("event length rounds");
+        let malformed_data_len = CYW43_SDPCM_HEADER_BYTES + CYW43_BDC_HEADER_BYTES;
+
+        stage_sdpcm_rx_header_with_next(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            malformed_data_len,
+            event_read_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_DATA,
+            10,
+            false,
+        );
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &[0; CYW43_BDC_HEADER_BYTES],
+        );
+        let malformed_wire = snapshot_runtime_wire::<128>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            event_frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_EVENT,
+            11,
+            false,
+        );
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &event_payload,
+        );
+        let event_wire = snapshot_runtime_wire::<128>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+
+        let trace = drive_production_dpc_event_frames_to_fifo(
+            generation,
+            &[&malformed_wire, &event_wire],
+            1,
+            I_HMB_FRAME_IND,
+        );
+
+        assert_eq!(trace.function2_reads, 3);
+        assert_eq!(trace.function2_aborts, 0);
+        assert_eq!(trace.read_frame_terminations, 0);
+        assert_eq!(trace.retransmit_naks, 0);
+        assert_eq!(trace.owner_command_issues, trace.owner_children);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert!(!state.recovery_required);
+            assert!(!state.rxskip);
+            assert_eq!(state.dpc_events_consumed, 1);
+            assert_ne!(
+                state.service_trace_progress & CYW43_SERVICE_PROGRESS_LOCAL_DECODE_DROP,
+                0,
+            );
+            assert_eq!(
+                state.service_trace_channel,
+                u16::from(CYW43_SDPCM_CHANNEL_DATA),
+            );
+            assert_eq!(
+                cyw43_rx_queue_pop_matching(state, CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT),
+                Some(DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: event_payload.len() as u16,
+                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 11),
+                }),
+            );
+        });
+        assert_eq!(
+            read_frame_prefix::<13>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: event_payload.len() as u16,
+                flags: 0,
+            }),
+            event_payload,
+        );
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn production_dpc_nextlen_control_terminates_and_naks_without_function2_abort() {
+        let _guard = test_guard();
+        let generation = 0x4359_d105;
+        let _ = initialize_production_dpc_source_event(generation, 0);
+        let event_payload = *b"before-control";
+        let control_payload = [0x5au8; CYW43_CDC_HEADER_BYTES];
+        let control_frame_len = CYW43_SDPCM_HEADER_BYTES + control_payload.len();
+        let control_read_len =
+            cyw43_sdpcm_readahead_len(control_frame_len).expect("control length rounds");
+        let event_frame_len = CYW43_SDPCM_HEADER_BYTES + event_payload.len();
+
+        stage_sdpcm_rx_header_with_next(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            event_frame_len,
+            control_read_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_EVENT,
+            14,
+            false,
+        );
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &event_payload,
+        );
+        let event_wire = snapshot_runtime_wire::<128>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            control_frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_CONTROL,
+            15,
+            false,
+        );
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &control_payload,
+        );
+        let control_wire = snapshot_runtime_wire::<128>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+
+        let trace = drive_production_dpc_event_frames_to_fifo(
+            generation,
+            &[&event_wire, &control_wire],
+            1,
+            I_HMB_FRAME_IND,
+        );
+
+        assert_eq!(trace.function2_reads, 2);
+        assert_eq!(trace.function2_aborts, 0);
+        assert_eq!(trace.read_frame_terminations, 1);
+        assert_eq!(trace.retransmit_naks, 1);
+        assert_eq!(trace.owner_command_issues, trace.owner_children);
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.recovery_required);
+            assert!(state.rxskip);
+            assert!(state.rx_retransmit_pending);
+            assert_eq!(state.dpc_events_consumed, 1);
+        });
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+
+        let mut state = Cyw43RuntimeState::new();
+        state.rxskip = true;
+        state.rx_retransmit_pending = true;
+        state.pending_intstatus = I_HMB_HOST_INT;
+        let mut cursor = Cyw43DpcCursor::empty();
+        cursor.action = Cyw43DpcAction::HostmailAck;
+        cursor.mailbox_data = HMB_DATA_NAKHANDLED;
+        assert!(!cyw43_dpc_finish_action(&mut state, &mut cursor, 0));
+        assert!(!state.rxskip);
+        assert!(!state.rx_retransmit_pending);
+        assert_ne!(state.pending_intstatus & I_HMB_FRAME_IND, 0);
+        assert_eq!(cursor.action, Cyw43DpcAction::FifoWindow);
+    }
+
+    #[test]
+    fn production_dpc_malformed_glom_uses_retained_non_nak_recovery() {
+        let _guard = test_guard();
+        let generation = 0x4359_d104;
+        let _ = initialize_production_dpc_source_event(generation, 0);
+        let malformed_subframe_len = CYW43_SDPCM_HEADER_BYTES;
+        let superframe_len = CYW43_SDPCM_HEADER_BYTES + malformed_subframe_len;
+        let superframe_read_len =
+            cyw43_sdpcm_readahead_len(superframe_len).expect("glom length rounds");
+        let descriptor_len = CYW43_SDPCM_HEADER_BYTES + core::mem::size_of::<u16>();
+
+        stage_sdpcm_rx_header_with_next(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            descriptor_len,
+            superframe_read_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_GLOM,
+            12,
+            true,
+        );
+        stage_u16(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            (malformed_subframe_len + CYW43_SDPCM_HEADER_BYTES) as u16,
+        );
+        let descriptor_wire = snapshot_runtime_wire::<128>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            superframe_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_GLOM,
+            13,
+            false,
+        );
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &[0; CYW43_SDPCM_HEADER_BYTES],
+        );
+        let malformed_wire = snapshot_runtime_wire::<128>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+
+        let trace = drive_production_dpc_event_frames_to_fifo(
+            generation,
+            &[&descriptor_wire, &malformed_wire],
+            0,
+            I_HMB_FRAME_IND,
+        );
+
+        assert_eq!(trace.function2_reads, 2);
+        assert_eq!(trace.function2_aborts, 1);
+        assert_eq!(trace.read_frame_terminations, 1);
+        assert_eq!(trace.retransmit_naks, 0);
+        assert_eq!(trace.owner_command_issues, trace.owner_children);
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.recovery_required);
+            assert!(!state.rxskip);
+            assert!(!state.rx_retransmit_pending);
+            assert_eq!(state.dpc_events_consumed, 1);
+        });
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
     }
 
     #[test]

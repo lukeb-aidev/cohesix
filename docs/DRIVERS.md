@@ -1044,6 +1044,22 @@ This as-built closure is authorized by Milestone 26d task
   read could resurrect `I_HMB_FRAME_IND` and reread the same frame forever.
   A different event sequence arriving while one is active poisons the current
   generation instead of merging two event identities.
+  Post-read dispatch follows Linux brcmfmac failure boundaries. Once the
+  Function 2 transfer and SDPCM length/complement header are valid, an
+  unsupported channel, malformed BDC payload, malformed glom descriptor, or
+  other upper-payload decode miss is a counted local drop; it cannot poison the
+  CYW43/SDIO generation or request pair replay. Glom superframes admit both DATA
+  and EVENT subframes in descriptor order. A malformed descriptor-backed glom
+  superframe uses retained Function 2 abort, `RF_TERM`, and bounded RFRAME drain
+  without NAK; only failure of that retained recovery is generation-terminal.
+  A control packet or length mismatch encountered through an SDPCM nextlen read
+  uses retained `RF_TERM`, bounded drain, mailbox NAK, and `NAKHANDLED` wait so
+  firmware retries it header-first, without an unnecessary completed-Function-2
+  abort. Invalid header-first framing retains the corresponding abort,
+  `RF_TERM`, drain, and NAK sequence. Every register access, Function 2
+  transfer, recovery poll, and mailbox write is still one reciprocal child on a
+  separate outer turn. A zero-wanted-mask DPC direct-delivery result remains an
+  internal ownership invariant and is terminal; ordinary decode drops are not.
 - DPC 32-bit backplane writes for SDIO-core interrupt-status W1C and firmware
   mailbox ACK/NAK are one atomic little-endian, incrementing, four-byte
   Function 1 CMD53 child action. They are never split into four bytewise CMD52
