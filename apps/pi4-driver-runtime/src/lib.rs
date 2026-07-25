@@ -15760,6 +15760,16 @@ fn service_cyw43_control_exchange_command_turn(
         cyw43_control_exchange_command_turn(state, desc, command.sequence, command.aux1)
     });
     CYW43_ACTIVE_PARENT_SEQUENCE.store(previous_parent_sequence, Ordering::Release);
+    if matches!(turn, RuntimeCommandTurn::Pending) && cyw43_control_exchange_descriptor_strict(desc)
+    {
+        // A predecessor reply and DPC delivery both reuse the ring aperture.
+        // Restore the exact retained parent input, which can differ from the
+        // older runtime-private request during an owner handoff. This is a
+        // scratch repair only; it neither submits nor retransmits hardware
+        // work.
+        #[cfg(any(target_os = "none", test))]
+        CYW43_FOREGROUND_TRANSACTION.with_ref(Cyw43ForegroundTransaction::restore_parent_input);
+    }
     Some(turn)
 }
 
@@ -16243,11 +16253,73 @@ fn cyw43_control_exchange_command_turn(
             ));
         }
         if !cyw43_control_exchange_owner_matches(cursor, owner_generation) {
-            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+            // The root logical generation can advance after it consumes the
+            // preceding child completion while this runtime still owns an
+            // interleaved op11 continuation. Match Linux's single pending
+            // BCDC transaction lock: finish only the older runtime-private
+            // cursor before admitting the new owner. The new descriptor is
+            // reciprocal scratch and cannot replace or retransmit the old
+            // request.
+            let previous_owner_generation = cursor.owner_generation;
+            return match cyw43_control_exchange_command_turn(
+                state,
+                desc,
                 sequence,
-                FAULT_REJECTED_COMMAND,
-                cursor.owner_generation,
-            ));
+                previous_owner_generation,
+            ) {
+                RuntimeCommandTurn::Pending => RuntimeCommandTurn::Pending,
+                RuntimeCommandTurn::Complete(completion)
+                    if completion.code == COMPLETION_FRAME_READY
+                        && completion.detail
+                            == DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME =>
+                {
+                    // Root must route the EVENT/DATA frame and resume the same
+                    // new command. The older cursor remains authoritative.
+                    RuntimeCommandTurn::Complete(completion)
+                }
+                RuntimeCommandTurn::Complete(completion)
+                    if completion.code == COMPLETION_FRAME_READY
+                        && completion.detail
+                            != DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME
+                        && completion.frame.flags
+                            & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK
+                            == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL =>
+                {
+                    // The prior CONTROL reply is terminal for the previous
+                    // private owner, not a reply to the new descriptor.
+                    // Privately snapshot the already-admitted new request now:
+                    // reciprocal completion delivery may reuse its shared
+                    // descriptor aperture before the next retained turn.
+                    if cyw43_control_exchange_descriptor_strict(desc)
+                        && cyw43_control_exchange_begin(state, desc, owner_generation)
+                    {
+                        RuntimeCommandTurn::Pending
+                    } else {
+                        state.recovery_required = true;
+                        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+                        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+                        RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+                            sequence,
+                            FAULT_CYW43_DESCRIPTOR_INVALID,
+                            cyw43_descriptor_invalid_result(desc)
+                                | CYW43_DESCRIPTOR_INVALID_PAYLOAD,
+                        ))
+                    }
+                }
+                RuntimeCommandTurn::Complete(_) => {
+                    // A failed or malformed predecessor cannot authorize a
+                    // new BCDC transaction. Poison the pair and report the
+                    // exact retired owner generation as the causal result.
+                    state.recovery_required = true;
+                    CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+                    CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+                    RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+                        sequence,
+                        FAULT_CYW43_TRANSPORT_BUS_LINK,
+                        previous_owner_generation,
+                    ))
+                }
+            };
         }
     } else {
         if !cyw43_control_exchange_descriptor_strict(desc) {
@@ -57821,37 +57893,43 @@ mod tests {
             assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         }
 
-        let mut wrong_owner = cyw43_descriptor_command(414);
-        wrong_owner.aux1 = 1;
-        assert_eq!(
-            service_command_turn(0, wrong_owner),
-            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
-                414,
-                FAULT_REJECTED_COMMAND,
-                0,
-            )),
-            "a different immutable root owner generation cannot resume the cursor",
-        );
-
-        stage_cyw43_control_exchange_request(cmd, id, flags, &body);
+        let next_id = id + 1;
+        let next_body = *b"next-owner";
+        let next_descriptor = stage_cyw43_control_exchange_request(cmd, next_id, flags, &next_body);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             queue_cyw43_control_reply(state, cmd, id, CYW43_CDC_STATUS_SUCCESS, &[]);
         });
+        let mut next_owner = cyw43_descriptor_command(414);
+        next_owner.aux1 = 1;
         assert_eq!(
-            service_command_turn(0, cyw43_descriptor_command(415)),
-            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::frame_ready_with_descriptor(
-                415,
-                DriverFrameDescriptor {
-                    offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_CDC_HEADER_BYTES) as u32,
-                    len: 0,
-                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 1),
-                },
-            ))
+            service_command_turn(0, next_owner),
+            RuntimeCommandTurn::Pending,
+            "the runtime terminally drains owner generation zero and privately admits generation one",
         );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
         CYW43_RUNTIME_STATE.with_ref(|state| {
-            assert!(!state.control_exchange.active());
+            assert!(state.control_exchange.active());
+            assert_eq!(state.control_exchange.owner_generation, 1);
+            assert_eq!(state.control_exchange.expected_cmd, cmd);
+            assert_eq!(state.control_exchange.expected_id, next_id);
+            assert_eq!(
+                state.control_exchange.phase,
+                Cyw43ControlExchangePhase::WaitCredit
+            );
         });
+        assert_eq!(
+            CYW43_CONTROL_REQUEST.retained_len(),
+            usize::from(next_descriptor.payload_len)
+        );
+        let body_offset = CYW43_CONTROL_REQUEST
+            .retained_len()
+            .saturating_sub(next_body.len());
+        for (index, expected) in next_body.iter().copied().enumerate() {
+            assert_eq!(
+                CYW43_CONTROL_REQUEST.retained_byte(body_offset + index),
+                expected
+            );
+        }
     }
 
     #[test]

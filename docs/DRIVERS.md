@@ -1270,7 +1270,16 @@ This as-built closure is authorized by Milestone 26d task
   BCDC id, descriptor, and full payload fingerprint. The runtime binds the
   private request snapshot to root's immutable owner-generation token and
   restores that snapshot before transmit instead of reparsing staged scratch as
-  continuation identity. While the lease is active, every other
+  continuation identity. If root advances to a new logical generation while
+  the runtime still retains the preceding private cursor, the runtime does not
+  reject, replace, or replay either request. It terminally drains only the
+  preceding cursor; EVENT/DATA completions remain routable, a matching old
+  CONTROL reply is suppressed as the predecessor's terminal barrier, and only
+  then is the already-admitted new descriptor and payload privately
+  snapshotted. A failed or malformed predecessor poisons the pair instead of
+  authorizing the new request. Pending turns restore the exact retained parent
+  input after reciprocal aperture reuse without issuing hardware work. While
+  the lease is active, every other
   root-originated CYW43 descriptor—including generic op10 prompt/control polls
   and data TX—retains its cursor and yields without consuming the CYW43
   operation permit or reaching HAL. The linked-runtime DPC remains the sole
