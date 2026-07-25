@@ -12177,7 +12177,20 @@ fn sdio_external_dma_command_candidate(
     {
         return None;
     }
-    let descriptor = read_sdio_command_descriptor(command.frame)?;
+    let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+    let descriptor = if retained.active() {
+        // The reciprocal descriptor aperture is shared scratch. CARD_INT/DPC
+        // publication and the CYW43 parent's next retained turn may reuse it
+        // while the SDIO owner still holds a multi-turn request. Once admitted,
+        // the private cursor is the sole descriptor authority, matching
+        // Linux's request-private mmc_request state. The immutable command and
+        // generation are still checked below by
+        // `sdio_external_dma_request_identity_matches`; only mutable scratch is
+        // excluded from continuation identity.
+        retained.identity.descriptor
+    } else {
+        read_sdio_command_descriptor(command.frame)?
+    };
     matches!(
         descriptor.op,
         DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG
@@ -64097,6 +64110,68 @@ mod tests {
                 "descriptor mutation cannot switch the retained engine",
             );
         }
+    }
+
+    #[test]
+    fn sdio_production_candidate_uses_retained_descriptor_after_scratch_reuse() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_5354;
+        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = generation);
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        stage_bytes(data_offset, &[1, 2, 3, 4]);
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 1,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
+            data_offset: data_offset as u16,
+            len: 4,
+            block_size: 0,
+            block_count: 0,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+            reserved: 0,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+        };
+        let command = stage_sdio_descriptor_service_command(0x8000_5354, descriptor);
+        assert_eq!(
+            sdio_external_dma_command_candidate(command),
+            Some(descriptor),
+        );
+
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+
+        let scratch_reuse = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: generation,
+            data_offset: 0,
+            len: 0,
+            block_size: 0,
+            block_count: 0,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE,
+            reserved: 0,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+        };
+        let _ = stage_sdio_descriptor_service_command(command.sequence, scratch_reuse);
+        let retained = sdio_external_dma_command_candidate(command)
+            .expect("the active owner cursor remains the production descriptor authority");
+        assert_eq!(retained, descriptor);
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, retained, &mut io),
+            RuntimeCommandTurn::Pending,
+            "shared scratch reuse cannot reject or reroute the retained SDIO request",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.external_dma_request.identity.descriptor, descriptor);
+            assert!(!state.dpc_poisoned);
+        });
     }
 
     #[test]

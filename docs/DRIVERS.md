@@ -713,6 +713,14 @@ This as-built closure is authorized by Milestone 26d task
   DMA-resource, timeout, or containment failure. There is no operator-selectable
   engine, root-owned data path, lower-clock or narrower-bus rescue, legacy
   fallback, same-generation replay, or second boot lane.
+  The reciprocal descriptor aperture is admission scratch, not continuation
+  authority. After the SDIO owner accepts a request, every later owner turn
+  dispatches from the private cursor's sealed descriptor while continuing to
+  validate the immutable command fingerprint and generation. CYW43 DPC/event
+  publication may reuse the shared aperture without rerouting the retained
+  SDIO request or manufacturing a rejected-command terminal. This is the
+  linked-runtime equivalent of Linux retaining request-private `mmc_request`
+  state until its single host-thread completion.
   Function 1 firmware streaming retains one immutable 32-KiB backplane
   aperture, matching brcmfmac's production RAM-write window rather than its
   debug-only 2-KiB `MEMBLOCK` readback unit. MMC-shaped CMD53 partitioning
