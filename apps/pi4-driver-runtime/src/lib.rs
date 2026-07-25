@@ -629,6 +629,12 @@ const BUDGET_EXHAUSTED_FRAMES: u16 = 4;
 
 const FAULT_NONE: u16 = 0;
 const FAULT_REJECTED_COMMAND: u16 = 1;
+/// An exact SDIO intake seal already belongs to another command sequence.
+const SDIO_REJECT_RESULT_INTAKE_SEAL_BUSY: u32 = 0x5344_0001;
+/// A descriptor-shaped SDIO turn reached dispatch without a valid intake seal.
+const SDIO_REJECT_RESULT_INTAKE_SEAL_MISSING: u32 = 0x5344_0002;
+/// The outer linked-runtime generation predicate rejected the command.
+const LINKED_RUNTIME_REJECT_RESULT_OUTER_GENERATION: u32 = 0x5344_0003;
 const FAULT_DEVICE_UNAVAILABLE: u16 = 3;
 const FAULT_SDIO_COMMAND_UNAVAILABLE: u16 = 0x5101;
 const FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED: u16 = 0x5103;
@@ -4834,6 +4840,25 @@ fn runtime_delegated_generation_admission(
 }
 
 #[cfg(any(target_os = "none", test))]
+const fn runtime_outer_generation_rejection_completion(
+    command: DriverTaskCommandRecord,
+    delegated: RuntimeDelegatedGenerationAdmission,
+    root: RuntimeDelegatedGenerationAdmission,
+) -> Option<DriverTaskCompletionRecord> {
+    if matches!(delegated, RuntimeDelegatedGenerationAdmission::Rejected)
+        || matches!(root, RuntimeDelegatedGenerationAdmission::Rejected)
+    {
+        Some(DriverTaskCompletionRecord::fault_with_result(
+            command.sequence,
+            FAULT_REJECTED_COMMAND,
+            LINKED_RUNTIME_REJECT_RESULT_OUTER_GENERATION,
+        ))
+    } else {
+        None
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
 const fn runtime_delegated_command_admission_progress_due(
     admission: RuntimeDelegatedGenerationAdmission,
     last_grant_id: u32,
@@ -5868,6 +5893,29 @@ struct RuntimeCommandIntake {
     reply_cap_available: bool,
 }
 
+/// Seal every descriptor-shaped SDIO command before admitting its runtime turn.
+///
+/// A failed SDIO pre-admission means an older exact command still owns the
+/// reciprocal descriptor aperture. Preserve that seal and owner byte-for-byte
+/// and defer this intake; constructing a `RuntimeCommandIntake` here would let
+/// the later dispatcher observe mutable scratch and manufacture a competing
+/// owner. CYW43 pre-admission retains its existing typed terminal path, where
+/// `service_command_turn` reports a foreground-parent conflict to root.
+#[cfg(any(target_os = "none", test))]
+fn runtime_command_intake_after_pre_admit(
+    command: DriverTaskCommandRecord,
+    reply_cap_available: bool,
+) -> Option<RuntimeCommandIntake> {
+    let _ = cyw43_foreground_pre_admit(command);
+    if !sdio_external_dma_pre_admit(command) {
+        return None;
+    }
+    Some(RuntimeCommandIntake {
+        command,
+        reply_cap_available,
+    })
+}
+
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeWake {
@@ -6398,12 +6446,7 @@ fn poll_runtime_command(
     match runtime_command_admission(command, last_sequence) {
         RuntimeCommandAdmission::None => return None,
         RuntimeCommandAdmission::OneWay => {
-            let _ = cyw43_foreground_pre_admit(command);
-            let _ = sdio_external_dma_pre_admit(command);
-            return Some(RuntimeCommandIntake {
-                command,
-                reply_cap_available: false,
-            });
+            return runtime_command_intake_after_pre_admit(command, false);
         }
         RuntimeCommandAdmission::NeedsReplyCap => {}
     }
@@ -6456,12 +6499,7 @@ fn poll_runtime_command(
         );
         return None;
     }
-    let _ = cyw43_foreground_pre_admit(command);
-    let _ = sdio_external_dma_pre_admit(command);
-    Some(RuntimeCommandIntake {
-        command,
-        reply_cap_available: expects_reply,
-    })
+    runtime_command_intake_after_pre_admit(command, expects_reply)
 }
 
 #[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
@@ -6491,12 +6529,8 @@ fn runtime_wake_from_received_tag(
         return RuntimeWake::None;
     }
     let reply_cap_available = command_expects_reply(command);
-    let _ = cyw43_foreground_pre_admit(command);
-    let _ = sdio_external_dma_pre_admit(command);
-    RuntimeWake::Command(RuntimeCommandIntake {
-        command,
-        reply_cap_available,
-    })
+    runtime_command_intake_after_pre_admit(command, reply_cap_available)
+        .map_or(RuntimeWake::None, RuntimeWake::Command)
 }
 
 #[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
@@ -12352,6 +12386,16 @@ fn sdio_external_dma_finish_terminal(
     RuntimeCommandTurn::Complete(completion)
 }
 
+fn sdio_external_dma_intake_rejection_result(command: DriverTaskCommandRecord) -> u32 {
+    SDIO_RUNTIME_STATE.with_ref(|state| {
+        if state.external_dma_input.valid && !state.external_dma_input.matches(command) {
+            SDIO_REJECT_RESULT_INTAKE_SEAL_BUSY
+        } else {
+            SDIO_REJECT_RESULT_INTAKE_SEAL_MISSING
+        }
+    })
+}
+
 fn sdio_external_dma_command_candidate(
     command: DriverTaskCommandRecord,
 ) -> Option<DriverRuntimeSdioCommandDescriptor> {
@@ -12400,9 +12444,14 @@ fn service_sdio_external_dma_admitted_turn_with_io<I: SdioTransferIo>(
         // retained owner lane. A missing or mismatched seal is terminal; it
         // must never fall through to `service_sdio_host`, which reparses the
         // mutable reciprocal scratch aperture.
+        let result = sdio_external_dma_intake_rejection_result(command);
         return Some(sdio_external_dma_finish_terminal(
             command,
-            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+            DriverTaskCompletionRecord::fault_with_result(
+                command.sequence,
+                FAULT_REJECTED_COMMAND,
+                result,
+            ),
         ));
     };
     if descriptor.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET {
@@ -19767,6 +19816,12 @@ fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
             // publication-to-first-service race that the seal closes.
             return false;
         }
+        // Materialize the intake-sealed descriptor and payload together before
+        // the first private service phase. The accessors below already prefer
+        // the sealed parent while `executing`, but restoring the whole aperture
+        // here also protects helpers that consume a physical frame directly and
+        // prevents a mixed old-descriptor/new-payload view at initial dispatch.
+        CYW43_FOREGROUND_TRANSACTION.with_ref(Cyw43ForegroundTransaction::restore_parent_input);
         let generation = cyw43_foreground_snapshot_runtime_state();
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             transaction.baseline_state_valid = true;
@@ -45657,13 +45712,12 @@ pub fn runtime_main(task_key: usize) -> ! {
                 command.sequence,
                 event_sequence,
             ))
-        } else if delegated_generation == RuntimeDelegatedGenerationAdmission::Rejected
-            || root_generation == RuntimeDelegatedGenerationAdmission::Rejected
-        {
-            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault(
-                command.sequence,
-                FAULT_REJECTED_COMMAND,
-            ))
+        } else if let Some(completion) = runtime_outer_generation_rejection_completion(
+            command,
+            delegated_generation,
+            root_generation,
+        ) {
+            RuntimeCommandTurn::Complete(completion)
         } else if quarantine_command_fault {
             RuntimeCommandTurn::Complete(CYW43_RUNTIME_STATE.with_ref(|state| {
                 cyw43_dpc_terminal_completion(
@@ -52772,6 +52826,26 @@ mod tests {
             runtime_delegated_generation_admission(command, None),
             RuntimeDelegatedGenerationAdmission::Rejected,
         );
+        assert_eq!(
+            runtime_outer_generation_rejection_completion(
+                command,
+                RuntimeDelegatedGenerationAdmission::Rejected,
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+            ),
+            Some(DriverTaskCompletionRecord::fault_with_result(
+                command.sequence,
+                FAULT_REJECTED_COMMAND,
+                LINKED_RUNTIME_REJECT_RESULT_OUTER_GENERATION,
+            )),
+        );
+        assert_eq!(
+            runtime_outer_generation_rejection_completion(
+                command,
+                RuntimeDelegatedGenerationAdmission::Admitted(generation),
+                RuntimeDelegatedGenerationAdmission::NotDelegated,
+            ),
+            None,
+        );
         let root_sequence_command = DriverTaskCommandRecord {
             sequence: command.sequence & !CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN,
             ..command
@@ -58570,7 +58644,7 @@ mod tests {
 
         // Reproduce the physical Gate-8 interval: root's sequence-last op11
         // record is retained, then a watermarked DPC quantum reuses the
-        // reciprocal descriptor aperture with op10 before the first
+        // reciprocal descriptor and payload apertures before the first
         // foreground service quantum.
         let prompt_scratch = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
@@ -58579,6 +58653,10 @@ mod tests {
         };
         assert!(prompt_scratch.valid());
         stage_cyw43_descriptor(prompt_scratch);
+        let payload_base = usize::from(descriptor.payload_offset);
+        for index in 0..usize::from(descriptor.payload_len) {
+            write_runtime_payload_byte_physical(payload_base + index, 0xa5 ^ index as u8);
+        }
         assert_eq!(
             read_cyw43_command_descriptor_physical(parent.frame),
             Some(prompt_scratch),
@@ -58599,6 +58677,18 @@ mod tests {
             assert!(!transaction.active);
             assert!(transaction.parent_input_sealed);
             assert_eq!(transaction.parent_descriptor, descriptor);
+            for index in 0..usize::from(descriptor.payload_len) {
+                assert_eq!(
+                    CYW43_CONTROL_REQUEST.retained_byte(index),
+                    transaction.parent_payload[index],
+                    "the first private op11 cursor must snapshot the sealed parent payload",
+                );
+                assert_eq!(
+                    read_runtime_payload_byte_physical(payload_base + index),
+                    transaction.parent_payload[index],
+                    "initial dispatch restores descriptor and payload as one sealed parent",
+                );
+            }
         });
 
         stage_cyw43_descriptor(prompt_scratch);
@@ -64850,6 +64940,108 @@ mod tests {
     }
 
     #[test]
+    fn sdio_production_intake_rejects_competing_seal_before_dispatch() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_5360;
+        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = generation);
+        let retained = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: generation,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut retained_command = stage_sdio_descriptor_service_command(0x8000_5360, retained);
+        retained_command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        retained_command.aux1 = generation;
+        assert_eq!(
+            runtime_command_intake_after_pre_admit(retained_command, false),
+            Some(RuntimeCommandIntake {
+                command: retained_command,
+                reply_cap_available: false,
+            }),
+        );
+        let seal_before = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_input);
+        let owner_before = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+
+        let replacement = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 64,
+            block_size: 64,
+            block_count: 1,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut replacement_command =
+            stage_sdio_descriptor_service_command(0x8000_5361, replacement);
+        replacement_command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        replacement_command.aux1 = generation;
+        assert_eq!(
+            runtime_command_intake_after_pre_admit(replacement_command, false),
+            None,
+            "a failed SDIO seal cannot become a production RuntimeCommandIntake",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.external_dma_input, seal_before);
+            assert_eq!(state.external_dma_request, owner_before);
+        });
+
+        let mut io = TestSdioHostIo::new();
+        assert_eq!(
+            service_sdio_external_dma_admitted_turn_with_io(replacement_command, &mut io),
+            Some(RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::fault_with_result(
+                    replacement_command.sequence,
+                    FAULT_REJECTED_COMMAND,
+                    SDIO_REJECT_RESULT_INTAKE_SEAL_BUSY,
+                ),
+            )),
+            "the fail-closed dispatch seam retains a site-specific busy result",
+        );
+        assert_eq!(io.write_count, 0);
+        assert_eq!(io.polls, 0);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.external_dma_input, seal_before);
+            assert_eq!(state.external_dma_request, owner_before);
+        });
+    }
+
+    #[test]
+    fn sdio_dispatch_without_intake_seal_reports_missing_site() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 64,
+            block_size: 64,
+            block_count: 1,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let command = stage_sdio_descriptor_service_command(0x8000_5362, descriptor);
+        let mut io = TestSdioHostIo::new();
+        assert_eq!(
+            service_sdio_external_dma_admitted_turn_with_io(command, &mut io),
+            Some(RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::fault_with_result(
+                    command.sequence,
+                    FAULT_REJECTED_COMMAND,
+                    SDIO_REJECT_RESULT_INTAKE_SEAL_MISSING,
+                ),
+            )),
+        );
+        assert_eq!(io.write_count, 0);
+        assert_eq!(io.polls, 0);
+    }
+
+    #[test]
     fn sdio_seal_mismatch_cannot_fall_through_to_live_scratch() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
@@ -64890,9 +65082,10 @@ mod tests {
         assert_eq!(
             service_sdio_external_dma_admitted_turn_with_io(replacement_command, &mut io,),
             Some(RuntimeCommandTurn::Complete(
-                DriverTaskCompletionRecord::fault(
+                DriverTaskCompletionRecord::fault_with_result(
                     replacement_command.sequence,
                     FAULT_REJECTED_COMMAND,
+                    SDIO_REJECT_RESULT_INTAKE_SEAL_BUSY,
                 ),
             )),
             "mismatched intake is terminal rather than a synchronous fallback",

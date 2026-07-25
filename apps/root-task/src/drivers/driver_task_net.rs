@@ -10639,7 +10639,12 @@ pub(crate) fn service_cyw43_maintenance_turn() -> bool {
     let deadline_before_turn = action.deadline;
     if !cyw43_poll_deadline_open(&mut action.deadline) {
         snapshot.action = None;
-        if action.issued {
+        if action.request.is_some() {
+            // HAL assigns the immutable request before the linked child can
+            // observe its nonzero sequence. A Prepared lease may already have
+            // changed one or both linked-runtime priorities, so it has the same
+            // ordered pair-scrub requirement as an Issued lease. Only an
+            // action that never crossed HAL admission may retire locally.
             *CYW43_MAINTENANCE_CURSOR.lock() = snapshot;
             latch_cyw43_maintenance_recovery(&action, None);
         } else {
@@ -26439,63 +26444,192 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_maintenance_deadline_poisons_only_an_issued_action() {
+    fn cyw43_maintenance_deadline_pair_fences_only_an_admitted_action() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
-        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
-        let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
-        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
-        crate::hal::driver_task::publish_driver_task_shared_frame(
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            0,
-            1,
-            shared_page.as_mut_ptr() as usize,
-        );
-        assert!(
-            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+        reset_cyw43_status_flags();
+        {
+            let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+            let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+            let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+            crate::hal::driver_task::publish_driver_task_shared_frame(
                 CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            )
-        );
+                0,
+                1,
+                shared_page.as_mut_ptr() as usize,
+            );
+            assert!(
+                crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                )
+            );
+
+            CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+            CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+            latch_cyw43_post_key_maintenance([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+            let mut issued = false;
+            for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+                begin_cyw43_outer_event_turn();
+                assert!(service_cyw43_maintenance_turn());
+                assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+                if crate::hal::driver_task::active_driver_task_retained_request(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                )
+                .is_some_and(|active| active.issued())
+                {
+                    issued = true;
+                    break;
+                }
+            }
+            assert!(
+                issued,
+                "maintenance fixture reaches the real issue boundary"
+            );
+            CYW43_MAINTENANCE_CURSOR
+                .lock()
+                .action
+                .as_mut()
+                .expect("issued maintenance action retained")
+                .deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+            begin_cyw43_outer_event_turn();
+            assert!(service_cyw43_maintenance_turn());
+            assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+            assert!(CYW43_MAINTENANCE_CURSOR.lock().action.is_none());
+            assert_eq!(CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire), 0);
+            assert_eq!(
+                CYW43_DEFERRED_RECOVERY
+                    .lock()
+                    .expect("issued deadline publishes recovery")
+                    .cause,
+                Cyw43RecoveryCause::Maintenance
+            );
+        }
 
         reset_cyw43_status_flags();
-        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
-        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
-        latch_cyw43_post_key_maintenance([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
-        let mut issued = false;
-        for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+        {
+            let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+            let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+            let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+            crate::hal::driver_task::publish_driver_task_shared_frame(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                0,
+                1,
+                shared_page.as_mut_ptr() as usize,
+            );
+            assert!(
+                crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                )
+            );
+
+            CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+            CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+            latch_cyw43_post_key_maintenance([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+
             begin_cyw43_outer_event_turn();
             assert!(service_cyw43_maintenance_turn());
             assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
-            if crate::hal::driver_task::active_driver_task_retained_request(
-                CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            )
-            .is_some_and(|active| active.issued())
-            {
-                issued = true;
-                break;
-            }
-        }
-        assert!(
-            issued,
-            "maintenance fixture reaches the real issue boundary"
-        );
-        CYW43_MAINTENANCE_CURSOR
-            .lock()
-            .action
-            .as_mut()
-            .expect("issued maintenance action retained")
-            .deadline = Cyw43PollDeadline::Polls { remaining: 0 };
-        begin_cyw43_outer_event_turn();
-        assert!(service_cyw43_maintenance_turn());
-        assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
-        assert!(CYW43_MAINTENANCE_CURSOR.lock().action.is_none());
-        assert_eq!(CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire), 0);
-        assert_eq!(
-            CYW43_DEFERRED_RECOVERY
+            let prepared = CYW43_MAINTENANCE_CURSOR
                 .lock()
-                .expect("issued deadline publishes recovery")
-                .cause,
-            Cyw43RecoveryCause::Maintenance
-        );
+                .action
+                .expect("first production turn retains the maintenance action");
+            let request = prepared
+                .request
+                .expect("HAL assigns one immutable maintenance request");
+            assert!(!prepared.issued);
+            assert!(matches!(
+                crate::hal::driver_task::active_driver_task_retained_request(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                ),
+                Some(crate::hal::driver_task::DriverTaskRetainedRequestState::Prepared {
+                    request: active_request,
+                    ..
+                }) if active_request == request
+            ));
+            let logical_owner = *CYW43_LOGICAL_CONTROL_OWNER.lock();
+            assert!(
+                logical_owner.is_some(),
+                "HAL admission acquires the persistent logical op11 owner"
+            );
+            let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+
+            CYW43_MAINTENANCE_CURSOR
+                .lock()
+                .action
+                .as_mut()
+                .expect("prepared maintenance action retained")
+                .deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+            begin_cyw43_outer_event_turn();
+            assert!(service_cyw43_maintenance_turn());
+            assert_eq!(
+                cyw43_outer_event_turn_operation_count(),
+                0,
+                "deadline recovery performs no second child operation"
+            );
+            assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+            assert!(CYW43_MAINTENANCE_CURSOR.lock().action.is_none());
+            assert!(matches!(
+                crate::hal::driver_task::active_driver_task_retained_request(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                ),
+                Some(crate::hal::driver_task::DriverTaskRetainedRequestState::Prepared {
+                    request: active_request,
+                    ..
+                }) if active_request == request
+            ));
+            assert!(CYW43_TERMINAL_DRAIN_CURSOR.lock().is_some_and(|cursor| {
+                cursor.request == request
+                    && matches!(
+                        cursor.owner,
+                        Cyw43TerminalDrainOwner::Maintenance(action)
+                            if action.request == Some(request) && !action.issued
+                    )
+            }));
+            let recovery = CYW43_DEFERRED_RECOVERY
+                .lock()
+                .expect("prepared deadline publishes exact maintenance recovery");
+            assert_eq!(recovery.cause, Cyw43RecoveryCause::Maintenance);
+            assert_eq!(recovery.ticket_id, u64::from(request));
+            assert!(!recovery.terminal_observed);
+            assert_eq!(
+                *CYW43_LOGICAL_CONTROL_OWNER.lock(),
+                logical_owner,
+                "prepared deadline cannot release op11 ownership before pair scrub"
+            );
+            assert_eq!(
+                CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire),
+                pair_scrub_epoch,
+                "deadline recovery requests scrub but cannot publish scrub completion"
+            );
+
+            begin_cyw43_outer_event_turn();
+            assert_eq!(
+                run_cyw43_runtime_descriptor_turn_raw(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    prepared.generation,
+                    "prepared-maintenance-competing-poll",
+                    DriverRuntimeCyw43CommandDescriptor {
+                        op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+                        ..DriverRuntimeCyw43CommandDescriptor::empty()
+                    },
+                    &[],
+                ),
+                Err(DriverTaskNetError::RuntimePending(
+                    "cyw43-logical-control-owner-busy"
+                ))
+            );
+            assert_eq!(
+                cyw43_outer_event_turn_operation_count(),
+                0,
+                "the retained op11 owner blocks fresh op10 work until pair scrub"
+            );
+            let mut blocked_owner = logical_owner.expect("prepared op11 owner remains retained");
+            blocked_owner.blocked_turns = blocked_owner.blocked_turns.saturating_add(1);
+            assert_eq!(
+                *CYW43_LOGICAL_CONTROL_OWNER.lock(),
+                Some(blocked_owner),
+                "the blocked counter is the only permitted owner mutation"
+            );
+        }
 
         reset_cyw43_status_flags();
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
@@ -26513,6 +26647,7 @@ mod tests {
         assert!(service_cyw43_maintenance_turn());
         assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
         assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+        assert!(CYW43_LOGICAL_CONTROL_OWNER.lock().is_none());
         assert_eq!(CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire), 0);
 
         reset_cyw43_status_flags();

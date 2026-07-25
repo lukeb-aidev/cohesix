@@ -11109,6 +11109,16 @@ where
             return "none";
         }
         if terminal.completion_code == 5 {
+            if terminal.completion_detail == 1 {
+                return match terminal.completion_result {
+                    0x5344_0001 => "sdio-intake-seal-busy",
+                    0x5344_0002 => "sdio-intake-seal-missing",
+                    0x5344_0003 => "linked-runtime-generation-rejected",
+                    _ => crate::drivers::driver_task_net::cyw43_runtime_fault_reason(
+                        terminal.completion_detail,
+                    ),
+                };
+            }
             return crate::drivers::driver_task_net::cyw43_runtime_fault_reason(
                 terminal.completion_detail,
             );
@@ -21346,6 +21356,20 @@ mod tests {
         assert!(lines[7].contains("cmd=0x0000001a id=37"));
         assert!(lines[8].contains("code=5 code_name=fault"));
         assert!(lines[8].contains("detail=0x0001 detail_name=rejected-command"));
+        for (result, expected) in [
+            (0x5344_0001, "sdio-intake-seal-busy"),
+            (0x5344_0002, "sdio-intake-seal-missing"),
+            (0x5344_0003, "linked-runtime-generation-rejected"),
+        ] {
+            let site_line = KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(
+                crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
+                    completion_detail: 1,
+                    completion_result: result,
+                    ..terminal
+                },
+            );
+            assert!(site_line.contains(expected), "{site_line}",);
+        }
         let control_fault_line = KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(
             crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
                 completion_detail: 0x530b,

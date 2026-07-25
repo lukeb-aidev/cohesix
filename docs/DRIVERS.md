@@ -724,8 +724,13 @@ This as-built closure is authorized by Milestone 26d task
   That private authority now starts at the SDIO endpoint intake. The owner
   copies the sequence-last descriptor before CARD_INT arbitration, then
   transfers it into the retained request cursor on the first service turn.
-  A descriptor-shaped command with a missing or mismatched intake seal fails
-  closed; it cannot fall through to the synchronous descriptor parser.
+  Intake admission is authoritative rather than advisory: a competing command
+  cannot become a runnable `RuntimeCommandIntake` while another exact seal owns
+  the aperture. The durable replacement remains deferred until that owner
+  transfers or terminates. A descriptor-shaped dispatch with no valid seal is
+  a site-tagged terminal invariant failure; it cannot fall through to the
+  synchronous descriptor parser or be flattened into an unattributed generic
+  rejected-command.
   Every outer terminal, including a pre-dispatch generation rejection, clears
   only its exact seal. A fresh contained-preissue retry selects its own sealed
   descriptor and must compare equal to the fenced terminal request; it cannot
@@ -753,11 +758,13 @@ This as-built closure is authorized by Milestone 26d task
   child. The runtime seals a root CYW43 descriptor and its payload immediately
   after the sequence-last command record and endpoint rendezvous agree, before
   draining any watermarked CARD_INT/DPC work. Purely private op11 phase
-  transitions retain that seal until terminal completion. DPC may therefore
-  reuse reciprocal descriptor scratch before op11's first SDIO child without
-  misrouting the root control exchange as an op10 poll. This is the isolated
-  runtime equivalent of Linux attaching BCDC state to the already admitted
-  request before scheduling its SDIO DPC.
+  transitions retain that seal until terminal completion, and the first
+  private service turn restores the descriptor and payload together before
+  any helper can consume the physical aperture. DPC may therefore reuse
+  reciprocal descriptor or payload scratch before op11's first SDIO child
+  without misrouting or corrupting the root control exchange. This is the
+  isolated runtime equivalent of Linux attaching BCDC state to the already
+  admitted request before scheduling its SDIO DPC.
   Function 1 firmware streaming retains one immutable 32-KiB backplane
   aperture, matching brcmfmac's production RAM-write window rather than its
   debug-only 2-KiB `MEMBLOCK` readback unit. MMC-shaped CMD53 partitioning
@@ -1223,9 +1230,11 @@ This as-built closure is authorized by Milestone 26d task
   replay, and post-secure retained maintenance carry absolute virtual-counter
   deadlines. The linked engine envelope is eight seconds, covering the
   Linux-aligned one-second ALP and three-second Function 2 waits plus bounded
-  handoff margin. An expired issued request poisons its generation and cannot
-  be replaced in that generation; a non-issued gate fails with a typed stage
-  error instead of remaining pending forever.
+  handoff margin. Once HAL assigns an immutable request, both `Prepared` and
+  `Issued` deadline expiry retain the exact lease and require ordered pair
+  scrub; neither may be discarded or replaced in that generation. Only an
+  action that never crossed HAL request admission may fail locally with a
+  typed stage error instead of remaining pending forever.
 - Steady association, EAPOL, maintenance, data, and pair-signal paths retain
   one deferred-recovery record for the current generation. That record
   separately binds the current recovery generation and the generation that
