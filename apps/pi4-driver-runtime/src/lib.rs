@@ -42,16 +42,12 @@ use pi4_driver_abi::DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET;
 use pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID;
 #[cfg(all(target_os = "none", target_arch = "aarch64"))]
 use pi4_driver_abi::DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE;
-#[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
-    driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
-    DriverRuntimeContinuationGrant, DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
-};
-use pi4_driver_abi::{
-    driver_runtime_cyw43_armcr4_reset_result, driver_runtime_genet_completion_result,
-    DriverRuntimeBusLinkDescriptor, DriverRuntimeCyw43CommandDescriptor,
-    DriverRuntimeDpcEventEntry, DriverRuntimeDpcEventRing, DriverRuntimeGenetCompletionResultParts,
-    DriverRuntimeInitDescriptor, DriverRuntimeIrqDescriptor, DriverRuntimeResourceRangeDescriptor,
+    driver_runtime_continuation_action_fingerprint, driver_runtime_cyw43_armcr4_reset_result,
+    driver_runtime_genet_completion_result, DriverRuntimeBusLinkDescriptor,
+    DriverRuntimeCyw43CommandDescriptor, DriverRuntimeDpcEventEntry, DriverRuntimeDpcEventRing,
+    DriverRuntimeGenetCompletionResultParts, DriverRuntimeInitDescriptor,
+    DriverRuntimeIrqDescriptor, DriverRuntimeResourceRangeDescriptor,
     DriverRuntimeSdioCommandDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
     DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
@@ -554,6 +550,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY, DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
     HOT_PATH_CYW43_WIFI, HOT_PATH_GENET_NIC, HOT_PATH_HDMI_TEXT, HOT_PATH_PCIE_ROOT,
     HOT_PATH_SDIO_HOST, HOT_PATH_SERIAL_CONSOLE, HOT_PATH_USB_KEYBOARD,
+};
+#[cfg(any(target_os = "none", test))]
+use pi4_driver_abi::{
+    driver_runtime_is_cyw43_root_continuation, DriverRuntimeContinuationGrant,
+    DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
@@ -2757,6 +2758,38 @@ impl SdioExternalDmaRequestCursor {
     }
 }
 
+/// Immutable SDIO child input captured at sequence-last command intake.
+///
+/// The CYW43 producer and SDIO owner share one reciprocal descriptor aperture.
+/// CARD_INT arbitration may run after the owner observes the command record but
+/// before its first foreground service turn, so the aperture is no longer
+/// authoritative after intake. The private request cursor takes over once the
+/// first service turn admits the descriptor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SdioExternalDmaInputSeal {
+    command: DriverTaskCommandRecord,
+    descriptor: DriverRuntimeSdioCommandDescriptor,
+    valid: bool,
+}
+
+impl SdioExternalDmaInputSeal {
+    const fn empty() -> Self {
+        Self {
+            command: DriverTaskCommandRecord::empty(),
+            descriptor: DriverRuntimeSdioCommandDescriptor::empty(),
+            valid: false,
+        }
+    }
+
+    fn matches(self, command: DriverTaskCommandRecord) -> bool {
+        self.valid && self.command == command
+    }
+
+    fn clear(&mut self) {
+        *self = Self::empty();
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SdioRuntimeState {
     initialized: bool,
@@ -2780,6 +2813,7 @@ struct SdioRuntimeState {
     pullup_clear_generation: u32,
     pullup_clear_admitted: bool,
     pwrseq: SdioPwrseqCursor,
+    external_dma_input: SdioExternalDmaInputSeal,
     external_dma_request: SdioExternalDmaRequestCursor,
 }
 
@@ -2807,6 +2841,7 @@ impl SdioRuntimeState {
             pullup_clear_generation: 0,
             pullup_clear_admitted: false,
             pwrseq: SdioPwrseqCursor::idle(),
+            external_dma_input: SdioExternalDmaInputSeal::empty(),
             external_dma_request: SdioExternalDmaRequestCursor::idle(),
         }
     }
@@ -4716,7 +4751,6 @@ impl DriverTaskCommandRecord {
     }
 }
 
-#[cfg(any(target_os = "none", test))]
 const fn runtime_continuation_action_fingerprint(command: DriverTaskCommandRecord) -> u32 {
     driver_runtime_continuation_action_fingerprint(
         command.opcode,
@@ -6365,6 +6399,7 @@ fn poll_runtime_command(
         RuntimeCommandAdmission::None => return None,
         RuntimeCommandAdmission::OneWay => {
             let _ = cyw43_foreground_pre_admit(command);
+            let _ = sdio_external_dma_pre_admit(command);
             return Some(RuntimeCommandIntake {
                 command,
                 reply_cap_available: false,
@@ -6422,6 +6457,7 @@ fn poll_runtime_command(
         return None;
     }
     let _ = cyw43_foreground_pre_admit(command);
+    let _ = sdio_external_dma_pre_admit(command);
     Some(RuntimeCommandIntake {
         command,
         reply_cap_available: expects_reply,
@@ -6456,6 +6492,7 @@ fn runtime_wake_from_received_tag(
     }
     let reply_cap_available = command_expects_reply(command);
     let _ = cyw43_foreground_pre_admit(command);
+    let _ = sdio_external_dma_pre_admit(command);
     RuntimeWake::Command(RuntimeCommandIntake {
         command,
         reply_cap_available,
@@ -7303,6 +7340,13 @@ const fn cyw43_dpc_child_blocks_cursor(global_child_active: bool, dpc_child_acti
     global_child_active && !dpc_child_active
 }
 
+const fn cyw43_dpc_wait_services_cursor(
+    dpc_cursor_active: bool,
+    blocking_child_active: bool,
+) -> bool {
+    dpc_cursor_active && !blocking_child_active
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43DpcPendingCommandRoute {
     Execute,
@@ -8107,7 +8151,7 @@ fn dpc_event_ring_initialize_at(base: usize, epoch: u32) {
     driver_task_shared_clean_range(base, core::mem::size_of::<DriverRuntimeDpcEventRing>());
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 fn dpc_event_ring_reset_generation_at(base: usize, current: u32, requested: u32) -> bool {
     let mut ring = dpc_event_ring_read_at(base);
     if !dpc_event_ring_reset_generation(&mut ring, current, requested) {
@@ -9982,11 +10026,10 @@ fn cyw43_dpc_start_flow_or_hostmail(state: &mut Cyw43RuntimeState, cursor: &mut 
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor, generation: u32) -> bool {
-    if cyw43_dpc_turn_route(cursor) != Cyw43DpcTurnRoute::SubmitChild {
-        return false;
-    }
-    let sequence = cyw43_sdio_bus_link_next_sequence();
+fn cyw43_dpc_prepare_current_io_command(
+    cursor: &Cyw43DpcCursor,
+    sequence: u32,
+) -> Option<(DriverTaskCommandRecord, DriverFrameDescriptor)> {
     let command = match cursor.io_phase {
         Cyw43DpcIoPhase::WindowLow | Cyw43DpcIoPhase::WindowMid | Cyw43DpcIoPhase::WindowHigh => {
             let (low, mid, high) = cyw43_backplane_window_register_bytes(cursor.io_addr);
@@ -9994,10 +10037,10 @@ fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor, generation: u32) -> 
                 Cyw43DpcIoPhase::WindowLow => (SBSDIO_FUNC1_SBADDRLOW, low),
                 Cyw43DpcIoPhase::WindowMid => (SBSDIO_FUNC1_SBADDRMID, mid),
                 Cyw43DpcIoPhase::WindowHigh => (SBSDIO_FUNC1_SBADDRHIGH, high),
-                Cyw43DpcIoPhase::Idle | Cyw43DpcIoPhase::Transfer => return false,
+                Cyw43DpcIoPhase::Idle | Cyw43DpcIoPhase::Transfer => return None,
             };
             if !write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value) {
-                return false;
+                return None;
             }
             driver_task_shared_store_barrier();
             driver_task_shared_clean_range(
@@ -10036,12 +10079,12 @@ fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor, generation: u32) -> 
                 let transfer = cyw43_dpc_backplane_write32_transfer(cursor.io_addr);
                 let payload = cyw43_dpc_backplane_write32_payload(cursor.io_value);
                 if !sdio_bus_link_payload_bounds(CYW43_SDIO_BUS_LINK_DATA_OFFSET, payload.len()) {
-                    return false;
+                    return None;
                 }
                 for (index, value) in payload.into_iter().enumerate() {
                     if !write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET + index, value)
                     {
-                        return false;
+                        return None;
                     }
                 }
                 driver_task_shared_store_barrier();
@@ -10071,7 +10114,7 @@ fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor, generation: u32) -> 
                     CYW43_SDIO_BUS_LINK_DATA_OFFSET,
                     cursor.io_value as u8,
                 ) {
-                    return false;
+                    return None;
                 }
                 driver_task_shared_store_barrier();
                 driver_task_shared_clean_range(
@@ -10105,12 +10148,12 @@ fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor, generation: u32) -> 
                     0,
                 )
             }
-            Cyw43DpcIoKind::None | Cyw43DpcIoKind::WindowOnly => return false,
+            Cyw43DpcIoKind::None | Cyw43DpcIoKind::WindowOnly => return None,
         },
-        Cyw43DpcIoPhase::Idle => return false,
+        Cyw43DpcIoPhase::Idle => return None,
     };
     let Some(command) = command else {
-        return false;
+        return None;
     };
     let read_frame = match (cursor.io_phase, cursor.io_kind) {
         (Cyw43DpcIoPhase::Transfer, Cyw43DpcIoKind::BackplaneRead32) => DriverFrameDescriptor {
@@ -10122,7 +10165,47 @@ fn cyw43_dpc_submit_current_io(cursor: &mut Cyw43DpcCursor, generation: u32) -> 
         (Cyw43DpcIoPhase::Transfer, Cyw43DpcIoKind::Function2Read) => cursor.io_frame,
         _ => DriverFrameDescriptor::empty(),
     };
-    cyw43_dpc_child_submit_once(cursor, command, read_frame, generation)
+    Some((command, read_frame))
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcSubmitResult {
+    Submitted,
+    DeferredOwner,
+    Fault,
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_submit_current_io(
+    cursor: &mut Cyw43DpcCursor,
+    generation: u32,
+) -> Cyw43DpcSubmitResult {
+    if generation == 0 || cyw43_dpc_turn_route(cursor) != Cyw43DpcTurnRoute::SubmitChild {
+        return Cyw43DpcSubmitResult::Fault;
+    }
+    let sequence = cyw43_sdio_bus_link_next_sequence();
+    if !cyw43_sdio_child_claim(sequence) {
+        if CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
+            || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+        {
+            return Cyw43DpcSubmitResult::Fault;
+        }
+        if CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire) {
+            CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+            return Cyw43DpcSubmitResult::DeferredOwner;
+        }
+        return Cyw43DpcSubmitResult::Fault;
+    }
+    let Some((command, read_frame)) = cyw43_dpc_prepare_current_io_command(cursor, sequence) else {
+        let _ = cyw43_sdio_child_release_exact_or_restart(sequence);
+        return Cyw43DpcSubmitResult::Fault;
+    };
+    if cyw43_dpc_child_submit_claimed_once(cursor, command, read_frame, generation) {
+        Cyw43DpcSubmitResult::Submitted
+    } else {
+        Cyw43DpcSubmitResult::Fault
+    }
 }
 
 fn cyw43_dpc_terminal_completion(
@@ -11110,17 +11193,31 @@ fn cyw43_runtime_service_dpc_event() -> bool {
                     should_defer_local = true;
                     return true;
                 }
-            } else if cyw43_dpc_submit_current_io(&mut cursor, state.dpc_shared_epoch) {
-                state.dpc_cursor = cursor;
-                return true;
             } else {
-                state.dpc_cursor = cursor;
-                cyw43_dpc_quarantine_transport(
-                    state,
-                    cursor.event_sequence,
-                    CYW43_DPC_TERMINAL_RESULT_CHILD_SUBMIT,
-                );
-                return false;
+                match cyw43_dpc_submit_current_io(&mut cursor, state.dpc_shared_epoch) {
+                    Cyw43DpcSubmitResult::Submitted => {
+                        state.dpc_cursor = cursor;
+                        return true;
+                    }
+                    Cyw43DpcSubmitResult::DeferredOwner => {
+                        // A foreground child won the single global SDIO claim.
+                        // Preserve this cursor unchanged and retry only after
+                        // the exact owner terminal; blocked claim is not a
+                        // transport fault.
+                        state.dpc_cursor = cursor;
+                        should_defer_local = true;
+                        return true;
+                    }
+                    Cyw43DpcSubmitResult::Fault => {
+                        state.dpc_cursor = cursor;
+                        cyw43_dpc_quarantine_transport(
+                            state,
+                            cursor.event_sequence,
+                            CYW43_DPC_TERMINAL_RESULT_CHILD_SUBMIT,
+                        );
+                        return false;
+                    }
+                }
             }
 
             state.dpc_cursor = cursor;
@@ -12162,11 +12259,8 @@ fn service_sdio_descriptor_command_with_io<I: SdioTransferIo>(
 fn service_sdio_external_dma_command_turn(
     command: DriverTaskCommandRecord,
 ) -> Option<RuntimeCommandTurn> {
-    let descriptor = sdio_external_dma_command_candidate(command)?;
     let mut io = SdioMmioTransferIo;
-    Some(service_sdio_external_dma_command_turn_with_io(
-        command, descriptor, &mut io,
-    ))
+    service_sdio_external_dma_admitted_turn_with_io(command, &mut io)
 }
 
 #[cfg(not(target_os = "none"))]
@@ -12176,33 +12270,18 @@ const fn service_sdio_external_dma_command_turn(
     None
 }
 
-#[cfg(any(target_os = "none", test))]
-fn sdio_external_dma_command_candidate(
-    command: DriverTaskCommandRecord,
-) -> Option<DriverRuntimeSdioCommandDescriptor> {
-    if command.sequence == 0
-        || command.opcode != OPCODE_SERVICE
-        || command.arg0 != HOT_PATH_SDIO_HOST
-        || command.arg1 != ROLE_SDIO
-        || command.frame.len as usize != core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()
-        || !command.frame.in_ring_payload()
-    {
-        return None;
-    }
-    let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
-    let descriptor = if retained.active() {
-        // The reciprocal descriptor aperture is shared scratch. CARD_INT/DPC
-        // publication and the CYW43 parent's next retained turn may reuse it
-        // while the SDIO owner still holds a multi-turn request. Once admitted,
-        // the private cursor is the sole descriptor authority, matching
-        // Linux's request-private mmc_request state. The immutable command and
-        // generation are still checked below by
-        // `sdio_external_dma_request_identity_matches`; only mutable scratch is
-        // excluded from continuation identity.
-        retained.identity.descriptor
-    } else {
-        read_sdio_command_descriptor(command.frame)?
-    };
+fn sdio_external_dma_command_shape(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.opcode == OPCODE_SERVICE
+        && command.arg0 == HOT_PATH_SDIO_HOST
+        && command.arg1 == ROLE_SDIO
+        && command.frame.len as usize == core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()
+        && command.frame.in_ring_payload()
+}
+
+const fn sdio_external_dma_descriptor_supported(
+    descriptor: DriverRuntimeSdioCommandDescriptor,
+) -> bool {
     matches!(
         descriptor.op,
         DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG
@@ -12213,9 +12292,131 @@ fn sdio_external_dma_command_candidate(
             | DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
             | DRIVER_RUNTIME_SDIO_OP_POLL_IRQ
             | DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE
+            | DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET
             | DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT
     )
-    .then_some(descriptor)
+}
+
+fn sdio_external_dma_pre_admit(command: DriverTaskCommandRecord) -> bool {
+    if !sdio_external_dma_command_shape(command) {
+        return true;
+    }
+    let sealed = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_input);
+    if sealed.valid {
+        return sealed.matches(command);
+    }
+    let Some(descriptor) = read_sdio_command_descriptor(command.frame) else {
+        return false;
+    };
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        if state.external_dma_input.valid {
+            return state.external_dma_input.matches(command);
+        }
+        state.external_dma_input = SdioExternalDmaInputSeal {
+            command,
+            descriptor,
+            valid: true,
+        };
+        true
+    })
+}
+
+fn sdio_external_dma_finish_intake(
+    command: DriverTaskCommandRecord,
+    turn: RuntimeCommandTurn,
+) -> RuntimeCommandTurn {
+    let cursor_active = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active());
+    if cursor_active || matches!(turn, RuntimeCommandTurn::Complete(_)) {
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            if state.external_dma_input.matches(command) {
+                state.external_dma_input.clear();
+            }
+        });
+    }
+    turn
+}
+
+fn sdio_external_dma_clear_intake_on_terminal(command: DriverTaskCommandRecord) {
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        if state.external_dma_input.matches(command) {
+            state.external_dma_input.clear();
+        }
+    });
+}
+
+fn sdio_external_dma_finish_terminal(
+    command: DriverTaskCommandRecord,
+    completion: DriverTaskCompletionRecord,
+) -> RuntimeCommandTurn {
+    sdio_external_dma_clear_intake_on_terminal(command);
+    RuntimeCommandTurn::Complete(completion)
+}
+
+fn sdio_external_dma_command_candidate(
+    command: DriverTaskCommandRecord,
+) -> Option<DriverRuntimeSdioCommandDescriptor> {
+    if !sdio_external_dma_command_shape(command) {
+        return None;
+    }
+    let (sealed, retained) =
+        SDIO_RUNTIME_STATE.with_ref(|state| (state.external_dma_input, state.external_dma_request));
+    let retained_continuation = retained.active()
+        && command.sequence == retained.identity.sequence
+        && runtime_continuation_action_fingerprint(command) == retained.identity.action_fingerprint;
+    let descriptor = if retained_continuation {
+        // The reciprocal descriptor aperture is shared scratch. CARD_INT/DPC
+        // publication and the CYW43 parent's next retained turn may reuse it
+        // while the SDIO owner still holds a multi-turn request. Once admitted,
+        // the private cursor is the sole descriptor authority, matching
+        // Linux's request-private mmc_request state. The immutable command and
+        // generation are still checked below by
+        // `sdio_external_dma_request_identity_matches`; only mutable scratch is
+        // excluded from continuation identity.
+        retained.identity.descriptor
+    } else if sealed.matches(command) {
+        // Intake seals the descriptor before CARD_INT arbitration. The first
+        // service turn and any fresh pre-issue retry ticket therefore use
+        // their own immutable descriptor even if CYW43 has already restored
+        // or reused the reciprocal scratch aperture. A new sequence must not
+        // borrow the old cursor descriptor or it could make a changed retry
+        // compare equal to itself.
+        sealed.descriptor
+    } else {
+        return None;
+    };
+    sdio_external_dma_descriptor_supported(descriptor).then_some(descriptor)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn service_sdio_external_dma_admitted_turn_with_io<I: SdioTransferIo>(
+    command: DriverTaskCommandRecord,
+    io: &mut I,
+) -> Option<RuntimeCommandTurn> {
+    if !sdio_external_dma_command_shape(command) {
+        return None;
+    }
+    let Some(descriptor) = sdio_external_dma_command_candidate(command) else {
+        // Every descriptor-shaped production command belongs to the sealed
+        // retained owner lane. A missing or mismatched seal is terminal; it
+        // must never fall through to `service_sdio_host`, which reparses the
+        // mutable reciprocal scratch aperture.
+        return Some(sdio_external_dma_finish_terminal(
+            command,
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+        ));
+    };
+    if descriptor.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET {
+        // The power-sequence cursor owns generation reset and is dispatched
+        // before this lane. Reaching this branch means reset admission did not
+        // establish that cursor, so fail closed rather than executing reset
+        // through the synchronous descriptor implementation.
+        return Some(sdio_external_dma_finish_terminal(
+            command,
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+        ));
+    }
+    let turn = service_sdio_external_dma_command_turn_with_io(command, descriptor, io);
+    Some(sdio_external_dma_finish_intake(command, turn))
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -13483,52 +13684,79 @@ fn sdio_retained_dpc_activate_turn_with<I: SdioTransferIo>(
 }
 
 #[cfg(any(target_os = "none", test))]
+const fn sdio_generation_commit_state_admitted(
+    state: &SdioRuntimeState,
+    current: u32,
+    requested: u32,
+) -> bool {
+    state.shared_epoch == current
+        && state.pending_epoch == requested
+        && requested != 0
+        && state.card_irq_masked
+        && !state.dpc_activation_allowed
+        && state.dpc_poisoned
+}
+
+#[cfg(target_os = "none")]
+const fn sdio_generation_commit_ring_base() -> usize {
+    DRIVER_TASK_RING_VADDR + DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET as usize
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn sdio_generation_commit_ring_base() -> usize {
+    if TEST_CYW43_FOREGROUND_PRODUCTION_CHAIN_ENABLED.load(Ordering::Acquire) {
+        DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET)
+    } else {
+        DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET)
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn sdio_generation_commit_ring_admitted(current: u32, requested: u32) -> bool {
+    let ring = dpc_event_ring_read_at(sdio_generation_commit_ring_base());
+    ring.valid() && ring.epoch == current && dpc_generation_reset_request_valid(current, requested)
+}
+
+#[cfg(any(target_os = "none", test))]
 fn sdio_retained_generation_commit_turn_with<I: SdioTransferIo>(
     mut cursor: SdioExternalDmaRequestCursor,
     io: &mut I,
 ) -> RuntimeCommandTurn {
     let requested = cursor.identity.descriptor.addr;
+    let current = cursor.identity.generation;
     match cursor.phase {
         SdioExternalDmaRequestPhase::GenerationCommitAdmit => {
-            let admitted = SDIO_RUNTIME_STATE.with_ref(|state| {
-                state.pending_epoch == requested
-                    && requested != 0
-                    && state.card_irq_masked
-                    && !state.dpc_activation_allowed
-                    && state.dpc_poisoned
-            });
+            let admitted = SDIO_RUNTIME_STATE
+                .with_ref(|state| sdio_generation_commit_state_admitted(state, current, requested));
             if !admitted {
                 return sdio_retained_control_fault(cursor, FAULT_REJECTED_COMMAND);
             }
             cursor.phase = SdioExternalDmaRequestPhase::GenerationCommitRingReset;
         }
         SdioExternalDmaRequestPhase::GenerationCommitRingReset => {
-            let current = cursor.identity.generation;
-            #[cfg(target_os = "none")]
-            let reset = dpc_event_ring_reset_generation_at(
-                DRIVER_TASK_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
-                current,
-                requested,
-            );
-            #[cfg(not(target_os = "none"))]
-            let reset = dpc_generation_reset_request_valid(current, requested);
-            if !reset {
+            // Preflight the shared ring without changing its epoch. The CYW43
+            // producer still owns an old-generation child ticket and checks
+            // this ring before every grant and completion poll.
+            if !sdio_generation_commit_ring_admitted(current, requested) {
                 return sdio_retained_control_fault(cursor, FAULT_REJECTED_COMMAND);
             }
             cursor.phase = SdioExternalDmaRequestPhase::GenerationCommitState;
         }
         SdioExternalDmaRequestPhase::GenerationCommitState => {
-            SDIO_RUNTIME_STATE.with_mut(|state| {
-                state.shared_epoch = requested;
-                state.pending_epoch = 0;
-                state.card_irq_masked = true;
-                state.dpc_activation_allowed = false;
-                state.irq_ack_pending = false;
-                state.dpc_poisoned = false;
-            });
+            // Keep both owner state and the shared ring on the old epoch while
+            // the remaining health/policy phases consume separate bounded
+            // turns. Publication occurs only at the exact terminal boundary.
+            if !SDIO_RUNTIME_STATE
+                .with_ref(|state| sdio_generation_commit_state_admitted(state, current, requested))
+            {
+                return sdio_retained_control_fault(cursor, FAULT_REJECTED_COMMAND);
+            }
             cursor.phase = SdioExternalDmaRequestPhase::GenerationCommitHealth;
         }
         SdioExternalDmaRequestPhase::GenerationCommitHealth => {
+            // Preserve the old generation's poisoned/masked truth until the
+            // new ring is committed. CommitComplete republishes clean health
+            // against the new epoch after owner state advances.
             sdio_record_dpc_health(false);
             cursor.phase = SdioExternalDmaRequestPhase::GenerationCommitPolicyEnable;
         }
@@ -13543,6 +13771,28 @@ fn sdio_retained_generation_commit_turn_with<I: SdioTransferIo>(
             cursor.phase = SdioExternalDmaRequestPhase::GenerationCommitComplete;
         }
         SdioExternalDmaRequestPhase::GenerationCommitComplete => {
+            if !SDIO_RUNTIME_STATE
+                .with_ref(|state| sdio_generation_commit_state_admitted(state, current, requested))
+                || !dpc_event_ring_reset_generation_at(
+                    sdio_generation_commit_ring_base(),
+                    current,
+                    requested,
+                )
+            {
+                return sdio_retained_control_fault(cursor, FAULT_REJECTED_COMMAND);
+            }
+            // This is the sole generation-publication boundary. The ring is
+            // sequence-stable at E+1 before clean owner health is exposed;
+            // CARD_INT remains masked until the later CYW43 release lane.
+            SDIO_RUNTIME_STATE.with_mut(|state| {
+                state.shared_epoch = requested;
+                state.pending_epoch = 0;
+                state.card_irq_masked = true;
+                state.dpc_activation_allowed = false;
+                state.irq_ack_pending = false;
+                state.dpc_poisoned = false;
+            });
+            sdio_record_dpc_health(false);
             cursor.response0 = requested;
             return sdio_external_dma_success(cursor, io);
         }
@@ -14748,15 +14998,17 @@ fn sdio_engine_init_command_candidate(command: DriverTaskCommandRecord) -> bool 
 fn sdio_generation_reset_command_candidate(
     command: DriverTaskCommandRecord,
 ) -> Option<DriverRuntimeSdioCommandDescriptor> {
-    if command.sequence == 0
-        || command.opcode != OPCODE_SERVICE
-        || command.arg0 != HOT_PATH_SDIO_HOST
-        || command.arg1 != ROLE_SDIO
-        || command.frame.len as usize != core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()
+    #[cfg(test)]
     {
-        return None;
+        // Unit tests call the service-turn seam directly rather than entering
+        // through the production endpoint intake. Model that intake exactly
+        // once so reset tests exercise the same immutable descriptor contract.
+        let sealed = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_input);
+        if !sealed.valid {
+            let _ = sdio_external_dma_pre_admit(command);
+        }
     }
-    let desc = read_sdio_command_descriptor(command.frame)?;
+    let desc = sdio_external_dma_command_candidate(command)?;
     (desc.valid() && desc.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET).then_some(desc)
 }
 
@@ -14964,7 +15216,8 @@ fn service_sdio_pwrseq_command_turn(
             return Some(RuntimeCommandTurn::Pending);
         } else if let Some(desc) = sdio_generation_reset_command_candidate(command) {
             if let Err(detail) = begin_sdio_generation_reset(command.sequence, desc.addr) {
-                return Some(RuntimeCommandTurn::Complete(
+                return Some(sdio_external_dma_finish_terminal(
+                    command,
                     DriverTaskCompletionRecord::fault(command.sequence, detail),
                 ));
             }
@@ -14981,17 +15234,22 @@ fn service_sdio_pwrseq_command_turn(
     let cursor = SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq);
     let purpose = cursor.purpose;
     let aux0 = cursor.aux0;
-    Some(match sdio_linux_wifi_power_cycle_turn() {
+    let turn = match sdio_linux_wifi_power_cycle_turn() {
         SdioPwrseqTurn::Pending => RuntimeCommandTurn::Pending,
-        SdioPwrseqTurn::Ready => RuntimeCommandTurn::Complete(match purpose {
-            SdioPwrseqPurpose::EngineInit => finish_sdio_engine_init(command.sequence, aux0),
+        SdioPwrseqTurn::Ready => match purpose {
+            SdioPwrseqPurpose::EngineInit => {
+                RuntimeCommandTurn::Complete(finish_sdio_engine_init(command.sequence, aux0))
+            }
             SdioPwrseqPurpose::GenerationReset { requested_epoch } => {
-                finish_sdio_generation_reset(command.sequence, requested_epoch)
+                sdio_external_dma_finish_terminal(
+                    command,
+                    finish_sdio_generation_reset(command.sequence, requested_epoch),
+                )
             }
-            SdioPwrseqPurpose::Idle => {
-                DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND)
-            }
-        }),
+            SdioPwrseqPurpose::Idle => RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
+            ),
+        },
         SdioPwrseqTurn::Fault { detail, result } => {
             if matches!(purpose, SdioPwrseqPurpose::EngineInit) {
                 SDIO_RUNTIME_STATE.with_mut(|state| state.initialized = false);
@@ -15006,14 +15264,18 @@ fn service_sdio_pwrseq_command_turn(
                     result,
                 ))
             } else {
-                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
-                    command.sequence,
-                    FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
-                    (u32::from(detail) << 16) | (result & 0xffff),
-                ))
+                sdio_external_dma_finish_terminal(
+                    command,
+                    DriverTaskCompletionRecord::fault_with_result(
+                        command.sequence,
+                        FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                        (u32::from(detail) << 16) | (result & 0xffff),
+                    ),
+                )
             }
         }
-    })
+    };
+    Some(turn)
 }
 
 #[cfg(test)]
@@ -18366,10 +18628,18 @@ fn cyw43_reset_sdio_generation_via_bus_link(
     ))
 }
 
-#[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
 fn cyw43_commit_sdio_generation_via_bus_link(
     requested: u32,
 ) -> Option<(u32, DriverTaskCompletionRecord)> {
+    #[cfg(all(not(target_os = "none"), test))]
+    if !TEST_CYW43_FOREGROUND_PRODUCTION_CHAIN_ENABLED.load(Ordering::Acquire) {
+        let sequence = cyw43_sdio_bus_link_next_sequence();
+        return Some((
+            sequence,
+            DriverTaskCompletionRecord::progress(sequence, requested),
+        ));
+    }
     let sequence = cyw43_sdio_bus_link_next_sequence();
     let desc = DriverRuntimeSdioCommandDescriptor {
         op: DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT,
@@ -18415,7 +18685,7 @@ fn cyw43_commit_sdio_generation_via_bus_link(
     }
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), not(test)))]
 fn cyw43_commit_sdio_generation_via_bus_link(
     requested: u32,
 ) -> Option<(u32, DriverTaskCompletionRecord)> {
@@ -19464,15 +19734,13 @@ fn cyw43_foreground_restore_baseline() -> bool {
 
 #[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
-    let (active, same_parent, poisoned, generation) =
-        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
-            (
-                transaction.active,
-                transaction.parent == command,
-                transaction.poisoned,
-                transaction.generation,
-            )
-        });
+    let (active, same_parent, poisoned) = CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+        (
+            transaction.active,
+            transaction.parent == command,
+            transaction.poisoned,
+        )
+    });
     if active && !same_parent {
         CYW43_FOREGROUND_TRANSACTION.with_mut(cyw43_foreground_poison_active_frontier);
         return false;
@@ -19480,7 +19748,9 @@ fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
     if poisoned {
         return false;
     }
-    if active && !cyw43_foreground_runtime_generation_is_current(generation) {
+    if active
+        && !CYW43_FOREGROUND_TRANSACTION.with_ref(cyw43_foreground_retained_generation_is_current)
+    {
         // A pair restart may replace the DPC epoch while an old parent is
         // retained. Never restore that parent's baseline over the new
         // generation, and never accept or replay its outstanding child.
@@ -19558,15 +19828,14 @@ fn cyw43_foreground_finish_turn(
     command: DriverTaskCommandRecord,
     turn: RuntimeCommandTurn,
 ) -> RuntimeCommandTurn {
-    let (same_parent, pending, issued_unknown, poisoned, generation, result) =
-        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+    let (same_parent, pending, issued_unknown, poisoned, result) = CYW43_FOREGROUND_TRANSACTION
+        .with_mut(|transaction| {
             transaction.executing = false;
             (
                 transaction.parent == command,
                 transaction.turn.pending,
                 transaction.issued_unknown,
                 transaction.poisoned,
-                transaction.generation,
                 if transaction.frontier_valid {
                     cyw43_sdio_bus_link_command_result_from_descriptor(
                         transaction.frontier.command,
@@ -19585,7 +19854,7 @@ fn cyw43_foreground_finish_turn(
         ));
     }
     if (poisoned || pending || issued_unknown)
-        && !cyw43_foreground_runtime_generation_is_current(generation)
+        && !CYW43_FOREGROUND_TRANSACTION.with_ref(cyw43_foreground_retained_generation_is_current)
     {
         // The current runtime and owner ring already belong to a replacement
         // generation. Preserve them byte-for-byte; only fence the abandoned
@@ -20345,7 +20614,7 @@ fn cyw43_reap_issued_unknown_child() -> Cyw43IssuedUnknownReapResult {
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_dpc_child_submit_once(
+fn cyw43_dpc_child_submit_claimed_once(
     cursor: &mut Cyw43DpcCursor,
     mut command: DriverTaskCommandRecord,
     read_frame: DriverFrameDescriptor,
@@ -20353,11 +20622,9 @@ fn cyw43_dpc_child_submit_once(
 ) -> bool {
     if cursor.child.active
         || cursor.child.issued_unknown
-        || !cyw43_sdio_child_claim(command.sequence)
+        || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+        || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) != command.sequence
     {
-        return false;
-    }
-    if generation == 0 {
         let _ = cyw43_sdio_child_release_exact_or_restart(command.sequence);
         return false;
     }
@@ -20981,7 +21248,7 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
 #[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_grant_frontier(transaction: &mut Cyw43ForegroundTransaction) -> bool {
     let entry = transaction.frontier;
-    if !cyw43_foreground_owner_generation_is_current(entry.ticket.generation) {
+    if !cyw43_foreground_retained_owner_generation_is_current(transaction) {
         cyw43_foreground_abandon_stale_transaction(transaction);
         return false;
     }
@@ -21028,7 +21295,7 @@ fn cyw43_foreground_poll_frontier(
 ) -> Option<DriverTaskCompletionRecord> {
     let entry = transaction.frontier;
     transaction.retain_frontier_completion_poll();
-    if !cyw43_foreground_owner_generation_is_current(entry.ticket.generation) {
+    if !cyw43_foreground_retained_owner_generation_is_current(transaction) {
         cyw43_foreground_abandon_stale_transaction(transaction);
         return None;
     }
@@ -21163,21 +21430,6 @@ fn cyw43_foreground_new_frontier_generation_valid(
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_owner_generation_is_current(retained_generation: u32) -> bool {
-    let owner_ring = dpc_event_ring_read_at(
-        DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
-    );
-    cyw43_foreground_new_frontier_generation_valid(retained_generation, Some(&owner_ring))
-}
-
-#[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_runtime_generation_is_current(retained_generation: u32) -> bool {
-    let runtime_generation = CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_shared_epoch);
-    runtime_generation == retained_generation
-        && cyw43_foreground_owner_generation_is_current(retained_generation)
-}
-
-#[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_published_frontier_is_immutable(
     transaction: &Cyw43ForegroundTransaction,
 ) -> bool {
@@ -21199,6 +21451,107 @@ fn cyw43_foreground_published_frontier_is_immutable(
             && grant.action_fingerprint == runtime_continuation_action_fingerprint(entry.command)
             && grant.generation == entry.ticket.generation
     })
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_generation_commit_transition_valid(
+    transaction: &Cyw43ForegroundTransaction,
+    runtime_generation: u32,
+    owner_ring: &DriverRuntimeDpcEventRing,
+) -> bool {
+    if !transaction.active
+        || transaction.poisoned
+        || transaction.issued_unknown
+        || transaction.generation == 0
+        || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
+        || !owner_ring.valid()
+    {
+        return false;
+    }
+
+    let active_frontier = transaction.frontier_valid && transaction.frontier_submitted;
+    let entry = if active_frontier {
+        transaction.frontier
+    } else {
+        let completed = usize::from(transaction.turn.completed_count);
+        if transaction.frontier_valid || completed == 0 || completed > transaction.entries.len() {
+            return false;
+        }
+        transaction.entries[completed - 1]
+    };
+    let requested = entry.descriptor.addr;
+    let immutable_identity = entry.ticket.parent_sequence == transaction.parent.sequence
+        && entry.ticket.generation == transaction.generation
+        && entry.ticket.owner_sequence == entry.command.sequence
+        && entry.ticket.issued_turn_id != 0
+        && entry.command.sequence != 0
+        && runtime_continuation_expected_generation(entry.command) == Some(transaction.generation)
+        && entry.descriptor.valid()
+        && entry.descriptor.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT
+        && entry.descriptor.function == 0
+        && entry.descriptor.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
+        && entry.descriptor.data_offset == 0
+        && entry.descriptor.len == 0
+        && entry.descriptor.block_size == 0
+        && entry.descriptor.block_count == 0
+        && entry.descriptor.flags == 0
+        && entry.descriptor.reserved == 0
+        && dpc_generation_reset_request_valid(transaction.generation, requested)
+        && owner_ring.epoch == requested;
+    if !immutable_identity {
+        return false;
+    }
+
+    if active_frontier {
+        runtime_generation == transaction.generation
+            && transaction.frontier_ticket_valid()
+            && cyw43_foreground_published_frontier_is_immutable(transaction)
+            && CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+            && CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) == entry.command.sequence
+            && !CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+    } else {
+        (runtime_generation == transaction.generation || runtime_generation == requested)
+            && entry.ticket.ordinal.saturating_add(1) == transaction.turn.completed_count
+            && entry.completion
+                == DriverTaskCompletionRecord::progress(entry.command.sequence, requested)
+            && !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+            && !CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_retained_generation_is_current(
+    transaction: &Cyw43ForegroundTransaction,
+) -> bool {
+    let runtime_generation = CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_shared_epoch);
+    let owner_ring = dpc_event_ring_read_at(
+        DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+    );
+    (runtime_generation == transaction.generation
+        && cyw43_foreground_new_frontier_generation_valid(
+            transaction.generation,
+            Some(&owner_ring),
+        ))
+        || cyw43_foreground_generation_commit_transition_valid(
+            transaction,
+            runtime_generation,
+            &owner_ring,
+        )
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_retained_owner_generation_is_current(
+    transaction: &Cyw43ForegroundTransaction,
+) -> bool {
+    let owner_ring = dpc_event_ring_read_at(
+        DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+    );
+    cyw43_foreground_new_frontier_generation_valid(transaction.generation, Some(&owner_ring))
+        || cyw43_foreground_generation_commit_transition_valid(
+            transaction,
+            transaction.generation,
+            &owner_ring,
+        )
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -45078,8 +45431,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                     // complete command intake and reply cap retained while one
                     // cursor-owned quantum advances. A non-DPC child already
                     // owns the bus, so it is only waited on here.
-                    if dpc_cursor_active {
+                    if cyw43_dpc_wait_services_cursor(dpc_cursor_active, blocking_child_active) {
                         let _ = cyw43_runtime_service_dpc_event();
+                    } else if blocking_child_active {
+                        // The global claim belongs to the retained foreground
+                        // child. Preserve the coalesced DPC condition without
+                        // entering a cursor turn: DPC submission publishes into
+                        // the same reciprocal descriptor/payload aperture and
+                        // may not touch it until that exact child terminates.
+                        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
                     }
                     // One bounded arbitration turn completed. The retained
                     // foreground command cannot resume until root publishes a
@@ -45362,6 +45722,12 @@ pub fn runtime_main(task_key: usize) -> ! {
             }
             continue;
         };
+        // Intake sealing precedes delegated-generation admission, so every
+        // outer terminal path must release its exact seal even when dispatch
+        // never reached the SDIO service helper. This is idempotent with the
+        // service-local transfer into a retained cursor and cannot clear a
+        // different sequence's immutable intake.
+        sdio_external_dma_clear_intake_on_terminal(command);
         pending_command_gate.complete();
         driver_task_shared_store_barrier();
         if completion.code != COMPLETION_FAULT {
@@ -48003,6 +48369,78 @@ mod tests {
         assert!(!cyw43_dpc_child_blocks_cursor(false, false));
         assert!(cyw43_dpc_child_blocks_cursor(true, false));
         assert!(!cyw43_dpc_child_blocks_cursor(true, true));
+        assert!(!cyw43_dpc_wait_services_cursor(false, false));
+        assert!(cyw43_dpc_wait_services_cursor(true, false));
+        assert!(!cyw43_dpc_wait_services_cursor(true, true));
+    }
+
+    #[test]
+    fn dpc_claim_block_preserves_foreground_child_aperture() {
+        let _guard = test_guard();
+        let generation = 0x4359_5359;
+        initialize_production_foreground_pair(generation);
+        let foreground_sequence = 0x8000_5359;
+        let foreground = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 1,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: cyw43_backplane_function_addr(CYW43_CHIPCOMMON_PMUCONTROL_ADDR),
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 4,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        assert!(cyw43_sdio_child_claim(foreground_sequence));
+        assert!(sdio_bus_link_write_descriptor_physical(
+            CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET,
+            foreground,
+        ));
+        let owner_window =
+            RuntimeRingWindow::sdio_owner().expect("test SDIO owner window must be mapped");
+        let payload = [0x11, 0x22, 0x33, 0x44];
+        for (index, value) in payload.into_iter().enumerate() {
+            assert!(owner_window.write_u8(CYW43_SDIO_BUS_LINK_DATA_OFFSET + index, value));
+        }
+
+        let mut state = Cyw43RuntimeState::new();
+        state.backplane_window_valid = true;
+        state.backplane_window = CYW43_SDIO_CORE_BASE & BACKPLANE_WINDOW_MASK;
+        let mut cursor = Cyw43DpcCursor::empty();
+        cursor.event_sequence = 91;
+        cyw43_dpc_prepare_backplane_io(
+            &state,
+            &mut cursor,
+            Cyw43DpcAction::FlowAck,
+            Cyw43DpcIoKind::BackplaneWrite32,
+            CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS,
+            I_HMB_FC_CHANGE,
+        );
+        let cursor_before = cursor;
+        CYW43_DPC_DEFERRED.store(false, Ordering::Release);
+
+        assert_eq!(
+            cyw43_dpc_submit_current_io(&mut cursor, generation),
+            Cyw43DpcSubmitResult::DeferredOwner,
+        );
+        assert_eq!(cursor, cursor_before);
+        assert_eq!(
+            CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire),
+            foreground_sequence,
+        );
+        assert_eq!(
+            sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET),
+            Some(foreground),
+        );
+        for (index, expected) in payload.into_iter().enumerate() {
+            assert_eq!(
+                owner_window.read_u8(CYW43_SDIO_BUS_LINK_DATA_OFFSET + index),
+                Some(expected),
+            );
+        }
+        assert!(CYW43_DPC_DEFERRED.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        assert!(cyw43_sdio_child_release_exact(foreground_sequence));
     }
 
     #[test]
@@ -64297,6 +64735,10 @@ mod tests {
             timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
         };
         let command = stage_sdio_descriptor_service_command(0x8000_5354, descriptor);
+        assert!(
+            sdio_external_dma_pre_admit(command),
+            "sequence-last intake seals the first owner descriptor"
+        );
         assert_eq!(
             sdio_external_dma_command_candidate(command),
             Some(descriptor),
@@ -64334,6 +64776,284 @@ mod tests {
         SDIO_RUNTIME_STATE.with_ref(|state| {
             assert_eq!(state.external_dma_request.identity.descriptor, descriptor);
             assert!(!state.dpc_poisoned);
+        });
+    }
+
+    #[test]
+    fn sdio_dpc_child_is_sealed_before_first_owner_turn() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_5355;
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.dpc_link_ready = true;
+            state.shared_epoch = generation;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = true;
+            state.dpc_activation_allowed = false;
+            state.dpc_poisoned = false;
+        });
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: generation,
+            data_offset: 0,
+            len: 0,
+            block_size: 0,
+            block_count: 0,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE,
+            reserved: 0,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+        };
+        let command = stage_sdio_descriptor_service_command(0x8000_5355, descriptor);
+        assert!(sdio_external_dma_pre_admit(command));
+
+        // Reproduce the physical Gate-8 interval: the SDIO runtime has
+        // accepted the sequence-last child, CARD_INT arbitration runs before
+        // its first foreground owner turn, and CYW43 reuses reciprocal
+        // descriptor scratch while restoring another retained child.
+        let scratch_reuse = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: 0,
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 64,
+            block_size: 64,
+            block_count: 1,
+            flags: 0,
+            reserved: 0,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+        };
+        let _ = stage_sdio_descriptor_service_command(command.sequence, scratch_reuse);
+        assert_eq!(
+            sdio_external_dma_command_candidate(command),
+            Some(descriptor),
+            "mutable scratch cannot replace the intake-sealed DPC child"
+        );
+
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        assert_eq!(
+            service_sdio_external_dma_admitted_turn_with_io(command, &mut io),
+            Some(RuntimeCommandTurn::Pending),
+            "the production dispatcher executes only the intake-sealed child",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.external_dma_input.valid);
+            assert!(state.external_dma_request.active());
+            assert_eq!(state.external_dma_request.identity.descriptor, descriptor);
+            assert!(!state.dpc_poisoned);
+        });
+    }
+
+    #[test]
+    fn sdio_seal_mismatch_cannot_fall_through_to_live_scratch() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_5356;
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.dpc_link_ready = true;
+            state.shared_epoch = generation;
+        });
+        let retained = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: generation,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let retained_command = stage_sdio_descriptor_service_command(0x8000_5356, retained);
+        assert!(sdio_external_dma_pre_admit(retained_command));
+
+        let replacement = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 64,
+            block_size: 64,
+            block_count: 1,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let replacement_command = stage_sdio_descriptor_service_command(0x8000_5357, replacement);
+        assert!(
+            !sdio_external_dma_pre_admit(replacement_command),
+            "a second sequence cannot replace the sealed intake owner",
+        );
+
+        let mut io = TestSdioHostIo::new();
+        assert_eq!(
+            service_sdio_external_dma_admitted_turn_with_io(replacement_command, &mut io,),
+            Some(RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::fault(
+                    replacement_command.sequence,
+                    FAULT_REJECTED_COMMAND,
+                ),
+            )),
+            "mismatched intake is terminal rather than a synchronous fallback",
+        );
+        assert_eq!(io.write_count, 0);
+        assert_eq!(io.polls, 0);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.external_dma_input.command, retained_command);
+            assert_eq!(state.external_dma_input.descriptor, retained);
+            assert!(!state.external_dma_request.active());
+        });
+    }
+
+    #[test]
+    fn sdio_outer_rejection_clears_only_its_exact_intake_seal() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_535a;
+        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = generation);
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: generation,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut rejected = stage_sdio_descriptor_service_command(0x8000_535a, descriptor);
+        rejected.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        rejected.aux1 = dpc_generation_next(generation);
+        assert!(sdio_external_dma_pre_admit(rejected));
+        assert_eq!(
+            runtime_delegated_generation_admission(rejected, Some(generation)),
+            RuntimeDelegatedGenerationAdmission::Rejected,
+        );
+
+        // Model the central outer-terminal hook used when generation
+        // admission rejects before SDIO dispatch.
+        sdio_external_dma_clear_intake_on_terminal(rejected);
+        assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_input.valid));
+
+        let mut admitted = stage_sdio_descriptor_service_command(0x8000_535b, descriptor);
+        admitted.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        admitted.aux1 = generation;
+        assert!(sdio_external_dma_pre_admit(admitted));
+        assert_eq!(
+            sdio_external_dma_command_candidate(admitted),
+            Some(descriptor),
+            "a pre-dispatch terminal cannot strand a seal that rejects every later generation",
+        );
+    }
+
+    #[test]
+    fn sdio_fresh_preissue_ticket_compares_its_own_sealed_descriptor() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_535c;
+        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = generation);
+        let original = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: generation,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut first = stage_sdio_descriptor_service_command(0x8000_535c, original);
+        first.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        first.aux1 = generation;
+        let mut io = TestSdioHostIo::new();
+        let identity = sdio_external_dma_request_identity_with(first, original, &mut io)
+            .expect("original ticket identity must be valid");
+        let mut terminal = SdioExternalDmaRequestCursor::idle();
+        terminal.phase = SdioExternalDmaRequestPhase::Failed;
+        terminal.identity = identity;
+        terminal.issued = false;
+        terminal.failure_result =
+            sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_INHIBIT, SDHCI_CMD_INHIBIT);
+        terminal.failure_frame = DriverFrameDescriptor {
+            offset: SDIO_FAULT_TELEMETRY_FRAME_OFFSET as u32,
+            len: SDIO_FAULT_TELEMETRY_BYTES,
+            flags: DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED,
+        };
+        SDIO_RUNTIME_STATE.with_mut(|state| state.external_dma_request = terminal);
+
+        let changed = DriverRuntimeSdioCommandDescriptor {
+            flags: 0,
+            ..original
+        };
+        let mut retry = stage_sdio_descriptor_service_command(0x8000_535d, changed);
+        retry.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        retry.aux1 = generation;
+        assert!(sdio_external_dma_pre_admit(retry));
+        assert_eq!(
+            runtime_continuation_action_fingerprint(retry),
+            identity.action_fingerprint,
+            "the fresh sequence retains the same command-record action",
+        );
+        assert_eq!(
+            sdio_external_dma_command_candidate(retry),
+            Some(changed),
+            "new sequence selection must use its own intake seal, not the old cursor descriptor",
+        );
+        assert_eq!(
+            service_sdio_external_dma_admitted_turn_with_io(retry, &mut io),
+            Some(RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::fault(retry.sequence, FAULT_REJECTED_COMMAND),
+            )),
+            "a changed physical descriptor cannot authenticate as the contained retry",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.external_dma_request, terminal);
+            assert!(!state.external_dma_input.valid);
+        });
+    }
+
+    #[test]
+    fn sdio_generation_reset_uses_intake_seal_before_power_cursor() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let current = 0x4359_5358;
+        let requested = dpc_generation_next(current);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.dpc_link_ready = true;
+            state.shared_epoch = current;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+        });
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET,
+            addr: requested,
+            timeout_us: PI4_WIFI_PWRSEQ_OWNER_WORST_CASE_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let command = stage_sdio_descriptor_service_command(0x8000_5358, descriptor);
+        assert!(sdio_external_dma_pre_admit(command));
+
+        let replacement = DriverRuntimeSdioCommandDescriptor {
+            addr: dpc_generation_next(requested),
+            ..descriptor
+        };
+        let _ = stage_sdio_descriptor_service_command(command.sequence, replacement);
+        assert_eq!(
+            sdio_generation_reset_command_candidate(command),
+            Some(descriptor),
+            "generation reset must never reread the reciprocal descriptor",
+        );
+        assert_eq!(
+            service_sdio_pwrseq_command_turn(command),
+            Some(RuntimeCommandTurn::Pending),
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(
+                state.pwrseq.purpose,
+                SdioPwrseqPurpose::GenerationReset {
+                    requested_epoch: requested,
+                },
+            );
+            assert!(
+                state.external_dma_input.matches(command),
+                "the reset seal remains until this exact cursor terminates",
+            );
         });
     }
 
@@ -68476,6 +69196,44 @@ mod tests {
         cyw43_descriptor_command(parent_sequence)
     }
 
+    fn stage_production_generation_commit_parent(
+        current: u32,
+        requested: u32,
+        parent_sequence: u32,
+    ) -> DriverTaskCommandRecord {
+        initialize_production_foreground_pair(current);
+        assert!(dpc_generation_reset_request_valid(current, requested));
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.transport_ready = false;
+            state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BACKPLANE_READY;
+            state.sdio_transport_enumerated = true;
+            state.recovery_required = true;
+            state.bus_link_ready = true;
+            state.dpc_link_ready = true;
+            state.dpc_shared_epoch = current;
+            state.dpc_pending_epoch = requested;
+            state.backplane_attach.parent_sequence = parent_sequence;
+            state.backplane_attach.generation = current;
+            state.backplane_attach.phase = Cyw43BackplaneAttachPhase::Complete;
+            state.backplane_attach.poisoned = false;
+        });
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.pending_epoch = requested;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = true;
+            state.dpc_activation_allowed = false;
+            state.irq_ack_pending = false;
+            state.dpc_poisoned = true;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+        cyw43_descriptor_command(parent_sequence)
+    }
+
     fn stage_production_post_f2_release_parent(
         generation: u32,
         parent_sequence: u32,
@@ -68687,6 +69445,213 @@ mod tests {
         panic!(
             "retained owner exceeded its explicit turn bound: cursor={cursor:?} grant={grant:?}"
         );
+    }
+
+    #[test]
+    fn production_generation_commit_survives_epoch_publish_before_child_completion() {
+        let _guard = test_guard();
+        let current = 0x4359_c101;
+        let requested = dpc_generation_next(current);
+        let parent = stage_production_generation_commit_parent(current, requested, 0x4359_c110);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let child = drive_production_parent_until_first_child(parent);
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        let descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+            .expect("generation-commit descriptor is sequence-last visible");
+        assert_eq!(child.aux1, current);
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT);
+        assert_eq!(descriptor.addr, requested);
+        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert_eq!(
+            CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire),
+            child.sequence,
+        );
+
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        let mut io = production_owner_io();
+        configure_production_owner_child(&mut io, descriptor);
+        let mut last_grant_id = 0u32;
+        let mut owner_completion = None;
+        for _ in 0..32 {
+            if SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active()) {
+                let mut exact_grant = None;
+                for _ in 0..8 {
+                    exact_grant = read_runtime_continuation_grant_at(
+                        DRIVER_TASK_SDIO_BUS_RING_VADDR,
+                    )
+                    .filter(|grant| {
+                        grant.grant_id != 0
+                            && grant.grant_id != last_grant_id
+                            && grant.consumed_grant_id != grant.grant_id
+                            && grant.request_sequence == child.sequence
+                            && grant.action_fingerprint
+                                == runtime_continuation_action_fingerprint(child)
+                            && grant.generation == current
+                    });
+                    if exact_grant.is_some() {
+                        break;
+                    }
+                    assert_eq!(
+                        service_command_turn(0, parent),
+                        RuntimeCommandTurn::Pending,
+                        "the retained parent may only grant or poll this exact child",
+                    );
+                }
+                let grant = exact_grant.expect("generation commit receives an exact fresh grant");
+                assert!(acknowledge_runtime_continuation_grant_at(
+                    DRIVER_TASK_SDIO_BUS_RING_VADDR,
+                    grant.grant_id,
+                ));
+                last_grant_id = grant.grant_id;
+            }
+
+            match service_sdio_external_dma_command_turn_with_io(child, descriptor, &mut io) {
+                RuntimeCommandTurn::Pending => {
+                    assert_eq!(
+                        dpc_event_ring_read_at(dpc_base).epoch,
+                        current,
+                        "the producer-visible epoch remains old before the terminal owner turn",
+                    );
+                    SDIO_RUNTIME_STATE.with_ref(|state| {
+                        assert_eq!(state.shared_epoch, current);
+                        assert_eq!(state.pending_epoch, requested);
+                        assert!(state.dpc_poisoned);
+                    });
+                    CYW43_RUNTIME_STATE.with_ref(|state| {
+                        assert_eq!(state.dpc_shared_epoch, current);
+                        assert_eq!(state.dpc_pending_epoch, requested);
+                    });
+                }
+                RuntimeCommandTurn::Complete(completion) => {
+                    owner_completion = Some(completion);
+                    break;
+                }
+            }
+        }
+        let owner_completion =
+            owner_completion.expect("generation commit reaches its bounded terminal owner turn");
+        assert_eq!(
+            owner_completion,
+            DriverTaskCompletionRecord::progress(child.sequence, requested),
+        );
+        assert_ne!(
+            runtime_ring_read_completion_stable(&owner_ring),
+            Some((owner_completion, owner_completion)),
+            "the owner completion remains deliberately unpublished at the SMP cut",
+        );
+
+        let committed_ring = dpc_event_ring_read_at(dpc_base);
+        assert!(committed_ring.valid());
+        assert_eq!(committed_ring.epoch, requested);
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.dpc_shared_epoch, current);
+            assert_eq!(state.dpc_pending_epoch, requested);
+        });
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.shared_epoch, requested);
+            assert_eq!(state.pending_epoch, 0);
+            assert!(state.card_irq_masked);
+            assert!(!state.dpc_poisoned);
+        });
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(transaction.active);
+            assert!(transaction.frontier_valid);
+            assert!(transaction.frontier_submitted);
+            assert!(!transaction.poisoned);
+            assert!(!transaction.issued_unknown);
+            assert!(cyw43_foreground_generation_commit_transition_valid(
+                transaction,
+                current,
+                &committed_ring,
+            ));
+        });
+
+        assert_eq!(
+            service_command_turn(0, parent),
+            RuntimeCommandTurn::Pending,
+            "the real parent must retain its exact child while completion is unpublished",
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(transaction.active);
+            assert!(transaction.frontier_valid);
+            assert!(transaction.frontier_submitted);
+            assert!(!transaction.poisoned);
+            assert!(!transaction.issued_unknown);
+            assert!(cyw43_foreground_generation_commit_transition_valid(
+                transaction,
+                current,
+                &committed_ring,
+            ));
+        });
+        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(owner_completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            owner_completion.sequence,
+        ));
+
+        let mut saw_cached_completion = false;
+        let mut parent_completion = None;
+        for _ in 0..8 {
+            match service_command_turn(0, parent) {
+                RuntimeCommandTurn::Pending => {
+                    let child_active = CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire);
+                    CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+                        assert!(transaction.active);
+                        assert!(!transaction.poisoned);
+                        assert!(!transaction.issued_unknown);
+                        assert!(cyw43_foreground_generation_commit_transition_valid(
+                            transaction,
+                            current,
+                            &committed_ring,
+                        ));
+                        if child_active {
+                            assert!(transaction.frontier_valid);
+                            assert!(transaction.frontier_submitted);
+                        } else {
+                            assert!(!transaction.frontier_valid);
+                            assert_eq!(transaction.turn.completed_count, 1);
+                            saw_cached_completion = true;
+                        }
+                    });
+                }
+                RuntimeCommandTurn::Complete(completion) => {
+                    parent_completion = Some(completion);
+                    break;
+                }
+            }
+        }
+        assert!(saw_cached_completion);
+        assert_eq!(
+            parent_completion,
+            Some(DriverTaskCompletionRecord::progress_with_detail(
+                parent.sequence,
+                DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
+                1,
+            )),
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.dpc_shared_epoch, requested);
+            assert_eq!(state.dpc_pending_epoch, 0);
+            assert!(state.transport_ready);
+            assert!(!state.recovery_required);
+        });
+        assert_eq!(
+            SDIO_RUNTIME_STATE.with_ref(|state| state.shared_epoch),
+            requested,
+        );
+        assert!(!cyw43_foreground_transaction_active());
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -69443,6 +70408,156 @@ mod tests {
             completion,
             issued_unknown,
         }
+    }
+
+    #[test]
+    fn generation_commit_terminal_epoch_cut_reaches_exact_parent_completion() {
+        let _guard = test_guard();
+        let current = 0x4359_f071;
+        let requested = dpc_generation_next(current);
+        let parent_sequence = 0x4359_f079;
+        let parent = stage_production_generation_commit_parent(current, requested, parent_sequence);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let child = drive_production_parent_until_first_child(parent);
+        let descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+            .expect("generation commit descriptor is sequence-last visible");
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT);
+        assert_eq!(descriptor.addr, requested);
+        assert_eq!(child.aux1, current);
+
+        let mut io = production_owner_io();
+        let mut last_grant_id = 0u32;
+        let owner_completion = {
+            let mut completion = None;
+            for _ in 0..32 {
+                if SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active()) {
+                    let mut exact_grant = None;
+                    for _ in 0..8 {
+                        if let Some(grant) =
+                            read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
+                                .filter(|grant| {
+                                    grant.grant_id != 0
+                                        && grant.grant_id != last_grant_id
+                                        && grant.consumed_grant_id != grant.grant_id
+                                        && grant.request_sequence == child.sequence
+                                        && grant.action_fingerprint
+                                            == runtime_continuation_action_fingerprint(child)
+                                        && grant.generation == current
+                                })
+                        {
+                            exact_grant = Some(grant);
+                            break;
+                        }
+                        assert_eq!(
+                            service_command_turn(0, parent),
+                            RuntimeCommandTurn::Pending,
+                            "the retained parent may only grant or poll its commit child",
+                        );
+                    }
+                    let grant = exact_grant.expect("generation commit receives an exact grant");
+                    assert!(acknowledge_runtime_continuation_grant_at(
+                        DRIVER_TASK_SDIO_BUS_RING_VADDR,
+                        grant.grant_id,
+                    ));
+                    last_grant_id = grant.grant_id;
+                }
+
+                match service_sdio_external_dma_command_turn_with_io(child, descriptor, &mut io) {
+                    RuntimeCommandTurn::Pending => {}
+                    RuntimeCommandTurn::Complete(done) => {
+                        completion = Some(done);
+                        break;
+                    }
+                }
+            }
+            completion.expect("generation commit owner reaches its terminal turn")
+        };
+        assert_eq!(
+            owner_completion,
+            DriverTaskCompletionRecord::progress(child.sequence, requested),
+        );
+
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        let terminal_ring = dpc_event_ring_read_at(dpc_base);
+        assert_eq!(terminal_ring.epoch, requested);
+        assert_eq!(
+            CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_shared_epoch),
+            current,
+            "the CYW43 producer cannot advance before replaying the exact child completion",
+        );
+        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(cyw43_foreground_generation_commit_transition_valid(
+                transaction,
+                current,
+                &terminal_ring,
+            ));
+        });
+
+        // Strongest SMP cut: the SDIO owner has mutated the shared ring and
+        // returned its exact completion, but the sequence-last completion has
+        // not yet been published. The retained CYW43 parent must neither
+        // abandon nor poison the admitted generation-commit frontier.
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending,);
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(transaction.active);
+            assert!(!transaction.poisoned);
+            assert!(!transaction.issued_unknown);
+            assert!(transaction.frontier_valid);
+            assert!(cyw43_foreground_generation_commit_transition_valid(
+                transaction,
+                current,
+                &terminal_ring,
+            ));
+        });
+
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(owner_completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            owner_completion.sequence,
+        ));
+
+        let mut saw_exact_child_release = false;
+        let mut parent_completion = None;
+        for _ in 0..8 {
+            let turn = service_command_turn(0, parent);
+            if !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire) {
+                saw_exact_child_release = true;
+            }
+            if let RuntimeCommandTurn::Complete(done) = turn {
+                parent_completion = Some(done);
+                break;
+            }
+        }
+
+        assert!(
+            saw_exact_child_release,
+            "the production chain must release the exact child before parent completion",
+        );
+        assert_eq!(
+            parent_completion,
+            Some(DriverTaskCompletionRecord::progress_with_detail(
+                parent_sequence,
+                DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
+                1,
+            )),
+            "the exact cached terminal is the sole authority that lets finish_turn accept the new CYW epoch",
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.dpc_shared_epoch, requested);
+            assert_eq!(state.dpc_pending_epoch, 0);
+            assert!(!state.recovery_required);
+            assert!(state.transport_ready);
+        });
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
     }
 
     #[test]
@@ -74969,11 +76084,12 @@ mod tests {
     }
 
     #[test]
-    fn sdio_retained_generation_commit_resets_ring_before_state_and_policy_publication() {
+    fn sdio_retained_generation_commit_publishes_epoch_only_after_policy_at_terminal() {
         let _guard = test_guard();
-        reset_sdio_descriptor_seam_for_test();
         let current = 0x4359_c001;
         let requested = dpc_generation_next(current);
+        initialize_production_foreground_pair(current);
+        let _production_mode = ProductionForegroundModeGuard::enter();
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.initialized = true;
             state.dpc_link_ready = true;
@@ -74985,13 +76101,21 @@ mod tests {
             state.dpc_activation_allowed = false;
             state.dpc_poisoned = true;
         });
+        let dpc_base = sdio_generation_commit_ring_base();
+        dpc_event_ring_initialize_at(dpc_base, current);
         let descriptor = DriverRuntimeSdioCommandDescriptor {
             op: DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT,
             addr: requested,
             timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
             ..DriverRuntimeSdioCommandDescriptor::empty()
         };
-        let command = stage_sdio_descriptor_service_command(0x5306_c001, descriptor);
+        let mut command = stage_sdio_descriptor_service_command(0x8000_c001, descriptor);
+        command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        command.aux1 = current;
+        assert_eq!(
+            runtime_delegated_generation_admission(command, Some(current)),
+            RuntimeDelegatedGenerationAdmission::Admitted(current),
+        );
         let mut io = TestSdioHostIo::new();
         io.use_runtime_payload = true;
         let mut phases = Vec::new();
@@ -75002,6 +76126,21 @@ mod tests {
                     let phase =
                         SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase);
                     phases.push(phase);
+                    assert_eq!(
+                        runtime_delegated_generation_admission(command, Some(current)),
+                        RuntimeDelegatedGenerationAdmission::Admitted(current),
+                        "every pending owner phase retains the old grant generation",
+                    );
+                    SDIO_RUNTIME_STATE.with_ref(|state| {
+                        assert_eq!(state.shared_epoch, current);
+                        assert_eq!(state.pending_epoch, requested);
+                        assert!(state.dpc_poisoned);
+                    });
+                    assert_eq!(
+                        dpc_event_ring_read_at(dpc_base).epoch,
+                        current,
+                        "the shared ring cannot advance before terminal completion",
+                    );
                     assert!(io.write_count <= writes_before + 1);
                     assert!(phases.len() < 32, "retained generation-commit bound");
                 }
@@ -75027,6 +76166,16 @@ mod tests {
         assert!(ring_reset < state_publish && state_publish < policy_enable);
         assert_eq!(io.command_issue_count(), 0);
         assert_eq!(io.polls, 0);
+        let final_ring = dpc_event_ring_read_at(dpc_base);
+        assert_eq!(final_ring.epoch, requested);
+        assert_ne!(
+            final_ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+            0,
+        );
+        assert_eq!(
+            final_ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED,
+            0,
+        );
         SDIO_RUNTIME_STATE.with_ref(|state| {
             assert_eq!(state.shared_epoch, requested);
             assert_eq!(state.pending_epoch, 0);

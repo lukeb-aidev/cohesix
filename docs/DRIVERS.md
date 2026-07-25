@@ -721,6 +721,34 @@ This as-built closure is authorized by Milestone 26d task
   SDIO request or manufacturing a rejected-command terminal. This is the
   linked-runtime equivalent of Linux retaining request-private `mmc_request`
   state until its single host-thread completion.
+  That private authority now starts at the SDIO endpoint intake. The owner
+  copies the sequence-last descriptor before CARD_INT arbitration, then
+  transfers it into the retained request cursor on the first service turn.
+  A descriptor-shaped command with a missing or mismatched intake seal fails
+  closed; it cannot fall through to the synchronous descriptor parser.
+  Every outer terminal, including a pre-dispatch generation rejection, clears
+  only its exact seal. A fresh contained-preissue retry selects its own sealed
+  descriptor and must compare equal to the fenced terminal request; it cannot
+  borrow the old cursor descriptor to make a changed retry self-authenticate.
+  Generation reset uses the same sealed descriptor until its private power
+  cursor terminates. Generation commit keeps both owner state and the shared
+  event ring on the old epoch throughout its bounded health and
+  interrupt-policy turns, then publishes the new epoch only in its terminal
+  owner turn. Because the separate CYW43 runtime may observe that terminal
+  ring mutation before the sequence-last child completion is visible, only
+  the exact retained parent with either its immutable generation-commit
+  frontier or its cached exact terminal may cross the epoch edge; no other
+  ticket may use that transition. Grant and completion-poll turns validate
+  only this owner-ring authority while the CYW43 runtime-state lock is already
+  held; outer begin/finish turns add the live CYW43 epoch check. This preserves
+  the same exact transition contract without recursively acquiring the
+  runtime-state lock.
+  On the producer side, both foreground and DPC children acquire the one
+  global CYW43-to-SDIO claim before publishing descriptor or payload bytes. A
+  DPC cursor blocked by a foreground child remains deferred and cannot touch
+  the reciprocal aperture. Together these rules provide the seL4
+  linked-runtime equivalent of Linux constructing an immutable `mmc_request`
+  before either host-thread or IRQ work can observe it.
   The same rule begins at the CYW43 endpoint intake, not at the first physical
   child. The runtime seals a root CYW43 descriptor and its payload immediately
   after the sequence-last command record and endpoint rendezvous agree, before

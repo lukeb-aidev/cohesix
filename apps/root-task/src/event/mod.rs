@@ -11120,6 +11120,17 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_terminal_drain_is_gate8_fault(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> bool {
+        terminal.logical_terminal
+            && terminal.completion_code == 5
+            && (terminal.stage.starts_with("cyw43-association-")
+                || terminal.stage.starts_with("cyw43-host-eapol-")
+                || terminal.stage.starts_with("cyw43-control-"))
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_terminal_drain_physical_line(
         terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
@@ -11168,6 +11179,20 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_first_causal_terminal_line(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence first_causal_terminal authority=retained-first gate=8 stage={} request={} carrier_op=0x{:04x} detail=0x{:04x} result=0x{:08x} current_state=secondary",
+            terminal.stage,
+            terminal.request,
+            terminal.descriptor_op,
+            terminal.completion_detail,
+            terminal.completion_result,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_logical_control_diagnostics(&mut self) {
         let owner = crate::drivers::driver_task_net::cyw43_logical_control_owner_diagnostic();
         let owner_line = Self::wifi_diag_logical_control_owner_line(owner);
@@ -11179,6 +11204,10 @@ where
                 Self::wifi_diag_terminal_drain_logical_line(terminal),
             ] {
                 self.emit_console_line(detail.as_str());
+            }
+            if Self::wifi_terminal_drain_is_gate8_fault(terminal) {
+                let first_cause = Self::wifi_diag_first_causal_terminal_line(terminal);
+                self.emit_console_line(first_cause.as_str());
             }
         }
     }
@@ -11669,8 +11698,15 @@ where
     fn wifi_sdio_dpc_truth_line(
         snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let (sample_reason, authority, action) = if snapshot.ring_poisoned {
+            ("ring-poisoned", "live-ring", "restart-pair")
+        } else if snapshot.client_sample_stale {
+            ("ring-consumer-mismatch", "live-ring", "rerun-proof")
+        } else {
+            ("current", "live-ring", "none")
+        };
         format_message(format_args!(
-            "CYW43_SDIO_DPC_TRUTH generation={} ring_poisoned={} client_sample_stale={} ring_consumer={} sample_consumer={}",
+            "CYW43_SDIO_DPC_TRUTH generation={} ring_poisoned={} client_sample_stale={} ring_consumer={} sample_consumer={} sample_reason={} authority={} action={}",
             snapshot.generation,
             if snapshot.ring_poisoned { "yes" } else { "no" },
             if snapshot.client_sample_stale {
@@ -11680,6 +11716,9 @@ where
             },
             snapshot.consumed,
             snapshot.sample_consumer,
+            sample_reason,
+            authority,
+            action,
         ))
     }
 
@@ -12344,6 +12383,12 @@ where
         let association = crate::drivers::driver_task_net::cyw43_association_diagnostic();
         let association_join_pending =
             !live_net_supersedes_runtime && association.association_join_pending();
+        let retained_gate8_terminal = if live_net_supersedes_runtime {
+            None
+        } else {
+            crate::drivers::driver_task_net::cyw43_terminal_drain_diagnostic()
+                .filter(|terminal| Self::wifi_terminal_drain_is_gate8_fault(*terminal))
+        };
         let root_grant_prepared = crate::hal::driver_task::driver_task_retained_grant_snapshot(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         )
@@ -12381,23 +12426,26 @@ where
             cyw43_runtime_progress.is_some_and(|progress| {
                 Self::wifi_cyw43_runtime_progress_suppresses_sdio_fallback(progress.phase)
             });
-        let driver_task_gate: Option<u8> =
-            if association_join_pending || deferred_gate8.is_some() || root_grant_prepared {
-                Some(8)
-            } else if runtime_bootstrap_failed {
-                Some(1)
-            } else if explicit_join_security {
-                Some(8)
-            } else {
-                cyw43_fault_gate
-                    .or(sdio_replay_gate)
-                    .or(cyw43_progress_gate)
-                    .or(if cyw43_progress_suppresses_sdio_fallback {
-                        None
-                    } else {
-                        sdio_progress_gate
-                    })
-            };
+        let driver_task_gate: Option<u8> = if retained_gate8_terminal.is_some()
+            || association_join_pending
+            || deferred_gate8.is_some()
+            || root_grant_prepared
+        {
+            Some(8)
+        } else if runtime_bootstrap_failed {
+            Some(1)
+        } else if explicit_join_security {
+            Some(8)
+        } else {
+            cyw43_fault_gate
+                .or(sdio_replay_gate)
+                .or(cyw43_progress_gate)
+                .or(if cyw43_progress_suppresses_sdio_fallback {
+                    None
+                } else {
+                    sdio_progress_gate
+                })
+        };
         let live_net_channel_ready = live_net_supersedes_runtime;
         let firmware_ready = fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_ready);
         let firmware_prep_complete =
@@ -12477,7 +12525,9 @@ where
                 snapshot.control_plane_exact_error
             }
         });
-        let gate8_exact_error = if association_join_pending {
+        let gate8_exact_error = if let Some(terminal) = retained_gate8_terminal {
+            terminal.stage
+        } else if association_join_pending {
             "cyw43-association-join-pending"
         } else if let Some(recovery) = deferred_gate8 {
             recovery.subphase
@@ -12485,8 +12535,9 @@ where
             exact_error
         };
         let channel_ready = live_net_channel_ready
-            || exact_error.is_empty()
-            || Self::wifi_exact_error_is_join_security_blocker(exact_error);
+            || (retained_gate8_terminal.is_none()
+                && (exact_error.is_empty()
+                    || Self::wifi_exact_error_is_join_security_blocker(exact_error)));
 
         let dhcp_pass = live_net_frontier.as_ref().map_or_else(
             || self.wifi_diag_dhcp_bound(),
@@ -12518,7 +12569,9 @@ where
         );
         let reported_proof_gate =
             Self::wifi_startup_reported_proof_gate(direct_proof_gate, driver_task_gate);
-        let active_blocker = if association_join_pending {
+        let active_blocker = if let Some(terminal) = retained_gate8_terminal {
+            terminal.stage
+        } else if association_join_pending {
             "cyw43-association-join-pending"
         } else if let Some(recovery) = deferred_gate8 {
             recovery.subphase
@@ -12547,7 +12600,9 @@ where
         } else {
             Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
         };
-        let next_action = if association_join_pending {
+        let next_action = if let Some(terminal) = retained_gate8_terminal {
+            Self::wifi_startup_next_action_for_gate(8, terminal.stage)
+        } else if association_join_pending {
             "resume-exact-association-join-owner"
         } else if let Some(recovery) = deferred_gate8 {
             Self::wifi_deferred_recovery_next_action(recovery)
@@ -12643,7 +12698,8 @@ where
         } else {
             format_message(format_args!("card=unknown rca=0x0000 ocr=0x00000000"))
         };
-        let runtime_progress_superseded = deferred_recovery.is_some()
+        let runtime_progress_superseded = retained_gate8_terminal.is_some()
+            || deferred_recovery.is_some()
             || fault.is_some()
             || sdio_replay_gate.is_some()
             || !explicit_exact_error.is_empty();
@@ -21430,7 +21486,7 @@ mod tests {
             epoch_errors: u32::MAX,
             sequence_errors: u32::MAX,
             ack_failures: u32::MAX,
-            ring_poisoned: true,
+            ring_poisoned: false,
             client_sample_stale: true,
             poisoned: true,
             masked: true,
@@ -21446,8 +21502,47 @@ mod tests {
             assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
         }
         assert!(accounting.ends_with("acceptance_bad=yes masked=yes"));
-        assert!(truth.contains("ring_poisoned=yes client_sample_stale=yes"));
-        assert!(truth.ends_with("ring_consumer=4294967295 sample_consumer=4294967295"));
+        assert!(truth.contains("ring_poisoned=no client_sample_stale=yes"));
+        assert!(truth.contains("ring_consumer=4294967295 sample_consumer=4294967295"));
+        assert!(truth.ends_with(
+            "sample_reason=ring-consumer-mismatch authority=live-ring action=rerun-proof"
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_retained_gate8_terminal_requires_logical_fault_authority() {
+        let mut terminal = crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
+            generation: 2,
+            stage: "cyw43-host-eapol-data-poll",
+            request: 3_780,
+            descriptor_op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            descriptor_arg0: 0,
+            descriptor_arg1: 0,
+            completion_code: 5,
+            completion_detail: 1,
+            completion_result: 0,
+            completion_frame_offset: 0,
+            completion_frame_len: 0,
+            completion_frame_flags: 0,
+            logical_terminal: true,
+            logical_owner_conflict: false,
+            logical_owner_generation: 0,
+            logical_owner_stage: "none",
+            logical_owner_cmd: 0,
+            logical_owner_id: 0,
+            logical_owner_payload_fingerprint: 0,
+        };
+        assert!(KernelConsoleTestPump::wifi_terminal_drain_is_gate8_fault(
+            terminal,
+        ));
+
+        terminal.logical_terminal = false;
+        terminal.logical_owner_conflict = true;
+        assert!(
+            !KernelConsoleTestPump::wifi_terminal_drain_is_gate8_fault(terminal),
+            "a competing physical owner receipt cannot replace the primitive logical cause",
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -26882,6 +26977,29 @@ mod tests {
                 gate: 8,
             },
         );
+        crate::drivers::driver_task_net::test_record_cyw43_terminal_drain_diagnostic(
+            crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
+                generation: 2,
+                stage: "cyw43-host-eapol-data-poll",
+                request: 3_780,
+                descriptor_op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+                descriptor_arg0: 0,
+                descriptor_arg1: 0,
+                completion_code: 5,
+                completion_detail: 1,
+                completion_result: 0,
+                completion_frame_offset: 0,
+                completion_frame_len: 0,
+                completion_frame_flags: 0,
+                logical_terminal: true,
+                logical_owner_conflict: false,
+                logical_owner_generation: 0,
+                logical_owner_stage: "none",
+                logical_owner_cmd: 0,
+                logical_owner_id: 0,
+                logical_owner_payload_fingerprint: 0,
+            },
+        );
 
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -26923,6 +27041,12 @@ mod tests {
         );
         assert!(
             rendered.contains(
+                "wifi: evidence first_causal_terminal authority=retained-first gate=8 stage=cyw43-host-eapol-data-poll request=3780 carrier_op=0x0008 detail=0x0001 result=0x00000000 current_state=secondary"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
                 "wifi: cyw43 last_progress marker_valid=yes sequence=1345 phase=467 phase_name=root-grant-rejected"
             ) && rendered.contains("gate=0 superseded=yes"),
             "{rendered}"
@@ -26933,13 +27057,12 @@ mod tests {
         );
         assert!(
             rendered.contains("wifi: gate 8 name=host-eapol status=fail")
-                && rendered
-                    .contains("exact=cyw43-host-eapol-control-poll control_stage=host-eapol"),
+                && rendered.contains("exact=cyw43-host-eapol-data-poll control_stage=host-eapol"),
             "{rendered}"
         );
         assert!(
             rendered.contains(
-                "wifi: next_action=recover-exact-host-eapol-owner blocker=cyw43-host-eapol-control-poll proof_gate=7 target_gate=10"
+                "wifi: next_action=complete-host-eapol-handshake blocker=cyw43-host-eapol-data-poll proof_gate=7 target_gate=10"
             ),
             "{rendered}"
         );

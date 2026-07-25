@@ -7954,6 +7954,7 @@ pub(crate) fn test_clear_cyw43_runtime_replay_status() {
     finish_cyw43_bootstrap_causal_fault_capture();
     clear_cyw43_runtime_command_fault_status();
     *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
+    *CYW43_FIRST_TERMINAL_DRAIN_DIAGNOSTIC.lock() = None;
     *SDIO_LAST_RUNTIME_REPLAY_STATUS.lock() = None;
 }
 
@@ -7962,6 +7963,13 @@ pub(crate) fn test_record_cyw43_deferred_recovery_diagnostic(
     diagnostic: Cyw43DeferredRecoveryDiagnostic,
 ) {
     *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = Some(diagnostic);
+}
+
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_record_cyw43_terminal_drain_diagnostic(
+    diagnostic: Cyw43TerminalDrainDiagnostic,
+) {
+    *CYW43_FIRST_TERMINAL_DRAIN_DIAGNOSTIC.lock() = Some(diagnostic);
 }
 
 #[cfg(all(test, feature = "kernel"))]
