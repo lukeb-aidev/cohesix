@@ -14467,6 +14467,48 @@ def test_bootstrap_supervisor_accepts_later_independent_recovery_episode() -> No
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
 
 
+def test_bootstrap_supervisor_accepts_same_attempt_ready_recovery_exhaustion() -> None:
+    """Attached generations may fail and recover before retry backoff."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(0, "preflight", 0, 0, 1),
+            bootstrap_supervisor_line(1, "begin", 0, 100, 2),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+            bootstrap_supervisor_line(1, "recovery", 0, 300, 4),
+            bootstrap_supervisor_line(1, "ready", 0, 400, 5),
+            bootstrap_supervisor_line(1, "recovery", 0, 500, 6),
+            bootstrap_supervisor_line(1, "backoff", 1_000, 1_500, 7),
+            bootstrap_supervisor_line(2, "recovery", 0, 1_500, 8),
+            bootstrap_supervisor_line(2, "ready", 0, 1_600, 9),
+            bootstrap_supervisor_line(2, "recovery", 0, 1_700, 10),
+            bootstrap_supervisor_line(2, "backoff", 2_000, 3_700, 11),
+            bootstrap_supervisor_line(3, "recovery", 0, 3_700, 12),
+            bootstrap_supervisor_line(3, "ready", 0, 3_800, 13),
+            bootstrap_supervisor_line(3, "recovery", 0, 3_900, 14),
+            bootstrap_supervisor_line(3, "backoff", 4_000, 7_900, 15),
+            bootstrap_supervisor_line(4, "recovery", 0, 7_900, 16),
+            bootstrap_supervisor_line(4, "ready", 0, 8_000, 17),
+            bootstrap_supervisor_line(4, "recovery", 0, 8_100, 18),
+            bootstrap_supervisor_line(4, "backoff", 8_000, 16_100, 19),
+            bootstrap_supervisor_line(5, "recovery", 0, 16_100, 20),
+            bootstrap_supervisor_line(5, "ready", 0, 16_200, 21),
+            bootstrap_supervisor_line(5, "recovery", 0, 16_300, 22),
+            bootstrap_supervisor_line(
+                5, "exhausted", 0, (1 << 64) - 1, 23
+            ),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 5
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 4
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "exhausted"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "retry-exhausted"
+
+
 def test_bootstrap_supervisor_accepts_bounded_exhaustion_as_terminal_red() -> None:
     """The fifth failure must close with the exact no-attempt sentinel."""
 

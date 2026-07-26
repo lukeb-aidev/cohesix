@@ -10659,8 +10659,10 @@ where
     #[cfg(feature = "kernel")]
     fn wifi_diag_cyw43_runtime_command_fault_status(
     ) -> Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus> {
+        // Only the bootstrap recorder has causal authority. A later runtime
+        // fault after pair recovery is emitted separately as recovery residue
+        // and must not rewrite earlier gate evidence.
         crate::drivers::driver_task_net::bootstrap_causal_cyw43_runtime_command_fault_status()
-            .or_else(crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status)
     }
 
     #[cfg(feature = "kernel")]
@@ -10672,13 +10674,67 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn wifi_diag_cyw43_recovery_command_fault_status(
+    fn wifi_partition_runtime_faults(
         causal: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
-    ) -> Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus> {
-        Self::wifi_recovery_fault_after_causal(
-            causal,
-            crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status(),
-        )
+        latest: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+        retained_cause_present: bool,
+        latest_matches_retained_cause: bool,
+    ) -> (
+        Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+        Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+    ) {
+        if causal.is_some() {
+            return (
+                causal,
+                Self::wifi_recovery_fault_after_causal(causal, latest),
+            );
+        }
+        if retained_cause_present {
+            if latest_matches_retained_cause {
+                // The retained record already emits this completion with
+                // stronger owner identity. Do not relabel the same field-
+                // matched terminal as a later recovery fault.
+                (None, None)
+            } else {
+                (None, latest)
+            }
+        } else {
+            (latest, None)
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_runtime_fault_matches_terminal_drain(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> bool {
+        fault.stage == terminal.stage
+            && fault.op == terminal.descriptor_op
+            && fault.detail == terminal.completion_detail
+            && fault.result == terminal.completion_result
+            && (fault.op != pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+                || (fault.control_cmd == terminal.descriptor_arg0
+                    && fault.control_id == terminal.descriptor_arg1 as u16))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_runtime_fault_matches_deferred_recovery(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> bool {
+        recovery.terminal_observed
+            && fault.stage == recovery.subphase
+            && fault.op == recovery.descriptor_op
+            && fault.flags == recovery.descriptor_flags
+            && fault.target_addr == recovery.descriptor_target_addr
+            && fault.payload_offset == recovery.descriptor_payload_offset
+            && fault.payload_len == recovery.descriptor_payload_len
+            && fault.total_len == recovery.descriptor_total_len
+            && fault.detail == recovery.completion_detail
+            && fault.result == recovery.completion_result
+            && (fault.op != pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+                || (fault.control_cmd == recovery.descriptor_arg0
+                    && fault.control_id == recovery.descriptor_arg1 as u16))
     }
 
     #[cfg(feature = "kernel")]
@@ -11002,7 +11058,50 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn wifi_linked_runtime_rejection_reason(result: u32) -> Option<&'static str> {
+        match result {
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_BUSY => {
+                Some("sdio-intake-seal-busy")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_MISSING => {
+                Some("sdio-intake-seal-missing")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_OUTER_GENERATION => {
+                Some("linked-runtime-generation-rejected")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH => {
+                Some("cyw43-control-owner-mismatch")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_GENERATION_RESET_ROUTE_MISSING => {
+                Some("sdio-generation-reset-route-missing")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_RETAINED_OWNER_IDENTITY_MISMATCH => {
+                Some("sdio-retained-owner-identity-mismatch")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_REQUEST_IDENTITY_INVALID => {
+                Some("sdio-request-identity-invalid")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_PULLUP_ADMISSION => {
+                Some("sdio-pullup-admission-rejected")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE => {
+                Some("sdio-invalid-retained-phase")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_DPC_ACTIVATION_ADMISSION => {
+                Some("sdio-dpc-activation-admission")
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_GENERATION_COMMIT_ADMISSION => {
+                Some("sdio-generation-commit-admission")
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_deferred_recovery_completion_cause(result: u32) -> &'static str {
+        if let Some(reason) = Self::wifi_linked_runtime_rejection_reason(result) {
+            return reason;
+        }
         match result {
             0x4450_0001 => "dpc-frame-prefix",
             0x4450_0002 => "dpc-nested-control",
@@ -11044,10 +11143,18 @@ where
     fn wifi_diag_deferred_recovery_completion_line(
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let cause = if !recovery.terminal_observed {
+            "none-unobserved"
+        } else {
+            Self::wifi_deferred_recovery_completion_cause(recovery.completion_result)
+        };
         format_message(format_args!(
-            "wifi: deferred_recovery completion result=0x{:08x} cause={}",
+            "wifi: deferred_recovery completion observed={} sequence={} detail=0x{:04x} result=0x{:08x} cause={}",
+            Self::yes_no(recovery.terminal_observed),
+            recovery.completion_sequence,
+            recovery.completion_detail,
             recovery.completion_result,
-            Self::wifi_deferred_recovery_completion_cause(recovery.completion_result),
+            cause,
         ))
     }
 
@@ -11109,16 +11216,10 @@ where
             return "none";
         }
         if terminal.completion_code == 5 {
-            if terminal.completion_detail == 1 {
-                return match terminal.completion_result {
-                    0x5344_0001 => "sdio-intake-seal-busy",
-                    0x5344_0002 => "sdio-intake-seal-missing",
-                    0x5344_0003 => "linked-runtime-generation-rejected",
-                    0x5344_0004 => "cyw43-control-owner-mismatch",
-                    _ => crate::drivers::driver_task_net::cyw43_runtime_fault_reason(
-                        terminal.completion_detail,
-                    ),
-                };
+            if let Some(reason) =
+                Self::wifi_linked_runtime_rejection_reason(terminal.completion_result)
+            {
+                return reason;
             }
             return crate::drivers::driver_task_net::cyw43_runtime_fault_reason(
                 terminal.completion_detail,
@@ -11142,14 +11243,49 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_terminal_drain_is_gate8_physical_carrier(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> bool {
+        terminal.completion_code == 5
+            && terminal.request != 0
+            && (terminal.stage.starts_with("cyw43-association-")
+                || terminal.stage.starts_with("cyw43-host-eapol-")
+                || terminal.stage.starts_with("cyw43-control-"))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_gate8_physical_carrier_reason(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> &'static str {
+        if terminal.completion_code == 5
+            && terminal.completion_detail == 1
+            && terminal.completion_result == 0
+        {
+            "linked-runtime-terminal-untyped"
+        } else {
+            Self::wifi_terminal_drain_detail_name(terminal)
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_terminal_drain_physical_line(
         terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: evidence terminal_drain physical generation={} stage={} request={} op=0x{:04x} cmd=0x{:08x} id={} code={} code_name={} detail=0x{:04x} detail_name={} result=0x{:08x}",
+            "wifi: evidence terminal_drain physical generation={} stage={} request={} completion_sequence={} exact_request_match=yes",
             terminal.generation,
             terminal.stage,
             terminal.request,
+            terminal.request,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_terminal_drain_completion_line(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence terminal_drain completion op=0x{:04x} cmd=0x{:08x} id={} code={} code_name={} detail=0x{:04x} detail_name={} result=0x{:08x}",
             terminal.descriptor_op,
             terminal.descriptor_arg0,
             terminal.descriptor_arg1 as u16,
@@ -11178,7 +11314,7 @@ where
         terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: evidence terminal_drain logical terminal={} owner_conflict={} owner_generation={} owner_stage={} owner_cmd=0x{:08x} owner_id={} owner_payload_fingerprint=0x{:016x}",
+            "wifi: evidence terminal_drain logical terminal={} owner_conflict={} owner_scope=root-logical-capture owner_generation={} owner_stage={} owner_cmd=0x{:08x} owner_id={} owner_payload_fingerprint=0x{:016x}",
             Self::yes_no(terminal.logical_terminal),
             Self::yes_no(terminal.logical_owner_conflict),
             terminal.logical_owner_generation,
@@ -11204,6 +11340,19 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_first_causal_physical_completion_line(
+        terminal: crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: evidence first_causal_physical_completion authority=retained-first gate=8 role=carrier logical_terminal_proven={} stage={} request={} completion_sequence={} exact_request_match=yes current_state=secondary",
+            Self::yes_no(terminal.logical_terminal),
+            terminal.stage,
+            terminal.request,
+            terminal.request,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_logical_control_diagnostics(&mut self) {
         let owner = crate::drivers::driver_task_net::cyw43_logical_control_owner_diagnostic();
         let owner_line = Self::wifi_diag_logical_control_owner_line(owner);
@@ -11211,10 +11360,16 @@ where
         if let Some(terminal) = crate::drivers::driver_task_net::cyw43_terminal_drain_diagnostic() {
             for detail in [
                 Self::wifi_diag_terminal_drain_physical_line(terminal),
+                Self::wifi_diag_terminal_drain_completion_line(terminal),
                 Self::wifi_diag_terminal_drain_frame_line(terminal),
                 Self::wifi_diag_terminal_drain_logical_line(terminal),
             ] {
                 self.emit_console_line(detail.as_str());
+            }
+            if Self::wifi_terminal_drain_is_gate8_physical_carrier(terminal) {
+                let first_physical =
+                    Self::wifi_diag_first_causal_physical_completion_line(terminal);
+                self.emit_console_line(first_physical.as_str());
             }
             if Self::wifi_terminal_drain_is_gate8_fault(terminal) {
                 let first_cause = Self::wifi_diag_first_causal_terminal_line(terminal);
@@ -11311,25 +11466,33 @@ where
             crate::hal::driver_task::wifi_driver_task_bootstrap_failure()
         };
         let bootstrap_exact = bootstrap_failure.map(|failure| failure.reason.as_str());
-        let fault = if live_net_supersedes_runtime
-            || host_eapol_exact.is_some()
-            || bootstrap_failure.is_some()
-        {
-            None
-        } else {
-            Self::wifi_diag_cyw43_runtime_command_fault_status()
-        };
-        let recovery_fault = if live_net_supersedes_runtime
-            || host_eapol_exact.is_some()
-            || bootstrap_failure.is_some()
-        {
-            None
-        } else {
-            Self::wifi_diag_cyw43_recovery_command_fault_status(fault)
-        };
-        let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
         let deferred_recovery =
             crate::drivers::driver_task_net::cyw43_deferred_recovery_diagnostic();
+        let terminal_drain = crate::drivers::driver_task_net::cyw43_terminal_drain_diagnostic();
+        let retained_cause_present = deferred_recovery.is_some() || terminal_drain.is_some();
+        let (fault, recovery_fault) = if live_net_supersedes_runtime
+            || host_eapol_exact.is_some()
+            || bootstrap_failure.is_some()
+        {
+            (None, None)
+        } else {
+            let latest =
+                crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status();
+            let latest_matches_retained_cause = latest.is_some_and(|latest| {
+                terminal_drain.is_some_and(|terminal| {
+                    Self::wifi_runtime_fault_matches_terminal_drain(latest, terminal)
+                }) || deferred_recovery.is_some_and(|recovery| {
+                    Self::wifi_runtime_fault_matches_deferred_recovery(latest, recovery)
+                })
+            });
+            Self::wifi_partition_runtime_faults(
+                Self::wifi_diag_cyw43_runtime_command_fault_status(),
+                latest,
+                retained_cause_present,
+                latest_matches_retained_cause,
+            )
+        };
+        let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
         let progress_present = Self::wifi_driver_task_runtime_progress_present();
         let pinctrl = crate::hal::pi4_wifi::wifi_sdio_pinctrl_snapshot();
         if source == "debug-handle-unavailable"
@@ -12400,6 +12563,12 @@ where
             crate::drivers::driver_task_net::cyw43_terminal_drain_diagnostic()
                 .filter(|terminal| Self::wifi_terminal_drain_is_gate8_fault(*terminal))
         };
+        let retained_gate8_carrier = if live_net_supersedes_runtime {
+            None
+        } else {
+            crate::drivers::driver_task_net::cyw43_terminal_drain_diagnostic()
+                .filter(|terminal| Self::wifi_terminal_drain_is_gate8_physical_carrier(*terminal))
+        };
         let root_grant_prepared = crate::hal::driver_task::driver_task_retained_grant_snapshot(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         )
@@ -12536,8 +12705,8 @@ where
                 snapshot.control_plane_exact_error
             }
         });
-        let gate8_exact_error = if let Some(terminal) = retained_gate8_terminal {
-            terminal.stage
+        let gate8_exact_error = if let Some(terminal) = retained_gate8_carrier {
+            Self::wifi_gate8_physical_carrier_reason(terminal)
         } else if association_join_pending {
             "cyw43-association-join-pending"
         } else if let Some(recovery) = deferred_gate8 {
@@ -12580,8 +12749,8 @@ where
         );
         let reported_proof_gate =
             Self::wifi_startup_reported_proof_gate(direct_proof_gate, driver_task_gate);
-        let active_blocker = if let Some(terminal) = retained_gate8_terminal {
-            terminal.stage
+        let active_blocker = if let Some(terminal) = retained_gate8_carrier {
+            Self::wifi_gate8_physical_carrier_reason(terminal)
         } else if association_join_pending {
             "cyw43-association-join-pending"
         } else if let Some(recovery) = deferred_gate8 {
@@ -12611,8 +12780,12 @@ where
         } else {
             Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
         };
-        let next_action = if let Some(terminal) = retained_gate8_terminal {
+        let next_action = if self.network_service_quarantined && driver_task_gate == Some(8) {
+            "repair-causal-linked-runtime-and-reboot"
+        } else if let Some(terminal) = retained_gate8_terminal {
             Self::wifi_startup_next_action_for_gate(8, terminal.stage)
+        } else if retained_gate8_carrier.is_some() {
+            "preserve-logical-owner-and-run-bounded-pair-recovery"
         } else if association_join_pending {
             "resume-exact-association-join-owner"
         } else if let Some(recovery) = deferred_gate8 {
@@ -21360,6 +21533,7 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(Some(owner)),
             KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(terminal),
+            KernelConsoleTestPump::wifi_diag_terminal_drain_completion_line(terminal),
             KernelConsoleTestPump::wifi_diag_terminal_drain_frame_line(terminal),
             KernelConsoleTestPump::wifi_diag_terminal_drain_logical_line(terminal),
         ];
@@ -21382,6 +21556,24 @@ mod tests {
         assert!(lines[4].contains("completion_result=0xffffffff"));
         assert!(lines[4].contains("turn=18446744073709551615"));
         assert!(lines[5].contains("result=0xffffffff cause=runtime-terminal"));
+        let mut unobserved = recovery;
+        unobserved.terminal_observed = false;
+        unobserved.completion_detail = 0;
+        unobserved.completion_result = 0;
+        unobserved.completion_sequence = 0;
+        let unobserved_line =
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(unobserved);
+        assert!(unobserved_line.contains(
+            "observed=no sequence=0 detail=0x0000 result=0x00000000 cause=none-unobserved"
+        ));
+        unobserved.completion_detail = 1;
+        unobserved.completion_result = 0x5344_0007;
+        unobserved.completion_sequence = 3_907;
+        let unobserved_candidate_line =
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(unobserved);
+        assert!(unobserved_candidate_line.contains(
+            "observed=no sequence=3907 detail=0x0001 result=0x53440007 cause=none-unobserved"
+        ));
         assert_eq!(
             KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x4450_0003),
             "dpc-zero-mask-delivery-invariant",
@@ -21390,18 +21582,41 @@ mod tests {
             KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x4450_0004),
             "dpc-recovery-drain-exhausted",
         );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x5344_0006),
+            "sdio-retained-owner-identity-mismatch",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x5344_0007),
+            "sdio-request-identity-invalid",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x5344_000a),
+            "sdio-dpc-activation-admission",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x5344_000b),
+            "sdio-generation-commit-admission",
+        );
         assert!(lines[6].contains("descriptor op=0xffff flags=0xffff"));
         assert!(lines[7].contains("active=yes generation=1"));
         assert!(lines[7].contains("cmd=0x0000001a id=37"));
-        assert!(lines[8].contains("code=5 code_name=fault"));
-        assert!(lines[8].contains("detail=0x0001 detail_name=rejected-command"));
+        assert!(lines[9].contains("code=5 code_name=fault"));
+        assert!(lines[9].contains("detail=0x0001 detail_name=rejected-command"));
         for (result, expected) in [
             (0x5344_0001, "sdio-intake-seal-busy"),
             (0x5344_0002, "sdio-intake-seal-missing"),
             (0x5344_0003, "linked-runtime-generation-rejected"),
             (0x5344_0004, "cyw43-control-owner-mismatch"),
+            (0x5344_0005, "sdio-generation-reset-route-missing"),
+            (0x5344_0006, "sdio-retained-owner-identity-mismatch"),
+            (0x5344_0007, "sdio-request-identity-invalid"),
+            (0x5344_0008, "sdio-pullup-admission-rejected"),
+            (0x5344_0009, "sdio-invalid-retained-phase"),
+            (0x5344_000a, "sdio-dpc-activation-admission"),
+            (0x5344_000b, "sdio-generation-commit-admission"),
         ] {
-            let site_line = KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(
+            let site_line = KernelConsoleTestPump::wifi_diag_terminal_drain_completion_line(
                 crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
                     completion_detail: 1,
                     completion_result: result,
@@ -21409,8 +21624,24 @@ mod tests {
                 },
             );
             assert!(site_line.contains(expected), "{site_line}",);
+            let result_field = format_message(format_args!("result=0x{result:08x}"));
+            assert!(site_line.contains(result_field.as_str()), "{site_line}");
+            assert!(!site_line.contains(DIAGNOSTIC_TRUNCATION_MARKER));
         }
-        let control_fault_line = KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(
+        let nested_site_line = KernelConsoleTestPump::wifi_diag_terminal_drain_completion_line(
+            crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
+                completion_detail: 0x5310,
+                completion_result:
+                    pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_DPC_ACTIVATION_ADMISSION,
+                ..terminal
+            },
+        );
+        assert!(
+            nested_site_line.contains("detail_name=sdio-dpc-activation-admission"),
+            "{nested_site_line}",
+        );
+        assert!(!nested_site_line.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        let control_fault_line = KernelConsoleTestPump::wifi_diag_terminal_drain_completion_line(
             crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
                 completion_detail: 0x530b,
                 ..terminal
@@ -21420,9 +21651,11 @@ mod tests {
             control_fault_line.contains("detail=0x530b detail_name=cyw43-control-exchange"),
             "{control_fault_line}",
         );
-        assert!(lines[9].contains("offset=0 len=0"));
-        assert!(lines[10].contains("terminal=no owner_conflict=yes"));
-        assert!(lines[10].contains("owner_cmd=0x0000001a owner_id=37"));
+        assert!(lines[10].contains("offset=0 len=0"));
+        assert!(lines[11].contains("terminal=no owner_conflict=yes"));
+        assert!(lines[11].contains("owner_scope=root-logical-capture"));
+        assert!(lines[11].contains("owner_cmd=0x0000001a owner_id=37"));
+        assert!(lines[8].contains("completion_sequence=3907 exact_request_match=yes"));
         assert_eq!(
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(None).as_str(),
             "wifi: logical_control_owner active=no",
@@ -21607,6 +21840,63 @@ mod tests {
             !KernelConsoleTestPump::wifi_terminal_drain_is_gate8_fault(terminal),
             "a competing physical owner receipt cannot replace the primitive logical cause",
         );
+        assert!(
+            KernelConsoleTestPump::wifi_terminal_drain_is_gate8_physical_carrier(terminal),
+            "the exact physical completion remains first-cause evidence",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_gate8_physical_carrier_reason(terminal),
+            "linked-runtime-terminal-untyped",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_gate8_physical_carrier_reason(
+                crate::drivers::driver_task_net::Cyw43TerminalDrainDiagnostic {
+                    completion_result:
+                        pi4_driver_abi::DRIVER_RUNTIME_REJECT_SDIO_REQUEST_IDENTITY_INVALID,
+                    ..terminal
+                },
+            ),
+            "sdio-request-identity-invalid",
+        );
+        let matching_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: terminal.stage,
+            op: terminal.descriptor_op,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            control_cmd: terminal.descriptor_arg0,
+            control_id: terminal.descriptor_arg1 as u16,
+            control_header_mode: "plain",
+            control_response_len: 0,
+            detail: terminal.completion_detail,
+            reason: "rejected-command",
+            result: terminal.completion_result,
+        };
+        assert!(
+            KernelConsoleTestPump::wifi_runtime_fault_matches_terminal_drain(
+                matching_fault,
+                terminal,
+            ),
+            "the retained terminal suppresses its duplicate latest status",
+        );
+        assert!(
+            !KernelConsoleTestPump::wifi_runtime_fault_matches_terminal_drain(
+                crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+                    stage: "cyw43-host-eapol-data-poll-recovery",
+                    ..matching_fault
+                },
+                terminal,
+            ),
+            "a distinct terminal stage remains visible as recovery residue",
+        );
+        let carrier =
+            KernelConsoleTestPump::wifi_diag_first_causal_physical_completion_line(terminal);
+        assert!(carrier.contains("role=carrier logical_terminal_proven=no"));
+        assert!(carrier.contains("request=3780 completion_sequence=3780"));
+        assert!(carrier.contains("exact_request_match=yes current_state=secondary"));
+        assert!(!carrier.contains(DIAGNOSTIC_TRUNCATION_MARKER));
     }
 
     #[cfg(feature = "kernel")]
@@ -27465,6 +27755,35 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_recovery_fault_after_causal(Some(causal), Some(causal)),
             None
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_partition_runtime_faults(
+                None,
+                Some(recovery),
+                false,
+                false,
+            ),
+            (Some(recovery), None),
+            "without retained evidence the latest fault is the primary cause",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_partition_runtime_faults(None, Some(recovery), true, false,),
+            (None, Some(recovery)),
+            "retained deferred/terminal evidence keeps the later fault secondary",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_partition_runtime_faults(None, Some(recovery), true, true,),
+            (None, None),
+            "the retained record already owns a field-matched latest terminal",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_partition_runtime_faults(
+                Some(causal),
+                Some(recovery),
+                false,
+                false,
+            ),
+            (Some(causal), Some(recovery)),
         );
     }
 

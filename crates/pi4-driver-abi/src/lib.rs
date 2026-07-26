@@ -189,6 +189,28 @@ pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED: u16 = 0x021a;
 pub const DRIVER_RUNTIME_NET_INIT_AUX: u32 = 0x494e_4954;
 /// CYW43 command descriptor submission marker used in `aux0`.
 pub const DRIVER_RUNTIME_CYW43_COMMAND_AUX: u32 = 0x4359_5734;
+/// An SDIO intake seal already belongs to another command sequence.
+pub const DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_BUSY: u32 = 0x5344_0001;
+/// A descriptor-shaped SDIO turn reached dispatch without its intake seal.
+pub const DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_MISSING: u32 = 0x5344_0002;
+/// The outer linked-runtime generation predicate rejected the command.
+pub const DRIVER_RUNTIME_REJECT_OUTER_GENERATION: u32 = 0x5344_0003;
+/// An active CYW43 control cursor was presented with another logical parent.
+pub const DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH: u32 = 0x5344_0004;
+/// Generation reset reached the retained transfer lane instead of its power cursor.
+pub const DRIVER_RUNTIME_REJECT_SDIO_GENERATION_RESET_ROUTE_MISSING: u32 = 0x5344_0005;
+/// A command did not match the active immutable SDIO request identity.
+pub const DRIVER_RUNTIME_REJECT_SDIO_RETAINED_OWNER_IDENTITY_MISMATCH: u32 = 0x5344_0006;
+/// A fresh SDIO descriptor could not construct a bounded hardware request.
+pub const DRIVER_RUNTIME_REJECT_SDIO_REQUEST_IDENTITY_INVALID: u32 = 0x5344_0007;
+/// The one-shot CYW43 pull-up action was presented outside its admitted edge.
+pub const DRIVER_RUNTIME_REJECT_SDIO_PULLUP_ADMISSION: u32 = 0x5344_0008;
+/// An active retained request reached an impossible idle phase.
+pub const DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE: u32 = 0x5344_0009;
+/// DPC activation did not match the admitted live generation and notification state.
+pub const DRIVER_RUNTIME_REJECT_SDIO_DPC_ACTIVATION_ADMISSION: u32 = 0x5344_000a;
+/// Generation commit lost its exact poisoned old-generation admission state.
+pub const DRIVER_RUNTIME_REJECT_SDIO_GENERATION_COMMIT_ADMISSION: u32 = 0x5344_000b;
 /// Maximum reciprocal SDIO actions retained by one immutable CYW43 parent command.
 ///
 /// Root uses the same bound to cap child-completion deadline renewals, so a
@@ -456,9 +478,16 @@ pub const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
 pub const DRIVER_RUNTIME_RING_PAGE_BYTES: u16 = 4096;
 /// CYW43 runtime scratch offset for outgoing SDPCM Function 2 TX frames.
 ///
-/// This is intentionally separate from `DRIVER_RUNTIME_RING_FRAME_OFFSET`,
-/// where root stages the active CYW43 command descriptor and Ethernet payloads.
+/// This is intentionally separate from the root/runtime frame window and the
+/// dedicated CYW43 parent-command descriptor slot.
 pub const DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET: u16 = 2048;
+/// Dedicated root-to-CYW43 parent-command descriptor slot.
+///
+/// The linked CYW43 runtime may publish RX frames, backplane scratch, or SDIO
+/// fault telemetry while root prepares a retained command on another core.
+/// Keeping the 28-byte descriptor on its own cache line at `1920` makes those
+/// writers disjoint; root's command sequence remains the sole publication bit.
+pub const DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET: u16 = 1920;
 /// Fixed offset of the runtime progress marker in one ring page.
 pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
 /// Fixed offset of the retained-command continuation grant.
@@ -2320,7 +2349,7 @@ pub struct DriverRuntimeCyw43CommandDescriptor {
     pub flags: u16,
     /// Backplane target address for firmware/NVRAM/control writes.
     pub target_addr: u32,
-    /// Payload offset inside the fixed command ring page.
+    /// Payload offset in the fixed shared CYW43/SDIO payload aperture.
     pub payload_offset: u16,
     /// Payload bytes carried in this command.
     pub payload_len: u16,
@@ -2405,8 +2434,6 @@ impl DriverRuntimeCyw43CommandDescriptor {
             _ => self.flags == 0,
         };
         let payload_end = self.payload_offset as u32 + self.payload_len as u32;
-        let ring_payload = self.payload_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
-            && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32;
         let bulk_shared_payload = self.payload_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
             && payload_end
                 <= DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
@@ -2423,7 +2450,7 @@ impl DriverRuntimeCyw43CommandDescriptor {
                 && post_release_shared_payload);
         known_op
             && known_flags
-            && ((carries_payload && self.payload_len != 0 && (ring_payload || shared_payload))
+            && ((carries_payload && self.payload_len != 0 && shared_payload)
                 || (zero_payload && self.payload_len == 0))
             && (self.total_len == 0 || self.total_len >= self.payload_len as u32)
     }
@@ -4331,7 +4358,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_command_descriptor_validates_ring_payload_bounds() {
+    fn cyw43_command_descriptor_validates_canonical_shared_payload_bounds() {
         assert_eq!(DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK & 0xfff0, 0);
         assert_eq!(DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT, 8);
         assert_eq!(
@@ -4344,7 +4371,7 @@ mod tests {
             op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
             flags: 0,
             target_addr: 0x0019_8000,
-            payload_offset: DRIVER_RUNTIME_RING_FRAME_OFFSET,
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
             payload_len: 512,
             total_len: 4096,
             arg0: 0,
@@ -4358,17 +4385,17 @@ mod tests {
         assert!(!descriptor.valid());
         descriptor.flags = 0;
 
-        descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET - 1;
-        assert!(!descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
+        assert!(!descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         descriptor.payload_len = 0;
         assert!(!descriptor.valid());
         descriptor.payload_len = 512;
         descriptor.total_len = 128;
         assert!(!descriptor.valid());
         descriptor.total_len = 4096;
-        descriptor.payload_offset = DRIVER_RUNTIME_RING_PAGE_BYTES - 128;
-        descriptor.payload_len = 129;
+        assert!(descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE + 1;
         assert!(!descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         descriptor.payload_len = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES;
@@ -4407,7 +4434,7 @@ mod tests {
         descriptor = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
             flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
-            payload_offset: DRIVER_RUNTIME_RING_FRAME_OFFSET,
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
             payload_len: 16,
             total_len: 16,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
@@ -4426,13 +4453,15 @@ mod tests {
         descriptor.payload_len = 16;
         descriptor.total_len = 16;
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
+        assert!(!descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         descriptor.flags = 1 << 0;
         assert!(!descriptor.valid());
 
         descriptor = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
             flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
-            payload_offset: DRIVER_RUNTIME_RING_FRAME_OFFSET,
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
             payload_len: 16,
             total_len: 16,
             arg0: 2,
@@ -4451,6 +4480,8 @@ mod tests {
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         assert!(descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
+        assert!(!descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         descriptor.flags = 1 << 0;
         assert!(!descriptor.valid());
 

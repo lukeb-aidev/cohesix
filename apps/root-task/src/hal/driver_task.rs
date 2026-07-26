@@ -21,6 +21,8 @@ use core::sync::atomic::{fence, AtomicU32, AtomicUsize, Ordering};
 ))]
 use crate::arch::aarch64::timer::{timer_counter_ticks, timer_freq_hz};
 use heapless::Deque;
+#[cfg(all(feature = "kernel", test))]
+use pi4_driver_abi::DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
     driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
@@ -2460,6 +2462,40 @@ fn driver_task_ring_commit_command_sequence(
     driver_task_ring_publish_barrier(ring_root_ptr);
 }
 
+/// Materialize one retained command's complete input at its issue boundary.
+///
+/// Retained service first publishes only a zero-sequence command identity,
+/// then spends separate outer turns acquiring the linked-runtime priority
+/// lease. Bytes copied before those scheduler turns are not authoritative
+/// command input: reciprocal linked-runtime work may still be active, and the
+/// caller must present the same fingerprint-matched snapshot at commit. Copy
+/// that snapshot and refresh the zero-sequence records in the dedicated commit
+/// turn; the following sequence-last store is then the single child-visible
+/// publication boundary. CYW43's descriptor itself occupies a disjoint slot,
+/// so it also remains immutable after this publication.
+#[cfg(feature = "kernel")]
+fn driver_task_ring_prepare_retained_issue(
+    slot: &DriverTaskCommandSlot,
+    ring_root_ptr: usize,
+    command_ptr: *mut DriverTaskCommandRecord,
+    completion_ptr: *mut DriverTaskCompletionRecord,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> bool {
+    if driver_task_stage_segments(slot, ring_root_ptr, staging_segments).is_none() {
+        return false;
+    }
+    driver_task_ring_stage_command_record(
+        slot,
+        ring_root_ptr,
+        command_ptr,
+        completion_ptr,
+        command,
+        DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+    );
+    true
+}
+
 #[cfg(feature = "kernel")]
 const fn driver_task_runtime_continuation_fingerprint(command: DriverTaskCommandRecord) -> u32 {
     driver_runtime_continuation_action_fingerprint(
@@ -4212,6 +4248,37 @@ pub(crate) fn active_driver_task_retained_request(
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
     active_driver_task_retained_request_for_slot(slot)
+}
+
+/// Revalidate one retained request against its complete caller-owned input.
+///
+/// A prepared retained command deliberately has sequence zero and does not
+/// expose its staged descriptor or payload until the issue turn. The HAL's
+/// immutable command-plus-staging fingerprint is therefore the only exact
+/// authority available before issue; re-reading shared bytes would either
+/// adopt stale runtime output or reject every legitimate prepared request.
+#[cfg(feature = "kernel")]
+pub(crate) fn active_driver_task_retained_request_matches_staging(
+    contract: DriverTaskContract,
+    mut command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskRetainedRequestState> {
+    let snapshot = active_driver_task_retained_request_snapshot(contract)?;
+    let request = snapshot.state.request();
+    let mut active_command = snapshot.state.command()?;
+    command.flags =
+        driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, command.flags);
+    command.sequence = request;
+    active_command.sequence = request;
+    if active_command != command {
+        return None;
+    }
+    let expected_fingerprint = driver_task_ring_command_fingerprint(
+        command,
+        driver_task_staging_segments_fingerprint(staging_segments),
+    );
+    (expected_fingerprint != 0 && snapshot.command_fingerprint == expected_fingerprint)
+        .then_some(snapshot.state)
 }
 
 #[cfg(feature = "kernel")]
@@ -10833,9 +10900,6 @@ const fn driver_task_ring_completion_is_quiet_expected(
 ) -> bool {
     completion.code == DriverTaskCompletionCode::Idle.as_u16()
         || (completion.code == DriverTaskCompletionCode::Fault.as_u16()
-            && completion.detail == DriverTaskFaultCode::RejectedCommand.as_u16()
-            && completion.result == 0)
-        || (completion.code == DriverTaskCompletionCode::Fault.as_u16()
             && completion.detail == DRIVER_TASK_RING_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL
             && completion.result == DRIVER_TASK_RING_SDIO_RESPONSE_ERROR_RESULT)
 }
@@ -11784,7 +11848,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         driver_task_counter_add(&slot.counters.same_request_resumes, 1);
         slot.request_seq.load(Ordering::Acquire)
     } else {
-        if !staging_segments.is_empty()
+        if mode != DriverTaskRingCommandMode::RetainedTurn
+            && !staging_segments.is_empty()
             && driver_task_stage_segments(slot, ring_root_ptr, staging_segments).is_none()
         {
             slot.active.store(0, Ordering::Release);
@@ -11829,10 +11894,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         let completion_reset =
             DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand);
         if mode == DriverTaskRingCommandMode::RetainedTurn {
-            // Retained CYW43/SDIO turns first stage an ABI-invisible record.
-            // The runtime polls this ring without a doorbell, so publishing a
-            // nonzero sequence before both scheduling boosts would let the
-            // physical action start outside the retained issue turn.
+            // Retained CYW43/SDIO turns first publish only an ABI-invisible
+            // command identity. The runtime polls this ring without a
+            // doorbell, so a nonzero sequence before both scheduling boosts
+            // would let the physical action start outside the retained issue
+            // turn. Descriptor/payload bytes are deliberately deferred to that
+            // issue turn so the complete fingerprint-matched snapshot is
+            // materialized only at its child-visible boundary.
             driver_task_ring_stage_command_record(
                 slot,
                 ring_root_ptr,
@@ -11921,9 +11989,24 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
 
     if retained_commit_turn {
         // Sequence publication is the issue boundary for autonomously polling
-        // runtimes. Both required TCBs are already boosted. Cache publication
-        // is the sole HAL operation in this outer turn; the wake notification
-        // is deliberately deferred to the next turn.
+        // runtimes. Both required TCBs are already boosted. Re-materialize the
+        // fingerprint-matched descriptor/payload and zero-sequence records now,
+        // after every pre-issue scheduler turn and immediately before making
+        // them child-visible. CYW43's dedicated descriptor and shared parent
+        // payload remain disjoint from DPC writers after this boundary. The
+        // wake notification remains deferred to the next turn.
+        if !driver_task_ring_prepare_retained_issue(
+            slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            staging_segments,
+        ) {
+            fail_driver_task_retained_priority_lease(slot, contract);
+            cache_counter_batch.flush(slot);
+            return None;
+        }
         // Conservatively latch issued-unknown before sequence-last publication.
         // Thus any child that can observe the nonzero sequence is guaranteed
         // that root already classifies the action as non-replayable. A fault in
@@ -17449,6 +17532,102 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn retained_cyw43_issue_restages_canonical_descriptor_before_sequence_commit() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let descriptor = [
+            0x0au8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        let descriptor_offset = usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET);
+        let staging_segments = [DriverTaskStagingSegment::ring_payload_at(
+            descriptor_offset,
+            &descriptor,
+            0,
+        )];
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            91,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: u32::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                len: descriptor.len() as u16,
+                flags: 0,
+            },
+        );
+        command.flags |= DRIVER_TASK_RING_FLAG_ONE_WAY;
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        command.aux1 = 1;
+
+        assert_eq!(
+            driver_task_stage_segments(&slot, ring_root_ptr, &staging_segments),
+            Some(())
+        );
+        driver_task_ring_stage_command_record(
+            &slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+        );
+
+        // Model stale pre-issue descriptor bytes surviving the separate
+        // BoostBus and BoostPrimary turns. The production CYW43 descriptor
+        // owns a disjoint slot, but issue publication still refreshes the
+        // complete canonical input before its sequence becomes visible.
+        // SAFETY: The range lies within the aligned test-owned ring page.
+        unsafe {
+            core::ptr::write_bytes(
+                (ring_root_ptr + descriptor_offset) as *mut u8,
+                0xa5,
+                descriptor.len(),
+            );
+        }
+        // SAFETY: `command_ptr` addresses the fixed command record in the
+        // test-owned ring page.
+        assert_eq!(unsafe { core::ptr::read_volatile(command_ptr) }.sequence, 0);
+
+        assert!(driver_task_ring_prepare_retained_issue(
+            &slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            &staging_segments,
+        ));
+        // SAFETY: The slices remain within the aligned test-owned ring page.
+        let staged_descriptor = unsafe {
+            core::slice::from_raw_parts(
+                (ring_root_ptr + descriptor_offset) as *const u8,
+                descriptor.len(),
+            )
+        };
+        assert_eq!(staged_descriptor, descriptor);
+        // SAFETY: `command_ptr` addresses the fixed command record in the
+        // test-owned ring page.
+        assert_eq!(unsafe { core::ptr::read_volatile(command_ptr) }.sequence, 0);
+
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        driver_task_ring_commit_command_sequence(
+            &slot,
+            ring_root_ptr,
+            command_ptr,
+            command.sequence,
+        );
+        // SAFETY: `command_ptr` addresses the fixed command record in the
+        // test-owned ring page.
+        assert_eq!(unsafe { core::ptr::read_volatile(command_ptr) }, command);
+        assert_eq!(staged_descriptor, descriptor);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn root_retained_grant_is_exact_monotonic_and_rearmed_from_consumed_truth() {
         let slot = DriverTaskCommandSlot::new();
         let mut ring_page = Box::new(AlignedDriverTaskRing(
@@ -18820,7 +18999,7 @@ mod tests {
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             quiet_rx_command
         ));
-        assert!(!driver_task_ring_completion_trace_enabled(
+        assert!(driver_task_ring_completion_trace_enabled(
             false,
             quiet_rx_command,
             DriverTaskCompletionRecord::fault(92, DriverTaskFaultCode::RejectedCommand)

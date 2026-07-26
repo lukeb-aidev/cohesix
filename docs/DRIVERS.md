@@ -735,6 +735,13 @@ This as-built closure is authorized by Milestone 26d task
   only its exact seal. A fresh contained-preissue retry selects its own sealed
   descriptor and must compare equal to the fenced terminal request; it cannot
   borrow the old cursor descriptor to make a changed retry self-authenticate.
+  SDIO owner admission and retained-state invariant failures are site-tagged in
+  the shared ABI (`0x53440001..0x5344000b`): intake busy/missing, outer
+  generation, CYW43 logical-owner mismatch, reset-route mismatch, retained
+  request identity mismatch, invalid fresh request identity, pull-up admission,
+  invalid retained phase, DPC-activation admission, and generation-commit
+  admission. A DPC terminal parent preserves that exact child result instead
+  of flattening it to generic result zero.
   Generation reset uses the same sealed descriptor until its private power
   cursor terminates. Generation commit keeps both owner state and the shared
   event ring on the old epoch throughout its bounded health and
@@ -754,17 +761,33 @@ This as-built closure is authorized by Milestone 26d task
   the reciprocal aperture. Together these rules provide the seL4
   linked-runtime equivalent of Linux constructing an immutable `mmc_request`
   before either host-thread or IRQ work can observe it.
+  Root-to-CYW43 retained publication also treats sequence commit, not the
+  earlier scheduler-lease prepare turn, as the only input boundary. Prepare
+  publishes a zero-sequence command identity while the HAL acquires the
+  generated CYW43/SDIO priority lease. The parent descriptor has one canonical
+  cache-line-aligned slot at ring offset `1920`: after the maximum RX frame,
+  backplane word, and SDIO fault-telemetry writers, and before private SDPCM TX
+  at `2048`. Post-release parent payload uses the root TX shared slice
+  `4096..8192`; DPC RX begins at `8192`. These disjoint ranges close the
+  core-0/root versus core-3/runtime race without a timing assumption. In the
+  dedicated issue turn, HAL still refreshes the fingerprint-matched input and
+  zero-sequence command/completion records before committing the command
+  sequence last. No later retained turn restages over an active child, and the
+  old frame-offset descriptor is rejected rather than retained as a fallback.
+  Every payload-bearing CYW43 parent likewise uses the canonical shared-payload
+  base at `4096`; the runtime and shared ABI reject the former ring-local
+  payload lane.
   The same rule begins at the CYW43 endpoint intake, not at the first physical
   child. The runtime seals a root CYW43 descriptor and its payload immediately
   after the sequence-last command record and endpoint rendezvous agree, before
   draining any watermarked CARD_INT/DPC work. Purely private op11 phase
   transitions retain that seal until terminal completion, and the first
-  private service turn restores the descriptor and payload together before
-  any helper can consume the physical aperture. DPC may therefore reuse
-  reciprocal descriptor or payload scratch before op11's first SDIO child
-  without misrouting or corrupting the root control exchange. This is the
-  isolated runtime equivalent of Linux attaching BCDC state to the already
-  admitted request before scheduling its SDIO DPC.
+  private service turn restores the descriptor and payload together before any
+  helper consumes them. DPC may continue using its disjoint frame and RX
+  slices before op11's first SDIO child without misrouting or corrupting the
+  root control exchange. This is the isolated runtime equivalent of Linux
+  attaching BCDC state to the already admitted request before scheduling its
+  SDIO DPC.
   Function 1 firmware streaming retains one immutable 32-KiB backplane
   aperture, matching brcmfmac's production RAM-write window rather than its
   debug-only 2-KiB `MEMBLOCK` readback unit. MMC-shaped CMD53 partitioning
@@ -1317,20 +1340,25 @@ This as-built closure is authorized by Milestone 26d task
   request; it cannot release the logical lease or admit association, WSEC,
   maintenance, or bootstrap under a different command, BCDC id, descriptor, or
   payload fingerprint. Matching work resumes the lease. The runtime snapshots
-  the accepted BCDC request into private state and treats the reciprocal shared
-  payload aperture as mutable scratch between physical requests; DPC-delivered
-  event/data frames may reuse that aperture and its staged descriptor.
+  the accepted BCDC request into private state. Root's descriptor and TX
+  payload remain in their canonical disjoint input slices; DPC-delivered
+  event/data frames use the front frame and private RX slice. Only the separate
+  CYW43-to-SDIO reciprocal owner aperture is mutable scratch between physical
+  child requests.
 
   Root's logical lease remains the sole authority for the immutable stage,
   command, BCDC id, descriptor, and full payload fingerprint. The runtime binds
   its active cursor to the exact intake-sealed logical request: owner
   generation, operation, flags, target, payload and total lengths, command,
   BCDC id, reserved value, and every payload byte must match the retained
-  private request. Physical root-request sequence and payload offset are
-  intentionally excluded because an interleaved completion may release one
-  physical request and restage the same logical continuation at another
-  sequence or bounded scratch location. The runtime still restores its private
-  snapshot before the one transmit instead of treating mutable reciprocal
+  private request. The root logical ticket is captured before carrier
+  canonicalization, so its descriptor retains logical payload offset zero;
+  the producer then requires the one physical shared-payload base at `4096`.
+  Payload offset is excluded only from the logical fingerprint at that
+  boundary, while carrier admission validates `4096` exactly. A later physical
+  request sequence may carry the same retained logical continuation, but no
+  alternate payload location may do so. The runtime still restores its private
+  snapshot before the one transmit instead of treating reciprocal child
   scratch as continuation authority.
 
   A competing identity cannot advance, drain, retire, replace, or retransmit

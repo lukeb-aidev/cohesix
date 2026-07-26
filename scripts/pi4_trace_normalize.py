@@ -12051,7 +12051,16 @@ def summarize_cyw43_bootstrap_supervisor(
                     mark_blocker("malformed-backoff-progression")
                     sequence_valid = False
             elif state == "ready":
-                if attempt != 1 or status != "recovery":
+                # A ready network generation may fail before it reaches the
+                # supervisor's stability boundary. Production then emits a
+                # same-attempt recovery edge; attempt one is also the canonical
+                # start of a later independent attached-recovery episode after
+                # a previously stable run. Both are legal retained state
+                # transitions, not evidence of a skipped retry.
+                if (
+                    status != "recovery"
+                    or (attempt != current_attempt and attempt != 1)
+                ):
                     mark_blocker("invalid-status-sequence")
                     sequence_valid = False
             else:
