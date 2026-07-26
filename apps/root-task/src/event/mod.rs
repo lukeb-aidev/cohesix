@@ -730,14 +730,6 @@ fn net_status_linked_runtime_data_ready(status: &NetStatusReport) -> bool {
 }
 
 #[cfg(feature = "net-console")]
-fn net_status_cyw43_data_ready(status: &NetStatusReport) -> bool {
-    status.active_driver == "cyw43"
-        && status.active_interface == "wifi"
-        && status.address_source == "dhcp-lease"
-        && status.dhcp_phase == "bound"
-}
-
-#[cfg(feature = "net-console")]
 fn net_status_cyw43_dhcp_pending(status: &NetStatusReport) -> bool {
     status.active_driver == "cyw43"
         && status.active_interface == "wifi"
@@ -767,14 +759,16 @@ const fn net_post_dispatch_flush_limit_for_display(
 
 #[cfg(feature = "net-console")]
 fn net_post_dispatch_flush_limit_for_status(
-    status: &NetStatusReport,
+    _status: &NetStatusReport,
     display: Option<LocalSeatDisplayTrace>,
 ) -> Option<usize> {
-    if net_status_cyw43_data_ready(status) {
-        None
-    } else {
-        Some(net_post_dispatch_flush_limit_for_display(display))
-    }
+    // Every flush is retained across later EventPump polls, so a CYW43 flush
+    // still performs at most one linked-runtime operation in each outer turn.
+    // Disabling this continuation only for a ready WiFi interface left ACK,
+    // response, and FIN work behind the five-phase event rotation and produced
+    // multi-second TCP stalls. Keep one canonical bounded continuation for all
+    // NICs; the driver-task contract remains the per-turn hardware bound.
+    Some(net_post_dispatch_flush_limit_for_display(display))
 }
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
@@ -11290,6 +11284,20 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_association_fence_line(
+        association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: association fence event_armed={} event_generation={} terminal_failure={} deferred_reauth={} deferred_generation={}",
+            Self::yes_no(association.event_armed_current),
+            association.event_armed_generation,
+            Self::yes_no(association.terminal_failure),
+            Self::yes_no(association.deferred_reauth_current),
+            association.deferred_reauth_generation,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_association_progress_line(
         association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
@@ -11377,11 +11385,12 @@ where
         handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: data_handoff generation={} committed={} commit_token={} baseline_token={} baseline_generation={} queue={}/{} high_water={}",
+            "wifi: data_handoff generation={} committed={} commit_token={} baseline_token={} publication_token={} baseline_generation={} queue={}/{} high_water={}",
             handoff.generation,
             Self::yes_no(handoff.committed),
             handoff.commit_epoch_token,
             handoff.baseline_epoch_token,
+            handoff.publication_epoch_token,
             handoff.baseline_generation,
             handoff.root_rx_queue_len,
             handoff.root_rx_queue_cap,
@@ -12072,6 +12081,7 @@ where
         let association = crate::drivers::driver_task_net::cyw43_association_diagnostic();
         for detail in [
             Self::wifi_diag_association_state_line(association),
+            Self::wifi_diag_association_fence_line(association),
             Self::wifi_diag_association_progress_line(association),
             Self::wifi_diag_association_scheduler_line(association),
             Self::wifi_diag_association_retained_line(association),
@@ -22060,6 +22070,11 @@ mod tests {
             polls: u32::MAX,
             event_rx: u32::MAX,
             association_event: "set-ssid-authentication-complete",
+            event_armed_current: true,
+            event_armed_generation: u32::MAX,
+            terminal_failure: true,
+            deferred_reauth_current: true,
+            deferred_reauth_generation: u32::MAX,
             retained_owner: "cyw43-host-eapol-control-poll",
             retained_generation: u32::MAX,
             retained_request: u32::MAX,
@@ -22208,6 +22223,7 @@ mod tests {
         );
         let lines = [
             KernelConsoleTestPump::wifi_diag_association_state_line(diagnostic),
+            KernelConsoleTestPump::wifi_diag_association_fence_line(diagnostic),
             KernelConsoleTestPump::wifi_diag_association_progress_line(diagnostic),
             KernelConsoleTestPump::wifi_diag_association_retained_line(diagnostic),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_line(recovery, 3),
@@ -22229,18 +22245,21 @@ mod tests {
             );
             assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
         }
-        assert!(lines[1].contains("generation=4294967295 current=no"));
-        assert!(lines[2].contains("request=4294967295 issued=yes accepted=yes"));
-        assert!(lines[3].contains(
+        assert!(lines[1].contains(
+            "event_armed=yes event_generation=4294967295 terminal_failure=yes deferred_reauth=yes deferred_generation=4294967295"
+        ));
+        assert!(lines[2].contains("generation=4294967295 current=no"));
+        assert!(lines[3].contains("request=4294967295 issued=yes accepted=yes"));
+        assert!(lines[4].contains(
             "refinement=exact-owner logical_terminal_observed=yes cause=issued-owner-unknown",
         ));
-        assert!(lines[3].contains("subphase=cyw43-host-eapol-control-poll gate=8"));
-        assert!(lines[3].contains("current=no live_generation=3"));
-        assert!(lines[4].contains("ticket=18446744073709551615"));
-        assert!(lines[4].contains("completion_detail=0xffff"));
-        assert!(lines[4].contains("completion_result=0xffffffff"));
-        assert!(lines[4].contains("turn=18446744073709551615"));
-        assert!(lines[5].contains("result=0xffffffff cause=runtime-terminal"));
+        assert!(lines[4].contains("subphase=cyw43-host-eapol-control-poll gate=8"));
+        assert!(lines[4].contains("current=no live_generation=3"));
+        assert!(lines[5].contains("ticket=18446744073709551615"));
+        assert!(lines[5].contains("completion_detail=0xffff"));
+        assert!(lines[5].contains("completion_result=0xffffffff"));
+        assert!(lines[5].contains("turn=18446744073709551615"));
+        assert!(lines[6].contains("result=0xffffffff cause=runtime-terminal"));
         let mut unobserved = recovery;
         unobserved.terminal_observed = false;
         unobserved.completion_detail = 0;
@@ -22283,11 +22302,11 @@ mod tests {
             KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x5344_000b),
             "sdio-generation-commit-admission",
         );
-        assert!(lines[6].contains("descriptor op=0xffff flags=0xffff"));
-        assert!(lines[7].contains("active=yes generation=1"));
-        assert!(lines[7].contains("cmd=0x0000001a id=37"));
-        assert!(lines[9].contains("code=5 code_name=fault"));
-        assert!(lines[9].contains("detail=0x0001 detail_name=rejected-command"));
+        assert!(lines[7].contains("descriptor op=0xffff flags=0xffff"));
+        assert!(lines[8].contains("active=yes generation=1"));
+        assert!(lines[8].contains("cmd=0x0000001a id=37"));
+        assert!(lines[10].contains("code=5 code_name=fault"));
+        assert!(lines[10].contains("detail=0x0001 detail_name=rejected-command"));
         for (result, expected) in [
             (0x5344_0001, "sdio-intake-seal-busy"),
             (0x5344_0002, "sdio-intake-seal-missing"),
@@ -22336,14 +22355,14 @@ mod tests {
             control_fault_line.contains("detail=0x530b detail_name=cyw43-control-exchange"),
             "{control_fault_line}",
         );
-        assert!(lines[10].contains("offset=0 len=0"));
-        assert!(lines[11].contains("terminal=no owner_conflict=yes"));
-        assert!(lines[11].contains("owner_scope=root-logical-capture"));
-        assert!(lines[11].contains("owner_cmd=0x0000001a owner_id=37"));
-        assert!(lines[12].contains(
+        assert!(lines[11].contains("offset=0 len=0"));
+        assert!(lines[12].contains("terminal=no owner_conflict=yes"));
+        assert!(lines[12].contains("owner_scope=root-logical-capture"));
+        assert!(lines[12].contains("owner_cmd=0x0000001a owner_id=37"));
+        assert!(lines[13].contains(
             "service_turns=4294967295 join_starts=4294967295 control_progress=ordinary-network-turn"
         ));
-        assert!(lines[8].contains("completion_sequence=3907 exact_request_match=yes"));
+        assert!(lines[9].contains("completion_sequence=3907 exact_request_match=yes"));
         assert_eq!(
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(None).as_str(),
             "wifi: logical_control_owner active=no",
@@ -22413,6 +22432,7 @@ mod tests {
             generation: u32::MAX,
             commit_epoch_token: u64::MAX,
             baseline_epoch_token: u64::MAX,
+            publication_epoch_token: u64::MAX,
             committed: true,
             consumer_open: true,
             baseline_generation: u32::MAX,
@@ -22455,8 +22475,9 @@ mod tests {
         assert!(handoff_state.len() < DEFAULT_LINE_CAPACITY);
         assert!(handoff_state
             .contains("generation=4294967295 committed=yes commit_token=18446744073709551615"));
-        assert!(handoff_state
-            .contains("baseline_token=18446744073709551615 baseline_generation=4294967295"));
+        assert!(handoff_state.contains(
+            "baseline_token=18446744073709551615 publication_token=18446744073709551615 baseline_generation=4294967295"
+        ));
         assert!(handoff_state.contains("queue=50/50 high_water=50"));
         let handoff_lane = KernelConsoleTestPump::wifi_diag_data_handoff_lane_line(handoff);
         assert!(!handoff_lane.contains(DIAGNOSTIC_TRUNCATION_MARKER));
@@ -24509,10 +24530,13 @@ mod tests {
             net_post_dispatch_flush_limit_for_status(&genet, None),
             Some(NET_POST_DISPATCH_FLUSH_POLLS)
         );
-        assert_eq!(net_post_dispatch_flush_limit_for_status(&wifi, None), None);
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&wifi, None),
+            Some(NET_POST_DISPATCH_FLUSH_POLLS)
+        );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&stack_reported_wifi, None),
-            None
+            Some(NET_POST_DISPATCH_FLUSH_POLLS)
         );
 
         let mut pending = LocalSeatDisplayTrace {
@@ -24529,11 +24553,11 @@ mod tests {
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
-            None
+            Some(NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS)
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&stack_reported_wifi, Some(pending)),
-            None
+            Some(NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS)
         );
 
         pending = LocalSeatDisplayTrace {
@@ -24552,7 +24576,7 @@ mod tests {
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
-            None
+            Some(NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS)
         );
 
         pending = LocalSeatDisplayTrace {
@@ -24571,7 +24595,7 @@ mod tests {
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
-            None
+            Some(NET_POST_DISPATCH_FLUSH_POLLS)
         );
     }
 

@@ -1725,23 +1725,38 @@ where
                         sel4::yield_now();
                         continue;
                     }
+                    // Reserve lifecycle and consumer state before mutating any
+                    // qlog/serial/HDMI Ready queue. This root turn cannot poll
+                    // NetStack between publication and the queue commit, and
+                    // the EventPump transaction preflights all retained
+                    // capacity before appending its first visible record.
+                    let lifecycle_accepted = gate8_lifecycle.accept_ready(generation);
+                    let consumer_published = lifecycle_accepted
+                        && crate::drivers::driver_task_net::publish_cyw43_gate8_data_consumer(
+                            generation,
+                        );
                     let ready_sequence = retry_schedule.next_status_sequence();
-                    let ready_queued = emit_deferred_net_gate8_ready_transaction(
-                        pump,
-                        diagnostic,
-                        ready_sequence,
-                        attempt,
-                        stability_now_ms,
-                        local_seat_enabled,
-                    );
-                    if ready_queued && gate8_lifecycle.accept_ready(generation) {
+                    let ready_queued = consumer_published
+                        && emit_deferred_net_gate8_ready_transaction(
+                            pump,
+                            diagnostic,
+                            ready_sequence,
+                            attempt,
+                            stability_now_ms,
+                            local_seat_enabled,
+                        );
+                    if ready_queued {
                         crate::log_buffer::append_log_line(
                             "[net-console] CYW43 Gate 8 stable for current generation",
                         );
                     } else {
+                        let _ = crate::drivers::driver_task_net::retract_cyw43_gate8_data_consumer(
+                            generation,
+                        );
                         let _ = bootstrap.retract_gate8_generation(generation);
+                        let _ = gate8_lifecycle.enter_stabilizing(attempt, stability_now_ms);
                         crate::log_buffer::append_log_line(
-                            "CYW43_GATE8_READY_TRANSACTION status=failed action=retract-and-retry-fresh-snapshot",
+                            "CYW43_GATE8_READY_TRANSACTION status=failed consumer=blocked action=retract-and-retry-fresh-snapshot",
                         );
                     }
                 }
@@ -1764,6 +1779,9 @@ where
                 }
                 DeferredGate8Observation::Ready => {}
                 DeferredGate8Observation::Retracted { generation } => {
+                    let _ = crate::drivers::driver_task_net::retract_cyw43_gate8_data_consumer(
+                        generation,
+                    );
                     let _ = bootstrap.retract_gate8_generation(generation);
                     pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
                     let deadline_ms = match gate8_lifecycle.deadline_ms() {
@@ -1807,6 +1825,8 @@ where
             }
 
             if let Some((generation, blocker, deadline_ms)) = failure {
+                let _ =
+                    crate::drivers::driver_task_net::retract_cyw43_gate8_data_consumer(generation);
                 let mut line = HeaplessString::<224>::new();
                 let _ = write!(
                     line,
@@ -1993,6 +2013,9 @@ where
                     };
                     let gate8_deadline_ms = gate8_lifecycle.enter_stabilizing(attempt, now_ms);
                     if let Some(generation) = retracted_generation {
+                        let _ = crate::drivers::driver_task_net::retract_cyw43_gate8_data_consumer(
+                            generation,
+                        );
                         let _ = bootstrap.retract_gate8_generation(generation);
                         pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
                     }

@@ -117,8 +117,8 @@ const TCP_SMOKE_OUT_LOCAL_PORT: u16 = 31_340;
 const TCP_CONSOLE_SELFTEST_LOCAL_PORT: u16 = 31_341;
 const CONSOLE_SELFTEST_RECOVERY_DEADLINE_MS: u64 = 3_000;
 const CONSOLE_SELFTEST_RETRY_MS: u64 = 250;
-const DISCONNECT_GRACE_MS: u64 = 250;
-const DISCONNECT_GRACE_POLLS: u8 = 64;
+const DISCONNECT_DRAIN_DEADLINE_MS: u64 = 10_000;
+const DISCONNECT_CLOSE_DEADLINE_MS: u64 = 10_000;
 const BOOTINFO_NET_LOGGER_PREFIX_BUDGET: usize = 48;
 const BOOTINFO_NET_LOGGER_FRAME_LIMIT: usize = 192;
 #[cfg(feature = "net-outbound-probe")]
@@ -144,6 +144,103 @@ enum SelfTestLogSeverity {
     Warn,
     Debug,
     Trace,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConsoleDisconnectPhase {
+    Idle,
+    Draining,
+    Closing,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConsoleDisconnectAction {
+    Wait,
+    StartClose,
+    ContinueClose,
+    Complete,
+    Abort,
+}
+
+fn console_disconnect_action(
+    phase: ConsoleDisconnectPhase,
+    tcp_state: TcpState,
+    application_output_drained: bool,
+    tcp_send_queue_empty: bool,
+    now_ms: u64,
+    phase_started_ms: u64,
+) -> ConsoleDisconnectAction {
+    match phase {
+        ConsoleDisconnectPhase::Idle => ConsoleDisconnectAction::Wait,
+        ConsoleDisconnectPhase::Draining => {
+            if matches!(tcp_state, TcpState::Closed | TcpState::TimeWait) {
+                ConsoleDisconnectAction::Complete
+            } else if matches!(
+                tcp_state,
+                TcpState::FinWait1 | TcpState::FinWait2 | TcpState::Closing | TcpState::LastAck
+            ) {
+                ConsoleDisconnectAction::ContinueClose
+            } else if application_output_drained && tcp_send_queue_empty {
+                ConsoleDisconnectAction::StartClose
+            } else if now_ms.saturating_sub(phase_started_ms) >= DISCONNECT_DRAIN_DEADLINE_MS {
+                ConsoleDisconnectAction::Abort
+            } else {
+                ConsoleDisconnectAction::Wait
+            }
+        }
+        ConsoleDisconnectPhase::Closing => {
+            if matches!(tcp_state, TcpState::Closed | TcpState::TimeWait) {
+                ConsoleDisconnectAction::Complete
+            } else if now_ms.saturating_sub(phase_started_ms) >= DISCONNECT_CLOSE_DEADLINE_MS {
+                ConsoleDisconnectAction::Abort
+            } else {
+                ConsoleDisconnectAction::Wait
+            }
+        }
+    }
+}
+
+const fn arm_console_disconnect_phase_deadline(
+    phase: ConsoleDisconnectPhase,
+    phase_started_ms: Option<u64>,
+    now_ms: u64,
+) -> Option<u64> {
+    match phase {
+        ConsoleDisconnectPhase::Idle => None,
+        ConsoleDisconnectPhase::Draining | ConsoleDisconnectPhase::Closing => {
+            Some(match phase_started_ms {
+                Some(started_ms) => started_ms,
+                None => now_ms,
+            })
+        }
+    }
+}
+
+const fn console_disconnect_terminal_reason(
+    action: ConsoleDisconnectAction,
+    origin: NetConsoleDisconnectReason,
+) -> NetConsoleDisconnectReason {
+    if matches!(action, ConsoleDisconnectAction::Abort) {
+        NetConsoleDisconnectReason::Error
+    } else {
+        origin
+    }
+}
+
+const fn console_output_admitted_during_disconnect(phase: ConsoleDisconnectPhase) -> bool {
+    !matches!(phase, ConsoleDisconnectPhase::Closing)
+}
+
+const fn console_disconnect_application_queues_drained(
+    server_outbound_pending: bool,
+    coalescer_output_pending: bool,
+    inbound_queued: u32,
+    entered_draining_this_turn: bool,
+) -> bool {
+    !entered_draining_this_turn
+        && !server_outbound_pending
+        && !coalescer_output_pending
+        && inbound_queued == 0
 }
 
 const fn self_test_enabled_for_backend(backend: NetBackend) -> bool {
@@ -1423,9 +1520,10 @@ pub struct NetStack<D: NetDevice> {
     prefix_len: u8,
     listen_port: u16,
     session_active: bool,
-    disconnect_requested: bool,
-    disconnect_requested_at_ms: Option<u64>,
-    disconnect_requested_polls: u8,
+    disconnect_phase: ConsoleDisconnectPhase,
+    disconnect_phase_started_ms: Option<u64>,
+    disconnect_reason: NetConsoleDisconnectReason,
+    disconnect_forced_aborts: u64,
     listener_announced: bool,
     listener_defer_reason: Option<&'static str>,
     active_client_id: Option<u64>,
@@ -2719,31 +2817,15 @@ impl<D: NetDevice> NetStack<D> {
         self.session_state.flush_blocked_logged_preconnect = preconnect_logged;
         self.conn_bytes_read = 0;
         self.conn_bytes_written = 0;
-        self.disconnect_requested = false;
-        self.disconnect_requested_at_ms = None;
-        self.disconnect_requested_polls = 0;
+        self.disconnect_phase = ConsoleDisconnectPhase::Idle;
+        self.disconnect_phase_started_ms = None;
+        self.disconnect_reason = NetConsoleDisconnectReason::Quit;
     }
 
     fn reset_session_state_with(&mut self, tcp_state: Option<TcpState>) {
         self.reset_session_state();
         if let Some(state) = tcp_state {
             self.session_state.last_state = Some(state);
-        }
-    }
-
-    fn force_relisten(socket: &mut TcpSocket, listen_port: u16) {
-        if socket.state() != TcpState::Closed {
-            socket.abort();
-        }
-        if socket.state() == TcpState::Closed {
-            match socket.listen(IpListenEndpoint::from(listen_port)) {
-                Ok(()) => {
-                    NET_DIAG.record_listener_bound();
-                }
-                Err(err) => {
-                    warn!("[net-console] failed to re-listen after close: {err}");
-                }
-            }
         }
     }
 
@@ -3356,9 +3438,10 @@ impl<D: NetDevice> NetStack<D> {
             prefix_len: prefix,
             listen_port: console_config.listen_port,
             session_active: false,
-            disconnect_requested: false,
-            disconnect_requested_at_ms: None,
-            disconnect_requested_polls: 0,
+            disconnect_phase: ConsoleDisconnectPhase::Idle,
+            disconnect_phase_started_ms: None,
+            disconnect_reason: NetConsoleDisconnectReason::Quit,
+            disconnect_forced_aborts: 0,
             listener_announced: false,
             listener_defer_reason: None,
             active_client_id: None,
@@ -3856,7 +3939,7 @@ impl<D: NetDevice> NetStack<D> {
         let tcp_pending_work = socket.can_recv()
             || self.server.has_outbound()
             || self.outbound.has_pending()
-            || self.disconnect_requested;
+            || self.disconnect_phase != ConsoleDisconnectPhase::Idle;
         budgeted_cyw43_selftest_defers_to_tcp(
             D::driver_task_contract(),
             self.stage_policy,
@@ -5963,7 +6046,7 @@ impl<D: NetDevice> NetStack<D> {
         let mut reset_tcp_state: Option<TcpState> = None;
         let last_tcp_state;
         let mut allow_flush = true;
-        let listen_port = self.listen_port;
+        let mut disconnect_entered_this_turn = false;
         if !self.validate_console_socket(now_ms) {
             return true;
         }
@@ -6002,7 +6085,12 @@ impl<D: NetDevice> NetStack<D> {
             let peer_changed =
                 Self::record_peer_endpoint(&mut self.peer_endpoint, socket.remote_endpoint());
 
-            if !socket.is_open() {
+            if !socket.is_open() && self.disconnect_phase == ConsoleDisconnectPhase::Idle {
+                let terminal_reason = if socket.state() == TcpState::TimeWait {
+                    NetConsoleDisconnectReason::Eof
+                } else {
+                    NetConsoleDisconnectReason::Reset
+                };
                 self.peer_endpoint = None;
                 reset_session = true;
                 if !self.listener_announced {
@@ -6042,16 +6130,8 @@ impl<D: NetDevice> NetStack<D> {
                     self.server.end_session();
                     self.session_active = false;
                     if let Some(conn_id) = self.active_client_id {
-                        Self::note_close_reason(
-                            &mut log_closed_conn,
-                            conn_id,
-                            NetConsoleDisconnectReason::Reset,
-                        );
-                        Self::note_close_reason(
-                            &mut record_closed_conn,
-                            conn_id,
-                            NetConsoleDisconnectReason::Reset,
-                        );
+                        Self::note_close_reason(&mut log_closed_conn, conn_id, terminal_reason);
+                        Self::note_close_reason(&mut record_closed_conn, conn_id, terminal_reason);
                     }
                     self.active_client_id = None;
                 }
@@ -6101,6 +6181,7 @@ impl<D: NetDevice> NetStack<D> {
             }
 
             let new_established = socket.state() == TcpState::Established
+                && self.disconnect_phase == ConsoleDisconnectPhase::Idle
                 && (previous_state != Some(TcpState::Established)
                     || !self.session_active
                     || peer_changed);
@@ -6123,9 +6204,9 @@ impl<D: NetDevice> NetStack<D> {
                 self.server.end_session();
                 self.session_active = false;
                 self.active_client_id = None;
-                self.disconnect_requested = false;
-                self.disconnect_requested_at_ms = None;
-                self.disconnect_requested_polls = 0;
+                self.disconnect_phase = ConsoleDisconnectPhase::Idle;
+                self.disconnect_phase_started_ms = None;
+                self.disconnect_reason = NetConsoleDisconnectReason::Quit;
                 NET_DIAG.record_accept_attempt();
                 let client_id = self.client_counter.wrapping_add(1);
                 self.client_counter = client_id;
@@ -6241,7 +6322,7 @@ impl<D: NetDevice> NetStack<D> {
                 self.counters.tcp_accepts = self.counters.tcp_accepts.saturating_add(1);
             }
 
-            if socket.can_recv() {
+            if self.disconnect_phase == ConsoleDisconnectPhase::Idle && socket.can_recv() {
                 let mut temp = [0u8; TCP_CONSOLE_RECV_CHUNK_BYTES];
                 let conn_id = self.active_client_id.unwrap_or(0);
                 self.counters.tcp_console_recv_ready =
@@ -6589,7 +6670,10 @@ impl<D: NetDevice> NetStack<D> {
                         self.counters.tcp_console_recv_budget_hits.saturating_add(1);
                 }
             }
-            if self.session_active && socket.state() == TcpState::Established && !socket.may_recv()
+            if self.disconnect_phase == ConsoleDisconnectPhase::Idle
+                && self.session_active
+                && socket.state() == TcpState::Established
+                && !socket.may_recv()
             {
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 self.outbound.reset();
@@ -6620,7 +6704,8 @@ impl<D: NetDevice> NetStack<D> {
                 reset_tcp_state = Some(socket.state());
                 allow_flush = false;
             }
-            if self.session_active
+            if self.disconnect_phase == ConsoleDisconnectPhase::Idle
+                && self.session_active
                 && !self.server.is_authenticated()
                 && self.server.auth_timed_out(now_ms)
             {
@@ -6686,7 +6771,10 @@ impl<D: NetDevice> NetStack<D> {
                 activity |= true;
             }
 
-            if self.session_active && self.server.should_timeout(now_ms) {
+            if self.disconnect_phase == ConsoleDisconnectPhase::Idle
+                && self.session_active
+                && self.server.should_timeout(now_ms)
+            {
                 warn!(
                     "[net-console] TCP client #{} timed out due to inactivity",
                     self.active_client_id.unwrap_or(0)
@@ -6746,40 +6834,49 @@ impl<D: NetDevice> NetStack<D> {
             }
 
             let tcp_state = socket.state();
-            if matches!(
-                tcp_state,
-                TcpState::CloseWait
-                    | TcpState::FinWait1
-                    | TcpState::FinWait2
-                    | TcpState::LastAck
-                    | TcpState::TimeWait
-            ) {
+            if self.disconnect_phase == ConsoleDisconnectPhase::Idle
+                && tcp_state == TcpState::CloseWait
+            {
                 info!(
-                    "[net-console] TCP client #{} closing (state={:?})",
+                    "[net-console] TCP client #{} peer half-close (state={:?}) action=drain-then-fin",
                     self.active_client_id.unwrap_or(0),
                     tcp_state
                 );
-                debug!(
-                    "[net-console][auth] state={:?} client={} closing socket state={:?}",
-                    self.auth_state,
-                    self.active_client_id.unwrap_or(0),
-                    tcp_state
-                );
+                self.disconnect_phase = ConsoleDisconnectPhase::Draining;
+                self.disconnect_phase_started_ms = None;
+                self.disconnect_reason = NetConsoleDisconnectReason::Eof;
+                disconnect_entered_this_turn = true;
+                activity = true;
+            } else if self.disconnect_phase == ConsoleDisconnectPhase::Idle
+                && matches!(
+                    tcp_state,
+                    TcpState::FinWait1 | TcpState::FinWait2 | TcpState::Closing | TcpState::LastAck
+                )
+            {
+                // A local close outside the console-QUIT path has already
+                // staged its FIN. Preserve smoltcp's handshake state; aborting
+                // here converts ordinary connection churn into a wire RST.
+                allow_flush = false;
+            }
+
+            if self.disconnect_phase == ConsoleDisconnectPhase::Idle
+                && matches!(socket.state(), TcpState::Closed)
+                && self.session_active
+            {
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 self.outbound.reset();
                 self.server.end_session();
                 self.session_active = false;
-                outbound_pending = false;
                 if let Some(conn_id) = self.active_client_id {
                     Self::note_close_reason(
                         &mut log_closed_conn,
                         conn_id,
-                        NetConsoleDisconnectReason::Eof,
+                        NetConsoleDisconnectReason::Reset,
                     );
                     Self::note_close_reason(
                         &mut record_closed_conn,
                         conn_id,
-                        NetConsoleDisconnectReason::Eof,
+                        NetConsoleDisconnectReason::Reset,
                     );
                 }
                 self.active_client_id = None;
@@ -6789,40 +6886,12 @@ impl<D: NetDevice> NetStack<D> {
                     self.active_client_id,
                     AuthState::Start,
                 );
-                if socket.state() != TcpState::Closed {
-                    socket.abort();
-                }
                 reset_session = true;
                 reset_tcp_state = Some(socket.state());
                 allow_flush = false;
             }
 
-            if matches!(socket.state(), TcpState::Closed) && self.session_active {
-                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
-                self.outbound.reset();
-                self.server.end_session();
-                self.session_active = false;
-                if let Some(conn_id) = self.active_client_id {
-                    Self::note_close_reason(
-                        &mut log_closed_conn,
-                        conn_id,
-                        NetConsoleDisconnectReason::Reset,
-                    );
-                    Self::note_close_reason(
-                        &mut record_closed_conn,
-                        conn_id,
-                        NetConsoleDisconnectReason::Reset,
-                    );
-                }
-                self.active_client_id = None;
-                self.peer_endpoint = None;
-                Self::set_auth_state(
-                    &mut self.auth_state,
-                    self.active_client_id,
-                    AuthState::Start,
-                );
-                reset_session = true;
-                reset_tcp_state = Some(socket.state());
+            if self.disconnect_phase == ConsoleDisconnectPhase::Closing {
                 allow_flush = false;
             }
 
@@ -6844,41 +6913,96 @@ impl<D: NetDevice> NetStack<D> {
                 outbound_pending |= self.server.has_outbound();
             }
 
-            if self.disconnect_requested {
-                self.disconnect_requested_polls = self.disconnect_requested_polls.saturating_add(1);
-                let outbound_clear = !self.server.has_outbound() && !self.outbound.has_pending();
-                let grace_elapsed = self
-                    .disconnect_requested_at_ms
-                    .map(|start| now_ms.saturating_sub(start) >= DISCONNECT_GRACE_MS)
-                    .unwrap_or(false)
-                    || self.disconnect_requested_polls >= DISCONNECT_GRACE_POLLS;
-                if outbound_clear || grace_elapsed {
-                    Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
-                    if outbound_clear {
-                        if socket.state() != TcpState::Closed {
+            if self.disconnect_phase != ConsoleDisconnectPhase::Idle {
+                self.disconnect_phase_started_ms = arm_console_disconnect_phase_deadline(
+                    self.disconnect_phase,
+                    self.disconnect_phase_started_ms,
+                    now_ms,
+                );
+                let inbound_queued = self.server.ingest_snapshot().queued;
+                let application_output_drained = console_disconnect_application_queues_drained(
+                    self.server.has_outbound(),
+                    self.outbound.has_pending(),
+                    inbound_queued,
+                    disconnect_entered_this_turn,
+                );
+                // Smoltcp retains transmitted bytes here until the peer ACKs them. Empty
+                // application queues alone only prove that output was staged into the socket.
+                let tcp_send_queue_empty = socket.send_queue() == 0;
+                let action = console_disconnect_action(
+                    self.disconnect_phase,
+                    socket.state(),
+                    application_output_drained,
+                    tcp_send_queue_empty,
+                    now_ms,
+                    self.disconnect_phase_started_ms.unwrap_or(now_ms),
+                );
+                let mut disconnect_terminal = false;
+                let terminal_reason =
+                    console_disconnect_terminal_reason(action, self.disconnect_reason);
+                match action {
+                    ConsoleDisconnectAction::Wait => {}
+                    ConsoleDisconnectAction::StartClose => {
+                        info!(
+                            "[net-console] quit close start conn={} state={:?} app_drained={} inbound={} send_queue={}",
+                            self.active_client_id.unwrap_or(0),
+                            socket.state(),
+                            application_output_drained,
+                            inbound_queued,
+                            socket.send_queue()
+                        );
+                        Self::log_session_closed(
+                            &mut self.session_state,
+                            self.peer_endpoint,
+                            socket,
+                        );
+                        if !matches!(socket.state(), TcpState::Closed | TcpState::TimeWait) {
                             socket.close();
                         }
-                    } else if socket.state() != TcpState::Closed {
-                        socket.abort();
+                        self.disconnect_phase = ConsoleDisconnectPhase::Closing;
+                        self.disconnect_phase_started_ms = Some(now_ms);
+                        activity = true;
                     }
+                    ConsoleDisconnectAction::ContinueClose => {
+                        self.disconnect_phase = ConsoleDisconnectPhase::Closing;
+                        self.disconnect_phase_started_ms = Some(now_ms);
+                        activity = true;
+                    }
+                    ConsoleDisconnectAction::Complete => {
+                        disconnect_terminal = true;
+                    }
+                    ConsoleDisconnectAction::Abort => {
+                        self.disconnect_forced_aborts =
+                            self.disconnect_forced_aborts.saturating_add(1);
+                        warn!(
+                            "[net-console] disconnect deadline expired conn={} origin={} phase={:?} state={:?} app_drained={} inbound={} send_queue={} forced_aborts={}",
+                            self.active_client_id.unwrap_or(0),
+                            self.disconnect_reason.as_str(),
+                            self.disconnect_phase,
+                            socket.state(),
+                            application_output_drained,
+                            inbound_queued,
+                            socket.send_queue(),
+                            self.disconnect_forced_aborts,
+                        );
+                        if socket.state() != TcpState::Closed {
+                            socket.abort();
+                        }
+                        disconnect_terminal = true;
+                    }
+                }
+
+                if disconnect_terminal {
+                    Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                     self.server.end_session();
                     self.outbound.reset();
                     self.session_active = false;
-                    self.disconnect_requested = false;
-                    self.disconnect_requested_at_ms = None;
-                    self.disconnect_requested_polls = 0;
+                    self.disconnect_phase = ConsoleDisconnectPhase::Idle;
+                    self.disconnect_phase_started_ms = None;
                     outbound_pending = false;
                     if let Some(conn_id) = self.active_client_id {
-                        Self::note_close_reason(
-                            &mut log_closed_conn,
-                            conn_id,
-                            NetConsoleDisconnectReason::Quit,
-                        );
-                        Self::note_close_reason(
-                            &mut record_closed_conn,
-                            conn_id,
-                            NetConsoleDisconnectReason::Quit,
-                        );
+                        Self::note_close_reason(&mut log_closed_conn, conn_id, terminal_reason);
+                        Self::note_close_reason(&mut record_closed_conn, conn_id, terminal_reason);
                     }
                     self.active_client_id = None;
                     self.peer_endpoint = None;
@@ -6887,19 +7011,11 @@ impl<D: NetDevice> NetStack<D> {
                         self.active_client_id,
                         AuthState::Start,
                     );
-                    if console_listener_defer_reason_for(
-                        self.mode,
-                        self.ip,
-                        self.device.bringup_status_label(),
-                    )
-                    .is_none()
-                    {
-                        Self::force_relisten(socket, listen_port);
-                    } else {
-                        self.listener_announced = false;
-                    }
+                    self.listener_announced = false;
+                    self.disconnect_reason = NetConsoleDisconnectReason::Quit;
                     reset_session = true;
                     reset_tcp_state = Some(socket.state());
+                    activity = true;
                 }
             }
 
@@ -7658,7 +7774,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 
     fn send_console_line(&mut self, line: &str) -> bool {
-        if !self.stage_policy.allow_console_io {
+        if !self.stage_policy.allow_console_io
+            || !console_output_admitted_during_disconnect(self.disconnect_phase)
+        {
             return false;
         }
         if self.stage_policy.allow_tcp {
@@ -7723,9 +7841,14 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 
     fn request_disconnect(&mut self) {
-        self.disconnect_requested = true;
-        self.disconnect_requested_at_ms = self.last_now_ms;
-        self.disconnect_requested_polls = 0;
+        if self.disconnect_phase == ConsoleDisconnectPhase::Idle {
+            self.disconnect_phase = ConsoleDisconnectPhase::Draining;
+            self.disconnect_reason = NetConsoleDisconnectReason::Quit;
+            // Arm from the first service turn, not the request timestamp. A
+            // delayed linked-runtime poll must still get one chance to flush
+            // the queued QUIT response into smoltcp before expiry is judged.
+            self.disconnect_phase_started_ms = None;
+        }
     }
 
     fn console_output_drained(&self, conn_id: u64) -> bool {
@@ -7757,9 +7880,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     fn reset(&mut self) {
         self.server.end_session();
         self.session_active = false;
-        self.disconnect_requested = false;
-        self.disconnect_requested_at_ms = None;
-        self.disconnect_requested_polls = 0;
+        self.disconnect_phase = ConsoleDisconnectPhase::Idle;
+        self.disconnect_phase_started_ms = None;
+        self.disconnect_reason = NetConsoleDisconnectReason::Quit;
+        self.disconnect_forced_aborts = 0;
         self.telemetry = NetTelemetry::default();
         self.outbound.reset();
         self.tcp_smoke_outbound_sent = false;
@@ -8479,6 +8603,195 @@ mod tests {
         TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
         TCP_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
         *TCP_RX_STORAGE_TAG_LABEL.lock() = None;
+    }
+
+    #[test]
+    fn console_disconnect_waits_for_smoltcp_send_queue_ack() {
+        let started_ms = 100;
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::Established,
+                true,
+                false,
+                started_ms + 1,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::Wait
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::Established,
+                false,
+                true,
+                started_ms + 1,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::Wait
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::Established,
+                true,
+                true,
+                started_ms + 1,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::StartClose
+        );
+    }
+
+    #[test]
+    fn console_disconnect_waits_for_inbound_dispatch_after_peer_fin() {
+        assert!(!console_disconnect_application_queues_drained(
+            false, false, 1, false,
+        ));
+        assert!(!console_disconnect_application_queues_drained(
+            false, false, 0, true,
+        ));
+        assert!(console_disconnect_application_queues_drained(
+            false, false, 0, false,
+        ));
+    }
+
+    #[test]
+    fn console_disconnect_tracks_fin_handshake_before_relisten() {
+        assert!(console_output_admitted_during_disconnect(
+            ConsoleDisconnectPhase::Draining
+        ));
+        assert!(!console_output_admitted_during_disconnect(
+            ConsoleDisconnectPhase::Closing
+        ));
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::CloseWait,
+                false,
+                false,
+                1,
+                0,
+            ),
+            ConsoleDisconnectAction::Wait
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::CloseWait,
+                true,
+                true,
+                1,
+                0,
+            ),
+            ConsoleDisconnectAction::StartClose
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::FinWait1,
+                true,
+                true,
+                1,
+                0,
+            ),
+            ConsoleDisconnectAction::ContinueClose
+        );
+        for state in [
+            TcpState::FinWait1,
+            TcpState::FinWait2,
+            TcpState::Closing,
+            TcpState::LastAck,
+        ] {
+            assert_eq!(
+                console_disconnect_action(ConsoleDisconnectPhase::Closing, state, true, true, 1, 0,),
+                ConsoleDisconnectAction::Wait
+            );
+        }
+        for state in [TcpState::TimeWait, TcpState::Closed] {
+            assert_eq!(
+                console_disconnect_action(ConsoleDisconnectPhase::Closing, state, true, true, 1, 0,),
+                ConsoleDisconnectAction::Complete
+            );
+        }
+    }
+
+    #[test]
+    fn console_disconnect_deadlines_use_elapsed_time() {
+        let started_ms = 7;
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::Established,
+                false,
+                false,
+                started_ms + DISCONNECT_DRAIN_DEADLINE_MS - 1,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::Wait
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::Established,
+                false,
+                false,
+                started_ms + DISCONNECT_DRAIN_DEADLINE_MS,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::Abort
+        );
+        assert_eq!(
+            console_disconnect_terminal_reason(
+                ConsoleDisconnectAction::Abort,
+                NetConsoleDisconnectReason::Quit,
+            ),
+            NetConsoleDisconnectReason::Error,
+            "forced RST recovery must not be reported as a graceful QUIT"
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Closing,
+                TcpState::LastAck,
+                true,
+                true,
+                started_ms + DISCONNECT_CLOSE_DEADLINE_MS - 1,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::Wait
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Closing,
+                TcpState::LastAck,
+                true,
+                true,
+                started_ms + DISCONNECT_CLOSE_DEADLINE_MS,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::Abort
+        );
+
+        let first_late_service_ms = started_ms + DISCONNECT_DRAIN_DEADLINE_MS * 4;
+        let armed = arm_console_disconnect_phase_deadline(
+            ConsoleDisconnectPhase::Draining,
+            None,
+            first_late_service_ms,
+        )
+        .expect("the first service turn arms the drain deadline");
+        assert_eq!(armed, first_late_service_ms);
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::Established,
+                false,
+                false,
+                first_late_service_ms,
+                armed,
+            ),
+            ConsoleDisconnectAction::Wait,
+            "a long scheduling gap before first service cannot expire an unarmed disconnect"
+        );
     }
 
     #[test]

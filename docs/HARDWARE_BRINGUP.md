@@ -638,14 +638,24 @@ connection-generation publication checked by the normalizer; it cannot be
 used to stitch pair/control evidence from an earlier recovery into the current
 snapshot. A partial, reordered, duplicated, generation-regressing, or
 cross-recovery sequence, or any gap between 8h and `status=ready`, fails closed.
-The eight records and Ready are one retained transaction; a failed preflight
-publishes none of them.
+The eight records are one immutable candidate transaction. In particular,
+`8h ... status=pass` proves that the exact-generation handoff snapshot is
+eligible; it does not open the steady DHCP/TCP consumer and is not accepted
+Gate 8 by itself. The immediately adjacent `status=ready` is the lifecycle
+commit: root must first revalidate the same generation, handoff tokens, owner
+state, and recovery state, then publish the separate consumer token. A failed
+publication retracts the candidate and publishes no Ready. A later recovery
+does not rewrite an earlier accepted record, but it retracts current readiness
+and requires a fresh complete candidate plus Ready before ordinary data
+admission resumes.
 
-Gate 8h cannot pass until the root consumer has committed the handoff for the
-same generation. Association-generation start is too early: Cohesix may admit
-firmware data after secure keys while post-key maintenance still owns the
-linked-runtime lane and before the root NetStack exists, whereas Linux
-`brcmfmac` already has a live netdev consumer at controlled-port opening.
+Gate 8h cannot become a candidate pass until root has committed the handoff for
+the same generation; that handoff commit remains fenced from steady consumers
+until the lifecycle Ready publication above. Association-generation start is
+too early: Cohesix may admit firmware data after secure keys while post-key
+maintenance still owns the linked-runtime lane and before the root NetStack
+exists, whereas Linux `brcmfmac` already has a live netdev consumer at
+controlled-port opening.
 Cohesix therefore continues the one ordinary attached Network turn for
 association/control progress while the CYW43 NetDevice fences smoltcp RX/TX,
 Device-originated fresh data polling, fresh ARP staging, and DHCP. The existing
