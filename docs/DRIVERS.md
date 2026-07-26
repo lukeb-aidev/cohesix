@@ -302,7 +302,7 @@ image has passed the device's acceptance gate.
 | GENET | Isolated runtime owns MAC/MDIO and bounded RX/TX descriptor rings. Root consumes a network-driver trait. | Accepted Milestone 26c wired evidence exists for its recorded image. Milestone 26d current-image and benchmark revalidation is a separate requirement. |
 | PCIe root | Isolated runtime services declared PCIe MMIO operations; HAL owns platform admission and firmware/reset authority. | Runtime implemented. PCIe/VL805 identity, BAR/COMMAND, link, and downstream USB proof must be tied to the current boot. |
 | SDIO host | Isolated runtime exclusively owns SDHCI MMIO, CMD52/CMD53, card interrupt handling, and bus-owner service. | Runtime, generated IRQ/DPC topology, Linux-aligned elapsed timing, deterministic controller model, whole-action restart cuts, modeled CARD_INT/notification substeps, and persistent outer-fence failures are implemented. Repeated physical functional proof remains an acceptance gate. |
-| CYW43 Wi-Fi | Isolated runtime owns firmware upload, SDPCM/BDC control, EAPOL/data service, and bounded RX state through the generated CYW43-to-SDIO link. It receives no direct SDHCI MMIO authority. Root supervises transient bootstrap after publishing serial/local-seat and performs a full pair/context replay on retry. | Implementation remains active research/closure work. Production acceptance requires 10/10 cold plus 10/10 warm boots of one read-back image with association, DHCP, raw TCP/`cohsh`, ordered RX, and clean DPC counters; historical or offline success is not current closure. |
+| CYW43 Wi-Fi | Isolated runtime owns firmware upload, SDPCM/BDC control, EAPOL/data service, and bounded RX state through the generated CYW43-to-SDIO link. It receives no direct SDHCI MMIO authority. After linked-pair admission, every cold boot and recovery executes the same sole 22-action pair-normalization and context-replay lane before firmware and control. | Implementation remains active research/closure work. Production acceptance requires 10/10 cold plus 10/10 warm attempt-1 boots of one read-back image, with zero transient retries and with association, DHCP, raw TCP/`cohsh`, ordered RX, and clean DPC counters; historical, offline, or eventual retry success is not current closure. |
 
 ### QEMU network drivers
 
@@ -407,6 +407,28 @@ This as-built defect closure is authorized by active Milestone 26d task
 `m26b-wifi-sdio-notification-dpc-closure`. It does not authorize a second
 ownership, bootstrap, recovery, or proof lane.
 
+#### Sole pair-normalization and pre-Join lane
+
+Cold bootstrap and recovery do not have separate post-handoff implementations.
+After initial linked-runtime admission and CYW43-to-SDIO producer handoff, both
+enter the same retained 22-action pair-normalization cursor. It suspends and
+fences the pair, drains and acknowledges the notification/IRQ state, resets the
+rings, restores bootstrap scheduling state, resumes and proves SDIO before
+CYW43, replays both descriptors and engines, hands the ring back to CYW43, and
+advances the pair epoch. The same context-replay gate then owns firmware and
+control programming before the two owner-first steady-priority cutovers. Cold
+normalization is part of attempt 1, not a retry. There is no direct
+cold-to-firmware path, recovery-only replay path, same-generation fallback, or
+second restart cursor.
+
+The sole event quiet fence is immediately before association Join. It runs
+after the last Join-affecting protected-network control
+(`HostEapolPromisc`) or open-network control (`OpenWpaAuth`) and before Join
+event ownership can be armed. It completes only after two consecutive exact
+`Idle` terminals. Any `FrameReady` or `Progress` activity resets that streak,
+and 256 polls is the finite fail-closed cap rather than mandatory work on an
+already quiet boot. There is no earlier or additional post-UP quiet fence.
+
 #### Ordered Gate 8 stability contract
 
 Transport and control-plane attachment enter `stabilizing`, not `ready`.
@@ -495,6 +517,10 @@ the one-pair-restart allowance for the next numbered outer attempt without
 clearing an accepted terminal-drain owner, so every advertised attempt is a
 real hardware episode rather than a local `pair-recovery-limit` no-op.
 Attempt 5 exhausts and quarantines instead of spinning.
+Those later attempts remain bounded diagnostic and containment machinery, not
+production acceptance. Every counted production hardware boot must reach
+`status=ready` on `attempt=1`, with no `status=backoff`, no attempt-2-or-later
+bootstrap, and no transient retry.
 
 Gate 8h deliberately permits normal bounded root RX, data TX, ARP, runtime
 backlog, and an exact already-assigned current-generation NetData request.
@@ -514,6 +540,15 @@ connection generation when root queues them. Generation invalidation and the
 commit boundary reject and separately count stale-generation tokens, while
 valid current-generation backlog remains queued for NetStack rather than being
 discarded or hidden by the new baseline.
+
+Every exact terminal that accepts a current-generation steady data TX arms one
+RX-fairness obligation. Before another fresh data TX is admitted, the existing
+sole `NetData` `RX_POLL`/DPC path must reach one exact non-fault `Idle`,
+`Progress`, or `FrameReady` terminal in that generation. Copied root RX, queued
+ARP, or another outbound frame cannot clear or bypass the obligation; a stale
+or fault terminal leaves it fenced under the existing recovery contract. This
+is Linux-shaped RX/DPC fairness across linked-runtime/EventPump turns, not a
+second poller or TX path.
 
 Both `wifi diag` and `wifi probe-ht` emit the same passive scheduler, handoff,
 and retained-frontier records after association and maintenance state:
@@ -1318,9 +1353,13 @@ generation and XID.
   the distinct source-asserted-empty episode-rearm counter is diagnostic only
   and cannot be substituted for owner liveness.
 - Physical-Pi Wi-Fi bootstrap is supervised after the serial prompt. Buffered
-  USB command fencing remains live during that finite episode, but HDMI keeps
-  its interactive ready banner and prompt deferred until the supervisor emits
-  `ready`, `exhausted`, or `permanent` and USB command admission is proven.
+  USB command fencing remains live during that finite episode. Supervisor
+  `ready` proves the driver lifecycle only. For the selected Wi-Fi/DHCP lane,
+  HDMI may say `Ready to use` only after DHCP is bound and the TCP console
+  listener is bound, non-deferred, and admitted. This listener-ready predicate
+  is weaker than end-to-end `tcp_ready`, which additionally requires accepted
+  or authenticated physical data-path proof. On `exhausted` or `permanent`,
+  HDMI may expose diagnostics but must not render `Ready to use`.
   Pre-terminal HDMI text reports startup/diagnostic availability only. The
   linked display schedules its canonical attach snapshot once, immediately at
   successful attach and before queued incremental startup text can drain.
@@ -1329,13 +1368,16 @@ generation and XID.
   that exact prompt and typed row restored and cleared to end-of-line; a closed
   command retains its newline before response text, rather than restarting a
   viewport redraw.
-  One bootstrap or recovery episode permits at most five attempts, separated
+  Every cold boot first runs the same sole 22-action pair normalization and
+  context replay used by recovery before firmware/control. It remains attempt
+  1 and is not an implicit retry. One bootstrap or recovery episode permits at
+  most five attempts, separated
   by bounded `1/2/4/8` second virtual-counter backoffs. This finite bound is
   analogous to brcmfmac's `BRCMF_SDIO_MAX_ACCESS_ERRORS = 5` SDIO-access error
   budget; it does not claim that Linux retries the whole device-bootstrap
-  sequence identically. Once both restart contexts exist, every retry first
-  suspends and fences the pair, restarts SDIO before CYW43, and replays retained
-  firmware and control context. Inside one outer attempt, at most one such pair
+  sequence identically. Once both restart contexts exist, every recovery
+  re-enters that identical owner-first normalization/context-replay lane. Inside
+  one outer attempt, at most one such pair
   restart is admitted until the attached EventPump proves address/TCP network
   readiness. Successful descriptor, engine, firmware, or context replay is not
   stability proof and cannot reset that inner streak; the same transport fault
@@ -1394,8 +1436,8 @@ generation and XID.
   One retained copy can be submitted only during each later ordinary `Display`
   EventPump turn; status publication cannot compose display service with the
   child operation that caused it.
-- Recovery can become necessary before initial firmware-bundle admission. After
-  the ordered pair restart acquires the context-replay gate, a supervisor with
+- Cold normalization or recovery admits a firmware bundle only after the
+  ordered pair restart acquires the context-replay gate. A supervisor with
   no retained bundle reacquires the manifest-selected bundle through HAL,
   validates it and its firmware reset vector, normalizes NVRAM into retained
   storage, and publishes the retained recovery context before beginning the
@@ -1580,8 +1622,10 @@ generation and XID.
   association recovery, host-EAPOL maintenance, data TX, and ARP/GARP output
   retain their next action for a later turn. EventPump and NetStack do not
   manufacture private Wi-Fi poll, tail-ingest, TCP-flush, or EAPOL bursts. In
-  particular, the post-up 256-frame drain requires 256 separately admitted
-  outer turns.
+  particular, the sole immediately pre-Join quiet fence consumes one poll per
+  separately admitted outer turn, requires two consecutive exact `Idle`
+  terminals, resets that streak on activity, and fails closed at its finite
+  256-poll cap.
 - Steady Gate 8 polling uses one retained-owner arbitration rule. An existing
   `NetData` prompt poll remains first until its immutable request reaches a
   typed terminal, including while its prepared ring sequence is deliberately
@@ -1605,6 +1649,9 @@ generation and XID.
   host-EAPOL policy lane remains scheduled until that obligation has an exact
   success/failure terminal, and it fences only fresh NetData admission; it
   cannot revoke an already-assigned op8 continuation.
+  After a steady data TX reaches an accepted terminal, that same sole
+  `NetData` op8 lane must complete one current-generation RX/DPC poll before a
+  second fresh TX is admitted.
 - Between retained operations, live serial service is admitted only through
   the independent linked-runtime route. Physical-Pi cutover requires a matching
   linked-runtime service completion (`Idle`, `Progress`, or `FrameReady`) after

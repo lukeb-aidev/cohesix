@@ -610,8 +610,24 @@ and authenticated `cohsh` proof, with no unresolved transport, DPC, generation,
 or recovery ambiguity. The minimum closure sample is 10/10 cold power-on boots
 and 10/10 warm software-reset boots of the same independently read-back image.
 Every counted boot must contain that image's exact `[BUILD]` marker and must
-pass the complete normalizer evidence predicate with `NET_ACTIVE=wifi`; one
-failed boot keeps repeatability open rather than being hidden by extra passes.
+pass the complete normalizer evidence predicate with `NET_ACTIVE=wifi`, reach
+Wi-Fi `status=ready` on `attempt=1`, and contain zero transient retries. Any
+`status=backoff`, attempt-2-or-later success, or recovery used to rescue initial
+bootstrap keeps repeatability open rather than being hidden by extra passes.
+
+Every cold attempt and later recovery uses one path after linked-pair admission:
+the sole retained 22-action CYW43/SDIO pair normalization, then its sole context
+replay, then firmware/control programming and owner-first steady-priority
+cutover. Cold normalization is part of attempt 1, not a retry. Reaching
+firmware/control without that complete normalization, or using a separate cold,
+replay, or fallback path, fails this runbook.
+
+The sole event quiet fence is immediately pre-Join, after
+`HostEapolPromisc` for a protected network or `OpenWpaAuth` for an open network.
+It must observe two consecutive exact `Idle` terminals before Join event
+ownership is armed. `FrameReady` or `Progress` resets the streak; 256 polls is
+the finite fail-closed cap, not a mandatory delay on an already quiet boot. An
+earlier post-UP drain is not a substitute.
 
 Gate 8 is an ordered stability proof, not the first moment the linked transport
 attaches. After transport/control attachment, require
@@ -696,6 +712,14 @@ generation; the next consumer-active generation captures a new baseline
 without resetting cumulative counters. A stale-purge count is diagnostic
 evidence, not successful receive or permission to ignore later loss.
 
+For steady traffic, each exact terminal that accepts a current-generation data
+TX must be followed by one exact terminal from the existing sole `NetData`
+`RX_POLL`/DPC lane before another fresh TX is admitted. Accept `Idle`,
+`Progress`, or `FrameReady` only for the same generation and exact retained
+request. A fault or stale terminal cannot clear the fence. In the paired pcap,
+check that outbound TCP trains do not suppress peer ACK/FIN ingress while this
+bounded RX-fairness transaction is active.
+
 Capture the passive scheduler, handoff, and retained-frontier lines from both
 `wifi diag` and `wifi probe-ht`:
 
@@ -744,7 +768,10 @@ attempts with 1/2/4/8-second backoffs are the finite limit. Each numbered
 attempt receives one fresh pair-restart allowance without discarding an
 accepted terminal-drain owner, so a reported attempt cannot fail locally
 merely because the prior attempt used its allowance. Attempt 5 must exhaust
-rather than start a sixth. Gate 9 DHCP/address and Gate 10 nettest, TCP, and
+rather than start a sixth. This retry budget preserves diagnosis and
+containment, but any use of it disqualifies a production hardware boot: counted
+boots must pass on attempt 1 with zero transient retries. Gate 9 DHCP/address
+and Gate 10 nettest, TCP, and
 authenticated `cohsh` must remain in the accepted Gate 8 connection
 generation. Each DHCP start must also publish a fresh generation-bound XID;
 late Offer/ACK packets carrying a prior XID are not current proof. Do not count
@@ -754,8 +781,10 @@ invalidates those proofs.
 On the current shared-core linked-runtime design, the prompt-side supervisor
 must prove the SDIO owner before the CYW43 client. SDIO service registration and
 exact descriptor replay occur first, followed by CYW43 registration and
-descriptor replay. Both remain at bootstrap priority `255` through engine,
-firmware, and control-context replay. Only after control-plane readiness does
+descriptor replay. After initial engine handoff, every cold boot and recovery
+enters the same sole 22-action owner-first pair-normalization cursor and context
+replay before firmware/control. Both remain at bootstrap priority `255` through
+engine, firmware, and control-context replay. Only after control-plane readiness does
 one outer turn lower SDIO to its steady contract priority; a separate later
 turn lowers CYW43. Recovery raises and reprograms SDIO, raises and reprograms
 CYW43 while both remain suspended, then resumes and proves the SDIO owner before
@@ -1327,6 +1356,10 @@ and `reboot` must return their documented result or a typed unavailable/fenced
 error rather than being swallowed by the failed bootstrap. Only end-to-end
 network-ready proof resets the inner restart streak and the finite recovery
 state for a later independently signalled recovery episode.
+These later attempts remain fail-closed diagnostic and recovery machinery.
+Production hardware acceptance requires the canonical cold normalization and
+all later Wi-Fi gates to complete on attempt 1 without a backoff or transient
+retry.
 
 The high-impact `preflight`, `begin`, `recovery`, `backoff`, `ready`,
 `exhausted`, and `permanent` supervisor records declare
@@ -1389,6 +1422,15 @@ semantic rendering on a later isolated-display turn; it must not render the raw
 supervisor record. The `telemetry_sinks=serial+qlog+hdmi` field declares the
 configured routing targets without requiring byte-identical presentation; it
 is not proof that an unavailable or saturated display accepted the mirror.
+For the selected Wi-Fi/DHCP lane, supervisor `ready` is driver readiness only.
+HDMI may render `Ready to use` only after current-generation DHCP is bound and
+the TCP console listener is bound, non-deferred, and admitted. Listener
+readiness is intentionally distinct from end-to-end `tcp_ready`, which
+additionally requires accepted or authenticated physical data-path proof. The
+HDMI message is obvious operator availability, not raw TCP or
+authenticated-`cohsh` acceptance evidence. Diagnostic prompts may remain
+available after `exhausted` or `permanent`, but those states must never render
+`Ready to use`.
 The serial record receives bounded physical-console priority: a terminal
 `ready`, `exhausted`, or `permanent` record may
 evict only an older nonterminal background record, never an `ACK`/`ERR`/`END`,
@@ -1531,7 +1573,8 @@ sidecar, and log set cannot authenticate itself merely by agreeing internally.
 A missing/unreadable artifact,
 hash mismatch, unsealed/absent/duplicated/conflicting marker, incomplete or
 non-ready bootstrap-supervisor
-record, skip-only log, wired boot, failed boot slice, or any existing
+record, any `status=backoff`, any attempt-2-or-later success, any transient
+retry, skip-only log, wired boot, failed boot slice, or any existing
 Wi-Fi/driver/operator blocker fails the aggregate. Cold versus warm remains an
 operator-recorded reset classification, so retain a per-run collection ledger
 and power/reset evidence alongside the serial and pcap files.
@@ -1541,7 +1584,9 @@ and power/reset evidence alongside the serial and pcap files.
 Serial remains the recovery authority. HDMI is an independent display sink;
 USB keyboard readiness requires isolated-runtime command and first-report
 proof. A prompt displayed on HDMI does not prove keyboard input, and a USB
-descriptor does not prove command readiness. Under load, preserve serial and
+descriptor does not prove command readiness. `Ready to use` requires DHCP bound
+plus TCP-listener readiness but does not prove the stronger end-to-end
+`tcp_ready` predicate. Under load, preserve serial and
 local-seat command liveness before nonessential mirroring or redraws.
 
 Before constructing the EventPump, Pi root completes the current synchronous

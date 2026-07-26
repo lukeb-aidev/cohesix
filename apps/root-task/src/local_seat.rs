@@ -943,9 +943,11 @@ pub(crate) const fn local_seat_hdmi_keyboard_ready_line_supersedes_busy(
 
 pub(crate) const CYW43_GATE8_READY_HDMI_LINE: &str =
     "[drivers] WiFi Gate 8 stable; DHCP and TCP continuing";
+pub(crate) const CYW43_READY_TO_USE_HDMI_PREFIX: &str = "[drivers] WiFi ready to use:";
 
 fn local_seat_cyw43_stale_ready_line(line: &str) -> bool {
     line.starts_with("[drivers] WiFi Gate 8 stable;")
+        || line.starts_with(CYW43_READY_TO_USE_HDMI_PREFIX)
         || line == "Cohesix console ready"
         || line == "cohesix> "
 }
@@ -10469,9 +10471,16 @@ mod tests {
             buffer_lines: 16,
         });
         let wifi_ready = CYW43_GATE8_READY_HDMI_LINE;
+        let wifi_ready_to_use =
+            "[drivers] WiFi ready to use: DHCP bound at 192.168.86.154; TCP console listening on port 31337";
         runtime.hdmi_bootstrap_terminal_ready = true;
         runtime.hdmi_console_ready_line_emitted = true;
-        for line in [wifi_ready, "Cohesix console ready", "cohesix> "] {
+        for line in [
+            wifi_ready,
+            wifi_ready_to_use,
+            "Cohesix console ready",
+            "cohesix> ",
+        ] {
             runtime.mirror_line_current_tcb(line);
             assert!(runtime.queue_linked_hdmi_line(line));
         }
@@ -10488,6 +10497,10 @@ mod tests {
         assert_eq!(trace.pending_bytes, 0);
         assert!(trace.pending_redraw);
         assert!(trace.superseded_bytes >= queued_stale_bytes as u64);
+        assert!(!runtime
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line.as_str() == wifi_ready_to_use));
         assert!(!runtime.hdmi_bootstrap_terminal_ready());
         assert!(!runtime.hdmi_console_ready_line_emitted());
         assert!(!runtime

@@ -1226,6 +1226,15 @@ pub trait NetPoller {
         CONSOLE_TCP_PORT
     }
 
+    /// Return whether the TCP console listener is bound and accepting peers.
+    ///
+    /// This is intentionally weaker than [`NetStatusReport::tcp_ready`] on
+    /// physical drivers, where readiness also requires an accepted or
+    /// authenticated session as end-to-end data-path proof.
+    fn console_listener_ready(&self) -> bool {
+        self.status_report().tcp_ready
+    }
+
     /// Start a network self-test run if supported.
     fn start_self_test(&mut self, _now_ms: u64) -> NetSelfTestStartResult {
         NetSelfTestStartResult::Unsupported

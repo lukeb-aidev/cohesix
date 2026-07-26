@@ -1073,7 +1073,11 @@ impl DeferredNetSupervisorStatus {
     }
 
     const fn releases_hdmi_console_ready(self) -> bool {
-        matches!(self, Self::Ready | Self::Exhausted | Self::Permanent)
+        // Successful Gate 8 uses the atomic transaction and remains fenced
+        // until EventPump independently proves DHCP Bound plus a listening
+        // TCP console. Terminal failures release the local HDMI console while
+        // keeping their explicit Wi-Fi-unavailable message visible.
+        matches!(self, Self::Exhausted | Self::Permanent)
     }
 }
 
@@ -3082,7 +3086,7 @@ mod tests {
         assert!(!super::DeferredNetSupervisorStatus::Begin.releases_hdmi_console_ready());
         assert!(!super::DeferredNetSupervisorStatus::Backoff.releases_hdmi_console_ready());
         assert!(!super::DeferredNetSupervisorStatus::Stabilizing.releases_hdmi_console_ready());
-        assert!(super::DeferredNetSupervisorStatus::Ready.releases_hdmi_console_ready());
+        assert!(!super::DeferredNetSupervisorStatus::Ready.releases_hdmi_console_ready());
         assert!(super::DeferredNetSupervisorStatus::Exhausted.releases_hdmi_console_ready());
         assert!(super::DeferredNetSupervisorStatus::Permanent.releases_hdmi_console_ready());
     }

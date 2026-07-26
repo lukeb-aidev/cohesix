@@ -500,6 +500,15 @@ fn net_status_tcp_ready(
             || physical_driver_tcp_data_path_proven(active_driver, active_interface, counters))
 }
 
+fn net_console_listener_ready(
+    allow_tcp: bool,
+    listener_announced: bool,
+    listener_deferred: bool,
+    wifi_rx_admission_blocked: bool,
+) -> bool {
+    allow_tcp && listener_announced && !listener_deferred && !wifi_rx_admission_blocked
+}
+
 fn cyw43_status_blocker_for(
     active_driver: &'static str,
     active_interface: &'static str,
@@ -8032,6 +8041,15 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.listen_port
     }
 
+    fn console_listener_ready(&self) -> bool {
+        net_console_listener_ready(
+            self.stage_policy.allow_tcp,
+            self.listener_announced,
+            self.listener_defer_reason.is_some(),
+            self.wifi_rx_admission_blocked,
+        )
+    }
+
     fn self_test_report(&self) -> NetSelfTestReport {
         let udp_target = self.selftest_host_target(UDP_ECHO_PORT);
         let tcp_target = self.selftest_host_target(TCP_SMOKE_PORT);
@@ -8097,10 +8115,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             (NetInterfacePolicy::Auto, _, _) => "wired",
             _ => "none",
         };
-        let listener_ready = self.stage_policy.allow_tcp
-            && self.listener_announced
-            && self.listener_defer_reason.is_none()
-            && !self.wifi_rx_admission_blocked;
+        let listener_ready = self.console_listener_ready();
         let tcp_ready = net_status_tcp_ready(
             listener_ready && cyw43_blocker.is_none(),
             active_driver,
@@ -8533,6 +8548,16 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.console_listen_port(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.console_listen_port(),
+        }
+    }
+
+    fn console_listener_ready(&self) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.console_listener_ready(),
+            Self::GenetDriverTask(stack) => stack.console_listener_ready(),
+            Self::Cyw43DriverTask(stack) => stack.console_listener_ready(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_listener_ready(),
         }
     }
 
@@ -10100,6 +10125,15 @@ mod tests {
                 ..NetCounters::default()
             }
         ));
+    }
+
+    #[test]
+    fn console_listener_ready_requires_bound_non_deferred_admission() {
+        assert!(net_console_listener_ready(true, true, false, false));
+        assert!(!net_console_listener_ready(false, true, false, false));
+        assert!(!net_console_listener_ready(true, false, false, false));
+        assert!(!net_console_listener_ready(true, true, true, false));
+        assert!(!net_console_listener_ready(true, true, false, true));
     }
 
     #[test]

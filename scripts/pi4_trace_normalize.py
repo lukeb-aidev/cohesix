@@ -616,6 +616,7 @@ class Cyw43BootstrapSupervisorProof:
     seen: bool = False
     max_attempt: int = 0
     transient_retries: int = 0
+    recoveries: int = 0
     last_status: str = "none"
     ready: bool = False
     blocker: str = "none"
@@ -741,6 +742,7 @@ class GateSummary:
     cyw43_bootstrap_supervisor_seen: bool = False
     cyw43_bootstrap_supervisor_max_attempt: int = 0
     cyw43_bootstrap_supervisor_transient_retries: int = 0
+    cyw43_bootstrap_supervisor_recoveries: int = 0
     cyw43_bootstrap_supervisor_last_status: str = "none"
     cyw43_bootstrap_supervisor_ready: bool = False
     cyw43_bootstrap_supervisor_blocker: str = "none"
@@ -1008,6 +1010,9 @@ class GateSummary:
             ),
             "CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES": (
                 self.cyw43_bootstrap_supervisor_transient_retries
+            ),
+            "CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES": (
+                self.cyw43_bootstrap_supervisor_recoveries
             ),
             "CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS": (
                 self.cyw43_bootstrap_supervisor_last_status
@@ -12816,6 +12821,7 @@ def summarize_cyw43_bootstrap_supervisor(
     current_attempt = 0
     max_attempt = 0
     transient_retries = 0
+    recoveries = 0
     last_status = "none"
     begin_ms = 0
     scheduled_ms = 0
@@ -12948,6 +12954,8 @@ def summarize_cyw43_bootstrap_supervisor(
             mark_blocker("serial-blocked")
 
         if status in ("begin", "recovery"):
+            if status == "recovery":
+                recoveries += 1
             sequence_valid = True
             if backoff_ms != 0:
                 mark_blocker("malformed-backoff-progression")
@@ -13107,6 +13115,7 @@ def summarize_cyw43_bootstrap_supervisor(
         seen=True,
         max_attempt=max_attempt,
         transient_retries=transient_retries,
+        recoveries=recoveries,
         last_status=last_status,
         ready=ready,
         blocker=blocker or "none",
@@ -14089,6 +14098,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         ),
         cyw43_bootstrap_supervisor_transient_retries=(
             cyw43_bootstrap_supervisor.transient_retries
+        ),
+        cyw43_bootstrap_supervisor_recoveries=(
+            cyw43_bootstrap_supervisor.recoveries
         ),
         cyw43_bootstrap_supervisor_last_status=(
             cyw43_bootstrap_supervisor.last_status
@@ -15425,6 +15437,37 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
             and record.get("CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS") != "ready"
         ):
             blockers.append("cyw43-bootstrap-supervisor-last-status-not-ready")
+        if supervisor_seen and (
+            parse_hex_int(
+                str(record.get("CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT", "0"))
+            )
+            or 0
+        ) != 1:
+            blockers.append("cyw43-bootstrap-supervisor-not-first-attempt")
+        transient_retries_raw = record.get(
+            "CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"
+        )
+        transient_retries = (
+            None
+            if transient_retries_raw is None
+            else parse_hex_int(str(transient_retries_raw))
+        )
+        if supervisor_seen and transient_retries is None:
+            blockers.append(
+                "cyw43-bootstrap-supervisor-transient-retries-missing"
+            )
+        elif supervisor_seen and transient_retries != 0:
+            blockers.append("cyw43-bootstrap-supervisor-transient-retries")
+        recoveries_raw = record.get("CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES")
+        recoveries = (
+            None
+            if recoveries_raw is None
+            else parse_hex_int(str(recoveries_raw))
+        )
+        if supervisor_seen and recoveries is None:
+            blockers.append("cyw43-bootstrap-supervisor-recoveries-missing")
+        elif supervisor_seen and recoveries != 0:
+            blockers.append("cyw43-bootstrap-supervisor-recovery")
         if record.get("DRIVER_TASK_SDIO_DEDICATED") != "yes":
             blockers.append("driver-task-sdio-not-dedicated")
         if (parse_hex_int(str(record.get("WIFI_GATE", "0"))) or 0) < 10:

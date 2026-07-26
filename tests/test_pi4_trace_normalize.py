@@ -1299,6 +1299,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "CYW43_BOOTSTRAP_SUPERVISOR_SEEN": "no",
         "CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT": 0,
         "CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES": 0,
+        "CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES": 0,
         "CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS": "none",
         "CYW43_BOOTSTRAP_SUPERVISOR_READY": "no",
         "CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER": "none",
@@ -14323,9 +14324,34 @@ def test_boot_acceptance_requires_wifi_bootstrap_supervisor_terminal() -> None:
 
     assert record["NET_ACTIVE"] == "wifi"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
-    assert "cyw43-bootstrap-supervisor-missing" not in (
-        normalizer.boot_evidence_blockers(record)
+    clean_blockers = normalizer.boot_evidence_blockers(record)
+    assert "cyw43-bootstrap-supervisor-missing" not in clean_blockers
+    assert "cyw43-bootstrap-supervisor-not-first-attempt" not in clean_blockers
+    assert "cyw43-bootstrap-supervisor-transient-retries" not in clean_blockers
+    assert "cyw43-bootstrap-supervisor-recovery" not in clean_blockers
+
+    missing_counters = dict(record)
+    missing_counters.pop("CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES")
+    missing_counters.pop("CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES")
+    missing_counter_blockers = normalizer.boot_evidence_blockers(
+        missing_counters
     )
+    assert (
+        "cyw43-bootstrap-supervisor-transient-retries-missing"
+        in missing_counter_blockers
+    )
+    assert (
+        "cyw43-bootstrap-supervisor-recoveries-missing"
+        in missing_counter_blockers
+    )
+
+    record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] = 2
+    record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] = 1
+    record["CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES"] = 1
+    retry_blockers = normalizer.boot_evidence_blockers(record)
+    assert "cyw43-bootstrap-supervisor-not-first-attempt" in retry_blockers
+    assert "cyw43-bootstrap-supervisor-transient-retries" in retry_blockers
+    assert "cyw43-bootstrap-supervisor-recovery" in retry_blockers
 
     record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] = "no"
     assert "cyw43-bootstrap-supervisor-missing" in (
@@ -15092,6 +15118,7 @@ def test_bootstrap_supervisor_absence_preserves_historical_scoring() -> None:
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] == "no"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 0
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 0
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES"] == 0
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "none"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
@@ -15617,8 +15644,8 @@ def test_bootstrap_supervisor_rejects_noncanonical_or_oversized_u64_fields(
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "numeric-field-invalid"
 
 
-def test_bootstrap_supervisor_accepts_multiple_backoffs_then_ready() -> None:
-    """Monotonic 1/2-second retry progression may close at a later ready."""
+def test_bootstrap_supervisor_normalizes_later_ready_but_rejects_production_retry() -> None:
+    """Diagnostic readiness remains true while production rejects warm-up retries."""
 
     events = normalizer.parse_events(
         [
@@ -15643,6 +15670,7 @@ def test_bootstrap_supervisor_accepts_multiple_backoffs_then_ready() -> None:
     )
 
     record = normalizer.summarize_gates(events).to_record()
+    record["NET_ACTIVE"] = "wifi"
     blockers = normalizer.boot_evidence_blockers(record)
 
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 3
@@ -15650,10 +15678,8 @@ def test_bootstrap_supervisor_accepts_multiple_backoffs_then_ready() -> None:
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
-    assert not any(
-        blocker.startswith("cyw43-bootstrap-supervisor-")
-        for blocker in blockers
-    )
+    assert "cyw43-bootstrap-supervisor-not-first-attempt" in blockers
+    assert "cyw43-bootstrap-supervisor-transient-retries" in blockers
 
 
 def test_bootstrap_supervisor_preflight_does_not_consume_an_attempt() -> None:
@@ -15860,6 +15886,7 @@ def test_bootstrap_supervisor_accepts_later_independent_recovery_episode() -> No
 
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 2
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 1
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES"] == 2
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
@@ -15908,6 +15935,7 @@ def test_bootstrap_supervisor_accepts_same_attempt_ready_recovery_exhaustion() -
 
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 5
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 4
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES"] == 10
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "exhausted"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "retry-exhausted"

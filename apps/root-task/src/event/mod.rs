@@ -2050,6 +2050,45 @@ struct PendingCyw43BootstrapHdmiMilestone {
     releases_console_ready: bool,
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43NetworkReadyHdmiState {
+    WaitingForNetworkStack,
+    WaitingForDhcp,
+    WaitingForTcpListener,
+    Ready,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl Cyw43NetworkReadyHdmiState {
+    const fn display_text(self) -> &'static str {
+        match self {
+            Self::WaitingForNetworkStack => "Gate 8 stable; attaching network stack",
+            Self::WaitingForDhcp => "security ready; waiting for DHCP lease",
+            Self::WaitingForTcpListener => "DHCP bound; starting TCP console listener",
+            Self::Ready => "ready to use",
+        }
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_network_ready_hdmi_state(
+    status: &NetStatusReport,
+    listener_ready: bool,
+) -> Cyw43NetworkReadyHdmiState {
+    if status.active_driver != "cyw43" || status.active_interface != "wifi" {
+        return Cyw43NetworkReadyHdmiState::WaitingForNetworkStack;
+    }
+    if status.address_source != "dhcp-lease" || status.dhcp_phase != "bound" || status.ip.is_empty()
+    {
+        return Cyw43NetworkReadyHdmiState::WaitingForDhcp;
+    }
+    if !listener_ready {
+        return Cyw43NetworkReadyHdmiState::WaitingForTcpListener;
+    }
+    Cyw43NetworkReadyHdmiState::Ready
+}
+
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43BootstrapHdmiProgressCadence {
@@ -2116,6 +2155,65 @@ impl Cyw43BootstrapHdmiProgressCadence {
         now_ms: u64,
     ) {
         self.emitted = Some(frontier);
+        self.last_emitted_ms = now_ms;
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43NetworkReadyHdmiProgressCadence {
+    active: bool,
+    current: Option<Cyw43NetworkReadyHdmiState>,
+    emitted: Option<Cyw43NetworkReadyHdmiState>,
+    last_emitted_ms: u64,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl Cyw43NetworkReadyHdmiProgressCadence {
+    const fn new() -> Self {
+        Self {
+            active: false,
+            current: None,
+            emitted: None,
+            last_emitted_ms: 0,
+        }
+    }
+
+    fn begin(&mut self, now_ms: u64) {
+        self.active = true;
+        self.current = Some(Cyw43NetworkReadyHdmiState::WaitingForNetworkStack);
+        self.emitted = None;
+        self.last_emitted_ms = now_ms;
+    }
+
+    fn clear(&mut self, now_ms: u64) {
+        self.active = false;
+        self.current = None;
+        self.emitted = None;
+        self.last_emitted_ms = now_ms;
+    }
+
+    fn observe(&mut self, state: Cyw43NetworkReadyHdmiState) {
+        if self.active && state != Cyw43NetworkReadyHdmiState::Ready {
+            self.current = Some(state);
+        }
+    }
+
+    fn due(self, now_ms: u64) -> Option<(Cyw43NetworkReadyHdmiState, bool)> {
+        if !self.active {
+            return None;
+        }
+        let current = self.current?;
+        let elapsed_ms = now_ms.saturating_sub(self.last_emitted_ms);
+        if self.emitted != Some(current) {
+            return (elapsed_ms >= CYW43_BOOTSTRAP_HDMI_PROGRESS_MIN_INTERVAL_MS)
+                .then_some((current, false));
+        }
+        (elapsed_ms >= CYW43_BOOTSTRAP_HDMI_PROGRESS_HEARTBEAT_MS).then_some((current, true))
+    }
+
+    fn record_emitted(&mut self, state: Cyw43NetworkReadyHdmiState, now_ms: u64) {
+        self.emitted = Some(state);
         self.last_emitted_ms = now_ms;
     }
 }
@@ -2270,6 +2368,8 @@ where
     pending_cyw43_bootstrap_hdmi_terminal_milestone: Option<PendingCyw43BootstrapHdmiMilestone>,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_progress: Cyw43BootstrapHdmiProgressCadence,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    cyw43_network_ready_hdmi_progress: Cyw43NetworkReadyHdmiProgressCadence,
     #[cfg(feature = "kernel")]
     pending_cyw43_bootstrap_serial_milestones: HeaplessDeque<
         HeaplessString<DEFAULT_LINE_CAPACITY>,
@@ -2442,6 +2542,8 @@ where
             pending_cyw43_bootstrap_hdmi_terminal_milestone: None,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_hdmi_progress: Cyw43BootstrapHdmiProgressCadence::new(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            cyw43_network_ready_hdmi_progress: Cyw43NetworkReadyHdmiProgressCadence::new(),
             #[cfg(feature = "kernel")]
             pending_cyw43_bootstrap_serial_milestones: HeaplessDeque::new(),
             #[cfg(feature = "kernel")]
@@ -3042,6 +3144,128 @@ where
             .record_emitted(frontier, self.now_ms);
     }
 
+    /// Refresh the post-association HDMI frontier until the network is usable.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn queue_due_cyw43_network_ready_hdmi_progress(&mut self) {
+        if self.local_seat.is_none() || self.reboot_pending {
+            return;
+        }
+        let Some((state, heartbeat)) = self.cyw43_network_ready_hdmi_progress.due(self.now_ms)
+        else {
+            return;
+        };
+        let mut text = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        if write!(
+            text,
+            "[drivers] WiFi {}{}",
+            state.display_text(),
+            if heartbeat { " (still working)" } else { "" },
+        )
+        .is_err()
+        {
+            self.cyw43_network_ready_hdmi_progress
+                .record_emitted(state, self.now_ms);
+            return;
+        }
+        crate::log_buffer::append_log_line(text.as_str());
+        self.pending_cyw43_bootstrap_hdmi_progress_milestone =
+            Some(PendingCyw43BootstrapHdmiMilestone {
+                text,
+                releases_console_ready: false,
+            });
+        self.cyw43_bootstrap_hdmi_pending = true;
+        self.cyw43_network_ready_hdmi_progress
+            .record_emitted(state, self.now_ms);
+    }
+
+    /// Reconcile Gate 8 with DHCP and TCP-listener truth.
+    ///
+    /// This method is queue-only. The linked display phase remains the sole
+    /// owner that submits the corresponding HDMI operation.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn reconcile_cyw43_network_ready_hdmi(&mut self) {
+        if !self.cyw43_network_ready_hdmi_progress.active || self.reboot_pending {
+            return;
+        }
+        if self.local_seat.is_none() {
+            self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
+            return;
+        }
+
+        let observation = self.net.as_ref().map(|net| {
+            let status = net.status_report();
+            let listener_ready = net.console_listener_ready();
+            let state = cyw43_network_ready_hdmi_state(&status, listener_ready);
+            (state, status.ip, net.console_listen_port())
+        });
+        let Some((state, ip, listen_port)) = observation else {
+            self.cyw43_network_ready_hdmi_progress
+                .observe(Cyw43NetworkReadyHdmiState::WaitingForNetworkStack);
+            self.queue_due_cyw43_network_ready_hdmi_progress();
+            return;
+        };
+
+        if state != Cyw43NetworkReadyHdmiState::Ready {
+            self.cyw43_network_ready_hdmi_progress.observe(state);
+            self.queue_due_cyw43_network_ready_hdmi_progress();
+            return;
+        }
+
+        let mut text = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        if write!(
+            text,
+            "{} DHCP bound at {}; TCP console listening on port {}",
+            crate::local_seat::CYW43_READY_TO_USE_HDMI_PREFIX,
+            ip,
+            listen_port,
+        )
+        .is_err()
+        {
+            crate::log_buffer::append_log_line(
+                "CYW43_HDMI_READY status=format-failed action=retain-readiness-fence",
+            );
+            return;
+        }
+        // A final Ready transition supersedes any coalesced wait heartbeat;
+        // no stale "still working" line may follow the usable prompt.
+        self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
+        let ready_log = text.clone();
+        let milestone = PendingCyw43BootstrapHdmiMilestone {
+            text,
+            releases_console_ready: true,
+        };
+        let queued = match self
+            .pending_cyw43_bootstrap_hdmi_milestones
+            .push_back(milestone)
+        {
+            Ok(()) => true,
+            Err(milestone)
+                if self
+                    .pending_cyw43_bootstrap_hdmi_terminal_milestone
+                    .is_none() =>
+            {
+                self.pending_cyw43_bootstrap_hdmi_terminal_milestone = Some(milestone);
+                crate::log_buffer::append_log_line(
+                    "CYW43_HDMI_READY status=terminal-reserved action=release-after-retained-milestones",
+                );
+                true
+            }
+            Err(_) => {
+                crate::log_buffer::append_log_line(
+                    "CYW43_HDMI_READY status=queue-full action=retry-after-display-progress",
+                );
+                false
+            }
+        };
+        if !queued {
+            return;
+        }
+
+        crate::log_buffer::append_log_line(ready_log.as_str());
+        self.cyw43_bootstrap_hdmi_pending = true;
+        self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
+    }
+
     /// Queue one bootstrap/recovery diagnostic without touching the root UART.
     ///
     /// The linked serial turn that follows performs the actual flush. Keeping
@@ -3147,10 +3371,9 @@ where
 
     /// Atomically publish one complete Gate 8 snapshot and its Ready terminal.
     ///
-    /// The serial proof and the HDMI readiness transition are preflighted
-    /// before either route is mutated. This prevents a visible eight-line pass
-    /// prefix, or a stale HDMI Ready milestone, when the terminal record cannot
-    /// be retained.
+    /// The serial proof and the HDMI Gate 8 milestone are preflighted before
+    /// either route is mutated. Gate 8 starts the bounded DHCP/listener wait;
+    /// it does not release the interactive HDMI prompt by itself.
     #[cfg(feature = "kernel")]
     pub fn queue_cyw43_gate8_ready_transaction(
         &mut self,
@@ -3194,16 +3417,9 @@ where
         if required_serial > CYW43_BOOTSTRAP_SERIAL_MILESTONE_CAPACITY {
             return false;
         }
-        let hdmi_uses_reserved_terminal = self.local_seat.is_some()
+        let hdmi_fifo_full = self.local_seat.is_some()
             && self.pending_cyw43_bootstrap_hdmi_milestones.len()
                 >= CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY;
-        if hdmi_uses_reserved_terminal
-            && self
-                .pending_cyw43_bootstrap_hdmi_terminal_milestone
-                .is_some()
-        {
-            return false;
-        }
 
         for line in subgate_lines {
             crate::log_buffer::append_log_line(line.as_str());
@@ -3232,17 +3448,22 @@ where
 
         if self.local_seat.is_some() {
             self.cyw43_bootstrap_hdmi_progress.clear(self.now_ms);
+            #[cfg(feature = "net-console")]
+            self.cyw43_network_ready_hdmi_progress.begin(self.now_ms);
             self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
-            let terminal = PendingCyw43BootstrapHdmiMilestone {
+            let gate8 = PendingCyw43BootstrapHdmiMilestone {
                 text: hdmi_terminal,
-                releases_console_ready: true,
+                releases_console_ready: false,
             };
-            if hdmi_uses_reserved_terminal {
-                self.pending_cyw43_bootstrap_hdmi_terminal_milestone = Some(terminal);
+            if hdmi_fifo_full {
+                // Gate 8 is a progress frontier, not the final readiness
+                // transition. Coalesce it so the dedicated terminal reserve
+                // remains available for DHCP plus listener readiness.
+                self.pending_cyw43_bootstrap_hdmi_progress_milestone = Some(gate8);
             } else {
                 let hdmi_queued = self
                     .pending_cyw43_bootstrap_hdmi_milestones
-                    .push_back(terminal);
+                    .push_back(gate8);
                 debug_assert!(
                     hdmi_queued.is_ok(),
                     "preflighted Gate 8 HDMI Ready must fit retained queue"
@@ -3405,6 +3626,8 @@ where
         self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
         self.pending_cyw43_bootstrap_hdmi_terminal_milestone = None;
         self.cyw43_bootstrap_hdmi_progress.clear(self.now_ms);
+        #[cfg(feature = "net-console")]
+        self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
         self.cyw43_bootstrap_hdmi_ready_deferred = true;
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.defer_hdmi_console_ready_until_cyw43_terminal();
@@ -3613,6 +3836,9 @@ where
             }
             self.drain_net_console_events();
         }
+
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        self.reconcile_cyw43_network_ready_hdmi();
 
         self.ipc.dispatch(self.now_ms);
         #[cfg(feature = "kernel")]
@@ -11298,6 +11524,35 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_association_first_terminal_line(
+        association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: association first_terminal scope=boot-first present={} generation={} pair_epoch={} source_stage={}",
+            Self::yes_no(association.first_terminal_event_present),
+            association.first_terminal_event_generation,
+            association.first_terminal_event_pair_epoch,
+            association.first_terminal_event_source_stage,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_association_first_terminal_raw_line(
+        association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: association first_terminal_raw type=0x{:02x} status=0x{:08x} reason=0x{:08x} auth_type=0x{:08x} join_request={} join_issued={} join_accepted={}",
+            association.first_terminal_event_type,
+            association.first_terminal_event_status,
+            association.first_terminal_event_reason,
+            association.first_terminal_event_auth_type,
+            association.first_terminal_event_join_request,
+            Self::yes_no(association.first_terminal_event_join_issued),
+            Self::yes_no(association.first_terminal_event_join_accepted),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_association_progress_line(
         association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
@@ -12082,6 +12337,8 @@ where
         for detail in [
             Self::wifi_diag_association_state_line(association),
             Self::wifi_diag_association_fence_line(association),
+            Self::wifi_diag_association_first_terminal_line(association),
+            Self::wifi_diag_association_first_terminal_raw_line(association),
             Self::wifi_diag_association_progress_line(association),
             Self::wifi_diag_association_scheduler_line(association),
             Self::wifi_diag_association_retained_line(association),
@@ -20735,6 +20992,70 @@ mod tests {
         assert_eq!(cadence.due(35_000), Some((Frontier::CardPath, false)));
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn cyw43_network_ready_requires_dhcp_bound_ip_and_listener() {
+        let mut status = NetStatusReport::default();
+        assert_eq!(
+            cyw43_network_ready_hdmi_state(&status, false),
+            Cyw43NetworkReadyHdmiState::WaitingForNetworkStack
+        );
+
+        status.active_driver = "cyw43";
+        status.active_interface = "wifi";
+        status.address_source = "dhcp-pending";
+        status.dhcp_phase = "selecting";
+        assert_eq!(
+            cyw43_network_ready_hdmi_state(&status, false),
+            Cyw43NetworkReadyHdmiState::WaitingForDhcp
+        );
+
+        status.address_source = "dhcp-lease";
+        status.dhcp_phase = "bound";
+        assert_eq!(
+            cyw43_network_ready_hdmi_state(&status, true),
+            Cyw43NetworkReadyHdmiState::WaitingForDhcp
+        );
+        status.ip.push_str("192.168.86.154").unwrap();
+        assert_eq!(
+            cyw43_network_ready_hdmi_state(&status, false),
+            Cyw43NetworkReadyHdmiState::WaitingForTcpListener
+        );
+        assert_eq!(
+            cyw43_network_ready_hdmi_state(&status, true),
+            Cyw43NetworkReadyHdmiState::Ready
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn cyw43_network_wait_progress_refreshes_on_frontier_and_heartbeat() {
+        let mut cadence = Cyw43NetworkReadyHdmiProgressCadence::new();
+        cadence.begin(1_000);
+        cadence.observe(Cyw43NetworkReadyHdmiState::WaitingForDhcp);
+        assert_eq!(cadence.due(5_999), None);
+        assert_eq!(
+            cadence.due(6_000),
+            Some((Cyw43NetworkReadyHdmiState::WaitingForDhcp, false))
+        );
+        cadence.record_emitted(Cyw43NetworkReadyHdmiState::WaitingForDhcp, 6_000);
+
+        cadence.observe(Cyw43NetworkReadyHdmiState::WaitingForTcpListener);
+        assert_eq!(cadence.due(10_999), None);
+        assert_eq!(
+            cadence.due(11_000),
+            Some((Cyw43NetworkReadyHdmiState::WaitingForTcpListener, false,))
+        );
+        cadence.record_emitted(Cyw43NetworkReadyHdmiState::WaitingForTcpListener, 11_000);
+        assert_eq!(cadence.due(20_999), None);
+        assert_eq!(
+            cadence.due(21_000),
+            Some((Cyw43NetworkReadyHdmiState::WaitingForTcpListener, true,))
+        );
+        cadence.clear(21_000);
+        assert_eq!(cadence.due(u64::MAX), None);
+    }
+
     #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_turn_status_parser_rejects_malformed_or_zero_attempts() {
@@ -22073,6 +22394,17 @@ mod tests {
             event_armed_current: true,
             event_armed_generation: u32::MAX,
             terminal_failure: true,
+            first_terminal_event_present: true,
+            first_terminal_event_generation: u32::MAX,
+            first_terminal_event_pair_epoch: u64::MAX,
+            first_terminal_event_type: u8::MAX,
+            first_terminal_event_status: u32::MAX,
+            first_terminal_event_reason: u32::MAX,
+            first_terminal_event_auth_type: u32::MAX,
+            first_terminal_event_join_request: u32::MAX,
+            first_terminal_event_join_issued: true,
+            first_terminal_event_join_accepted: true,
+            first_terminal_event_source_stage: "cyw43-runtime-event-frame",
             deferred_reauth_current: true,
             deferred_reauth_generation: u32::MAX,
             retained_owner: "cyw43-host-eapol-control-poll",
@@ -22236,6 +22568,8 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_terminal_drain_frame_line(terminal),
             KernelConsoleTestPump::wifi_diag_terminal_drain_logical_line(terminal),
             KernelConsoleTestPump::wifi_diag_association_scheduler_line(diagnostic),
+            KernelConsoleTestPump::wifi_diag_association_first_terminal_line(diagnostic),
+            KernelConsoleTestPump::wifi_diag_association_first_terminal_raw_line(diagnostic),
         ];
 
         for line in &lines {
@@ -22250,6 +22584,12 @@ mod tests {
         ));
         assert!(lines[2].contains("generation=4294967295 current=no"));
         assert!(lines[3].contains("request=4294967295 issued=yes accepted=yes"));
+        assert!(lines[14].contains(
+            "scope=boot-first present=yes generation=4294967295 pair_epoch=18446744073709551615 source_stage=cyw43-runtime-event-frame"
+        ));
+        assert!(lines[15].contains(
+            "type=0xff status=0xffffffff reason=0xffffffff auth_type=0xffffffff join_request=4294967295 join_issued=yes join_accepted=yes"
+        ));
         assert!(lines[4].contains(
             "refinement=exact-owner logical_terminal_observed=yes cause=issued-owner-unknown",
         ));
@@ -22891,6 +23231,7 @@ mod tests {
         released_line_after_flush_poll: bool,
         idle_flush_polls_before_release: usize,
         tcp_ready_after_polls: Option<usize>,
+        listener_ready: bool,
         exhaust_poll_budget: bool,
         exhaust_flush_budget: bool,
         disconnect_requests: usize,
@@ -22920,6 +23261,7 @@ mod tests {
                 released_line_after_flush_poll: false,
                 idle_flush_polls_before_release: 0,
                 tcp_ready_after_polls: None,
+                listener_ready: false,
                 exhaust_poll_budget: false,
                 exhaust_flush_budget: false,
                 disconnect_requests: 0,
@@ -23059,6 +23401,10 @@ mod tests {
 
         fn active_console_conn_id(&self) -> Option<u64> {
             self.active_conn_id
+        }
+
+        fn console_listener_ready(&self) -> bool {
+            self.listener_ready
         }
 
         fn start_self_test(&mut self, _now_ms: u64) -> NetSelfTestStartResult {
@@ -30144,9 +30490,9 @@ mod tests {
             .any(|line| line.contains("CYW43_BOOTSTRAP_SUPERVISOR")));
     }
 
-    #[cfg(feature = "kernel")]
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn gate8_ready_transaction_is_all_or_nothing_and_retraction_invalidates_hdmi_ready() {
+    fn gate8_transaction_waits_for_dhcp_and_listener_before_hdmi_ready() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -30171,6 +30517,13 @@ mod tests {
             buffer_lines: 64,
         });
         local_seat.mark_root_console_ready();
+        let mut net = FakeNet::new();
+        net.status.active_driver = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.status.ip.push_str("192.168.86.154").unwrap();
+        net.listener_ready = true;
 
         let mut subgates = heapless::Vec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>::new();
         for token in [
@@ -30204,7 +30557,8 @@ mod tests {
 
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
-                .with_local_seat(&mut local_seat);
+                .with_local_seat(&mut local_seat)
+                .with_network(&mut net);
             pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
 
             let mut reordered = subgates.clone();
@@ -30301,11 +30655,29 @@ mod tests {
                 hdmi_ready,
             ));
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .hdmi_bootstrap_terminal_ready());
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
             assert!(pump
                 .local_seat
                 .as_ref()
                 .unwrap()
                 .hdmi_bootstrap_terminal_ready());
+            let expected_ready = format!(
+                "[drivers] WiFi ready to use: DHCP bound at 192.168.86.154; TCP console listening on port {}",
+                crate::net::CONSOLE_TCP_PORT,
+            );
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| line == expected_ready.as_str()));
         }
     }
 

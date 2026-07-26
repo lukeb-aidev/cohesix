@@ -381,24 +381,47 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "[cyw43] host-eapol action=install-wsec-key kind=gtk result=ok",
         "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=secure "
         "associated=yes link_up=yes eapol_rx=2",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing backoff_ms=0 "
+        "next_attempt_ms=150 serial=ready local_seat=ready recovery=full "
+        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        "wifi: gate 8 subgate=8a-pair-generation status=pass "
+        "pair_epoch=1 generation=9 blocker=none",
+        "wifi: gate 8 subgate=8b-control-program status=pass "
+        "pair_epoch=1 generation=9 blocker=none",
+        "wifi: gate 8 subgate=8c-join-terminal status=pass "
+        "pair_epoch=1 generation=9 blocker=none",
+        "wifi: gate 8 subgate=8d-association-link status=pass "
+        "pair_epoch=1 generation=9 blocker=none",
+        "wifi: gate 8 subgate=8e-bssid-refresh status=pass "
+        "pair_epoch=1 generation=9 blocker=none",
+        "wifi: gate 8 subgate=8f-eapol-keys status=pass "
+        "pair_epoch=1 generation=9 blocker=none",
+        "wifi: gate 8 subgate=8g-post-key-maintenance status=pass "
+        "pair_epoch=1 generation=9 blocker=none",
+        "wifi: gate 8 subgate=8h-data-admission status=pass "
+        "pair_epoch=1 generation=9 blocker=none",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
+        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
+        "console_seq=3 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "[dhcp] start ready interface=wifi",
         "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
         "server=192.168.10.1 lease_s=3600",
-        "OK NETTEST detail=pass scope=serial-local",
+        "[net-selftest] result generation=9 tx_ok=true udp_echo_ok=false "
+        "tcp_ok=false console_ok=true peer_assisted_ok=true "
+        "result=peer-assisted-pass",
+        "OK NETTEST detail=pass scope=serial-local generation=9",
         "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
-        "netstats: udp_rx=2 udp_tx=4 tcp_accepts=1 tcp_auth=1 "
+        "netstats: generation=9 udp_rx=2 udp_tx=4 tcp_accepts=1 tcp_auth=1 "
         "tcp_rx_bytes=58 tcp_tx_bytes=6782",
         "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
-        "netstatus: ip=192.168.10.50 gateway=192.168.10.1 "
+        "netstatus: generation=9 ip=192.168.10.50 gateway=192.168.10.1 "
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
+        "[cohsh-net][auth] auth OK, session established (generation=9 conn_id=1)",
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 poisoned=no masked=no",
-        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
-        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
-        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
     ]
 
 
@@ -1395,7 +1418,7 @@ def test_gate_proof_rejects_wifi_ready_with_incomplete_gate7_handshake(
     )
 
     assert result.returncode == 2
-    assert "WIFI_SUBGATE=7e" in result.stdout
+    assert "WIFI_SUBGATE=8h-data-admission" in result.stdout
     assert "WIFI_GATE7_COMPLETE=no" in result.stdout
     assert "WIFI_GATE7_SEEN=7a>7b>7c" in result.stdout
     assert "WIFI_GATE7_MISSING=7d" in result.stdout
@@ -1462,7 +1485,7 @@ def test_gate_proof_rejects_wifi_ready_with_zero_dpc_activity(
         if not line.startswith("CYW43_SDIO_DPC ")
     ]
     lines.append(
-        "CYW43_SDIO_DPC generation=8 captures=0 published=0 consumed=0 "
+        "CYW43_SDIO_DPC generation=9 captures=0 published=0 consumed=0 "
         "rearms=0 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 poisoned=no masked=no"
     )
