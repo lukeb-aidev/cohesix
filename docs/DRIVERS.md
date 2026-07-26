@@ -352,8 +352,10 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
 - `wifi diag` is likewise a single cached read: it never performs the old
   dump/probe/dump sequence, and retained progress is explicitly labelled as
   historical when a newer terminal fault exists. Its driver-task report copies
-  the maintenance generation, requested mask, next stage, and retained action
-  under the existing cursor lock without servicing that action; retained
+  the maintenance generation, requested mask, and next stage in one bounded
+  record, plus the retained action identity in an adjacent bounded record,
+  copied from the same snapshot under the existing cursor lock without
+  servicing that action; retained
   deferred recovery is labelled against the live connection generation.
   `netstats` and `smp` are passive retained-counter reports. In contrast,
   `nettest` starts the bounded network self-test and `usb probe-kbd` advances
@@ -400,10 +402,10 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
 
 ### SDIO and CYW43
 
-This as-built defect closure is authorized by Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`. Milestone 26d supplied the physical
-Wi-Fi investigation context that exposed the defect; it does not authorize a
-second ownership, bootstrap, recovery, or proof lane.
+This as-built defect closure is authorized by active Milestone 26d task
+`m26d-cyw43-hardware-free-closure`, restoring Reopened Milestone 26b task
+`m26b-wifi-sdio-notification-dpc-closure`. It does not authorize a second
+ownership, bootstrap, recovery, or proof lane.
 
 #### Ordered Gate 8 stability contract
 
@@ -432,17 +434,31 @@ this exact order:
 Gate 8h has one explicit root-consumer commit. Association-generation start
 does not establish the data-handoff baseline because, unlike Linux
 `brcmfmac`, Cohesix can open the firmware controlled port before its root
-NetStack consumer has attached. After 8a through 8g are current and pass, the
-first ordinary root Network turn with an attached but not yet polled consumer
-calls `commit_cyw43_data_handoff_if_ready` with the expected generation. This
-idempotent helper revalidates the pair, association/link, BSSID, key,
-maintenance, logical-owner, and recovery state; rejects only queued tokens
-captured in a stale generation; preserves current-generation backlog for the
-immediately following NetStack poll; captures the sticky cumulative root-drop
-and runtime-overflow counters as the post-consumer baseline; and
-release-publishes the current-generation commit token last. This is root
-handoff bookkeeping, not a second physical driver, SDIO owner, poll, or
-recovery path.
+NetStack consumer can accept data. Every attached non-recovery iteration runs
+the ordinary EventPump/NetStack turn because that is also the sole
+association, host-EAPOL, maintenance, and exact-operation continuation lane.
+Until handoff commit, the CYW43 NetDevice blocks queued-data delivery,
+Device-originated fresh data polling, DHCP start, fresh ARP staging, and fresh
+smoltcp TX. The existing pre-poll physical RX ingress remains available to
+observe association/control events; it routes those frames to their sole
+policy owner and copies ordinary data into the current-generation queue. An
+already assigned NetData operation may likewise reach its exact terminal, but
+an ordinary returned frame is copied back into that queue rather than
+delivered.
+
+After one such control-capable turn makes 8a through 8g current and passing,
+root calls `commit_cyw43_data_handoff_if_ready` with the freshly observed
+logical connection generation, never the independently retained firmware
+bootstrap generation. This idempotent helper revalidates the pair,
+association/link, BSSID, key, maintenance, logical-owner, and recovery state;
+rejects only queued tokens captured in a stale generation; preserves
+current-generation backlog for the following consumer turn; captures the
+sticky cumulative root-drop and runtime-overflow counters as the
+post-consumer baseline; release-publishes its generation token; and then
+release-publishes the matching consumer commit token last. Root then takes a
+new Gate 8 snapshot because commit changes 8h. This is bookkeeping at the one
+data-consumer boundary, not a second physical driver, SDIO owner, polling path,
+or recovery lane.
 
 Root and child use the single ABI value
 `pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`: it bounds both the
@@ -455,12 +471,12 @@ Subgates 8a and 8b must belong to one current pair/control epoch. Subgates 8c
 through 8h must all belong to one current logical connection generation. The
 producer evaluates once, formats all eight
 `wifi: gate 8 subgate=<token> status=<pass|pending|fail>
-generation=<n> blocker=<reason>` records from that immutable value, and queues
-them and the immediately following supervisor `status=ready` record in one
-all-or-nothing retained transaction. It revalidates and commits the same
-snapshot before that transaction. A prefix, mixed generation, cross-recovery
-stitch, non-adjacent Ready, or snapshot that changed before commit is not
-Gate 8 proof.
+pair_epoch=<p> generation=<n> blocker=<reason>` records from that immutable
+value, and queues them and the immediately following supervisor `status=ready`
+record in one all-or-nothing retained transaction. It revalidates and commits
+the same snapshot before that transaction. A prefix, mixed generation,
+cross-recovery stitch, non-adjacent Ready, or snapshot that changed before
+commit is not Gate 8 proof.
 
 `ready` is revocable. Any later fresh snapshot that is non-stable or has a
 different generation retracts `ready` to `stabilizing`, even when the logical
@@ -499,16 +515,27 @@ commit boundary reject and separately count stale-generation tokens, while
 valid current-generation backlog remains queued for NetStack rather than being
 discarded or hidden by the new baseline.
 
-Both `wifi diag` and `wifi probe-ht` emit the same five passive handoff records
-after association and maintenance state:
+Both `wifi diag` and `wifi probe-ht` emit the same passive scheduler, handoff,
+and retained-frontier records after association and maintenance state:
 
 ```text
-wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
+wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=ordinary-network-turn
+wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
+wifi: data_handoff lane consumer=<blocked|open> control_progress=ordinary-network-turn
 wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
 wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
 wifi: data_handoff boot_first_loss=no
 wifi: data_handoff postcommit_first_loss=no
+wifi: gate8 retained_frontier=no
+wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
 ```
+
+The retained Gate 8 line is the latest complete snapshot taken before sticky
+pair recovery rewrites live Gate 8 as the generic
+`8a-pair-generation/pair-recovery-required` state. The association counters
+are boot-cumulative and passive: a `join-submit-pending` frontier with zero
+service turns and zero Join starts proves scheduler starvation rather than RF
+or hardware warm-up.
 
 When losses exist, the fourth and fifth lines have these exact shapes:
 

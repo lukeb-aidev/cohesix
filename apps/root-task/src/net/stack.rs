@@ -173,6 +173,7 @@ fn dhcp_phase_for_bringup_status(status: &'static str) -> &'static str {
     match status.as_bytes() {
         b"wifi-host-eapol-pending" => "host-eapol-pending",
         b"wifi-host-eapol-required" => "host-eapol-required",
+        b"wifi-data-handoff-pending" => "data-handoff-pending",
         b"wifi-association-failed" => "failed",
         b"wifi-link-down" => "link-down",
         _ => "associating",
@@ -1664,6 +1665,7 @@ fn cyw43_runtime_service_live_bringup_status(bringup_status: Option<&'static str
                 | "wifi-host-eapol-pending"
                 | "wifi-host-eapol-required"
                 | "wifi-link-down"
+                | "wifi-data-handoff-pending"
                 | "wifi-data-rx-admission-blocked"
         )
     )
@@ -8727,6 +8729,9 @@ mod tests {
         assert!(wifi_host_eapol_blocks_data_path(Some(
             "wifi-host-eapol-required"
         )));
+        assert!(!wifi_host_eapol_blocks_data_path(Some(
+            "wifi-data-handoff-pending"
+        )));
         assert!(!wifi_host_eapol_blocks_data_path(Some("dhcp-pending")));
         assert!(!wifi_host_eapol_blocks_data_path(None));
     }
@@ -8756,6 +8761,9 @@ mod tests {
         )));
         assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(Some(
             "dhcp-pending"
+        )));
+        assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(Some(
+            "wifi-data-handoff-pending"
         )));
         assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(None));
     }
@@ -8798,6 +8806,14 @@ mod tests {
         assert_eq!(
             dhcp_start_defer_reason_for(Some("wifi-link-down")),
             Some("wifi-link-down")
+        );
+        assert_eq!(
+            dhcp_start_defer_reason_for(Some("wifi-data-handoff-pending")),
+            Some("wifi-data-handoff-pending")
+        );
+        assert_eq!(
+            dhcp_phase_for_bringup_status("wifi-data-handoff-pending"),
+            "data-handoff-pending"
         );
     }
 
@@ -9284,6 +9300,15 @@ mod tests {
             NetMode::Dhcp,
             Ipv4Address::UNSPECIFIED,
             Some("wifi-link-down"),
+            None,
+            false
+        ));
+        assert!(cyw43_runtime_service_pre_poll_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            Some("wifi-data-handoff-pending"),
             None,
             false
         ));

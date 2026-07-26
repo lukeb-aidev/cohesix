@@ -506,6 +506,10 @@ static GENET_ARP_TX: AtomicU32 = AtomicU32::new(0);
 static CYW43_PENDING_RX_HIGH_WATER: AtomicU32 = AtomicU32::new(0);
 static CYW43_PENDING_RX_DROPS: AtomicU32 = AtomicU32::new(0);
 static CYW43_PENDING_RX_DROP_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
+// Published after the locked baseline record and before the consumer commit
+// token. Steady RX/TX admission can therefore verify the exact baseline
+// generation without taking the diagnostic mutex.
+static CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
 static CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
 static CYW43_STALE_RX_PURGED_TOTAL: AtomicU32 = AtomicU32::new(0);
 static CYW43_STALE_RX_PURGE_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
@@ -629,7 +633,9 @@ static CYW43_POSTCOMMIT_FIRST_PENDING_RX_LOSS: Mutex<Option<Cyw43PendingRxLossDi
 pub(crate) struct Cyw43DataHandoffDiagnostic {
     pub generation: u32,
     pub commit_epoch_token: u64,
+    pub baseline_epoch_token: u64,
     pub committed: bool,
+    pub consumer_open: bool,
     pub baseline_generation: u32,
     pub root_rx_queue_len: u32,
     pub root_rx_queue_cap: u32,
@@ -4367,6 +4373,10 @@ static CYW43_HOST_EAPOL_REQUIRED: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_SECURE: AtomicU32 = AtomicU32::new(0);
 static CYW43_OPEN_NETWORK_ACTIVE: AtomicU32 = AtomicU32::new(0);
 static CYW43_ASSOCIATION_PROGRESS_EPOCH: AtomicU32 = AtomicU32::new(0);
+// Loader-zeroed, boot-cumulative scheduler proof. Pair/control resets must not
+// clear these counters; tests reset them explicitly.
+static CYW43_ASSOCIATION_SERVICE_TURNS: AtomicU32 = AtomicU32::new(0);
+static CYW43_ASSOCIATION_JOIN_STARTS: AtomicU32 = AtomicU32::new(0);
 static CYW43_ASSOCIATION_TERMINAL_FAILURE: AtomicU32 = AtomicU32::new(0);
 static CYW43_PAIR_CONTEXT_RECOVERY_EPOCH: AtomicU32 = AtomicU32::new(0);
 // Linked-pair scrub epoch whose immutable firmware control program reached its
@@ -6612,6 +6622,7 @@ fn invalidate_cyw43_data_handoff() {
     // root has attached NetStack, unlike Linux's already-live netdev. Leave
     // Gate 8h pending until the explicit consumer-active commit.
     CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(0, Ordering::Release);
+    CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(0, Ordering::Release);
     let mut baseline = CYW43_DATA_HANDOFF_BASELINE.lock();
     let mut queue = CYW43_PENDING_RX_QUEUE.lock();
@@ -6620,6 +6631,29 @@ fn invalidate_cyw43_data_handoff() {
     record_cyw43_stale_rx_purge(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), stale);
     *CYW43_POSTCOMMIT_FIRST_PENDING_RX_LOSS.lock() = None;
     *baseline = Cyw43DataHandoffBaseline::initial();
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_handoff_committed_for_generation(expected_generation: u32) -> bool {
+    let expected_token = cyw43_epoch_token(expected_generation);
+    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == expected_generation
+        && CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.load(Ordering::Acquire) == expected_token
+        && CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire) == expected_token
+        && CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.load(Ordering::Acquire) == expected_token
+        && CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == expected_generation
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_consumer_open_for_generation(expected_generation: u32) -> bool {
+    cyw43_data_handoff_committed_for_generation(expected_generation)
+        && !cyw43_recovery_required()
+        && !cyw43_rejoin_pending_for_epoch(expected_generation)
+        && CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == expected_generation
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_current_generation_data_consumer_open() -> bool {
+    cyw43_data_consumer_open_for_generation(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire))
 }
 
 #[cfg(feature = "kernel")]
@@ -7670,6 +7704,8 @@ pub(crate) struct Cyw43AssociationDiagnostic {
     pub progress_generation: u32,
     pub progress_current: bool,
     pub progress_epoch: u32,
+    pub service_turns: u32,
+    pub join_starts: u32,
     pub runtime_ready: bool,
     pub primary_join_ready: bool,
     pub associated: bool,
@@ -8047,6 +8083,8 @@ pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
         progress_generation,
         progress_current: progress.is_some() && progress_generation == generation,
         progress_epoch: CYW43_ASSOCIATION_PROGRESS_EPOCH.load(Ordering::Acquire),
+        service_turns: CYW43_ASSOCIATION_SERVICE_TURNS.load(Ordering::Acquire),
+        join_starts: CYW43_ASSOCIATION_JOIN_STARTS.load(Ordering::Acquire),
         runtime_ready: runtime_ready(DriverTaskHotPath::Cyw43Wifi),
         primary_join_ready: CYW43_PRIMARY_BSSCFG_JOIN_READY.load(Ordering::Acquire) != 0,
         associated: CYW43_ASSOCIATED.load(Ordering::Acquire) != 0,
@@ -8123,6 +8161,9 @@ pub(crate) struct Cyw43Gate8Diagnostic {
 }
 
 #[cfg(feature = "kernel")]
+static CYW43_RETAINED_PRE_RECOVERY_GATE8: Mutex<Option<Cyw43Gate8Diagnostic>> = Mutex::new(None);
+
+#[cfg(feature = "kernel")]
 impl Cyw43Gate8Diagnostic {
     #[must_use]
     pub(crate) fn stable(self) -> bool {
@@ -8138,6 +8179,29 @@ impl Cyw43Gate8Diagnostic {
             .find(|subgate| subgate.status != Cyw43Gate8SubgateStatus::Pass)
             .map_or(Cyw43Gate8SubgateStatus::Pass, |subgate| subgate.status)
     }
+}
+
+/// Retain the latest complete Gate 8 snapshot before pair recovery rewrites
+/// the live diagnostic state.
+///
+/// This is passive evidence only. It never issues, resumes, retries, or
+/// completes a linked-runtime operation.
+#[cfg(feature = "kernel")]
+pub(crate) fn record_cyw43_pre_recovery_gate8(diagnostic: Cyw43Gate8Diagnostic) {
+    if cyw43_recovery_required() {
+        return;
+    }
+    let mut retained = CYW43_RETAINED_PRE_RECOVERY_GATE8.lock();
+    if cyw43_recovery_required() {
+        return;
+    }
+    *retained = Some(diagnostic);
+}
+
+/// Return the latest complete Gate 8 snapshot retained before recovery.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_retained_pre_recovery_gate8() -> Option<Cyw43Gate8Diagnostic> {
+    *CYW43_RETAINED_PRE_RECOVERY_GATE8.lock()
 }
 
 #[cfg(feature = "kernel")]
@@ -8482,6 +8546,8 @@ pub(crate) fn cyw43_gate8_diagnostic() -> Cyw43Gate8Diagnostic {
     let generation = association.generation;
     let epoch_token = cyw43_epoch_token(generation);
     let data_handoff_commit_token = CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire);
+    let data_handoff_baseline_token =
+        CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.load(Ordering::Acquire);
     let data_handoff_baseline = *CYW43_DATA_HANDOFF_BASELINE.lock();
     let prompt_poll = *CYW43_PENDING_PROMPT_POLL.lock();
     let root_rx_queue_len = CYW43_PENDING_RX_QUEUE.lock().len();
@@ -8526,7 +8592,9 @@ pub(crate) fn cyw43_gate8_diagnostic() -> Cyw43Gate8Diagnostic {
         data_rx_admitted: cyw43_post_secure_data_rx_admitted(),
         control_plane_ready: CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire) != 0,
         data_handoff_generation_token: data_handoff_commit_token,
-        data_handoff_generation_current: data_handoff_commit_token == epoch_token,
+        data_handoff_generation_current: data_handoff_commit_token == epoch_token
+            && data_handoff_baseline_token == epoch_token
+            && data_handoff_baseline.generation == generation,
         prompt_poll_active: prompt_poll.is_some(),
         prompt_poll_net_data: prompt_poll
             .is_some_and(|pending| pending.owner == Cyw43PromptPollOwner::NetData),
@@ -8538,9 +8606,11 @@ pub(crate) fn cyw43_gate8_diagnostic() -> Cyw43Gate8Diagnostic {
         arp_tx_pending: !CYW43_PENDING_ARP_TX.lock().is_empty(),
         root_rx_queue_saturated: root_rx_queue_len >= CYW43_PENDING_RX_QUEUE_CAP,
         root_rx_drop_since_baseline: data_handoff_commit_token == epoch_token
+            && data_handoff_baseline_token == epoch_token
             && data_handoff_baseline.generation == generation
             && CYW43_PENDING_RX_DROP_EPOCH_TOKEN.load(Ordering::Acquire) == epoch_token,
         runtime_rx_overflow_since_baseline: data_handoff_commit_token == epoch_token
+            && data_handoff_baseline_token == epoch_token
             && data_handoff_baseline.generation == generation
             && runtime_rx_overflow_episodes > data_handoff_baseline.runtime_rx_overflow_episodes,
     })
@@ -8549,11 +8619,12 @@ pub(crate) fn cyw43_gate8_diagnostic() -> Cyw43Gate8Diagnostic {
 /// Commit the single root-consumer handoff for one proven Gate 8 generation.
 ///
 /// This performs no HAL, SDIO, CYW43, retry, or completion work. The ordinary
-/// EventPump calls it only after NetStack is attached and before its first poll
-/// for this generation. Stale-generation frames are rejected, valid current
-/// backlog remains available to that first consumer turn, cumulative loss
-/// telemetry is sampled, and the generation token is release-published last.
-/// Repeating the commit for the same generation is a no-op.
+/// EventPump calls it after a control-capable NetStack turn proves subgates
+/// 8a-through-8g. The device boundary prevents smoltcp RX/TX consumption until
+/// this commit rejects stale frames, samples cumulative loss, and
+/// release-publishes the logical generation token. Valid current backlog
+/// remains available to the following consumer turn. Repeating the commit for
+/// the same generation is a no-op.
 #[cfg(feature = "kernel")]
 pub(crate) fn commit_cyw43_data_handoff_if_ready(expected_generation: u32) -> bool {
     let expected_token = cyw43_epoch_token(expected_generation);
@@ -8583,7 +8654,7 @@ pub(crate) fn commit_cyw43_data_handoff_if_ready(expected_generation: u32) -> bo
     }
 
     if CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire) == expected_token {
-        return true;
+        return cyw43_data_handoff_committed_for_generation(expected_generation);
     }
 
     // Match the diagnostic lock order (baseline, then queue). Holding the
@@ -8613,6 +8684,7 @@ pub(crate) fn commit_cyw43_data_handoff_if_ready(expected_generation: u32) -> bo
         root_rx_drops: CYW43_PENDING_RX_DROPS.load(Ordering::Acquire),
         runtime_rx_overflow_episodes: CYW43_RX_RUNTIME_OVERFLOW_EPISODES.load(Ordering::Acquire),
     };
+    CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.store(expected_token, Ordering::Release);
     core::sync::atomic::fence(Ordering::Release);
     CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(expected_token, Ordering::Release);
     true
@@ -8622,14 +8694,22 @@ pub(crate) fn commit_cyw43_data_handoff_if_ready(expected_generation: u32) -> bo
 #[cfg(feature = "kernel")]
 pub(crate) fn cyw43_data_handoff_diagnostic() -> Cyw43DataHandoffDiagnostic {
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
-    let epoch_token = cyw43_epoch_token(generation);
     let commit_epoch_token = CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire);
+    let baseline_epoch_token = CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.load(Ordering::Acquire);
     let baseline = *CYW43_DATA_HANDOFF_BASELINE.lock();
     let root_rx_queue_len = CYW43_PENDING_RX_QUEUE.lock().len() as u32;
+    let committed = baseline.generation == generation
+        && baseline_epoch_token == cyw43_epoch_token(generation)
+        && cyw43_data_handoff_committed_for_generation(generation);
     Cyw43DataHandoffDiagnostic {
         generation,
         commit_epoch_token,
-        committed: commit_epoch_token == epoch_token,
+        baseline_epoch_token,
+        committed,
+        consumer_open: committed
+            && !cyw43_recovery_required()
+            && !cyw43_rejoin_pending_for_epoch(generation)
+            && CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation,
         baseline_generation: baseline.generation,
         root_rx_queue_len,
         root_rx_queue_cap: CYW43_PENDING_RX_QUEUE_CAP as u32,
@@ -9739,6 +9819,7 @@ impl Cyw43AssociationSupervisor {
         credentials: Option<WifiCredentials>,
         now_ms: u64,
     ) -> Cyw43AssociationServiceOutcome {
+        increment_atomic_u32_saturating(&CYW43_ASSOCIATION_SERVICE_TURNS);
         if let Cyw43AssociationPhase::Join(pending) = self.phase {
             publish_cyw43_association_join_diagnostic(&pending);
         } else {
@@ -9905,6 +9986,7 @@ impl Cyw43AssociationSupervisor {
                 self.generation = generation;
                 match begin_cyw43_pending_association_join(credentials, generation) {
                     Ok(pending) => {
+                        increment_atomic_u32_saturating(&CYW43_ASSOCIATION_JOIN_STARTS);
                         self.phase = Cyw43AssociationPhase::Join(pending);
                         self.service_join(credentials, now_ms)
                     }
@@ -16363,6 +16445,11 @@ fn cyw43_data_tx_admission_ready(contract: DriverTaskContract) -> bool {
         return false;
     }
     #[cfg(feature = "kernel")]
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT && !cyw43_current_generation_data_consumer_open()
+    {
+        return false;
+    }
+    #[cfg(feature = "kernel")]
     if stage_one_cyw43_arp_tx_if_ready(contract) {
         return false;
     }
@@ -18116,6 +18203,7 @@ fn reset_cyw43_control_plane_state(mode: Cyw43ControlPlaneResetMode) {
         CYW43_POST_ASSOC_BSSID_REFRESH_FAILURE_EPOCH_TOKEN.store(0, Ordering::Release);
         clear_cyw43_logical_control_owner();
         *CYW43_FIRST_TERMINAL_DRAIN_DIAGNOSTIC.lock() = None;
+        *CYW43_RETAINED_PRE_RECOVERY_GATE8.lock() = None;
     }
     CYW43_HOST_EAPOL_RX.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_START.store(0, Ordering::Release);
@@ -20997,6 +21085,10 @@ fn cyw43_driver_task_bringup_status_label() -> Option<&'static str> {
         return Some(DRIVER_TASK_NET_STATUS);
     }
     if cyw43_data_plane_ready() {
+        #[cfg(feature = "kernel")]
+        if !cyw43_current_generation_data_consumer_open() {
+            return Some("wifi-data-handoff-pending");
+        }
         return None;
     }
     if cyw43_secure_carrier_ready() {
@@ -21534,6 +21626,13 @@ fn service_cyw43_pending_data_tx_turn(contract: DriverTaskContract) -> bool {
     }
     let _ = advance_cyw43_pending_data_tx(contract);
     true
+}
+
+#[cfg(feature = "kernel")]
+fn increment_atomic_u32_saturating(counter: &AtomicU32) {
+    let _ = counter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+        Some(value.saturating_add(1))
+    });
 }
 
 #[cfg(feature = "kernel")]
@@ -22515,6 +22614,32 @@ fn defer_cyw43_pre_secure_eapol_to_service_slice(
 }
 
 #[cfg(feature = "kernel")]
+fn defer_cyw43_precommit_data_frame(
+    contract: DriverTaskContract,
+    flags: u16,
+    token: DriverTaskNetRxToken,
+) {
+    let pending_before = cyw43_pending_rx_token_occupied();
+    let store_possible = cyw43_pending_rx_token_store_possible(flags, &token);
+    emit_cyw43_data_path_trace(
+        contract,
+        if store_possible {
+            "rx-preserve"
+        } else {
+            "rx-preserve-drop"
+        },
+        "data-handoff-pending",
+        0,
+        &token.buffer[..token.len],
+        None,
+        flags,
+        pending_before,
+        pending_before || store_possible,
+    );
+    let _ = store_cyw43_pending_rx_token(flags, token);
+}
+
+#[cfg(feature = "kernel")]
 fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<DriverTaskNetRxToken> {
     // Host EAPOL owns the prompt poll until its exact retained transaction is
     // terminal. Steady smoltcp RX must not consume that completion or start a
@@ -22534,6 +22659,24 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
     if service_cyw43_pending_data_tx_turn(contract) {
         // The retained ETH_TX cursor consumed this outer device turn. Even a
         // terminal completion must return to EventPump before an RX operation.
+        return None;
+    }
+    if !cyw43_current_generation_data_consumer_open() {
+        // A previously assigned NetData request remains the sole legal
+        // physical continuation. Drain that exact ticket, but retain an
+        // ordinary data frame for the first post-commit smoltcp turn.
+        if !cyw43_net_data_pre_poll_continuation_pending(contract) {
+            return None;
+        }
+        let (flags, token) = resume_cyw43_active_prompt_poll_for_data_path(contract)?;
+        if cyw43_pre_secure_host_eapol_frame(flags, &token) {
+            defer_cyw43_pre_secure_eapol_to_service_slice(contract, flags, token, "handoff-resume");
+            return None;
+        }
+        if consume_cyw43_post_secure_eapol_frame(contract, flags, &token, "handoff-resume") {
+            return None;
+        }
+        defer_cyw43_precommit_data_frame(contract, flags, token);
         return None;
     }
     if stage_one_cyw43_arp_tx_if_ready(contract) {
@@ -23315,8 +23458,8 @@ fn record_cyw43_pending_rx_drop(
         Some(drops.saturating_add(1))
     });
     let epoch_token = cyw43_epoch_token(sampled_generation);
-    let handoff_committed =
-        CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire) == epoch_token;
+    let handoff_committed = cyw43_data_handoff_committed_for_generation(sampled_generation)
+        && CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire) == epoch_token;
     let loss = Cyw43PendingRxLossDiagnostic {
         sampled_generation,
         handoff_committed,
@@ -24554,6 +24697,8 @@ mod tests {
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
         CYW43_OPEN_NETWORK_ACTIVE.store(0, Ordering::Release);
         CYW43_ASSOCIATION_PROGRESS_EPOCH.store(0, Ordering::Release);
+        CYW43_ASSOCIATION_SERVICE_TURNS.store(0, Ordering::Release);
+        CYW43_ASSOCIATION_JOIN_STARTS.store(0, Ordering::Release);
         CYW43_ASSOCIATION_TERMINAL_FAILURE.store(0, Ordering::Release);
         CYW43_PAIR_CONTEXT_RECOVERY_EPOCH.store(0, Ordering::Release);
         CYW43_CONTROL_PROGRAM_EPOCH_TOKEN.store(0, Ordering::Release);
@@ -24638,7 +24783,9 @@ mod tests {
         CYW43_PENDING_RX_HIGH_WATER.store(0, Ordering::Release);
         CYW43_PENDING_RX_DROPS.store(0, Ordering::Release);
         CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(0, Ordering::Release);
+        CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(0, Ordering::Release);
+        *CYW43_RETAINED_PRE_RECOVERY_GATE8.lock() = None;
         CYW43_STALE_RX_PURGED_TOTAL.store(0, Ordering::Release);
         CYW43_STALE_RX_PURGE_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_STALE_RX_PURGED_LAST.store(0, Ordering::Release);
@@ -29638,6 +29785,8 @@ mod tests {
         CYW43_CONNECTION_EPOCH.store(9, Ordering::Release);
         CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(cyw43_epoch_token(9), Ordering::Release);
         CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
+        CYW43_ASSOCIATION_SERVICE_TURNS.store(9, Ordering::Release);
+        CYW43_ASSOCIATION_JOIN_STARTS.store(3, Ordering::Release);
 
         reset_cyw43_control_plane_state(Cyw43ControlPlaneResetMode::PreserveGeneration);
         assert_eq!(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), 9);
@@ -29646,6 +29795,8 @@ mod tests {
             cyw43_epoch_token(9)
         );
         assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_ASSOCIATION_SERVICE_TURNS.load(Ordering::Acquire), 9);
+        assert_eq!(CYW43_ASSOCIATION_JOIN_STARTS.load(Ordering::Acquire), 3);
         clear_cyw43_rejoin_after_control_replay(9);
         assert!(!cyw43_rejoin_pending_for_epoch(9));
         assert_eq!(CYW43_REJOIN_PENDING_EPOCH_TOKEN.load(Ordering::Acquire), 0);
@@ -29653,6 +29804,16 @@ mod tests {
         reset_cyw43_control_plane_state(Cyw43ControlPlaneResetMode::Initial);
         assert_eq!(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_REJOIN_PENDING_EPOCH_TOKEN.load(Ordering::Acquire), 0);
+        assert_eq!(
+            CYW43_ASSOCIATION_SERVICE_TURNS.load(Ordering::Acquire),
+            9,
+            "control-plane replay/reset cannot erase boot-cumulative service proof"
+        );
+        assert_eq!(
+            CYW43_ASSOCIATION_JOIN_STARTS.load(Ordering::Acquire),
+            3,
+            "control-plane replay/reset cannot erase boot-cumulative Join proof"
+        );
         reset_cyw43_status_flags();
     }
 
@@ -31047,6 +31208,22 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn association_service_counter_includes_a_missing_credentials_turn() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut supervisor = Cyw43AssociationSupervisor::new(true, None, 0, 0);
+
+        let outcome = supervisor.service(None, 0);
+
+        assert!(!outcome.claimed_runtime_turn);
+        assert_eq!(supervisor.phase, Cyw43AssociationPhase::Dormant);
+        assert_eq!(CYW43_ASSOCIATION_SERVICE_TURNS.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_ASSOCIATION_JOIN_STARTS.load(Ordering::Acquire), 0);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn association_supervisor_owns_first_join_without_bootstrap_join_proof() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
@@ -31055,7 +31232,7 @@ mod tests {
         let credentials = crate::net::WifiCredentials::new("cohesix", "")
             .expect("valid open-network credentials");
 
-        let supervisor = Cyw43AssociationSupervisor::new(true, Some(credentials), 0, 37);
+        let mut supervisor = Cyw43AssociationSupervisor::new(true, Some(credentials), 0, 37);
 
         assert_eq!(
             supervisor.phase,
@@ -31066,6 +31243,25 @@ mod tests {
             }
         );
         assert!(supervisor.claims_runtime_turn(Some(credentials), 37));
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+        begin_cyw43_outer_event_turn();
+        CYW43_OUTER_EVENT_TURN_CLAIMED.store(1, Ordering::Release);
+
+        let first = supervisor.service(Some(credentials), 37);
+        assert!(first.claimed_runtime_turn);
+        assert!(matches!(supervisor.phase, Cyw43AssociationPhase::Join(_)));
+        assert_eq!(CYW43_ASSOCIATION_SERVICE_TURNS.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_ASSOCIATION_JOIN_STARTS.load(Ordering::Acquire), 1);
+
+        let second = supervisor.service(Some(credentials), 38);
+        assert!(second.claimed_runtime_turn);
+        assert!(matches!(supervisor.phase, Cyw43AssociationPhase::Join(_)));
+        assert_eq!(CYW43_ASSOCIATION_SERVICE_TURNS.load(Ordering::Acquire), 2);
+        assert_eq!(
+            CYW43_ASSOCIATION_JOIN_STARTS.load(Ordering::Acquire),
+            1,
+            "servicing one immutable Join cannot allocate a second start"
+        );
         reset_cyw43_status_flags();
     }
 
@@ -31399,6 +31595,8 @@ mod tests {
         *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
         CYW43_CONNECTION_EPOCH.store(9, Ordering::Release);
         CYW43_ASSOCIATION_PROGRESS_EPOCH.store(7, Ordering::Release);
+        CYW43_ASSOCIATION_SERVICE_TURNS.store(17, Ordering::Release);
+        CYW43_ASSOCIATION_JOIN_STARTS.store(2, Ordering::Release);
         CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
         CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
         CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
@@ -31426,6 +31624,8 @@ mod tests {
         assert_eq!(snapshot.progress_generation, 9);
         assert!(snapshot.progress_current);
         assert_eq!(snapshot.progress_epoch, 7);
+        assert_eq!(snapshot.service_turns, 17);
+        assert_eq!(snapshot.join_starts, 2);
         assert!(snapshot.runtime_ready);
         assert!(snapshot.primary_join_ready);
         assert_eq!(snapshot.polls, 23);
@@ -31674,6 +31874,11 @@ mod tests {
         ));
         assert!(cyw43_secure_carrier_ready());
         assert!(cyw43_data_plane_ready());
+        assert_eq!(
+            cyw43_driver_task_bringup_status_label(),
+            Some("wifi-data-handoff-pending")
+        );
+        mark_cyw43_gate8_ready_for_test(0);
         assert_eq!(cyw43_driver_task_bringup_status_label(), None);
 
         reset_cyw43_status_flags();
@@ -33160,9 +33365,21 @@ mod tests {
         );
 
         CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+        #[cfg(feature = "kernel")]
+        {
+            assert_eq!(
+                dev.bringup_status_label(),
+                Some("wifi-data-handoff-pending")
+            );
+            assert!(
+                dev.transmit(Instant::from_millis(0)).is_none(),
+                "fresh data TX remains blocked until the exact Gate 8 handoff"
+            );
+            mark_cyw43_gate8_ready_for_test(0);
+        }
         assert!(
             dev.transmit(Instant::from_millis(0)).is_some(),
-            "descriptor data TX should become available after post-secure data RX admission"
+            "descriptor data TX becomes available after the exact generation handoff"
         );
 
         CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
@@ -33215,7 +33432,10 @@ mod tests {
             CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire),
             1
         );
-        assert_eq!(cyw43_driver_task_bringup_status_label(), None);
+        assert_eq!(
+            cyw43_driver_task_bringup_status_label(),
+            Some("wifi-data-handoff-pending")
+        );
         assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 1);
 
@@ -33266,7 +33486,10 @@ mod tests {
             CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire),
             1
         );
-        assert_eq!(cyw43_driver_task_bringup_status_label(), None);
+        assert_eq!(
+            cyw43_driver_task_bringup_status_label(),
+            Some("wifi-data-handoff-pending")
+        );
         let maintenance = CYW43_MAINTENANCE_CURSOR.lock();
         assert_eq!(
             maintenance.requested,
@@ -39299,6 +39522,39 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn retained_pre_recovery_gate8_tracks_latest_complete_snapshot_and_resets() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut inputs = stable_cyw43_gate8_inputs_for_test(23);
+        inputs.primary_join_ready = false;
+        inputs.primary_join_current = false;
+        inputs.associated = false;
+        inputs.link_up = false;
+        let pending = evaluate_cyw43_gate8(inputs);
+        record_cyw43_pre_recovery_gate8(pending);
+        assert_eq!(cyw43_retained_pre_recovery_gate8(), Some(pending));
+
+        crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+        let mut recovery_inputs = stable_cyw43_gate8_inputs_for_test(23);
+        recovery_inputs.pair_failure = true;
+        record_cyw43_pre_recovery_gate8(evaluate_cyw43_gate8(recovery_inputs));
+        assert_eq!(
+            cyw43_retained_pre_recovery_gate8(),
+            Some(pending),
+            "sticky recovery cannot overwrite the causal frontier with generic 8a failure"
+        );
+        crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
+
+        let stable = evaluate_cyw43_gate8(stable_cyw43_gate8_inputs_for_test(23));
+        record_cyw43_pre_recovery_gate8(stable);
+        assert_eq!(cyw43_retained_pre_recovery_gate8(), Some(stable));
+
+        reset_cyw43_status_flags();
+        assert_eq!(cyw43_retained_pre_recovery_gate8(), None);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn gate8_rejects_unsuccessful_bssid_keys_and_post_key_maintenance_terminals() {
         let ready = stable_cyw43_gate8_inputs_for_test(31);
 
@@ -43190,10 +43446,9 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
-        CYW43_ASSOCIATED.store(1, Ordering::Release);
-        CYW43_LINK_UP.store(1, Ordering::Release);
-        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
-        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+        let generation = 5;
+        mark_cyw43_gate8_ready_for_test(generation);
+        invalidate_cyw43_data_handoff();
 
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
         let _ring = test_publish_cyw43_ring(&mut ring_page);
@@ -43208,17 +43463,16 @@ mod tests {
         ));
         assert!(cyw43_pending_rx_token_occupied());
 
-        let (pending_flags, pending_token) =
-            take_cyw43_pending_rx_token().expect("pre-poll CYW43 RX token is pending");
-        assert_eq!(pending_flags, flags);
-        assert_eq!(pending_token.len, payload.len());
-        assert_eq!(&pending_token.buffer[..pending_token.len], &payload);
-        assert!(store_cyw43_pending_rx_token(pending_flags, pending_token));
-
         let mut dev = Cyw43DriverTaskDevice::default();
+        assert!(
+            dev.receive(Instant::from_millis(0)).is_none(),
+            "the physical pre-poll may queue data but cannot deliver it before handoff"
+        );
+        assert_eq!(cyw43_data_handoff_diagnostic().root_rx_queue_len, 1);
+        assert!(commit_cyw43_data_handoff_if_ready(generation));
         let (rx, _) = dev
-            .receive(Instant::from_millis(0))
-            .expect("pre-poll CYW43 RX token is delivered before a fresh poll");
+            .receive(Instant::from_millis(1))
+            .expect("the committed consumer receives the preserved pre-poll token");
         rx.consume(|bytes| assert_eq!(bytes, &payload));
         assert!(take_cyw43_pending_rx_token().is_none());
 
@@ -43232,10 +43486,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
-        CYW43_ASSOCIATED.store(1, Ordering::Release);
-        CYW43_LINK_UP.store(1, Ordering::Release);
-        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
-        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+        mark_cyw43_gate8_ready_for_test(6);
 
         let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
         let eapol = test_cyw43_eapol_frame();
@@ -44588,24 +44839,144 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_tx_retry_pending_rx_token_is_delivered_to_receive() {
+    fn cyw43_pending_rx_token_waits_for_exact_handoff_before_device_delivery() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
-        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
-        CYW43_LINK_UP.store(1, Ordering::Release);
+        let generation = 7;
+        mark_cyw43_gate8_ready_for_test(generation);
+        invalidate_cyw43_data_handoff();
         let mut buffer = [0u8; MAX_FRAME_LEN];
         buffer[..4].copy_from_slice(b"dhcP");
         assert!(store_cyw43_pending_rx_token(
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
             DriverTaskNetRxToken { len: 4, buffer },
         ));
+        assert!(queue_cyw43_arp_frame([0u8; 42]));
 
+        assert!(!cyw43_current_generation_data_consumer_open());
+        assert!(receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none());
+        assert_eq!(cyw43_data_handoff_diagnostic().root_rx_queue_len, 1);
+        assert_eq!(
+            CYW43_PENDING_ARP_TX.lock().len(),
+            1,
+            "fresh ARP staging stays behind the same consumer fence"
+        );
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        CYW43_PENDING_ARP_TX.lock().clear();
+        assert!(commit_cyw43_data_handoff_if_ready(generation));
+        assert!(cyw43_current_generation_data_consumer_open());
         let token = receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT)
-            .expect("pending RX token is delivered before a fresh poll");
+            .expect("exact committed generation releases the preserved RX token");
         token.consume(|bytes| assert_eq!(bytes, b"dhcP"));
         assert!(take_cyw43_pending_rx_token().is_none());
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_fresh_tx_admission_waits_for_exact_data_handoff_commit() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 11;
+        mark_cyw43_gate8_ready_for_test(generation);
+        let committed = cyw43_data_handoff_diagnostic();
+        assert!(committed.committed);
+        assert!(committed.consumer_open);
+
+        let baseline = *CYW43_DATA_HANDOFF_BASELINE.lock();
+        *CYW43_DATA_HANDOFF_BASELINE.lock() = Cyw43DataHandoffBaseline {
+            generation: generation - 1,
+            ..baseline
+        };
+        CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN
+            .store(cyw43_epoch_token(generation - 1), Ordering::Release);
+        let mismatched_baseline = cyw43_data_handoff_diagnostic();
+        assert!(!mismatched_baseline.committed);
+        assert!(!mismatched_baseline.consumer_open);
+        assert_eq!(
+            cyw43_gate8_diagnostic().subgates[7],
+            cyw43_gate8_record(
+                "8h-data-admission",
+                Cyw43Gate8SubgateStatus::Pending,
+                "data-handoff-commit-pending",
+            ),
+            "the generation token cannot authorize data without its exact baseline"
+        );
+        assert!(
+            !commit_cyw43_data_handoff_if_ready(generation),
+            "an idempotent token cannot conceal a mismatched baseline"
+        );
+        *CYW43_DATA_HANDOFF_BASELINE.lock() = baseline;
+        CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN
+            .store(cyw43_epoch_token(generation), Ordering::Release);
+        assert!(cyw43_data_handoff_diagnostic().committed);
+
+        CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(cyw43_epoch_token(generation), Ordering::Release);
+        let rejoin = cyw43_data_handoff_diagnostic();
+        assert!(rejoin.committed);
+        assert!(!rejoin.consumer_open);
+        CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(0, Ordering::Release);
+
+        crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+        let recovery = cyw43_data_handoff_diagnostic();
+        assert!(recovery.committed);
+        assert!(!recovery.consumer_open);
+        crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
+
+        CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN
+            .store(cyw43_epoch_token(generation - 1), Ordering::Release);
+        let stale = cyw43_data_handoff_diagnostic();
+        assert!(!stale.committed);
+        assert!(!stale.consumer_open);
+        CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN
+            .store(cyw43_epoch_token(generation), Ordering::Release);
+        invalidate_cyw43_data_handoff();
+
+        assert!(!cyw43_data_tx_admission_ready(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert!(commit_cyw43_data_handoff_if_ready(generation));
+        assert!(cyw43_data_tx_admission_ready(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_fresh_arp_staging_waits_for_exact_data_handoff_commit() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 13;
+        mark_cyw43_gate8_ready_for_test(generation);
+        invalidate_cyw43_data_handoff();
+        assert!(queue_cyw43_arp_frame([0u8; 42]));
+
+        assert!(!cyw43_data_tx_admission_ready(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert_eq!(CYW43_PENDING_ARP_TX.lock().len(), 1);
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+
+        assert!(commit_cyw43_data_handoff_if_ready(generation));
+        assert!(!cyw43_data_tx_admission_ready(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert!(CYW43_PENDING_ARP_TX.lock().is_empty());
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_some(),
+            "the committed turn may stage exactly one retained ARP frame"
+        );
 
         reset_cyw43_status_flags();
     }

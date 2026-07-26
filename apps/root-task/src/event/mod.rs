@@ -11305,6 +11305,17 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_association_scheduler_line(
+        association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: association scheduler service_turns={} join_starts={} control_progress=ordinary-network-turn",
+            association.service_turns,
+            association.join_starts,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_association_retained_line(
         association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
@@ -11322,18 +11333,27 @@ where
     fn wifi_diag_maintenance_line(
         maintenance: crate::drivers::driver_task_net::Cyw43MaintenanceDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: maintenance generation={} current={} pending={} requested=0x{:08x} required=0x{:08x} completed=0x{:08x} failed=0x{:08x} next={}",
+            maintenance.generation,
+            Self::yes_no(maintenance.current),
+            Self::yes_no(maintenance.pending),
+            maintenance.requested,
+            maintenance.required,
+            maintenance.completed,
+            maintenance.failed,
+            maintenance.next_stage,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_maintenance_action_line(
+        maintenance: crate::drivers::driver_task_net::Cyw43MaintenanceDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         match maintenance.action {
             Some(action) => match action.request {
                 Some(request) => format_message(format_args!(
-                    "wifi: maintenance generation={} current={} pending={} requested=0x{:08x} required=0x{:08x} completed=0x{:08x} failed=0x{:08x} next={} action={} action_generation={} request={} issued={} turns={}",
-                    maintenance.generation,
-                    Self::yes_no(maintenance.current),
-                    Self::yes_no(maintenance.pending),
-                    maintenance.requested,
-                    maintenance.required,
-                    maintenance.completed,
-                    maintenance.failed,
-                    maintenance.next_stage,
+                    "wifi: maintenance action={} action_generation={} request={} issued={} turns={}",
                     action.stage,
                     action.generation,
                     request,
@@ -11341,32 +11361,14 @@ where
                     action.turns,
                 )),
                 None => format_message(format_args!(
-                    "wifi: maintenance generation={} current={} pending={} requested=0x{:08x} required=0x{:08x} completed=0x{:08x} failed=0x{:08x} next={} action={} action_generation={} request=none issued={} turns={}",
-                    maintenance.generation,
-                    Self::yes_no(maintenance.current),
-                    Self::yes_no(maintenance.pending),
-                    maintenance.requested,
-                    maintenance.required,
-                    maintenance.completed,
-                    maintenance.failed,
-                    maintenance.next_stage,
+                    "wifi: maintenance action={} action_generation={} request=none issued={} turns={}",
                     action.stage,
                     action.generation,
                     Self::yes_no(action.issued),
                     action.turns,
                 )),
             },
-            None => format_message(format_args!(
-                "wifi: maintenance generation={} current={} pending={} requested=0x{:08x} required=0x{:08x} completed=0x{:08x} failed=0x{:08x} next={} action=none",
-                maintenance.generation,
-                Self::yes_no(maintenance.current),
-                Self::yes_no(maintenance.pending),
-                maintenance.requested,
-                maintenance.required,
-                maintenance.completed,
-                maintenance.failed,
-                maintenance.next_stage,
-            )),
+            None => format_message(format_args!("wifi: maintenance action=none")),
         }
     }
 
@@ -11375,14 +11377,60 @@ where
         handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: data_handoff generation={} committed={} commit_token={} baseline_generation={} queue={}/{} high_water={}",
+            "wifi: data_handoff generation={} committed={} commit_token={} baseline_token={} baseline_generation={} queue={}/{} high_water={}",
             handoff.generation,
             Self::yes_no(handoff.committed),
             handoff.commit_epoch_token,
+            handoff.baseline_epoch_token,
             handoff.baseline_generation,
             handoff.root_rx_queue_len,
             handoff.root_rx_queue_cap,
             handoff.root_rx_high_water,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_data_handoff_lane_line(
+        handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: data_handoff lane consumer={} control_progress=ordinary-network-turn",
+            if handoff.consumer_open {
+                "open"
+            } else {
+                "blocked"
+            },
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_retained_gate8_line(
+        diagnostic: Option<crate::drivers::driver_task_net::Cyw43Gate8Diagnostic>,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let Some(diagnostic) = diagnostic else {
+            return format_message(format_args!("wifi: gate8 retained_frontier=no"));
+        };
+        let frontier = diagnostic
+            .subgates
+            .iter()
+            .find(|subgate| {
+                subgate.status != crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass
+            })
+            .copied()
+            .unwrap_or(
+                crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic {
+                    token: "complete",
+                    status: crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass,
+                    blocker: "none",
+                },
+            );
+        format_message(format_args!(
+            "wifi: gate8 retained_frontier=yes pair_epoch={} generation={} subgate={} status={} blocker={}",
+            diagnostic.pair_scrub_epoch,
+            diagnostic.generation,
+            frontier.token,
+            frontier.status.as_str(),
+            frontier.blocker,
         ))
     }
 
@@ -11907,6 +11955,7 @@ where
         let deferred_recovery =
             crate::drivers::driver_task_net::cyw43_deferred_recovery_diagnostic();
         let terminal_drain = crate::drivers::driver_task_net::cyw43_terminal_drain_diagnostic();
+        let retained_gate8 = crate::drivers::driver_task_net::cyw43_retained_pre_recovery_gate8();
         let retained_cause_present = deferred_recovery.is_some() || terminal_drain.is_some();
         let (fault, recovery_fault) = if live_net_supersedes_runtime
             || host_eapol_exact.is_some()
@@ -11940,6 +11989,7 @@ where
             && fault.is_none()
             && sdio_status.is_none()
             && deferred_recovery.is_none()
+            && retained_gate8.is_none()
             && !progress_present
             && !pinctrl.attempted
             && !live_net_supersedes_runtime
@@ -11952,6 +12002,7 @@ where
             && fault.is_none()
             && sdio_status.is_none()
             && deferred_recovery.is_none()
+            && retained_gate8.is_none()
             && !progress_present
             && !pinctrl.attempted
             && !live_net_supersedes_runtime
@@ -12022,16 +12073,22 @@ where
         for detail in [
             Self::wifi_diag_association_state_line(association),
             Self::wifi_diag_association_progress_line(association),
+            Self::wifi_diag_association_scheduler_line(association),
             Self::wifi_diag_association_retained_line(association),
         ] {
             self.emit_console_line(detail.as_str());
         }
         let maintenance = crate::drivers::driver_task_net::cyw43_maintenance_diagnostic();
-        let maintenance_line = Self::wifi_diag_maintenance_line(maintenance);
-        self.emit_console_line(maintenance_line.as_str());
+        for detail in [
+            Self::wifi_diag_maintenance_line(maintenance),
+            Self::wifi_diag_maintenance_action_line(maintenance),
+        ] {
+            self.emit_console_line(detail.as_str());
+        }
         let handoff = crate::drivers::driver_task_net::cyw43_data_handoff_diagnostic();
         for detail in [
             Self::wifi_diag_data_handoff_state_line(handoff),
+            Self::wifi_diag_data_handoff_lane_line(handoff),
             Self::wifi_diag_data_handoff_counters_line(handoff),
             Self::wifi_diag_data_handoff_stale_purge_line(handoff),
             Self::wifi_diag_data_handoff_boot_loss_line(handoff),
@@ -12039,6 +12096,8 @@ where
         ] {
             self.emit_console_line(detail.as_str());
         }
+        let retained_gate8_line = Self::wifi_diag_retained_gate8_line(retained_gate8);
+        self.emit_console_line(retained_gate8_line.as_str());
         if let Some(recovery) = deferred_recovery {
             for detail in [
                 Self::wifi_diag_deferred_recovery_line(recovery, association.generation),
@@ -21989,6 +22048,8 @@ mod tests {
             progress_generation: u32::MAX,
             progress_current: false,
             progress_epoch: u32::MAX,
+            service_turns: u32::MAX,
+            join_starts: u32::MAX,
             runtime_ready: true,
             primary_join_ready: true,
             associated: true,
@@ -22086,10 +22147,18 @@ mod tests {
         assert!(maintenance_line.contains(
             "generation=4294967295 current=yes pending=yes requested=0x0000001f required=0x0000000f completed=0x00000007 failed=0x00000008"
         ));
-        assert!(maintenance_line.contains(
+        assert!(maintenance_line.ends_with("next=cyw43-host-eapol-bssid-refresh"));
+        let maintenance_action_line =
+            KernelConsoleTestPump::wifi_diag_maintenance_action_line(maintenance);
+        assert!(
+            !maintenance_action_line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{maintenance_action_line}"
+        );
+        assert!(maintenance_action_line.len() < DEFAULT_LINE_CAPACITY);
+        assert!(maintenance_action_line.contains(
             "action=cyw43-host-eapol-bssid-refresh action_generation=4294967295 request=4294967295 issued=yes turns=65535"
         ));
-        let prepared_line = KernelConsoleTestPump::wifi_diag_maintenance_line(
+        let prepared_line = KernelConsoleTestPump::wifi_diag_maintenance_action_line(
             crate::drivers::driver_task_net::Cyw43MaintenanceDiagnostic {
                 action: maintenance.action.map(|action| {
                     crate::drivers::driver_task_net::Cyw43MaintenanceActionDiagnostic {
@@ -22118,7 +22187,24 @@ mod tests {
                 },
             )
             .as_str(),
-            "wifi: maintenance generation=3 current=yes pending=no requested=0x00000000 required=0x00000000 completed=0x00000000 failed=0x00000000 next=none action=none"
+            "wifi: maintenance generation=3 current=yes pending=no requested=0x00000000 required=0x00000000 completed=0x00000000 failed=0x00000000 next=none"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_diag_maintenance_action_line(
+                crate::drivers::driver_task_net::Cyw43MaintenanceDiagnostic {
+                    generation: 3,
+                    current: true,
+                    pending: false,
+                    requested: 0,
+                    required: 0,
+                    completed: 0,
+                    failed: 0,
+                    next_stage: "none",
+                    action: None,
+                },
+            )
+            .as_str(),
+            "wifi: maintenance action=none"
         );
         let lines = [
             KernelConsoleTestPump::wifi_diag_association_state_line(diagnostic),
@@ -22133,6 +22219,7 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_terminal_drain_completion_line(terminal),
             KernelConsoleTestPump::wifi_diag_terminal_drain_frame_line(terminal),
             KernelConsoleTestPump::wifi_diag_terminal_drain_logical_line(terminal),
+            KernelConsoleTestPump::wifi_diag_association_scheduler_line(diagnostic),
         ];
 
         for line in &lines {
@@ -22253,6 +22340,9 @@ mod tests {
         assert!(lines[11].contains("terminal=no owner_conflict=yes"));
         assert!(lines[11].contains("owner_scope=root-logical-capture"));
         assert!(lines[11].contains("owner_cmd=0x0000001a owner_id=37"));
+        assert!(lines[12].contains(
+            "service_turns=4294967295 join_starts=4294967295 control_progress=ordinary-network-turn"
+        ));
         assert!(lines[8].contains("completion_sequence=3907 exact_request_match=yes"));
         assert_eq!(
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(None).as_str(),
@@ -22322,7 +22412,9 @@ mod tests {
         let handoff = crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic {
             generation: u32::MAX,
             commit_epoch_token: u64::MAX,
+            baseline_epoch_token: u64::MAX,
             committed: true,
+            consumer_open: true,
             baseline_generation: u32::MAX,
             root_rx_queue_len: 50,
             root_rx_queue_cap: 50,
@@ -22363,7 +22455,15 @@ mod tests {
         assert!(handoff_state.len() < DEFAULT_LINE_CAPACITY);
         assert!(handoff_state
             .contains("generation=4294967295 committed=yes commit_token=18446744073709551615"));
+        assert!(handoff_state
+            .contains("baseline_token=18446744073709551615 baseline_generation=4294967295"));
         assert!(handoff_state.contains("queue=50/50 high_water=50"));
+        let handoff_lane = KernelConsoleTestPump::wifi_diag_data_handoff_lane_line(handoff);
+        assert!(!handoff_lane.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert_eq!(
+            handoff_lane.as_str(),
+            "wifi: data_handoff lane consumer=open control_progress=ordinary-network-turn"
+        );
         let handoff_counters = KernelConsoleTestPump::wifi_diag_data_handoff_counters_line(handoff);
         assert!(!handoff_counters.contains(DIAGNOSTIC_TRUNCATION_MARKER));
         assert!(handoff_counters.len() < DEFAULT_LINE_CAPACITY);
@@ -22392,6 +22492,41 @@ mod tests {
             "postcommit_first_loss=yes sampled_generation=4294967295 reason=queue-full-rejected"
         ));
         assert!(handoff_postcommit_loss.contains("attribution=current-epoch-sample"));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_retained_gate8_line_preserves_the_last_pre_recovery_frontier() {
+        let pass = crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic {
+            token: "8a-pair-generation",
+            status: crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass,
+            blocker: "none",
+        };
+        let mut subgates = [pass; 8];
+        subgates[2] = crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic {
+            token: "8c-join-terminal",
+            status: crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pending,
+            blocker: "join-submit-pending",
+        };
+        let line = KernelConsoleTestPump::wifi_diag_retained_gate8_line(Some(
+            crate::drivers::driver_task_net::Cyw43Gate8Diagnostic {
+                pair_scrub_epoch: u64::MAX,
+                generation: u32::MAX,
+                subgates,
+                current_work_pending: true,
+            },
+        ));
+
+        assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+        assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
+        assert!(line.contains(
+            "pair_epoch=18446744073709551615 generation=4294967295 subgate=8c-join-terminal"
+        ));
+        assert!(line.ends_with("status=pending blocker=join-submit-pending"));
+        assert_eq!(
+            KernelConsoleTestPump::wifi_diag_retained_gate8_line(None).as_str(),
+            "wifi: gate8 retained_frontier=no",
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -32395,18 +32530,20 @@ mod tests {
             .lines()
             .find(|line| line.starts_with("wifi: maintenance generation="))
             .expect("driver-task wifi diag emits passive maintenance state");
-        for field in [
-            " current=",
-            " pending=",
-            " requested=0x",
-            " next=",
-            " action=",
-        ] {
+        for field in [" current=", " pending=", " requested=0x", " next="] {
             assert!(maintenance_line.contains(field), "{maintenance_line}");
         }
         assert!(
             !maintenance_line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
             "{maintenance_line}"
+        );
+        let maintenance_action_line = rendered
+            .lines()
+            .find(|line| line.starts_with("wifi: maintenance action="))
+            .expect("driver-task wifi diag emits passive maintenance action state");
+        assert!(
+            !maintenance_action_line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{maintenance_action_line}"
         );
         assert!(
             rendered.contains(

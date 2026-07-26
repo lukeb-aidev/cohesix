@@ -507,9 +507,9 @@ preserve those upper-path invariants, but this historical pass cannot satisfy a
 current-image gate and cannot authorize timing-dependent loops,
 same-generation replay, root-owned SDIO, or a legacy fallback.
 
-The CYW43 software-closure gate is authorized by Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`. Milestone 26d supplied only the
-physical investigation context that exposed the defect. It exercises the host-testable
+The CYW43 software-closure gate is authorized by active Milestone 26d task
+`m26d-cyw43-hardware-free-closure`, restoring Reopened Milestone 26b task
+`m26b-wifi-sdio-notification-dpc-closure`. It exercises the host-testable
 production transaction data and state transitions (`begin_turn`, frontier
 reservation, retained submit, completion miss, continuation grant, immutable
 ticket/completion validation, completion commit, and cached replay). The host
@@ -558,16 +558,25 @@ prove all of the following:
   the local-seat queue, is superseded by a canonical Stabilizing redraw.
 - Gate 8h stays pending until one idempotent root data-handoff commit is
   published for the current logical generation. Tests must prove that
-  generation start alone cannot publish it; only an ordinary Network turn
-  after root NetStack attach but before its first current-generation poll may call
-  `commit_cyw43_data_handoff_if_ready`; and the helper revalidates current
-  pair, association/link, BSSID, protected-key/open-network, maintenance,
-  logical-owner, and recovery state without performing HAL, SDIO, CYW43,
-  retry, or completion work. The commit must reject and separately account
-  only stale-generation tokens, preserve valid current-generation backlog for
-  the immediately following consumer poll, snapshot sticky cumulative
-  root-drop and runtime-overflow counters, and release-publish the generation
-  token last. Repeating the helper in the same generation is a no-op and must
+  generation start alone cannot publish it; every attached non-recovery turn
+  continues the sole ordinary NetStack association/control lane while the
+  CYW43 NetDevice blocks queued-data delivery, Device-originated fresh data
+  polling, DHCP start, fresh ARP staging, and fresh smoltcp TX. The one
+  pre-poll physical RX ingress may continue so EVENT/CONTROL frames reach
+  their existing policy owners, but it must queue ordinary data. An exact
+  assigned NetData continuation may complete before commit only if its
+  returned ordinary data frame is retained rather than delivered. After that
+  turn, the helper must use the freshly
+  observed logical connection generation, not the bootstrap pair generation,
+  and must revalidate current pair, association/link, BSSID,
+  protected-key/open-network, maintenance, logical-owner, and recovery state
+  without performing HAL, SDIO, CYW43, retry, or completion work. The commit
+  must reject and separately account only stale-generation tokens, preserve
+  valid current-generation backlog for the following consumer turn, snapshot
+  sticky cumulative root-drop and runtime-overflow counters, and
+  release-publish the baseline generation token before publishing the matching
+  consumer commit token last. The producer must capture a new Gate 8 diagnostic
+  after commit. Repeating the helper in the same generation is a no-op and must
   not purge a later frame.
 - Gate 8h passes with bounded non-full root RX, pending data TX/ARP, runtime
   backlog, or one exact assigned current-generation NetData request. A
@@ -589,12 +598,20 @@ prove all of the following:
   `pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`. They must reject
   divergent private capacities, prove the root can preserve one complete child
   backlog, and keep queue saturation subject to the Gate 8h rules above.
-- `wifi diag` and `wifi probe-ht` formatting coverage must preserve five
-  untruncated `wifi: data_handoff` records: generation/commit/baseline and
-  `queue=<used>/50`; current/baseline root-drop and runtime-overflow counters;
+- `wifi diag` and `wifi probe-ht` formatting coverage must preserve six
+  untruncated `wifi: data_handoff` records: generation/commit/baseline tokens,
+  baseline generation, and `queue=<used>/50`; current/baseline root-drop and runtime-overflow counters;
   total/last-token/last-count stale-purge state; boot-first loss state; and
-  current-handoff post-commit first-loss state. A positive loss record must
-  retain sampled generation, commit state where applicable, reason,
+  current-handoff post-commit first-loss state; plus explicit
+  `consumer=<blocked|open>` control-lane state. It must also preserve
+  boot-cumulative association service-turn/Join-start counters and the latest
+  complete non-recovery Gate 8 frontier so sticky recovery cannot replace the
+  causal subgate with only a generic pair-failure state. The passive
+  maintenance snapshot must render as adjacent state and action records,
+  preserve generation/current/pending, all four masks, next stage, exact action
+  generation/request/issued/turn fields at their maximum widths, and never
+  truncate either record. A positive loss record must retain sampled
+  generation, commit state where applicable, reason,
   queue length, channel, EtherType, and priority and end with
   `attribution=current-epoch-sample`. Tests and normalizers must not reinterpret
   that sampled generation as producer, runtime, SDIO, or physical-owner proof.

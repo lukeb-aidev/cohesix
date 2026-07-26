@@ -589,6 +589,57 @@ enum DeferredCyw43SupervisorPhase {
     feature = "net-console"
 ))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredCyw43AttachedTurn {
+    NetworkControl,
+    RecoveryOperator,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const fn deferred_cyw43_attached_turn(recovery_required: bool) -> DeferredCyw43AttachedTurn {
+    if recovery_required {
+        DeferredCyw43AttachedTurn::RecoveryOperator
+    } else {
+        DeferredCyw43AttachedTurn::NetworkControl
+    }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn run_deferred_cyw43_attached_network_control_turn<Poll, Recovery, Diagnostic, Record, Commit>(
+    mut poll: Poll,
+    mut recovery_required: Recovery,
+    mut diagnostic: Diagnostic,
+    mut record: Record,
+    mut commit: Commit,
+) where
+    Poll: FnMut(),
+    Recovery: FnMut() -> bool,
+    Diagnostic: FnMut() -> crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+    Record: FnMut(crate::drivers::driver_task_net::Cyw43Gate8Diagnostic),
+    Commit: FnMut(u32) -> bool,
+{
+    record(diagnostic());
+    poll();
+    if recovery_required() {
+        return;
+    }
+    let candidate = diagnostic();
+    let _ = commit(candidate.generation);
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredNetSupervisorTerminal {
     RetryBudgetExhausted,
     PermanentAttachedRecoveryFailure,
@@ -1611,33 +1662,36 @@ where
         }
 
         // Once the stack is attached, the retained supervisor remains its
-        // lifetime recovery owner. Ordinary network work gets one outer pump
-        // turn only while the linked pair is ready and no sticky recovery
-        // signal is pending. Gate 8 then consumes one passive snapshot. Its
-        // deadline belongs to the outer attempt and survives an internal pair
-        // recovery; neither polling nor a replay can silently renew it.
+        // lifetime recovery owner. The ordinary NetStack turn is also the sole
+        // association/control progress lane, so it must run while Gate 8 is
+        // pending. The CYW43 device boundary fences smoltcp RX/TX and DHCP
+        // until a post-turn commit publishes the current logical generation.
+        // Gate 8 then consumes a fresh passive snapshot. Its deadline belongs
+        // to the outer attempt and survives an internal pair recovery; neither
+        // polling nor a replay can silently renew it.
         if network_attached && bootstrap.is_ready() {
-            if crate::drivers::driver_task_net::cyw43_recovery_required() {
-                // Sticky recovery forbids ordinary network/SDIO work, but it
-                // must not freeze the retained serial lane. One hardware-free
-                // supervisor turn drains proof capacity so the atomic
-                // 8a-through-8h plus Recovery transaction can be retained
-                // before the pair restart begins.
-                pump.poll_cyw43_bootstrap_supervisor_event_turn();
-            } else {
-                // NetStack is attached, but no ordinary poll for this
-                // generation may run until the single handoff commit rejects
-                // stale tokens and publishes its loss baseline. Valid
-                // current-generation backlog remains queued for the
-                // immediately following consumer turn.
-                let handoff_committed = bootstrap.ready_generation().is_some_and(|generation| {
-                    crate::drivers::driver_task_net::commit_cyw43_data_handoff_if_ready(generation)
-                });
-                if handoff_committed {
-                    pump.poll();
-                } else {
-                    // Preserve operator liveness without consuming network
-                    // data or issuing an alternate physical-driver operation.
+            match deferred_cyw43_attached_turn(
+                crate::drivers::driver_task_net::cyw43_recovery_required(),
+            ) {
+                DeferredCyw43AttachedTurn::NetworkControl => {
+                    run_deferred_cyw43_attached_network_control_turn(
+                        || pump.poll(),
+                        crate::drivers::driver_task_net::cyw43_recovery_required,
+                        crate::drivers::driver_task_net::cyw43_gate8_diagnostic,
+                        crate::drivers::driver_task_net::record_cyw43_pre_recovery_gate8,
+                        crate::drivers::driver_task_net::commit_cyw43_data_handoff_if_ready,
+                    );
+                    // The poll above may start Join and advance the logical
+                    // connection generation. Commit only that post-poll
+                    // generation; the bootstrap generation names the
+                    // independently retained firmware/control pair.
+                }
+                DeferredCyw43AttachedTurn::RecoveryOperator => {
+                    // Sticky recovery forbids ordinary network/SDIO work, but
+                    // it must not freeze the retained serial lane. One
+                    // hardware-free supervisor turn drains proof capacity so
+                    // the atomic 8a-through-8h plus Recovery transaction can
+                    // be retained before the pair restart begins.
                     pump.poll_cyw43_bootstrap_supervisor_event_turn();
                 }
             }
@@ -1645,6 +1699,9 @@ where
             let recovery_required = crate::drivers::driver_task_net::cyw43_recovery_required();
             let attempt = retry_schedule.attempt_number();
             let diagnostic = crate::drivers::driver_task_net::cyw43_gate8_diagnostic();
+            if !recovery_required {
+                crate::drivers::driver_task_net::record_cyw43_pre_recovery_gate8(diagnostic);
+            }
             let observation = gate8_lifecycle.observe(
                 attempt,
                 stability_now_ms,
@@ -3319,6 +3376,108 @@ mod tests {
                 terminal
             ));
         }
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn attached_gate8_network_turn_polls_before_committing_the_fresh_logical_generation() {
+        use core::cell::Cell;
+
+        assert_eq!(
+            super::deferred_cyw43_attached_turn(false),
+            super::DeferredCyw43AttachedTurn::NetworkControl,
+        );
+        assert_eq!(
+            super::deferred_cyw43_attached_turn(true),
+            super::DeferredCyw43AttachedTurn::RecoveryOperator,
+        );
+
+        let stage = Cell::new(0u8);
+        let logical_generation = Cell::new(0u32);
+        let diagnostic_calls = Cell::new(0u8);
+        let committed = Cell::new(false);
+        super::run_deferred_cyw43_attached_network_control_turn(
+            || {
+                assert_eq!(stage.get(), 1, "pre-poll evidence must be retained first");
+                assert!(!committed.get(), "handoff cannot commit before the poll");
+                logical_generation.set(23);
+                stage.set(2);
+            },
+            || {
+                assert_eq!(stage.get(), 2, "recovery is checked after the poll");
+                stage.set(3);
+                false
+            },
+            || {
+                let call = diagnostic_calls.get();
+                diagnostic_calls.set(call + 1);
+                match call {
+                    0 => assert_eq!(stage.get(), 0),
+                    1 => assert_eq!(stage.get(), 3),
+                    _ => panic!("one turn takes exactly two Gate 8 snapshots"),
+                }
+                gate8_lifecycle_snapshot(
+                    7,
+                    logical_generation.get(),
+                    crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pending,
+                    "data-handoff-commit-pending",
+                )
+            },
+            |diagnostic| {
+                assert_eq!(stage.get(), 0);
+                assert_eq!(diagnostic.generation, 0);
+                stage.set(1);
+            },
+            |generation| {
+                assert_eq!(stage.get(), 3);
+                assert_eq!(generation, 23, "commit must use the post-poll generation");
+                committed.set(true);
+                stage.set(4);
+                true
+            },
+        );
+        assert_eq!(stage.get(), 4);
+        assert_eq!(diagnostic_calls.get(), 2);
+        assert!(committed.get());
+
+        let recovery_stage = Cell::new(0u8);
+        let recovery_diagnostic_calls = Cell::new(0u8);
+        let recovery_commit_called = Cell::new(false);
+        super::run_deferred_cyw43_attached_network_control_turn(
+            || {
+                assert_eq!(recovery_stage.get(), 1);
+                recovery_stage.set(2);
+            },
+            || {
+                assert_eq!(recovery_stage.get(), 2);
+                recovery_stage.set(3);
+                true
+            },
+            || {
+                recovery_diagnostic_calls.set(recovery_diagnostic_calls.get() + 1);
+                gate8_lifecycle_snapshot(
+                    7,
+                    0,
+                    crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pending,
+                    "join-submit-pending",
+                )
+            },
+            |_| recovery_stage.set(1),
+            |_| {
+                recovery_commit_called.set(true);
+                true
+            },
+        );
+        assert_eq!(recovery_stage.get(), 3);
+        assert_eq!(recovery_diagnostic_calls.get(), 1);
+        assert!(
+            !recovery_commit_called.get(),
+            "post-poll recovery forbids handoff commit"
+        );
     }
 
     #[cfg(all(

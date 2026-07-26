@@ -405,11 +405,14 @@ the retained prompt/TX/key/drain owner, generation, request, issuance, and HAL
 acceptance state without line truncation. Use those records to distinguish an
 accepted join waiting for DPC-delivered events from stale progress, purely
 prepared local work, or a still-owned child request; the command itself never
-probes SDIO. The driver-task report also emits one passive
+probes SDIO. The driver-task report also emits two passive, independently
+bounded records:
 `wifi: maintenance generation=<n> current=<yes|no> pending=<yes|no>
-requested=0x<mask> next=<stage> action=<stage|none> ...` line. A cleared
-current-generation cursor reports `pending=no requested=0x00000000 next=none
-action=none`; a retained deferred-recovery summary independently reports
+requested=0x<mask> ... next=<stage>` and
+`wifi: maintenance action=<stage|none> action_generation=<n> request=<n|none>
+issued=<yes|no> turns=<n>`. A cleared current-generation cursor reports
+`pending=no requested=0x00000000 next=none` and `action=none`; a retained
+deferred-recovery summary independently reports
 `current=<yes|no> live_generation=<n>` so a first-cause record from an older
 generation cannot be mistaken for live maintenance. A child-invisible retained
 request is reported as `state=prepared-root-continuation ...
@@ -593,10 +596,10 @@ between connections is failed TCP liveness evidence.
 
 ### CYW43 Wi-Fi
 
-This runbook section exercises Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`. Milestone 26d is discovery context
-for the physical Wi-Fi defect only; it does not authorize a second production
-or acceptance lane.
+This runbook section exercises active Milestone 26d task
+`m26d-cyw43-hardware-free-closure` to restore Reopened Milestone 26b task
+`m26b-wifi-sdio-notification-dpc-closure`. It does not authorize a second
+production or acceptance lane.
 
 Wi-Fi is the current research and evidence-closure lane. Source tests and a
 stage-only build do not establish live association or data-path readiness. The
@@ -642,16 +645,22 @@ Gate 8h cannot pass until the root consumer has committed the handoff for the
 same generation. Association-generation start is too early: Cohesix may admit
 firmware data after secure keys while post-key maintenance still owns the
 linked-runtime lane and before the root NetStack exists, whereas Linux
-`brcmfmac` already has a live netdev consumer at controlled-port opening. Once
-8a through 8g pass, the first ordinary Network turn with an attached but not
-yet polled root consumer calls `commit_cyw43_data_handoff_if_ready`. It
-revalidates the complete connection/owner state, rejects only
-stale-generation tokens, preserves valid current-generation backlog for the
-immediately following NetStack poll, snapshots the sticky root-drop and
-runtime-overflow counters, and release-publishes the generation token last.
-This commit is bookkeeping at the existing root/NetStack handoff; it does not
-perform SDIO/CYW43 I/O or introduce another boot, owner, or fallback lane.
-Before it succeeds, 8h must report
+`brcmfmac` already has a live netdev consumer at controlled-port opening.
+Cohesix therefore continues the one ordinary attached Network turn for
+association/control progress while the CYW43 NetDevice fences smoltcp RX/TX,
+Device-originated fresh data polling, fresh ARP staging, and DHCP. The existing
+pre-poll physical RX ingress remains live so association/control events can
+advance through the sole policy lane; ordinary returned data is copied into
+the current-generation queue rather than delivered. Once a post-turn snapshot
+shows 8a through 8g passing, root calls
+`commit_cyw43_data_handoff_if_ready` with that snapshot's logical connection
+generation. It revalidates the complete connection/owner state, rejects only stale-generation tokens, preserves valid
+current-generation backlog for the following consumer turn, snapshots the
+sticky root-drop and runtime-overflow counters, release-publishes the baseline
+generation token, and then release-publishes the consumer commit token last.
+Root then captures the publishable post-commit snapshot. This commit performs
+no SDIO/CYW43 I/O and introduces no second boot, owner, polling, or fallback
+lane. Before it succeeds, 8h must report
 `blocker=data-handoff-commit-pending`.
 
 The child decoded-RX queue, its bounded drain budget, and the root copied-RX
@@ -677,16 +686,26 @@ generation; the next consumer-active generation captures a new baseline
 without resetting cumulative counters. A stale-purge count is diagnostic
 evidence, not successful receive or permission to ignore later loss.
 
-Capture the five passive handoff lines from both `wifi diag` and
-`wifi probe-ht`:
+Capture the passive scheduler, handoff, and retained-frontier lines from both
+`wifi diag` and `wifi probe-ht`:
 
 ```text
-wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
+wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=ordinary-network-turn
+wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
+wifi: data_handoff lane consumer=<blocked|open> control_progress=ordinary-network-turn
 wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
 wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
 wifi: data_handoff boot_first_loss=no
 wifi: data_handoff postcommit_first_loss=no
+wifi: gate8 retained_frontier=no
+wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
 ```
+
+After recovery, use `gate8 retained_frontier` as the last non-recovery Gate 8
+state; the live snapshot may correctly show only the generic pair-recovery
+state. Zero association service/Join-start counters at an 8c
+`join-submit-pending` frontier are scheduler-starvation evidence, not Wi-Fi
+hardware warm-up.
 
 When losses exist, the fourth and fifth lines read:
 
