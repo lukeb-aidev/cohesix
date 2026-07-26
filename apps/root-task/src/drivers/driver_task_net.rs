@@ -33293,10 +33293,7 @@ mod tests {
             state => panic!("expected a child-invisible prepared request, got {state:?}"),
         }
         assert_eq!(
-            cyw43_active_runtime_descriptor_for_request(
-                CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                request,
-            ),
+            cyw43_active_runtime_descriptor_for_request(CYW43_WIFI_DRIVER_TASK_CONTRACT, request,),
             None,
             "prepared descriptor bytes remain ABI-invisible until CommitRing",
         );
