@@ -137,7 +137,7 @@ manual availability, profile selection, implementation, and target proof.
 | [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | Complete |
 | [26a](#26a) | Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation | Complete |
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Reopened |
-| [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Reopened (Worker execution truth correction only) |
+| [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Pending |
 | [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
@@ -7177,9 +7177,9 @@ Deliverables:
 **Why now (reviewer trust):**
 Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-up evidence, and isolated runtime benchmark closure, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window after isolated runtime benchmark closure and before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
-**Current planning status:** Reopened for Worker execution truth correction
-only. The
-documentation-only task
+**Current planning status:** Complete.
+
+The documentation-only task
 `m26c-readme-linked-doc-suite-remediation`, including its preservation and
 newcomer-glossary follow-ups, completed on 15 July 2026. The later correction
 that removed fabricated LoRa-radio semantics was authorized and closed

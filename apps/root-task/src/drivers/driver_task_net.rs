@@ -17893,11 +17893,15 @@ fn cyw43_active_runtime_descriptor_for_request(
     if active.request() != active_request {
         return None;
     }
-    // HAL normalizes the child-invisible prepared sequence to the immutable
-    // root request identity after validating the retained lease phase. Reading
-    // the shared command directly would reject every legitimate sequence-zero
-    // preparation and strand its sole continuation before CommitRing.
-    let command = active.command()?;
+    let command = match active {
+        // Prepared input is deliberately absent from the shared descriptor
+        // aperture until CommitRing. The exact root cursor resumes it through
+        // HAL's immutable command-plus-staging fingerprint; generic decoders
+        // must remain fail-closed instead of interpreting zeroed bytes as op0.
+        crate::hal::driver_task::DriverTaskRetainedRequestState::Prepared { .. }
+        | crate::hal::driver_task::DriverTaskRetainedRequestState::Invalid { .. } => return None,
+        crate::hal::driver_task::DriverTaskRetainedRequestState::Issued { command, .. } => command,
+    };
     cyw43_runtime_descriptor_from_active_command(contract, command, active_request)
 }
 
@@ -33293,15 +33297,22 @@ mod tests {
                 CYW43_WIFI_DRIVER_TASK_CONTRACT,
                 request,
             ),
-            Some(descriptor),
-            "the root decoder must use HAL's normalized retained identity while the child sequence is zero",
+            None,
+            "prepared descriptor bytes remain ABI-invisible until CommitRing",
         );
+        assert!(
+            cyw43_active_descriptor_blocks_fresh_net_poll(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "a generic lane must fail closed on child-invisible prepared work"
+        );
+        latch_cyw43_filter_maintenance(0, 0);
+        assert!(cyw43_maintenance_pending());
         assert!(cyw43_net_data_pre_poll_continuation_pending(
             CYW43_WIFI_DRIVER_TASK_CONTRACT
         ));
-        assert!(driver_task_runtime_pre_poll_allowed(
-            CYW43_WIFI_DRIVER_TASK_CONTRACT
-        ));
+        assert!(
+            driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "queued maintenance cannot revoke the exact prepared NetData continuation"
+        );
 
         begin_cyw43_outer_event_turn();
         assert_eq!(
@@ -33322,6 +33333,10 @@ mod tests {
             "the next EventPump turn must advance the exact prepared request"
         );
         assert_eq!(grant.request, request);
+        assert!(
+            cyw43_maintenance_pending(),
+            "the exact continuation advances without consuming queued maintenance"
+        );
         assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
