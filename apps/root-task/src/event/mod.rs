@@ -14311,7 +14311,7 @@ where
     const fn wifi_cyw43_runtime_progress_blocker(phase: u32) -> &'static str {
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN => {
-                "cyw43-root-grant-not-published"
+                "cyw43-root-grant-wait-or-wake-pending"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY => {
                 "cyw43-root-grant-ack-pending"
@@ -14540,7 +14540,7 @@ where
     const fn wifi_cyw43_runtime_progress_next_action(phase: u32) -> &'static str {
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN => {
-                "publish-or-resignal-exact-root-grant"
+                "recheck-exact-root-grant-before-wait"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY => {
                 "ack-exact-root-grant-before-owner-quantum"
@@ -27794,6 +27794,18 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn wifi_root_grant_progress_never_claims_a_physical_gate() {
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_runtime_progress_blocker(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN,
+            ),
+            "cyw43-root-grant-wait-or-wake-pending",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_cyw43_runtime_progress_next_action(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN,
+            ),
+            "recheck-exact-root-grant-before-wait",
+        );
         for phase in [
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY,

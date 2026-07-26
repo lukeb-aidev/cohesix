@@ -14909,6 +14909,70 @@ def bootstrap_gate8_ready_tail(
     ]
 
 
+def bootstrap_gate8_exhaustion_lines() -> list[str]:
+    """Return the production five-attempt Gate 8 recovery/exhaustion trace."""
+
+    def recovery_line(attempt: int, generation: int, deadline_ms: int) -> str:
+        return (
+            f"CYW43_GATE8_RECOVERY attempt={attempt} "
+            f"generation={generation} "
+            "blocker=gate8-stabilization-deadline "
+            f"deadline_ms={deadline_ms} action=pair-restart"
+        )
+
+    return [
+        bootstrap_supervisor_line(
+            0,
+            "preflight",
+            normalizer.CYW43_BOOTSTRAP_SERIAL_RETRY_MS,
+            normalizer.CYW43_BOOTSTRAP_SERIAL_RETRY_MS,
+            1,
+            serial="blocked",
+        ),
+        bootstrap_supervisor_line(0, "preflight", 0, 0, 2),
+        bootstrap_supervisor_line(1, "begin", 0, 1_850, 3),
+        bootstrap_supervisor_line(1, "stabilizing", 0, 117_200, 4),
+        *wifi_gate8_snapshot_lines(
+            4,
+            pair_epoch=0,
+            generation=1,
+            blocker="bssid-owner-terminal-pending",
+        ),
+        recovery_line(1, 1, 117_200),
+        bootstrap_supervisor_line(1, "backoff", 1_000, 118_200, 5),
+        bootstrap_supervisor_line(2, "recovery", 0, 118_200, 6),
+        bootstrap_supervisor_line(2, "stabilizing", 0, 270_650, 7),
+        *wifi_gate8_snapshot_lines(
+            4,
+            pair_epoch=1,
+            generation=3,
+            blocker="bssid-owner-terminal-pending",
+        ),
+        recovery_line(2, 3, 270_650),
+        bootstrap_supervisor_line(2, "backoff", 2_000, 272_650, 8),
+        bootstrap_supervisor_line(3, "recovery", 0, 272_650, 9),
+        bootstrap_supervisor_line(3, "backoff", 4_000, 276_650, 10),
+        bootstrap_supervisor_line(4, "recovery", 0, 276_650, 11),
+        bootstrap_supervisor_line(4, "stabilizing", 0, 429_090, 12),
+        *wifi_gate8_snapshot_lines(
+            4,
+            pair_epoch=2,
+            generation=6,
+            blocker="bssid-owner-terminal-pending",
+        ),
+        recovery_line(4, 6, 429_090),
+        bootstrap_supervisor_line(4, "backoff", 8_000, 437_090, 13),
+        bootstrap_supervisor_line(5, "recovery", 0, 437_090, 14),
+        bootstrap_supervisor_line(
+            5,
+            "exhausted",
+            0,
+            normalizer.CYW43_BOOTSTRAP_NO_ATTEMPT_MS,
+            15,
+        ),
+    ]
+
+
 def test_bootstrap_supervisor_absence_preserves_historical_scoring() -> None:
     """Logs from before the supervisor do not acquire a new blocker."""
 
@@ -15738,6 +15802,71 @@ def test_bootstrap_supervisor_accepts_same_attempt_ready_recovery_exhaustion() -
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "retry-exhausted"
 
 
+def test_bootstrap_supervisor_retains_first_gate8_failure_at_exhaustion() -> None:
+    """Generic recovery lifecycle edges cannot erase the first atomic cause."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(bootstrap_gate8_exhaustion_lines())
+    ).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 5
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 4
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "exhausted"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "retry-exhausted"
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_SEEN"] == ">".join(
+        normalizer.WIFI_GATE8_SUBGATES[:4]
+    )
+    assert record["WIFI_GATE8_LAST"] == "8d-association-link"
+    assert record["WIFI_GATE8_MISSING"] == "8e-bssid-refresh"
+    assert record["WIFI_GATE8_STATUS"] == "fail"
+    assert record["WIFI_GATE8_PAIR_EPOCH"] == 0
+    assert record["WIFI_GATE8_GENERATION"] == 1
+    assert record["WIFI_GATE8_BLOCKER"] == "bssid-owner-terminal-pending"
+
+
+def test_gate8_postexhaust_passive_diag_cannot_mutate_retained_frontier() -> None:
+    """Post-exhaustion `wifi diag` is passive and cannot alter boot history."""
+
+    boot_lines = bootstrap_gate8_exhaustion_lines()
+    baseline = normalizer.summarize_gates(
+        normalizer.parse_events(boot_lines)
+    ).to_record()
+    with_postexhaust_diag = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                *boot_lines,
+                *wifi_gate8_snapshot_lines(
+                    0,
+                    pair_epoch=2,
+                    generation=7,
+                    status="fail",
+                    blocker="pair-recovery-required",
+                ),
+            ]
+        )
+    ).to_record()
+
+    retained_keys = (
+        "WIFI_GATE8_SEEN",
+        "WIFI_GATE8_LAST",
+        "WIFI_GATE8_MISSING",
+        "WIFI_GATE8_STATUS",
+        "WIFI_GATE8_PAIR_EPOCH",
+        "WIFI_GATE8_GENERATION",
+        "WIFI_GATE8_BLOCKER",
+        "WIFI_GATE8_LINE",
+    )
+    assert {
+        key: with_postexhaust_diag[key] for key in retained_keys
+    } == {key: baseline[key] for key in retained_keys}
+    assert (
+        with_postexhaust_diag["WIFI_GATE8_BLOCKER"]
+        != "pair-epoch-not-advanced-after-recovery"
+    )
+
+
 def test_bootstrap_supervisor_accepts_bounded_exhaustion_as_terminal_red() -> None:
     """The fifth failure must close with the exact no-attempt sentinel."""
 
@@ -15780,6 +15909,16 @@ def test_bootstrap_supervisor_accepts_bounded_exhaustion_as_terminal_red() -> No
                 ),
             ],
             "scheduled-not-terminal",
+        ),
+        (
+            [
+                bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+                bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+                bootstrap_supervisor_line(
+                    1, "backoff", 1_000, 1_150, 3
+                ),
+            ],
+            "invalid-status-sequence",
         ),
         (
             [

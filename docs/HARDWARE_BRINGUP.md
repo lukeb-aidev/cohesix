@@ -657,12 +657,17 @@ snapshot and require a new complete 8a-through-8h proof. A `fail` or the
 adjacent `CYW43_GATE8_RECOVERY` boundary, while reserving the next
 retained-serial slot for the supervisor `backoff`/`exhausted`/`permanent`
 terminal, then requests one fenced recovery. Retraction purges queued HDMI
-Ready/prompt bytes and forces a canonical Stabilizing redraw. Five outer attempts with
-1/2/4/8-second backoffs are the finite limit, and attempt 5 must exhaust rather
-than start a sixth. Gate 9 DHCP/address and Gate 10 nettest, TCP, and
-authenticated `cohsh` must remain in the accepted Gate 8 connection generation.
-Do not count a boot whose later recovery, generation change, or readiness
-retraction invalidates those proofs.
+Ready/prompt bytes and forces a canonical Stabilizing redraw. Five outer
+attempts with 1/2/4/8-second backoffs are the finite limit. Each numbered
+attempt receives one fresh pair-restart allowance without discarding an
+accepted terminal-drain owner, so a reported attempt cannot fail locally
+merely because the prior attempt used its allowance. Attempt 5 must exhaust
+rather than start a sixth. Gate 9 DHCP/address and Gate 10 nettest, TCP, and
+authenticated `cohsh` must remain in the accepted Gate 8 connection
+generation. Each DHCP start must also publish a fresh generation-bound XID;
+late Offer/ACK packets carrying a prior XID are not current proof. Do not count
+a boot whose later recovery, generation change, or readiness retraction
+invalidates those proofs.
 
 On the current shared-core linked-runtime design, the prompt-side supervisor
 must prove the SDIO owner before the CYW43 client. SDIO service registration and

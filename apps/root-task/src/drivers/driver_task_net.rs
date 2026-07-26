@@ -1536,7 +1536,19 @@ impl Cyw43BootstrapSupervisor {
         self.gate8_generation = None;
         self.gate8_snapshot = None;
         self.stable_generation = None;
-        self.arm_generation_recovery(reason);
+        // This call is the exact boundary between two finite outer supervisor
+        // attempts. Each advertised attempt receives one fresh whole-pair
+        // restart budget; otherwise an attempt that itself began through pair
+        // recovery would consume the only restart and the following numbered
+        // attempt would fail locally without touching hardware.
+        self.pair_restarts = 0;
+        self.pair_restart_limit = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
+        self.post_gate8_repair_opened = false;
+        // Gate 8 may expire while the ordinary NetData lane owns an exact
+        // issued CYW43 continuation. Route through the same terminal-owner
+        // drain used by every other generation fault so recovery cannot erase
+        // an accepted op8/op11 parent before its physical terminal is observed.
+        self.route_generation_recovery(reason);
         true
     }
 
@@ -7899,6 +7911,16 @@ fn cyw43_host_eapol_accepted_action_pending() -> bool {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_post_assoc_bssid_obligation_pending(session: &Cyw43HostEapolSession) -> bool {
+    if !session.progress.associated || !cyw43_host_eapol_epoch_is_current(&session.progress) {
+        return false;
+    }
+    let token = cyw43_epoch_token(session.progress.connection_epoch);
+    CYW43_POST_ASSOC_BSSID_REFRESH_EPOCH_TOKEN.load(Ordering::Acquire) != token
+        && CYW43_POST_ASSOC_BSSID_REFRESH_FAILURE_EPOCH_TOKEN.load(Ordering::Acquire) != token
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_host_eapol_runtime_work_pending() -> bool {
     cyw43_prompt_poll_owned_by_host_eapol()
         || CYW43_HOST_EAPOL_SESSION
@@ -7908,6 +7930,7 @@ fn cyw43_host_eapol_runtime_work_pending() -> bool {
                 session.pending_tx_submit.is_some()
                     || session.pending_key_install.is_some()
                     || session.pending_tx_drain.is_some()
+                    || cyw43_post_assoc_bssid_obligation_pending(session)
             })
 }
 
@@ -12570,16 +12593,8 @@ fn service_cyw43_host_eapol_slice_with_outcome(
             progress: None,
         };
     }
-    let incremental_work_pending = cyw43_maintenance_result_pending()
-        || cyw43_prompt_poll_owned_by_host_eapol()
-        || CYW43_HOST_EAPOL_SESSION
-            .lock()
-            .as_ref()
-            .is_some_and(|session| {
-                session.pending_tx_submit.is_some()
-                    || session.pending_key_install.is_some()
-                    || session.pending_tx_drain.is_some()
-            });
+    let incremental_work_pending =
+        cyw43_maintenance_result_pending() || cyw43_host_eapol_runtime_work_pending();
     if poll_limit == 0
         || (CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0 && !incremental_work_pending)
         || !runtime_ready(DriverTaskHotPath::Cyw43Wifi)
@@ -12686,14 +12701,33 @@ fn service_cyw43_host_eapol_slice_with_outcome(
                 break 'turn;
             }
         }
-        if session.pending_tx_submit.is_none()
-            && session.pending_key_install.is_none()
-            && session.pending_tx_drain.is_none()
-            && session.progress.secure_keys_ready
-            && mark_cyw43_host_eapol_secure(contract, &session.progress)
+        if !cyw43_host_eapol_retained_action_pending(session) && session.progress.secure_keys_ready
         {
-            activity = true;
-            break 'turn;
+            let secure = CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
+                || mark_cyw43_host_eapol_secure(contract, &session.progress);
+            activity |= secure;
+            if secure
+                && cyw43_post_assoc_bssid_obligation_pending(session)
+                && !session.bssid_refreshed_after_assoc
+            {
+                let latched = latch_cyw43_bssid_maintenance(Cyw43MaintenanceBssidContext {
+                    purpose: Cyw43MaintenanceBssidPurpose::PostAssociation,
+                    station_mac,
+                    poll: session.progress.polls as usize,
+                });
+                if latched {
+                    session.bssid_refreshed_after_assoc = true;
+                }
+                activity |= latched;
+            }
+            if secure {
+                // Secure data admission and the current-generation BSSID proof
+                // are separate obligations. Retain the same host-EAPOL policy
+                // session until maintenance publishes an exact success/failure
+                // terminal; ordinary NetData is fenced by
+                // `cyw43_host_eapol_runtime_work_pending` in the meantime.
+                break 'turn;
+            }
         }
         match service_cyw43_pending_host_eapol_frame(
             contract,
@@ -13739,17 +13773,6 @@ fn cyw43_service_host_eapol_post_assoc(
         session.last_eapol_start_ms,
         now_ms,
     ) {
-        if !session.bssid_refreshed_after_assoc {
-            let latched = latch_cyw43_bssid_maintenance(Cyw43MaintenanceBssidContext {
-                purpose: Cyw43MaintenanceBssidPurpose::PostAssociation,
-                station_mac,
-                poll: session.progress.polls as usize,
-            });
-            if latched {
-                session.bssid_refreshed_after_assoc = true;
-            }
-            return latched;
-        }
         let start_poll = session.progress.post_assoc_polls as usize;
         return cyw43_try_send_host_eapol_start(contract, station_mac, session, start_poll);
     }
@@ -18492,6 +18515,10 @@ const fn cyw43_runtime_descriptor_blocks_net_pre_poll(op: u16) -> bool {
 #[cfg(feature = "kernel")]
 fn cyw43_root_work_blocks_fresh_net_data_pre_poll() -> bool {
     cyw43_maintenance_pending()
+        || CYW43_HOST_EAPOL_SESSION
+            .lock()
+            .as_ref()
+            .is_some_and(cyw43_post_assoc_bssid_obligation_pending)
         || cyw43_pending_rx_token_occupied()
         || CYW43_PENDING_DATA_TX.lock().is_some()
         || !CYW43_PENDING_ARP_TX.lock().is_empty()
@@ -18522,10 +18549,11 @@ pub(crate) fn driver_task_runtime_pre_poll_allowed(contract: DriverTaskContract)
         }
         if cyw43_root_work_blocks_fresh_net_data_pre_poll() {
             // A fresh op8 may not outrun copied RX or retained TX, ARP, and
-            // maintenance work. Exact op8 continuations were admitted above;
-            // once terminal, this fence lets root consume the preserved frame
-            // and gives retained producers their own EventPump turn before the
-            // linked runtime supplies another frame.
+            // maintenance work, including an unlatched current-generation
+            // post-association BSSID obligation. Exact op8 continuations were
+            // admitted above; once terminal, this fence lets root consume the
+            // preserved frame and gives the host-EAPOL policy lane its own
+            // EventPump turn before the linked runtime supplies another frame.
             return false;
         }
     }
@@ -28207,6 +28235,135 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn gate8_timeout_drains_exact_issued_net_data_owner_before_pair_restart() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+
+        let mut request = None;
+        for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+            begin_cyw43_outer_event_turn();
+            assert_eq!(
+                run_cyw43_owned_prompt_poll(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    Cyw43PromptPollOwner::NetData,
+                    descriptor,
+                ),
+                None
+            );
+            assert!(cyw43_outer_event_turn_operation_count() <= 1);
+            if let Some(active) = crate::hal::driver_task::active_driver_task_retained_request(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .filter(|active| active.issued())
+            {
+                request = Some(active.request());
+                break;
+            }
+        }
+        let request = request.expect("ordinary NetData request reaches the issued boundary");
+        let pending = CYW43_PENDING_PROMPT_POLL
+            .lock()
+            .expect("issued NetData owner remains retained");
+        assert_eq!(pending.owner, Cyw43PromptPollOwner::NetData);
+        assert_eq!(pending.request, Some(request));
+        assert!(pending.issued);
+        assert!(CYW43_TERMINAL_DRAIN_CURSOR.lock().is_some_and(|cursor| {
+            cursor.request == request
+                && matches!(
+                    cursor.owner,
+                    Cyw43TerminalDrainOwner::Prompt(owner)
+                        if owner.owner == Cyw43PromptPollOwner::NetData
+                            && owner.request == Some(request)
+                            && owner.issued
+                )
+        }));
+
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor.phase = Cyw43BootstrapPhase::Complete;
+        supervisor.ready_generation = Some(0);
+        supervisor.gate8_generation = Some(0);
+        supervisor.pair_restarts = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
+        let generation_before = cyw43_connection_generation();
+
+        assert!(supervisor.request_gate8_stabilization_recovery("gate8-stabilization-deadline"));
+
+        assert_eq!(
+            supervisor.phase,
+            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::DrainTerminalOwner),
+            "Gate 8 recovery must enter the sole exact-terminal drain lane"
+        );
+        assert_eq!(cyw43_connection_generation(), generation_before);
+        assert_eq!(
+            supervisor.pair_restarts, 0,
+            "a genuine next outer attempt receives its own bounded pair restart"
+        );
+        assert!(CYW43_PENDING_PROMPT_POLL.lock().is_some_and(|owner| {
+            owner.owner == Cyw43PromptPollOwner::NetData
+                && owner.request == Some(request)
+                && owner.issued
+        }));
+        assert!(CYW43_TERMINAL_DRAIN_CURSOR.lock().is_some_and(|cursor| {
+            cursor.request == request
+                && matches!(
+                    cursor.owner,
+                    Cyw43TerminalDrainOwner::Prompt(owner)
+                        if owner.owner == Cyw43PromptPollOwner::NetData
+                            && owner.request == Some(request)
+                            && owner.issued
+                )
+        }));
+        assert_eq!(
+            CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire),
+            0,
+            "recovery routing cannot execute or replay the accepted child"
+        );
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn gate8_timeout_without_accepted_owner_routes_directly_to_generation_poison() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor.phase = Cyw43BootstrapPhase::Complete;
+        supervisor.ready_generation = Some(0);
+        supervisor.pair_restarts = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
+
+        assert!(supervisor.request_gate8_stabilization_recovery("gate8-stabilization-deadline"));
+
+        assert_eq!(
+            supervisor.phase,
+            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::PoisonGeneration),
+            "proven-unissued recovery has no terminal owner to drain"
+        );
+        assert_eq!(
+            supervisor.pair_restarts, 0,
+            "the next advertised attempt cannot inherit a spent inner restart budget"
+        );
+        assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
+        assert!(CYW43_TERMINAL_DRAIN_CURSOR.lock().is_none());
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn runtime_pair_signal_drains_exact_prompt_terminal_before_pair_restart() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
@@ -34146,6 +34303,107 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn secure_post_assoc_bssid_obligation_owns_policy_lane_before_fresh_net_data() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let _io_guard = test_enable_cyw43_host_eapol_io_stub();
+        let credentials =
+            WifiCredentials::new("cohesix", "passphrase").expect("valid host-EAPOL credentials");
+        let station = EthernetAddress([0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
+        *CYW43_RUNTIME_MAC.lock() = station;
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host-EAPOL session starts");
+        session.progress.associated = true;
+        session.progress.link_up = true;
+        session.progress.secure_keys_ready = true;
+        *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
+
+        assert!(cyw43_host_eapol_runtime_work_pending());
+        assert!(
+            !driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "an unlatched current-generation BSSID obligation blocks fresh NetData"
+        );
+
+        *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
+            ticket_id: 0x4253_5349,
+            owner: Cyw43PromptPollOwner::NetData,
+            generation: CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+            descriptor: DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+                flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            request: None,
+            issued: false,
+            deadline: cyw43_poll_deadline_from_millis_or_polls(
+                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            ),
+            child_reply_latched: false,
+            child_reply_renewals: 0,
+        });
+        assert!(
+            !driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "request-less NetData is still fresh work and must yield"
+        );
+        CYW43_PENDING_PROMPT_POLL
+            .lock()
+            .as_mut()
+            .expect("NetData cursor remains present")
+            .request = Some(0x91);
+        assert!(
+            driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "the BSSID obligation cannot revoke an exact assigned NetData continuation"
+        );
+        *CYW43_PENDING_PROMPT_POLL.lock() = None;
+
+        let outcome = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, 1);
+        assert!(outcome.activity);
+        assert_eq!(CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire),
+            1
+        );
+        let retained_session = CYW43_HOST_EAPOL_SESSION
+            .lock()
+            .expect("secure policy session remains generation-bound");
+        assert!(retained_session.bssid_refreshed_after_assoc);
+        assert!(
+            CYW43_MAINTENANCE_CURSOR.lock().requested & CYW43_MAINTENANCE_BSSID != 0,
+            "the same policy lane latches exactly one post-association BSSID action"
+        );
+        assert!(cyw43_post_assoc_bssid_obligation_pending(&retained_session));
+        assert!(cyw43_host_eapol_runtime_work_pending());
+
+        CYW43_POST_ASSOC_BSSID_REFRESH_EPOCH_TOKEN.store(cyw43_epoch_token(0), Ordering::Release);
+        assert!(
+            !cyw43_host_eapol_runtime_work_pending(),
+            "an exact same-generation success terminal closes the obligation"
+        );
+        CYW43_POST_ASSOC_BSSID_REFRESH_EPOCH_TOKEN.store(0, Ordering::Release);
+        CYW43_POST_ASSOC_BSSID_REFRESH_FAILURE_EPOCH_TOKEN
+            .store(cyw43_epoch_token(0), Ordering::Release);
+        assert!(
+            !cyw43_host_eapol_runtime_work_pending(),
+            "an exact same-generation failure terminal also closes policy ownership"
+        );
+        CYW43_POST_ASSOC_BSSID_REFRESH_FAILURE_EPOCH_TOKEN.store(0, Ordering::Release);
+        CYW43_CONNECTION_EPOCH.store(1, Ordering::Release);
+        assert!(
+            !cyw43_host_eapol_runtime_work_pending(),
+            "a stale session cannot manufacture work in the replacement generation"
+        );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn fresh_net_data_pre_poll_yields_to_root_rx_and_retained_tx_work() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
@@ -36319,7 +36577,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn host_eapol_m1_opens_post_assoc_maintenance_window() {
+    fn host_eapol_m1_keeps_bssid_maintenance_behind_secure_boundary() {
         let _guard = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 replay tests must serialize");
@@ -36372,21 +36630,21 @@ mod tests {
 
         session.progress.post_assoc_polls = CYW43_HOST_EAPOL_START_FIRST_POLL as u32 - 1;
         session.associated_ms = Some(0);
-        assert!(cyw43_service_host_eapol_post_assoc(
+        assert!(!cyw43_service_host_eapol_post_assoc(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             EthernetAddress(station),
             &mut session,
             CYW43_HOST_EAPOL_START_FIRST_MS
         ));
         assert_eq!(CYW43_HOST_EAPOL_START.load(Ordering::Acquire), 0);
-        assert!(session.bssid_refreshed_after_assoc);
+        assert!(!session.bssid_refreshed_after_assoc);
         assert!(
-            CYW43_MAINTENANCE_CURSOR.lock().requested & CYW43_MAINTENANCE_BSSID != 0,
-            "post-association BSSID maintenance owns its own outer turn before EAPOL Start"
+            CYW43_MAINTENANCE_CURSOR.lock().requested & CYW43_MAINTENANCE_BSSID == 0,
+            "post-association BSSID proof cannot monopolize the M2-to-M3 control lane"
         );
         assert!(
             session.pending_tx_submit.is_some(),
-            "M1 retains M2 while association maintenance is requested for later turns"
+            "M1 retains M2 while BSSID maintenance waits for secure keys"
         );
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_TX_SUBMITTED.load(Ordering::Acquire),

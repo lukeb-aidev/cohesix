@@ -4134,12 +4134,14 @@ impl<D: NetDevice> NetStack<D> {
         );
         if dhcp_restart_required_after_mac_sync(self.mode, self.ip, self.dhcp_started) {
             if let Some(client) = self.dhcp.as_mut() {
-                client.start(device_mac.0, now_ms);
+                client.start(device_mac.0, now_ms, self.wifi_connection_generation);
                 self.dhcp_restart_after_ms = None;
                 info!(
-                    "[dhcp] restart reason=hardware-address-sync interface={} mac={} now_ms={}",
+                    "[dhcp] restart reason=hardware-address-sync interface={} mac={} generation={} xid=0x{:08x} now_ms={}",
                     self.device.interface_label(),
                     device_mac,
+                    self.wifi_connection_generation,
+                    client.transaction_id(),
                     now_ms
                 );
             }
@@ -4861,13 +4863,15 @@ impl<D: NetDevice> NetStack<D> {
         let Some(client) = self.dhcp.as_mut() else {
             return false;
         };
-        client.start(self.device.mac().0, now_ms);
+        client.start(self.device.mac().0, now_ms, self.wifi_connection_generation);
         self.dhcp_started = true;
         self.dhcp_restart_after_ms = None;
         self.wifi_dhcp_eapol_settle_logged = false;
         info!(
-            "[dhcp] start ready interface={} now_ms={}",
+            "[dhcp] start ready interface={} generation={} xid=0x{:08x} now_ms={}",
             self.device.interface_label(),
+            self.wifi_connection_generation,
+            client.transaction_id(),
             now_ms
         );
         true

@@ -547,7 +547,10 @@ prove all of the following:
   recovery boundary is retained with one further slot reserved for the
   immediately following supervisor `backoff`/`exhausted`/`permanent` terminal,
   then records one transient outer-attempt failure; the 1/2/4/8-second schedule
-  ends at attempt 5 with exhaustion and no sixth attempt.
+  ends at attempt 5 with exhaustion and no sixth attempt. Each numbered attempt
+  receives one new inner pair-restart allowance while an accepted physical
+  terminal owner remains in the sole drain lane; tests must reject alternating
+  hardware/no-op attempts caused by inheriting a spent allowance.
 - A fresh non-stable or different-generation observation retracts `ready` to
   `stabilizing`, including a same-generation loss of owner/admission proof. The
   old snapshot becomes non-authorizing and a later `ready` requires a complete
@@ -563,10 +566,18 @@ prove all of the following:
   saturate rather than wrap, while the exact-generation loss latch remains
   fail-closed. Recovery captures a new baseline without clearing cumulative
   boot telemetry.
+- A current-generation association creates the post-association BSSID
+  obligation independently of the EAPOL-Start timer, but only the secure-keys
+  boundary may issue it; tests must prove M1/M2 cannot open BSSID maintenance
+  ahead of M3. The policy lane remains runnable until an exact BSSID
+  success/failure terminal, blocks fresh NetData, and still permits an
+  already-assigned op8 owner to reach its exact terminal.
 - Gate 9 address/DHCP and Gate 10 nettest/TCP/authenticated-`cohsh` acceptance
   bind to the same logical generation as Gate 8. Recovery, generation advance,
   or readiness retraction invalidates downstream proof instead of allowing
-  evidence stitching.
+  evidence stitching. DHCP tests must prove each start has a fresh
+  generation-bound nonzero XID and that delayed Offer/ACK packets from the
+  prior generation or prior same-generation transaction are rejected.
 
 Normalizer tests must expose `WIFI_GATE8_COMPLETE`, `WIFI_GATE8_SEEN`,
 `WIFI_GATE8_LAST`, `WIFI_GATE8_MISSING`, `WIFI_GATE8_STATUS`,
@@ -1330,8 +1341,12 @@ must then show distinct `CheckWake`, `CheckGrant`, `Service` or `Wait`, and
 one service turn before grant admission; a later CARD_INT may follow at most
 one already-admitted owner quantum and must be observed at the next
 `CheckWake`. `CheckGrant` may perform one stable grant read but no device
-operation, while `Execute` must perform ACK-before-I/O and at most one owner
-quantum without another poll. The actual card-init `HOST_CONFIG` producer must
+operation. Immediately before blocking, `Wait` must recheck the durable shared
+grant so a publication between the empty probe and receive advances to a later
+`Execute` turn without needing a second notification edge; the recheck itself
+performs no owner I/O, and the consumed grant cannot replay. `Execute` must
+perform ACK-before-I/O and at most one owner quantum without another poll. The
+actual card-init `HOST_CONFIG` producer must
 cross the production reciprocal ring and retained owner cursor under this
 ordering. Telemetry must distinguish the post-generation-admission
 one-shot `sdio-owner-command-admitted` marker from generic root engine-init

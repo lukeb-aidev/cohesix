@@ -6384,6 +6384,14 @@ enum RuntimeRetainedGrantProbe {
     Ready(DriverRuntimeContinuationGrant),
 }
 
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeRetainedWaitRecheck {
+    Block,
+    Rejected(DriverRuntimeContinuationGrant),
+    Execute(DriverRuntimeContinuationGrant),
+}
+
 /// Inspect the delegated SDIO continuation condition exactly once before a
 /// retained receive.
 ///
@@ -6415,6 +6423,29 @@ fn probe_runtime_retained_continuation_grant(
         RuntimeRetainedGrantProbe::Empty
     } else {
         RuntimeRetainedGrantProbe::Rejected(grant)
+    }
+}
+
+/// Re-read the durable continuation condition immediately before sleeping.
+///
+/// `CheckGrant` and `Wait` are distinct scheduler turns. The producer can
+/// publish and signal the next exact grant between them. seL4 preserves a
+/// signal that races after this recheck, while this stable shared-memory read
+/// observes a publication that raced before it. A ready decision only freezes
+/// the immutable grant for a later `Execute` turn; it never authorizes
+/// same-turn physical I/O.
+#[cfg(any(target_os = "none", test))]
+fn recheck_runtime_retained_continuation_grant_before_wait(
+    gate: &RuntimePendingCommandGate,
+    retained: Option<RuntimeCommandIntake>,
+    base: usize,
+) -> RuntimeRetainedWaitRecheck {
+    match probe_runtime_retained_continuation_grant(gate, retained, base) {
+        RuntimeRetainedGrantProbe::Inactive | RuntimeRetainedGrantProbe::Empty => {
+            RuntimeRetainedWaitRecheck::Block
+        }
+        RuntimeRetainedGrantProbe::Rejected(grant) => RuntimeRetainedWaitRecheck::Rejected(grant),
+        RuntimeRetainedGrantProbe::Ready(grant) => RuntimeRetainedWaitRecheck::Execute(grant),
     }
 }
 
@@ -45332,6 +45363,49 @@ pub fn runtime_main(task_key: usize) -> ! {
                         continue;
                     }
                     RuntimeRetainedOwnerPhase::Wait => {
+                        let root_grant = pending_command_gate.root_grant_active();
+                        match recheck_runtime_retained_continuation_grant_before_wait(
+                            &pending_command_gate,
+                            pending_intake,
+                            DRIVER_TASK_RING_VADDR,
+                        ) {
+                            RuntimeRetainedWaitRecheck::Execute(grant) => {
+                                if let Some(intake) = pending_intake {
+                                    publish_runtime_progress(
+                                        intake.command.sequence,
+                                        if root_grant {
+                                            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY
+                                        } else {
+                                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY
+                                        },
+                                        grant.grant_id,
+                                    );
+                                }
+                                pending_command_gate.set_delegated_owner_phase(
+                                    RuntimeRetainedOwnerPhase::Execute(grant),
+                                );
+                                // Freeze the exact grant, then hand off. The
+                                // next outer turn acknowledges it before one
+                                // owner quantum; this recheck performs no
+                                // physical I/O.
+                                runtime_yield_current_tcb();
+                                continue;
+                            }
+                            RuntimeRetainedWaitRecheck::Rejected(grant) => {
+                                if let Some(intake) = pending_intake {
+                                    publish_runtime_progress(
+                                        intake.command.sequence,
+                                        if root_grant {
+                                            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED
+                                        } else {
+                                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED
+                                        },
+                                        grant.grant_id,
+                                    );
+                                }
+                            }
+                            RuntimeRetainedWaitRecheck::Block => {}
+                        }
                         let wake = runtime_pending_wake_for_route(
                             notification_route,
                             wait_runtime_command_or_notification(last_sequence),
@@ -53837,6 +53911,93 @@ mod tests {
             RuntimeRetainedGrantProbe::Rejected(stale),
             "a genuinely wrong request identity remains rejected",
         );
+    }
+
+    #[test]
+    fn root_grant_published_between_empty_probe_and_wait_is_rechecked_once() {
+        let generation = 8;
+        let intake = root_retained_gate_test_intake(0x44, generation);
+        let mut retained = intake;
+        let mut ring = test_continuation_grant_ring();
+        let base = ring.0.as_mut_ptr() as usize;
+        let mut gate = RuntimePendingCommandGate::new();
+        let mut owner_quanta = 0usize;
+
+        assert!(publish_runtime_continuation_grant_at(
+            base,
+            intake.command,
+            generation,
+            1,
+        ));
+        let first = read_runtime_continuation_grant_at(base).expect("first exact root grant");
+        gate.retain_after_pending_root_generation(generation);
+        assert_eq!(
+            runtime_retained_owner_prepare_execute(&mut gate, &mut retained, first),
+            RuntimePendingWakeRoute::ContinueForeground,
+        );
+        assert!(acknowledge_runtime_continuation_grant_at(
+            base,
+            first.grant_id,
+        ));
+        owner_quanta = owner_quanta.saturating_add(1);
+        gate.retain_after_pending_root_generation(generation);
+
+        let consumed_probe = probe_runtime_retained_continuation_grant(&gate, Some(intake), base);
+        assert_eq!(consumed_probe, RuntimeRetainedGrantProbe::Empty);
+        gate.set_delegated_owner_phase(runtime_retained_owner_phase_after_grant(consumed_probe));
+        assert_eq!(
+            gate.delegated_owner_phase(),
+            RuntimeRetainedOwnerPhase::Wait,
+        );
+
+        // The producer publishes grant N+1 after CheckGrant observed Empty but
+        // before the consumer enters the blocking receive. No second edge is
+        // required: the pre-sleep recheck observes the durable exact grant.
+        assert!(publish_runtime_continuation_grant_at(
+            base,
+            intake.command,
+            generation,
+            2,
+        ));
+        let second = read_runtime_continuation_grant_at(base).expect("second exact root grant");
+        assert_eq!(
+            recheck_runtime_retained_continuation_grant_before_wait(&gate, Some(intake), base,),
+            RuntimeRetainedWaitRecheck::Execute(second),
+        );
+        assert_eq!(
+            owner_quanta, 1,
+            "the wait recheck freezes authority without same-turn owner I/O",
+        );
+        gate.set_delegated_owner_phase(RuntimeRetainedOwnerPhase::Execute(second));
+        assert_eq!(
+            runtime_retained_owner_prepare_execute(&mut gate, &mut retained, second),
+            RuntimePendingWakeRoute::ContinueForeground,
+        );
+        assert!(acknowledge_runtime_continuation_grant_at(
+            base,
+            second.grant_id,
+        ));
+        owner_quanta = owner_quanta.saturating_add(1);
+        gate.retain_after_pending_root_generation(generation);
+
+        assert_eq!(owner_quanta, 2);
+        assert_eq!(
+            recheck_runtime_retained_continuation_grant_before_wait(&gate, Some(intake), base,),
+            RuntimeRetainedWaitRecheck::Block,
+            "the acknowledged N+1 grant cannot replay",
+        );
+        let consumed =
+            read_runtime_continuation_grant_at(base).expect("second grant remains stable");
+        assert_eq!(
+            gate.route_wake_with_grant(
+                &mut retained,
+                RuntimeWake::Notification(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+                Some(consumed),
+            ),
+            RuntimePendingWakeRoute::Rejected,
+            "a coalesced scheduling hint cannot replay the consumed grant",
+        );
+        assert_eq!(owner_quanta, 2);
     }
 
     #[test]

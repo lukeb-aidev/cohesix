@@ -171,6 +171,7 @@ struct ParsedPacket {
 pub struct DhcpClient {
     config: NetDhcpConfig,
     xid: u32,
+    start_epoch: u32,
     state: DhcpState,
     metrics: DhcpMetrics,
 }
@@ -181,6 +182,7 @@ impl DhcpClient {
         Self {
             config,
             xid: 0,
+            start_epoch: 0,
             state: DhcpState::Disabled,
             metrics: DhcpMetrics {
                 tx_packets: 0,
@@ -191,8 +193,12 @@ impl DhcpClient {
         }
     }
 
-    pub fn start(&mut self, mac: [u8; 6], now_ms: u64) {
-        self.xid = make_xid(mac);
+    pub fn start(&mut self, mac: [u8; 6], now_ms: u64, connection_generation: u32) {
+        self.start_epoch = self.start_epoch.wrapping_add(1);
+        if self.start_epoch == 0 {
+            self.start_epoch = 1;
+        }
+        self.xid = make_xid(mac, connection_generation, self.start_epoch, now_ms);
         self.metrics = DhcpMetrics::default();
         self.state = DhcpState::Selecting {
             next_tx_ms: now_ms,
@@ -201,11 +207,19 @@ impl DhcpClient {
         };
     }
 
-    /// Discard a lease and all transaction identity from the previous link generation.
+    /// Discard the prior lease and active wire identity, retaining only the
+    /// local anti-reuse epoch for the next transaction.
     pub fn reset(&mut self) {
         self.xid = 0;
+        // Keep the local start epoch so a replacement transaction cannot
+        // reuse the previous generation's wire identity.
         self.metrics = DhcpMetrics::default();
         self.state = DhcpState::Disabled;
+    }
+
+    #[must_use]
+    pub const fn transaction_id(&self) -> u32 {
+        self.xid
     }
 
     #[must_use]
@@ -426,14 +440,22 @@ fn packet_to_lease(packet: ParsedPacket) -> Option<DhcpLease> {
     })
 }
 
-fn make_xid(mac: [u8; 6]) -> u32 {
-    0x434f_4800
-        ^ u32::from(mac[0]) << 24
-        ^ u32::from(mac[1]) << 16
-        ^ u32::from(mac[2]) << 8
-        ^ u32::from(mac[3])
-        ^ u32::from(mac[4]) << 4
-        ^ u32::from(mac[5])
+fn make_xid(mac: [u8; 6], connection_generation: u32, start_epoch: u32, now_ms: u64) -> u32 {
+    let mut xid = 0x434f_4800u32;
+    for byte in mac
+        .into_iter()
+        .chain(connection_generation.to_be_bytes())
+        .chain(start_epoch.to_be_bytes())
+        .chain(now_ms.to_be_bytes())
+    {
+        xid ^= u32::from(byte);
+        xid = xid.wrapping_mul(0x0100_0193);
+    }
+    if xid == 0 {
+        1
+    } else {
+        xid
+    }
 }
 
 fn encode_discover(xid: u32, mac: [u8; 6], buffer: &mut [u8]) -> Result<usize, DhcpFailureReason> {
@@ -829,7 +851,7 @@ mod tests {
     #[test]
     fn dhcp_offer_moves_client_to_requesting() {
         let mut client = DhcpClient::new(config());
-        client.start(MAC, 0);
+        client.start(MAC, 0, 0);
         let offer = offer_packet(client.xid);
         let event = client.handle_packet(MAC, &offer, 5);
         assert_eq!(event, DhcpEvent::SendQueued);
@@ -839,7 +861,7 @@ mod tests {
     #[test]
     fn dhcp_ack_yields_bound_lease() {
         let mut client = DhcpClient::new(config());
-        client.start(MAC, 0);
+        client.start(MAC, 0, 0);
         let offer = offer_packet(client.xid);
         assert_eq!(client.handle_packet(MAC, &offer, 5), DhcpEvent::SendQueued);
         let ack = ack_packet(client.xid);
@@ -857,7 +879,7 @@ mod tests {
     #[test]
     fn dhcp_generation_reset_discards_bound_lease_and_transaction_identity() {
         let mut client = DhcpClient::new(config());
-        client.start(MAC, 0);
+        client.start(MAC, 0, 7);
         let offer = offer_packet(client.xid);
         assert_eq!(client.handle_packet(MAC, &offer, 5), DhcpEvent::SendQueued);
         let ack = ack_packet(client.xid);
@@ -875,9 +897,57 @@ mod tests {
     }
 
     #[test]
+    fn dhcp_generation_restart_rejects_previous_wire_transaction() {
+        let mut client = DhcpClient::new(config());
+        client.start(MAC, 100, 7);
+        let previous_xid = client.transaction_id();
+        let previous_offer = offer_packet(previous_xid);
+        let previous_ack = ack_packet(previous_xid);
+
+        client.reset();
+        client.start(MAC, 200, 8);
+
+        assert_ne!(client.transaction_id(), previous_xid);
+        assert_eq!(
+            client.handle_packet(MAC, &previous_offer, 205),
+            DhcpEvent::None
+        );
+        assert_eq!(client.status().phase, DhcpPhase::Selecting);
+        assert_eq!(client.status().metrics.invalid_packets, 1);
+
+        let current_offer = offer_packet(client.transaction_id());
+        assert_eq!(
+            client.handle_packet(MAC, &current_offer, 206),
+            DhcpEvent::SendQueued
+        );
+        assert_eq!(
+            client.handle_packet(MAC, &previous_ack, 207),
+            DhcpEvent::None
+        );
+        assert_eq!(client.status().phase, DhcpPhase::Requesting);
+        assert_eq!(client.status().metrics.invalid_packets, 2);
+    }
+
+    #[test]
+    fn dhcp_same_generation_restart_uses_fresh_wire_transaction() {
+        let mut client = DhcpClient::new(config());
+        client.start(MAC, 200, 8);
+        let previous_xid = client.transaction_id();
+
+        client.start(MAC, 200, 8);
+
+        assert_ne!(client.transaction_id(), previous_xid);
+    }
+
+    #[test]
+    fn dhcp_wire_transaction_binds_connection_generation() {
+        assert_ne!(make_xid(MAC, 7, 1, 200), make_xid(MAC, 8, 1, 200));
+    }
+
+    #[test]
     fn dhcp_nak_fails_requesting_client() {
         let mut client = DhcpClient::new(config());
-        client.start(MAC, 0);
+        client.start(MAC, 0, 0);
         let offer = offer_packet(client.xid);
         assert_eq!(client.handle_packet(MAC, &offer, 5), DhcpEvent::SendQueued);
         let mut nak = offer_packet(client.xid);
@@ -893,7 +963,7 @@ mod tests {
     #[test]
     fn dhcp_ack_server_mismatch_is_rejected() {
         let mut client = DhcpClient::new(config());
-        client.start(MAC, 0);
+        client.start(MAC, 0, 0);
         let offer = offer_packet(client.xid);
         assert_eq!(client.handle_packet(MAC, &offer, 5), DhcpEvent::SendQueued);
         let mut ack = ack_packet(client.xid);
@@ -906,7 +976,7 @@ mod tests {
     #[test]
     fn dhcp_rejects_bad_cookie() {
         let mut client = DhcpClient::new(config());
-        client.start(MAC, 0);
+        client.start(MAC, 0, 0);
         let mut offer = offer_packet(client.xid);
         offer[DHCP_COOKIE_OFFSET] = 0;
         assert_eq!(client.handle_packet(MAC, &offer, 5), DhcpEvent::None);
@@ -917,7 +987,7 @@ mod tests {
     #[test]
     fn dhcp_timeouts_are_bounded() {
         let mut client = DhcpClient::new(config());
-        client.start(MAC, 0);
+        client.start(MAC, 0, 0);
 
         let mut frame = [0u8; 300];
         assert!(client.build_outbound(MAC, &mut frame, 0).unwrap().is_some());

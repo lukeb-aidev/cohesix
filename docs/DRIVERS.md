@@ -452,8 +452,11 @@ retained-serial slot for the immediately following supervisor
 `backoff`/`exhausted`/`permanent` terminal, so saturation cannot hide the
 attempt outcome. Retraction also invalidates queued HDMI Ready/prompt bytes and
 schedules a canonical Stabilizing redraw. Recovery remains bounded to five
-outer attempts with 1/2/4/8-second backoffs; attempt 5 exhausts and quarantines
-instead of spinning.
+outer attempts with 1/2/4/8-second backoffs. The Gate 8 failure boundary resets
+the one-pair-restart allowance for the next numbered outer attempt without
+clearing an accepted terminal-drain owner, so every advertised attempt is a
+real hardware episode rather than a local `pair-recovery-limit` no-op.
+Attempt 5 exhausts and quarantines instead of spinning.
 
 Gate 8h deliberately permits normal bounded root RX, data TX, ARP, runtime
 backlog, and an exact already-assigned current-generation NetData request.
@@ -470,7 +473,13 @@ generation-local baseline without clearing cumulative boot telemetry.
 Gate 9 DHCP/address proof and Gate 10 nettest/TCP/authenticated-`cohsh` proof
 must belong to the same logical connection generation as the accepted Gate 8
 snapshot. A recovery or readiness retraction invalidates those downstream
-proofs; a later generation cannot inherit them.
+proofs; a later generation cannot inherit them. DHCP transaction identity is
+also wire-generation-bound: each start derives a fresh nonzero XID from the
+device MAC, logical connection generation, retained start epoch, and monotonic
+time. Reset clears the active lease/XID but retains the start epoch, so a late
+Offer or ACK from a prior generation or same-generation retry cannot be
+accepted and relabeled as current proof. DHCP start telemetry reports both
+generation and XID.
 
 - SDIO is the sole SDHCI owner; CYW43 submits bounded bus-link operations.
 - After engine initialization, the SDIO runtime accepts only the fixed-layout
@@ -1511,7 +1520,13 @@ proofs; a later generation cannot inherit them.
   maintenance is waiting for the same one-operation EventPump permit.
   Association, host-EAPOL, maintenance, and NetData therefore defer to the
   exact current ticket rather than adopting, replacing, or poisoning it at the
-  bootstrap-to-steady handoff.
+  bootstrap-to-steady handoff. Association immediately creates one
+  current-generation post-association BSSID obligation independently of the
+  EAPOL-Start timer, but the secure-keys boundary is its only issue point so
+  the control request cannot occupy the latency-sensitive M2-to-M3 lane. The
+  host-EAPOL policy lane remains scheduled until that obligation has an exact
+  success/failure terminal, and it fences only fresh NetData admission; it
+  cannot revoke an already-assigned op8 continuation.
 - Between retained operations, live serial service is admitted only through
   the independent linked-runtime route. Physical-Pi cutover requires a matching
   linked-runtime service completion (`Idle`, `Progress`, or `FrameReady`) after
@@ -1693,7 +1708,12 @@ cannot advance foreground state. Exact-match, stale, mutated, and reply-cap
 endpoint wakes remain separated explicitly for non-CYW43 root commands.
 Root-to-CYW43 tests reject endpoint wakes, preserve an exact grant across
 coalesced peer service, and prove autonomous intake plus grant re-signal
-survives a consumed scheduling edge. Real-ring epoch-cut tests advance the live
+survives a consumed scheduling edge. Immediately before blocking, the runtime
+rechecks the durable shared grant. A grant published between the earlier empty
+probe and the receive is frozen for a later Execute turn; the recheck performs
+no physical I/O, and a consumed grant cannot replay. This is Cohesix's
+linked-runtime form of Linux's condition-before-sleep workqueue rule.
+Real-ring epoch-cut tests advance the live
 epoch while the cursor is separately `Prepared` and `Issued`, then prove the
 retained request and `aux1` remain bound to the original generation and that
 the replacement generation cannot adopt or replay either cursor.
