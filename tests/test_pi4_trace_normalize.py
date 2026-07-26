@@ -233,6 +233,9 @@ def oldgood_wifi_replay_lines() -> list[str]:
     """Return a synthetic linked-runtime CYW43 old-good replay trace."""
 
     return seal_driver_task_runtime_descriptor_lines([
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin backoff_ms=0 "
+        "next_attempt_ms=100 serial=ready local_seat=ready recovery=full "
+        "console_seq=1 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
@@ -302,6 +305,9 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 poisoned=no masked=no",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
+        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
+        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
     ])
 
 
@@ -359,6 +365,9 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
     """Return linked CYW43 old-good replay using resource-init breadcrumbs."""
 
     return seal_driver_task_runtime_descriptor_lines([
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin backoff_ms=0 "
+        "next_attempt_ms=100 serial=ready local_seat=ready recovery=full "
+        "console_seq=1 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
@@ -447,6 +456,9 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 poisoned=no masked=no",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
+        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
+        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
     ])
 
 
@@ -1572,6 +1584,9 @@ def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
             "cohesix> driver proof",
             "[timers] backend=arch-counter counter=vct timer_freq_hz=54000000",
             "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+            "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wifi "
+            "active_net=cyw43 required_roles=0x3f required_hot_paths=0x7f "
+            "required_tasks=6",
             "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
             "task_count=7 failed_count=0 live_tcb_count=7 "
             "fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 "
@@ -1660,11 +1675,23 @@ def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
             "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
             "rx_bytes=8 tx_frames=1 tx_bytes=8 role_aux0=0 role_aux1=0 "
             "role_aux2=0 role_aux3=0",
+            "DRIVER_TASK_COUNTER contract=cyw43455 hot_path=cyw43-wifi "
+            "source=root-ring sequence=2 submitted=2 completed=2 idle=0 fault=0 "
+            "budget=0 frame=1 desc=1 staged_bytes=64 clean_ops=0 clean_bytes=0 "
+            "inv_ops=0 inv_bytes=0 sends=2 yields=0 busy=0 same_request=0 "
+            "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
+            "rx_bytes=64 tx_frames=1 tx_bytes=64",
+            "DRIVER_TASK_COUNTER contract=sdio-host hot_path=sdio-host "
+            "source=root-ring sequence=2 submitted=2 completed=2 idle=0 fault=0 "
+            "budget=0 frame=1 desc=1 staged_bytes=64 clean_ops=0 clean_bytes=0 "
+            "inv_ops=0 inv_bytes=0 sends=2 yields=0 busy=0 same_request=0 "
+            "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
+            "rx_bytes=64 tx_frames=1 tx_bytes=64",
             "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
             "substrate=active capset=pass fault=pass revoke=pass sched=pass "
             "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
             "pointer_free_ipc=yes owner_state=driver-owned required=7 "
-            "dedicated=7 compatibility=0",
+            "dedicated=7 compatibility=0 active_net=cyw43",
         ])
     )
 
@@ -1672,11 +1699,26 @@ def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
     assert record["DRIVER_TASK_DMA_PROOFS"] == 7
     assert record["DRIVER_TASK_DMA_BLOCKER"] == "none"
     assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF"] == "yes"
-    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOFS"] == 7
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOFS"] == 6
     assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER"] == "none"
     assert record["PI4_RUNTIME_DMA_PROOF"] == "fresh-pi"
     assert record["PI4_RUNTIME_DMA_PROOF_REASON"] == "live-pi-owner-state"
     assert record["PI4_RUNTIME_DMA_COUNTER_PROOF"] == "counter-qualified"
+
+    missing_sdio_counter = [
+        event
+        for event in events
+        if not (
+            event.raw.startswith("DRIVER_TASK_COUNTER ")
+            and event.fields.get("contract") == "sdio-host"
+            and event.fields.get("hot_path") == "sdio-host"
+        )
+    ]
+    incomplete_record = normalizer.summarize_gates(
+        missing_sdio_counter
+    ).to_record()
+    assert incomplete_record["PI4_RUNTIME_DMA_PROOF"] == "fresh-pi"
+    assert incomplete_record["PI4_RUNTIME_DMA_COUNTER_PROOF"] == "diagnostic"
 
 
 def test_gate_summary_rejects_pre_seal_runtime_dma_as_fresh_pi() -> None:
@@ -8314,6 +8356,53 @@ def test_wifi_dpc_proof_requires_exact_complete_line() -> None:
     assert record["WIFI_DPC_REASON"] == "missing"
 
 
+def test_wifi_dpc_proof_scopes_failures_to_latest_supervisor_attempt() -> None:
+    """A failed retry cannot poison the later attempt's exact DPC proof."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            "CYW43_SDIO_DPC generation=1 captures=6 published=5 consumed=5 "
+            "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 poisoned=no masked=no",
+            bootstrap_supervisor_line(1, "recovery", 0, 150, 2),
+            bootstrap_supervisor_line(2, "begin", 1_000, 1_150, 3),
+            "CYW43_SDIO_DPC generation=1 captures=8 published=8 consumed=8 "
+            "rearms=8 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 poisoned=no masked=no",
+            bootstrap_supervisor_line(2, "ready", 0, 1_300, 4),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "yes"
+    assert record["WIFI_DPC_REASON"] == "none"
+    assert record["WIFI_DPC_GENERATION"] == 1
+    assert record["WIFI_DPC_CAPTURES"] == 8
+
+
+def test_wifi_dpc_proof_retains_failure_within_latest_generation() -> None:
+    """A later clean sample cannot erase an error in the same generation."""
+
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=9 captures=6 published=5 consumed=5 "
+            "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 poisoned=no masked=no",
+            "CYW43_SDIO_DPC generation=9 captures=8 published=8 consumed=8 "
+            "rearms=8 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 poisoned=no masked=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "capture-publish-mismatch"
+    assert record["WIFI_DPC_CAPTURES"] == 8
+
+
 def test_boot_acceptance_requires_wifi_dpc_but_wired_history_does_not() -> None:
     wifi_record = {
         "NET_ACTIVE": "wifi",
@@ -8919,7 +9008,7 @@ def test_gate_summary_prefers_sustained_input_blocker() -> None:
     assert record["USB_EVENT_LOOP_RUNTIME_SKIPPED"] == 97
 
 
-def test_gate_summary_keeps_cumulative_usb_counters_diagnostic_after_ready() -> None:
+def test_gate_summary_uses_latest_cumulative_usb_counter_snapshot() -> None:
     events = normalizer.parse_events(
         [
             "[local-seat] usb keyboard command-ready source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no",
@@ -8953,8 +9042,42 @@ def test_gate_summary_keeps_cumulative_usb_counters_diagnostic_after_ready() -> 
     record = normalizer.summarize_gates(events).to_record()
 
     assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
-    assert record["DRIVER_TASK_COUNTER_TIMEOUTS"] == 48932
+    assert record["DRIVER_TASK_COUNTER_SNAPSHOTS"] == 1
+    assert record["DRIVER_TASK_COUNTER_TIMEOUTS"] == 25176
     assert record["USB_KEYBOARD_NO_REPLIES"] == 0
+
+
+def test_latest_counter_deduplication_preserves_prior_invalid_snapshot() -> None:
+    """A later valid cumulative sample must not erase malformed telemetry."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_COUNTER contract=cyw43455 hot_path=cyw43-wifi "
+            "source=root-ring sequence=1 submitted=1 completed=1 idle=0 "
+            "fault=0 budget=0 frame=1 desc=1 staged_bytes=64 clean_ops=0 "
+            "clean_bytes=0 inv_ops=0 inv_bytes=0 sends=1 yields=0 busy=0 "
+            "same_request=0 timeouts=3 keep_active=0 aborts=0 overruns=0 "
+            "drops=0 rx_frames=1 rx_bytes=64 tx_frames=1 tx_bytes=64",
+            "DRIVER_TASK_COUNTER contract=cyw43455 hot_path=cyw43-wifi "
+            "source=root-ring sequence=0 submitted=0 completed=0 idle=0 "
+            "fault=0 budget=0 frame=0 desc=0 staged_bytes=0 clean_ops=0 "
+            "clean_bytes=0 inv_ops=0 inv_bytes=0 sends=0 yields=0 busy=0 "
+            "same_request=0 timeouts=0 keep_active=0 aborts=0 overruns=0 "
+            "drops=0 rx_frames=0 rx_bytes=0 tx_frames=0 tx_bytes=0",
+            "DRIVER_TASK_COUNTER contract=cyw43455 hot_path=cyw43-wifi "
+            "source=root-ring sequence=3 submitted=3 completed=3 idle=0 "
+            "fault=0 budget=0 frame=2 desc=2 staged_bytes=192 clean_ops=0 "
+            "clean_bytes=0 inv_ops=0 inv_bytes=0 sends=3 yields=0 busy=0 "
+            "same_request=0 timeouts=7 keep_active=0 aborts=0 overruns=0 "
+            "drops=0 rx_frames=2 rx_bytes=128 tx_frames=2 tx_bytes=128",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["DRIVER_TASK_COUNTER_SNAPSHOTS"] == 1
+    assert record["DRIVER_TASK_COUNTER_INVALID"] == 1
+    assert record["DRIVER_TASK_COUNTER_TIMEOUTS"] == 7
 
 
 def test_gate_summary_reports_active_post_first_byte_no_reply_delta() -> None:
@@ -13645,6 +13768,32 @@ def test_boot_acceptance_requires_complete_ordered_wifi_gate7_proof() -> None:
     assert "wifi-gate7-7d-missing" in blockers
 
 
+def test_boot_acceptance_requires_wifi_bootstrap_supervisor_terminal() -> None:
+    """Production WiFi evidence must include a ready bootstrap supervisor."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(oldgood_wifi_resource_replay_lines())
+    ).to_record()
+
+    assert record["NET_ACTIVE"] == "wifi"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert "cyw43-bootstrap-supervisor-missing" not in (
+        normalizer.boot_evidence_blockers(record)
+    )
+
+    record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] = "no"
+    assert "cyw43-bootstrap-supervisor-missing" in (
+        normalizer.boot_evidence_blockers(record)
+    )
+
+    record["CYW43_BOOTSTRAP_SUPERVISOR_SEEN"] = "yes"
+    record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] = "no"
+    record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] = "none"
+    assert "cyw43-bootstrap-supervisor-ready-missing" in (
+        normalizer.boot_evidence_blockers(record)
+    )
+
+
 def test_gate_summary_accepts_linked_runtime_wifi_harness_replay_contract() -> None:
     events = normalizer.parse_events(linked_runtime_wifi_harness_replay_lines())
 
@@ -13669,6 +13818,35 @@ def test_gate_summary_accepts_pi4_hardware_wifi_gate7_to_10_capture_contract() -
     assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
     assert record["WIFI_OLDGOOD_LAST"] == "dpc-healthy-after-tcp"
     assert record["WIFI_OLDGOOD_MISSING"] == "none"
+
+
+def test_wifi_oldgood_replay_does_not_stitch_across_supervisor_recovery() -> None:
+    """A later retry cannot consume ordered steps from an earlier attempt."""
+
+    lines = oldgood_wifi_resource_replay_lines()
+    final_ready_index = oldgood_wifi_line_index(
+        lines,
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready",
+    )
+    lines[final_ready_index] = lines[final_ready_index].replace(
+        "console_seq=2", "console_seq=4"
+    )
+    join_index = oldgood_wifi_line_index(lines, "CYW43_DRIVER_TASK_JOIN_REQUEST")
+    lines[join_index:join_index] = [
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
+        "next_attempt_ms=150 serial=ready local_seat=ready recovery=full "
+        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=recovery backoff_ms=0 "
+        "next_attempt_ms=160 serial=ready local_seat=ready recovery=full "
+        "console_seq=3 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+    ]
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "none"
+    assert record["WIFI_OLDGOOD_MISSING"] == "sdio-engine-ready"
 
 
 def test_gate_summary_requires_oldgood_txglomalign_control_step() -> None:

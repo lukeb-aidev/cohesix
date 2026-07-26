@@ -470,6 +470,9 @@ For Wi-Fi, use `--require-wifi-ready` instead of the wired gate and retain the
 boot-paired Wi-Fi packet capture. The normalizer must prove association, host
 EAPOL completion, DHCP, ARP/data progress, healthy DPC state, `nettest`, and
 authenticated TCP bytes; an association or DHCP line alone is insufficient.
+The same boot slice must end with the canonical CYW43 bootstrap supervisor
+present, ready, unblocked, and with `LAST_STATUS=ready`; a prior ready episode
+followed by recovery or exhaustion remains acceptance-red.
 It must also report `WIFI_GATE7_COMPLETE=yes`, the exact retained history
 `WIFI_GATE7_SEEN=7a>7b>7c>7d>7e`, `WIFI_GATE7_LAST=7e`, and
 `WIFI_GATE7_MISSING=none`. A latest-frontier `WIFI_SUBGATE=7e` cannot replace

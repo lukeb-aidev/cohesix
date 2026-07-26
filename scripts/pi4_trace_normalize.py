@@ -8555,6 +8555,7 @@ class DriverTaskCounterSummary:
 
     snapshots: int = 0
     invalid: int = 0
+    counter_keys: frozenset[tuple[str, str]] = frozenset()
     busy: int = 0
     same_request: int = 0
     timeouts: int = 0
@@ -9087,10 +9088,50 @@ def summarize_output_pressure(events: Iterable[TraceEvent]) -> OutputPressureSum
 def summarize_driver_task_counters(
     events: Iterable[TraceEvent],
 ) -> DriverTaskCounterSummary:
-    """Return bounded diagnostic counter totals from DRIVER_TASK_COUNTER lines."""
+    """Return latest per-owner totals from DRIVER_TASK_COUNTER snapshots."""
 
-    snapshots = 0
+    latest_by_key: dict[tuple[str, str], TraceEvent] = {}
     invalid = 0
+
+    def valid_snapshot(event: TraceEvent) -> bool:
+        fields = event.fields
+        missing_required = any(
+            field not in fields for field in DRIVER_TASK_COUNTER_REQUIRED_FIELDS
+        )
+        parsed = {
+            field: parse_hex_int(fields.get(field))
+            for field in DRIVER_TASK_COUNTER_ACTIVITY_FIELDS
+        }
+        optional = {
+            field: parse_hex_int(fields.get(field)) or 0
+            for field in DRIVER_TASK_COUNTER_OPTIONAL_ACTIVITY_FIELDS
+        }
+        bad_numeric = any(value is None for value in parsed.values())
+        source = fields.get("source", "").lower()
+        no_activity = not any(
+            (value or 0) != 0 for value in parsed.values()
+        ) and not any(value != 0 for value in optional.values())
+        return not (
+            missing_required
+            or bad_numeric
+            or source != "root-ring"
+            or no_activity
+        )
+
+    for event in events:
+        if not event.raw.lower().startswith("driver_task_counter "):
+            continue
+        contract = field_lower(event, "contract")
+        hot_path = field_lower(event, "hot_path")
+        if not contract or not hot_path:
+            invalid += 1
+            continue
+        latest_by_key[(contract, hot_path)] = event
+        if not valid_snapshot(event):
+            invalid += 1
+
+    snapshots = len(latest_by_key)
+    counter_keys: set[tuple[str, str]] = set()
     busy = 0
     same_request = 0
     timeouts = 0
@@ -9105,10 +9146,7 @@ def summarize_driver_task_counters(
     tx_frames = 0
     rx_bytes = 0
     tx_bytes = 0
-    for event in events:
-        if not event.raw.lower().startswith("driver_task_counter "):
-            continue
-        snapshots += 1
+    for key, event in latest_by_key.items():
         fields = event.fields
         missing_required = any(
             field not in fields for field in DRIVER_TASK_COUNTER_REQUIRED_FIELDS
@@ -9127,8 +9165,8 @@ def summarize_driver_task_counters(
             value != 0 for value in optional.values()
         )
         if missing_required or bad_numeric or source != "root-ring" or no_activity:
-            invalid += 1
             continue
+        counter_keys.add(key)
         busy += parsed["busy"] or 0
         same_request += parsed["same_request"] or 0
         timeouts += parsed["timeouts"] or 0
@@ -9146,6 +9184,7 @@ def summarize_driver_task_counters(
     return DriverTaskCounterSummary(
         snapshots=snapshots,
         invalid=invalid,
+        counter_keys=frozenset(counter_keys),
         busy=busy,
         same_request=same_request,
         timeouts=timeouts,
@@ -10459,10 +10498,14 @@ def ordered_sequence_result(
     steps: list[SequenceStep],
     required_any: list[SequenceStep] | None = None,
     forbidden: list[SequenceStep] | None = None,
+    ordered_events: Iterable[TraceEvent] | None = None,
 ) -> SequenceResult:
     """Match ordered replay steps while checking unordered prerequisites."""
 
     event_list = list(events)
+    sequence_events = (
+        event_list if ordered_events is None else list(ordered_events)
+    )
     for forbidden_step in forbidden or []:
         if any(forbidden_step.matcher(event) for event in event_list):
             return SequenceResult(False, "none", f"forbidden-{forbidden_step.name}")
@@ -10473,13 +10516,32 @@ def ordered_sequence_result(
 
     index = 0
     last = "none"
-    for event in event_list:
+    for event in sequence_events:
         if index < len(steps) and steps[index].matcher(event):
             last = steps[index].name
             index += 1
     if index == len(steps):
         return SequenceResult(True, last, "none")
     return SequenceResult(False, last, steps[index].name)
+
+
+def current_cyw43_supervisor_attempt_events(
+    events: Iterable[TraceEvent],
+) -> list[TraceEvent]:
+    """Return events from the latest canonical supervisor begin/recovery edge."""
+
+    event_list = list(events)
+    latest_start = 0
+    for index, event in enumerate(event_list):
+        match = CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE.fullmatch(event.raw)
+        if match is None:
+            continue
+        if match.group("status") not in {"begin", "recovery"}:
+            continue
+        if parse_hex_int(match.group("attempt")) in {None, 0}:
+            continue
+        latest_start = index
+    return event_list[latest_start:]
 
 
 def usb_xhci_ready_step(event: TraceEvent) -> bool:
@@ -11665,8 +11727,10 @@ def wifi_clm_version_step(event: TraceEvent) -> bool:
 def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResult:
     """Validate the reopened 26b CYW43 host-EAPOL old-good replay profile."""
 
+    event_list = list(events)
     return ordered_sequence_result(
-        events,
+        event_list,
+        ordered_events=current_cyw43_supervisor_attempt_events(event_list),
         required_any=[
             SequenceStep(
                 "cyw43-owner-state",
@@ -11865,11 +11929,13 @@ def wifi_dpc_failure_reason(proof: WifiDpcProof) -> str | None:
 
 
 def summarize_wifi_dpc_proof(events: Iterable[TraceEvent]) -> WifiDpcProof:
-    """Summarize exact CYW43/SDIO DPC lines without crediting partial text."""
+    """Summarize the latest exact CYW43/SDIO DPC generation and attempt."""
 
     latest: WifiDpcProof | None = None
     first_failure: str | None = None
-    for event in events:
+    current_generation: int | None = None
+    attempt_events = current_cyw43_supervisor_attempt_events(events)
+    for event in attempt_events:
         match = CYW43_SDIO_DPC_RE.fullmatch(event.raw)
         if match is None:
             continue
@@ -11887,6 +11953,9 @@ def summarize_wifi_dpc_proof(events: Iterable[TraceEvent]) -> WifiDpcProof:
                 "ack_failures",
             )
         }
+        if values["generation"] != current_generation:
+            current_generation = values["generation"]
+            first_failure = None
         latest = WifiDpcProof(
             generation=values["generation"],
             captures=values["captures"],
@@ -12526,6 +12595,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         timer_clock_hz=timer_clock_hz,
         timer_el0_counter=timer_el0_counter,
         dummy_timer_seen=dummy_timer_seen,
+        driver_task_active_net=driver_task_active_net,
         driver_task_counter_summary=driver_task_counter_summary,
     )
     output_pressure_summary = summarize_output_pressure(event_list)
@@ -13458,6 +13528,7 @@ def classify_pi4_runtime_dma_proof(
     timer_clock_hz: int,
     timer_el0_counter: str,
     dummy_timer_seen: bool,
+    driver_task_active_net: str,
     driver_task_counter_summary: DriverTaskCounterSummary,
 ) -> tuple[str, str, str]:
     """Classify Pi 4 runtime/DMA proof without inferring hardware success."""
@@ -13509,6 +13580,14 @@ def classify_pi4_runtime_dma_proof(
     if not all(runtime_checks):
         return "diagnostic", "runtime-proof-incomplete", "diagnostic"
 
+    selected_counter_keys = frozenset()
+    if driver_task_active_net == "cyw43":
+        selected_counter_keys = frozenset(
+            {
+                ("cyw43455", "cyw43-wifi"),
+                ("sdio-host", "sdio-host"),
+            }
+        )
     counter_qualified = (
         timer_backend == "arch-counter"
         and timer_clock_hz == 54_000_000
@@ -13516,6 +13595,9 @@ def classify_pi4_runtime_dma_proof(
         and not dummy_timer_seen
         and driver_task_counter_summary.snapshots > 0
         and driver_task_counter_summary.invalid == 0
+        and selected_counter_keys.issubset(
+            driver_task_counter_summary.counter_keys
+        )
     )
     counter_state = "counter-qualified" if counter_qualified else "diagnostic"
 
@@ -14315,6 +14397,23 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         blockers.append("usb-cold-boot-proof-missing")
     net_active = str(record.get("NET_ACTIVE", "unknown"))
     if net_active == "wifi":
+        supervisor_seen = record.get("CYW43_BOOTSTRAP_SUPERVISOR_SEEN") == "yes"
+        if not supervisor_seen:
+            blockers.append("cyw43-bootstrap-supervisor-missing")
+        elif (
+            record.get("CYW43_BOOTSTRAP_SUPERVISOR_READY") != "yes"
+            and not any(
+                blocker.startswith("cyw43-bootstrap-supervisor-")
+                for blocker in blockers
+            )
+        ):
+            blockers.append("cyw43-bootstrap-supervisor-ready-missing")
+        if (
+            supervisor_seen
+            and record.get("CYW43_BOOTSTRAP_SUPERVISOR_READY") == "yes"
+            and record.get("CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS") != "ready"
+        ):
+            blockers.append("cyw43-bootstrap-supervisor-last-status-not-ready")
         if record.get("DRIVER_TASK_SDIO_DEDICATED") != "yes":
             blockers.append("driver-task-sdio-not-dedicated")
         if (parse_hex_int(str(record.get("WIFI_GATE", "0"))) or 0) < 10:

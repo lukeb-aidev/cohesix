@@ -67,6 +67,20 @@ def _driver_task_counter_lines() -> list[str]:
         "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
         "rx_bytes=8 tx_frames=1 tx_bytes=8 role_aux0=0 role_aux1=0 "
         "role_aux2=0 role_aux3=0",
+        "DRIVER_TASK_COUNTER contract=cyw43455 hot_path=cyw43-wifi "
+        "source=root-ring sequence=2 submitted=2 completed=2 idle=0 fault=0 "
+        "budget=0 frame=1 desc=1 staged_bytes=64 clean_ops=0 clean_bytes=0 "
+        "inv_ops=0 inv_bytes=0 sends=2 yields=0 busy=0 same_request=0 "
+        "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
+        "rx_bytes=64 tx_frames=1 tx_bytes=64 role_aux0=0 role_aux1=0 "
+        "role_aux2=0 role_aux3=0",
+        "DRIVER_TASK_COUNTER contract=sdio-host hot_path=sdio-host "
+        "source=root-ring sequence=2 submitted=2 completed=2 idle=0 fault=0 "
+        "budget=0 frame=1 desc=1 staged_bytes=64 clean_ops=0 clean_bytes=0 "
+        "inv_ops=0 inv_bytes=0 sends=2 yields=0 busy=0 same_request=0 "
+        "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
+        "rx_bytes=64 tx_frames=1 tx_bytes=64 role_aux0=0 role_aux1=0 "
+        "role_aux2=0 role_aux3=0",
     ]
 
 
@@ -164,6 +178,9 @@ def _strong_driver_task_proof_lines() -> list[str]:
         "rearms=4 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 poisoned=no",
         "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+        "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wifi "
+        "active_net=cyw43 required_roles=0x3f required_hot_paths=0x7f "
+        "required_tasks=6",
         *_timer_arch_counter_lines(),
         *_driver_task_boot_affinity_lines(),
         "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
@@ -194,7 +211,7 @@ def _strong_driver_task_proof_lines() -> list[str]:
         "substrate=active capset=pass fault=pass revoke=pass sched=pass "
         "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
         "pointer_free_ipc=yes owner_state=driver-owned required=7 "
-        "dedicated=7 compatibility=0",
+        "dedicated=7 compatibility=0 active_net=cyw43",
         "SERIAL_ECHO p95_us=800 max_gap_us=1200",
         "USB_BURST bytes=256 drops=0 max_latency_us=900",
         "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
@@ -311,6 +328,9 @@ def _oldgood_usb_replay_lines() -> list[str]:
 
 def _oldgood_wifi_replay_lines() -> list[str]:
     return [
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin backoff_ms=0 "
+        "next_attempt_ms=100 serial=ready local_seat=ready recovery=full "
+        "console_seq=1 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "SDIO_DRIVER_TASK_REPLAY_STATUS stage=engine-init blocker=ready detail=0x5500",
         "wifi: cyw43-transport-ready owner=linked-runtime",
         "wifi: firmware_contract fw=609309 nvram=1744 clm=2676 "
@@ -376,6 +396,9 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 poisoned=no masked=no",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
+        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
+        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
     ]
 
 
@@ -1289,6 +1312,50 @@ def test_gate_proof_accepts_ready_with_oldgood_replay_contracts(
     assert "WIFI_GATE7_SEEN=7a>7b>7c>7d>7e" in result.stdout
     assert "WIFI_GATE7_LAST=7e" in result.stdout
     assert "WIFI_GATE7_MISSING=none" in result.stdout
+
+
+def test_gate_proof_rejects_wifi_ready_without_bootstrap_supervisor(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A Gate-10 replay cannot substitute for the boot supervisor terminal."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    lines = [
+        line
+        for line in [
+            *_strong_driver_task_proof_lines(),
+            *_oldgood_wifi_replay_lines(),
+        ]
+        if not line.startswith("CYW43_BOOTSTRAP_SUPERVISOR ")
+    ]
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-wifi-ready",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "CYW43_BOOTSTRAP_SUPERVISOR_SEEN=no" in result.stdout
+    assert (
+        "CYW43_BOOTSTRAP_SUPERVISOR_SEEN expected yes got no"
+        in result.stderr
+    )
 
 
 def test_gate_proof_rejects_wifi_ready_with_incomplete_gate7_handshake(

@@ -15115,7 +15115,7 @@ pub const fn driver_task_acceptance_ready_for_selected(
 }
 
 #[cfg(feature = "kernel")]
-const DRIVER_TASK_COUNTER_LINE_BYTES: usize = 1024;
+pub(crate) const DRIVER_TASK_COUNTER_LINE_BYTES: usize = 1024;
 
 #[cfg(feature = "kernel")]
 fn write_driver_task_counter_line(
@@ -15162,6 +15162,18 @@ fn write_driver_task_counter_line(
         counters.role_aux2,
         counters.role_aux3,
     )
+}
+
+/// Return one complete activity-gated counter line for a driver contract.
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_counter_line(
+    contract: DriverTaskContract,
+) -> Option<heapless::String<DRIVER_TASK_COUNTER_LINE_BYTES>> {
+    let counters = driver_task_counter_snapshot(contract)?;
+    let mut line = heapless::String::new();
+    write_driver_task_counter_line(&mut line, contract.name, counters)
+        .ok()
+        .map(|()| line)
 }
 
 /// Emit compact scheduling-contract proof breadcrumbs for Pi 4 gate tooling.
@@ -15369,11 +15381,8 @@ pub fn emit_boot_contract_proof() {
         );
         emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
 
-        if let Some(counters) = driver_task_counter_snapshot(*contract) {
-            let mut line = String::<DRIVER_TASK_COUNTER_LINE_BYTES>::new();
-            if write_driver_task_counter_line(&mut line, contract.name, counters).is_ok() {
-                emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
-            }
+        if let Some(line) = driver_task_counter_line(*contract) {
+            emit_driver_task_boot_contract_line(line.as_str(), use_raw_uart);
         }
     }
 

@@ -5552,6 +5552,8 @@ where
         self.emit_smp_activity_net();
         self.emit_smp_activity_rates(previous, snapshot);
         self.emit_smp_activity_driver_contracts();
+        #[cfg(feature = "kernel")]
+        self.emit_smp_activity_selected_driver_counters();
         self.emit_smp_activity_affinity();
         self.emit_console_line("[smp] activity end");
         self.last_smp_activity_snapshot = Some(snapshot);
@@ -6152,6 +6154,36 @@ where
             );
         }
         if emitted {
+            self.emit_console_line(line.as_str());
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_smp_activity_selected_driver_counters(&mut self) {
+        use crate::hal::driver_task::{
+            pi4_pre_root_net_bootstrap_selection, Pi4PreRootNetBootstrapSelection,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT,
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+        };
+
+        match pi4_pre_root_net_bootstrap_selection() {
+            Pi4PreRootNetBootstrapSelection::Wifi => {
+                self.emit_smp_activity_driver_counter(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+                self.emit_smp_activity_driver_counter(SDIO_HOST_DRIVER_TASK_CONTRACT);
+            }
+            Pi4PreRootNetBootstrapSelection::Wired => {
+                self.emit_smp_activity_driver_counter(GENET_DRIVER_TASK_CONTRACT);
+            }
+            Pi4PreRootNetBootstrapSelection::Disabled => {}
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_smp_activity_driver_counter(
+        &mut self,
+        contract: crate::hal::driver_task::DriverTaskContract,
+    ) {
+        if let Some(line) = crate::hal::driver_task::driver_task_counter_line(contract) {
             self.emit_console_line(line.as_str());
         }
     }
@@ -11853,7 +11885,7 @@ where
         snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "CYW43_SDIO_DPC generation={} captures={} published={} consumed={} rearms={} overruns={} epoch_errors={} sequence_errors={} ack_failures={} acceptance_bad={} masked={}",
+            "CYW43_SDIO_DPC generation={} captures={} published={} consumed={} rearms={} overruns={} epoch_errors={} sequence_errors={} ack_failures={} poisoned={} masked={}",
             snapshot.generation,
             snapshot.captures,
             snapshot.published,
@@ -21798,7 +21830,7 @@ mod tests {
             );
             assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
         }
-        assert!(accounting.ends_with("acceptance_bad=yes masked=yes"));
+        assert!(accounting.ends_with("poisoned=yes masked=yes"));
         assert!(truth.contains("ring_poisoned=no client_sample_stale=yes"));
         assert!(truth.contains("ring_consumer=4294967295 sample_consumer=4294967295"));
         assert!(truth.ends_with(
@@ -30751,7 +30783,7 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(wifi.breadcrumb_suppression_observed);
-        let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 acceptance_bad=no masked=no";
+        let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 poisoned=no masked=no";
         let dpc_truth = "CYW43_SDIO_DPC_TRUTH generation=9 ring_poisoned=no client_sample_stale=no ring_consumer=12 sample_consumer=12";
         assert!(rendered.contains(dpc_line), "{rendered}");
         assert!(rendered.contains(dpc_truth), "{rendered}");

@@ -558,6 +558,10 @@ run_normalizer() {
         args+=("--expect" "USB_OLDGOOD_MISSING=none")
     fi
     if [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]; then
+        args+=("--expect" "CYW43_BOOTSTRAP_SUPERVISOR_SEEN=yes")
+        args+=("--expect" "CYW43_BOOTSTRAP_SUPERVISOR_READY=yes")
+        args+=("--expect" "CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS=ready")
+        args+=("--expect" "CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER=none")
         args+=("--expect-min" "WIFI_GATE=10" "--expect" "WIFI_BLOCKER=none")
         args+=("--expect" "NET_ACTIVE=wifi")
         args+=("--expect" "NET_ADDR_SRC=dhcp-lease")

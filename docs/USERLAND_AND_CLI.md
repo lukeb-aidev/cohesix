@@ -71,6 +71,10 @@ the most precise description of that boot.
 
 Use `smp` for normal QEMU and Pi 4 diagnostics. The activity report follows the
 linked serial owner and may be mirrored through the local-seat path. Use
+the selected Pi network section for fresh activity-gated driver counters:
+Wi-Fi emits the canonical CYW43 and SDIO owner snapshots, while wired mode
+emits the GENET owner snapshot. A missing activity-gated line remains missing
+evidence rather than being replaced by an unrelated driver's counters. Use
 `smp dump` only when investigating kernel scheduler state on a compatible debug
 profile before linked-UART cutover; the raw kernel text is UART-only. The
 explicit `smp activity` spelling remains accepted for scripts and older
