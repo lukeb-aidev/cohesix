@@ -10653,9 +10653,18 @@ fn cyw43_dpc_finish_action(
                 };
                 cyw43_dpc_prepare_function2_read(cursor, Cyw43DpcAction::Firstread, frame);
             } else {
+                // SDPCM nextlen is 16-byte aligned, while the card's configured
+                // Function-2 block size is 512 bytes. Linux aligns the physical
+                // SDIO request to that function block size once byte mode can no
+                // longer encode it. Keep `actual_frame_len` as the decode
+                // authority, but pad this one retained physical read so every
+                // >512-byte request is legal block mode rather than an
+                // unrepresentable byte count.
+                let request_len =
+                    cyw43_control_rx_request_len(usize::from(cursor.actual_frame_len));
                 let frame = DriverFrameDescriptor {
                     offset: CYW43_RUNTIME_RX_BUFFER_OFFSET as u32,
-                    len: cursor.actual_frame_len,
+                    len: request_len as u16,
                     flags: 0,
                 };
                 cyw43_dpc_prepare_function2_read(cursor, Cyw43DpcAction::Remainder, frame);
@@ -70574,8 +70583,10 @@ mod tests {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct ProductionDpcDrainTrace {
         first_descriptor: DriverRuntimeSdioCommandDescriptor,
+        first_function2_descriptor: DriverRuntimeSdioCommandDescriptor,
         owner_children: usize,
         function2_reads: usize,
+        function2_block_mode_reads: usize,
         function2_aborts: usize,
         read_frame_terminations: usize,
         retransmit_naks: usize,
@@ -70799,9 +70810,11 @@ mod tests {
         let mut owner_gate = RuntimePendingCommandGate::new();
         let mut notification_injected_for_phase = false;
         let mut first_descriptor = DriverRuntimeSdioCommandDescriptor::empty();
+        let mut first_function2_descriptor = DriverRuntimeSdioCommandDescriptor::empty();
         let mut descriptors = Vec::new();
         let mut owner_children = 0usize;
         let mut function2_reads = 0usize;
+        let mut function2_block_mode_reads = 0usize;
         let mut staged_function2_reads = 0usize;
         let mut function2_aborts = 0usize;
         let mut read_frame_terminations = 0usize;
@@ -70811,7 +70824,7 @@ mod tests {
         let mut owner_turns = 0usize;
         let mut terminal = false;
 
-        for _ in 0..512 {
+        for _ in 0..1_024 {
             assert!(cyw43_runtime_service_dpc_event());
             dpc_turns = dpc_turns.saturating_add(1);
             if owner_completion_published {
@@ -70881,7 +70894,7 @@ mod tests {
                 }
                 if descriptor.op == DRIVER_RUNTIME_SDIO_OP_CMD53_READ {
                     let transfer_len = usize::from(descriptor.len);
-                    let mut bytes = [0u8; 128];
+                    let mut bytes = vec![0u8; transfer_len];
                     // The finite model also records host writes in `fifo`.
                     // A new read descriptor observes a fresh card response,
                     // so do not let the preceding W1C bytes alias that source.
@@ -70889,14 +70902,19 @@ mod tests {
                     io.fifo_read_offset = 0;
                     if descriptor.function == 2 {
                         function2_reads = function2_reads.saturating_add(1);
+                        if descriptor.block_count != 0 {
+                            function2_block_mode_reads =
+                                function2_block_mode_reads.saturating_add(1);
+                        }
+                        if first_function2_descriptor.op == 0 {
+                            first_function2_descriptor = descriptor;
+                        }
                         if let Some(wire_frame) = wire_frames.get(staged_function2_reads) {
                             assert!(
                                 transfer_len <= wire_frame.len(),
                                 "staged DPC wire frame must cover its Function 2 read",
                             );
                             bytes[..transfer_len].copy_from_slice(&wire_frame[..transfer_len]);
-                        } else {
-                            assert!(transfer_len <= 128);
                         }
                         staged_function2_reads = staged_function2_reads.saturating_add(1);
                     } else if descriptor.function == 1 {
@@ -71003,6 +71021,21 @@ mod tests {
                 }
             }
             if let Some(command) = owner_admitted {
+                let owner_cursor = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+                if owner_cursor.active()
+                    && sdio_request_uses_pio(owner_cursor.identity)
+                    && owner_cursor.pio_ready_interrupt_required
+                    && owner_cursor.pio_offset != 0
+                    && owner_cursor.pio_offset < owner_cursor.identity.frame.len
+                {
+                    // A multi-block PIO transfer receives a distinct
+                    // direction-ready edge for every card block. The finite
+                    // owner model supplies the command's first edge above;
+                    // model each later edge only after the retained cursor has
+                    // consumed the preceding block.
+                    let ready = sdhci_pio_interrupt_ready_mask(owner_cursor.identity.write);
+                    io.set_register(SDHCI_INT_STATUS, io.register(SDHCI_INT_STATUS) | ready);
+                }
                 let issues_before = io.command_issue_count();
                 let snapshots_before = io.dma_dreq_snapshots;
                 let turn = service_sdio_external_dma_command_turn_with_io(
@@ -71083,8 +71116,10 @@ mod tests {
         assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
         ProductionDpcDrainTrace {
             first_descriptor,
+            first_function2_descriptor,
             owner_children,
             function2_reads,
+            function2_block_mode_reads,
             function2_aborts,
             read_frame_terminations,
             retransmit_naks,
@@ -74431,6 +74466,60 @@ mod tests {
         assert_eq!(
             SDIO_CMD_COUNT.load(Ordering::Acquire),
             owner_commands_before
+        );
+    }
+
+    #[test]
+    fn production_dpc_nextlen_above_byte_mode_uses_one_padded_block_read() {
+        let _guard = test_guard();
+        let generation = 0x4359_d10f;
+        let _ = initialize_production_dpc_source_event(generation, 0);
+        const NEXTLEN_BYTES: usize = 528;
+        const PACKET_BYTES: usize = SDIO_CMD53_BYTE_MODE_MAX + 1;
+        const REQUEST_BYTES: usize = 1_024;
+        assert_eq!(cyw43_sdpcm_readahead_len(PACKET_BYTES), Some(NEXTLEN_BYTES),);
+        assert_eq!(cyw43_control_rx_request_len(NEXTLEN_BYTES), REQUEST_BYTES);
+        assert_ne!(NEXTLEN_BYTES % CYW43_FUNCTION2_BLOCK_BYTES, 0);
+
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            PACKET_BYTES,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_EVENT,
+            12,
+            false,
+        );
+        let wire_frame = snapshot_runtime_wire::<REQUEST_BYTES>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.sdpcm_next_frame_len = NEXTLEN_BYTES as u16;
+            state.sdpcm_next_frame_from_rframe = false;
+        });
+
+        let trace = drive_production_dpc_event_to_fifo(generation, &wire_frame, 1, 0);
+        let descriptor = trace.first_function2_descriptor;
+        assert_eq!(
+            trace.function2_reads, 2,
+            "DPC drains the nextlen frame then confirms the level source is empty",
+        );
+        assert_eq!(trace.function2_block_mode_reads, 1);
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_SDIO_OP_CMD53_READ);
+        assert_eq!(descriptor.function, 2);
+        assert_eq!(descriptor.len, REQUEST_BYTES as u16);
+        assert_eq!(descriptor.block_size, CYW43_FUNCTION2_BLOCK_BYTES as u16);
+        assert_eq!(
+            descriptor.block_count,
+            (REQUEST_BYTES / CYW43_FUNCTION2_BLOCK_BYTES) as u16,
+        );
+        assert_eq!(trace.owner_command_issues, trace.owner_children);
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.rx_queue_count, 1);
+            assert!(!state.recovery_required);
+        });
+        assert_ne!(
+            CYW43_LAST_FAULT_RESULT.load(Ordering::Acquire),
+            DRIVER_RUNTIME_REJECT_SDIO_REQUEST_IDENTITY_INVALID,
         );
     }
 

@@ -11714,6 +11714,32 @@ def test_gate_summary_keeps_causal_parent_no_reply_over_secondary_sdio_progress(
     assert gates.wifi_subgate_name == "none"
 
 
+def test_gate_summary_does_not_mislabel_sdio_identity_fault_as_gate7_join() -> None:
+    """A Gate 8 linked-SDIO fault is below the host-EAPOL sub-gate taxonomy."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 7 name=function2-ready status=pass "
+            "evidence=f2_enabled=no dependency=ready-for-direct-evidence",
+            "wifi: gate 8 name=control-plane-exact-error status=fail "
+            "evidence=exact=sdio-request-identity-invalid "
+            "control_stage=firmware-channel dependency=ready-for-direct-evidence",
+            "wifi: evidence boundary proof=gate-frontier direct_proof_gate=7 "
+            "proof_gate=7 frontier_gate=7 failing_gate=8 target_gate=10 "
+            "failure_domain=sdio-request-identity-invalid",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "sdio-request-identity-invalid"
+    assert gates.wifi_exact == "sdio-request-identity-invalid"
+    assert gates.wifi_subgate == "none"
+    assert gates.wifi_subgate_name == "none"
+    assert gates.wifi_subgate_reason == "sdio-request-identity-invalid"
+
+
 def test_gate_summary_reads_nested_gate_exact_over_later_recovery_progress() -> None:
     """The Gate 8 evidence field preserves the live association blocker."""
 

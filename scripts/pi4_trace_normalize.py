@@ -2715,6 +2715,17 @@ def summarize_wifi_gate7_subgate_detail(
         "cyw43-control-tx-retry-no-reply",
         "cyw43-control-tx-not-submitted",
         "cyw43-runtime-command-no-reply",
+        "linked-runtime-generation-rejected",
+        "cyw43-control-owner-mismatch",
+        "sdio-intake-seal-busy",
+        "sdio-intake-seal-missing",
+        "sdio-generation-reset-route-missing",
+        "sdio-retained-owner-identity-mismatch",
+        "sdio-request-identity-invalid",
+        "sdio-pullup-admission-rejected",
+        "sdio-invalid-retained-phase",
+        "sdio-dpc-activation-admission",
+        "sdio-generation-commit-admission",
         "sdio-linked-runtime-progress-no-reply",
     }:
         return WifiGate7Subgate("none", "none", reason=wifi_blocker)

@@ -1127,6 +1127,10 @@ This as-built closure is authorized by Milestone 26d task
   and EVENT subframes in descriptor order. A malformed descriptor-backed glom
   superframe uses retained Function 2 abort, `RF_TERM`, and bounded RFRAME drain
   without NAK; only failure of that retained recovery is generation-terminal.
+  A validated SDPCM next-length remains the decode bound, but a physical
+  Function 2 read above CMD53 byte-mode capacity is rounded up to the configured
+  512-byte Function 2 block boundary and issued once in block mode; the padded
+  bytes never widen SDPCM validation or upper-frame delivery.
   A control packet or length mismatch encountered through an SDPCM nextlen read
   uses retained `RF_TERM`, bounded drain, mailbox NAK, and `NAKHANDLED` wait so
   firmware retries it header-first, without an unnecessary completed-Function-2
