@@ -593,9 +593,10 @@ between connections is failed TCP liveness evidence.
 
 ### CYW43 Wi-Fi
 
-This runbook section exercises Milestone 26d task
-`m26d-cyw43-hardware-free-closure` and Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`.
+This runbook section exercises Reopened Milestone 26b task
+`m26b-wifi-sdio-notification-dpc-closure`. Milestone 26d is discovery context
+for the physical Wi-Fi defect only; it does not authorize a second production
+or acceptance lane.
 
 Wi-Fi is the current research and evidence-closure lane. Source tests and a
 stage-only build do not establish live association or data-path readiness. The
@@ -608,6 +609,60 @@ and 10/10 warm software-reset boots of the same independently read-back image.
 Every counted boot must contain that image's exact `[BUILD]` marker and must
 pass the complete normalizer evidence predicate with `NET_ACTIVE=wifi`; one
 failed boot keeps repeatability open rather than being hidden by extra passes.
+
+Gate 8 is an ordered stability proof, not the first moment the linked transport
+attaches. After transport/control attachment, require
+`CYW43_BOOTSTRAP_SUPERVISOR ... status=stabilizing`. One outer attempt has one
+absolute 90,000-millisecond stabilization deadline; an internal pair repair in
+that attempt does not refresh it. Before accepting
+`CYW43_BOOTSTRAP_SUPERVISOR ... status=ready`, the serial/qlog evidence must
+contain one all-or-nothing immutable snapshot immediately before that record:
+
+```text
+wifi: gate 8 subgate=8a-pair-generation status=pass pair_epoch=<p> generation=<n> blocker=none
+wifi: gate 8 subgate=8b-control-program status=pass pair_epoch=<p> generation=<n> blocker=none
+wifi: gate 8 subgate=8c-join-terminal status=pass pair_epoch=<p> generation=<n> blocker=none
+wifi: gate 8 subgate=8d-association-link status=pass pair_epoch=<p> generation=<n> blocker=none
+wifi: gate 8 subgate=8e-bssid-refresh status=pass pair_epoch=<p> generation=<n> blocker=none
+wifi: gate 8 subgate=8f-eapol-keys status=pass pair_epoch=<p> generation=<n> blocker=none
+wifi: gate 8 subgate=8g-post-key-maintenance status=pass pair_epoch=<p> generation=<n> blocker=none
+wifi: gate 8 subgate=8h-data-admission status=pass pair_epoch=<p> generation=<n> blocker=none
+```
+
+Treat 8a and 8b as one pair/control epoch and 8c through 8h as one current
+logical connection generation. The repeated `generation=<n>` field is the
+connection-generation publication checked by the normalizer; it cannot be
+used to stitch pair/control evidence from an earlier recovery into the current
+snapshot. A partial, reordered, duplicated, generation-regressing, or
+cross-recovery sequence, or any gap between 8h and `status=ready`, fails closed.
+The eight records and Ready are one retained transaction; a failed preflight
+publishes none of them.
+
+Bounded data traffic is legal while 8h passes: non-full root RX, pending data
+TX/ARP, runtime backlog, and an exact assigned current-generation NetData
+request do not by themselves block readiness. A stale prompt generation,
+request-less NetData pre-poll retained while root RX/TX/ARP work has priority,
+a generation-local root-drop/runtime-overflow increase is a failure. A full
+root RX queue with no loss remains pending while bounded drain work has
+priority. A data-handoff baseline mismatch remains pending until current;
+cumulative root-drop telemetry saturates rather than wrapping, and an exact
+generation latch still proves any new loss at saturation. A recovery publishes
+a new baseline without resetting the cumulative counters.
+
+After `ready`, keep capturing. A later fresh non-stable or different-generation
+snapshot must produce `status=stabilizing`; this can occur in the same logical
+generation when exact owner/admission proof is lost. Discard the earlier
+snapshot and require a new complete 8a-through-8h proof. A `fail` or the
+90-second deadline first retains one atomic eight-line failure snapshot and its
+adjacent `CYW43_GATE8_RECOVERY` boundary, while reserving the next
+retained-serial slot for the supervisor `backoff`/`exhausted`/`permanent`
+terminal, then requests one fenced recovery. Retraction purges queued HDMI
+Ready/prompt bytes and forces a canonical Stabilizing redraw. Five outer attempts with
+1/2/4/8-second backoffs are the finite limit, and attempt 5 must exhaust rather
+than start a sixth. Gate 9 DHCP/address and Gate 10 nettest, TCP, and
+authenticated `cohsh` must remain in the accepted Gate 8 connection generation.
+Do not count a boot whose later recovery, generation change, or readiness
+retraction invalidates those proofs.
 
 On the current shared-core linked-runtime design, the prompt-side supervisor
 must prove the SDIO owner before the CYW43 client. SDIO service registration and

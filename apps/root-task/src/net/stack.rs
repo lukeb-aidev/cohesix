@@ -205,20 +205,32 @@ const fn cyw43_pre_poll_generation_fence_required(cached: u32, observed: u32) ->
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct TcpGenerationProofBaseline {
+struct Cyw43GenerationProofBaseline {
     generation: u32,
     accepts: u64,
     authenticated_sessions: u64,
     rx_bytes: u64,
+    root_rx_drops: u64,
+    runtime_rx_overflow_episodes: u64,
+    data_trace_faults: u64,
+    data_trace_tx_retries: u64,
+    tx_submit: u64,
+    tx_complete: u64,
 }
 
-impl TcpGenerationProofBaseline {
+impl Cyw43GenerationProofBaseline {
     fn capture(generation: u32, counters: NetCounters) -> Self {
         Self {
             generation,
             accepts: counters.tcp_accepts,
             authenticated_sessions: counters.tcp_auth_sessions,
             rx_bytes: counters.tcp_rx_bytes,
+            root_rx_drops: counters.wifi_rx_pending_drops,
+            runtime_rx_overflow_episodes: counters.wifi_rx_runtime_overflow_episodes,
+            data_trace_faults: counters.wifi_data_trace_faults,
+            data_trace_tx_retries: counters.wifi_data_trace_tx_retries,
+            tx_submit: counters.tx_submit,
+            tx_complete: counters.tx_complete,
         }
     }
 
@@ -227,6 +239,13 @@ impl TcpGenerationProofBaseline {
             counters.tcp_accepts = 0;
             counters.tcp_auth_sessions = 0;
             counters.tcp_rx_bytes = 0;
+            counters.wifi_rx_pending_drops = 0;
+            counters.wifi_rx_runtime_queue_overflow_seen = 0;
+            counters.wifi_rx_runtime_overflow_episodes = 0;
+            counters.wifi_data_trace_faults = 0;
+            counters.wifi_data_trace_tx_retries = 0;
+            counters.tx_submit = 0;
+            counters.tx_complete = 0;
             return counters;
         }
         counters.tcp_accepts = counters.tcp_accepts.saturating_sub(self.accepts);
@@ -234,6 +253,22 @@ impl TcpGenerationProofBaseline {
             .tcp_auth_sessions
             .saturating_sub(self.authenticated_sessions);
         counters.tcp_rx_bytes = counters.tcp_rx_bytes.saturating_sub(self.rx_bytes);
+        counters.wifi_rx_pending_drops = counters
+            .wifi_rx_pending_drops
+            .saturating_sub(self.root_rx_drops);
+        counters.wifi_rx_runtime_overflow_episodes = counters
+            .wifi_rx_runtime_overflow_episodes
+            .saturating_sub(self.runtime_rx_overflow_episodes);
+        counters.wifi_rx_runtime_queue_overflow_seen =
+            u64::from(counters.wifi_rx_runtime_overflow_episodes != 0);
+        counters.wifi_data_trace_faults = counters
+            .wifi_data_trace_faults
+            .saturating_sub(self.data_trace_faults);
+        counters.wifi_data_trace_tx_retries = counters
+            .wifi_data_trace_tx_retries
+            .saturating_sub(self.data_trace_tx_retries);
+        counters.tx_submit = counters.tx_submit.saturating_sub(self.tx_submit);
+        counters.tx_complete = counters.tx_complete.saturating_sub(self.tx_complete);
         counters
     }
 }
@@ -378,20 +413,10 @@ fn cyw43_status_blocker_for(
     if cyw43_tcp_data_path_proven(active_driver, active_interface, counters) {
         return None;
     }
-    if counters.wifi_rx_runtime_queue_overflow_seen != 0 || counters.wifi_rx_pending_drops != 0 {
+    if counters.wifi_rx_runtime_overflow_episodes != 0 || counters.wifi_rx_pending_drops != 0 {
         return Some(Cyw43StatusBlocker {
             address_source: "wifi-rx-overflow",
             dhcp_phase: "rx-overflow",
-        });
-    }
-    if counters.wifi_rx_runtime_drain_budget_hit != 0
-        && (counters.wifi_rx_runtime_queue_count != 0
-            || counters.wifi_rx_runtime_queue_high_water != 0
-            || counters.wifi_rx_pending_queue_count != 0)
-    {
-        return Some(Cyw43StatusBlocker {
-            address_source: "wifi-rx-starvation",
-            dhcp_phase: "rx-starvation",
         });
     }
     if counters.wifi_host_eapol_m1 != 0
@@ -1428,7 +1453,7 @@ pub struct NetStack<D: NetDevice> {
     #[cfg(feature = "net-outbound-probe")]
     tcp_probe_handle: Option<SocketHandle>,
     counters: NetCounters,
-    tcp_generation_proof_baseline: TcpGenerationProofBaseline,
+    cyw43_generation_proof_baseline: Cyw43GenerationProofBaseline,
     self_test: SelfTestState,
     stage_policy: NetStagePolicy,
     tx_only_sent: bool,
@@ -3360,7 +3385,7 @@ impl<D: NetDevice> NetStack<D> {
             #[cfg(feature = "net-outbound-probe")]
             tcp_probe_handle: None,
             counters: NetCounters::default(),
-            tcp_generation_proof_baseline: TcpGenerationProofBaseline::capture(
+            cyw43_generation_proof_baseline: Cyw43GenerationProofBaseline::capture(
                 wifi_connection_generation,
                 NetCounters::default(),
             ),
@@ -3571,8 +3596,8 @@ impl<D: NetDevice> NetStack<D> {
             return false;
         }
         let previous_generation = self.wifi_connection_generation;
-        self.tcp_generation_proof_baseline =
-            TcpGenerationProofBaseline::capture(generation, self.counters);
+        self.cyw43_generation_proof_baseline =
+            Cyw43GenerationProofBaseline::capture(generation, self.current_counters_unprojected());
         self.wifi_connection_generation = generation;
         #[cfg(feature = "kernel")]
         self.wifi_association_supervisor
@@ -4898,7 +4923,8 @@ impl<D: NetDevice> NetStack<D> {
             let _ = self.interface.routes_mut().add_default_ipv4_route(gw);
         }
         info!(
-            "[dhcp] lease bound ip={}/{} gateway={} server={}.{}.{}.{} lease_s={}",
+            "[dhcp] lease bound generation={} ip={}/{} gateway={} server={}.{}.{}.{} lease_s={}",
+            self.wifi_connection_generation,
             ip,
             lease.prefix_len,
             gateway.unwrap_or(Ipv4Address::UNSPECIFIED),
@@ -4945,11 +4971,16 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.wifi_rx_pending_queue_high_water =
             device_counters.wifi_rx_pending_queue_high_water;
         self.counters.wifi_rx_pending_drops = device_counters.wifi_rx_pending_drops;
+        self.counters.wifi_rx_pending_drops_boot = device_counters.wifi_rx_pending_drops;
         self.counters.wifi_rx_runtime_queue_count = device_counters.wifi_rx_runtime_queue_count;
         self.counters.wifi_rx_runtime_queue_high_water =
             device_counters.wifi_rx_runtime_queue_high_water;
         self.counters.wifi_rx_runtime_queue_overflow_seen =
             device_counters.wifi_rx_runtime_queue_overflow_seen;
+        self.counters.wifi_rx_runtime_overflow_episodes =
+            device_counters.wifi_rx_runtime_overflow_episodes;
+        self.counters.wifi_rx_runtime_overflow_episodes_boot =
+            device_counters.wifi_rx_runtime_overflow_episodes;
         self.counters.wifi_rx_runtime_drain_budget_hit =
             device_counters.wifi_rx_runtime_drain_budget_hit;
         self.counters.wifi_rx_runtime_max_drained_per_turn =
@@ -4980,6 +5011,7 @@ impl<D: NetDevice> NetStack<D> {
             device_counters.wifi_post_dhcp_rx_last_ethertype;
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
         self.counters.wifi_assoc = device_counters.wifi_assoc;
+        self.counters.wifi_connection_generation = u64::from(wifi_connection_generation_for::<D>());
         self.counters.wifi_link_up = device_counters.wifi_link_up;
         self.counters.wifi_host_eapol_rx = device_counters.wifi_host_eapol_rx;
         self.counters.wifi_host_eapol_start = device_counters.wifi_host_eapol_start;
@@ -4992,7 +5024,7 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.wifi_host_eapol_gtk = device_counters.wifi_host_eapol_gtk;
     }
 
-    fn current_counters(&self) -> NetCounters {
+    fn current_counters_unprojected(&self) -> NetCounters {
         let device_counters = self.device.counters();
         let counters = NetCounters {
             rx_packets: device_counters.rx_packets,
@@ -5034,10 +5066,14 @@ impl<D: NetDevice> NetStack<D> {
             wifi_rx_pending_queue_count: device_counters.wifi_rx_pending_queue_count,
             wifi_rx_pending_queue_high_water: device_counters.wifi_rx_pending_queue_high_water,
             wifi_rx_pending_drops: device_counters.wifi_rx_pending_drops,
+            wifi_rx_pending_drops_boot: device_counters.wifi_rx_pending_drops,
             wifi_rx_runtime_queue_count: device_counters.wifi_rx_runtime_queue_count,
             wifi_rx_runtime_queue_high_water: device_counters.wifi_rx_runtime_queue_high_water,
             wifi_rx_runtime_queue_overflow_seen: device_counters
                 .wifi_rx_runtime_queue_overflow_seen,
+            wifi_rx_runtime_overflow_episodes: device_counters.wifi_rx_runtime_overflow_episodes,
+            wifi_rx_runtime_overflow_episodes_boot: device_counters
+                .wifi_rx_runtime_overflow_episodes,
             wifi_rx_runtime_drain_budget_hit: device_counters.wifi_rx_runtime_drain_budget_hit,
             wifi_rx_runtime_max_drained_per_turn: device_counters
                 .wifi_rx_runtime_max_drained_per_turn,
@@ -5065,6 +5101,7 @@ impl<D: NetDevice> NetStack<D> {
             wifi_post_dhcp_rx_last_ethertype: device_counters.wifi_post_dhcp_rx_last_ethertype,
             dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
             wifi_assoc: device_counters.wifi_assoc,
+            wifi_connection_generation: u64::from(wifi_connection_generation_for::<D>()),
             wifi_link_up: device_counters.wifi_link_up,
             wifi_host_eapol_rx: device_counters.wifi_host_eapol_rx,
             wifi_host_eapol_start: device_counters.wifi_host_eapol_start,
@@ -5076,14 +5113,21 @@ impl<D: NetDevice> NetStack<D> {
             wifi_host_eapol_ptk: device_counters.wifi_host_eapol_ptk,
             wifi_host_eapol_gtk: device_counters.wifi_host_eapol_gtk,
         };
-        self.tcp_generation_proof_baseline
-            .project(wifi_connection_generation_for::<D>(), counters)
+        counters
+    }
+
+    fn current_counters(&self) -> NetCounters {
+        self.cyw43_generation_proof_baseline.project(
+            wifi_connection_generation_for::<D>(),
+            self.current_counters_unprojected(),
+        )
     }
 
     fn log_self_test_result(&self, result: NetSelfTestResult) {
         let counters = self.current_counters();
         info!(
-            "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={} result={}",
+            "[net-selftest] result generation={} tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={} result={}",
+            self.wifi_connection_generation,
             result.tx_ok,
             result.udp_echo_ok,
             result.tcp_ok,
@@ -6336,9 +6380,10 @@ impl<D: NetDevice> NetStack<D> {
                                         preview
                                     );
                                     info!(
-	                                        "[cohsh-net][auth] auth OK, session established (conn_id={})",
-	                                        conn_id
-	                                    );
+                                        "[cohsh-net][auth] auth OK, session established (generation={} conn_id={})",
+                                        self.wifi_connection_generation,
+                                        conn_id
+                                    );
                                     NET_DIAG.record_accept_success();
                                     self.counters.tcp_auth_sessions =
                                         self.counters.tcp_auth_sessions.saturating_add(1);
@@ -7568,8 +7613,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 
     fn stats(&self) -> NetCounters {
-        self.tcp_generation_proof_baseline
-            .project(wifi_connection_generation_for::<D>(), self.counters)
+        self.current_counters()
     }
 
     fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
@@ -8480,20 +8524,41 @@ mod tests {
     }
 
     #[test]
-    fn tcp_generation_proof_rejects_old_activity_until_new_activity_occurs() {
+    fn cyw43_generation_proof_rejects_old_activity_and_faults() {
         let old_generation_counters = NetCounters {
             tcp_accepts: 4,
             tcp_auth_sessions: 3,
             tcp_rx_bytes: 4_096,
+            wifi_rx_pending_drops: 8,
+            wifi_rx_pending_drops_boot: 8,
+            wifi_rx_runtime_queue_overflow_seen: 1,
+            wifi_rx_runtime_overflow_episodes: 5,
+            wifi_rx_runtime_overflow_episodes_boot: 5,
+            wifi_data_trace_faults: 7,
+            wifi_data_trace_tx_retries: 11,
+            tx_submit: 64,
+            tx_complete: 62,
             ..NetCounters::default()
         };
         let old_generation_baseline =
-            TcpGenerationProofBaseline::capture(7, NetCounters::default());
+            Cyw43GenerationProofBaseline::capture(7, NetCounters::default());
 
         let generation_mismatch = old_generation_baseline.project(8, old_generation_counters);
         assert_eq!(generation_mismatch.tcp_accepts, 0);
         assert_eq!(generation_mismatch.tcp_auth_sessions, 0);
         assert_eq!(generation_mismatch.tcp_rx_bytes, 0);
+        assert_eq!(generation_mismatch.wifi_rx_pending_drops, 0);
+        assert_eq!(generation_mismatch.wifi_rx_pending_drops_boot, 8);
+        assert_eq!(generation_mismatch.wifi_rx_runtime_overflow_episodes, 0);
+        assert_eq!(
+            generation_mismatch.wifi_rx_runtime_overflow_episodes_boot,
+            5
+        );
+        assert_eq!(generation_mismatch.wifi_rx_runtime_queue_overflow_seen, 0);
+        assert_eq!(generation_mismatch.wifi_data_trace_faults, 0);
+        assert_eq!(generation_mismatch.wifi_data_trace_tx_retries, 0);
+        assert_eq!(generation_mismatch.tx_submit, 0);
+        assert_eq!(generation_mismatch.tx_complete, 0);
         assert!(!cyw43_tcp_data_path_proven(
             "cyw43",
             "wifi",
@@ -8501,11 +8566,22 @@ mod tests {
         ));
 
         let new_generation_baseline =
-            TcpGenerationProofBaseline::capture(8, old_generation_counters);
+            Cyw43GenerationProofBaseline::capture(8, old_generation_counters);
         let before_new_activity = new_generation_baseline.project(8, old_generation_counters);
         assert_eq!(before_new_activity.tcp_accepts, 0);
         assert_eq!(before_new_activity.tcp_auth_sessions, 0);
         assert_eq!(before_new_activity.tcp_rx_bytes, 0);
+        assert_eq!(before_new_activity.wifi_rx_pending_drops, 0);
+        assert_eq!(before_new_activity.wifi_rx_runtime_overflow_episodes, 0);
+        assert_eq!(before_new_activity.wifi_rx_runtime_queue_overflow_seen, 0);
+        assert_eq!(before_new_activity.wifi_data_trace_faults, 0);
+        assert_eq!(before_new_activity.wifi_data_trace_tx_retries, 0);
+        assert_eq!(before_new_activity.tx_submit, 0);
+        assert_eq!(before_new_activity.tx_complete, 0);
+        assert_eq!(
+            cyw43_status_blocker_for("cyw43", "wifi", before_new_activity),
+            None
+        );
         assert!(!cyw43_tcp_data_path_proven(
             "cyw43",
             "wifi",
@@ -8516,12 +8592,35 @@ mod tests {
             tcp_accepts: 5,
             tcp_auth_sessions: 4,
             tcp_rx_bytes: 4_224,
+            wifi_rx_pending_drops: 9,
+            wifi_rx_pending_drops_boot: 9,
+            wifi_rx_runtime_queue_overflow_seen: 1,
+            wifi_rx_runtime_overflow_episodes: 6,
+            wifi_rx_runtime_overflow_episodes_boot: 6,
+            wifi_data_trace_faults: 8,
+            wifi_data_trace_tx_retries: 13,
+            tx_submit: 67,
+            tx_complete: 65,
             ..old_generation_counters
         };
         let after_new_activity = new_generation_baseline.project(8, new_generation_counters);
         assert_eq!(after_new_activity.tcp_accepts, 1);
         assert_eq!(after_new_activity.tcp_auth_sessions, 1);
         assert_eq!(after_new_activity.tcp_rx_bytes, 128);
+        assert_eq!(after_new_activity.wifi_rx_pending_drops, 1);
+        assert_eq!(after_new_activity.wifi_rx_pending_drops_boot, 9);
+        assert_eq!(after_new_activity.wifi_rx_runtime_overflow_episodes, 1);
+        assert_eq!(after_new_activity.wifi_rx_runtime_overflow_episodes_boot, 6);
+        assert_eq!(after_new_activity.wifi_rx_runtime_queue_overflow_seen, 1);
+        assert_eq!(after_new_activity.wifi_data_trace_faults, 1);
+        assert_eq!(after_new_activity.wifi_data_trace_tx_retries, 2);
+        assert_eq!(after_new_activity.tx_submit, 3);
+        assert_eq!(after_new_activity.tx_complete, 3);
+        assert_eq!(
+            cyw43_status_blocker_for("cyw43", "wifi", after_new_activity),
+            None,
+            "same-generation TCP proof is terminal for the status surface"
+        );
         assert!(cyw43_tcp_data_path_proven(
             "cyw43",
             "wifi",
@@ -8531,7 +8630,7 @@ mod tests {
 
     #[test]
     fn tcp_generation_proof_projection_fails_closed_after_counter_reset() {
-        let baseline = TcpGenerationProofBaseline::capture(
+        let baseline = Cyw43GenerationProofBaseline::capture(
             12,
             NetCounters {
                 tcp_accepts: 9,
@@ -9662,13 +9761,14 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_status_reports_rx_overflow_and_starvation_blockers() {
+    fn cyw43_status_reports_generation_local_rx_loss_without_backlog_false_positive() {
         assert_eq!(
             cyw43_status_blocker_for(
                 "cyw43",
                 "wifi",
                 NetCounters {
                     wifi_rx_runtime_queue_overflow_seen: 1,
+                    wifi_rx_runtime_overflow_episodes: 1,
                     wifi_rx_runtime_queue_count: 16,
                     wifi_rx_runtime_queue_high_water: 16,
                     ..NetCounters::default()
@@ -9689,10 +9789,7 @@ mod tests {
                     ..NetCounters::default()
                 }
             ),
-            Some(Cyw43StatusBlocker {
-                address_source: "wifi-rx-starvation",
-                dhcp_phase: "rx-starvation"
-            })
+            None
         );
     }
 

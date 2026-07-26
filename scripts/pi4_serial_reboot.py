@@ -69,6 +69,19 @@ DIAGNOSTIC_READY_MARKERS = (
 )
 DIAGNOSTIC_SETTLE_TIMEOUT_S = 30.0
 DIAGNOSTIC_COMMAND_DRAIN_S = 0.25
+NETTEST_STARTED_MARKER = b"OK NETTEST detail=started"
+NETTEST_RESULT_PREFIX = b"[net-selftest] result generation="
+NETTEST_RESULT_TIMEOUT_S = 30.0
+NETTEST_RESULT_RE = re.compile(
+    rb"\[net-selftest\] result "
+    rb"generation=(?P<generation>[0-9]+) "
+    rb"tx_ok=(?:true|false) "
+    rb"udp_echo_ok=(?:true|false) "
+    rb"tcp_ok=(?:true|false) "
+    rb"console_ok=(?:true|false) "
+    rb"peer_assisted_ok=(?:true|false) "
+    rb"result=(?P<result>pass|peer-assisted-pass|fail)(?:\r?\n|$)"
+)
 ASYNC_RESULT_FRAGMENT_RE = re.compile(
     rb"(?:"
     rb"\[[A-Za-z0-9_.:-]+\]"
@@ -360,6 +373,43 @@ def serial_marker_seen(snapshot: bytes, marker: bytes) -> bool:
     return compact_marker in compact_snapshot
 
 
+def parse_nettest_result(snapshot: bytes) -> tuple[int, str] | None:
+    """Return the generation and verdict from one complete self-test result."""
+
+    match = NETTEST_RESULT_RE.search(snapshot)
+    if match is None:
+        return None
+    return int(match.group("generation")), match.group("result").decode("ascii")
+
+
+def wait_for_nettest_result(
+    controller: RedactingSerialController,
+    initial_snapshot: bytes,
+    timeout_s: float = NETTEST_RESULT_TIMEOUT_S,
+) -> tuple[int, str]:
+    """Wait boundedly for the complete generation-tagged async result."""
+
+    deadline = time.monotonic() + timeout_s
+    snapshot = bytearray(initial_snapshot[-TAIL_LIMIT:])
+    while True:
+        parsed = parse_nettest_result(bytes(snapshot))
+        if parsed is not None:
+            return parsed
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0:
+            raise SerialMarkerTimeout(
+                "timed out waiting for generation-tagged net-selftest result"
+            )
+        chunk = controller.read_until(
+            (NETTEST_RESULT_PREFIX, b"\n"),
+            remaining_s,
+            label="generation-tagged net-selftest result",
+        )
+        snapshot.extend(chunk)
+        if len(snapshot) > TAIL_LIMIT:
+            del snapshot[: len(snapshot) - TAIL_LIMIT]
+
+
 def mint_ticket(repo: pathlib.Path, cohsh: pathlib.Path, ticket_config: pathlib.Path) -> str:
     ticket = subprocess.check_output(
         [
@@ -633,10 +683,25 @@ def run_diagnostics(
     *,
     prompt_ready: bool,
 ) -> None:
-    commands = ["netstats", "nettest"]
+    commands = [
+        ("netstats", "netstats"),
+        ("nettest", "nettest"),
+        ("netstats", "netstats-final"),
+    ]
     if lane == "wifi":
-        commands.extend(["wifi diag", "wifi probe-ht"])
-    commands.extend(["usb diag", "usb probe-kbd", "smp activity"])
+        commands.extend(
+            [
+                ("wifi diag", "wifi diag"),
+                ("wifi probe-ht", "wifi probe-ht"),
+            ]
+        )
+    commands.extend(
+        [
+            ("usb diag", "usb diag"),
+            ("usb probe-kbd", "usb probe-kbd"),
+            ("smp activity", "smp activity"),
+        ]
+    )
     usb_scored = True
     if prompt_ready:
         settle = controller.drain_for(
@@ -656,21 +721,52 @@ def run_diagnostics(
                     "diagnostics serial_only_usb_unproven_after_command_ready_timeout "
                     f"error={exc}"
                 )
-    for command in commands:
+    for command, label in commands:
         if command.startswith("usb ") and not usb_scored:
             controller.note(
                 f"diagnostics serial_only_usb_unscored command={command!r}"
             )
-        controller.synchronize_root_diagnostic_command(label=command)
+        controller.synchronize_root_diagnostic_command(label=label)
         controller.send_line(command, reinforce_terminator=True)
         try:
-            controller.read_until(
-                DIAGNOSTIC_RESULT_MARKERS[command],
-                90,
-                label=f"result for {command}",
+            result_markers = (
+                (NETTEST_STARTED_MARKER, b"ERR NETTEST")
+                if command == "nettest"
+                else DIAGNOSTIC_RESULT_MARKERS[command]
             )
+            command_snapshot = controller.read_until(
+                result_markers,
+                90,
+                label=f"result for {label}",
+            )
+            if command == "nettest" and serial_marker_seen(
+                command_snapshot,
+                NETTEST_STARTED_MARKER,
+            ):
+                # Ignore any older asynchronous result that arrived before the
+                # fresh admission ACK in this snapshot, but preserve a result
+                # that followed an unsplit ACK in the same serial read.
+                started_offset = command_snapshot.rfind(NETTEST_STARTED_MARKER)
+                post_ack_snapshot = (
+                    command_snapshot[
+                        started_offset + len(NETTEST_STARTED_MARKER) :
+                    ]
+                    if started_offset >= 0
+                    else b""
+                )
+                generation, result = wait_for_nettest_result(
+                    controller,
+                    post_ack_snapshot,
+                )
+                controller.note(
+                    "nettest terminal "
+                    f"generation={generation} result={result} "
+                    "action=capture-final-netstats"
+                )
         except SerialMarkerTimeout as exc:
-            controller.note(f"diagnostic timeout command={command!r} error={exc}")
+            controller.note(
+                f"diagnostic timeout command={command!r} label={label!r} error={exc}"
+            )
             raise
 
 

@@ -507,9 +507,9 @@ preserve those upper-path invariants, but this historical pass cannot satisfy a
 current-image gate and cannot authorize timing-dependent loops,
 same-generation replay, root-owned SDIO, or a legacy fallback.
 
-The CYW43 software-closure gate is authorized by Milestone 26d task
-`m26d-cyw43-hardware-free-closure` and Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`. It exercises the host-testable
+The CYW43 software-closure gate is authorized by Reopened Milestone 26b task
+`m26b-wifi-sdio-notification-dpc-closure`. Milestone 26d supplied only the
+physical investigation context that exposed the defect. It exercises the host-testable
 production transaction data and state transitions (`begin_turn`, frontier
 reservation, retained submit, completion miss, continuation grant, immutable
 ticket/completion validation, completion commit, and cached replay). The host
@@ -524,6 +524,56 @@ outer turn opens one monotonic CYW43 operation permit and may execute no more
 than one child-runtime or HAL operation; a rejected second attempt must leave
 the retained ticket, deadline, payload fingerprint, generation, and cursor
 unchanged.
+
+Ordered Gate 8 coverage must exercise one production diagnostic snapshot with
+these exact subgates: `8a-pair-generation`, `8b-control-program`,
+`8c-join-terminal`, `8d-association-link`, `8e-bssid-refresh`,
+`8f-eapol-keys`, `8g-post-key-maintenance`, and `8h-data-admission`. Tests must
+prove all of the following:
+
+- 8a and 8b are derived from one current linked pair/control epoch; 8c through
+  8h are derived from one current logical connection generation.
+- Snapshot evaluation is passive, immutable, and performs no HAL, SDIO,
+  runtime, retry, completion, or owner mutation. All eight records are formatted
+  from that single value and admitted with the immediately following Ready
+  record as one all-or-nothing retained transaction.
+- The producer revalidates and commits that exact snapshot before `ready`.
+  Partial, reordered, duplicate, mixed-generation, generation-regressing,
+  cross-recovery, and changed-before-commit snapshots fail closed.
+- Transport attachment publishes `stabilizing`. Each outer attempt uses one
+  absolute `now + 90,000 ms` Gate 8 deadline, and same-attempt pair recovery
+  cannot extend it. A subgate failure or deadline latches exactly one pair
+  restart only after an atomic eight-line failure snapshot plus its adjacent
+  recovery boundary is retained with one further slot reserved for the
+  immediately following supervisor `backoff`/`exhausted`/`permanent` terminal,
+  then records one transient outer-attempt failure; the 1/2/4/8-second schedule
+  ends at attempt 5 with exhaustion and no sixth attempt.
+- A fresh non-stable or different-generation observation retracts `ready` to
+  `stabilizing`, including a same-generation loss of owner/admission proof. The
+  old snapshot becomes non-authorizing and a later `ready` requires a complete
+  new snapshot. A delayed HDMI Ready/prompt, including bytes already handed to
+  the local-seat queue, is superseded by a canonical Stabilizing redraw.
+- Gate 8h passes with bounded non-full root RX, pending data TX/ARP, runtime
+  backlog, or one exact assigned current-generation NetData request. A
+  baseline-token/generation mismatch and lossless full root RX queue are
+  pending, with bounded drain priority for the latter. It fails for a stale
+  prompt generation, retained request-less NetData pre-poll while priority root
+  work exists, an exact-generation root drop, or a monotonic runtime-overflow
+  increase since the current-generation baseline. Root-drop telemetry must
+  saturate rather than wrap, while the exact-generation loss latch remains
+  fail-closed. Recovery captures a new baseline without clearing cumulative
+  boot telemetry.
+- Gate 9 address/DHCP and Gate 10 nettest/TCP/authenticated-`cohsh` acceptance
+  bind to the same logical generation as Gate 8. Recovery, generation advance,
+  or readiness retraction invalidates downstream proof instead of allowing
+  evidence stitching.
+
+Normalizer tests must expose `WIFI_GATE8_COMPLETE`, `WIFI_GATE8_SEEN`,
+`WIFI_GATE8_LAST`, `WIFI_GATE8_MISSING`, `WIFI_GATE8_STATUS`,
+`WIFI_GATE8_GENERATION`, and `WIFI_GATE8_BLOCKER`. They must cover snapshot
+prefixes, cross-recovery fragments, repeated/replayed records, U32 rollover
+versus reset/regression, `ready -> stabilizing -> ready` reproof, and rejection
+of Gate 9/10 evidence from any other generation.
 
 SDIO request-lifecycle coverage must drive production owner seams for card
 CMD5, generic CMD52, and data CMD53 descriptors. It must prove that every

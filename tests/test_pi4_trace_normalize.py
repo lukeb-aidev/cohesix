@@ -290,24 +290,35 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "[cyw43] host-eapol action=install-wsec-key kind=gtk result=ok",
         "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=secure "
         "associated=yes link_up=yes eapol_rx=2",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing backoff_ms=0 "
+        "next_attempt_ms=150 serial=ready local_seat=ready recovery=full "
+        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        *wifi_gate8_snapshot_lines(
+            len(normalizer.WIFI_GATE8_SUBGATES),
+            pair_epoch=1,
+            generation=9,
+        ),
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
+        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
+        "console_seq=3 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "[dhcp] start ready interface=wifi",
         "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
         "server=192.168.10.1 lease_s=3600",
-        "OK NETTEST detail=pass scope=serial-local",
+        "[net-selftest] result generation=9 tx_ok=true udp_echo_ok=false "
+        "tcp_ok=false console_ok=true peer_assisted_ok=true "
+        "result=peer-assisted-pass",
+        "OK NETTEST detail=pass scope=serial-local generation=9",
         "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
-        "netstats: udp_rx=2 udp_tx=4 tcp_accepts=1 tcp_auth=1 "
+        "netstats: generation=9 udp_rx=2 udp_tx=4 tcp_accepts=1 tcp_auth=1 "
         "tcp_rx_bytes=58 tcp_tx_bytes=6782",
         "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
-        "netstatus: ip=192.168.10.50 gateway=192.168.10.1 "
+        "netstatus: generation=9 ip=192.168.10.50 gateway=192.168.10.1 "
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 poisoned=no masked=no",
-        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
-        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
-        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
     ])
 
 
@@ -441,24 +452,35 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
         "stage=cyw43-host-eapol-gtk status=ready",
         "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 status=secure "
         "associated=yes link_up=yes eapol_rx=2",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing backoff_ms=0 "
+        "next_attempt_ms=150 serial=ready local_seat=ready recovery=full "
+        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        *wifi_gate8_snapshot_lines(
+            len(normalizer.WIFI_GATE8_SUBGATES),
+            pair_epoch=1,
+            generation=9,
+        ),
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
+        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
+        "console_seq=3 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "[dhcp] start ready interface=wifi",
         "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
         "server=192.168.10.1 lease_s=3600",
-        "OK NETTEST detail=pass scope=serial-local",
+        "[net-selftest] result generation=9 tx_ok=true udp_echo_ok=false "
+        "tcp_ok=false console_ok=true peer_assisted_ok=true "
+        "result=peer-assisted-pass",
+        "OK NETTEST detail=pass scope=serial-local generation=9",
         "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
-        "netstats: udp_rx=2 udp_tx=4 tcp_accepts=1 tcp_auth=1 "
+        "netstats: generation=9 udp_rx=2 udp_tx=4 tcp_accepts=1 tcp_auth=1 "
         "tcp_rx_bytes=58 tcp_tx_bytes=6782",
         "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
-        "netstatus: ip=192.168.10.50 gateway=192.168.10.1 "
+        "netstatus: generation=9 ip=192.168.10.50 gateway=192.168.10.1 "
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 poisoned=no masked=no",
-        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
-        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
-        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
     ])
 
 
@@ -546,6 +568,17 @@ def pi4_hardware_wifi_gate7_to_10_capture_lines() -> list[str]:
         "link_up=yes assoc_event=assoc assoc_poll=705 post_assoc_polls=5 "
         "next_action=release-dhcp-data",
         JOIN_COMPLETE_HOST_EAPOL,
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing backoff_ms=0 "
+        "next_attempt_ms=150 serial=ready local_seat=ready recovery=full "
+        "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        *wifi_gate8_snapshot_lines(
+            len(normalizer.WIFI_GATE8_SUBGATES),
+            pair_epoch=1,
+            generation=9,
+        ),
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
+        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
+        "console_seq=3 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "[dhcp] start ready interface=wifi now_ms=0",
         "[dhcp] tx queued kind=discover from=selecting to=selecting "
         "len=259 attempts=1 tx_packets=1",
@@ -556,16 +589,17 @@ def pi4_hardware_wifi_gate7_to_10_capture_lines() -> list[str]:
         "[dhcp] rx ack ip=192.168.86.154 phase=bound len=300 rx_packets=2",
         "[dhcp] lease bound ip=192.168.86.154/24 gateway=192.168.86.1 "
         "server=192.168.86.1 lease_s=86400",
-        "[net-selftest] result tx_ok=true udp_echo_ok=false tcp_ok=false "
-        "console_ok=true peer_assisted_ok=true",
-        "OK NETTEST detail=started",
+        "[net-selftest] result generation=9 tx_ok=true udp_echo_ok=false "
+        "tcp_ok=false console_ok=true peer_assisted_ok=true "
+        "result=peer-assisted-pass",
+        "OK NETTEST detail=started generation=9",
         "netstats: rx_pkts=590 tx_pkts=141 rx_used=590 tx_used=141 polls=9831",
-        "netstats: udp_rx=2 udp_tx=27 tcp_accepts=4 tcp_auth=4 "
+        "netstats: generation=9 udp_rx=2 udp_tx=27 tcp_accepts=4 tcp_auth=4 "
         "tcp_rx_bytes=320 tcp_tx_bytes=11287",
         "netstats: mode=dhcp policy=wifi active=wifi standby=none "
         "addr_src=dhcp-lease ip=192.168.86.154 gateway=192.168.86.1 dhcp=bound",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=0 eapol_secure=1",
-        "netstatus: ip=192.168.86.154 gateway=192.168.86.1 "
+        "netstatus: generation=9 ip=192.168.86.154 gateway=192.168.86.1 "
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
         "CYW43_SDIO_DPC generation=9 captures=16 published=16 consumed=16 "
         "rearms=16 overruns=0 epoch_errors=0 sequence_errors=0 "
@@ -1163,6 +1197,15 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_GATE7_SEEN": "none",
         "WIFI_GATE7_LAST": "none",
         "WIFI_GATE7_MISSING": "7a",
+        "WIFI_GATE8_COMPLETE": "no",
+        "WIFI_GATE8_SEEN": "none",
+        "WIFI_GATE8_LAST": "none",
+        "WIFI_GATE8_MISSING": "8a-pair-generation",
+        "WIFI_GATE8_STATUS": "none",
+        "WIFI_GATE8_GENERATION": 0,
+        "WIFI_GATE8_PAIR_EPOCH": 0,
+        "WIFI_GATE8_BLOCKER": "none",
+        "WIFI_GATE8_LINE": 0,
         "USB_OLDGOOD_REPLAY": "no",
         "USB_OLDGOOD_LAST": "none",
         "USB_OLDGOOD_MISSING": "cold-boot-unseeded",
@@ -8361,16 +8404,26 @@ def test_wifi_dpc_proof_scopes_failures_to_latest_supervisor_attempt() -> None:
 
     events = normalizer.parse_events(
         [
+            "wifi: preserved_failure source=live "
+            "stage=cyw43-load-firmware-fail "
+            "exact=cyw43-device-on-timeout-before-ht",
             bootstrap_supervisor_line(1, "begin", 0, 100, 1),
             "CYW43_SDIO_DPC generation=1 captures=6 published=5 consumed=5 "
             "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
             "ack_failures=0 poisoned=no masked=no",
-            bootstrap_supervisor_line(1, "recovery", 0, 150, 2),
-            bootstrap_supervisor_line(2, "begin", 1_000, 1_150, 3),
-            "CYW43_SDIO_DPC generation=1 captures=8 published=8 consumed=8 "
+            bootstrap_supervisor_line(1, "backoff", 1_000, 1_150, 2),
+            bootstrap_supervisor_line(2, "begin", 0, 1_150, 3),
+            *bootstrap_gate8_ready_tail(
+                2,
+                generation=2,
+                pair_epoch=2,
+                stabilizing_ms=1_200,
+                ready_ms=1_300,
+                console_seq=4,
+            ),
+            "CYW43_SDIO_DPC generation=2 captures=8 published=8 consumed=8 "
             "rearms=8 overruns=0 epoch_errors=0 sequence_errors=0 "
             "ack_failures=0 poisoned=no masked=no",
-            bootstrap_supervisor_line(2, "ready", 0, 1_300, 4),
         ]
     )
 
@@ -8378,7 +8431,7 @@ def test_wifi_dpc_proof_scopes_failures_to_latest_supervisor_attempt() -> None:
 
     assert record["WIFI_DPC_PROOF"] == "yes"
     assert record["WIFI_DPC_REASON"] == "none"
-    assert record["WIFI_DPC_GENERATION"] == 1
+    assert record["WIFI_DPC_GENERATION"] == 2
     assert record["WIFI_DPC_CAPTURES"] == 8
 
 
@@ -13375,7 +13428,7 @@ def test_gate_summary_treats_peer_assisted_nettest_as_ready_for_netstats() -> No
             "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
             "server=192.168.10.1 lease_s=3600",
             "[net-selftest] result tx_ok=true udp_echo_ok=false tcp_ok=false "
-            "console_ok=true peer_assisted_ok=true",
+            "console_ok=true peer_assisted_ok=true result=peer-assisted-pass",
             "OK NETTEST detail=started",
         ]
     )
@@ -13417,7 +13470,7 @@ def test_gate_summary_clears_exact_after_peer_assisted_netstats_ready() -> None:
             "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
             "server=192.168.10.1 lease_s=3600",
             "[net-selftest] result tx_ok=true udp_echo_ok=false tcp_ok=false "
-            "console_ok=true peer_assisted_ok=true",
+            "console_ok=true peer_assisted_ok=true result=peer-assisted-pass",
             "OK NETTEST detail=started",
             "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
             "netstats: mode=dhcp policy=wifi active=wifi standby=none "
@@ -13440,7 +13493,7 @@ def test_gate_summary_does_not_downgrade_remote_cohsh_after_peer_echo_missing() 
             "server=192.168.10.1 lease_s=3600",
             "[cohsh-net][auth] auth OK, session established (conn_id=1)",
             "[net-selftest] result tx_ok=true udp_echo_ok=false tcp_ok=false "
-            "console_ok=false",
+            "console_ok=false result=peer-assisted-pass",
             "OK NETTEST detail=started",
         ]
     )
@@ -13627,8 +13680,8 @@ def test_gate_summary_accepts_oldgood_wifi_replay_contract() -> None:
     assert record["WIFI_FIRMWARE_VERSION_PROOF"] == "yes"
     assert record["WIFI_CLM_VERSION_PROOF"] == "yes"
     assert record["SDIO_IRQ158_INBAND_PROOF"] == "yes"
-    assert record["WIFI_SUBGATE"] == "7e"
-    assert record["WIFI_SUBGATE_NAME"] == "secure-release"
+    assert record["WIFI_SUBGATE"] == "8h-data-admission"
+    assert record["WIFI_SUBGATE_NAME"] == "8h-data-admission"
 
 
 def test_oldgood_wifi_replay_requires_authenticated_tcp_counters() -> None:
@@ -13657,8 +13710,8 @@ def test_gate_summary_accepts_oldgood_wifi_resource_replay_contract() -> None:
     assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
     assert record["WIFI_OLDGOOD_LAST"] == "dpc-healthy-after-tcp"
     assert record["WIFI_OLDGOOD_MISSING"] == "none"
-    assert record["WIFI_SUBGATE"] == "7e"
-    assert record["WIFI_SUBGATE_NAME"] == "secure-release"
+    assert record["WIFI_SUBGATE"] == "8h-data-admission"
+    assert record["WIFI_SUBGATE_NAME"] == "8h-data-admission"
     assert record["WIFI_GATE7_COMPLETE"] == "yes"
     assert record["WIFI_GATE7_SEEN"] == "7a>7b>7c>7d>7e"
     assert record["WIFI_GATE7_LAST"] == "7e"
@@ -13768,6 +13821,490 @@ def test_boot_acceptance_requires_complete_ordered_wifi_gate7_proof() -> None:
     assert "wifi-gate7-7d-missing" in blockers
 
 
+def wifi_gate8_subgate_line(
+    subgate: str,
+    *,
+    status: str = "pass",
+    pair_epoch: int = 0,
+    generation: int = 0,
+    blocker: str = "none",
+) -> str:
+    """Return one canonical Gate 8 stabilization record."""
+
+    return (
+        f"wifi: gate 8 subgate={subgate} status={status} "
+        f"pair_epoch={pair_epoch} "
+        f"generation={generation} blocker={blocker}"
+    )
+
+
+def wifi_gate8_snapshot_lines(
+    passed: int,
+    *,
+    pair_epoch: int = 0,
+    generation: int = 0,
+    status: str = "pending",
+    blocker: str = "stabilization-pending",
+) -> list[str]:
+    """Return one complete ordered Gate 8 diagnostic snapshot."""
+
+    lines: list[str] = []
+    for index, subgate in enumerate(normalizer.WIFI_GATE8_SUBGATES):
+        if index < passed:
+            lines.append(
+                wifi_gate8_subgate_line(
+                    subgate,
+                    pair_epoch=pair_epoch,
+                    generation=generation,
+                )
+            )
+        elif index == passed:
+            lines.append(
+                wifi_gate8_subgate_line(
+                    subgate,
+                    status=status,
+                    pair_epoch=pair_epoch,
+                    generation=generation,
+                    blocker=blocker,
+                )
+            )
+        else:
+            lines.append(
+                wifi_gate8_subgate_line(
+                    subgate,
+                    status="pending",
+                    pair_epoch=pair_epoch,
+                    generation=generation,
+                    blocker=normalizer.WIFI_GATE8_SUBGATES[index - 1],
+                )
+            )
+    return lines
+
+
+def wifi_gate8_transaction_lines(
+    *,
+    pair_epoch: int = 0,
+    generation: int = 0,
+    attempt: int = 1,
+) -> list[str]:
+    """Return one exact Begin/Stabilizing/8a-8h/Ready transaction."""
+
+    return [
+        bootstrap_supervisor_line(attempt, "begin", 0, 100, 1),
+        bootstrap_supervisor_line(attempt, "stabilizing", 0, 150, 2),
+        *wifi_gate8_snapshot_lines(
+            len(normalizer.WIFI_GATE8_SUBGATES),
+            pair_epoch=pair_epoch,
+            generation=generation,
+        ),
+        bootstrap_supervisor_line(attempt, "ready", 0, 200, 3),
+    ]
+
+
+def wifi_generation_gate10_lines(
+    generation: int,
+    *,
+    selftest_result: str = "peer-assisted-pass",
+    tcp_counters: bool = True,
+    auth_generation: int | None = None,
+    dpc_generation: int | None = None,
+) -> list[str]:
+    """Return generation-tagged DHCP/nettest/TCP/DPC acceptance evidence."""
+
+    tcp_accepts = 1 if tcp_counters else 0
+    tcp_auth = 1 if tcp_counters else 0
+    tcp_rx_bytes = 58 if tcp_counters else 0
+    lines = [
+        "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+        "server=192.168.10.1 lease_s=3600",
+    ]
+    if selftest_result == "started-only":
+        lines.append(f"OK NETTEST detail=started generation={generation}")
+    else:
+        lines.extend(
+            [
+                f"[net-selftest] result generation={generation} tx_ok=true "
+                "udp_echo_ok=false tcp_ok=false console_ok=true "
+                f"peer_assisted_ok=true result={selftest_result}",
+                f"OK NETTEST detail=started generation={generation}",
+            ]
+        )
+    lines.extend(
+        [
+            "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+            f"netstats: generation={generation} udp_rx=2 udp_tx=4 "
+            f"tcp_accepts={tcp_accepts} tcp_auth={tcp_auth} "
+            f"tcp_rx_bytes={tcp_rx_bytes} tcp_tx_bytes=6782",
+            "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
+            "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 "
+            "dhcp=bound",
+            "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 "
+            "eapol_start=1 eapol_secure=1",
+            f"netstatus: generation={generation} ip=192.168.10.50 "
+            "gateway=192.168.10.1 src=dhcp-lease dhcp=bound tcp_ready=yes",
+            "[cohsh-net][auth] auth OK, session established "
+            f"(generation={auth_generation if auth_generation is not None else generation} "
+            "conn_id=1)",
+            "CYW43_SDIO_DPC "
+            f"generation={dpc_generation if dpc_generation is not None else generation} "
+            "captures=6 published=6 consumed=6 rearms=6 overruns=0 "
+            "epoch_errors=0 sequence_errors=0 ack_failures=0 "
+            "poisoned=no masked=no",
+        ]
+    )
+    return lines
+
+
+def test_gate8_ordered_proof_accepts_all_subgates_in_generation_zero() -> None:
+    """The initial CYW43 epoch is valid when all eight stages pass in order."""
+
+    lines = wifi_gate8_transaction_lines()
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_SEEN"] == ">".join(
+        normalizer.WIFI_GATE8_SUBGATES
+    )
+    assert record["WIFI_GATE8_LAST"] == "8h-data-admission"
+    assert record["WIFI_GATE8_MISSING"] == "none"
+    assert record["WIFI_GATE8_STATUS"] == "pass"
+    assert record["WIFI_GATE8_GENERATION"] == 0
+    assert record["WIFI_GATE8_BLOCKER"] == "none"
+    assert record["WIFI_GATE8_LINE"] == 10
+    assert record["WIFI_GATE"] == 8
+    assert record["WIFI_BLOCKER"] == "none"
+    assert record["WIFI_SUBGATE"] == "8h-data-admission"
+    assert record["WIFI_SUBGATE_SOURCE"] == "gate8-stability"
+
+
+def test_gate8_proof_keeps_pair_epoch_distinct_from_connection_generation() -> None:
+    """One pair/control epoch may legally cover a later Join generation."""
+
+    lines = wifi_gate8_transaction_lines(
+        pair_epoch=7,
+        generation=23,
+    )
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_PAIR_EPOCH"] == 7
+    assert record["WIFI_GATE8_GENERATION"] == 23
+
+
+def test_gate8_transaction_rejects_nonatomic_snapshot_and_nonadjacent_ready() -> None:
+    """Neither interleaved sub-gates nor a detached Ready record are authority."""
+
+    nonatomic = wifi_gate8_transaction_lines(generation=9)
+    nonatomic.insert(4, "wifi: snapshot source=live stage=interleaved")
+    nonatomic_record = normalizer.summarize_gates(
+        normalizer.parse_events(nonatomic)
+    ).to_record()
+
+    detached_ready = wifi_gate8_transaction_lines(generation=9)
+    detached_ready.insert(-1, "wifi: snapshot source=live stage=interleaved")
+    detached_record = normalizer.summarize_gates(
+        normalizer.parse_events(detached_ready)
+    ).to_record()
+
+    assert nonatomic_record["WIFI_GATE8_COMPLETE"] == "no"
+    assert nonatomic_record["WIFI_GATE8_BLOCKER"] == "snapshot-not-atomic"
+    assert detached_record["WIFI_GATE8_COMPLETE"] == "no"
+    assert detached_record["WIFI_GATE8_BLOCKER"] == "gate8-ready-not-adjacent"
+
+
+@pytest.mark.parametrize(
+    ("boundary", "expected_blocker"),
+    [
+        (
+            "CYW43_GATE8_RECOVERY attempt=1 generation=9 "
+            "blocker=carrier-lost deadline_ms=250 action=pair-restart",
+            "gate8-recovery",
+        ),
+        (
+            "CYW43_GATE8_READY_RETRACTED attempt=1 generation=9 "
+            "deadline_ms=250 action=fresh-proof",
+            "gate8-ready-retracted",
+        ),
+        (
+            "CYW43_GATE8_READY_TRANSACTION status=failed "
+            "action=retract-and-retry-fresh-snapshot",
+            "gate8-publication-rejected",
+        ),
+        (
+            "CYW43_GATE8_SNAPSHOT_COMMIT status=rejected "
+            "action=retry-fresh-snapshot",
+            "gate8-publication-rejected",
+        ),
+    ],
+)
+def test_gate8_authority_boundaries_revoke_ready(
+    boundary: str,
+    expected_blocker: str,
+) -> None:
+    """Recovery, retraction, and publication failure revoke accepted Ready."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [*wifi_gate8_transaction_lines(generation=9), boundary]
+        )
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_BLOCKER"] == expected_blocker
+
+
+def test_wifi_gate10_requires_post_ready_matching_generation() -> None:
+    """Pre-Ready and stale-generation network proof cannot satisfy Gate 9/10."""
+
+    current = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_generation_gate10_lines(9),
+            ]
+        )
+    ).to_record()
+    pre_ready = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                *wifi_generation_gate10_lines(9),
+                *wifi_gate8_transaction_lines(generation=9),
+            ]
+        )
+    ).to_record()
+    stale = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_generation_gate10_lines(8),
+            ]
+        )
+    ).to_record()
+
+    assert current["WIFI_GATE"] == 10
+    assert current["NETTEST_PROOF"] == "yes"
+    assert current["COHSH_TCP_AUTH_PROOF"] == "yes"
+    assert current["WIFI_DPC_PROOF"] == "yes"
+    assert pre_ready["WIFI_GATE"] == 8
+    assert pre_ready["WIFI_BLOCKER"] == "dhcp-generation-proof-missing"
+    assert stale["WIFI_GATE"] == 8
+    assert stale["WIFI_BLOCKER"] == "dhcp-generation-proof-missing"
+
+
+def test_wifi_gate10_rejects_started_only_nettest_and_stale_auth_dpc() -> None:
+    """Started-only nettest and stale TCP/DPC generations remain Gate-9 red."""
+
+    started = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_generation_gate10_lines(9, selftest_result="started-only"),
+            ]
+        )
+    ).to_record()
+    stale_auth = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_generation_gate10_lines(
+                    9,
+                    tcp_counters=False,
+                    auth_generation=8,
+                ),
+            ]
+        )
+    ).to_record()
+    stale_dpc = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_generation_gate10_lines(9, dpc_generation=8),
+            ]
+        )
+    ).to_record()
+
+    assert started["WIFI_GATE"] == 9
+    assert started["NETTEST_PROOF"] == "no"
+    assert stale_auth["WIFI_GATE"] == 9
+    assert stale_auth["COHSH_TCP_AUTH_PROOF"] == "no"
+    assert stale_dpc["WIFI_GATE"] == 9
+    assert stale_dpc["WIFI_DPC_PROOF"] == "no"
+    assert stale_dpc["WIFI_DPC_REASON"] == "generation-mismatch"
+
+
+def test_gate8_proof_rejects_pair_epoch_stitching_inside_one_snapshot() -> None:
+    """All 8a-8h records must name one immutable linked-pair epoch."""
+
+    lines = wifi_gate8_snapshot_lines(
+        len(normalizer.WIFI_GATE8_SUBGATES),
+        pair_epoch=4,
+        generation=9,
+    )
+    lines[5] = wifi_gate8_subgate_line(
+        normalizer.WIFI_GATE8_SUBGATES[5],
+        pair_epoch=5,
+        generation=9,
+    )
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_STATUS"] == "fail"
+    assert record["WIFI_GATE8_BLOCKER"] == "pair-epoch-mismatch"
+    assert record["WIFI_GATE8_LINE"] == 6
+
+
+def test_gate8_ordered_proof_reports_pending_current_frontier() -> None:
+    """Pending work is telemetry, not a completed or terminal Gate 8 proof."""
+
+    lines = wifi_gate8_snapshot_lines(
+        2,
+        generation=14,
+        blocker="join-owner-pending",
+    )
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert (
+        record["WIFI_GATE8_SEEN"]
+        == "8a-pair-generation>8b-control-program"
+    )
+    assert record["WIFI_GATE8_LAST"] == "8b-control-program"
+    assert record["WIFI_GATE8_MISSING"] == "8c-join-terminal"
+    assert record["WIFI_GATE8_STATUS"] == "pending"
+    assert record["WIFI_GATE8_GENERATION"] == 14
+    assert record["WIFI_GATE8_BLOCKER"] == "join-owner-pending"
+    assert record["WIFI_GATE8_LINE"] == 3
+    assert record["WIFI_GATE"] == 7
+    assert record["WIFI_BLOCKER"] == "join-owner-pending"
+    assert record["WIFI_EXACT"] == "join-owner-pending"
+    assert record["WIFI_PHASE"] == "gate8-stabilizing"
+    assert record["WIFI_SUBGATE"] == "8c-join-terminal"
+    assert record["WIFI_SUBGATE_STATUS"] == "pending"
+
+
+def test_gate8_ordered_proof_reports_terminal_current_frontier() -> None:
+    """A terminal sub-gate failure remains distinct from pending work."""
+
+    lines = wifi_gate8_snapshot_lines(
+        4,
+        status="fail",
+        generation=22,
+        blocker="bssid-owner-terminal-failure",
+    )
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_MISSING"] == "8e-bssid-refresh"
+    assert record["WIFI_GATE8_STATUS"] == "fail"
+    assert record["WIFI_GATE8_GENERATION"] == 22
+    assert (
+        record["WIFI_GATE8_BLOCKER"]
+        == "bssid-owner-terminal-failure"
+    )
+    assert record["WIFI_GATE8_LINE"] == 5
+
+
+def test_gate8_ordered_proof_never_stitches_recovery_generations() -> None:
+    """A higher recovery epoch resets every earlier Gate 8 pass."""
+
+    lines = [
+        *wifi_gate8_snapshot_lines(
+            4,
+            generation=0,
+            blocker="bssid-refresh-pending",
+        ),
+        *wifi_gate8_snapshot_lines(
+            1,
+            generation=1,
+            blocker="control-program-pending",
+        ),
+    ]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_SEEN"] == "8a-pair-generation"
+    assert record["WIFI_GATE8_LAST"] == "8a-pair-generation"
+    assert record["WIFI_GATE8_MISSING"] == "8b-control-program"
+    assert record["WIFI_GATE8_GENERATION"] == 1
+    assert record["WIFI_GATE8_BLOCKER"] == "control-program-pending"
+
+
+def test_gate8_ordered_proof_rejects_mixed_snapshot_generations() -> None:
+    """Every record in one Gate 8 snapshot must carry the same epoch."""
+
+    lines = wifi_gate8_snapshot_lines(
+        len(normalizer.WIFI_GATE8_SUBGATES),
+        generation=7,
+    )
+    lines[4] = lines[4].replace("generation=7", "generation=8")
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_MISSING"] == "8e-bssid-refresh"
+    assert record["WIFI_GATE8_STATUS"] == "fail"
+    assert record["WIFI_GATE8_BLOCKER"] == "generation-mismatch"
+    assert record["WIFI_GATE8_LINE"] == 5
+
+
+def test_gate8_ordered_proof_rejects_subgate_order_gap() -> None:
+    """A later pass cannot conceal a missing same-generation predecessor."""
+
+    lines = wifi_gate8_snapshot_lines(
+        len(normalizer.WIFI_GATE8_SUBGATES),
+        generation=7,
+    )
+    lines[1], lines[2] = lines[2], lines[1]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_SEEN"] == "8a-pair-generation"
+    assert record["WIFI_GATE8_MISSING"] == "8b-control-program"
+    assert record["WIFI_GATE8_STATUS"] == "fail"
+    assert record["WIFI_GATE8_BLOCKER"] == "subgate-order-gap"
+    assert record["WIFI_GATE"] == 7
+    assert record["WIFI_BLOCKER"] == "subgate-order-gap"
+
+
+def test_boot_acceptance_requires_complete_ordered_wifi_gate8_proof() -> None:
+    """Observed Gate 8 telemetry must close all same-generation sub-gates."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(oldgood_wifi_resource_replay_lines())
+    ).to_record()
+    record["WIFI_GATE8_COMPLETE"] = "no"
+    record["WIFI_GATE8_STATUS"] = "pending"
+    record["WIFI_GATE8_MISSING"] = "8f-eapol-keys"
+
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert "wifi-gate8-subgates-incomplete" in blockers
+    assert "wifi-gate8-8f-eapol-keys-missing" in blockers
+
+
 def test_boot_acceptance_requires_wifi_bootstrap_supervisor_terminal() -> None:
     """Production WiFi evidence must include a ready bootstrap supervisor."""
 
@@ -13824,21 +14361,40 @@ def test_wifi_oldgood_replay_does_not_stitch_across_supervisor_recovery() -> Non
     """A later retry cannot consume ordered steps from an earlier attempt."""
 
     lines = oldgood_wifi_resource_replay_lines()
+    stabilizing_index = oldgood_wifi_line_index(
+        lines,
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing",
+    )
     final_ready_index = oldgood_wifi_line_index(
         lines,
         "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready",
     )
-    lines[final_ready_index] = lines[final_ready_index].replace(
-        "console_seq=2", "console_seq=4"
+    lines[stabilizing_index] = (
+        lines[stabilizing_index]
+        .replace("attempt=1", "attempt=2", 1)
+        .replace("next_attempt_ms=150", "next_attempt_ms=1200", 1)
+        .replace("console_seq=2", "console_seq=6", 1)
+    )
+    lines[final_ready_index] = (
+        lines[final_ready_index]
+        .replace("attempt=1", "attempt=2", 1)
+        .replace("next_attempt_ms=200", "next_attempt_ms=1300", 1)
+        .replace("console_seq=3", "console_seq=7", 1)
     )
     join_index = oldgood_wifi_line_index(lines, "CYW43_DRIVER_TASK_JOIN_REQUEST")
     lines[join_index:join_index] = [
-        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing backoff_ms=0 "
         "next_attempt_ms=150 serial=ready local_seat=ready recovery=full "
         "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=recovery backoff_ms=0 "
         "next_attempt_ms=160 serial=ready local_seat=ready recovery=full "
         "console_seq=3 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=backoff backoff_ms=1000 "
+        "next_attempt_ms=1160 serial=ready local_seat=ready recovery=full "
+        "console_seq=4 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=2 status=recovery backoff_ms=0 "
+        "next_attempt_ms=1160 serial=ready local_seat=ready recovery=full "
+        "console_seq=5 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
     ]
 
     record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
@@ -14064,7 +14620,9 @@ def test_gate_summary_rejects_generic_eapol_message_as_wifi_oldgood_replay() -> 
 
 def test_gate_summary_rejects_nonpass_nettest_as_wifi_oldgood_replay() -> None:
     lines = [
-        line.replace("OK NETTEST detail=pass", "OK NETTEST detail=started")
+        line.replace("OK NETTEST detail=pass", "OK NETTEST detail=started").replace(
+            "result=peer-assisted-pass", "result=incomplete"
+        )
         for line in oldgood_wifi_resource_replay_lines()
     ]
     events = normalizer.parse_events(lines)
@@ -14083,15 +14641,27 @@ def test_gate_summary_rejects_condensed_host_eapol_as_oldgood_replay() -> None:
     lines.extend(
         [
             JOIN_COMPLETE_HOST_EAPOL,
+            *bootstrap_gate8_ready_tail(
+                1,
+                generation=9,
+                pair_epoch=1,
+                stabilizing_ms=150,
+                ready_ms=200,
+                console_seq=2,
+            ),
             "[dhcp] start ready interface=wifi",
             "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
             "server=192.168.10.1 lease_s=3600",
-            "OK NETTEST detail=pass scope=serial-local",
+            "OK NETTEST detail=pass scope=serial-local generation=9",
             "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+            "netstats: generation=9 udp_rx=1 udp_tx=1 tcp_accepts=0 "
+            "tcp_auth=0 tcp_rx_bytes=0",
             "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
             "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
             "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 "
             "eapol_start=1 eapol_secure=1",
+            "netstatus: generation=9 ip=192.168.10.50 "
+            "gateway=192.168.10.1 src=dhcp-lease dhcp=bound tcp_ready=no",
         ]
     )
     events = normalizer.parse_events(lines)
@@ -14305,6 +14875,40 @@ def bootstrap_supervisor_line(
     )
 
 
+def bootstrap_gate8_ready_tail(
+    attempt: int,
+    *,
+    generation: int,
+    pair_epoch: int,
+    stabilizing_ms: int,
+    ready_ms: int,
+    console_seq: int,
+) -> list[str]:
+    """Return Stabilizing plus one atomic Gate-8 snapshot and adjacent Ready."""
+
+    return [
+        bootstrap_supervisor_line(
+            attempt,
+            "stabilizing",
+            0,
+            stabilizing_ms,
+            console_seq,
+        ),
+        *wifi_gate8_snapshot_lines(
+            len(normalizer.WIFI_GATE8_SUBGATES),
+            pair_epoch=pair_epoch,
+            generation=generation,
+        ),
+        bootstrap_supervisor_line(
+            attempt,
+            "ready",
+            0,
+            ready_ms,
+            console_seq + 1,
+        ),
+    ]
+
+
 def test_bootstrap_supervisor_absence_preserves_historical_scoring() -> None:
     """Logs from before the supervisor do not acquire a new blocker."""
 
@@ -14322,8 +14926,8 @@ def test_bootstrap_supervisor_absence_preserves_historical_scoring() -> None:
     )
 
 
-def test_bootstrap_supervisor_accepts_terminal_first_attempt_ready() -> None:
-    """A begin followed by terminal ready is a valid no-retry sequence."""
+def test_bootstrap_supervisor_rejects_ready_without_stabilizing_transaction() -> None:
+    """A bare Begin-to-Ready edge cannot publish Gate-8 authority."""
 
     events = normalizer.parse_events(
         [
@@ -14338,8 +14942,388 @@ def test_bootstrap_supervisor_accepts_terminal_first_attempt_ready() -> None:
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 1
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 0
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert (
+        record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
+        == "invalid-status-sequence"
+    )
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_BLOCKER"] == "supervisor-stabilizing-missing"
+
+
+def test_bootstrap_supervisor_accepts_stabilizing_then_gate8_ready() -> None:
+    """Ready may follow attached stabilization only after exact Gate 8 proof."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 500, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 550, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                pair_epoch=1,
+                generation=0,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 600, 3),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+
+
+def test_bootstrap_supervisor_accepts_recovery_from_stabilizing() -> None:
+    """An attached generation may recover before reaching Gate 8 stability."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            bootstrap_supervisor_line(1, "recovery", 0, 200, 3),
+            bootstrap_supervisor_line(1, "backoff", 1_000, 1_200, 4),
+            bootstrap_supervisor_line(2, "recovery", 0, 1_200, 5),
+            bootstrap_supervisor_line(2, "stabilizing", 0, 1_250, 6),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=1,
+            ),
+            bootstrap_supervisor_line(2, "ready", 0, 1_300, 7),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT"] == 2
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES"] == 1
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+    assert record["WIFI_GATE8_GENERATION"] == 1
+
+
+def test_bootstrap_supervisor_recovery_invalidates_earlier_gate8_snapshot() -> None:
+    """A later recovery edge cannot reuse an earlier generation's 8a-8h proof."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=0,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+            bootstrap_supervisor_line(1, "recovery", 0, 250, 4),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_SEEN"] == "none"
+    assert record["WIFI_GATE8_MISSING"] == "8a-pair-generation"
+    assert record["WIFI_GATE8_STATUS"] == "pending"
+    assert record["WIFI_GATE8_BLOCKER"] == "supervisor-recovery"
+
+
+def test_bootstrap_supervisor_stabilizing_retracts_ready_gate8_proof() -> None:
+    """A same-attempt carrier loss revokes Ready and its prior 8a-8h proof."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=7,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 250, 4),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_MISSING"] == "8a-pair-generation"
+    assert record["WIFI_GATE8_STATUS"] == "pending"
+    assert record["WIFI_GATE8_BLOCKER"] == "supervisor-stabilizing"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "stabilizing"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert (
+        record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
+        == "stabilizing-not-terminal"
+    )
+
+
+def test_bootstrap_supervisor_ready_after_retraction_requires_new_gate8_proof() -> None:
+    """A second Ready cannot reuse the snapshot retracted by Stabilizing."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=7,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 250, 4),
+            bootstrap_supervisor_line(1, "ready", 0, 300, 5),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert (
+        record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
+        == "gate8-subgates-incomplete"
+    )
+
+
+def test_bootstrap_supervisor_ready_after_retraction_accepts_new_gate8_proof() -> None:
+    """Fresh same-generation 8a-8h proof may restore the retracted Ready."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=7,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 250, 4),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=7,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 300, 5),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_GENERATION"] == 7
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+
+
+def test_bootstrap_supervisor_recovery_cannot_stitch_gate8_snapshot() -> None:
+    """Recovery is a hard boundary between Gate 8 diagnostic records."""
+
+    snapshot = wifi_gate8_snapshot_lines(
+        len(normalizer.WIFI_GATE8_SUBGATES),
+        generation=7,
+    )
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *snapshot[:4],
+            bootstrap_supervisor_line(1, "recovery", 0, 200, 3),
+            *snapshot[4:],
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE"] == 7
+
+
+def test_bootstrap_supervisor_recovery_requires_new_gate8_generation() -> None:
+    """A same-generation post-recovery snapshot is stale, even when 8/8 pass."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=7,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+            bootstrap_supervisor_line(1, "recovery", 0, 250, 4),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 300, 5),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=7,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 350, 6),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_MISSING"] == "8a-pair-generation"
+    assert record["WIFI_GATE8_BLOCKER"] == (
+        "generation-not-advanced-after-recovery"
+    )
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+
+
+def test_bootstrap_supervisor_gate8_generation_wrap_is_forward() -> None:
+    """The retained u32 generation may legitimately wrap from max to zero."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=normalizer.U32_MAX,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+            bootstrap_supervisor_line(1, "recovery", 0, 250, 4),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 300, 5),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                pair_epoch=1,
+                generation=0,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 350, 6),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_GENERATION"] == 0
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+
+
+def test_gate8_ordered_proof_rejects_later_generation_regression() -> None:
+    """A stale later diagnostic cannot replace a newer generation's proof."""
+
+    events = normalizer.parse_events(
+        [
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=12,
+            ),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=11,
+            ),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_MISSING"] == "8a-pair-generation"
+    assert record["WIFI_GATE8_BLOCKER"] == "generation-regression"
+
+
+def test_bootstrap_supervisor_begin_resets_gate8_generation_history() -> None:
+    """A new supervisor episode may begin from the boot-reset generation."""
+
+    events = normalizer.parse_events(
+        [
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=12,
+            ),
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                generation=0,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_GENERATION"] == 0
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+
+
+def test_bootstrap_supervisor_stabilizing_without_ready_is_not_terminal() -> None:
+    """An attached stack cannot satisfy the supervisor's Ready contract."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *wifi_gate8_snapshot_lines(
+                0,
+                generation=0,
+                blocker="pair-generation-pending",
+            ),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "stabilizing"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert (
+        record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
+        == "stabilizing-not-terminal"
+    )
+
+
+def test_bootstrap_supervisor_ready_rejects_partial_gate8_telemetry() -> None:
+    """A Ready line cannot outrank a current incomplete Gate 8 sequence."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            *wifi_gate8_snapshot_lines(
+                1,
+                generation=0,
+                blocker="control-program-pending",
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert (
+        record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
+        == "gate8-subgates-incomplete"
+    )
+
+
+def test_bootstrap_supervisor_ready_requires_gate8_after_stabilizing() -> None:
+    """The new stabilizing protocol cannot publish unsupported Ready proof."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 2),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_STATUS"] == "fail"
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_BLOCKER"] == "gate8-subgates-incomplete"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert (
+        record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
+        == "gate8-subgates-incomplete"
+    )
 
 
 def test_bootstrap_supervisor_accepts_production_raw_uart_suffix() -> None:
@@ -14348,7 +15332,14 @@ def test_bootstrap_supervisor_accepts_production_raw_uart_suffix() -> None:
     events = normalizer.parse_events(
         [
             bootstrap_supervisor_line(1, "begin", 0, 500, 1),
-            bootstrap_supervisor_line(1, "ready", 0, 500, 2),
+            *bootstrap_gate8_ready_tail(
+                1,
+                generation=0,
+                pair_epoch=1,
+                stabilizing_ms=550,
+                ready_ms=600,
+                console_seq=2,
+            ),
         ]
     )
 
@@ -14465,7 +15456,14 @@ def test_bootstrap_supervisor_accepts_multiple_backoffs_then_ready() -> None:
                 2, "backoff", 2_000, 3_300, 4
             ),
             bootstrap_supervisor_line(3, "begin", 0, 3_300, 5),
-            bootstrap_supervisor_line(3, "ready", 0, 3_350, 6),
+            *bootstrap_gate8_ready_tail(
+                3,
+                generation=0,
+                pair_epoch=1,
+                stabilizing_ms=3_325,
+                ready_ms=3_350,
+                console_seq=6,
+            ),
         ]
     )
 
@@ -14495,7 +15493,14 @@ def test_bootstrap_supervisor_preflight_does_not_consume_an_attempt() -> None:
                 0, "preflight", 0, 400, 2, serial="ready"
             ),
             bootstrap_supervisor_line(1, "begin", 0, 400, 3),
-            bootstrap_supervisor_line(1, "ready", 0, 500, 4),
+            *bootstrap_gate8_ready_tail(
+                1,
+                generation=0,
+                pair_epoch=1,
+                stabilizing_ms=450,
+                ready_ms=500,
+                console_seq=4,
+            ),
         ]
     )
 
@@ -14654,11 +15659,25 @@ def test_bootstrap_supervisor_accepts_later_independent_recovery_episode() -> No
     events = normalizer.parse_events(
         [
             bootstrap_supervisor_line(1, "begin", 0, 100, 1),
-            bootstrap_supervisor_line(1, "ready", 0, 200, 2),
-            bootstrap_supervisor_line(1, "recovery", 0, 500, 3),
-            bootstrap_supervisor_line(1, "backoff", 1_000, 1_500, 4),
-            bootstrap_supervisor_line(2, "recovery", 0, 1_500, 5),
-            bootstrap_supervisor_line(2, "ready", 0, 1_600, 6),
+            *bootstrap_gate8_ready_tail(
+                1,
+                generation=0,
+                pair_epoch=1,
+                stabilizing_ms=150,
+                ready_ms=200,
+                console_seq=2,
+            ),
+            bootstrap_supervisor_line(1, "recovery", 0, 500, 4),
+            bootstrap_supervisor_line(1, "backoff", 1_000, 1_500, 5),
+            bootstrap_supervisor_line(2, "recovery", 0, 1_500, 6),
+            *bootstrap_gate8_ready_tail(
+                2,
+                generation=1,
+                pair_epoch=2,
+                stabilizing_ms=1_550,
+                ready_ms=1_600,
+                console_seq=7,
+            ),
         ]
     )
 
@@ -14678,28 +15697,34 @@ def test_bootstrap_supervisor_accepts_same_attempt_ready_recovery_exhaustion() -
         [
             bootstrap_supervisor_line(0, "preflight", 0, 0, 1),
             bootstrap_supervisor_line(1, "begin", 0, 100, 2),
-            bootstrap_supervisor_line(1, "ready", 0, 200, 3),
-            bootstrap_supervisor_line(1, "recovery", 0, 300, 4),
-            bootstrap_supervisor_line(1, "ready", 0, 400, 5),
-            bootstrap_supervisor_line(1, "recovery", 0, 500, 6),
-            bootstrap_supervisor_line(1, "backoff", 1_000, 1_500, 7),
-            bootstrap_supervisor_line(2, "recovery", 0, 1_500, 8),
-            bootstrap_supervisor_line(2, "ready", 0, 1_600, 9),
-            bootstrap_supervisor_line(2, "recovery", 0, 1_700, 10),
-            bootstrap_supervisor_line(2, "backoff", 2_000, 3_700, 11),
-            bootstrap_supervisor_line(3, "recovery", 0, 3_700, 12),
-            bootstrap_supervisor_line(3, "ready", 0, 3_800, 13),
-            bootstrap_supervisor_line(3, "recovery", 0, 3_900, 14),
-            bootstrap_supervisor_line(3, "backoff", 4_000, 7_900, 15),
-            bootstrap_supervisor_line(4, "recovery", 0, 7_900, 16),
-            bootstrap_supervisor_line(4, "ready", 0, 8_000, 17),
-            bootstrap_supervisor_line(4, "recovery", 0, 8_100, 18),
-            bootstrap_supervisor_line(4, "backoff", 8_000, 16_100, 19),
-            bootstrap_supervisor_line(5, "recovery", 0, 16_100, 20),
-            bootstrap_supervisor_line(5, "ready", 0, 16_200, 21),
-            bootstrap_supervisor_line(5, "recovery", 0, 16_300, 22),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 150, 3),
+            bootstrap_supervisor_line(1, "ready", 0, 200, 4),
+            bootstrap_supervisor_line(1, "recovery", 0, 300, 5),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 350, 6),
+            bootstrap_supervisor_line(1, "ready", 0, 400, 7),
+            bootstrap_supervisor_line(1, "recovery", 0, 500, 8),
+            bootstrap_supervisor_line(1, "backoff", 1_000, 1_500, 9),
+            bootstrap_supervisor_line(2, "recovery", 0, 1_500, 10),
+            bootstrap_supervisor_line(2, "stabilizing", 0, 1_550, 11),
+            bootstrap_supervisor_line(2, "ready", 0, 1_600, 12),
+            bootstrap_supervisor_line(2, "recovery", 0, 1_700, 13),
+            bootstrap_supervisor_line(2, "backoff", 2_000, 3_700, 14),
+            bootstrap_supervisor_line(3, "recovery", 0, 3_700, 15),
+            bootstrap_supervisor_line(3, "stabilizing", 0, 3_750, 16),
+            bootstrap_supervisor_line(3, "ready", 0, 3_800, 17),
+            bootstrap_supervisor_line(3, "recovery", 0, 3_900, 18),
+            bootstrap_supervisor_line(3, "backoff", 4_000, 7_900, 19),
+            bootstrap_supervisor_line(4, "recovery", 0, 7_900, 20),
+            bootstrap_supervisor_line(4, "stabilizing", 0, 7_950, 21),
+            bootstrap_supervisor_line(4, "ready", 0, 8_000, 22),
+            bootstrap_supervisor_line(4, "recovery", 0, 8_100, 23),
+            bootstrap_supervisor_line(4, "backoff", 8_000, 16_100, 24),
+            bootstrap_supervisor_line(5, "recovery", 0, 16_100, 25),
+            bootstrap_supervisor_line(5, "stabilizing", 0, 16_150, 26),
+            bootstrap_supervisor_line(5, "ready", 0, 16_200, 27),
+            bootstrap_supervisor_line(5, "recovery", 0, 16_300, 28),
             bootstrap_supervisor_line(
-                5, "exhausted", 0, (1 << 64) - 1, 23
+                5, "exhausted", 0, (1 << 64) - 1, 29
             ),
         ]
     )
@@ -14817,20 +15842,24 @@ def test_bootstrap_supervisor_rejects_incomplete_or_malformed_sequences(
     )
 
 
-def test_bootstrap_ready_clears_only_transient_supervisor_blocker() -> None:
-    """Supervisor recovery cannot erase an independent CYW43 gate failure."""
+def test_exact_gate8_transaction_clears_transient_bootstrap_failure() -> None:
+    """A later exact 8a-8h publication outranks an earlier recovered failure."""
 
     events = normalizer.parse_events(
         [
-            "wifi: preserved_failure source=live "
-            "stage=cyw43-load-firmware-fail "
-            "exact=cyw43-device-on-timeout-before-ht",
             bootstrap_supervisor_line(1, "begin", 0, 100, 1),
             bootstrap_supervisor_line(
                 1, "backoff", 1_000, 1_100, 2
             ),
             bootstrap_supervisor_line(2, "begin", 0, 1_100, 3),
-            bootstrap_supervisor_line(2, "ready", 0, 1_200, 4),
+            *bootstrap_gate8_ready_tail(
+                2,
+                generation=0,
+                pair_epoch=1,
+                stabilizing_ms=1_150,
+                ready_ms=1_200,
+                console_seq=4,
+            ),
         ]
     )
 
@@ -14838,4 +15867,4 @@ def test_bootstrap_ready_clears_only_transient_supervisor_blocker() -> None:
 
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
-    assert record["WIFI_BLOCKER"] == "devon-timeout"
+    assert record["WIFI_BLOCKER"] == "none"

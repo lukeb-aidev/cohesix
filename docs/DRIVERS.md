@@ -400,9 +400,77 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
 
 ### SDIO and CYW43
 
-This as-built closure is authorized by Milestone 26d task
-`m26d-cyw43-hardware-free-closure` and Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`.
+This as-built defect closure is authorized by Reopened Milestone 26b task
+`m26b-wifi-sdio-notification-dpc-closure`. Milestone 26d supplied the physical
+Wi-Fi investigation context that exposed the defect; it does not authorize a
+second ownership, bootstrap, recovery, or proof lane.
+
+#### Ordered Gate 8 stability contract
+
+Transport and control-plane attachment enter `stabilizing`, not `ready`.
+Each outer supervisor attempt owns one fixed absolute Gate 8 deadline of
+90,000 milliseconds. A retained pair repair inside that attempt preserves the
+original deadline; it cannot manufacture another stabilization window.
+
+One passive, immutable snapshot evaluates and publishes the eight subgates in
+this exact order:
+
+1. `8a-pair-generation` proves one current linked CYW43/SDIO pair epoch.
+2. `8b-control-program` proves the control program for that same pair epoch.
+3. `8c-join-terminal` proves the primary Join reached a successful exact
+   terminal.
+4. `8d-association-link` proves association and link-up.
+5. `8e-bssid-refresh` proves the post-association BSSID owner reached its exact
+   terminal, except on an open network where that refresh is unnecessary.
+6. `8f-eapol-keys` proves the protected network is secure and no host-EAPOL
+   owner remains active or required; an open network passes this step directly.
+7. `8g-post-key-maintenance` proves the current-generation maintenance mask and
+   all logical control owners are clear.
+8. `8h-data-admission` proves the current-generation data handoff and bounded
+   fairness/loss invariants.
+
+Subgates 8a and 8b must belong to one current pair/control epoch. Subgates 8c
+through 8h must all belong to one current logical connection generation. The
+producer evaluates once, formats all eight
+`wifi: gate 8 subgate=<token> status=<pass|pending|fail>
+generation=<n> blocker=<reason>` records from that immutable value, and queues
+them and the immediately following supervisor `status=ready` record in one
+all-or-nothing retained transaction. It revalidates and commits the same
+snapshot before that transaction. A prefix, mixed generation, cross-recovery
+stitch, non-adjacent Ready, or snapshot that changed before commit is not
+Gate 8 proof.
+
+`ready` is revocable. Any later fresh snapshot that is non-stable or has a
+different generation retracts `ready` to `stabilizing`, even when the logical
+generation number did not change. The old snapshot becomes non-authorizing
+immediately, and a complete new 8a-through-8h snapshot is required before
+another `ready`. A subgate `fail` or the absolute deadline requests the sole
+fenced pair restart only after one atomic eight-line failure snapshot plus its
+immediately following `CYW43_GATE8_RECOVERY` boundary is retained, then consumes
+one outer transient failure. That atomic admission reserves one additional
+retained-serial slot for the immediately following supervisor
+`backoff`/`exhausted`/`permanent` terminal, so saturation cannot hide the
+attempt outcome. Retraction also invalidates queued HDMI Ready/prompt bytes and
+schedules a canonical Stabilizing redraw. Recovery remains bounded to five
+outer attempts with 1/2/4/8-second backoffs; attempt 5 exhausts and quarantines
+instead of spinning.
+
+Gate 8h deliberately permits normal bounded root RX, data TX, ARP, runtime
+backlog, and an exact already-assigned current-generation NetData request.
+A baseline-token or generation handoff mismatch is `pending`, not `fail`.
+A lossless full root RX queue is also `pending` with bounded drain priority. It
+fails when an exact-generation root-drop latch or monotonic runtime-overflow
+episode advances beyond the current connection-generation baseline, a prompt
+belongs to a stale generation, or a retained request-less NetData pre-poll
+survives while higher-priority root RX/TX/ARP work exists. Cumulative root-drop
+telemetry saturates instead of wrapping; the exact-generation latch therefore
+remains fail-closed even at counter saturation. Recovery publishes a new
+generation-local baseline without clearing cumulative boot telemetry.
+
+Gate 9 DHCP/address proof and Gate 10 nettest/TCP/authenticated-`cohsh` proof
+must belong to the same logical connection generation as the accepted Gate 8
+snapshot. A recovery or readiness retraction invalidates those downstream
+proofs; a later generation cannot inherit them.
 
 - SDIO is the sole SDHCI owner; CYW43 submits bounded bus-link operations.
 - After engine initialization, the SDIO runtime accepts only the fixed-layout

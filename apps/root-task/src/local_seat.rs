@@ -941,6 +941,15 @@ pub(crate) const fn local_seat_hdmi_keyboard_ready_line_supersedes_busy(
     false
 }
 
+pub(crate) const CYW43_GATE8_READY_HDMI_LINE: &str =
+    "[drivers] WiFi Gate 8 stable; DHCP and TCP continuing";
+
+fn local_seat_cyw43_stale_ready_line(line: &str) -> bool {
+    line.starts_with("[drivers] WiFi Gate 8 stable;")
+        || line == "Cohesix console ready"
+        || line == "cohesix> "
+}
+
 /// Return whether HDMI may publish the final interactive-console banner.
 ///
 /// Serial and buffered USB command handling remain live while deferred Wi-Fi
@@ -3631,8 +3640,63 @@ impl LocalSeatRuntime {
     /// live, and USB bytes already delivered by its linked runtime can still be
     /// consumed by the bootstrap command fence.
     pub fn defer_hdmi_console_ready_until_cyw43_terminal(&mut self) {
+        let stale_ready_visible = self.hdmi_console_ready_line_emitted
+            || self
+                .mirrored_lines
+                .iter()
+                .any(|line| local_seat_cyw43_stale_ready_line(line.as_str()));
         self.hdmi_bootstrap_terminal_ready = false;
         self.hdmi_console_ready_line_emitted = false;
+        if !stale_ready_visible {
+            return;
+        }
+
+        let retained_open_line = if self.hdmi_open_line {
+            self.mirrored_lines.pop_back().and_then(|line| {
+                (self.hdmi_open_line_mirrors_input
+                    && !local_seat_cyw43_stale_ready_line(line.as_str()))
+                .then_some(line)
+            })
+        } else {
+            None
+        };
+        self.hdmi_open_line = false;
+        self.hdmi_open_line_floor_bytes = 0;
+        self.hdmi_open_line_mirrors_input = false;
+        self.mirrored_lines
+            .retain(|line| !local_seat_cyw43_stale_ready_line(line.as_str()));
+        self.mirror_line_current_tcb("[drivers] WiFi stabilizing; readiness retracted");
+        if let Some(open_line) = retained_open_line {
+            let floor = "cohesix> ".len().min(open_line.len());
+            self.mirrored_lines.push_back(open_line);
+            self.hdmi_open_line = true;
+            self.hdmi_open_line_floor_bytes = floor;
+            self.hdmi_open_line_mirrors_input = true;
+        }
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            self.hdmi_prompt_pending_until_keyboard_ready = true;
+            self.hdmi_pending_prompt.clear();
+        }
+        let superseded = self
+            .hdmi_pending_bytes
+            .len()
+            .saturating_add(self.hdmi_redraw_bytes.len());
+        self.hdmi_pending_bytes.clear();
+        self.hdmi_redraw_bytes.clear();
+        self.hdmi_pending_redraw = false;
+        self.hdmi_pending_high_impact = false;
+        self.hdmi_superseded_bytes = self.hdmi_superseded_bytes.saturating_add(superseded as u64);
+        // A full canonical redraw supersedes Ready/prompt bytes that were
+        // queued but not yet issued. If a stale frame is already in flight,
+        // this is the first legal following display transaction and replaces
+        // it with the retracted state.
+        self.request_linked_hdmi_snapshot_redraw();
     }
 
     /// Release the HDMI ready banner and prompt after a terminal Wi-Fi status.
@@ -10394,6 +10458,66 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn cyw43_retraction_supersedes_queued_ready_and_prompt_with_stabilizing_snapshot() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 96,
+            buffer_lines: 16,
+        });
+        let wifi_ready = CYW43_GATE8_READY_HDMI_LINE;
+        runtime.hdmi_bootstrap_terminal_ready = true;
+        runtime.hdmi_console_ready_line_emitted = true;
+        for line in [wifi_ready, "Cohesix console ready", "cohesix> "] {
+            runtime.mirror_line_current_tcb(line);
+            assert!(runtime.queue_linked_hdmi_line(line));
+        }
+        runtime.open_linked_hdmi_prompt_line("cohesix> ");
+        runtime.hdmi_pending_redraw = true;
+        runtime.hdmi_redraw_bytes.extend(b"stale redraw bytes");
+        let queued_stale_bytes = runtime.display_trace().pending_bytes;
+        assert!(queued_stale_bytes != 0);
+        assert!(runtime.display_trace().redraw_bytes != 0);
+
+        runtime.defer_hdmi_console_ready_until_cyw43_terminal();
+
+        let trace = runtime.display_trace();
+        assert_eq!(trace.pending_bytes, 0);
+        assert!(trace.pending_redraw);
+        assert!(trace.superseded_bytes >= queued_stale_bytes as u64);
+        assert!(!runtime.hdmi_bootstrap_terminal_ready());
+        assert!(!runtime.hdmi_console_ready_line_emitted());
+        assert!(!runtime
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| local_seat_cyw43_stale_ready_line(line.as_str())));
+        assert!(runtime
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line == "[drivers] WiFi stabilizing; readiness retracted"));
+
+        let mut snapshot = Vec::new();
+        while let Some((chunk, _, redraw)) = runtime.next_linked_hdmi_payload() {
+            assert!(redraw);
+            snapshot.extend_from_slice(chunk.as_slice());
+        }
+        assert!(snapshot
+            .windows(b"WiFi stabilizing; readiness retracted".len())
+            .any(|window| window == b"WiFi stabilizing; readiness retracted"));
+        for stale in [
+            b"WiFi Gate 8 stable".as_slice(),
+            b"Cohesix console ready".as_slice(),
+            b"cohesix> ".as_slice(),
+        ] {
+            assert!(
+                !snapshot.windows(stale.len()).any(|window| window == stale),
+                "stale readiness bytes survived redraw: {:?}",
+                core::str::from_utf8(stale).unwrap_or("non-utf8"),
+            );
+        }
     }
 
     #[test]

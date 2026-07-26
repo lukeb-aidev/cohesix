@@ -106,9 +106,18 @@ CYW43_BOOTSTRAP_SUPERVISOR_PREFLIGHT_SUFFIX_RE = re.compile(
     r"telemetry_sinks=serial\+queen-log "
     r"prompt_refresh=no$"
 )
+WIFI_GATE8_SUBGATE_RE = re.compile(
+    r"^wifi: gate 8 "
+    r"subgate=(?P<subgate>[a-z0-9-]+) "
+    r"status=(?P<status>pass|pending|fail) "
+    r"pair_epoch=(?P<pair_epoch>[0-9]+) "
+    r"generation=(?P<generation>[0-9]+) "
+    r"blocker=(?P<blocker>[a-z0-9-]+)$"
+)
 CYW43_BOOTSTRAP_RETRY_BACKOFF_MS = (1_000, 2_000, 4_000, 8_000)
 CYW43_BOOTSTRAP_MAX_ATTEMPTS = 5
 U64_MAX = (1 << 64) - 1
+U32_MAX = (1 << 32) - 1
 CYW43_BOOTSTRAP_NO_ATTEMPT_MS = U64_MAX
 CYW43_BOOTSTRAP_SERIAL_RETRY_MS = 250
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
@@ -555,6 +564,23 @@ class WifiGate7Proof:
 
 
 @dataclass(frozen=True)
+class WifiGate8Proof:
+    """Ordered pair-epoch and connection-generation Gate 8 proof."""
+
+    complete: bool = False
+    seen: str = "none"
+    last: str = "none"
+    missing: str = "8a-pair-generation"
+    status: str = "none"
+    pair_epoch: int = 0
+    generation: int = 0
+    blocker: str = "none"
+    line: int = 0
+    attempt: int = 0
+    ready_line: int = 0
+
+
+@dataclass(frozen=True)
 class WifiDpcProof:
     """Latest exact CYW43/SDIO DPC proof plus fail-closed verdict."""
 
@@ -604,6 +630,15 @@ class GateSummary:
     wifi_gate7_seen: str = "none"
     wifi_gate7_last: str = "none"
     wifi_gate7_missing: str = "7a"
+    wifi_gate8_complete: bool = False
+    wifi_gate8_seen: str = "none"
+    wifi_gate8_last: str = "none"
+    wifi_gate8_missing: str = "8a-pair-generation"
+    wifi_gate8_status: str = "none"
+    wifi_gate8_pair_epoch: int = 0
+    wifi_gate8_generation: int = 0
+    wifi_gate8_blocker: str = "none"
+    wifi_gate8_line: int = 0
     usb_oldgood_replay: bool = False
     usb_oldgood_last: str = "none"
     usb_oldgood_missing: str = "not-run"
@@ -842,6 +877,15 @@ class GateSummary:
             "WIFI_GATE7_SEEN": self.wifi_gate7_seen,
             "WIFI_GATE7_LAST": self.wifi_gate7_last,
             "WIFI_GATE7_MISSING": self.wifi_gate7_missing,
+            "WIFI_GATE8_COMPLETE": "yes" if self.wifi_gate8_complete else "no",
+            "WIFI_GATE8_SEEN": self.wifi_gate8_seen,
+            "WIFI_GATE8_LAST": self.wifi_gate8_last,
+            "WIFI_GATE8_MISSING": self.wifi_gate8_missing,
+            "WIFI_GATE8_STATUS": self.wifi_gate8_status,
+            "WIFI_GATE8_PAIR_EPOCH": self.wifi_gate8_pair_epoch,
+            "WIFI_GATE8_GENERATION": self.wifi_gate8_generation,
+            "WIFI_GATE8_BLOCKER": self.wifi_gate8_blocker,
+            "WIFI_GATE8_LINE": self.wifi_gate8_line,
             "USB_OLDGOOD_REPLAY": "yes" if self.usb_oldgood_replay else "no",
             "USB_OLDGOOD_LAST": self.usb_oldgood_last,
             "USB_OLDGOOD_MISSING": self.usb_oldgood_missing,
@@ -2545,6 +2589,16 @@ WIFI_GATE7_SUBGATE_NAMES = {
     "7d": "eapol-handshake",
     "7e": "secure-release",
 }
+WIFI_GATE8_SUBGATES = (
+    "8a-pair-generation",
+    "8b-control-program",
+    "8c-join-terminal",
+    "8d-association-link",
+    "8e-bssid-refresh",
+    "8f-eapol-keys",
+    "8g-post-key-maintenance",
+    "8h-data-admission",
+)
 
 
 def cyw43_host_eapol_rx_blocker_name(value: str) -> bool:
@@ -2755,6 +2809,576 @@ def summarize_wifi_gate7_subgate(
 
     detail = summarize_wifi_gate7_subgate_detail(events, wifi_gate, wifi_blocker)
     return detail.subgate, detail.name
+
+
+def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
+    """Validate one atomic Gate-8 snapshot-to-Ready publication transaction."""
+
+    event_list = list(events)
+    if not any(
+        event.raw.lower().startswith("wifi: gate 8 subgate=")
+        or event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR")
+        or event.raw.startswith(
+            (
+                "CYW43_GATE8_RECOVERY",
+                "CYW43_GATE8_READY_RETRACTED",
+                "CYW43_GATE8_READY_TRANSACTION",
+                "CYW43_GATE8_SNAPSHOT_COMMIT",
+            )
+        )
+        for event in event_list
+    ):
+        return WifiGate8Proof()
+
+    proof_stream: list[list[TraceEvent] | TraceEvent] = []
+    current: list[TraceEvent] = []
+    for event in event_list:
+        gate8_authority_boundary = event.raw.startswith(
+            (
+                "CYW43_GATE8_RECOVERY",
+                "CYW43_GATE8_READY_RETRACTED",
+                "CYW43_GATE8_READY_TRANSACTION",
+                "CYW43_GATE8_SNAPSHOT_COMMIT",
+            )
+        )
+        if event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR") or gate8_authority_boundary:
+            if current:
+                proof_stream.append(current)
+                current = []
+            proof_stream.append(event)
+            continue
+        if not event.raw.lower().startswith("wifi: gate 8 subgate="):
+            continue
+        match = WIFI_GATE8_SUBGATE_RE.fullmatch(event.raw.lower())
+        starts_snapshot = (
+            match is not None
+            and match.group("subgate") == WIFI_GATE8_SUBGATES[0]
+        )
+        if starts_snapshot and current:
+            proof_stream.append(current)
+            current = []
+        current.append(event)
+        if len(current) == len(WIFI_GATE8_SUBGATES):
+            proof_stream.append(current)
+            current = []
+    if current:
+        proof_stream.append(current)
+
+    def summarize_snapshot(snapshot: list[TraceEvent]) -> WifiGate8Proof:
+        """Validate one physically contiguous eight-record snapshot."""
+
+        passed_count = 0
+        frontier_status = "none"
+        frontier_blocker = "none"
+        frontier_line = snapshot[-1].line
+        pair_epoch: int | None = None
+        generation: int | None = None
+        invalid_reason: str | None = None
+        invalid_line = snapshot[-1].line
+
+        for previous, current_event in zip(snapshot, snapshot[1:]):
+            if current_event.line != previous.line + 1:
+                invalid_reason = "snapshot-not-atomic"
+                invalid_line = current_event.line
+                break
+
+        for index, event in enumerate(snapshot):
+            if invalid_reason is not None:
+                break
+            match = WIFI_GATE8_SUBGATE_RE.fullmatch(event.raw.lower())
+            if match is None:
+                invalid_reason = invalid_reason or "malformed-line"
+                invalid_line = event.line
+                break
+            expected_subgate = WIFI_GATE8_SUBGATES[index]
+            if match.group("subgate") != expected_subgate:
+                invalid_reason = invalid_reason or "subgate-order-gap"
+                invalid_line = event.line
+                break
+
+            pair_epoch_text = match.group("pair_epoch")
+            observed_pair_epoch = int(pair_epoch_text)
+            if observed_pair_epoch > U64_MAX or (
+                len(pair_epoch_text) > 1 and pair_epoch_text.startswith("0")
+            ):
+                invalid_reason = invalid_reason or "pair-epoch-invalid"
+                invalid_line = event.line
+                break
+            if pair_epoch is None:
+                pair_epoch = observed_pair_epoch
+            elif observed_pair_epoch != pair_epoch:
+                invalid_reason = invalid_reason or "pair-epoch-mismatch"
+                invalid_line = event.line
+                break
+
+            generation_text = match.group("generation")
+            observed_generation = int(generation_text)
+            if observed_generation > U32_MAX or (
+                len(generation_text) > 1 and generation_text.startswith("0")
+            ):
+                invalid_reason = invalid_reason or "generation-invalid"
+                invalid_line = event.line
+                break
+            if generation is None:
+                generation = observed_generation
+            elif observed_generation != generation:
+                invalid_reason = invalid_reason or "generation-mismatch"
+                invalid_line = event.line
+                break
+
+            observed_status = match.group("status")
+            observed_blocker = match.group("blocker")
+            if frontier_status == "none":
+                if observed_status == "pass":
+                    if observed_blocker != "none":
+                        invalid_reason = invalid_reason or "pass-has-blocker"
+                        invalid_line = event.line
+                        break
+                    passed_count += 1
+                    continue
+                if observed_blocker == "none":
+                    invalid_reason = (
+                        invalid_reason or f"{observed_status}-missing-blocker"
+                    )
+                    invalid_line = event.line
+                    break
+                frontier_status = observed_status
+                frontier_blocker = observed_blocker
+                frontier_line = event.line
+                continue
+
+            expected_dependency = WIFI_GATE8_SUBGATES[index - 1]
+            if (
+                observed_status != "pending"
+                or observed_blocker != expected_dependency
+            ):
+                invalid_reason = invalid_reason or "dependency-tail-invalid"
+                invalid_line = event.line
+                break
+        if (
+            invalid_reason is None
+            and len(snapshot) != len(WIFI_GATE8_SUBGATES)
+        ):
+            invalid_reason = "telemetry-truncated"
+
+        if generation is None:
+            generation = 0
+        if pair_epoch is None:
+            pair_epoch = 0
+        seen_tokens = WIFI_GATE8_SUBGATES[:passed_count]
+        seen = ">".join(seen_tokens) if seen_tokens else "none"
+        last = seen_tokens[-1] if seen_tokens else "none"
+        complete = (
+            invalid_reason is None
+            and passed_count == len(WIFI_GATE8_SUBGATES)
+            and frontier_status == "none"
+        )
+        if complete:
+            return WifiGate8Proof(
+                complete=True,
+                seen=seen,
+                last=last,
+                missing="none",
+                status="pass",
+                pair_epoch=pair_epoch,
+                generation=generation,
+                blocker="none",
+                line=snapshot[-1].line,
+            )
+
+        missing = (
+            WIFI_GATE8_SUBGATES[passed_count]
+            if passed_count < len(WIFI_GATE8_SUBGATES)
+            else "invalid"
+        )
+        return WifiGate8Proof(
+            complete=False,
+            seen=seen,
+            last=last,
+            missing=missing,
+            status="fail" if invalid_reason is not None else frontier_status,
+            pair_epoch=pair_epoch,
+            generation=generation,
+            blocker=invalid_reason or frontier_blocker,
+            line=invalid_line if invalid_reason is not None else frontier_line,
+        )
+
+    def snapshot_generation(snapshot: list[TraceEvent]) -> int | None:
+        """Return the canonical generation named by a snapshot's 8a record."""
+
+        match = WIFI_GATE8_SUBGATE_RE.fullmatch(snapshot[0].raw.lower())
+        if match is None or match.group("subgate") != WIFI_GATE8_SUBGATES[0]:
+            return None
+        generation_text = match.group("generation")
+        generation = int(generation_text)
+        if generation > U32_MAX or (
+            len(generation_text) > 1 and generation_text.startswith("0")
+        ):
+            return None
+        return generation
+
+    def snapshot_pair_epoch(snapshot: list[TraceEvent]) -> int | None:
+        """Return the canonical linked-pair epoch named by an 8a record."""
+
+        match = WIFI_GATE8_SUBGATE_RE.fullmatch(snapshot[0].raw.lower())
+        if match is None or match.group("subgate") != WIFI_GATE8_SUBGATES[0]:
+            return None
+        pair_epoch_text = match.group("pair_epoch")
+        pair_epoch = int(pair_epoch_text)
+        if pair_epoch > U64_MAX or (
+            len(pair_epoch_text) > 1 and pair_epoch_text.startswith("0")
+        ):
+            return None
+        return pair_epoch
+
+    def generation_advances(previous: int, current_generation: int) -> bool:
+        """Use u32 serial arithmetic so max-to-zero is a forward generation."""
+
+        delta = (current_generation - previous) & U32_MAX
+        return 0 < delta < (1 << 31)
+
+    def pair_epoch_advances(previous: int, current_pair_epoch: int) -> bool:
+        """Use u64 serial arithmetic for one ordered linked-pair scrub."""
+
+        delta = (current_pair_epoch - previous) & U64_MAX
+        return 0 < delta < (1 << 63)
+
+    latest = WifiGate8Proof()
+    accepted: WifiGate8Proof | None = None
+    candidate: WifiGate8Proof | None = None
+    candidate_first_line = 0
+    current_attempt = 0
+    episode_started = False
+    stabilizing_line = 0
+    last_pair_epoch: int | None = None
+    recovery_pair_epoch: int | None = None
+    last_generation: int | None = None
+    recovery_generation: int | None = None
+
+    def empty_frontier(
+        *,
+        status: str,
+        blocker: str,
+        line: int,
+    ) -> WifiGate8Proof:
+        """Return an invalidated transaction while retaining its epoch identity."""
+
+        return WifiGate8Proof(
+            complete=False,
+            missing=WIFI_GATE8_SUBGATES[0],
+            status=status,
+            pair_epoch=last_pair_epoch or 0,
+            generation=last_generation or 0,
+            blocker=blocker,
+            line=line,
+            attempt=current_attempt,
+        )
+
+    for item in proof_stream:
+        if isinstance(item, TraceEvent):
+            if not item.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR"):
+                if item.raw.startswith("CYW43_GATE8_RECOVERY"):
+                    recovery_pair_epoch = last_pair_epoch
+                    recovery_generation = (
+                        parse_hex_int(item.fields.get("generation"))
+                        if item.fields.get("generation") is not None
+                        else last_generation
+                    )
+                    accepted = None
+                    candidate = None
+                    candidate_first_line = 0
+                    episode_started = False
+                    stabilizing_line = 0
+                    latest = empty_frontier(
+                        status="fail",
+                        blocker="gate8-recovery",
+                        line=item.line,
+                    )
+                    continue
+
+                if item.raw.startswith("CYW43_GATE8_READY_RETRACTED"):
+                    # Stabilizing is emitted before this marker. Retraction
+                    # revokes the old publication while preserving that fresh
+                    # same-attempt stabilization lane for a new snapshot.
+                    accepted = None
+                    candidate = None
+                    candidate_first_line = 0
+                    recovery_pair_epoch = None
+                    recovery_generation = None
+                    latest = empty_frontier(
+                        status="pending",
+                        blocker="gate8-ready-retracted",
+                        line=item.line,
+                    )
+                    continue
+
+                transaction_status = item.fields.get("status", "").lower()
+                transaction_failed = (
+                    item.raw.startswith("CYW43_GATE8_SNAPSHOT_COMMIT")
+                    or transaction_status not in {"committed", "ok", "ready"}
+                )
+                if transaction_failed:
+                    accepted = None
+                    candidate = None
+                    candidate_first_line = 0
+                    latest = empty_frontier(
+                        status="fail",
+                        blocker="gate8-publication-rejected",
+                        line=item.line,
+                    )
+                continue
+
+            match = CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE.fullmatch(item.raw)
+            if match is None:
+                if not episode_started and latest.status == "none":
+                    continue
+                accepted = None
+                candidate = None
+                stabilizing_line = 0
+                latest = empty_frontier(
+                    status="fail",
+                    blocker="supervisor-malformed",
+                    line=item.line,
+                )
+                continue
+
+            status = match.group("status")
+            attempt = parse_hex_int(match.group("attempt")) or 0
+            if status == "preflight":
+                continue
+
+            if status == "begin":
+                # A new boot attempt may legitimately restart both epochs.
+                accepted = None
+                candidate = None
+                candidate_first_line = 0
+                current_attempt = attempt
+                episode_started = attempt > 0
+                stabilizing_line = 0
+                last_pair_epoch = None
+                recovery_pair_epoch = None
+                last_generation = None
+                recovery_generation = None
+                latest = empty_frontier(
+                    status="pending",
+                    blocker="supervisor-begin",
+                    line=item.line,
+                )
+                continue
+
+            if status == "recovery":
+                # Recovery is a new transaction start, but unlike a new boot it
+                # poisons the previously observed epochs.
+                recovery_pair_epoch = last_pair_epoch
+                recovery_generation = last_generation
+                accepted = None
+                candidate = None
+                candidate_first_line = 0
+                current_attempt = attempt
+                episode_started = attempt > 0
+                stabilizing_line = 0
+                latest = empty_frontier(
+                    status="pending",
+                    blocker="supervisor-recovery",
+                    line=item.line,
+                )
+                continue
+
+            if status == "stabilizing":
+                sequence_valid = episode_started and attempt == current_attempt
+                accepted = None
+                candidate = None
+                candidate_first_line = 0
+                if sequence_valid:
+                    stabilizing_line = item.line
+                    latest = empty_frontier(
+                        status="pending",
+                        blocker="supervisor-stabilizing",
+                        line=item.line,
+                    )
+                else:
+                    stabilizing_line = 0
+                    latest = empty_frontier(
+                        status="fail",
+                        blocker="supervisor-stabilizing-order",
+                        line=item.line,
+                    )
+                continue
+
+            if status == "ready":
+                blocker = "none"
+                if (
+                    not episode_started
+                    or attempt != current_attempt
+                    or stabilizing_line == 0
+                ):
+                    blocker = "supervisor-stabilizing-missing"
+                elif candidate is None:
+                    blocker = (
+                        latest.blocker
+                        if latest.status == "fail"
+                        and latest.blocker
+                        not in {
+                            "none",
+                            "supervisor-begin",
+                            "supervisor-stabilizing",
+                        }
+                        else "gate8-subgates-incomplete"
+                    )
+                elif candidate_first_line <= stabilizing_line:
+                    blocker = "gate8-snapshot-before-stabilizing"
+                elif candidate.line + 1 != item.line:
+                    blocker = "gate8-ready-not-adjacent"
+
+                if blocker != "none":
+                    accepted = None
+                    basis = candidate or latest
+                    latest = replace(
+                        basis,
+                        complete=False,
+                        missing=(
+                            "ready"
+                            if candidate is not None
+                            else WIFI_GATE8_SUBGATES[0]
+                        ),
+                        status="fail",
+                        blocker=blocker,
+                        line=item.line,
+                        attempt=attempt,
+                        ready_line=0,
+                    )
+                else:
+                    accepted = replace(
+                        candidate,
+                        complete=True,
+                        missing="none",
+                        status="pass",
+                        blocker="none",
+                        attempt=attempt,
+                        ready_line=item.line,
+                    )
+                    latest = accepted
+                candidate = None
+                candidate_first_line = 0
+                stabilizing_line = 0
+                continue
+
+            accepted = None
+            candidate = None
+            candidate_first_line = 0
+            stabilizing_line = 0
+            terminal = status in {"exhausted", "permanent"} or status.startswith(
+                "permanent-"
+            )
+            latest = empty_frontier(
+                status="fail" if terminal else "pending",
+                blocker=f"supervisor-{status}",
+                line=item.line,
+            )
+            continue
+
+        snapshot = item
+        proof = summarize_snapshot(snapshot)
+        pair_epoch = snapshot_pair_epoch(snapshot)
+        generation = snapshot_generation(snapshot)
+        if pair_epoch is not None:
+            if recovery_pair_epoch is not None and not pair_epoch_advances(
+                recovery_pair_epoch, pair_epoch
+            ):
+                proof = WifiGate8Proof(
+                    complete=False,
+                    missing=WIFI_GATE8_SUBGATES[0],
+                    status="fail",
+                    pair_epoch=pair_epoch,
+                    generation=proof.generation,
+                    blocker="pair-epoch-not-advanced-after-recovery",
+                    line=snapshot[-1].line,
+                    attempt=current_attempt,
+                )
+            elif (
+                last_pair_epoch is not None
+                and pair_epoch != last_pair_epoch
+                and not pair_epoch_advances(last_pair_epoch, pair_epoch)
+            ):
+                proof = WifiGate8Proof(
+                    complete=False,
+                    missing=WIFI_GATE8_SUBGATES[0],
+                    status="fail",
+                    pair_epoch=pair_epoch,
+                    generation=proof.generation,
+                    blocker="pair-epoch-regression",
+                    line=snapshot[-1].line,
+                    attempt=current_attempt,
+                )
+            else:
+                last_pair_epoch = pair_epoch
+                if recovery_pair_epoch is not None:
+                    recovery_pair_epoch = None
+        if generation is not None:
+            if recovery_generation is not None and not generation_advances(
+                recovery_generation, generation
+            ):
+                proof = WifiGate8Proof(
+                    complete=False,
+                    missing=WIFI_GATE8_SUBGATES[0],
+                    status="fail",
+                    pair_epoch=proof.pair_epoch,
+                    generation=generation,
+                    blocker="generation-not-advanced-after-recovery",
+                    line=snapshot[-1].line,
+                    attempt=current_attempt,
+                )
+            elif (
+                last_generation is not None
+                and generation != last_generation
+                and not generation_advances(last_generation, generation)
+            ):
+                proof = WifiGate8Proof(
+                    complete=False,
+                    missing=WIFI_GATE8_SUBGATES[0],
+                    status="fail",
+                    pair_epoch=proof.pair_epoch,
+                    generation=generation,
+                    blocker="generation-regression",
+                    line=snapshot[-1].line,
+                    attempt=current_attempt,
+                )
+            else:
+                last_generation = generation
+                if recovery_generation is not None:
+                    recovery_generation = None
+
+        if accepted is not None and stabilizing_line == 0:
+            # Passive `wifi diag` snapshots cannot replace or revoke the exact
+            # publication transaction. Only explicit lifecycle boundaries do.
+            continue
+
+        if stabilizing_line != 0 and proof.complete:
+            candidate = replace(proof, attempt=current_attempt)
+            candidate_first_line = snapshot[0].line
+            latest = replace(
+                candidate,
+                complete=False,
+                missing="ready",
+                status="pending",
+                blocker="gate8-ready-missing",
+            )
+        else:
+            candidate = None
+            candidate_first_line = 0
+            if proof.complete:
+                latest = replace(
+                    proof,
+                    complete=False,
+                    missing="ready",
+                    status="pending",
+                    blocker="gate8-ready-transaction-missing",
+                    attempt=current_attempt,
+                )
+            else:
+                latest = replace(proof, attempt=current_attempt)
+
+    return accepted or latest
 
 
 def cyw43_field_yes(fields: dict[str, str], key: str) -> bool:
@@ -5658,6 +6282,16 @@ def wifi_nettest_ok_terminal_success(event: TraceEvent) -> bool:
     )
 
 
+def wifi_netselftest_terminal_success(event: TraceEvent) -> bool:
+    """Return true only for an explicitly terminal successful self-test result."""
+
+    return (
+        event.domain == "wifi"
+        and "[net-selftest] result" in event.raw.lower()
+        and field_lower(event, "result") in {"pass", "peer-assisted-pass"}
+    )
+
+
 def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     """Summarize the WiFi CYW43455 proof gate from HT through nettest."""
 
@@ -5780,7 +6414,6 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     control_plane_idle_poll_count = 0
     dhcp_started_seen = False
     nettest_success_seen = False
-    remote_cohsh_auth_seen = False
     netstats_status_wifi_bound_seen = False
     netstats_wifi_secure_seen = False
     netstats_txrx_seen = False
@@ -5836,14 +6469,6 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             host_eapol_terminal_blocker = None
             if blocker == recovered_blocker:
                 blocker = "none"
-        if (
-            "[cohsh-net][auth] auth ok" in raw
-            or "[net-console] auth ok" in raw
-            or "conn " in raw
-            and " authenticated" in raw
-            and "[net-console]" in raw
-        ):
-            remote_cohsh_auth_seen = True
         for key in (
             "reason",
             "detail",
@@ -6611,18 +7236,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             udp_ok = fields.get("udp_echo_ok")
             tcp_ok = fields.get("tcp_ok")
             console_ok = fields.get("console_ok")
-            peer_assisted_ok = fields.get("peer_assisted_ok")
-            nettest_result = field_lower(event, "result")
-            if {tx_ok, udp_ok, tcp_ok, console_ok} <= {"true", "1"}:
+            if wifi_netselftest_terminal_success(event) and {
+                tx_ok,
+                udp_ok,
+                tcp_ok,
+                console_ok,
+            } <= {"true", "1"}:
                 nettest_success_seen = True
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
                 blocker = "netstats-missing"
-            elif nettest_result in {"pass", "peer-assisted-pass"} or (
-                peer_assisted_ok in {"true", "1"}
-            ) or (
-                tx_ok in {"true", "1"} and remote_cohsh_auth_seen
-            ):
+            elif wifi_netselftest_terminal_success(event):
                 nettest_success_seen = True
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
@@ -9202,6 +9826,67 @@ def summarize_driver_task_counters(
     )
 
 
+def trace_event_generations(event: TraceEvent) -> tuple[set[int], bool]:
+    """Return canonical generation fields and whether any field was malformed."""
+
+    generations: set[int] = set()
+    for key in ("generation", "wifi_generation"):
+        value = event.fields.get(key)
+        if value is None:
+            continue
+        if not value.isdigit() or (len(value) > 1 and value.startswith("0")):
+            return generations, True
+        parsed = int(value)
+        if parsed > U32_MAX:
+            return generations, True
+        generations.add(parsed)
+    return generations, False
+
+
+def wifi_generation_scoped_events(
+    events: Iterable[TraceEvent],
+    generation: int,
+    ready_line: int,
+) -> list[TraceEvent]:
+    """Keep only post-Ready evidence bound to one accepted WiFi generation."""
+
+    event_list = [event for event in events if event.line > ready_line]
+    accepted_indexes: set[int] = set()
+
+    index = 0
+    while index < len(event_list):
+        event = event_list[index]
+        if not event.raw.lower().startswith("netstats:"):
+            generations, malformed = trace_event_generations(event)
+            if not malformed and generations == {generation}:
+                accepted_indexes.add(index)
+            index += 1
+            continue
+
+        block_start = index
+        block_generations: set[int] = set()
+        malformed = False
+        previous_line = event.line - 1
+        while (
+            index < len(event_list)
+            and event_list[index].raw.lower().startswith("netstats:")
+            and event_list[index].line == previous_line + 1
+        ):
+            generations, event_malformed = trace_event_generations(event_list[index])
+            block_generations.update(generations)
+            malformed = malformed or event_malformed
+            previous_line = event_list[index].line
+            index += 1
+        if not malformed and block_generations == {generation}:
+            accepted_indexes.update(range(block_start, index))
+
+    return [
+        event
+        for index, event in enumerate(event_list)
+        if index in accepted_indexes
+    ]
+
+
 def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bool, bool]:
     """Return the latest compact netstats/netstatus state."""
 
@@ -9223,10 +9908,7 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
             host_tcp_proof = False
             tcp_ready = False
             nettest_proof = False
-        if raw_has(event, "[net-selftest] result", "tx_ok=true", "console_ok=true") or (
-            "[net-selftest] result" in raw
-            and field_lower(event, "result") in {"pass", "peer-assisted-pass"}
-        ):
+        if wifi_netselftest_terminal_success(event):
             nettest_proof = True
         if raw.startswith("[dhcp]") or "[dhcp]" in raw:
             interface = event.fields.get("interface")
@@ -11473,10 +12155,9 @@ def wifi_dhcp_bound_step(event: TraceEvent) -> bool:
 def wifi_nettest_step(event: TraceEvent) -> bool:
     """Return true for successful WiFi nettest evidence."""
 
-    raw = event.raw.lower()
     return event.domain == "wifi" and (
         wifi_nettest_ok_terminal_success(event)
-        or raw_has(event, "[net-selftest] result", "tx_ok=true", "console_ok=true")
+        or wifi_netselftest_terminal_success(event)
     )
 
 
@@ -11928,13 +12609,21 @@ def wifi_dpc_failure_reason(proof: WifiDpcProof) -> str | None:
     return None
 
 
-def summarize_wifi_dpc_proof(events: Iterable[TraceEvent]) -> WifiDpcProof:
+def summarize_wifi_dpc_proof(
+    events: Iterable[TraceEvent],
+    expected_generation: int | None = None,
+) -> WifiDpcProof:
     """Summarize the latest exact CYW43/SDIO DPC generation and attempt."""
 
     latest: WifiDpcProof | None = None
+    latest_mismatch: WifiDpcProof | None = None
     first_failure: str | None = None
     current_generation: int | None = None
-    attempt_events = current_cyw43_supervisor_attempt_events(events)
+    attempt_events = (
+        list(events)
+        if expected_generation is not None
+        else current_cyw43_supervisor_attempt_events(events)
+    )
     for event in attempt_events:
         match = CYW43_SDIO_DPC_RE.fullmatch(event.raw)
         if match is None:
@@ -11953,6 +12642,16 @@ def summarize_wifi_dpc_proof(events: Iterable[TraceEvent]) -> WifiDpcProof:
                 "ack_failures",
             )
         }
+        if (
+            expected_generation is not None
+            and values["generation"] != expected_generation
+        ):
+            latest_mismatch = WifiDpcProof(
+                generation=values["generation"],
+                reason="generation-mismatch",
+                line=event.line,
+            )
+            continue
         if values["generation"] != current_generation:
             current_generation = values["generation"]
             first_failure = None
@@ -11974,7 +12673,7 @@ def summarize_wifi_dpc_proof(events: Iterable[TraceEvent]) -> WifiDpcProof:
         if failure is not None and first_failure is None:
             first_failure = failure
     if latest is None:
-        return WifiDpcProof()
+        return latest_mismatch or WifiDpcProof()
     if first_failure is not None:
         return replace(latest, proof=False, reason=first_failure)
     return replace(latest, proof=True, reason="none")
@@ -12130,16 +12829,18 @@ def summarize_cyw43_bootstrap_supervisor(
                 if next_attempt_ms < scheduled_ms:
                     mark_blocker("malformed-backoff-progression")
                     sequence_valid = False
-            elif state == "ready":
-                # A ready network generation may fail before it reaches the
-                # supervisor's stability boundary. Production then emits a
-                # same-attempt recovery edge; attempt one is also the canonical
-                # start of a later independent attached-recovery episode after
-                # a previously stable run. Both are legal retained state
-                # transitions, not evidence of a skipped retry.
+            elif state in {"stabilizing", "ready"}:
+                # An attached network generation may fail while stabilizing or
+                # after it reaches the Gate-8 stability boundary. Production
+                # then emits a same-attempt recovery edge; attempt one is also
+                # the canonical start of a later independent recovery episode
+                # after a previously stable run.
                 if (
                     status != "recovery"
-                    or (attempt != current_attempt and attempt != 1)
+                    or (
+                        attempt != current_attempt
+                        and not (state == "ready" and attempt == 1)
+                    )
                 ):
                     mark_blocker("invalid-status-sequence")
                     sequence_valid = False
@@ -12176,10 +12877,29 @@ def summarize_cyw43_bootstrap_supervisor(
                 scheduled_ms = next_attempt_ms
             continue
 
-        if status == "ready":
-            sequence_valid = state == "active" and attempt == current_attempt
+        if status == "stabilizing":
+            # Ready is a revocable same-generation stability observation, not
+            # an ownership release. Loss of a logical carrier may retract the
+            # same attempt to Stabilizing without entering pair recovery.
+            sequence_valid = (
+                state in {"active", "ready"} and attempt == current_attempt
+            )
             if not sequence_valid:
-                if state == "active" and attempt < current_attempt:
+                if state in {"active", "ready"} and attempt < current_attempt:
+                    mark_blocker("attempt-regression")
+                else:
+                    mark_blocker("invalid-status-sequence")
+            if backoff_ms != 0 or next_attempt_ms < begin_ms:
+                mark_blocker("malformed-backoff-progression")
+                sequence_valid = False
+            if sequence_valid:
+                state = "stabilizing"
+            continue
+
+        if status == "ready":
+            sequence_valid = state == "stabilizing" and attempt == current_attempt
+            if not sequence_valid:
+                if attempt < current_attempt:
                     mark_blocker("attempt-regression")
                 else:
                     mark_blocker("invalid-status-sequence")
@@ -12225,6 +12945,8 @@ def summarize_cyw43_bootstrap_supervisor(
     if blocker is None:
         if state == "active":
             blocker = "begin-not-terminal"
+        elif state == "stabilizing":
+            blocker = "stabilizing-not-terminal"
         elif state == "backoff":
             blocker = "scheduled-not-terminal"
         elif state == "none" and preflight_seen and not preflight_serial_ready:
@@ -12247,8 +12969,64 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
     event_list = list(events)
-    wifi_dpc = summarize_wifi_dpc_proof(event_list)
+    wifi_gate8 = summarize_wifi_gate8_proof(event_list)
     cyw43_bootstrap_supervisor = summarize_cyw43_bootstrap_supervisor(event_list)
+    gate8_protocol_seen = any(
+        event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR")
+        or event.raw.lower().startswith("wifi: gate 8 subgate=")
+        or event.raw.startswith(
+            (
+                "CYW43_GATE8_RECOVERY",
+                "CYW43_GATE8_READY_RETRACTED",
+                "CYW43_GATE8_READY_TRANSACTION",
+                "CYW43_GATE8_SNAPSHOT_COMMIT",
+            )
+        )
+        for event in event_list
+    )
+    if (
+        wifi_gate8.complete
+        and not cyw43_bootstrap_supervisor.ready
+        and cyw43_bootstrap_supervisor.seen
+    ):
+        wifi_gate8 = replace(
+            wifi_gate8,
+            complete=False,
+            missing="ready",
+            status="fail",
+            blocker=(
+                "supervisor-"
+                f"{cyw43_bootstrap_supervisor.blocker}"
+            ),
+            ready_line=0,
+        )
+    if cyw43_bootstrap_supervisor.ready and not wifi_gate8.complete:
+        cyw43_bootstrap_supervisor = replace(
+            cyw43_bootstrap_supervisor,
+            ready=False,
+            blocker="gate8-subgates-incomplete",
+        )
+    if wifi_gate8.complete:
+        post_ready_event_list = [
+            event
+            for event in event_list
+            if event.line > wifi_gate8.ready_line
+        ]
+        acceptance_event_list = wifi_generation_scoped_events(
+            post_ready_event_list,
+            wifi_gate8.generation,
+            wifi_gate8.ready_line,
+        )
+        wifi_dpc = summarize_wifi_dpc_proof(
+            post_ready_event_list,
+            expected_generation=wifi_gate8.generation,
+        )
+    elif gate8_protocol_seen:
+        acceptance_event_list = []
+        wifi_dpc = WifiDpcProof(reason="gate8-ready-missing")
+    else:
+        acceptance_event_list = event_list
+        wifi_dpc = summarize_wifi_dpc_proof(event_list)
     usb_gate, usb_blocker = summarize_usb_gate(event_list)
     usb_oldgood = summarize_usb_oldgood_replay(event_list)
     usb_event_ring_alive, usb_psc_drain_count, usb_psc_drain_mask = (
@@ -12401,10 +13179,14 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         any(root_console_ready_evidence(event) for event in event_list) or root_prompt_seen
     )
     net_active, net_addr_src, net_dhcp, net_tcp_ready, nettest_proof = (
-        summarize_net_state(event_list)
+        summarize_net_state(acceptance_event_list)
     )
+    if gate8_protocol_seen and net_active == "unknown":
+        # Selection is descriptive, not acceptance proof. Retain the observed
+        # WiFi lane while keeping DHCP/TCP/nettest generation-scoped.
+        net_active = summarize_net_state(event_list)[0]
     cohsh_tcp_auth_proof, tcp_accepts, tcp_auth_sessions, tcp_rx_bytes = (
-        summarize_cohsh_tcp_auth(event_list)
+        summarize_cohsh_tcp_auth(acceptance_event_list)
     )
     (
         wifi_data_path_tx,
@@ -12924,6 +13706,49 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_gate = 7
         wifi_blocker = "control-plane-reply-idle-loop"
         wifi_exact, wifi_phase, wifi_blocker_line = terminal_control_timeout
+    if wifi_gate8.status != "none":
+        if wifi_gate8.complete:
+            if 7 <= wifi_gate <= 8:
+                wifi_gate = 8
+                wifi_blocker = "none"
+                wifi_exact = "none"
+                wifi_phase = "none"
+                wifi_blocker_line = 0
+        else:
+            # A current Gate-8 frontier supersedes stale later-gate inference.
+            # Only the ordered 8a..8h pass set can advance the proof to Gate 8.
+            wifi_gate = 7
+            wifi_blocker = (
+                wifi_gate8.blocker
+                if wifi_gate8.blocker != "none"
+                else f"{wifi_gate8.missing}-missing"
+            )
+            wifi_exact = wifi_blocker
+            wifi_phase = "gate8-stabilizing"
+            wifi_blocker_line = wifi_gate8.line
+    if wifi_gate8.complete and wifi_gate >= 9:
+        post_ready_wifi_gate, post_ready_wifi_blocker = summarize_wifi_gate(
+            acceptance_event_list
+        )
+        if net_dhcp != "bound" or net_addr_src != "dhcp-lease":
+            wifi_gate = 8
+            wifi_blocker = "dhcp-generation-proof-missing"
+            wifi_exact = wifi_blocker
+            wifi_phase = "dhcp"
+        elif wifi_gate >= 10 and not nettest_proof:
+            wifi_gate = 9
+            wifi_blocker = "nettest-generation-proof-missing"
+            wifi_exact = wifi_blocker
+            wifi_phase = "nettest"
+        elif wifi_gate >= 10 and post_ready_wifi_gate < 10:
+            wifi_gate = 9
+            wifi_blocker = (
+                post_ready_wifi_blocker
+                if post_ready_wifi_blocker not in {"none", "unknown"}
+                else "netstats-generation-proof-missing"
+            )
+            wifi_exact = wifi_blocker
+            wifi_phase = "netstats"
     if wifi_gate >= 10 and not cohsh_tcp_auth_proof:
         wifi_gate = 9
         wifi_blocker = "tcp-auth-proof-missing"
@@ -12939,6 +13764,12 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_blocker = "wifi-dpc-proof-missing"
         wifi_exact = wifi_blocker
         wifi_phase = "cyw43-dpc"
+    if gate8_protocol_seen and wifi_oldgood.replay and wifi_gate < 10:
+        wifi_oldgood = SequenceResult(
+            replay=False,
+            last=wifi_oldgood.last,
+            missing=wifi_blocker,
+        )
     if driver_task_active_net == "genet" or net_active == "wired":
         wifi_gate = 0
         wifi_blocker = "not-selected"
@@ -12971,6 +13802,20 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     wifi_subgate = summarize_wifi_gate7_subgate_detail(
         event_list, wifi_gate, wifi_blocker
     )
+    if wifi_gate8.status != "none":
+        gate8_frontier = (
+            wifi_gate8.last
+            if wifi_gate8.missing == "none"
+            else wifi_gate8.missing
+        )
+        wifi_subgate = WifiGate7Subgate(
+            gate8_frontier,
+            gate8_frontier,
+            "gate8-stability",
+            wifi_gate8.status,
+            wifi_gate8.blocker,
+            wifi_gate8.line,
+        )
     wifi_gate7 = (
         WifiGate7Proof(missing="not-selected")
         if wifi_blocker == "not-selected"
@@ -12991,6 +13836,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_gate7_seen=wifi_gate7.seen,
         wifi_gate7_last=wifi_gate7.last,
         wifi_gate7_missing=wifi_gate7.missing,
+        wifi_gate8_complete=wifi_gate8.complete,
+        wifi_gate8_seen=wifi_gate8.seen,
+        wifi_gate8_last=wifi_gate8.last,
+        wifi_gate8_missing=wifi_gate8.missing,
+        wifi_gate8_status=wifi_gate8.status,
+        wifi_gate8_pair_epoch=wifi_gate8.pair_epoch,
+        wifi_gate8_generation=wifi_gate8.generation,
+        wifi_gate8_blocker=wifi_gate8.blocker,
+        wifi_gate8_line=wifi_gate8.line,
         usb_oldgood_replay=usb_oldgood.replay,
         usb_oldgood_last=usb_oldgood.last,
         usb_oldgood_missing=usb_oldgood.missing,
@@ -14425,6 +15279,14 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         wifi_gate7_missing = str(record.get("WIFI_GATE7_MISSING", "7a"))
         if wifi_gate7_missing != "none":
             blockers.append(f"wifi-gate7-{wifi_gate7_missing}-missing")
+        if record.get("WIFI_GATE8_STATUS") != "none":
+            if record.get("WIFI_GATE8_COMPLETE") != "yes":
+                blockers.append("wifi-gate8-subgates-incomplete")
+            wifi_gate8_missing = str(
+                record.get("WIFI_GATE8_MISSING", WIFI_GATE8_SUBGATES[0])
+            )
+            if wifi_gate8_missing != "none":
+                blockers.append(f"wifi-gate8-{wifi_gate8_missing}-missing")
         if record.get("WIFI_OLDGOOD_REPLAY") != "yes":
             blockers.append("wifi-oldgood-replay-missing")
         if record.get("WIFI_OLDGOOD_MISSING") != "none":

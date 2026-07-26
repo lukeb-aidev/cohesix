@@ -480,6 +480,13 @@ const CYW43_BOOTSTRAP_RETRY_BACKOFF_MS: [u64; 4] = [1_000, 2_000, 4_000, 8_000];
     feature = "kernel",
     feature = "net-console"
 ))]
+const CYW43_GATE8_STABILIZATION_TIMEOUT_MS: u64 = 90_000;
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
 const SERIAL_LINKED_RUNTIME_RETRY_MS: u64 = 250;
 
 #[cfg(all(
@@ -690,6 +697,245 @@ impl DeferredNetRetrySchedule {
     feature = "kernel",
     feature = "net-console"
 ))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredGate8Lifecycle {
+    Detached,
+    Stabilizing {
+        attempt: u32,
+        deadline_ms: u64,
+    },
+    Recovering {
+        failed_attempt: u32,
+        deadline_ms: u64,
+    },
+    Ready {
+        generation: u32,
+        attempt: u32,
+        deadline_ms: u64,
+        gate10_complete: bool,
+    },
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredGate8Observation {
+    Pending,
+    Publish {
+        generation: u32,
+    },
+    Ready,
+    Retracted {
+        generation: u32,
+    },
+    Fail {
+        generation: u32,
+        blocker: &'static str,
+    },
+    Deadline {
+        generation: u32,
+        deadline_ms: u64,
+    },
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DeferredGate8RecoveryBudget {
+    AlreadyRecorded,
+    Backoff { delay_ms: u64, next_attempt_ms: u64 },
+    Exhausted,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+impl DeferredGate8Lifecycle {
+    const fn new() -> Self {
+        Self::Detached
+    }
+
+    /// Enter one outer attempt's bounded stabilization window.
+    ///
+    /// A linked-pair repair may complete while the same outer attempt remains
+    /// active. In that case the original absolute deadline is retained: an
+    /// internal recovery cannot manufacture a fresh unbounded wait.
+    fn enter_stabilizing(&mut self, attempt: u32, now_ms: u64) -> u64 {
+        match *self {
+            Self::Stabilizing {
+                attempt: active_attempt,
+                deadline_ms,
+            } if active_attempt == attempt => {
+                return deadline_ms;
+            }
+            Self::Ready {
+                attempt,
+                deadline_ms,
+                gate10_complete: false,
+                ..
+            } => {
+                *self = Self::Stabilizing {
+                    attempt,
+                    deadline_ms,
+                };
+                return deadline_ms;
+            }
+            Self::Detached
+            | Self::Stabilizing { .. }
+            | Self::Recovering { .. }
+            | Self::Ready { .. } => {}
+        }
+        let deadline_ms = now_ms.saturating_add(CYW43_GATE8_STABILIZATION_TIMEOUT_MS);
+        *self = Self::Stabilizing {
+            attempt,
+            deadline_ms,
+        };
+        deadline_ms
+    }
+
+    fn begin_recovery(&mut self, failed_attempt: u32) -> bool {
+        let Self::Stabilizing {
+            attempt,
+            deadline_ms,
+        } = *self
+        else {
+            return false;
+        };
+        if attempt != failed_attempt {
+            return false;
+        }
+        *self = Self::Recovering {
+            failed_attempt,
+            deadline_ms,
+        };
+        true
+    }
+
+    fn observe(
+        &mut self,
+        attempt: u32,
+        now_ms: u64,
+        accepted_proof_still_stable: bool,
+        diagnostic: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+    ) -> DeferredGate8Observation {
+        if matches!(self, Self::Recovering { .. }) {
+            return DeferredGate8Observation::Pending;
+        }
+        if let Self::Ready { generation, .. } = *self {
+            if accepted_proof_still_stable
+                && diagnostic.stable()
+                && diagnostic.generation == generation
+            {
+                return DeferredGate8Observation::Ready;
+            }
+            self.enter_stabilizing(attempt, now_ms);
+            return DeferredGate8Observation::Retracted { generation };
+        }
+
+        let deadline_ms = self.enter_stabilizing(attempt, now_ms);
+        if diagnostic.frontier_status()
+            == crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Fail
+        {
+            let blocker = diagnostic
+                .subgates
+                .iter()
+                .find(|subgate| {
+                    subgate.status == crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Fail
+                })
+                .map_or("gate8-failed", |subgate| subgate.blocker);
+            return DeferredGate8Observation::Fail {
+                generation: diagnostic.generation,
+                blocker,
+            };
+        }
+        if now_ms >= deadline_ms {
+            return DeferredGate8Observation::Deadline {
+                generation: diagnostic.generation,
+                deadline_ms,
+            };
+        }
+        if diagnostic.stable() {
+            return DeferredGate8Observation::Publish {
+                generation: diagnostic.generation,
+            };
+        }
+        DeferredGate8Observation::Pending
+    }
+
+    fn accept_ready(&mut self, generation: u32) -> bool {
+        let Self::Stabilizing {
+            attempt,
+            deadline_ms,
+        } = *self
+        else {
+            return false;
+        };
+        *self = Self::Ready {
+            generation,
+            attempt,
+            deadline_ms,
+            gate10_complete: false,
+        };
+        true
+    }
+
+    fn mark_gate10_complete(&mut self, generation: u32) -> bool {
+        let Self::Ready {
+            generation: ready_generation,
+            gate10_complete,
+            ..
+        } = self
+        else {
+            return false;
+        };
+        if *ready_generation != generation {
+            return false;
+        }
+        *gate10_complete = true;
+        true
+    }
+
+    const fn deadline_ms(self) -> Option<u64> {
+        match self {
+            Self::Stabilizing { deadline_ms, .. }
+            | Self::Recovering { deadline_ms, .. }
+            | Self::Ready { deadline_ms, .. } => Some(deadline_ms),
+            Self::Detached => None,
+        }
+    }
+
+    fn consume_failure(
+        &mut self,
+        failed_attempt: u32,
+        now_ms: u64,
+        retry_schedule: &mut DeferredNetRetrySchedule,
+    ) -> DeferredGate8RecoveryBudget {
+        if !self.begin_recovery(failed_attempt) {
+            return DeferredGate8RecoveryBudget::AlreadyRecorded;
+        }
+        match retry_schedule.record_transient_failure(now_ms) {
+            Some(delay_ms) => DeferredGate8RecoveryBudget::Backoff {
+                delay_ms,
+                next_attempt_ms: retry_schedule.next_attempt_ms,
+            },
+            None => DeferredGate8RecoveryBudget::Exhausted,
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
 fn emit_deferred_net_operator_line<
     'a,
     D,
@@ -732,6 +978,7 @@ pub(crate) enum DeferredNetSupervisorStatus {
     Begin,
     Recovery,
     Backoff,
+    Stabilizing,
     Ready,
     Exhausted,
     Permanent,
@@ -743,11 +990,12 @@ pub(crate) enum DeferredNetSupervisorStatus {
     feature = "net-console"
 ))]
 impl DeferredNetSupervisorStatus {
-    const ALL: [Self; 7] = [
+    const ALL: [Self; 8] = [
         Self::Preflight,
         Self::Begin,
         Self::Recovery,
         Self::Backoff,
+        Self::Stabilizing,
         Self::Ready,
         Self::Exhausted,
         Self::Permanent,
@@ -759,6 +1007,7 @@ impl DeferredNetSupervisorStatus {
             Self::Begin => "begin",
             Self::Recovery => "recovery",
             Self::Backoff => "backoff",
+            Self::Stabilizing => "stabilizing",
             Self::Ready => "ready",
             Self::Exhausted => "exhausted",
             Self::Permanent => "permanent",
@@ -819,13 +1068,21 @@ fn format_deferred_net_bootstrap_supervisor_semantic_status(
     if !status.valid_attempt(attempt) {
         return None;
     }
+    let semantic_backoff_ms = if matches!(
+        status,
+        DeferredNetSupervisorStatus::Preflight | DeferredNetSupervisorStatus::Backoff
+    ) {
+        backoff_ms
+    } else {
+        0
+    };
     let mut line = HeaplessString::new();
     if write!(
         line,
         "CYW43_BOOTSTRAP_SUPERVISOR attempt={} status={} backoff_ms={} next_attempt_ms={} serial={} local_seat={} recovery=full",
         attempt,
         status.as_str(),
-        backoff_ms,
+        semantic_backoff_ms,
         next_attempt_ms,
         if serial_ready { "ready" } else { "blocked" },
         if local_seat_enabled {
@@ -880,8 +1137,11 @@ pub(crate) fn format_deferred_net_bootstrap_supervisor_display_status(
             "[drivers] WiFi attempt {attempt}/{CYW43_BOOTSTRAP_MAX_ATTEMPTS} paused; retry in {backoff_ms} ms"
         )
         .is_err(),
+        DeferredNetSupervisorStatus::Stabilizing => line
+            .push_str("[drivers] WiFi transport attached; Gate 8 association security stabilizing")
+            .is_err(),
         DeferredNetSupervisorStatus::Ready => line
-            .push_str("[drivers] WiFi driver ready; association and DHCP continuing")
+            .push_str(crate::local_seat::CYW43_GATE8_READY_HDMI_LINE)
             .is_err(),
         DeferredNetSupervisorStatus::Exhausted => write!(
             line,
@@ -930,6 +1190,164 @@ fn format_deferred_net_bootstrap_supervisor_linked_route(
     feature = "kernel",
     feature = "net-console"
 ))]
+fn format_deferred_net_gate8_subgate(
+    pair_scrub_epoch: u64,
+    generation: u32,
+    subgate: crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic,
+) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+    let mut line = HeaplessString::new();
+    if write!(
+        line,
+        "wifi: gate 8 subgate={} status={} pair_epoch={} generation={} blocker={}",
+        subgate.token,
+        subgate.status.as_str(),
+        pair_scrub_epoch,
+        generation,
+        subgate.blocker,
+    )
+    .is_err()
+    {
+        return None;
+    }
+    Some(line)
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn format_deferred_net_gate8_snapshot_lines(
+    diagnostic: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+) -> Option<heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>> {
+    let mut lines = heapless::Vec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>::new();
+    for subgate in diagnostic.subgates {
+        let line = format_deferred_net_gate8_subgate(
+            diagnostic.pair_scrub_epoch,
+            diagnostic.generation,
+            subgate,
+        )?;
+        lines.push(line).ok()?;
+    }
+    Some(lines)
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn emit_deferred_net_gate8_ready_transaction<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    diagnostic: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+    console_sequence: u64,
+    attempt: u32,
+    next_attempt_ms: u64,
+    local_seat_enabled: bool,
+) -> bool
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    if !diagnostic.stable() {
+        return false;
+    }
+    let Some(lines) = format_deferred_net_gate8_snapshot_lines(diagnostic) else {
+        return false;
+    };
+    let serial_ready = !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+        || crate::serial::serial_linked_runtime_transport_active();
+    let Some(semantic) = format_deferred_net_bootstrap_supervisor_semantic_status(
+        attempt,
+        DeferredNetSupervisorStatus::Ready,
+        0,
+        next_attempt_ms,
+        serial_ready,
+        local_seat_enabled,
+    ) else {
+        return false;
+    };
+    let Some(serial_terminal) =
+        format_deferred_net_bootstrap_supervisor_linked_route(semantic.as_str(), console_sequence)
+    else {
+        return false;
+    };
+    let Some(hdmi_terminal) = format_deferred_net_bootstrap_supervisor_display_status(
+        attempt,
+        DeferredNetSupervisorStatus::Ready,
+        0,
+        serial_ready,
+    ) else {
+        return false;
+    };
+    pump.queue_cyw43_gate8_ready_transaction(
+        lines.as_slice(),
+        serial_terminal.as_str(),
+        hdmi_terminal.as_str(),
+    )
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn emit_deferred_net_gate8_failure_transaction<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    diagnostic: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+    recovery_line: &str,
+) -> bool
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    let Some(snapshot_lines) = format_deferred_net_gate8_snapshot_lines(diagnostic) else {
+        return false;
+    };
+    let mut lines = heapless::Vec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 9>::new();
+    for line in snapshot_lines {
+        if lines.push(line).is_err() {
+            return false;
+        }
+    }
+    let mut recovery = HeaplessString::new();
+    if recovery.push_str(recovery_line).is_err() || lines.push(recovery).is_err() {
+        return false;
+    }
+    // A terminal attempt publishes exactly one passive eight-line snapshot
+    // immediately followed by its recovery boundary. The pair cannot restart
+    // until the complete causal batch and one following Backoff, Exhausted, or
+    // Permanent supervisor terminal slot are retained.
+    pump.queue_cyw43_bootstrap_operator_lines_atomic(lines.as_slice(), 1)
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
 fn emit_deferred_net_bootstrap_supervisor_status<
     'a,
     D,
@@ -948,7 +1366,8 @@ fn emit_deferred_net_bootstrap_supervisor_status<
     next_attempt_ms: u64,
     local_seat_enabled: bool,
     raw_fallback_allowed: bool,
-) where
+) -> bool
+where
     D: crate::serial::SerialDriver,
     T: TimerSource,
     I: IpcDispatcher,
@@ -969,7 +1388,7 @@ fn emit_deferred_net_bootstrap_supervisor_status<
             "CYW43_BOOTSTRAP_STATUS_FORMAT_ERROR action=operator-diagnostics acceptance=red",
             raw_fallback_allowed,
         );
-        return;
+        return false;
     };
     let Some(linked_line) =
         format_deferred_net_bootstrap_supervisor_linked_route(semantic.as_str(), console_sequence)
@@ -979,7 +1398,7 @@ fn emit_deferred_net_bootstrap_supervisor_status<
             "CYW43_BOOTSTRAP_STATUS_FORMAT_ERROR action=operator-diagnostics acceptance=red",
             raw_fallback_allowed,
         );
-        return;
+        return false;
     };
     let Some(display_line) = format_deferred_net_bootstrap_supervisor_display_status(
         attempt,
@@ -992,7 +1411,7 @@ fn emit_deferred_net_bootstrap_supervisor_status<
             "CYW43_BOOTSTRAP_STATUS_FORMAT_ERROR action=operator-diagnostics acceptance=red",
             raw_fallback_allowed,
         );
-        return;
+        return false;
     };
     // Preserve the full-fidelity record without a logger prefix. Once the
     // linked route is active this is enqueue-only; its next ordinary operator
@@ -1004,22 +1423,26 @@ fn emit_deferred_net_bootstrap_supervisor_status<
         display_line.as_str(),
         status.releases_hdmi_console_ready(),
     );
-    if !queued {
-        if raw_fallback_allowed {
-            let raw_console_sequence = match u32::try_from(console_sequence) {
-                Ok(sequence) => sequence,
-                Err(_) => u32::MAX,
-            };
-            boot_log::force_uart_line_raw_and_log_with_console_seq(
-                semantic.as_str(),
-                raw_console_sequence,
-            );
-        } else if !crate::serial::serial_linked_runtime_transport_active() {
-            // The released generation must never reclaim raw UART. Keep the
-            // exact sequenced record available to authenticated diagnostics.
-            crate::log_buffer::append_log_line(linked_line.as_str());
-        }
+    if queued {
+        return true;
     }
+    if raw_fallback_allowed {
+        let raw_console_sequence = match u32::try_from(console_sequence) {
+            Ok(sequence) => sequence,
+            Err(_) => u32::MAX,
+        };
+        boot_log::force_uart_line_raw_and_log_with_console_seq(
+            semantic.as_str(),
+            raw_console_sequence,
+        );
+        return true;
+    }
+    if !crate::serial::serial_linked_runtime_transport_active() {
+        // The released generation must never reclaim raw UART. Keep the
+        // exact sequenced record available to authenticated diagnostics.
+        crate::log_buffer::append_log_line(linked_line.as_str());
+    }
+    false
 }
 
 #[cfg(all(
@@ -1119,6 +1542,7 @@ where
     let mut bootstrap = Cyw43BootstrapSupervisor::new(config);
     let mut attempt_active = false;
     let mut network_attached = false;
+    let mut gate8_lifecycle = DeferredGate8Lifecycle::new();
     let mut terminal_mode = None;
     let mut wifi_operation_started = false;
     let mut serial_retry = DeferredSerialRouteRetry::new(crate::hal::timebase().now_ms());
@@ -1189,23 +1613,206 @@ where
         // Once the stack is attached, the retained supervisor remains its
         // lifetime recovery owner. Ordinary network work gets one outer pump
         // turn only while the linked pair is ready and no sticky recovery
-        // signal is pending. A fault observed during that turn is consumed by
-        // the supervisor on the next turn, before NetStack can touch CYW43
-        // again.
-        if network_attached
-            && bootstrap.is_ready()
-            && !crate::drivers::driver_task_net::cyw43_recovery_required()
-        {
-            pump.poll();
-            let stability_now_ms = crate::hal::timebase().now_ms();
-            if bootstrap.mark_ready_generation_stable(pump.net_console_ready_for_root()) {
-                retry_schedule.reset_attempt_budget(stability_now_ms);
-                crate::log_buffer::append_log_line(
-                    "[net-console] CYW43 recovery budget reset after address/TCP-ready proof",
-                );
+        // signal is pending. Gate 8 then consumes one passive snapshot. Its
+        // deadline belongs to the outer attempt and survives an internal pair
+        // recovery; neither polling nor a replay can silently renew it.
+        if network_attached && bootstrap.is_ready() {
+            if crate::drivers::driver_task_net::cyw43_recovery_required() {
+                // Sticky recovery forbids ordinary network/SDIO work, but it
+                // must not freeze the retained serial lane. One hardware-free
+                // supervisor turn drains proof capacity so the atomic
+                // 8a-through-8h plus Recovery transaction can be retained
+                // before the pair restart begins.
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            } else {
+                pump.poll();
             }
-            sel4::yield_now();
-            continue;
+            let stability_now_ms = crate::hal::timebase().now_ms();
+            let recovery_required = crate::drivers::driver_task_net::cyw43_recovery_required();
+            let attempt = retry_schedule.attempt_number();
+            let diagnostic = crate::drivers::driver_task_net::cyw43_gate8_diagnostic();
+            let observation = gate8_lifecycle.observe(
+                attempt,
+                stability_now_ms,
+                bootstrap.gate8_generation_still_stable(),
+                diagnostic,
+            );
+            let mut failure = None;
+            match observation {
+                DeferredGate8Observation::Pending => {}
+                DeferredGate8Observation::Publish { generation } if !recovery_required => {
+                    // The driver revalidates and commits this exact passive
+                    // snapshot before it can become visible as readiness
+                    // proof. The eight-line queue operation is atomic and
+                    // reserves the immediately following Ready record. Any
+                    // publication rejection retracts the accepted generation,
+                    // so the next turn must capture and validate a fresh copy.
+                    if !bootstrap.mark_gate8_generation_stable(diagnostic) {
+                        crate::log_buffer::append_log_line(
+                            "CYW43_GATE8_SNAPSHOT_COMMIT status=rejected action=retry-fresh-snapshot",
+                        );
+                        sel4::yield_now();
+                        continue;
+                    }
+                    let ready_sequence = retry_schedule.next_status_sequence();
+                    let ready_queued = emit_deferred_net_gate8_ready_transaction(
+                        pump,
+                        diagnostic,
+                        ready_sequence,
+                        attempt,
+                        stability_now_ms,
+                        local_seat_enabled,
+                    );
+                    if ready_queued && gate8_lifecycle.accept_ready(generation) {
+                        crate::log_buffer::append_log_line(
+                            "[net-console] CYW43 Gate 8 stable for current generation",
+                        );
+                    } else {
+                        let _ = bootstrap.retract_gate8_generation(generation);
+                        crate::log_buffer::append_log_line(
+                            "CYW43_GATE8_READY_TRANSACTION status=failed action=retract-and-retry-fresh-snapshot",
+                        );
+                    }
+                }
+                DeferredGate8Observation::Publish { .. } => {}
+                DeferredGate8Observation::Ready if !recovery_required => {
+                    if bootstrap.mark_ready_generation_stable(
+                        pump.net_console_cyw43_gate10_proven_for_root(),
+                    ) {
+                        if gate8_lifecycle.mark_gate10_complete(diagnostic.generation) {
+                            retry_schedule.reset_attempt_budget(stability_now_ms);
+                            crate::log_buffer::append_log_line(
+                                "[net-console] CYW43 recovery budget reset after same-generation nettest/TCP/cohsh proof",
+                            );
+                        } else {
+                            crate::log_buffer::append_log_line(
+                                "CYW43_GATE10_LIFECYCLE status=generation-mismatch action=preserve-retry-budget",
+                            );
+                        }
+                    }
+                }
+                DeferredGate8Observation::Ready => {}
+                DeferredGate8Observation::Retracted { generation } => {
+                    let _ = bootstrap.retract_gate8_generation(generation);
+                    pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
+                    let deadline_ms = match gate8_lifecycle.deadline_ms() {
+                        Some(deadline_ms) => deadline_ms,
+                        None => stability_now_ms,
+                    };
+                    emit_deferred_net_bootstrap_supervisor_status(
+                        pump,
+                        retry_schedule.next_status_sequence(),
+                        attempt,
+                        DeferredNetSupervisorStatus::Stabilizing,
+                        0,
+                        deadline_ms,
+                        local_seat_enabled,
+                        false,
+                    );
+                    let mut line = HeaplessString::<192>::new();
+                    let _ = write!(
+                        line,
+                        "CYW43_GATE8_READY_RETRACTED attempt={} generation={} deadline_ms={} action=fresh-proof",
+                        attempt, generation, deadline_ms,
+                    );
+                    emit_deferred_net_operator_line(pump, line.as_str(), false);
+                }
+                DeferredGate8Observation::Fail {
+                    generation,
+                    blocker,
+                } => {
+                    let deadline_ms = match gate8_lifecycle.deadline_ms() {
+                        Some(deadline_ms) => deadline_ms,
+                        None => stability_now_ms,
+                    };
+                    failure = Some((generation, blocker, deadline_ms));
+                }
+                DeferredGate8Observation::Deadline {
+                    generation,
+                    deadline_ms,
+                } => {
+                    failure = Some((generation, "gate8-stabilization-deadline", deadline_ms));
+                }
+            }
+
+            if let Some((generation, blocker, deadline_ms)) = failure {
+                let mut line = HeaplessString::<224>::new();
+                let _ = write!(
+                    line,
+                    "CYW43_GATE8_RECOVERY attempt={} generation={} blocker={} deadline_ms={} action=pair-restart",
+                    attempt, generation, blocker, deadline_ms,
+                );
+                if !emit_deferred_net_gate8_failure_transaction(pump, diagnostic, line.as_str()) {
+                    crate::log_buffer::append_log_line(
+                        "CYW43_GATE8_FAILURE_TRANSACTION status=not-retained action=wait-for-serial-capacity",
+                    );
+                    sel4::yield_now();
+                    continue;
+                }
+                if !bootstrap.request_gate8_stabilization_recovery(blocker) {
+                    emit_deferred_net_bootstrap_supervisor_status(
+                        pump,
+                        retry_schedule.next_status_sequence(),
+                        attempt,
+                        DeferredNetSupervisorStatus::Permanent,
+                        0,
+                        stability_now_ms,
+                        local_seat_enabled,
+                        false,
+                    );
+                    pump.quarantine_network_service_after_cyw43_exhaustion();
+                    terminal_mode =
+                        Some(DeferredNetSupervisorTerminal::PermanentAttachedRecoveryFailure);
+                    attempt_active = false;
+                    sel4::yield_now();
+                    continue;
+                }
+                match gate8_lifecycle.consume_failure(
+                    attempt,
+                    stability_now_ms,
+                    &mut retry_schedule,
+                ) {
+                    DeferredGate8RecoveryBudget::AlreadyRecorded => {}
+                    DeferredGate8RecoveryBudget::Backoff {
+                        delay_ms,
+                        next_attempt_ms,
+                    } => {
+                        emit_deferred_net_bootstrap_supervisor_status(
+                            pump,
+                            retry_schedule.next_status_sequence(),
+                            attempt,
+                            DeferredNetSupervisorStatus::Backoff,
+                            delay_ms,
+                            next_attempt_ms,
+                            local_seat_enabled,
+                            false,
+                        );
+                        attempt_active = false;
+                    }
+                    DeferredGate8RecoveryBudget::Exhausted => {
+                        emit_deferred_net_bootstrap_supervisor_status(
+                            pump,
+                            retry_schedule.next_status_sequence(),
+                            attempt,
+                            DeferredNetSupervisorStatus::Exhausted,
+                            0,
+                            retry_schedule.next_attempt_ms,
+                            local_seat_enabled,
+                            false,
+                        );
+                        pump.quarantine_network_service_after_cyw43_exhaustion();
+                        terminal_mode = Some(DeferredNetSupervisorTerminal::RetryBudgetExhausted);
+                        attempt_active = false;
+                    }
+                }
+                sel4::yield_now();
+                continue;
+            }
+
+            if !recovery_required {
+                sel4::yield_now();
+                continue;
+            }
         }
 
         if supervisor_phase == DeferredCyw43SupervisorPhase::Operator {
@@ -1307,13 +1914,24 @@ where
                     run_root_console_pump(pump);
                 }
                 if network_attached {
+                    let retracted_generation = match gate8_lifecycle {
+                        DeferredGate8Lifecycle::Ready { generation, .. } => Some(generation),
+                        DeferredGate8Lifecycle::Detached
+                        | DeferredGate8Lifecycle::Stabilizing { .. }
+                        | DeferredGate8Lifecycle::Recovering { .. } => None,
+                    };
+                    let gate8_deadline_ms = gate8_lifecycle.enter_stabilizing(attempt, now_ms);
+                    if let Some(generation) = retracted_generation {
+                        let _ = bootstrap.retract_gate8_generation(generation);
+                        pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
+                    }
                     emit_deferred_net_bootstrap_supervisor_status(
                         pump,
                         retry_schedule.next_status_sequence(),
                         attempt,
-                        DeferredNetSupervisorStatus::Ready,
+                        DeferredNetSupervisorStatus::Stabilizing,
                         0,
-                        now_ms,
+                        gate8_deadline_ms,
                         local_seat_enabled,
                         false,
                     );
@@ -1365,22 +1983,24 @@ where
                     );
                     run_root_console_pump(pump);
                 }
+                let gate8_deadline_ms = gate8_lifecycle.enter_stabilizing(attempt, now_ms);
                 emit_deferred_net_bootstrap_supervisor_status(
                     pump,
                     retry_schedule.next_status_sequence(),
                     attempt,
-                    DeferredNetSupervisorStatus::Ready,
+                    DeferredNetSupervisorStatus::Stabilizing,
                     0,
-                    now_ms,
+                    gate8_deadline_ms,
                     local_seat_enabled,
                     false,
                 );
                 let mut line = HeaplessString::<160>::new();
                 let _ = write!(
                     line,
-                    "[net-console] listening on 0.0.0.0:{} after bootstrap attempt {}",
+                    "[net-console] stack attached on 0.0.0.0:{} after bootstrap attempt {}; Gate 8 stabilizing until {} ms",
                     crate::net::CONSOLE_TCP_PORT,
                     attempt,
+                    gate8_deadline_ms,
                 );
                 crate::log_buffer::append_log_line(line.as_str());
                 network_attached = true;
@@ -2115,6 +2735,39 @@ mod tests {
         feature = "kernel",
         feature = "net-console"
     ))]
+    fn gate8_lifecycle_snapshot(
+        pair_scrub_epoch: u64,
+        generation: u32,
+        frontier_status: crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus,
+        blocker: &'static str,
+    ) -> crate::drivers::driver_task_net::Cyw43Gate8Diagnostic {
+        let pass = crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic {
+            token: "8a-pair-generation",
+            status: crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass,
+            blocker: "none",
+        };
+        let mut subgates = [pass; 8];
+        if frontier_status != crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass {
+            subgates[7] = crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic {
+                token: "8h-data-admission",
+                status: frontier_status,
+                blocker,
+            };
+        }
+        crate::drivers::driver_task_net::Cyw43Gate8Diagnostic {
+            pair_scrub_epoch,
+            generation,
+            subgates,
+            current_work_pending: frontier_status
+                == crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pending,
+        }
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
     #[test]
     fn cyw43_supervisor_pre_cutover_raw_fallback_receives_semantic_only() {
         let semantic = super::format_deferred_net_bootstrap_supervisor_semantic_status(
@@ -2230,6 +2883,31 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
+    fn cyw43_gate8_subgate_wire_record_is_exact_and_bounded() {
+        let line = super::format_deferred_net_gate8_subgate(
+            u64::MAX,
+            u32::MAX,
+            crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic {
+                token: "8g-post-key-maintenance",
+                status: crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pending,
+                blocker: "logical-control-owner-active",
+            },
+        )
+        .expect("Gate 8 subgate record must fit");
+
+        assert_eq!(
+            line.as_str(),
+            "wifi: gate 8 subgate=8g-post-key-maintenance status=pending pair_epoch=18446744073709551615 generation=4294967295 blocker=logical-control-owner-active"
+        );
+        assert!(line.len() <= crate::serial::DEFAULT_LINE_CAPACITY);
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
     fn cyw43_supervisor_display_status_is_concise_and_machine_record_free() {
         for (attempt, status, backoff_ms, serial_ready, expected) in [
             (
@@ -2269,10 +2947,17 @@ mod tests {
             ),
             (
                 4,
+                super::DeferredNetSupervisorStatus::Stabilizing,
+                0,
+                true,
+                "[drivers] WiFi transport attached; Gate 8 association security stabilizing",
+            ),
+            (
+                4,
                 super::DeferredNetSupervisorStatus::Ready,
                 0,
                 true,
-                "[drivers] WiFi driver ready; association and DHCP continuing",
+                "[drivers] WiFi Gate 8 stable; DHCP and TCP continuing",
             ),
             (
                 5,
@@ -2302,6 +2987,7 @@ mod tests {
         assert!(!super::DeferredNetSupervisorStatus::Preflight.releases_hdmi_console_ready());
         assert!(!super::DeferredNetSupervisorStatus::Begin.releases_hdmi_console_ready());
         assert!(!super::DeferredNetSupervisorStatus::Backoff.releases_hdmi_console_ready());
+        assert!(!super::DeferredNetSupervisorStatus::Stabilizing.releases_hdmi_console_ready());
         assert!(super::DeferredNetSupervisorStatus::Ready.releases_hdmi_console_ready());
         assert!(super::DeferredNetSupervisorStatus::Exhausted.releases_hdmi_console_ready());
         assert!(super::DeferredNetSupervisorStatus::Permanent.releases_hdmi_console_ready());
@@ -2358,6 +3044,247 @@ mod tests {
         assert!(supervisor.attempt_due(3_100));
         assert!(!supervisor.exhausted());
         assert_eq!(supervisor.record_transient_failure(3_100), Some(1_000));
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn gate8_stabilization_deadline_is_absolute_within_one_outer_attempt() {
+        let pending = gate8_lifecycle_snapshot(
+            4,
+            9,
+            crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pending,
+            "association-event-pending",
+        );
+        let mut lifecycle = super::DeferredGate8Lifecycle::new();
+
+        assert_eq!(
+            lifecycle.observe(1, 100, false, pending),
+            super::DeferredGate8Observation::Pending,
+        );
+        assert_eq!(lifecycle.deadline_ms(), Some(90_100));
+        assert_eq!(lifecycle.enter_stabilizing(1, 80_000), 90_100);
+        assert_eq!(
+            lifecycle.observe(1, 90_099, false, pending),
+            super::DeferredGate8Observation::Pending,
+        );
+        assert_eq!(
+            lifecycle.observe(1, 90_100, false, pending),
+            super::DeferredGate8Observation::Deadline {
+                generation: 9,
+                deadline_ms: 90_100,
+            },
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn gate8_failure_consumes_one_outer_attempt_and_cannot_double_count() {
+        let failed = gate8_lifecycle_snapshot(
+            4,
+            9,
+            crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Fail,
+            "association-terminal-failure",
+        );
+        let mut lifecycle = super::DeferredGate8Lifecycle::new();
+        let mut retry_schedule = super::DeferredNetRetrySchedule::new(100);
+
+        assert_eq!(
+            lifecycle.observe(1, 100, false, failed),
+            super::DeferredGate8Observation::Fail {
+                generation: 9,
+                blocker: "association-terminal-failure",
+            },
+        );
+        assert_eq!(
+            lifecycle.consume_failure(1, 100, &mut retry_schedule),
+            super::DeferredGate8RecoveryBudget::Backoff {
+                delay_ms: 1_000,
+                next_attempt_ms: 1_100,
+            },
+        );
+        assert_eq!(retry_schedule.attempt_number(), 2);
+        assert_eq!(
+            lifecycle.consume_failure(1, 101, &mut retry_schedule),
+            super::DeferredGate8RecoveryBudget::AlreadyRecorded,
+        );
+        assert_eq!(retry_schedule.attempt_number(), 2);
+        assert_eq!(
+            lifecycle.observe(2, 1_100, false, failed),
+            super::DeferredGate8Observation::Pending,
+            "the recovering state cannot consume another attempt before the sole supervisor completes",
+        );
+
+        assert_eq!(lifecycle.enter_stabilizing(2, 1_100), 91_100);
+        assert_eq!(lifecycle.deadline_ms(), Some(91_100));
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn gate8_failures_exhaust_exactly_five_outer_attempts() {
+        let mut lifecycle = super::DeferredGate8Lifecycle::new();
+        let mut retry_schedule = super::DeferredNetRetrySchedule::new(0);
+        let mut now_ms = 0;
+
+        for attempt in 1..=super::CYW43_BOOTSTRAP_MAX_ATTEMPTS {
+            lifecycle.enter_stabilizing(attempt, now_ms);
+            let budget = lifecycle.consume_failure(attempt, now_ms, &mut retry_schedule);
+            if attempt < super::CYW43_BOOTSTRAP_MAX_ATTEMPTS {
+                let super::DeferredGate8RecoveryBudget::Backoff {
+                    next_attempt_ms, ..
+                } = budget
+                else {
+                    panic!("attempt {attempt} must schedule one bounded recovery");
+                };
+                now_ms = next_attempt_ms;
+            } else {
+                assert_eq!(budget, super::DeferredGate8RecoveryBudget::Exhausted);
+            }
+        }
+
+        assert!(retry_schedule.exhausted());
+        assert_eq!(retry_schedule.attempt_number(), 5);
+        assert_eq!(
+            lifecycle.consume_failure(5, now_ms, &mut retry_schedule),
+            super::DeferredGate8RecoveryBudget::AlreadyRecorded,
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn gate8_ready_requires_fresh_publication_and_retracts_on_proof_loss() {
+        let stable = gate8_lifecycle_snapshot(
+            8,
+            12,
+            crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass,
+            "none",
+        );
+        let pending_same_generation = gate8_lifecycle_snapshot(
+            8,
+            12,
+            crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pending,
+            "maintenance-owner-active",
+        );
+        let mut lifecycle = super::DeferredGate8Lifecycle::new();
+
+        assert_eq!(
+            lifecycle.observe(1, 1_000, false, stable),
+            super::DeferredGate8Observation::Publish { generation: 12 },
+        );
+        assert_eq!(
+            lifecycle.observe(1, 1_001, false, stable),
+            super::DeferredGate8Observation::Publish { generation: 12 },
+            "failed publication leaves readiness uncommitted and requires a fresh observation",
+        );
+        assert!(lifecycle.accept_ready(12));
+        assert_eq!(
+            lifecycle.observe(1, 1_002, true, stable),
+            super::DeferredGate8Observation::Ready,
+        );
+        assert_eq!(
+            lifecycle.observe(1, 1_003, false, pending_same_generation),
+            super::DeferredGate8Observation::Retracted { generation: 12 },
+            "loss of exact proof retracts Ready even without a generation change",
+        );
+        assert_eq!(
+            lifecycle.deadline_ms(),
+            Some(91_000),
+            "pre-Gate10 retraction must retain the original absolute deadline",
+        );
+        assert_eq!(
+            lifecycle.observe(1, 1_004, false, stable),
+            super::DeferredGate8Observation::Publish { generation: 12 },
+        );
+        assert!(lifecycle.accept_ready(12));
+        assert!(lifecycle.mark_gate10_complete(12));
+        assert_eq!(
+            lifecycle.observe(1, 2_000, false, pending_same_generation),
+            super::DeferredGate8Observation::Retracted { generation: 12 },
+        );
+        assert_eq!(
+            lifecycle.deadline_ms(),
+            Some(92_000),
+            "proof loss after Gate10 begins a fresh bounded recovery episode",
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn gate8_internal_recovery_from_ready_preserves_pre_gate10_deadline() {
+        let stable = gate8_lifecycle_snapshot(
+            8,
+            12,
+            crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass,
+            "none",
+        );
+        let mut lifecycle = super::DeferredGate8Lifecycle::new();
+
+        assert_eq!(
+            lifecycle.observe(1, 100, false, stable),
+            super::DeferredGate8Observation::Publish { generation: 12 },
+        );
+        assert!(lifecycle.accept_ready(12));
+        assert_eq!(
+            lifecycle.enter_stabilizing(1, 50_000),
+            90_100,
+            "same-attempt recovery before Gate10 cannot renew the absolute deadline",
+        );
+
+        assert_eq!(
+            lifecycle.observe(1, 50_001, false, stable),
+            super::DeferredGate8Observation::Publish { generation: 12 },
+        );
+        assert!(lifecycle.accept_ready(12));
+        assert!(lifecycle.mark_gate10_complete(12));
+        assert_eq!(
+            lifecycle.enter_stabilizing(1, 60_000),
+            150_000,
+            "a later recovery after Gate10 starts a new bounded episode",
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn gate8_stable_snapshot_at_the_absolute_deadline_fails_closed() {
+        let stable = gate8_lifecycle_snapshot(
+            8,
+            12,
+            crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass,
+            "none",
+        );
+        let mut lifecycle = super::DeferredGate8Lifecycle::new();
+        assert_eq!(lifecycle.enter_stabilizing(3, 500), 90_500);
+
+        assert_eq!(
+            lifecycle.observe(3, 90_500, false, stable),
+            super::DeferredGate8Observation::Deadline {
+                generation: 12,
+                deadline_ms: 90_500,
+            },
+        );
     }
 
     #[cfg(all(

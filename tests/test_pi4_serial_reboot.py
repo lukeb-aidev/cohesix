@@ -113,6 +113,13 @@ RESET_MENU = b"""
 Select option [0]:
 """
 
+NETTEST_STARTED = b"OK NETTEST detail=started\ncohesix>"
+NETTEST_RESULT = (
+    b"[net-selftest] result generation=14 tx_ok=true udp_echo_ok=true "
+    b"tcp_ok=true console_ok=true peer_assisted_ok=false result=pass\n"
+)
+NETSTATS_OK = b"OK NETSTATS\ncohesix>"
+
 
 class FakeController:
     """Small serial-controller test double for menu-selection logic."""
@@ -433,7 +440,12 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\ncohesix>",
-            b"OK NETTEST\ncohesix>",
+            (
+                NETTEST_RESULT.replace(b"generation=14", b"generation=13")
+                + NETTEST_STARTED
+            ),
+            NETTEST_RESULT,
+            NETSTATS_OK,
             b"OK WIFI\ncohesix>",
             b"ERR WIFI\ncohesix>",
             b"OK USB\ncohesix>",
@@ -447,6 +459,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
     assert controller.sent == [
         "netstats",
         "nettest",
+        "netstats",
         "wifi diag",
         "wifi probe-ht",
         "usb diag",
@@ -454,16 +467,21 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "smp activity",
     ]
     assert controller.public_sent[0] == "netstats"
-    assert controller.reinforced == [True, True, True, True, True, True, True]
+    assert controller.reinforced == [True, True, True, True, True, True, True, True]
     assert controller.diagnostic_barriers == [
         "netstats",
         "nettest",
+        "netstats-final",
         "wifi diag",
         "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
     ]
+    assert (
+        "nettest terminal generation=14 result=pass "
+        "action=capture-final-netstats"
+    ) in controller.notes
     assert controller.drains == [(8.0, "post-root-prompt-settle-before-diagnostics")]
 
 
@@ -477,7 +495,9 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
                 b"ERR NE[local-seat] usb keyboard command-ready "
                 b"action=enable-command-input\nTSTATS reason=policy\ncohesix>"
             ),
-            b"OK NETTEST\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_OK,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -489,6 +509,7 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
     assert controller.sent == [
         "netstats",
         "nettest",
+        "netstats",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -502,7 +523,9 @@ def test_diagnostics_accept_prompt_tail_after_result() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\nx>",
-            b"OK NETTEST\nx>",
+            b"OK NETTEST detail=started\nx>",
+            NETTEST_RESULT,
+            b"OK NETSTATS\nx>",
             b"OK USB\nx>",
             b"OK USB\nx>",
             b"OK SMP\nx>",
@@ -514,6 +537,7 @@ def test_diagnostics_accept_prompt_tail_after_result() -> None:
     assert controller.sent == [
         "netstats",
         "nettest",
+        "netstats",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -527,7 +551,9 @@ def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
     controller = FakeController(
         [
             b"OK NETSTATS\ncohesix>",
-            b"OK NETTEST\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_OK,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -543,6 +569,7 @@ def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
     assert controller.sent == [
         "netstats",
         "nettest",
+        "netstats",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -561,7 +588,9 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\ncohesix>",
-            b"OK NETTEST\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_OK,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -573,6 +602,7 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
     assert controller.sent == [
         "netstats",
         "nettest",
+        "netstats",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -593,7 +623,9 @@ def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> No
                 b"usb: runtime_gate keyboard=yes first_report=yes first_byte=yes\n"
             ),
             b"OK NETSTATS\ncohesix>",
-            b"OK NETTEST\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_OK,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -605,6 +637,7 @@ def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> No
     assert controller.sent == [
         "netstats",
         "nettest",
+        "netstats",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -626,7 +659,9 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\n",
-            b"OK NETTEST\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_OK,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -638,6 +673,7 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
     assert controller.sent == [
         "netstats",
         "nettest",
+        "netstats",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -645,6 +681,7 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
     assert controller.diagnostic_barriers == [
         "netstats",
         "nettest",
+        "netstats-final",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -658,7 +695,9 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
     controller = TimeoutOnceController(
         [
             b"OK NETSTATS\ncohesix>",
-            b"OK NETTEST\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_OK,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -670,6 +709,7 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
     assert controller.sent == [
         "netstats",
         "nettest",
+        "netstats",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -683,6 +723,103 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
         "diagnostics serial_only_usb_unscored command='usb probe-kbd'" in note
         for note in controller.notes
     )
+
+
+def test_nettest_result_parser_requires_complete_generation_tagged_terminal() -> None:
+    """Admission ACKs and untagged/partial result lines are not terminal."""
+
+    assert pi4_serial_reboot.parse_nettest_result(NETTEST_STARTED) is None
+    assert (
+        pi4_serial_reboot.parse_nettest_result(
+            b"[net-selftest] result tx_ok=true udp_echo_ok=true tcp_ok=true "
+            b"console_ok=true peer_assisted_ok=false result=pass\n"
+        )
+        is None
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_result(
+            b"[net-selftest] result generation=14 tx_ok=true udp_echo_ok=true "
+            b"tcp_ok=true console_ok=true peer_assisted_ok=false\n"
+        )
+        is None
+    )
+    assert pi4_serial_reboot.parse_nettest_result(NETTEST_RESULT) == (14, "pass")
+
+
+def test_nettest_result_wait_reassembles_split_generation_tagged_line() -> None:
+    """The bounded waiter retains a result split across serial reads."""
+
+    controller = FakeController(
+        [
+            b"[net-selftest] result generation=",
+            (
+                b"14 tx_ok=true udp_echo_ok=false tcp_ok=false "
+                b"console_ok=true peer_assisted_ok=true "
+                b"result=peer-assisted-pass\n"
+            ),
+        ]
+    )
+
+    result = pi4_serial_reboot.wait_for_nettest_result(
+        controller,
+        b"",
+        timeout_s=1,
+    )
+
+    assert result == (14, "peer-assisted-pass")
+    assert controller.reads == []
+
+
+def test_nettest_result_wait_times_out_on_untagged_result() -> None:
+    """An untagged asynchronous line cannot release the next diagnostic."""
+
+    controller = FakeController()
+
+    with pytest.raises(
+        pi4_serial_reboot.SerialMarkerTimeout,
+        match="generation-tagged",
+    ):
+        pi4_serial_reboot.wait_for_nettest_result(
+            controller,
+            (
+                b"[net-selftest] result tx_ok=true udp_echo_ok=true tcp_ok=true "
+                b"console_ok=true peer_assisted_ok=false result=pass\n"
+            ),
+            timeout_s=0,
+        )
+
+
+def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
+    """A refused self-test is terminal but still requires final counter capture."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_OK,
+            b"ERR NETTEST reason=policy detail=dhcp-pending\ncohesix>",
+            NETSTATS_OK,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+
+    assert controller.sent == [
+        "netstats",
+        "nettest",
+        "netstats",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
+    assert controller.diagnostic_barriers[:3] == [
+        "netstats",
+        "nettest",
+        "netstats-final",
+    ]
+    assert not any(note.startswith("nettest terminal") for note in controller.notes)
 
 
 def test_diagnostics_require_command_specific_result_marker() -> None:

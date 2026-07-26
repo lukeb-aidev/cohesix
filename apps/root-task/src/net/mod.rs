@@ -602,6 +602,8 @@ pub struct NetDeviceCounters {
     pub wifi_rx_runtime_queue_high_water: u64,
     /// CYW43 linked-runtime RX overflow flag, encoded as 0 or 1.
     pub wifi_rx_runtime_queue_overflow_seen: u64,
+    /// Root-observed CYW43 linked-runtime RX overflow episodes.
+    pub wifi_rx_runtime_overflow_episodes: u64,
     /// CYW43 linked-runtime RX drain-budget-hit flag, encoded as 0 or 1.
     pub wifi_rx_runtime_drain_budget_hit: u64,
     /// CYW43 linked-runtime max frames drained during one service turn.
@@ -664,7 +666,7 @@ pub struct NetDeviceCounters {
     pub wifi_host_eapol_gtk: u64,
 }
 
-/// Monotonic counters collected from the NIC driver and smoltcp sockets.
+/// NIC and smoltcp counters, either boot-cumulative or generation-projected as documented.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct NetCounters {
     /// RX packets handed to smoltcp.
@@ -759,12 +761,18 @@ pub struct NetCounters {
     pub wifi_rx_pending_queue_high_water: u64,
     /// Root preserved CYW43 RX queue drops.
     pub wifi_rx_pending_drops: u64,
+    /// Boot-cumulative root preserved CYW43 RX queue drops.
+    pub wifi_rx_pending_drops_boot: u64,
     /// CYW43 linked-runtime RX queue depth from the latest idle trace.
     pub wifi_rx_runtime_queue_count: u64,
     /// CYW43 linked-runtime RX queue high-water mark.
     pub wifi_rx_runtime_queue_high_water: u64,
     /// CYW43 linked-runtime RX overflow flag, encoded as 0 or 1.
     pub wifi_rx_runtime_queue_overflow_seen: u64,
+    /// Current-generation CYW43 linked-runtime RX overflow episodes.
+    pub wifi_rx_runtime_overflow_episodes: u64,
+    /// Boot-cumulative CYW43 linked-runtime RX overflow episodes.
+    pub wifi_rx_runtime_overflow_episodes_boot: u64,
     /// CYW43 linked-runtime RX drain-budget-hit flag, encoded as 0 or 1.
     pub wifi_rx_runtime_drain_budget_hit: u64,
     /// CYW43 linked-runtime max frames drained during one service turn.
@@ -797,6 +805,8 @@ pub struct NetCounters {
     pub dropped_zero_len_tx: u64,
     /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.
     pub wifi_assoc: u64,
+    /// Current CYW43 connection generation.
+    pub wifi_connection_generation: u64,
     /// Wi-Fi link state, encoded as 0 or 1 for compact diagnostics.
     pub wifi_link_up: u64,
     /// Host-EAPOL frames received by the Wi-Fi driver.
