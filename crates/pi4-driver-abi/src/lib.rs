@@ -340,6 +340,11 @@ pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL: u16 = 0;
 pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT: u16 = 1;
 /// CYW43 frame flag value for Ethernet data payloads.
 pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA: u16 = 2;
+/// Maximum decoded CYW43 RX backlog retained by either linked-runtime side.
+///
+/// Root must be able to preserve one complete child-runtime backlog while the
+/// single physical owner finishes an exact control transaction.
+pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP: usize = 50;
 /// CYW43 frame flag shift carrying the firmware SDPCM credit byte.
 pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT: u16 = 8;
 /// CYW43 frame flag mask carrying the firmware SDPCM credit byte.

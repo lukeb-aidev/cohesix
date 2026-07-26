@@ -1445,7 +1445,7 @@ const CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES: usize = 16;
 // including hints carried by glom frames. Keep this protocol boundary separate
 // from buffer capacity so a larger shared RX window cannot widen readahead.
 const CYW43_SDPCM_NEXT_FRAME_MAX_BYTES: usize = 2_048;
-const CYW43_RX_DRAIN_BUDGET: usize = 50;
+const CYW43_RX_DRAIN_BUDGET: usize = pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP;
 const CYW43_DPC_CHILD_FALLBACK_POLLS: u32 = 1_048_576;
 const CYW43_SERVICE_PROGRESS_CREDIT: u32 = 1 << 0;
 const CYW43_SERVICE_PROGRESS_QUEUE_DEPTH: u32 = 1 << 1;
@@ -1495,7 +1495,7 @@ const CYW43_EAPOL_KEY_INFO_ACK: u16 = 1 << 7;
 const CYW43_EAPOL_KEY_INFO_MIC: u16 = 1 << 8;
 const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
-const CYW43_RX_QUEUE_CAP: usize = CYW43_RX_DRAIN_BUDGET;
+const CYW43_RX_QUEUE_CAP: usize = pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP;
 const CYW43_FUNCTION2_BLOCK_BYTES: usize = SDIO_FUNCTION2_BLOCK_SIZE as usize;
 const CYW43_CONTROL_RX_FIRSTREAD_BYTES: usize = 64;
 const CYW43_CONTROL_RX_BLOCK_PROBE_BYTES: usize = CYW43_FUNCTION2_BLOCK_BYTES;
@@ -58514,7 +58514,10 @@ mod tests {
 
     #[test]
     fn cyw43_rx_glom_and_deferred_queue_caps_match_pi4_stability_envelope() {
-        assert_eq!(CYW43_RX_DRAIN_BUDGET, 50);
+        assert_eq!(
+            CYW43_RX_DRAIN_BUDGET,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP
+        );
         assert_eq!(CYW43_RX_GLOM_SUBFRAME_CAP, 8);
         assert_eq!(CYW43_RX_QUEUE_CAP, CYW43_RX_DRAIN_BUDGET);
         assert!(CYW43_RX_QUEUE_CAP >= CYW43_RX_GLOM_SUBFRAME_CAP);

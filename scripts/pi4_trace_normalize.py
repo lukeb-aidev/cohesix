@@ -578,6 +578,15 @@ class WifiGate8Proof:
     line: int = 0
     attempt: int = 0
     ready_line: int = 0
+    latest_seen: str = "none"
+    latest_last: str = "none"
+    latest_missing: str = "8a-pair-generation"
+    latest_status: str = "none"
+    latest_pair_epoch: int = 0
+    latest_generation: int = 0
+    latest_blocker: str = "none"
+    latest_line: int = 0
+    latest_attempt: int = 0
 
 
 @dataclass(frozen=True)
@@ -639,6 +648,15 @@ class GateSummary:
     wifi_gate8_generation: int = 0
     wifi_gate8_blocker: str = "none"
     wifi_gate8_line: int = 0
+    wifi_gate8_latest_seen: str = "none"
+    wifi_gate8_latest_last: str = "none"
+    wifi_gate8_latest_missing: str = "8a-pair-generation"
+    wifi_gate8_latest_status: str = "none"
+    wifi_gate8_latest_pair_epoch: int = 0
+    wifi_gate8_latest_generation: int = 0
+    wifi_gate8_latest_blocker: str = "none"
+    wifi_gate8_latest_line: int = 0
+    wifi_gate8_latest_attempt: int = 0
     usb_oldgood_replay: bool = False
     usb_oldgood_last: str = "none"
     usb_oldgood_missing: str = "not-run"
@@ -886,6 +904,15 @@ class GateSummary:
             "WIFI_GATE8_GENERATION": self.wifi_gate8_generation,
             "WIFI_GATE8_BLOCKER": self.wifi_gate8_blocker,
             "WIFI_GATE8_LINE": self.wifi_gate8_line,
+            "WIFI_GATE8_LATEST_SEEN": self.wifi_gate8_latest_seen,
+            "WIFI_GATE8_LATEST_LAST": self.wifi_gate8_latest_last,
+            "WIFI_GATE8_LATEST_MISSING": self.wifi_gate8_latest_missing,
+            "WIFI_GATE8_LATEST_STATUS": self.wifi_gate8_latest_status,
+            "WIFI_GATE8_LATEST_PAIR_EPOCH": self.wifi_gate8_latest_pair_epoch,
+            "WIFI_GATE8_LATEST_GENERATION": self.wifi_gate8_latest_generation,
+            "WIFI_GATE8_LATEST_BLOCKER": self.wifi_gate8_latest_blocker,
+            "WIFI_GATE8_LATEST_LINE": self.wifi_gate8_latest_line,
+            "WIFI_GATE8_LATEST_ATTEMPT": self.wifi_gate8_latest_attempt,
             "USB_OLDGOOD_REPLAY": "yes" if self.usb_oldgood_replay else "no",
             "USB_OLDGOOD_LAST": self.usb_oldgood_last,
             "USB_OLDGOOD_MISSING": self.usb_oldgood_missing,
@@ -3056,6 +3083,7 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
         return 0 < delta < (1 << 63)
 
     latest = WifiGate8Proof()
+    latest_farthest = WifiGate8Proof()
     accepted: WifiGate8Proof | None = None
     causal_failure: WifiGate8Proof | None = None
     candidate: WifiGate8Proof | None = None
@@ -3104,6 +3132,26 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
                 ready_line=0,
             )
         return empty_frontier(status=status, blocker=blocker, line=line)
+
+    def passed_subgate_count(proof: WifiGate8Proof) -> int:
+        """Return the ordered sub-gate depth represented by one frontier."""
+
+        if proof.seen == "none":
+            return 0
+        return len(proof.seen.split(">"))
+
+    def retain_latest_farthest(proof: WifiGate8Proof) -> None:
+        """Retain the farthest valid snapshot, breaking depth ties by recency."""
+
+        nonlocal latest_farthest
+        candidate = replace(proof, attempt=current_attempt)
+        candidate_key = (passed_subgate_count(candidate), candidate.line)
+        retained_key = (
+            passed_subgate_count(latest_farthest),
+            latest_farthest.line,
+        )
+        if candidate_key >= retained_key:
+            latest_farthest = candidate
 
     for item in proof_stream:
         if isinstance(item, TraceEvent):
@@ -3395,6 +3443,9 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
                 if recovery_generation is not None:
                     recovery_generation = None
 
+        if snapshot_valid:
+            retain_latest_farthest(proof)
+
         if accepted is not None and stabilizing_line == 0:
             # Passive `wifi diag` snapshots cannot replace or revoke the exact
             # publication transaction. Only explicit lifecycle boundaries do.
@@ -3433,7 +3484,19 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
             else:
                 latest = replace(proof, attempt=current_attempt)
 
-    return accepted or latest
+    retained = accepted or latest
+    return replace(
+        retained,
+        latest_seen=latest_farthest.seen,
+        latest_last=latest_farthest.last,
+        latest_missing=latest_farthest.missing,
+        latest_status=latest_farthest.status,
+        latest_pair_epoch=latest_farthest.pair_epoch,
+        latest_generation=latest_farthest.generation,
+        latest_blocker=latest_farthest.blocker,
+        latest_line=latest_farthest.line,
+        latest_attempt=latest_farthest.attempt,
+    )
 
 
 def cyw43_field_yes(fields: dict[str, str], key: str) -> bool:
@@ -12991,7 +13054,13 @@ def summarize_cyw43_bootstrap_supervisor(
 
         if status == "exhausted":
             sequence_valid = (
-                state == "active"
+                (
+                    state == "active"
+                    or (
+                        state == "stabilizing"
+                        and gate8_recovery_before_event
+                    )
+                )
                 and attempt == current_attempt
                 and attempt == CYW43_BOOTSTRAP_MAX_ATTEMPTS
             )
@@ -13924,6 +13993,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_gate8_generation=wifi_gate8.generation,
         wifi_gate8_blocker=wifi_gate8.blocker,
         wifi_gate8_line=wifi_gate8.line,
+        wifi_gate8_latest_seen=wifi_gate8.latest_seen,
+        wifi_gate8_latest_last=wifi_gate8.latest_last,
+        wifi_gate8_latest_missing=wifi_gate8.latest_missing,
+        wifi_gate8_latest_status=wifi_gate8.latest_status,
+        wifi_gate8_latest_pair_epoch=wifi_gate8.latest_pair_epoch,
+        wifi_gate8_latest_generation=wifi_gate8.latest_generation,
+        wifi_gate8_latest_blocker=wifi_gate8.latest_blocker,
+        wifi_gate8_latest_line=wifi_gate8.latest_line,
+        wifi_gate8_latest_attempt=wifi_gate8.latest_attempt,
         usb_oldgood_replay=usb_oldgood.replay,
         usb_oldgood_last=usb_oldgood.last,
         usb_oldgood_missing=usb_oldgood.missing,

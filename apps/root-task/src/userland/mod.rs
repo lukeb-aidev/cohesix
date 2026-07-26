@@ -1625,7 +1625,21 @@ where
                 // before the pair restart begins.
                 pump.poll_cyw43_bootstrap_supervisor_event_turn();
             } else {
-                pump.poll();
+                // NetStack is attached, but no ordinary poll for this
+                // generation may run until the single handoff commit rejects
+                // stale tokens and publishes its loss baseline. Valid
+                // current-generation backlog remains queued for the
+                // immediately following consumer turn.
+                let handoff_committed = bootstrap.ready_generation().is_some_and(|generation| {
+                    crate::drivers::driver_task_net::commit_cyw43_data_handoff_if_ready(generation)
+                });
+                if handoff_committed {
+                    pump.poll();
+                } else {
+                    // Preserve operator liveness without consuming network
+                    // data or issuing an alternate physical-driver operation.
+                    pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                }
             }
             let stability_now_ms = crate::hal::timebase().now_ms();
             let recovery_required = crate::drivers::driver_task_net::cyw43_recovery_required();

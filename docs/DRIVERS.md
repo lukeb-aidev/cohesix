@@ -429,6 +429,28 @@ this exact order:
 8. `8h-data-admission` proves the current-generation data handoff and bounded
    fairness/loss invariants.
 
+Gate 8h has one explicit root-consumer commit. Association-generation start
+does not establish the data-handoff baseline because, unlike Linux
+`brcmfmac`, Cohesix can open the firmware controlled port before its root
+NetStack consumer has attached. After 8a through 8g are current and pass, the
+first ordinary root Network turn with an attached but not yet polled consumer
+calls `commit_cyw43_data_handoff_if_ready` with the expected generation. This
+idempotent helper revalidates the pair, association/link, BSSID, key,
+maintenance, logical-owner, and recovery state; rejects only queued tokens
+captured in a stale generation; preserves current-generation backlog for the
+immediately following NetStack poll; captures the sticky cumulative root-drop
+and runtime-overflow counters as the post-consumer baseline; and
+release-publishes the current-generation commit token last. This is root
+handoff bookkeeping, not a second physical driver, SDIO owner, poll, or
+recovery path.
+
+Root and child use the single ABI value
+`pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`: it bounds both the
+root copied-frame queue and child decoded-frame queue, and it is also the
+child's bounded RX drain budget. This alignment lets root preserve one complete
+child backlog without maintaining a divergent private capacity. It does not
+replace the consumer commit or convert saturation into success.
+
 Subgates 8a and 8b must belong to one current pair/control epoch. Subgates 8c
 through 8h must all belong to one current logical connection generation. The
 producer evaluates once, formats all eight
@@ -460,15 +482,44 @@ Attempt 5 exhausts and quarantines instead of spinning.
 
 Gate 8h deliberately permits normal bounded root RX, data TX, ARP, runtime
 backlog, and an exact already-assigned current-generation NetData request.
-A baseline-token or generation handoff mismatch is `pending`, not `fail`.
-A lossless full root RX queue is also `pending` with bounded drain priority. It
-fails when an exact-generation root-drop latch or monotonic runtime-overflow
-episode advances beyond the current connection-generation baseline, a prompt
-belongs to a stale generation, or a retained request-less NetData pre-poll
-survives while higher-priority root RX/TX/ARP work exists. Cumulative root-drop
-telemetry saturates instead of wrapping; the exact-generation latch therefore
-remains fail-closed even at counter saturation. Recovery publishes a new
-generation-local baseline without clearing cumulative boot telemetry.
+Before the root-consumer commit, a missing/stale commit or baseline token is
+`pending` with blocker `data-handoff-commit-pending`, and pre-consumer queue
+pressure cannot be relabelled as a post-handoff failure. After the token is
+published, a lossless full root RX queue remains `pending` with bounded drain
+priority. Gate 8h then fails when an exact-generation root-drop latch or
+monotonic runtime-overflow episode advances beyond the committed baseline, a
+prompt belongs to a stale generation, or a retained request-less NetData
+pre-poll survives while higher-priority root RX/TX/ARP work exists. Cumulative
+root-drop telemetry saturates instead of wrapping; the exact-generation latch
+therefore remains fail-closed even at counter saturation. Recovery or
+generation advance invalidates the commit and requires a new consumer-active
+commit without clearing cumulative boot telemetry. Pending tokens capture the
+connection generation when root queues them. Generation invalidation and the
+commit boundary reject and separately count stale-generation tokens, while
+valid current-generation backlog remains queued for NetStack rather than being
+discarded or hidden by the new baseline.
+
+Both `wifi diag` and `wifi probe-ht` emit the same five passive handoff records
+after association and maintenance state:
+
+```text
+wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
+wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
+wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
+wifi: data_handoff boot_first_loss=no
+wifi: data_handoff postcommit_first_loss=no
+```
+
+When losses exist, the fourth and fifth lines have these exact shapes:
+
+```text
+wifi: data_handoff boot_first_loss=yes sampled_generation=<n> committed=<yes|no> reason=<reason> queue_len=<n> channel=<n> ethertype=0x<value> priority=<n> attribution=current-epoch-sample
+wifi: data_handoff postcommit_first_loss=yes sampled_generation=<n> reason=<reason> queue_len=<n> channel=<n> ethertype=0x<value> priority=<n> attribution=current-epoch-sample
+```
+
+`sampled_generation` is the connection epoch observed when root sampled the
+first copied-frame loss; `attribution=current-epoch-sample` explicitly means it
+is not proof of which producer or physical owner caused that loss.
 
 Gate 9 DHCP/address proof and Gate 10 nettest/TCP/authenticated-`cohsh` proof
 must belong to the same logical connection generation as the accepted Gate 8

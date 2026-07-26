@@ -506,6 +506,10 @@ static GENET_ARP_TX: AtomicU32 = AtomicU32::new(0);
 static CYW43_PENDING_RX_HIGH_WATER: AtomicU32 = AtomicU32::new(0);
 static CYW43_PENDING_RX_DROPS: AtomicU32 = AtomicU32::new(0);
 static CYW43_PENDING_RX_DROP_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
+static CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
+static CYW43_STALE_RX_PURGED_TOTAL: AtomicU32 = AtomicU32::new(0);
+static CYW43_STALE_RX_PURGE_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
+static CYW43_STALE_RX_PURGED_LAST: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -596,6 +600,51 @@ impl Cyw43DataHandoffBaseline {
 #[cfg(feature = "kernel")]
 static CYW43_DATA_HANDOFF_BASELINE: Mutex<Cyw43DataHandoffBaseline> =
     Mutex::new(Cyw43DataHandoffBaseline::initial());
+
+/// Passive evidence for the first copied root RX token that could not be
+/// retained during this boot.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43PendingRxLossDiagnostic {
+    pub sampled_generation: u32,
+    pub handoff_committed: bool,
+    pub reason: &'static str,
+    pub queue_len: u32,
+    pub channel: u16,
+    pub ethertype: u16,
+    pub priority: u8,
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_BOOT_FIRST_PENDING_RX_LOSS: Mutex<Option<Cyw43PendingRxLossDiagnostic>> =
+    Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+static CYW43_POSTCOMMIT_FIRST_PENDING_RX_LOSS: Mutex<Option<Cyw43PendingRxLossDiagnostic>> =
+    Mutex::new(None);
+
+/// Passive root data-handoff state used by serial WiFi diagnostics.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43DataHandoffDiagnostic {
+    pub generation: u32,
+    pub commit_epoch_token: u64,
+    pub committed: bool,
+    pub baseline_generation: u32,
+    pub root_rx_queue_len: u32,
+    pub root_rx_queue_cap: u32,
+    pub root_rx_high_water: u32,
+    pub root_rx_drops: u32,
+    pub baseline_root_rx_drops: u32,
+    pub drop_epoch_token: u64,
+    pub runtime_rx_overflow_episodes: u32,
+    pub baseline_runtime_rx_overflow_episodes: u32,
+    pub stale_rx_purged_total: u32,
+    pub last_stale_purge_epoch_token: u64,
+    pub last_stale_purge_count: u32,
+    pub boot_first_loss: Option<Cyw43PendingRxLossDiagnostic>,
+    pub postcommit_first_loss: Option<Cyw43PendingRxLossDiagnostic>,
+}
 
 /// Open one ordinary EventPump turn for CYW43 child-runtime service.
 ///
@@ -6480,7 +6529,7 @@ fn invalidate_cyw43_root_generation_for_recovery(expected_generation: u32) -> Op
             Ordering::Acquire,
         )
         .ok()?;
-    publish_cyw43_data_handoff_baseline(next_epoch);
+    invalidate_cyw43_data_handoff();
     CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(cyw43_epoch_token(next_epoch), Ordering::Release);
     CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
     CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
@@ -6518,7 +6567,6 @@ fn invalidate_cyw43_root_generation_for_recovery(expected_generation: u32) -> Op
     CYW43_ARP_TARGET_HW_ZEROED.store(0, Ordering::Release);
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
     CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
-    CYW43_PENDING_RX_QUEUE.lock().clear();
     *CYW43_PENDING_DATA_TX.lock() = None;
     CYW43_PENDING_ARP_TX.lock().clear();
     *CYW43_MAINTENANCE_CURSOR.lock() = Cyw43MaintenanceCursor {
@@ -6547,7 +6595,7 @@ fn transition_cyw43_host_eapol_to_reauthentication() {
     let next_epoch = CYW43_CONNECTION_EPOCH
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
-    publish_cyw43_data_handoff_baseline(next_epoch);
+    invalidate_cyw43_data_handoff();
     CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(cyw43_epoch_token(next_epoch), Ordering::Release);
     keep_cyw43_reauthentication_pending();
 }
@@ -6558,16 +6606,20 @@ const fn cyw43_epoch_token(epoch: u32) -> u64 {
 }
 
 #[cfg(feature = "kernel")]
-fn publish_cyw43_data_handoff_baseline(generation: u32) {
-    // Clear the exact-generation loss latch before sampling the cumulative
-    // counter. A concurrent drop before the sample is part of the baseline;
-    // one after the sample republishes the current generation token.
+fn invalidate_cyw43_data_handoff() {
+    // Generation start is not a consumer handoff. Cohesix can admit firmware
+    // data while exact post-key work still owns the linked runtime and before
+    // root has attached NetStack, unlike Linux's already-live netdev. Leave
+    // Gate 8h pending until the explicit consumer-active commit.
+    CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(0, Ordering::Release);
-    *CYW43_DATA_HANDOFF_BASELINE.lock() = Cyw43DataHandoffBaseline {
-        generation,
-        root_rx_drops: CYW43_PENDING_RX_DROPS.load(Ordering::Acquire),
-        runtime_rx_overflow_episodes: CYW43_RX_RUNTIME_OVERFLOW_EPISODES.load(Ordering::Acquire),
-    };
+    let mut baseline = CYW43_DATA_HANDOFF_BASELINE.lock();
+    let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+    let stale = queue.len() as u32;
+    queue.clear();
+    record_cyw43_stale_rx_purge(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), stale);
+    *CYW43_POSTCOMMIT_FIRST_PENDING_RX_LOSS.lock() = None;
+    *baseline = Cyw43DataHandoffBaseline::initial();
 }
 
 #[cfg(feature = "kernel")]
@@ -8347,33 +8399,35 @@ fn evaluate_cyw43_gate8(inputs: Cyw43Gate8Inputs) -> Cyw43Gate8Diagnostic {
     }
 
     if subgates[6].status == Cyw43Gate8SubgateStatus::Pass {
+        let handoff_current = inputs.data_handoff_generation_current
+            && inputs.data_handoff_generation_token == cyw43_epoch_token(inputs.generation);
         // Normal bounded RX/TX/ARP work may coexist with Gate 8. The admission
         // fence gives retained root work priority over a fresh request-less
         // NetData poll, while an exact assigned request remains the sole legal
-        // continuation. Fail only when that invariant or a generation-local
-        // loss bound is violated.
+        // continuation. Before the one consumer-active commit, data loss is
+        // pre-handoff pressure and 8h remains pending. Once committed, every
+        // generation-local loss remains fail-closed.
         let root_priority_work =
             inputs.root_rx_pending || inputs.data_tx_pending || inputs.arp_tx_pending;
-        let invariant_blocker =
-            if inputs.prompt_poll_active && !inputs.prompt_poll_generation_current {
-                Some("prompt-generation-stale")
-            } else if inputs.prompt_poll_active
-                && inputs.prompt_poll_net_data
-                && !inputs.prompt_poll_request_assigned
-                && root_priority_work
-            {
-                Some("requestless-net-data-root-work-conflict")
-            } else if inputs.root_rx_drop_since_baseline {
-                Some("root-rx-drop-since-generation")
-            } else if inputs.runtime_rx_overflow_since_baseline {
-                Some("runtime-rx-overflow-since-generation")
-            } else {
-                None
-            };
-        let pending_blocker = if !inputs.data_handoff_generation_current
-            || inputs.data_handoff_generation_token != cyw43_epoch_token(inputs.generation)
+        let invariant_blocker = if !handoff_current {
+            None
+        } else if inputs.prompt_poll_active && !inputs.prompt_poll_generation_current {
+            Some("prompt-generation-stale")
+        } else if inputs.prompt_poll_active
+            && inputs.prompt_poll_net_data
+            && !inputs.prompt_poll_request_assigned
+            && root_priority_work
         {
-            Some("data-handoff-generation-pending")
+            Some("requestless-net-data-root-work-conflict")
+        } else if inputs.root_rx_drop_since_baseline {
+            Some("root-rx-drop-since-generation")
+        } else if inputs.runtime_rx_overflow_since_baseline {
+            Some("runtime-rx-overflow-since-generation")
+        } else {
+            None
+        };
+        let pending_blocker = if !handoff_current {
+            Some("data-handoff-commit-pending")
         } else if inputs.root_rx_queue_saturated {
             Some("root-rx-drain-pending")
         } else if inputs.rejoin_pending {
@@ -8427,10 +8481,10 @@ pub(crate) fn cyw43_gate8_diagnostic() -> Cyw43Gate8Diagnostic {
     let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
     let generation = association.generation;
     let epoch_token = cyw43_epoch_token(generation);
+    let data_handoff_commit_token = CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire);
     let data_handoff_baseline = *CYW43_DATA_HANDOFF_BASELINE.lock();
     let prompt_poll = *CYW43_PENDING_PROMPT_POLL.lock();
     let root_rx_queue_len = CYW43_PENDING_RX_QUEUE.lock().len();
-    let root_rx_drops = CYW43_PENDING_RX_DROPS.load(Ordering::Acquire);
     let runtime_rx_overflow_episodes = CYW43_RX_RUNTIME_OVERFLOW_EPISODES.load(Ordering::Acquire);
     evaluate_cyw43_gate8(Cyw43Gate8Inputs {
         pair_scrub_epoch,
@@ -8471,8 +8525,8 @@ pub(crate) fn cyw43_gate8_diagnostic() -> Cyw43Gate8Diagnostic {
         rejoin_pending: cyw43_rejoin_pending_for_epoch(generation),
         data_rx_admitted: cyw43_post_secure_data_rx_admitted(),
         control_plane_ready: CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire) != 0,
-        data_handoff_generation_token: cyw43_epoch_token(data_handoff_baseline.generation),
-        data_handoff_generation_current: data_handoff_baseline.generation == generation,
+        data_handoff_generation_token: data_handoff_commit_token,
+        data_handoff_generation_current: data_handoff_commit_token == epoch_token,
         prompt_poll_active: prompt_poll.is_some(),
         prompt_poll_net_data: prompt_poll
             .is_some_and(|pending| pending.owner == Cyw43PromptPollOwner::NetData),
@@ -8483,12 +8537,114 @@ pub(crate) fn cyw43_gate8_diagnostic() -> Cyw43Gate8Diagnostic {
         data_tx_pending: CYW43_PENDING_DATA_TX.lock().is_some(),
         arp_tx_pending: !CYW43_PENDING_ARP_TX.lock().is_empty(),
         root_rx_queue_saturated: root_rx_queue_len >= CYW43_PENDING_RX_QUEUE_CAP,
-        root_rx_drop_since_baseline: data_handoff_baseline.generation == generation
-            && (root_rx_drops > data_handoff_baseline.root_rx_drops
-                || CYW43_PENDING_RX_DROP_EPOCH_TOKEN.load(Ordering::Acquire) == epoch_token),
-        runtime_rx_overflow_since_baseline: data_handoff_baseline.generation == generation
+        root_rx_drop_since_baseline: data_handoff_commit_token == epoch_token
+            && data_handoff_baseline.generation == generation
+            && CYW43_PENDING_RX_DROP_EPOCH_TOKEN.load(Ordering::Acquire) == epoch_token,
+        runtime_rx_overflow_since_baseline: data_handoff_commit_token == epoch_token
+            && data_handoff_baseline.generation == generation
             && runtime_rx_overflow_episodes > data_handoff_baseline.runtime_rx_overflow_episodes,
     })
+}
+
+/// Commit the single root-consumer handoff for one proven Gate 8 generation.
+///
+/// This performs no HAL, SDIO, CYW43, retry, or completion work. The ordinary
+/// EventPump calls it only after NetStack is attached and before its first poll
+/// for this generation. Stale-generation frames are rejected, valid current
+/// backlog remains available to that first consumer turn, cumulative loss
+/// telemetry is sampled, and the generation token is release-published last.
+/// Repeating the commit for the same generation is a no-op.
+#[cfg(feature = "kernel")]
+pub(crate) fn commit_cyw43_data_handoff_if_ready(expected_generation: u32) -> bool {
+    let expected_token = cyw43_epoch_token(expected_generation);
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != expected_generation
+        || cyw43_recovery_required()
+        || cyw43_rejoin_pending_for_epoch(expected_generation)
+    {
+        return false;
+    }
+
+    let diagnostic = cyw43_gate8_diagnostic();
+    if diagnostic.generation != expected_generation
+        || !diagnostic.subgates[..CYW43_GATE8_SUBGATE_COUNT - 1]
+            .iter()
+            .all(|subgate| subgate.status == Cyw43Gate8SubgateStatus::Pass)
+        || !cyw43_post_secure_data_rx_admitted()
+        || CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire) == 0
+    {
+        return false;
+    }
+
+    if let Some(prompt) = *CYW43_PENDING_PROMPT_POLL.lock() {
+        if prompt.generation != expected_generation || prompt.owner != Cyw43PromptPollOwner::NetData
+        {
+            return false;
+        }
+    }
+
+    if CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire) == expected_token {
+        return true;
+    }
+
+    // Match the diagnostic lock order (baseline, then queue). Holding the
+    // copied-frame queue across stale rejection and the counter snapshot makes
+    // this one root-side boundary: a later store is necessarily post-commit
+    // evidence. Current-generation backlog remains queued for NetStack.
+    let mut baseline = CYW43_DATA_HANDOFF_BASELINE.lock();
+    let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != expected_generation
+        || cyw43_recovery_required()
+        || cyw43_rejoin_pending_for_epoch(expected_generation)
+    {
+        return false;
+    }
+
+    let stale = purge_stale_cyw43_pending_rx_locked(&mut queue, expected_generation);
+    record_cyw43_stale_rx_purge(expected_generation, stale);
+
+    // A drop before this snapshot belongs to pre-consumer pressure. A later
+    // drop republishes the exact-generation loss token and records a separate
+    // post-commit first-loss sample. It remains fatal even if the cumulative
+    // counter has saturated.
+    CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(0, Ordering::Release);
+    *CYW43_POSTCOMMIT_FIRST_PENDING_RX_LOSS.lock() = None;
+    *baseline = Cyw43DataHandoffBaseline {
+        generation: expected_generation,
+        root_rx_drops: CYW43_PENDING_RX_DROPS.load(Ordering::Acquire),
+        runtime_rx_overflow_episodes: CYW43_RX_RUNTIME_OVERFLOW_EPISODES.load(Ordering::Acquire),
+    };
+    core::sync::atomic::fence(Ordering::Release);
+    CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(expected_token, Ordering::Release);
+    true
+}
+
+/// Return a passive copy of the root-consumer handoff and loss counters.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_data_handoff_diagnostic() -> Cyw43DataHandoffDiagnostic {
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let epoch_token = cyw43_epoch_token(generation);
+    let commit_epoch_token = CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire);
+    let baseline = *CYW43_DATA_HANDOFF_BASELINE.lock();
+    let root_rx_queue_len = CYW43_PENDING_RX_QUEUE.lock().len() as u32;
+    Cyw43DataHandoffDiagnostic {
+        generation,
+        commit_epoch_token,
+        committed: commit_epoch_token == epoch_token,
+        baseline_generation: baseline.generation,
+        root_rx_queue_len,
+        root_rx_queue_cap: CYW43_PENDING_RX_QUEUE_CAP as u32,
+        root_rx_high_water: CYW43_PENDING_RX_HIGH_WATER.load(Ordering::Acquire),
+        root_rx_drops: CYW43_PENDING_RX_DROPS.load(Ordering::Acquire),
+        baseline_root_rx_drops: baseline.root_rx_drops,
+        drop_epoch_token: CYW43_PENDING_RX_DROP_EPOCH_TOKEN.load(Ordering::Acquire),
+        runtime_rx_overflow_episodes: CYW43_RX_RUNTIME_OVERFLOW_EPISODES.load(Ordering::Acquire),
+        baseline_runtime_rx_overflow_episodes: baseline.runtime_rx_overflow_episodes,
+        stale_rx_purged_total: CYW43_STALE_RX_PURGED_TOTAL.load(Ordering::Acquire),
+        last_stale_purge_epoch_token: CYW43_STALE_RX_PURGE_EPOCH_TOKEN.load(Ordering::Acquire),
+        last_stale_purge_count: CYW43_STALE_RX_PURGED_LAST.load(Ordering::Acquire),
+        boot_first_loss: *CYW43_BOOT_FIRST_PENDING_RX_LOSS.lock(),
+        postcommit_first_loss: *CYW43_POSTCOMMIT_FIRST_PENDING_RX_LOSS.lock(),
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -10060,7 +10216,7 @@ fn begin_cyw43_association_retry(
     let next_generation = CYW43_CONNECTION_EPOCH
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
-    publish_cyw43_data_handoff_baseline(next_generation);
+    invalidate_cyw43_data_handoff();
     CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
     CYW43_ASSOCIATED.store(0, Ordering::Release);
@@ -10087,7 +10243,6 @@ fn begin_cyw43_association_retry(
     CYW43_HOST_EAPOL_SCB_AUTH_MAC_LO.store(0, Ordering::Release);
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
     CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
-    CYW43_PENDING_RX_QUEUE.lock().clear();
     *CYW43_PENDING_DATA_TX.lock() = None;
     CYW43_PENDING_ARP_TX.lock().clear();
     clear_cyw43_pending_control_replies();
@@ -17261,7 +17416,13 @@ fn service_cyw43_control_window_data_frame_without_reentry(
     if stored {
         store_cyw43_pending_rx_token(frame_flags, token)
     } else {
-        record_cyw43_pending_rx_drop();
+        record_cyw43_pending_rx_drop(
+            "prestore-rejected",
+            CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+            frame_flags,
+            Some(&token),
+            cyw43_pending_rx_queue_len() as usize,
+        );
         true
     }
 }
@@ -17946,7 +18107,7 @@ fn reset_cyw43_control_plane_state(mode: Cyw43ControlPlaneResetMode) {
     CYW43_LINK_UP.store(0, Ordering::Release);
     if mode == Cyw43ControlPlaneResetMode::Initial {
         CYW43_CONNECTION_EPOCH.store(0, Ordering::Release);
-        publish_cyw43_data_handoff_baseline(0);
+        invalidate_cyw43_data_handoff();
         CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_PAIR_SCRUB_EPOCH.store(0, Ordering::Release);
         CYW43_CONTROL_PROGRAM_EPOCH_TOKEN.store(0, Ordering::Release);
@@ -18058,7 +18219,14 @@ fn fail_closed_cyw43_generation_recovery() {
     CYW43_ANY_FRAME_NEXT_CHANNEL.store(0, Ordering::Release);
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
     CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
-    CYW43_PENDING_RX_QUEUE.lock().clear();
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let stale = {
+        let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+        let stale = queue.len() as u32;
+        queue.clear();
+        stale
+    };
+    record_cyw43_stale_rx_purge(generation, stale);
     *CYW43_PENDING_DATA_TX.lock() = None;
     CYW43_PENDING_ARP_TX.lock().clear();
     clear_cyw43_pending_control_replies();
@@ -20909,6 +21077,7 @@ pub struct DriverTaskNetRxToken {
 
 #[cfg(feature = "kernel")]
 struct DriverTaskNetPendingRxToken {
+    sampled_generation: u32,
     flags: u16,
     token: DriverTaskNetRxToken,
 }
@@ -20960,7 +21129,10 @@ static CYW43_PENDING_ARP_TX: Mutex<heapless::Deque<Cyw43PendingArpTx, CYW43_PEND
     Mutex::new(heapless::Deque::new());
 
 #[cfg(feature = "kernel")]
-const CYW43_PENDING_RX_QUEUE_CAP: usize = 32;
+// Preserve one complete child-runtime RX backlog. Both sides consume the same
+// ABI bound so an exact control owner cannot legally produce more copied
+// frames than root can retain before its ordinary network consumer runs.
+const CYW43_PENDING_RX_QUEUE_CAP: usize = pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP;
 #[cfg(feature = "kernel")]
 static CYW43_PENDING_RX_QUEUE: Mutex<
     heapless::Deque<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>,
@@ -21614,7 +21786,13 @@ fn route_cyw43_pre_secure_eapol_pre_poll_completion(
             if stored {
                 return store_cyw43_pending_rx_token(flags, token);
             }
-            record_cyw43_pending_rx_drop();
+            record_cyw43_pending_rx_drop(
+                "prestore-rejected",
+                CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+                flags,
+                Some(&token),
+                cyw43_pending_rx_queue_len() as usize,
+            );
         }
         return false;
     };
@@ -21704,7 +21882,13 @@ pub(crate) fn preserve_driver_task_pre_poll_completion(
                 if stored {
                     store_cyw43_pending_rx_token(flags, token)
                 } else {
-                    record_cyw43_pending_rx_drop();
+                    record_cyw43_pending_rx_drop(
+                        "prestore-rejected",
+                        CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+                        flags,
+                        Some(&token),
+                        cyw43_pending_rx_queue_len() as usize,
+                    );
                     false
                 }
             } else {
@@ -22662,7 +22846,10 @@ fn cyw43_pending_pre_secure_eapol_available() -> bool {
 
 #[cfg(feature = "kernel")]
 fn take_cyw43_pending_pre_secure_eapol_token() -> Option<(u16, DriverTaskNetRxToken)> {
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+    let stale = purge_stale_cyw43_pending_rx_locked(&mut queue, generation);
+    record_cyw43_stale_rx_purge(generation, stale);
     let (front, back) = queue.as_slices();
     let mut selected_index = None;
     let mut selected_rank = 0u8;
@@ -22681,7 +22868,10 @@ fn take_cyw43_pending_pre_secure_eapol_token() -> Option<(u16, DriverTaskNetRxTo
 
 #[cfg(feature = "kernel")]
 fn take_cyw43_pending_rx_token() -> Option<(u16, DriverTaskNetRxToken)> {
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+    let stale = purge_stale_cyw43_pending_rx_locked(&mut queue, generation);
+    record_cyw43_stale_rx_purge(generation, stale);
     let (front, back) = queue.as_slices();
     let mut selected_index = None;
     let mut selected_priority = 0u8;
@@ -22723,47 +22913,129 @@ fn remove_cyw43_pending_rx_at(
 }
 
 #[cfg(feature = "kernel")]
+fn purge_stale_cyw43_pending_rx_locked(
+    queue: &mut heapless::Deque<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>,
+    expected_generation: u32,
+) -> u32 {
+    let mut purged = 0u32;
+    loop {
+        let (front, back) = queue.as_slices();
+        let Some(index) =
+            front
+                .iter()
+                .chain(back.iter())
+                .enumerate()
+                .find_map(|(index, pending)| {
+                    (pending.sampled_generation != expected_generation).then_some(index)
+                })
+        else {
+            break;
+        };
+        if remove_cyw43_pending_rx_at(queue, index).is_none() {
+            break;
+        }
+        purged = purged.saturating_add(1);
+    }
+    purged
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_stale_rx_purge(generation: u32, purged: u32) {
+    if purged == 0 {
+        return;
+    }
+    let _ =
+        CYW43_STALE_RX_PURGED_TOTAL.fetch_update(Ordering::AcqRel, Ordering::Acquire, |total| {
+            Some(total.saturating_add(purged))
+        });
+    CYW43_STALE_RX_PURGED_LAST.store(purged, Ordering::Release);
+    CYW43_STALE_RX_PURGE_EPOCH_TOKEN.store(cyw43_epoch_token(generation), Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
 fn store_cyw43_pending_rx_token(flags: u16, token: DriverTaskNetRxToken) -> bool {
+    let sampled_generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+    let stale = purge_stale_cyw43_pending_rx_locked(&mut queue, sampled_generation);
+    record_cyw43_stale_rx_purge(sampled_generation, stale);
     if let Some(index) = cyw43_pending_rx_replacement_index(&queue, flags, &token) {
         if remove_cyw43_pending_rx_at(&mut queue, index).is_none() {
             return false;
         }
-        if queue
-            .push_back(DriverTaskNetPendingRxToken { flags, token })
-            .is_ok()
-        {
-            update_atomic_u32_max(&CYW43_PENDING_RX_HIGH_WATER, queue.len() as u32);
-            return true;
+        match queue.push_back(DriverTaskNetPendingRxToken {
+            sampled_generation,
+            flags,
+            token,
+        }) {
+            Ok(()) => {
+                update_atomic_u32_max(&CYW43_PENDING_RX_HIGH_WATER, queue.len() as u32);
+                return true;
+            }
+            Err(pending) => {
+                record_cyw43_pending_rx_drop(
+                    "replacement-store-failed",
+                    pending.sampled_generation,
+                    pending.flags,
+                    Some(&pending.token),
+                    queue.len(),
+                );
+                return false;
+            }
         }
-        record_cyw43_pending_rx_drop();
-        return false;
     }
-    let pending = match queue.push_back(DriverTaskNetPendingRxToken { flags, token }) {
+    let pending = match queue.push_back(DriverTaskNetPendingRxToken {
+        sampled_generation,
+        flags,
+        token,
+    }) {
         Ok(()) => {
             update_atomic_u32_max(&CYW43_PENDING_RX_HIGH_WATER, queue.len() as u32);
             return true;
         }
         Err(pending) => pending,
     };
-    if !cyw43_evict_one_pending_rx_for(&mut queue, flags, &pending.token) {
-        record_cyw43_pending_rx_drop();
+    let Some(evicted) = cyw43_evict_one_pending_rx_for(&mut queue, flags, &pending.token) else {
+        record_cyw43_pending_rx_drop(
+            "queue-full-rejected",
+            pending.sampled_generation,
+            pending.flags,
+            Some(&pending.token),
+            queue.len(),
+        );
         return false;
-    }
+    };
 
-    record_cyw43_pending_rx_drop();
-    if queue.push_back(pending).is_ok() {
-        update_atomic_u32_max(&CYW43_PENDING_RX_HIGH_WATER, queue.len() as u32);
-        true
-    } else {
-        record_cyw43_pending_rx_drop();
-        false
+    record_cyw43_pending_rx_drop(
+        "priority-eviction",
+        evicted.sampled_generation,
+        evicted.flags,
+        Some(&evicted.token),
+        CYW43_PENDING_RX_QUEUE_CAP,
+    );
+    match queue.push_back(pending) {
+        Ok(()) => {
+            update_atomic_u32_max(&CYW43_PENDING_RX_HIGH_WATER, queue.len() as u32);
+            true
+        }
+        Err(rejected) => {
+            record_cyw43_pending_rx_drop(
+                "eviction-store-failed",
+                rejected.sampled_generation,
+                rejected.flags,
+                Some(&rejected.token),
+                queue.len(),
+            );
+            false
+        }
     }
 }
 
 #[cfg(feature = "kernel")]
 fn cyw43_pending_rx_token_store_possible(flags: u16, token: &DriverTaskNetRxToken) -> bool {
-    let queue = CYW43_PENDING_RX_QUEUE.lock();
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let mut queue = CYW43_PENDING_RX_QUEUE.lock();
+    let stale = purge_stale_cyw43_pending_rx_locked(&mut queue, generation);
+    record_cyw43_stale_rx_purge(generation, stale);
     queue.len() < CYW43_PENDING_RX_QUEUE_CAP
         || cyw43_pending_rx_queue_contains_evictable_for(&queue, flags, token)
 }
@@ -22852,10 +23124,10 @@ fn cyw43_evict_one_pending_rx_for(
     queue: &mut heapless::Deque<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>,
     flags: u16,
     token: &DriverTaskNetRxToken,
-) -> bool {
+) -> Option<DriverTaskNetPendingRxToken> {
     let original_len = queue.len();
     if let Some(index) = cyw43_pending_rx_replacement_index(queue, flags, token) {
-        return remove_cyw43_pending_rx_at(queue, index).is_some();
+        return remove_cyw43_pending_rx_at(queue, index);
     }
     let incoming_priority = cyw43_pending_rx_priority(flags, token);
     let target_priority = {
@@ -22869,11 +23141,9 @@ fn cyw43_evict_one_pending_rx_for(
             })
             .min()
     };
-    let Some(target_priority) = target_priority else {
-        return false;
-    };
+    let target_priority = target_priority?;
     let (front, back) = queue.as_slices();
-    let Some(index) = front
+    let index = front
         .iter()
         .chain(back.iter())
         .take(original_len)
@@ -22881,11 +23151,8 @@ fn cyw43_evict_one_pending_rx_for(
         .find_map(|(index, pending)| {
             (cyw43_pending_rx_priority(pending.flags, &pending.token) == target_priority)
                 .then_some(index)
-        })
-    else {
-        return false;
-    };
-    remove_cyw43_pending_rx_at(queue, index).is_some()
+        })?;
+    remove_cyw43_pending_rx_at(queue, index)
 }
 
 #[cfg(feature = "kernel")]
@@ -23037,12 +23304,44 @@ fn cyw43_pending_rx_queue_len() -> u64 {
 }
 
 #[cfg(feature = "kernel")]
-fn record_cyw43_pending_rx_drop() {
+fn record_cyw43_pending_rx_drop(
+    reason: &'static str,
+    sampled_generation: u32,
+    flags: u16,
+    token: Option<&DriverTaskNetRxToken>,
+    queue_len: usize,
+) {
     let _ = CYW43_PENDING_RX_DROPS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |drops| {
         Some(drops.saturating_add(1))
     });
-    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
-    CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(cyw43_epoch_token(generation), Ordering::Release);
+    let epoch_token = cyw43_epoch_token(sampled_generation);
+    let handoff_committed =
+        CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.load(Ordering::Acquire) == epoch_token;
+    let loss = Cyw43PendingRxLossDiagnostic {
+        sampled_generation,
+        handoff_committed,
+        reason,
+        queue_len: queue_len as u32,
+        channel: cyw43_frame_channel(flags),
+        ethertype: token
+            .and_then(|token| cyw43_rx_token_ethertype(flags, token))
+            .unwrap_or(u16::MAX),
+        priority: token.map_or(u8::MAX, |token| cyw43_pending_rx_priority(flags, token)),
+    };
+    let mut boot_first = CYW43_BOOT_FIRST_PENDING_RX_LOSS.lock();
+    if boot_first.is_none() {
+        *boot_first = Some(loss);
+    }
+    drop(boot_first);
+    if handoff_committed {
+        let mut postcommit_first = CYW43_POSTCOMMIT_FIRST_PENDING_RX_LOSS.lock();
+        if postcommit_first.is_none() {
+            *postcommit_first = Some(loss);
+        }
+    }
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == sampled_generation {
+        CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(epoch_token, Ordering::Release);
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -24339,6 +24638,12 @@ mod tests {
         CYW43_PENDING_RX_HIGH_WATER.store(0, Ordering::Release);
         CYW43_PENDING_RX_DROPS.store(0, Ordering::Release);
         CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(0, Ordering::Release);
+        CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(0, Ordering::Release);
+        CYW43_STALE_RX_PURGED_TOTAL.store(0, Ordering::Release);
+        CYW43_STALE_RX_PURGE_EPOCH_TOKEN.store(0, Ordering::Release);
+        CYW43_STALE_RX_PURGED_LAST.store(0, Ordering::Release);
+        *CYW43_BOOT_FIRST_PENDING_RX_LOSS.lock() = None;
+        *CYW43_POSTCOMMIT_FIRST_PENDING_RX_LOSS.lock() = None;
         CYW43_RX_RUNTIME_QUEUE_COUNT.store(0, Ordering::Release);
         CYW43_RX_RUNTIME_QUEUE_OVERFLOW_SEEN.store(0, Ordering::Release);
         CYW43_RX_RUNTIME_OVERFLOW_LAST.store(0, Ordering::Release);
@@ -24364,7 +24669,7 @@ mod tests {
         CYW43_TEST_CONTROL_POLL_CALLS.store(0, Ordering::Release);
         CYW43_TEST_CONTROL_POLL_EMPTY_TURNS.store(0, Ordering::Release);
         CYW43_TEST_PROGRESS_OPERATION_COUNT.store(0, Ordering::Release);
-        while take_cyw43_pending_rx_token().is_some() {}
+        CYW43_PENDING_RX_QUEUE.lock().clear();
         clear_cyw43_pending_control_replies();
         clear_cyw43_host_eapol_status_throttle();
         *CYW43_HOST_EAPOL_SESSION.lock() = None;
@@ -29363,6 +29668,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     fn mark_cyw43_gate8_ready_for_test(generation: u32) {
         CYW43_CONNECTION_EPOCH.store(generation, Ordering::Release);
+        invalidate_cyw43_data_handoff();
         mark_cyw43_data_plane_ready_for_test();
         CYW43_CONTROL_PROGRAM_EPOCH_TOKEN.store(
             CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire),
@@ -29380,7 +29686,7 @@ mod tests {
             completed: CYW43_MAINTENANCE_POST_KEY_MASK,
             ..Cyw43MaintenanceCursor::new()
         };
-        publish_cyw43_data_handoff_baseline(generation);
+        assert!(commit_cyw43_data_handoff_if_ready(generation));
     }
 
     #[cfg(feature = "kernel")]
@@ -39048,12 +39354,12 @@ mod tests {
             {
                 let mut inputs = ready;
                 inputs.data_handoff_generation_current = false;
-                (inputs, "data-handoff-generation-pending")
+                (inputs, "data-handoff-commit-pending")
             },
             {
                 let mut inputs = ready;
                 inputs.data_handoff_generation_token = cyw43_epoch_token(16);
-                (inputs, "data-handoff-generation-pending")
+                (inputs, "data-handoff-commit-pending")
             },
             {
                 let mut inputs = ready;
@@ -39164,6 +39470,184 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn gate8_consumer_commit_preserves_current_backlog_and_fails_later_loss() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let generation = 73;
+        mark_cyw43_gate8_ready_for_test(generation);
+        invalidate_cyw43_data_handoff();
+
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let frame = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);
+        for index in 0..CYW43_PENDING_RX_QUEUE_CAP {
+            let mut queued = frame;
+            queued[18] = index as u8;
+            assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&queued)));
+        }
+        record_cyw43_pending_rx_drop(
+            "preconsumer-test",
+            generation,
+            flags,
+            Some(&test_rx_token(&frame)),
+            CYW43_PENDING_RX_QUEUE_CAP,
+        );
+
+        assert_eq!(
+            cyw43_gate8_diagnostic().subgates[7],
+            cyw43_gate8_record(
+                "8h-data-admission",
+                Cyw43Gate8SubgateStatus::Pending,
+                "data-handoff-commit-pending",
+            ),
+            "pre-consumer pressure is not post-handoff loss"
+        );
+        assert!(commit_cyw43_data_handoff_if_ready(generation));
+        let committed = cyw43_data_handoff_diagnostic();
+        assert!(committed.committed);
+        assert_eq!(
+            committed.root_rx_queue_len, CYW43_PENDING_RX_QUEUE_CAP as u32,
+            "current-generation backlog remains available to the first NetStack poll"
+        );
+        assert_eq!(committed.stale_rx_purged_total, 0);
+        assert_eq!(committed.root_rx_drops, committed.baseline_root_rx_drops);
+        assert_eq!(
+            committed
+                .boot_first_loss
+                .expect("boot-first loss evidence retained")
+                .reason,
+            "preconsumer-test"
+        );
+        assert!(committed.postcommit_first_loss.is_none());
+        assert_eq!(
+            cyw43_gate8_diagnostic().subgates[7],
+            cyw43_gate8_record(
+                "8h-data-admission",
+                Cyw43Gate8SubgateStatus::Pending,
+                "root-rx-drain-pending",
+            ),
+        );
+        assert!(take_cyw43_pending_rx_token().is_some());
+        assert!(cyw43_gate8_diagnostic().stable());
+
+        assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&frame)));
+        assert!(
+            commit_cyw43_data_handoff_if_ready(generation),
+            "same-generation commit is idempotent"
+        );
+        assert_eq!(
+            cyw43_data_handoff_diagnostic().root_rx_queue_len,
+            CYW43_PENDING_RX_QUEUE_CAP as u32,
+            "an idempotent commit must not purge postcommit traffic"
+        );
+        while take_cyw43_pending_rx_token().is_some() {}
+
+        record_cyw43_pending_rx_drop(
+            "postcommit-test",
+            generation,
+            flags,
+            Some(&test_rx_token(&frame)),
+            0,
+        );
+        let failed = cyw43_data_handoff_diagnostic();
+        assert_eq!(
+            failed
+                .boot_first_loss
+                .expect("boot-first loss remains retained")
+                .reason,
+            "preconsumer-test"
+        );
+        assert_eq!(
+            failed
+                .postcommit_first_loss
+                .expect("postcommit first loss is independently retained")
+                .reason,
+            "postcommit-test"
+        );
+        assert_eq!(
+            cyw43_gate8_diagnostic().subgates[7],
+            cyw43_gate8_record(
+                "8h-data-admission",
+                Cyw43Gate8SubgateStatus::Fail,
+                "root-rx-drop-since-generation",
+            ),
+        );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn pending_rx_rejects_stale_generation_and_does_not_charge_current_gate8() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let stale_generation = 80;
+        CYW43_CONNECTION_EPOCH.store(stale_generation, Ordering::Release);
+        invalidate_cyw43_data_handoff();
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let frame = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);
+        assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&frame)));
+
+        let current_generation = stale_generation.wrapping_add(1);
+        CYW43_CONNECTION_EPOCH.store(current_generation, Ordering::Release);
+        assert!(
+            take_cyw43_pending_rx_token().is_none(),
+            "a token captured in the superseded generation is never delivered"
+        );
+        let stale = cyw43_data_handoff_diagnostic();
+        assert_eq!(stale.root_rx_queue_len, 0);
+        assert_eq!(stale.stale_rx_purged_total, 1);
+        assert_eq!(
+            stale.last_stale_purge_epoch_token,
+            cyw43_epoch_token(current_generation)
+        );
+        assert_eq!(stale.last_stale_purge_count, 1);
+
+        mark_cyw43_gate8_ready_for_test(current_generation);
+        record_cyw43_pending_rx_drop(
+            "delayed-old-generation-loss",
+            stale_generation,
+            flags,
+            Some(&test_rx_token(&frame)),
+            0,
+        );
+        assert!(
+            cyw43_gate8_diagnostic().stable(),
+            "a sampled old-generation loss cannot be charged to current Gate 8h"
+        );
+        assert!(
+            cyw43_data_handoff_diagnostic()
+                .postcommit_first_loss
+                .is_none(),
+            "old-generation loss cannot overwrite current postcommit evidence"
+        );
+
+        record_cyw43_pending_rx_drop(
+            "current-generation-loss",
+            current_generation,
+            flags,
+            Some(&test_rx_token(&frame)),
+            0,
+        );
+        let current = cyw43_data_handoff_diagnostic();
+        assert_eq!(
+            current
+                .postcommit_first_loss
+                .expect("current postcommit loss retained")
+                .reason,
+            "current-generation-loss"
+        );
+        assert_eq!(
+            cyw43_gate8_diagnostic().subgates[7],
+            cyw43_gate8_record(
+                "8h-data-admission",
+                Cyw43Gate8SubgateStatus::Fail,
+                "root-rx-drop-since-generation",
+            ),
+        );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn live_gate8_data_handoff_allows_traffic_and_fails_generation_local_loss() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
@@ -39229,7 +39713,6 @@ mod tests {
         CYW43_PENDING_ARP_TX.lock().clear();
         CYW43_RX_RUNTIME_QUEUE_COUNT.store(0, Ordering::Release);
 
-        publish_cyw43_data_handoff_baseline(generation);
         let drops_at_baseline = CYW43_PENDING_RX_DROPS.load(Ordering::Acquire);
         for index in 0..CYW43_PENDING_RX_QUEUE_CAP {
             let mut queued = frame;
@@ -39254,7 +39737,7 @@ mod tests {
         }
         assert!(cyw43_gate8_diagnostic().stable());
 
-        CYW43_PENDING_RX_DROPS.store(drops_at_baseline.saturating_add(1), Ordering::Release);
+        record_cyw43_pending_rx_drop("postcommit-test", generation, flags, None, 0);
         assert_eq!(
             cyw43_gate8_diagnostic().subgates[7],
             cyw43_gate8_record(
@@ -39270,8 +39753,7 @@ mod tests {
             "a recovery generation starts from current cumulative telemetry"
         );
 
-        let recovered_drops = CYW43_PENDING_RX_DROPS.load(Ordering::Acquire);
-        CYW43_PENDING_RX_DROPS.store(recovered_drops.saturating_add(1), Ordering::Release);
+        record_cyw43_pending_rx_drop("post-recovery-test", next_generation, flags, None, 0);
         assert_eq!(
             cyw43_gate8_diagnostic().subgates[7],
             cyw43_gate8_record(
@@ -39326,7 +39808,7 @@ mod tests {
             cyw43_gate8_diagnostic().stable(),
             "a saturated boot counter is clean at the exact new-generation baseline"
         );
-        record_cyw43_pending_rx_drop();
+        record_cyw43_pending_rx_drop("test-injected", saturated_drop_generation, 0, None, 0);
         assert_eq!(
             CYW43_PENDING_RX_DROPS.load(Ordering::Acquire),
             u32::MAX,
@@ -43173,7 +43655,10 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
-        assert_eq!(CYW43_PENDING_RX_QUEUE_CAP, 32);
+        assert_eq!(
+            CYW43_PENDING_RX_QUEUE_CAP,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP
+        );
 
         let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
         let mut dhcp = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);

@@ -638,16 +638,69 @@ cross-recovery sequence, or any gap between 8h and `status=ready`, fails closed.
 The eight records and Ready are one retained transaction; a failed preflight
 publishes none of them.
 
+Gate 8h cannot pass until the root consumer has committed the handoff for the
+same generation. Association-generation start is too early: Cohesix may admit
+firmware data after secure keys while post-key maintenance still owns the
+linked-runtime lane and before the root NetStack exists, whereas Linux
+`brcmfmac` already has a live netdev consumer at controlled-port opening. Once
+8a through 8g pass, the first ordinary Network turn with an attached but not
+yet polled root consumer calls `commit_cyw43_data_handoff_if_ready`. It
+revalidates the complete connection/owner state, rejects only
+stale-generation tokens, preserves valid current-generation backlog for the
+immediately following NetStack poll, snapshots the sticky root-drop and
+runtime-overflow counters, and release-publishes the generation token last.
+This commit is bookkeeping at the existing root/NetStack handoff; it does not
+perform SDIO/CYW43 I/O or introduce another boot, owner, or fallback lane.
+Before it succeeds, 8h must report
+`blocker=data-handoff-commit-pending`.
+
+The child decoded-RX queue, its bounded drain budget, and the root copied-RX
+queue all use
+`pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`. Do not tune a private
+root or child capacity during diagnosis; the shared ABI value is the one
+production envelope, and capacity alignment is not a substitute for the
+handoff boundary.
+
 Bounded data traffic is legal while 8h passes: non-full root RX, pending data
 TX/ARP, runtime backlog, and an exact assigned current-generation NetData
 request do not by themselves block readiness. A stale prompt generation,
 request-less NetData pre-poll retained while root RX/TX/ARP work has priority,
-a generation-local root-drop/runtime-overflow increase is a failure. A full
-root RX queue with no loss remains pending while bounded drain work has
-priority. A data-handoff baseline mismatch remains pending until current;
-cumulative root-drop telemetry saturates rather than wrapping, and an exact
-generation latch still proves any new loss at saturation. A recovery publishes
-a new baseline without resetting the cumulative counters.
+a post-commit generation-local root-drop/runtime-overflow increase is a
+failure. Before commit, 8h remains `pending`; pre-consumer pressure is captured
+by the committed counter baseline rather than misclassified against a
+generation-start baseline. After commit, a full root RX queue with no loss
+remains pending while bounded drain work has priority. Cumulative root-drop
+telemetry saturates rather than wrapping, and an exact generation latch still
+proves any new post-commit loss at saturation. Recovery or generation advance
+invalidates the token and rejects queued tokens captured in the superseded
+generation; the next consumer-active generation captures a new baseline
+without resetting cumulative counters. A stale-purge count is diagnostic
+evidence, not successful receive or permission to ignore later loss.
+
+Capture the five passive handoff lines from both `wifi diag` and
+`wifi probe-ht`:
+
+```text
+wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
+wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
+wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
+wifi: data_handoff boot_first_loss=no
+wifi: data_handoff postcommit_first_loss=no
+```
+
+When losses exist, the fourth and fifth lines read:
+
+```text
+wifi: data_handoff boot_first_loss=yes sampled_generation=<n> committed=<yes|no> reason=<reason> queue_len=<n> channel=<n> ethertype=0x<value> priority=<n> attribution=current-epoch-sample
+wifi: data_handoff postcommit_first_loss=yes sampled_generation=<n> reason=<reason> queue_len=<n> channel=<n> ethertype=0x<value> priority=<n> attribution=current-epoch-sample
+```
+
+Retain its sampled generation, commit state, reason, queue length, channel,
+EtherType, and priority. The
+`attribution=current-epoch-sample` suffix says only that root sampled the loss
+while that connection epoch was current; it is not producer, runtime, SDIO, or
+physical-owner attribution. Correlate it with exact retained-owner and pcap
+evidence before assigning a cause.
 
 After `ready`, keep capturing. A later fresh non-stable or different-generation
 snapshot must produce `status=stabilizing`; this can occur in the same logical

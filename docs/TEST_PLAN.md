@@ -556,16 +556,48 @@ prove all of the following:
   old snapshot becomes non-authorizing and a later `ready` requires a complete
   new snapshot. A delayed HDMI Ready/prompt, including bytes already handed to
   the local-seat queue, is superseded by a canonical Stabilizing redraw.
+- Gate 8h stays pending until one idempotent root data-handoff commit is
+  published for the current logical generation. Tests must prove that
+  generation start alone cannot publish it; only an ordinary Network turn
+  after root NetStack attach but before its first current-generation poll may call
+  `commit_cyw43_data_handoff_if_ready`; and the helper revalidates current
+  pair, association/link, BSSID, protected-key/open-network, maintenance,
+  logical-owner, and recovery state without performing HAL, SDIO, CYW43,
+  retry, or completion work. The commit must reject and separately account
+  only stale-generation tokens, preserve valid current-generation backlog for
+  the immediately following consumer poll, snapshot sticky cumulative
+  root-drop and runtime-overflow counters, and release-publish the generation
+  token last. Repeating the helper in the same generation is a no-op and must
+  not purge a later frame.
 - Gate 8h passes with bounded non-full root RX, pending data TX/ARP, runtime
   backlog, or one exact assigned current-generation NetData request. A
-  baseline-token/generation mismatch and lossless full root RX queue are
-  pending, with bounded drain priority for the latter. It fails for a stale
-  prompt generation, retained request-less NetData pre-poll while priority root
-  work exists, an exact-generation root drop, or a monotonic runtime-overflow
-  increase since the current-generation baseline. Root-drop telemetry must
-  saturate rather than wrap, while the exact-generation loss latch remains
-  fail-closed. Recovery captures a new baseline without clearing cumulative
-  boot telemetry.
+  missing/stale commit or baseline token and a lossless full root RX queue are
+  pending, with exact blocker `data-handoff-commit-pending` for the former and
+  bounded drain priority for the latter. Pre-commit queue pressure must not
+  become `root-rx-drop-since-generation`. After commit, Gate 8h fails for a
+  stale prompt generation, retained request-less NetData pre-poll while
+  priority root work exists, an exact-generation root drop, or a monotonic
+  runtime-overflow increase since the committed baseline. Root-drop telemetry
+  must saturate rather than wrap, while the exact-generation loss latch remains
+  fail-closed. Recovery/generation advance invalidates the token; the next
+  consumer-active commit captures a new baseline without clearing cumulative
+  boot or stale-purge telemetry. Pending tokens must capture their enqueue
+  generation, stale tokens must be rejected before current-generation
+  consumption, and the handoff must preserve valid current-generation backlog.
+- Root and child tests must bind their queue capacity and the child bounded RX
+  drain budget to
+  `pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`. They must reject
+  divergent private capacities, prove the root can preserve one complete child
+  backlog, and keep queue saturation subject to the Gate 8h rules above.
+- `wifi diag` and `wifi probe-ht` formatting coverage must preserve five
+  untruncated `wifi: data_handoff` records: generation/commit/baseline and
+  `queue=<used>/50`; current/baseline root-drop and runtime-overflow counters;
+  total/last-token/last-count stale-purge state; boot-first loss state; and
+  current-handoff post-commit first-loss state. A positive loss record must
+  retain sampled generation, commit state where applicable, reason,
+  queue length, channel, EtherType, and priority and end with
+  `attribution=current-epoch-sample`. Tests and normalizers must not reinterpret
+  that sampled generation as producer, runtime, SDIO, or physical-owner proof.
 - A current-generation association creates the post-association BSSID
   obligation independently of the EAPOL-Start timer, but only the secure-keys
   boundary may issue it; tests must prove M1/M2 cannot open BSSID maintenance

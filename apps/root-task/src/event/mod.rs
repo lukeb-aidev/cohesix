@@ -11371,6 +11371,87 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_data_handoff_state_line(
+        handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: data_handoff generation={} committed={} commit_token={} baseline_generation={} queue={}/{} high_water={}",
+            handoff.generation,
+            Self::yes_no(handoff.committed),
+            handoff.commit_epoch_token,
+            handoff.baseline_generation,
+            handoff.root_rx_queue_len,
+            handoff.root_rx_queue_cap,
+            handoff.root_rx_high_water,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_data_handoff_counters_line(
+        handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: data_handoff counters root_drops={} baseline_drops={} drop_token={} runtime_overflows={} baseline_overflows={}",
+            handoff.root_rx_drops,
+            handoff.baseline_root_rx_drops,
+            handoff.drop_epoch_token,
+            handoff.runtime_rx_overflow_episodes,
+            handoff.baseline_runtime_rx_overflow_episodes,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_data_handoff_stale_purge_line(
+        handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: data_handoff stale_purge total={} last_token={} last_count={}",
+            handoff.stale_rx_purged_total,
+            handoff.last_stale_purge_epoch_token,
+            handoff.last_stale_purge_count,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_data_handoff_boot_loss_line(
+        handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        match handoff.boot_first_loss {
+            Some(loss) => format_message(format_args!(
+                "wifi: data_handoff boot_first_loss=yes sampled_generation={} committed={} reason={} queue_len={} channel={} ethertype=0x{:04x} priority={} attribution=current-epoch-sample",
+                loss.sampled_generation,
+                Self::yes_no(loss.handoff_committed),
+                loss.reason,
+                loss.queue_len,
+                loss.channel,
+                loss.ethertype,
+                loss.priority,
+            )),
+            None => format_message(format_args!("wifi: data_handoff boot_first_loss=no")),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_data_handoff_postcommit_loss_line(
+        handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        match handoff.postcommit_first_loss {
+            Some(loss) => format_message(format_args!(
+                "wifi: data_handoff postcommit_first_loss=yes sampled_generation={} reason={} queue_len={} channel={} ethertype=0x{:04x} priority={} attribution=current-epoch-sample",
+                loss.sampled_generation,
+                loss.reason,
+                loss.queue_len,
+                loss.channel,
+                loss.ethertype,
+                loss.priority,
+            )),
+            None => format_message(format_args!(
+                "wifi: data_handoff postcommit_first_loss=no"
+            )),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_deferred_recovery_line(
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
         live_generation: u32,
@@ -11948,6 +12029,16 @@ where
         let maintenance = crate::drivers::driver_task_net::cyw43_maintenance_diagnostic();
         let maintenance_line = Self::wifi_diag_maintenance_line(maintenance);
         self.emit_console_line(maintenance_line.as_str());
+        let handoff = crate::drivers::driver_task_net::cyw43_data_handoff_diagnostic();
+        for detail in [
+            Self::wifi_diag_data_handoff_state_line(handoff),
+            Self::wifi_diag_data_handoff_counters_line(handoff),
+            Self::wifi_diag_data_handoff_stale_purge_line(handoff),
+            Self::wifi_diag_data_handoff_boot_loss_line(handoff),
+            Self::wifi_diag_data_handoff_postcommit_loss_line(handoff),
+        ] {
+            self.emit_console_line(detail.as_str());
+        }
         if let Some(recovery) = deferred_recovery {
             for detail in [
                 Self::wifi_diag_deferred_recovery_line(recovery, association.generation),
@@ -22223,6 +22314,84 @@ mod tests {
             "{prepared}"
         );
         assert!(prepared.ends_with("exact=not-published"), "{prepared}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_data_handoff_diagnostic_lines_preserve_commit_and_loss_truth() {
+        let handoff = crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic {
+            generation: u32::MAX,
+            commit_epoch_token: u64::MAX,
+            committed: true,
+            baseline_generation: u32::MAX,
+            root_rx_queue_len: 50,
+            root_rx_queue_cap: 50,
+            root_rx_high_water: 50,
+            root_rx_drops: u32::MAX,
+            baseline_root_rx_drops: u32::MAX,
+            drop_epoch_token: u64::MAX,
+            runtime_rx_overflow_episodes: u32::MAX,
+            baseline_runtime_rx_overflow_episodes: u32::MAX,
+            stale_rx_purged_total: u32::MAX,
+            last_stale_purge_epoch_token: u64::MAX,
+            last_stale_purge_count: 50,
+            boot_first_loss: Some(
+                crate::drivers::driver_task_net::Cyw43PendingRxLossDiagnostic {
+                    sampled_generation: u32::MAX,
+                    handoff_committed: false,
+                    reason: "priority-eviction",
+                    queue_len: 50,
+                    channel: 2,
+                    ethertype: 0x0800,
+                    priority: 7,
+                },
+            ),
+            postcommit_first_loss: Some(
+                crate::drivers::driver_task_net::Cyw43PendingRxLossDiagnostic {
+                    sampled_generation: u32::MAX,
+                    handoff_committed: true,
+                    reason: "queue-full-rejected",
+                    queue_len: 50,
+                    channel: 2,
+                    ethertype: 0x0806,
+                    priority: 6,
+                },
+            ),
+        };
+        let handoff_state = KernelConsoleTestPump::wifi_diag_data_handoff_state_line(handoff);
+        assert!(!handoff_state.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert!(handoff_state.len() < DEFAULT_LINE_CAPACITY);
+        assert!(handoff_state
+            .contains("generation=4294967295 committed=yes commit_token=18446744073709551615"));
+        assert!(handoff_state.contains("queue=50/50 high_water=50"));
+        let handoff_counters = KernelConsoleTestPump::wifi_diag_data_handoff_counters_line(handoff);
+        assert!(!handoff_counters.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert!(handoff_counters.len() < DEFAULT_LINE_CAPACITY);
+        assert!(handoff_counters.contains(
+            "root_drops=4294967295 baseline_drops=4294967295 drop_token=18446744073709551615"
+        ));
+        let handoff_purge = KernelConsoleTestPump::wifi_diag_data_handoff_stale_purge_line(handoff);
+        assert!(!handoff_purge.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert!(handoff_purge.len() < DEFAULT_LINE_CAPACITY);
+        assert!(handoff_purge.contains(
+            "stale_purge total=4294967295 last_token=18446744073709551615 last_count=50"
+        ));
+        let handoff_boot_loss =
+            KernelConsoleTestPump::wifi_diag_data_handoff_boot_loss_line(handoff);
+        assert!(!handoff_boot_loss.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert!(handoff_boot_loss.len() < DEFAULT_LINE_CAPACITY);
+        assert!(handoff_boot_loss.contains(
+            "boot_first_loss=yes sampled_generation=4294967295 committed=no reason=priority-eviction"
+        ));
+        assert!(handoff_boot_loss.contains("attribution=current-epoch-sample"));
+        let handoff_postcommit_loss =
+            KernelConsoleTestPump::wifi_diag_data_handoff_postcommit_loss_line(handoff);
+        assert!(!handoff_postcommit_loss.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert!(handoff_postcommit_loss.len() < DEFAULT_LINE_CAPACITY);
+        assert!(handoff_postcommit_loss.contains(
+            "postcommit_first_loss=yes sampled_generation=4294967295 reason=queue-full-rejected"
+        ));
+        assert!(handoff_postcommit_loss.contains("attribution=current-epoch-sample"));
     }
 
     #[cfg(feature = "kernel")]
