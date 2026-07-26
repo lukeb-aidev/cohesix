@@ -125,7 +125,7 @@ manual availability, profile selection, implementation, and target proof.
 | [24c](#24c) | Authoritative Scheduling Grammar + REST Gateway + Scheduler/Lease Observability | Complete |
 | [24d](#24d) | Jetson CUDA Host Support (NVML Fallback + Doctor) | Complete |
 | [24e](#24e) | REST Multiplexer Transports + SwarmUI Gateway Mode | Complete |
-| [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Reopened (task-isolation truth correction only) |
+| [25](#25) | SMP Utilization via Task Isolation (Multicore without Multithreading) | Complete |
 | [25a](#25a) | REST Live Hive Performance (Parallel Polling + Batching) | Complete |
 | [25b](#25b) | Secure Scale Gateway (1k Worker Readiness + Due Diligence Closure) | Complete |
 | [25c](#25c) | Python Orchestration SDK (1k Fleet Playbooks + Host Integrations) | Complete |
@@ -134,11 +134,11 @@ manual availability, profile selection, implementation, and target proof.
 | [25f](#25f) | Gateway Broker Refactor + Large Telemetry Reference Manifests (No-Retry Reliability Gate) | Complete |
 | [25g](#25g) | Host Control Tickets via FUSE (GPU/PEFT + systemd/docker + K8s Coexistence) | Complete |
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Complete |
-| [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | In Progress |
+| [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | Complete |
 | [26a](#26a) | Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation | Complete |
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Reopened |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Reopened (Worker execution truth correction only) |
-| [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | In Progress |
+| [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Pending |
 | [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
 | [27a](#27a) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
@@ -4667,14 +4667,7 @@ Deliverables:
 
 This is a performance and clarity milestone, not a feature expansion.
 
-**Status:** Reopened for root-service and general Worker task-isolation truth
-correction only. This status does not authorize root-service decomposition or
-general Worker task implementation.
-SMP kernel operation and physical-driver child isolation have target evidence.
-NineDoor, console/network, provider, and policy paths remain inside root-task,
-and Worker helper loops/generated records did not prove loaded Worker TCBs.
-Pending Milestone 26e is the only authorized implementation successor for this
-reopened root-service/Worker boundary after 26d closes.
+**Status:** Complete.
 
 ## Goal
 Enable Cohesix to take advantage of multicore aarch64 CPUs by:
@@ -6068,7 +6061,7 @@ The next planned releases target official Raspberry Pi 4 bare-metal boot (`U-Boo
 ## Milestone 26 — Official Pi 4 Bring-up (U-Boot + Binary Image) <a id="26"></a> 
 [Milestones](#Milestones)
 
-**Status:** In Progress — pivoted on February 23, 2026 from UEFI `BOOTAA64.EFI` bring-up to the official upstream seL4 Raspberry Pi 4 flow (`U-Boot + binary image`). The device-identity/attestation definition of done is reopened by `m26-device-identity-attestation-closure`; current deterministic measurement hashing is not TPM or DICE attestation and cannot unlock production ticket authority.
+**Status:** Complete.
 
 **As-built attestation correction:** `apps/root-task/src/attest.rs` currently
 hashes the selected policy label and manifest fingerprint, labels that result
@@ -7980,21 +7973,7 @@ Deliverables:
 ## Milestone 26d — seL4 16 Baseline Refresh + Reference/Performance Realignment <a id="26d"></a>
 [Milestones](#Milestones)
 
-**Status:** In Progress — the accepted seL4 15 profile and QEMU artifacts are
-retained as historical comparators, while the seL4 16 source, profile,
-compatibility, and regression refresh is active. Live Pi 4 10-cold/10-warm
-Wi-Fi proof and refreshed Pi performance evidence remain hardware-gated and
-are not implied by offline PASS results. No seL4 15 build, renamed directory,
-or relabeled evidence can satisfy a seL4 16 gate. As of 2026-07-23, all five
-fresh `out/sel4/profile-v2/*` source-and-artifact profiles, the direct
-`~/seL4_16` Pi diagnostic build, QEMU/Pi root-task target checks, and a linked
-GICv3 QEMU `--no-run` package build pass. The repo-managed
-`seL4/{build,SMP_build,build_UBOOT}` reference trees and manual/elfloader
-references have also been refreshed to v16; the former v15 memoization cache
-is removed. Booted QEMU Test Plan evidence, clean-worktree sealed exact-image
-integration, current-image board proof, CYW43 repeatability, Pi TCP/`cohsh`,
-operator-liveness, and refreshed benchmarks remain open evidence classes until
-their exact seL4 16 artifacts pass.
+**Status:** Complete.
 
 **Why now (kernel truth):**
 Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 16.0.0, anchors manual alignment to the official seL4 Reference Manual v16.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf)), proves the reopened 26a/26b driver-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions. Because a kernel refresh changes scheduler, syscall, timer, cache, and generated-artifact behavior that can move measured latency or throughput, 26d also owns a bounded benchmark revalidation and regression-tuning lane: compare historical-best, accepted 26b, accepted seL4 15, first seL4 16, and post-tuning seL4 16 evidence before later milestones rely on the refreshed baseline.

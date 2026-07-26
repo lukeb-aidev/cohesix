@@ -6699,6 +6699,35 @@ impl Cyw43MaintenanceCursor {
 static CYW43_MAINTENANCE_CURSOR: Mutex<Cyw43MaintenanceCursor> =
     Mutex::new(Cyw43MaintenanceCursor::new());
 
+/// Passive copy of one retained CYW43 maintenance action.
+///
+/// The snapshot contains only scheduling identity. It never exposes payload
+/// bytes and cannot be used to resume, complete, or replace the live action.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43MaintenanceActionDiagnostic {
+    pub stage: &'static str,
+    pub generation: u32,
+    pub request: Option<u32>,
+    pub issued: bool,
+    pub turns: u16,
+}
+
+/// Passive, generation-bound maintenance telemetry for `wifi diag`.
+///
+/// Reading this snapshot copies the retained cursor under its existing lock.
+/// It performs no driver-runtime, HAL, register, or recovery operation.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43MaintenanceDiagnostic {
+    pub generation: u32,
+    pub current: bool,
+    pub pending: bool,
+    pub requested: u32,
+    pub next_stage: &'static str,
+    pub action: Option<Cyw43MaintenanceActionDiagnostic>,
+}
+
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43PendingPreSecureKeyInstall {
@@ -10403,6 +10432,33 @@ fn latch_cyw43_bssid_maintenance(context: Cyw43MaintenanceBssidContext) -> bool 
 fn cyw43_maintenance_pending() -> bool {
     let cursor = CYW43_MAINTENANCE_CURSOR.lock();
     cursor.requested != 0 || cursor.action.is_some()
+}
+
+/// Return one passive copy of the current CYW43 maintenance cursor.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_maintenance_diagnostic() -> Cyw43MaintenanceDiagnostic {
+    let current_generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let cursor = CYW43_MAINTENANCE_CURSOR.lock();
+    let action = cursor
+        .action
+        .as_ref()
+        .map(|action| Cyw43MaintenanceActionDiagnostic {
+            stage: action.kind.stage(),
+            generation: action.generation,
+            request: action.request,
+            issued: action.issued,
+            turns: action.turns,
+        });
+    Cyw43MaintenanceDiagnostic {
+        generation: cursor.generation,
+        current: cursor.generation == current_generation,
+        pending: cursor.requested != 0 || action.is_some(),
+        requested: cursor.requested,
+        next_stage: cursor
+            .next_kind()
+            .map_or("none", Cyw43MaintenanceKind::stage),
+        action,
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -17725,6 +17781,13 @@ pub(crate) fn driver_task_runtime_pre_poll_allowed(contract: DriverTaskContract)
             // ticket; every other owner must keep the generic device pre-poll
             // out until its own lane reaches a typed terminal.
             return pending.owner == Cyw43PromptPollOwner::NetData;
+        }
+        if cyw43_maintenance_pending() {
+            // Retained maintenance must claim the next fresh physical turn.
+            // Letting NetData start another prompt poll here can keep the
+            // maintenance cursor pending while pre-poll completions fill the
+            // root receive queue.
+            return false;
         }
     }
     !cyw43_active_descriptor_blocks_fresh_net_poll(contract)
@@ -26407,6 +26470,66 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_maintenance_diagnostic_is_passive_and_generation_bound() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        CYW43_CONNECTION_EPOCH.store(7, Ordering::Release);
+        latch_cyw43_post_key_maintenance([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+
+        let requested = cyw43_maintenance_diagnostic();
+        assert_eq!(requested, cyw43_maintenance_diagnostic());
+        assert_eq!(requested.generation, 7);
+        assert!(requested.current);
+        assert!(requested.pending);
+        assert_eq!(
+            requested.requested,
+            CYW43_MAINTENANCE_SCB
+                | CYW43_MAINTENANCE_MCAST
+                | CYW43_MAINTENANCE_ALLMULTI
+                | CYW43_MAINTENANCE_PROMISC
+        );
+        assert_eq!(
+            requested.next_stage,
+            Cyw43MaintenanceKind::ScbAuthorize.stage()
+        );
+        assert_eq!(requested.action, None);
+
+        {
+            let mut cursor = CYW43_MAINTENANCE_CURSOR.lock();
+            prepare_cyw43_maintenance_action(&mut cursor)
+                .expect("the exact maintenance action prepares");
+        }
+        let active = cyw43_maintenance_diagnostic();
+        assert_eq!(active, cyw43_maintenance_diagnostic());
+        let action = active.action.expect("one action remains retained");
+        assert_eq!(action.stage, Cyw43MaintenanceKind::ScbAuthorize.stage());
+        assert_eq!(action.generation, 7);
+        assert_eq!(action.request, None);
+        assert!(!action.issued);
+        assert_eq!(action.turns, 0);
+
+        *CYW43_MAINTENANCE_CURSOR.lock() = Cyw43MaintenanceCursor {
+            generation: 7,
+            ..Cyw43MaintenanceCursor::new()
+        };
+        let cleared = cyw43_maintenance_diagnostic();
+        assert!(cleared.current);
+        assert!(!cleared.pending);
+        assert_eq!(cleared.requested, 0);
+        assert_eq!(cleared.next_stage, "none");
+        assert_eq!(cleared.action, None);
+
+        CYW43_CONNECTION_EPOCH.store(8, Ordering::Release);
+        let stale = cyw43_maintenance_diagnostic();
+        assert!(!stale.current);
+        assert_eq!(stale.generation, 7);
+        assert!(!stale.pending);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_maintenance_chain_emits_exact_linux_filter_payloads_one_operation_per_turn() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
@@ -33062,6 +33185,61 @@ mod tests {
         assert_eq!(resumed.request, Some(request));
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn maintenance_blocks_fresh_pre_poll_but_not_exact_net_data_continuation() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+
+        assert!(driver_task_runtime_pre_poll_allowed(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        latch_cyw43_filter_maintenance(0, 0);
+        assert!(cyw43_maintenance_pending());
+        assert!(!driver_task_runtime_pre_poll_allowed(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+
+        *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
+            ticket_id: 0x4e45_5444,
+            owner: Cyw43PromptPollOwner::NetData,
+            generation: CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+            descriptor: DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+                flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            request: Some(0x91),
+            issued: true,
+            deadline: cyw43_poll_deadline_from_millis_or_polls(
+                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            ),
+            child_reply_latched: false,
+            child_reply_renewals: 0,
+        });
+        assert!(cyw43_net_data_pre_poll_continuation_pending(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert!(
+            driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "maintenance cannot revoke an exact retained NetData continuation"
+        );
+
+        *CYW43_PENDING_PROMPT_POLL.lock() = None;
+        assert!(!driver_task_runtime_pre_poll_allowed(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        *CYW43_MAINTENANCE_CURSOR.lock() = Cyw43MaintenanceCursor::new();
+        assert!(!cyw43_maintenance_pending());
+        assert!(
+            driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "clearing maintenance reopens fresh NetData pre-poll admission"
+        );
+
         reset_cyw43_status_flags();
     }
 

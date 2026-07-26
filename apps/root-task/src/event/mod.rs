@@ -11077,15 +11077,61 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_maintenance_line(
+        maintenance: crate::drivers::driver_task_net::Cyw43MaintenanceDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        match maintenance.action {
+            Some(action) => match action.request {
+                Some(request) => format_message(format_args!(
+                    "wifi: maintenance generation={} current={} pending={} requested=0x{:08x} next={} action={} action_generation={} request={} issued={} turns={}",
+                    maintenance.generation,
+                    Self::yes_no(maintenance.current),
+                    Self::yes_no(maintenance.pending),
+                    maintenance.requested,
+                    maintenance.next_stage,
+                    action.stage,
+                    action.generation,
+                    request,
+                    Self::yes_no(action.issued),
+                    action.turns,
+                )),
+                None => format_message(format_args!(
+                    "wifi: maintenance generation={} current={} pending={} requested=0x{:08x} next={} action={} action_generation={} request=none issued={} turns={}",
+                    maintenance.generation,
+                    Self::yes_no(maintenance.current),
+                    Self::yes_no(maintenance.pending),
+                    maintenance.requested,
+                    maintenance.next_stage,
+                    action.stage,
+                    action.generation,
+                    Self::yes_no(action.issued),
+                    action.turns,
+                )),
+            },
+            None => format_message(format_args!(
+                "wifi: maintenance generation={} current={} pending={} requested=0x{:08x} next={} action=none",
+                maintenance.generation,
+                Self::yes_no(maintenance.current),
+                Self::yes_no(maintenance.pending),
+                maintenance.requested,
+                maintenance.next_stage,
+            )),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_deferred_recovery_line(
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+        live_generation: u32,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: deferred_recovery retained=yes refinement=exact-owner logical_terminal_observed={} cause={} subphase={} gate={}",
+            "wifi: deferred_recovery retained=yes refinement=exact-owner logical_terminal_observed={} cause={} subphase={} gate={} current={} live_generation={}",
             Self::yes_no(recovery.terminal_observed),
             recovery.cause,
             recovery.subphase,
             recovery.gate,
+            Self::yes_no(recovery.generation == live_generation),
+            live_generation,
         ))
     }
 
@@ -11620,9 +11666,12 @@ where
         ] {
             self.emit_console_line(detail.as_str());
         }
+        let maintenance = crate::drivers::driver_task_net::cyw43_maintenance_diagnostic();
+        let maintenance_line = Self::wifi_diag_maintenance_line(maintenance);
+        self.emit_console_line(maintenance_line.as_str());
         if let Some(recovery) = deferred_recovery {
             for detail in [
-                Self::wifi_diag_deferred_recovery_line(recovery),
+                Self::wifi_diag_deferred_recovery_line(recovery, association.generation),
                 Self::wifi_diag_deferred_recovery_identity_line(recovery),
                 Self::wifi_diag_deferred_recovery_completion_line(recovery),
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
@@ -12478,9 +12527,10 @@ where
         let fault = Self::wifi_diag_cyw43_runtime_command_fault_status();
         let deferred_recovery =
             crate::drivers::driver_task_net::cyw43_deferred_recovery_diagnostic();
+        let live_generation = crate::drivers::driver_task_net::cyw43_connection_generation();
         if let Some(recovery) = deferred_recovery {
             for detail in [
-                Self::wifi_diag_deferred_recovery_line(recovery),
+                Self::wifi_diag_deferred_recovery_line(recovery, live_generation),
                 Self::wifi_diag_deferred_recovery_identity_line(recovery),
                 Self::wifi_diag_deferred_recovery_completion_line(recovery),
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
@@ -21555,11 +21605,66 @@ mod tests {
             logical_owner_id: 37,
             logical_owner_payload_fingerprint: 0x1122_3344_5566_7788,
         };
+        let maintenance = crate::drivers::driver_task_net::Cyw43MaintenanceDiagnostic {
+            generation: u32::MAX,
+            current: true,
+            pending: true,
+            requested: 0x1f,
+            next_stage: "cyw43-host-eapol-bssid-refresh",
+            action: Some(
+                crate::drivers::driver_task_net::Cyw43MaintenanceActionDiagnostic {
+                    stage: "cyw43-host-eapol-bssid-refresh",
+                    generation: u32::MAX,
+                    request: Some(u32::MAX),
+                    issued: true,
+                    turns: u16::MAX,
+                },
+            ),
+        };
+        let maintenance_line = KernelConsoleTestPump::wifi_diag_maintenance_line(maintenance);
+        assert!(
+            !maintenance_line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{maintenance_line}"
+        );
+        assert!(maintenance_line.len() < DEFAULT_LINE_CAPACITY);
+        assert!(maintenance_line
+            .contains("generation=4294967295 current=yes pending=yes requested=0x0000001f"));
+        assert!(maintenance_line.contains(
+            "action=cyw43-host-eapol-bssid-refresh action_generation=4294967295 request=4294967295 issued=yes turns=65535"
+        ));
+        let prepared_line = KernelConsoleTestPump::wifi_diag_maintenance_line(
+            crate::drivers::driver_task_net::Cyw43MaintenanceDiagnostic {
+                action: maintenance.action.map(|action| {
+                    crate::drivers::driver_task_net::Cyw43MaintenanceActionDiagnostic {
+                        request: None,
+                        issued: false,
+                        ..action
+                    }
+                }),
+                ..maintenance
+            },
+        );
+        assert!(prepared_line.contains("request=none issued=no"));
+        assert!(!prepared_line.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert_eq!(
+            KernelConsoleTestPump::wifi_diag_maintenance_line(
+                crate::drivers::driver_task_net::Cyw43MaintenanceDiagnostic {
+                    generation: 3,
+                    current: true,
+                    pending: false,
+                    requested: 0,
+                    next_stage: "none",
+                    action: None,
+                },
+            )
+            .as_str(),
+            "wifi: maintenance generation=3 current=yes pending=no requested=0x00000000 next=none action=none"
+        );
         let lines = [
             KernelConsoleTestPump::wifi_diag_association_state_line(diagnostic),
             KernelConsoleTestPump::wifi_diag_association_progress_line(diagnostic),
             KernelConsoleTestPump::wifi_diag_association_retained_line(diagnostic),
-            KernelConsoleTestPump::wifi_diag_deferred_recovery_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_line(recovery, 3),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_identity_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
@@ -21583,6 +21688,7 @@ mod tests {
             "refinement=exact-owner logical_terminal_observed=yes cause=issued-owner-unknown",
         ));
         assert!(lines[3].contains("subphase=cyw43-host-eapol-control-poll gate=8"));
+        assert!(lines[3].contains("current=no live_generation=3"));
         assert!(lines[4].contains("ticket=18446744073709551615"));
         assert!(lines[4].contains("completion_detail=0xffff"));
         assert!(lines[4].contains("completion_result=0xffffffff"));
@@ -31541,6 +31647,23 @@ mod tests {
                 "wifi: driver-task replay state detail=live-net-frontier source=debug-handle-unavailable active=wifi address_source=dhcp-pending dhcp_phase=selecting ip=0.0.0.0 assoc=1 link=1 eapol_secure=1"
             ),
             "{rendered}"
+        );
+        let maintenance_line = rendered
+            .lines()
+            .find(|line| line.starts_with("wifi: maintenance generation="))
+            .expect("driver-task wifi diag emits passive maintenance state");
+        for field in [
+            " current=",
+            " pending=",
+            " requested=0x",
+            " next=",
+            " action=",
+        ] {
+            assert!(maintenance_line.contains(field), "{maintenance_line}");
+        }
+        assert!(
+            !maintenance_line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{maintenance_line}"
         );
         assert!(
             rendered.contains(

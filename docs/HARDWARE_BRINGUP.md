@@ -405,10 +405,17 @@ the retained prompt/TX/key/drain owner, generation, request, issuance, and HAL
 acceptance state without line truncation. Use those records to distinguish an
 accepted join waiting for DPC-delivered events from stale progress, purely
 prepared local work, or a still-owned child request; the command itself never
-probes SDIO. A child-invisible retained request is reported as
-`state=prepared-root-continuation ... exact=not-published`; while that state is
-current, the causal next action is to resume the exact root continuation before
-CommitRing rather than inspect EAPOL RX. The trace normalizer treats a dependency-aware Gate 8
+probes SDIO. The driver-task report also emits one passive
+`wifi: maintenance generation=<n> current=<yes|no> pending=<yes|no>
+requested=0x<mask> next=<stage> action=<stage|none> ...` line. A cleared
+current-generation cursor reports `pending=no requested=0x00000000 next=none
+action=none`; a retained deferred-recovery summary independently reports
+`current=<yes|no> live_generation=<n>` so a first-cause record from an older
+generation cannot be mistaken for live maintenance. A child-invisible retained
+request is reported as `state=prepared-root-continuation ...
+exact=not-published`; while that state is current, the causal next action is to
+resume the exact root continuation before CommitRing rather than inspect EAPOL
+RX. The trace normalizer treats a dependency-aware Gate 8
 `evidence=exact=<association-blocker>` plus its matching evidence boundary as
 authoritative over later generic replay/recovery progress. That cache is
 transport-generation scoped: clearing or rebinding the physical linked-runtime

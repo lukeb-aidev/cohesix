@@ -32,6 +32,7 @@ DEFAULT_LINE_TERMINATOR = "\r"
 TAIL_LIMIT = 131_072
 CHOICE_PROMPT = b"Select option ["
 ROOT_PROMPT = b"cohesix>"
+ROOT_PROMPT_FULL = b"cohesix> "
 ROOT_PROMPT_MIN_SUFFIX = 2
 ROOT_MENU_MARKERS = (
     b"[cohesix] Cohesix boot menu",
@@ -67,6 +68,7 @@ DIAGNOSTIC_READY_MARKERS = (
     b"usb keyboard command-ready",
 )
 DIAGNOSTIC_SETTLE_TIMEOUT_S = 30.0
+DIAGNOSTIC_COMMAND_DRAIN_S = 0.25
 ASYNC_RESULT_FRAGMENT_RE = re.compile(
     rb"(?:"
     rb"\[[A-Za-z0-9_.:-]+\]"
@@ -267,6 +269,32 @@ class RedactingSerialController:
                 self._record(chunk)
                 seen.extend(chunk)
         return bytes(seen)
+
+    def synchronize_root_diagnostic_command(self, *, label: str) -> None:
+        """Prove a fresh, complete root prompt before one diagnostic command."""
+
+        self.drain_for(
+            DIAGNOSTIC_COMMAND_DRAIN_S,
+            label=f"stale serial output before {label}",
+        )
+        self.send_line("", public_line="<clear-line>")
+        self.send_line("ping")
+        ping_snapshot = self.read_until(
+            (b"OK PING",),
+            10,
+            label=f"root ping OK before {label}",
+        )
+        prompt_offset = ping_snapshot.rfind(ROOT_PROMPT_FULL)
+        prompt_follows_ping = prompt_offset >= 0 and serial_marker_seen(
+            ping_snapshot[:prompt_offset],
+            b"OK PING",
+        )
+        if not prompt_follows_ping:
+            self.read_until(
+                (ROOT_PROMPT_FULL,),
+                10,
+                label=f"fresh full root prompt before {label}",
+            )
 
 
 def parse_args() -> argparse.Namespace:
@@ -633,18 +661,14 @@ def run_diagnostics(
             controller.note(
                 f"diagnostics serial_only_usb_unscored command={command!r}"
             )
-        if prompt_ready:
-            prompt_ready = False
-        else:
-            controller.read_until((b"cohesix>",), 30, label=f"prompt before {command}")
+        controller.synchronize_root_diagnostic_command(label=command)
         controller.send_line(command, reinforce_terminator=True)
         try:
-            result_snapshot = controller.read_until(
+            controller.read_until(
                 DIAGNOSTIC_RESULT_MARKERS[command],
                 90,
                 label=f"result for {command}",
             )
-            prompt_ready = serial_marker_seen(result_snapshot, ROOT_PROMPT)
         except SerialMarkerTimeout as exc:
             controller.note(f"diagnostic timeout command={command!r} error={exc}")
             raise

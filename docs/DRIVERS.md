@@ -351,11 +351,14 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   `LocalSeat` turn and restores the prior polling policy when it terminates.
 - `wifi diag` is likewise a single cached read: it never performs the old
   dump/probe/dump sequence, and retained progress is explicitly labelled as
-  historical when a newer terminal fault exists. `netstats` and `smp`
-  are passive retained-counter reports. In contrast, `nettest` starts the
-  bounded network self-test and `usb probe-kbd` advances one retained
-  enumeration attempt, so operators must wait for each command's terminal
-  status before sending the next burst.
+  historical when a newer terminal fault exists. Its driver-task report copies
+  the maintenance generation, requested mask, next stage, and retained action
+  under the existing cursor lock without servicing that action; retained
+  deferred recovery is labelled against the live connection generation.
+  `netstats` and `smp` are passive retained-counter reports. In contrast,
+  `nettest` starts the bounded network self-test and `usb probe-kbd` advances
+  one retained enumeration attempt, so operators must wait for each command's
+  terminal status before sending the next burst.
 - If a USB diagnostic service turn stops replying, preserve the boot evidence
   and stop submitting more commands until the bounded recovery path or a fresh
   boot.
@@ -1432,10 +1435,15 @@ This as-built closure is authorized by Milestone 26d task
   work may reuse the shared descriptor aperture and cannot mutate, reroute, or
   reject that retained request. Runtime dispatch checks this private cursor
   before reparsing scratch for a fresh op11 exchange. A pending or required
-  host-EAPOL session then owns the next fresh control/data poll; generic NetData
-  pre-poll cannot continually start ahead of it. Association, host-EAPOL, and
-  NetData therefore defer to the exact current ticket rather than adopting,
-  replacing, or poisoning it at the bootstrap-to-steady handoff.
+  host-EAPOL session or retained post-key/filter maintenance then owns the next
+  fresh control/data poll; generic NetData pre-poll cannot continually start
+  ahead of it. An already-issued NetData prompt poll still reaches its exact
+  typed terminal before maintenance takes a fresh turn. This bounded ordering
+  prevents runtime pre-poll from filling root's pending RX queue while
+  maintenance is waiting for the same one-operation EventPump permit.
+  Association, host-EAPOL, maintenance, and NetData therefore defer to the
+  exact current ticket rather than adopting, replacing, or poisoning it at the
+  bootstrap-to-steady handoff.
 - Between retained operations, live serial service is admitted only through
   the independent linked-runtime route. Physical-Pi cutover requires a matching
   linked-runtime service completion (`Idle`, `Progress`, or `FrameReady`) after

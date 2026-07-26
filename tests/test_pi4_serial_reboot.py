@@ -126,6 +126,7 @@ class FakeController:
         self.drains: list[tuple[float, str]] = []
         self.drain_reads: list[bytes] = []
         self.redactions: list[tuple[str, str]] = []
+        self.diagnostic_barriers: list[str] = []
 
     def note(self, text: str) -> None:
         self.notes.append(text)
@@ -162,6 +163,9 @@ class FakeController:
         if self.drain_reads:
             return self.drain_reads.pop(0)
         return b""
+
+    def synchronize_root_diagnostic_command(self, *, label: str) -> None:
+        self.diagnostic_barriers.append(label)
 
 
 class TimeoutOnceController(FakeController):
@@ -382,6 +386,46 @@ def test_root_prompt_marker_accepts_tail_fragment() -> None:
     )
 
 
+def test_diagnostic_barrier_rejects_prompt_tail_after_ping() -> None:
+    """A split prompt after ping cannot authorize the diagnostic command."""
+
+    controller = FakeController(
+        [
+            b"cohesix> stale\nOK PING reply=pong\nx>",
+            b"cohesix> ",
+        ]
+    )
+
+    pi4_serial_reboot.RedactingSerialController.synchronize_root_diagnostic_command(
+        controller,
+        label="netstats",
+    )
+
+    assert controller.sent == ["", "ping"]
+    assert controller.public_sent == ["<clear-line>", "ping"]
+    assert controller.reads == []
+    assert controller.drains == [
+        (
+            pi4_serial_reboot.DIAGNOSTIC_COMMAND_DRAIN_S,
+            "stale serial output before netstats",
+        )
+    ]
+
+
+def test_diagnostic_barrier_accepts_full_prompt_following_ping() -> None:
+    """A complete prompt in the ping response proves the next command boundary."""
+
+    controller = FakeController([b"OK PING reply=pong\ncohesix> "])
+
+    pi4_serial_reboot.RedactingSerialController.synchronize_root_diagnostic_command(
+        controller,
+        label="wifi diag",
+    )
+
+    assert controller.sent == ["", "ping"]
+    assert controller.reads == []
+
+
 def test_diagnostics_reinforce_root_command_terminators() -> None:
     """Root diagnostics use guarded terminators without injecting a blank command."""
 
@@ -411,6 +455,15 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
     ]
     assert controller.public_sent[0] == "netstats"
     assert controller.reinforced == [True, True, True, True, True, True, True]
+    assert controller.diagnostic_barriers == [
+        "netstats",
+        "nettest",
+        "wifi diag",
+        "wifi probe-ht",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
     assert controller.drains == [(8.0, "post-root-prompt-settle-before-diagnostics")]
 
 
@@ -566,14 +619,13 @@ def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> No
     )
 
 
-def test_diagnostics_wait_for_prompt_after_result_without_prompt() -> None:
-    """A result line alone must not prove the next command boundary is clean."""
+def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
+    """Every next command gets a fresh barrier even when a result has no prompt."""
 
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\n",
-            b"cohesix>",
             b"OK NETTEST\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
@@ -584,6 +636,13 @@ def test_diagnostics_wait_for_prompt_after_result_without_prompt() -> None:
     pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
 
     assert controller.sent == [
+        "netstats",
+        "nettest",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
+    assert controller.diagnostic_barriers == [
         "netstats",
         "nettest",
         "usb diag",
